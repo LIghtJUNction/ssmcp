@@ -1,25 +1,92 @@
 # Worker sessions
 
-A worker session accepts tasks from its authenticated main agent and assigns each task to one idle execution slot. Start it with `--worker N`; its terminal shows **空闲中**, **正在工作**, **离线**, the total slot count, and the queued task count. The main agent binds to the pool, submits and lists its tasks, requests cancellation, and stops the pool from accepting new work. The monitor has no chat composer. Keyboard input, paste, layout changes, and a failed display cannot become input to a hidden shell.
+`ssmcp --worker 3` keeps the current window as the main chat and opens a second window with three worker slots. Use the main window to talk to the coordinating agent; use the worker window to inspect task states and per-slot logs. Each window has its own client connection and operating-system process.
+
+The default worker is an external agent. It actively connects to the worker window, registers with `role: "worker"`, and calls `ssmcp.worker.wait` to wait for a task. After executing an assigned task, it reports the result with `ssmcp.worker.complete` and waits again. Starting the pool creates task capacity without starting any model.
 
 ## Start a pool
 
-Start a remote pool with one command:
+Start the main chat and its worker window with one command:
 
 ```sh
-ssmcp --worker 2
+ssmcp --worker 3
 ssmcp alice@relay.example --worker 10
 ```
 
-Remote is the default on Linux, macOS and Windows. The pool holds a bounded task queue; its main agent manages that queue, while authorized remote executors claim tasks, do the work through their own tools, and report completion. Starting the pool does not start a model, a local harness, or a task executable. No `--agent` or `--input` option is required. `--agent remote` is an explicit equivalent; the older worker spelling `--agent next-caller` is accepted as the same remote mode.
+The worker window shows the real state of each station, the total station count, and queued work. All stations begin **offline**. An external worker registers and actively waits before its station becomes **idle**; an assigned task makes it **working**. The monitor has no chat composer. Keyboard input and paste cannot become input to a hidden shell. Ordinary `ssmcp` opens only the main chat.
 
-The foreground terminal is a monitor with per-slot state and bounded, scrollable logs. It has no chat input or human question dialog. For a background pool, use `ssmcp --worker 2 --daemon`; saved and daemon workers disable chat input internally. The advanced `--input none` spelling remains available for an explicitly headless foreground pool.
+The same external-worker workflow applies on Linux, macOS and Windows. Each worker uses its own existing agent application and tools.
 
-Interactive mode requires a working monitor. Closing it stops the connection. Worker mode does not combine with the conversation resume picker, external chat input modes, `--list-tools`, or `--load-harness`. Ordinary `ssmcp` remains the normal chat interface and does not start a worker pool.
+The foreground command needs an available terminal adapter for its second window. To select a terminal explicitly, set `SSMCP_WORKER_TERMINAL` to one executable path. The value is a literal path, including any spaces; it is not a shell command or a list of options.
+
+```sh
+SSMCP_WORKER_TERMINAL=/absolute/path/to/xterm ssmcp --worker 3
+```
+
+The child receives the original working directory and arguments as separate values. Startup waits for the actual worker process and its connection to become ready. A terminal launcher's successful exit alone does not establish readiness. An unavailable terminal or failed child startup produces an explicit error.
+
+Closing the main chat stops its owned worker window. A main-window `/reload` closes the old worker connection and starts its replacement. Closing only the worker window leaves the main chat available. A relay reconnect keeps the existing window rather than opening another pool.
+
+## Invite agents and adjust capacity
+
+Use these commands in the main chat:
+
+| Command | Result |
+| --- | --- |
+| `/invite` | Show a connection prompt for the main coordinating agent. |
+| `/invite worker` | Show a prompt for an external worker to join the linked pool and actively wait. |
+| `/worker ls` | Show the linked pool's actual stations and registered workers. |
+| `/worker +N` | Add `N` offline stations. |
+| `/worker -N` | Request removal of `N` stations, starting with offline and idle stations. |
+
+Invitation text appears in a local, scrollable panel, and the client also tries to copy it to the clipboard. A missing clipboard does not prevent reading the prompt. When the pool is fully staffed, `/invite worker` displays `Worker stations are fully staffed.` and does not generate another invitation. Sending a prompt to an external agent does not itself connect that agent or start a model.
+
+Shrinking a pool preserves in-flight claims and cancellation acknowledgements. A station being removed while its task is still running remains **working**. Once it has no running task but still awaits retirement confirmation, it is **retiring**. The physical station count is `idle + working + offline + retiring`; `desired_total` describes the requested capacity while retirement is pending.
+
+Capacity can range from zero to 128 stations. While a resize is awaiting retirement acknowledgements, only a repeat of the same target is accepted. The parent projection's `last_resize` identifies the actual request, target, acceptance and any error; sending a window-control message alone does not prove that the pool accepted it. A pool with zero stations remains connected and can grow again.
+
+## Connect the external workers
+
+A worker is an external agent that actively joins the worker connection and waits for a task. Keep each agent's existing conversation open while it waits. SSMCP supplies the task queue and tools; the external application supplies the model.
+
+1. Start `ssmcp --worker 3`, use `/invite`, and connect the coordinating agent to the main chat.
+2. Use `/invite worker` for each external agent. Each joins the linked worker connection once with `role: "worker"` and keeps its returned credentials private.
+3. Each worker binds its own credentials and calls `ssmcp.worker.wait`. A wait timeout leaves it available; it calls the wait tool again.
+4. The main agent submits tasks. A waiting worker receives one authenticated claim, performs the task, and reports it with `ssmcp.worker.complete`.
+5. After completion, the worker requests another task with a new wait request ID.
+
+Join the selected worker client once:
+
+```js
+const participant = await collab.join(id, {
+  name: "worker#3",
+  role: "worker",
+  capabilities: ["implementation", "tests"]
+});
+```
+
+Save the returned `agent_id` and private `token`. Bind that same participant in each later call before waiting:
+
+```js
+await collab.bind(id, {
+  agent_id: participant.agent_id,
+  token: participant.token
+});
+const reply = await call(id, "ssmcp.worker.wait", {
+  request_id: "worker3-next-task-1",
+  wait_ms: 5000
+});
+if (reply.isError) throw new Error(JSON.stringify(reply));
+return reply.structuredContent;
+```
+
+Reuse the same request ID while waiting or recovering a lost response. The result contains `waiting`, `assigned`, `already_completed`, `retiring`, `released`, or `not_accepting`. A wait timeout leaves the agent available. Use the complete claim unchanged when reporting a result, then use a new request ID to wait again. An assigned task can carry both `cancel_requested` and `retire_requested`. Finish that claim before requesting its retirement receipt; the old wait ID continues to return its completed-task receipt. For `retiring`, acknowledge the exact `retirement` object with `ssmcp.worker.release`. Stop waiting after release succeeds or the status is `released`.
+
+Registered worker participants and idle stations are separate counts. Three newly created stations are offline until workers actually connect and wait. Read the actual station binding from the pool; an agent's display name, such as `worker#3`, does not select panel `#03`.
 
 ## Use the monitor
 
-Each worker has its own status panel and log view. Select a panel to inspect its retained activity:
+Select a station to inspect its retained activity. The left column scrolls through its real work log; the right column refreshes its current summary and measurements in fixed positions. Scrolling logs does not scroll the status column.
 
 | Control | Action |
 | --- | --- |
@@ -29,34 +96,24 @@ Each worker has its own status panel and log view. Select a panel to inspect its
 | Home | Show its earliest retained entry. |
 | End | Return to the latest entries and follow new activity. |
 | Ctrl+Home / Ctrl+End | Select the first or last worker. |
-| Mouse click | Select the worker panel under the pointer. |
-| Mouse wheel | Scroll the log in the panel under the pointer. |
+| Mouse click | Select a station from the station navigation. |
+| Mouse wheel | Scroll the selected station's log when the pointer is in the log area. |
 
-Each worker retains up to 64 lifecycle entries within a 16 KiB log budget; an entry's text is limited to 1 KiB. Older entries drop out as new activity arrives, so Home does not recover discarded history. These logs show events such as assignment, cancellation and completion. Task text and results are excluded from the monitor and shared `worker.status` output; the submitting participant reads its result through `worker.result`.
+Each station retains up to 64 log entries within a 16 KiB budget; an entry's text is limited to 1 KiB. Older entries drop out as new activity arrives, so Home only reaches the earliest retained entry. The monitor shows task summaries and work attributed to that station. A missing command or progress report remains explicitly unavailable. Full task results remain accessible through the authenticated `worker.result` workflow.
 
-## Optional local executors
-
-Use a local executor only when you intend to run an installed, configured CLI on this machine:
-
-```sh
-ssmcp alice@relay.example --worker 10 --agent codex
-ssmcp alice@relay.example --worker 4 --worker-k 0.5 --agent claude
-```
-
-Local execution supports `codex`, `claude`, `opencode`, and `exec`. It requires Linux, cgroup v2 with CPU and memory controllers, and a usable per-user systemd manager. Every local execution slot runs in its own owned scope. If the hard limits or executable are unavailable, slots remain offline with a reason; there is no unrestricted execution fallback. A forwarded `ssmcp` chat peer is not a worker executor.
-
-For an executable that already processes a message, use an absolute path:
-
-```sh
-ssmcp alice@relay.example --worker 2 --daemon \
-  --agent exec --agent-exec /absolute/path/to/task-executor
-```
-
-Optional `--agent-argv-file /absolute/path/to/argv.json` supplies a private JSON array of fixed arguments. SSMCP appends `--` and the task prompt as one argument; it does not evaluate a shell command. Normal remote workers never enter this executable path.
+The status column shows current and accumulated work time and the last three completed task durations when those observations are available. Resource readings identify the process they measure. An external model has no implied local PID, so its CPU and memory use cannot be inferred from the worker window. Local client measurements, their bounded line chart, and the CPU heat value refer to the worker client process and are labelled accordingly; unavailable samples remain unavailable.
 
 ## Bind the main agent and manage tasks
 
-Worker tools use the existing authenticated native call route. Bind a real collaboration participant to the target client, then call `ssmcp.worker.attach` to become the pool's main agent. The pool derives this identity from the verified call scope; arguments cannot supply an account, owner, slot, or connection identity. Reading status or claiming a task does not acquire management rights.
+Read the main chat's `ssmcp.ui.get` projection at `/worker_pool` to identify its linked pool. It returns the actual worker `client_id` and `process_id`, connection state, station counts, queue length and registered-worker count. Confirm that client through `list` before binding a participant. The main chat and worker pool have distinct client IDs; the worker advertises `chat_enabled: false` and exposes `ssmcp.worker.status`. A display name alone does not select a connection.
+
+```js
+const projection = await call(mainClientId, "ssmcp.ui.get", {path: "/worker_pool"});
+if (projection.isError) throw new Error(JSON.stringify(projection));
+return projection.structuredContent.value;
+```
+
+Worker tools use the existing authenticated native call route. Bind a real collaboration participant to that worker client, then call `ssmcp.worker.attach` to become the pool's main agent. The pool derives this identity from the verified call scope; arguments cannot supply an account, owner, slot, or connection identity. Reading status or claiming a task does not acquire management rights.
 
 ```js
 const id = "the-worker-client-id";
@@ -92,13 +149,16 @@ Keep that participant's credentials private and reuse the same binding for subse
 | `ssmcp.worker.result` | `{task_id, wait_ms?: 0..5000}` | That caller's task state and any confirmed output. |
 | `ssmcp.worker.cancel` | `{task_id}` | A cancellation request; a running task remains occupied until completion or confirmed cleanup. |
 | `ssmcp.worker.stop` | `{}` | Main agent only: stop accepting new tasks, cancel queued work, and request cancellation of running work while retaining its occupied slots. |
-| `ssmcp.worker.wait` | `{request_id, wait_ms?: 0..5000}` | Remote mode: wait for a claim, default 5000 ms; return `waiting`, `assigned`, or `already_completed`. |
+| `ssmcp.worker.resize` | `{total: 0..128}` | Attached main agent only, remote mode: change desired capacity. Added stations are offline; occupied stations await completion and retirement acknowledgement. |
+| `ssmcp.worker.wait` | `{request_id, wait_ms?: 0..5000}` | Remote mode: wait for a claim, default 5000 ms; return a waiting, assignment, completion, retirement, release or nonaccepting status. |
 | `ssmcp.worker.claim` | `{request_id}` | Remote mode: the same claim operation without waiting. |
 | `ssmcp.worker.complete` | `{claim, status, output?, error?}` | Remote mode: report the result for the exact claim and its authenticated claimant. |
+| `ssmcp.worker.report` | `{claim, request_id, event, command?, progress?, detail?}` | Record actual command or progress observations for the claimant's active task; return `recorded`, duplicate status, and cancellation or retirement flags. |
+| `ssmcp.worker.release` | `{retirement}` | Acknowledge the exact retirement receipt with its authenticated worker; an active task must finish first. |
 
 To wait once for a result, use `call(id, "ssmcp.worker.result", {task_id, wait_ms: 5000})` under the same verified binding. A timeout returns the current task state; it does not complete or re-submit the task.
 
-Tasks keep the authenticated caller and original history owner captured at submission. Completion does not follow a later UI selection. File and skill references use local expansion; a missing file warns while retaining the literal message.
+Tasks keep the authenticated caller and original live-thread owner captured at submission. Completion does not follow a later UI selection. File and skill references use local expansion; a missing file warns while retaining the literal message.
 
 The snapshot exposes `manager` and `stopping`. An unbound pool has `manager: null`. A bound manager includes the actual `client_id`, verified `thread_id` and participant identity, connection, and binding time. The snapshot's `process_id` is the local operating-system PID; it is separate from the session's client ID and the main agent's logical thread ID.
 
@@ -118,42 +178,62 @@ Use one completion form after performing the work:
 
 A matching repeat of a retained completion is idempotent; changing its payload is rejected. Completion is identified as `authenticated_remote_agent`: it records what the remote agent reported, not an independent OS observation that an external process succeeded or stopped. Cancellation requests do not forcibly terminate an external agent or release an occupied slot before its report.
 
-A closed connection between the worker client and its relay makes unconfirmed assigned work `unknown`; do not replay it automatically. SSMCP does not separately check whether each external agent is still connected. If an agent goes silent while the worker remains connected, its unconfirmed task continues to occupy the slot.
+Native command starts and finishes are attached to their real task and authenticated caller. For progress observed by the external worker, call `ssmcp.worker.report` with `event: "progress"` after the work happened:
+
+```js
+return await call(id, "ssmcp.worker.report", {
+  claim: assignment.claim,
+  request_id: "task-step-1",
+  event: "progress",
+  progress: "The requested check completed; its actual result is available."
+});
+```
+
+The tool also accepts `command_start` and `command_end` events for commands an external worker actually observes. Command text is limited to 4096 bytes; progress and detail are limited to 1024 bytes. Use the event's fields from the discovered schema. Repeating a retained request ID with identical content is idempotent; changed content, another caller or a stale claim is rejected. A progress report does not complete the task.
+
+When a station is selected for removal, its original worker receives a retirement receipt through `worker.wait`. Keep that object unchanged. `worker.release` refuses an active claim and only removes the station after the owning worker acknowledges retirement. Repeating an already accepted release is safe while its receipt is retained. The worker can then leave its collaboration membership and stop waiting; no external model or operating-system process is forcibly terminated by this acknowledgement.
+
+A closed connection between the worker client and its relay makes unconfirmed assigned work `unknown`; do not replay it automatically. An agent that goes silent has not confirmed completion or cancellation. Its in-flight task continues to occupy its station until the task's lifecycle resolves; an idle-status display must not be used as evidence that external effects have stopped.
 
 The default remote pool does not impose CPU or RAM limits on external agents. Its resource status reports external execution and no local OS quota. Active push transports and model APIs are not selected implicitly by a host or port.
 
-## Queue, context, and local cancellation
+## Task queue and cancellation
 
-An atomic FIFO claim assigns a task to exactly one idle slot. When all slots are occupied, up to 128 tasks can wait. Input text is limited to 16 KiB and expanded input to 48 KiB.
+An atomic FIFO claim assigns a task to exactly one idle slot. When all slots are occupied, up to 128 tasks can wait. Input text is limited to 16 KiB and expanded input to 48 KiB. Workers follow their assigned task and authenticated claim.
 
-Each explicitly local slot has an independent SSMCP supervisor and context. It invokes the selected CLI for each task, rather than claiming a persistent provider-native thread. Context holds at most eight turns and 32 KiB and clears when the caller changes. Tasks can use different idle slots; callers must not depend on slot affinity.
+Queued cancellation prevents assignment. Cancellation of an assigned remote task keeps its slot occupied until the original worker acknowledges completion. The worker checks `cancel_requested` by repeating its wait request with the same request ID, stops its own work, and reports `status: "cancelled"` with the original claim.
 
-Idle local supervisors block on notifications and pipes, without occupying human `ui.wait`, polling a model, or requiring a public `sleepp` tool. After a reply and confirmed cleanup, they wait again automatically. The local CLI adapter retains its 120-second task limit and 64 KiB output limit; idle waiting is indefinite. Remote agents use bounded `worker.wait` calls to receive assignments instead.
+A worker client disconnect makes unconfirmed assigned work `unknown`. Preserve that outcome and inspect any effects before retrying. Identical submission requests deduplicate within the same caller and connection; terminal results have bounded retention.
 
-Queued cancellation prevents assignment. For a running local executor, cancellation keeps the slot busy until owned cleanup is confirmed. SSMCP stops the owned systemd scope and checks that its cgroup is empty; wrapper termination alone is insufficient. Cancellation cannot undo earlier effects.
+A waiting external agent uses bounded `worker.wait` calls and continues waiting after idle timeouts. It does not occupy a human question dialog. Default worker pools impose no local model process or CPU/RAM quota on that external agent.
 
-An unconfirmed result becomes `unknown` and must not be replayed blindly. Identical `request_id` retries deduplicate within the same caller and connection. The queue keeps 128 terminal results, guards against replaying evicted unknown tasks, and refuses new work if that separate guard fills. Reconnection does not make uncertain effects safe to repeat.
+## Live content and process lifetime
 
-## Local executor resource limits
+Conversation content, worker logs, context, task receipts and output buffers have bounded in-memory retention. Exiting or restarting the client discards that process's retained content. The client does not create conversation JSONL files, history archives, context-memory checkpoints or reload handoff files for this workflow. Old user files from earlier versions are neither read for recovery nor deleted.
 
-These limits apply only to owned local executor processes, not to the default remote queue or its external agents. The default multiplier is `k = 1`; `--worker-k K` accepts only a finite positive value. The intended per-slot ceilings are:
-
-```text
-CPU ceiling = effective CPU capacity / registered slot count × k
-RAM ceiling = effective memory capacity / registered slot count × k
-```
-
-The count includes live idle slots across SSMCP pools of the **current OS user**, not just this `--worker N`. Other users are outside that count. Effective capacity respects CPU affinity and inherited cgroup limits; transient free-memory readings do not replace it.
-
-These values are ceilings, not reserved CPU time or guaranteed free memory. SSMCP rounds enforceable values down, disables swap for the scope, and limits its process count. A share below 1% of one CPU or 16 MiB of RAM is rejected. A multiplier above one requests oversubscription.
-
-Before admitting more slots, SSMCP lowers and reads back existing idle scopes' limits. Busy tasks or an idle scope that cannot fit the lower memory ceiling defer admission, leaving the new slots offline. It does not force that reduction on a running model. Stricter ceilings may remain after a pool leaves or a partial admission fails; status exposes the registered limits.
-
-These limits govern owned worker process trees; they are not an OS security sandbox. Unrelated developer shells, external model processes, and independently launched Zuse commands remain outside them.
+A same-process network reconnect can retain the current draft, queue and frozen reference content. An unconfirmed delivery remains uncertain and is not automatically replayed. `outputs.read` only returns bytes still retained by the live output store; its cursors and truncation flags describe the actual retained range.
 
 ## Implementation references
 
-The CLI and lifecycle are in [client.rs](../src/client.rs). The [queue](../src/worker/queue.rs), [executor](../src/worker/executor.rs), [child protocol](../src/worker/child.rs), and [resource registry](../src/worker/registry.rs) keep assignment, execution, and cleanup separate. The [worker tools](../src/worker/pool.rs) derive task ownership from the existing authenticated call scope. The [monitor](../src/client/terminal/worker.rs) consumes the same typed snapshot used by the status tool.
+The CLI entry is in [client.rs](../src/client.rs); [worker_window.rs](../src/client/worker_window.rs) manages the owned second window. The [queue](../src/worker/queue.rs) tracks task assignment and completion. The [worker tools](../src/worker/pool.rs) derive ownership from the authenticated call scope, and the [monitor](../src/client/terminal/worker.rs) consumes the status snapshot. Internal background, saved-session, and explicit local-executor paths retain their existing lifecycle.
 
 This page describes the source contract. A build or test result applies only to the exact candidate on which it was run.
 
+## Isolated window acceptance
+
+The window acceptance script uses the built client, a private instance of the production account/router fixture, and private PTYs. Its terminal fixture returns immediately while a separate supervisor runs the real worker process. This exercises ownership and cleanup when the terminal launcher's lifetime is shorter than the worker's.
+
+```sh
+python3 scripts/e2e_worker_windows.py \
+  --bin-dir /path/to/built/bin \
+  --fixture-binary /path/to/ssmcp-tests \
+  --decoder /path/to/vt_snapshot \
+  --source-revision TESTED_COMMIT \
+  --report /tmp/worker-windows.json
+```
+
+The script requires already-built executables and never invokes Cargo. It checks the two connections and the `/worker_pool` link, initial offline capacity, external workers becoming available through real waits, an editable parent chat, literal arguments and working directory, and a single child launch. A private clipboard recorder exercises invitation prompts and the full-pool refusal; resizing checks the actual request acknowledgement and preserves waiting station identities. The authenticated protocol covers manager attachment, task submission, claim retry, an actual private command, truthful progress, per-task timing, completion, cancellation acknowledgement, and result retrieval. Shrinking to zero exercises both idle and busy retirement, authenticated release and retry receipts; subsequent growth must create offline capacity without counting old collaboration memberships as available workers.
+
+Lifecycle cases cover parent exit, parent `/reload`, worker-only closure, missing-terminal failure, and explicit headless mode. State and temporary directories are isolated inside the fixture. The test checks that coordination and cleanup leave no conversation or context-memory files. Its explicit report and terminal receipts are test artifacts. Each result records the tested executable hashes.
+
+This Linux test uses a terminal fixture and does not exercise an installed desktop terminal. Its daemon case checks dispatch to the background-service path and the absence of an extra window; full user-systemd lifecycle coverage remains in [e2e_daemon.py](../scripts/e2e_daemon.py). A failed prerequisite exits with a blocked result; it is not counted as a passing test.

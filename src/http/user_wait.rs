@@ -250,7 +250,6 @@ async fn coordinate_wait(
             // instruction and reports that delivery may already have happened.
             return Err("authorization changed after message dispatch; the message may already have been saved, but no end approval was delivered. Restore the original verified thread and make a new blocking ui.wait call; do not resend blindly.".into());
         }
-        run.capture_context(&client_id, &result);
         run.capture_question_answers(&session, recipient.agent_id(), &result);
         code_mode::question_answers::strip_native_metadata(&mut result);
         let accepted = result

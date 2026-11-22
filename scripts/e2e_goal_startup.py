@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise conversation goals and cached startup notices on owned real terminals.
+"""Exercise current-process goals and cached startup notices on owned real terminals.
 
 The release cache is explicitly synthetic. No public release is impersonated and
 no external request is needed: a private proxy trap detects accidental discovery.
@@ -17,21 +17,19 @@ import selectors
 import shutil
 import signal
 import socket
-import stat
 import struct
 import subprocess
 import tempfile
 import termios
 import time
 
-from e2e_composer import DOWN, ENTER, HOME
 from e2e_dashboard import Decoder, Frontend, text
 from e2e_interactions import Interactions, digest
 
 ROWS = 32
 RELEASE = "v999.0.0"
-GOAL_A = "GOAL_A 完成当前任务"
-GOAL_B = "GOAL_B 保留另一会话目标"
+GOAL_A = "GOAL_RAM_A 检查当前进程目标"
+GOAL_B = "GOAL_RAM_B 退出后不恢复"
 
 
 def native_target():
@@ -125,7 +123,6 @@ class GoalStartup(Interactions):
         self.labels = []
         self.frame_manifest = []
         self.cache = directory / "cache" / "ssmcp" / "update" / "release.json"
-        self.history_root = self.state_home / "ssmcp" / "conversations"
 
     def client_environment(self, label, **options):
         environment = super().client_environment(label, **options)
@@ -205,33 +202,20 @@ class GoalStartup(Interactions):
         front.pump(0.1)
 
     def local(self, front, command):
+        self.conversation(front)
         self.replace_short(front, command)
-        front.send(ENTER)
+        front.send("\r")
         return self.wait_state(front, lambda value: not value["draft"]["text"],
                                "local command consumed its owned input: " + command.split()[0])
 
-    def goal(self, front, expected, conversation_id=None):
-        state = self.wait_state(
+    def goal(self, front, expected):
+        return self.wait_state(
             front,
             lambda value: isinstance(value.get("goal"), dict)
             and value["goal"].get("status") == ("unset" if expected is None else "set")
-            and value["goal"].get("text") == expected and value["goal"].get("saving") is False
-            and (conversation_id is None or value["goal"].get("conversation_id") == conversation_id),
-            "goal reflects the selected conversation after storage completion",
-        )
-        self.check(state["goal"]["source"] == "user", "the goal records user intent")
-        return state["goal"]["conversation_id"]
-
-    def resume(self, front, conversation_id):
-        self.conversation(front)
-        sessions = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
-        selected = next(index for index, item in enumerate(sessions) if item["id"] == conversation_id)
-        self.local(front, "/resume")
-        self.wait_state(front, lambda value: value["view"] == "history", "the real history picker is open")
-        front.send(HOME + DOWN * selected + ENTER)
-
-    def sidecar(self, conversation_id):
-        return self.history_root / (conversation_id + ".goal.json")
+            and value["goal"].get("text") == expected,
+            "goal reflects the current process RAM state",
+        )["goal"]
 
     def run(self):
         self.prepare()
@@ -261,31 +245,30 @@ class GoalStartup(Interactions):
         self.replace_short(front, "")
         front.resize(ROWS, 120)
 
+        self.goal(front, None)
+        before_queue = self.queue()["queue"]
         self.local(front, "/goal set " + GOAL_A)
-        first = self.goal(front, GOAL_A)
-        first_file = self.history_root / (first + ".jsonl")
-        first_before = first_file.read_bytes()
-        sidecar = self.sidecar(first)
-        first_goal = sidecar.read_bytes()
-        value = json.loads(first_goal)
-        self.check(value == {"schema_version": 1, "id": first, "workspace": str(self.workspace), "text": GOAL_A},
-                   "the goal sidecar binds the exact conversation, workspace and Unicode text")
-        self.check(stat.S_IMODE(sidecar.stat().st_mode) == 0o600, "the goal sidecar remains private")
-        self.check(not self.observe("ssmcp.ui.history", {"action": "read", "id": first})["messages"],
-                   "setting a goal creates no fabricated conversation message")
-        self.capture_widths(front, "goal-a-set", GOAL_A)
-
+        self.goal(front, GOAL_A)
+        self.local(front, "/goal show")
+        self.capture_widths(front, "goal-live", GOAL_A)
         self.local(front, "/new")
-        self.goal(front, GOAL_A, first)
-        self.check(self.sidecar(first).read_bytes() == first_goal,
-                   "a new canvas retains its current history and goal")
+        self.goal(front, GOAL_A)
+        self.check(True, "another canvas in the same process keeps the current RAM goal")
+        self.local(front, "/goal clear")
+        self.goal(front, None)
+        self.local(front, "/goal set " + GOAL_B)
+        self.goal(front, GOAL_B)
+        self.check(self.queue()["queue"] == before_queue,
+                   "goal set/show/clear and canvas changes do not enqueue agent work")
+        self.check(not any(path.is_file() for namespace in ("conversations", "context-memory")
+                           for path in (self.state_home / "ssmcp" / namespace).rglob("*")),
+                   "RAM goal changes create no goal sidecar, conversation or memory-state files")
+
         front.disconnect()
         front.close()
 
-        # A new canvas keeps the selected history. A separate, fresh process
-        # creates B without resuming A, using the same private history directory.
-        # Its stdout pipe also proves that the startup probe itself is skipped:
-        # an expired cache would otherwise trigger the proxy and be rewritten.
+        # Machine-readable stdout suppresses the startup discovery probe even
+        # when this explicitly seeded private release cache has expired.
         expired_before = self.seed_cache(expired=True)
         front = self.frontend("goal-startup-pipe", self.config("goal-startup-pipe"))
         self.oauth_login(front.credentials)
@@ -297,49 +280,23 @@ class GoalStartup(Interactions):
         self.no_discovery("the stdout-pipe session made no startup release request")
         self.check(RELEASE + " available" not in text(front.snapshot()),
                    "the stdout-pipe session did not display a synthetic release offer")
-        self.local(front, "/goal " + GOAL_B)
-        second = self.goal(front, GOAL_B)
-        self.check(first != second, "new conversation goal has its own history identity")
-        second_before = (self.history_root / (second + ".jsonl")).read_bytes()
-        second_goal = self.sidecar(second).read_bytes()
-        self.resume(front, first)
-        self.goal(front, GOAL_A, first)
-        self.local(front, "/goal show")
-        self.capture(front, "goal-a-restored", GOAL_A)
+        self.goal(front, None)
+        self.check(GOAL_B not in text(front.snapshot()),
+                   "a fresh client process does not restore the prior RAM goal")
+        self.local(front, "/goal set " + GOAL_A)
+        self.goal(front, GOAL_A)
         self.local(front, "/goal clear")
-        self.goal(front, None, first)
-        self.check(not self.sidecar(first).exists(), "clearing the current goal removes its sidecar")
-        self.check(self.sidecar(second).read_bytes() == second_goal,
-                   "clearing A leaves B's stored goal unchanged")
-        self.check(first_file.read_bytes() == first_before, "goal viewing and clearing do not append to the message log")
-        self.check(not self.queue()["queue"], "local goal commands do not enqueue agent work")
+        self.goal(front, None)
+        self.check(not self.queue()["queue"], "startup notices do not enqueue agent work")
+        self.check(all(not self.external_invocations(label) for label in self.labels),
+                   "startup scenarios started no external model or harness")
         front.disconnect()
         front.close()
-
-        resumed = self.frontend("goal-reopened-pipe", self.config("goal-reopened-pipe"))
-        self.oauth_login(resumed.credentials)
-        self.resume(resumed, second)
-        self.goal(resumed, GOAL_B, second)
-        self.local(resumed, "/goal")
-        self.capture_widths(resumed, "goal-b-after-process-restart", GOAL_B)
-        self.check(self.sidecar(second).read_bytes() == second_goal,
-                   "reopening a conversation reads its original persistent goal")
-        self.check((self.history_root / (second + ".jsonl")).read_bytes() == second_before,
-                   "reopening and showing the goal do not replay or duplicate messages")
-        self.local(resumed, "/goal clear")
-        self.goal(resumed, None, second)
-        self.check(not self.sidecar(second).exists(), "goal clear also persists in the reopened process")
-        self.check(not self.queue()["queue"], "reopening a goal does not restore old queued work")
-        self.check(self.cache.read_bytes() == expired_before, "reopened pipe-output sessions still leave discovery disabled")
-        self.no_discovery("all goal scenarios kept external release discovery suppressed")
-        self.check(all(not self.external_invocations(label) for label in self.labels),
-                   "goal and startup scenarios started no external model or harness")
-        resumed.disconnect()
-        resumed.close()
         return {"status": "passed", "checks": self.checks, "frames": self.frames,
                 "frame_manifest": self.frame_manifest,
                 "fixture_release_cache": {"synthetic": True, "version": RELEASE, "target": self.target},
-                "proxy_connections": self.proxy_connections, "conversations": [first, second],
+                "proxy_connections": self.proxy_connections,
+                "scope": "RAM goal set/show/clear and process reset; TTY cached startup notice, stdout-pipe suppression, Unicode draft and resize",
                 "models_started": False, "existing_services_touched": False}
 
     def cleanup(self):

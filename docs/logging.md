@@ -16,11 +16,15 @@ ssmcp --ssh --log-format pretty my-server
 
 `--verbose` 选择 `pretty-verbose`，展开脱敏后的事件元数据；已经实时显示的 stdout/stderr 和 Diff 预览不会在附加 JSON 中再次打印。`--raw-events` 和原有的 `--raw` 选择 `jsonl`。JSONL 每个事件独占一行，连接状态、SSH stderr、原生 stderr 和 PTY 输出都以事件表示。PTY 字节使用 base64，进入审计的副本仍经过敏感信息检查；不要将 JSONL 的 raw 名称理解为绕过脱敏。启动参数解析或配置加载失败发生在日志配置生效之前，错误使用默认可读格式。
 
-EventLog 在持久化前调用同一脱敏函数，渲染器在 pretty、verbose 和 JSONL 模式也处理副本。环境变量映射、凭据字段、私钥材料、敏感路径正文及可识别令牌被隐藏。原生 RPC response 的任意 result/error 正文不进入日志摘要，只保留路由、状态、退出码和审批等允许的元数据；传回调用方的原生结果保持类型与内容。识别未知格式的任意秘密仍有边界，因此不能把脱敏视为读取敏感文件内容的授权。[审计副本](../src/audit.rs)
+`--log-format jsonl` 仍可显式选择标准错误流上的事件格式。上例中的 `2>events.jsonl` 由 Shell 按操作者要求保存该流，不表示客户端会自动创建会话归档或 `lifecycle.jsonl`。
+
+客户端日志使用既有的脱敏副本，渲染器在 pretty、verbose 和 JSONL 模式也处理副本。环境变量映射、凭据字段、私钥材料、敏感路径正文及可识别令牌被隐藏。原生 RPC response 的任意 result/error 正文不进入日志摘要，只保留路由、状态、退出码和审批等允许的元数据；传回调用方的原生结果保持类型与内容。识别未知格式的任意秘密仍有边界，因此不能把脱敏视为读取敏感文件内容的授权。[审计副本](../src/audit.rs)
 
 stdout 用于连接信息。重定向 stdout 或选择 JSONL 时，保留单行连接 JSON，兼容现有脚本；交互终端默认显示 MCP 地址和登录说明。一次性登录码仍是敏感凭据，保存 stdout 时请限制文件权限。OpenSSH 自身通过 `/dev/tty` 发出的主机密钥或私钥口令交互不属于事件日志。
 
-默认每个缓冲 stdout/stderr 块显示最多 12 行，保留开头与末尾，省略处注明折叠数量和展开参数。实时流式输出持续显示；大对象和数组显示有界摘要。`--max-inline-output N` 调整缓冲输出的行数。这里的折叠只影响展示。事件滚动缓存有界，过早的游标会得到 `truncated:true`；检查事件页的 JSONL artifact 和归档错误，通过 `outputs.read` 分页读取已保存记录。来源、容量或存储错误造成的不完整由 metadata 明确标记。
+默认每个缓冲 stdout/stderr 块显示最多 12 行，保留开头与末尾，省略处注明折叠数量和展开参数。实时流式输出持续显示；大对象和数组显示有界摘要。`--max-inline-output N` 调整缓冲输出的行数，折叠只影响展示。
+
+候选源码中的客户端事件与输出都保存在有界 RAM 中。`ssmcp.ui.events` 按 `generation` 和 `next_cursor` 读取当前进程事件窗口，须检查 `truncated_since_cursor` 与 `retention_gap_possible`。输出 artifact 使用 `storage: "memory"`、`path: null`，通过 `outputs.read` 读取仍保留的字节；进程退出或 `/reload` 后不能恢复。[实时事件](conversation-history.md) · [输出预算与完整性](session-control.md#自动清理与容量)
 
 ## 固定状态区与窗口尺寸
 
@@ -47,7 +51,7 @@ HEAD 改变时先清除旧历史，再读取对应提交链，失败显示 unava
 | Esc | 关闭帮助或详情，返回输入；普通复制草稿可恢复暂存的原稿 |
 | 内容区 ↑ / ↓、Enter 或 →、← | 选择审计记录、展开源码、返回列表 |
 
-上表对应默认 `chat` 布局，输入框中的 Home/End 和方向键仍用于编辑。筛选保留命中命令的输出与结果上下文：`commands` 显示命令相关记录，`errors` 显示错误、警告或 stderr 等诊断记录。`/filter` 清除文本，`/filter --all` 恢复全部类别；筛选只改变当前保留历史的显示，不改变任务和事件归档。自定义前端可调用 `ssmcp.ui.filter`，或读取事件后自行筛选。[键盘与鼠标操作](client-ui.md#键盘与鼠标操作) · [原子 UI 接口](client-ui.md#原子-ui-接口)
+上表对应默认 `chat` 布局，输入框中的 Home/End 和方向键仍用于编辑。筛选保留命中命令的输出与结果上下文：`commands` 显示命令相关记录，`errors` 显示错误、警告或 stderr 等诊断记录。`/filter` 清除文本，`/filter --all` 恢复全部类别；筛选只改变当前保留事件的显示，不改变任务和内存事件记录。自定义前端可调用 `ssmcp.ui.filter`，或读取事件后自行筛选。[键盘与鼠标操作](client-ui.md#键盘与鼠标操作) · [原子 UI 接口](client-ui.md#原子-ui-接口)
 
 日志窗保留 128 行滚动历史。这只是屏幕回看范围，输出流、事件游标和 artifact 另有保留规则；滚动到最早一行不代表已经读完命令输出。Ctrl-End 返回最新日志。正常退出时恢复原终端屏幕、光标和输入模式。
 
@@ -59,7 +63,7 @@ HEAD 改变时先清除旧历史，再读取对应提交链，失败显示 unava
 
 编排完成、原生调用返回和后台命令退出是三个独立状态。`exec.start` 返回后，编排可以已经完成而命令仍在执行；原生错误也可能被 JavaScript 捕获。判断命令结果时，继续读取实际任务的 `running`、`exit_code` 和输出，不能只看编排的完成标签。
 
-底部输入框的要求队列使用协议 v7。要求与工具执行输出分别展示；`delivered` 只表示附加到符合目标的 `code_mode` 响应。它不代表模型已经阅读或执行，也不改变该次工具调用的错误或退出状态。排队、取回、重新选目标与重载恢复见[要求队列](client-ui.md#输入要求与队列)。
+底部输入框的要求队列使用协议 v7。要求与工具执行输出分别展示；`delivered` 只表示附加到符合目标的 `code_mode` 响应。它不代表模型已经阅读或执行，也不改变该次工具调用的错误或退出状态。队列在进程重启或 `/reload` 后清空；排队、取回与重新选目标见[要求队列](client-ui.md#输入要求与队列)。
 
 ## 并行任务与真实进度
 
@@ -81,9 +85,9 @@ Codex 命令调用以一次原生 `command/exec` 请求和响应为显示单位�
 
 ## 命令、文件与技能活动
 
-后台命令以 `exec.started`、`exec.stdout`、`exec.stderr`、`exec.exited` 记录开始、增量输出和退出。显示包含任务 ID、命令与工作目录，结束时包含状态和实际退出码。不同任务可以交错，单任务各流保留顺序和游标。输出在任务执行时推送，不需要等待 `wait` 返回；`read/wait` 的历史响应只显示元数据，避免重复打印正文。超过阈值时给出转储引用，正文通过 `outputs.read` 查询。
+后台命令以 `exec.started`、`exec.stdout`、`exec.stderr`、`exec.exited` 记录开始、增量输出和退出。显示包含任务 ID、命令与工作目录，结束时包含状态和实际退出码。不同任务可以交错，单任务各流保留顺序和游标。输出在任务执行时推送，不需要等待 `wait` 返回；`read/wait` 的历史响应只显示元数据，避免重复打印正文。超过阈值时给出内存 artifact 引用，仍保留的正文通过 `outputs.read` 查询。
 
-成功原生文件读取显示 `READ`；原子写入或编辑提交成功后显示 `EDIT`，随后显示 `DIFF` 路径与实际 `+新增 / -删除` 行数。快照有 missing、known、unknown 三态。敏感路径、二进制、不可读或过大快照显示具体不可用原因和未知计数，不用空文本伪造 Diff。小 Diff 在事件内保留完整正文，大 Diff 由 `diff_artifact` 引用同一输出存储；终端预览不足时仍可查询完整结果。[文件审计](../src/workspace/audit.rs)
+成功原生文件读取显示 `READ`；原子写入或编辑提交成功后显示 `EDIT`，随后显示 `DIFF` 路径与实际 `+新增 / -删除` 行数。快照有 missing、known、unknown 三态。敏感路径、二进制、不可读或过大快照显示具体不可用原因和未知计数，不用空文本伪造 Diff。小 Diff 在事件内保留完整正文，大 Diff 由 `diff_artifact` 引用同一内存输出存储；查询时检查 `complete` 和错误信息，确认仍保留内容的完整性。[文件审计](../src/workspace/audit.rs)
 
 技能事件明确区分发现元数据、读取正文和实际调用。`ssmcp.skill.discovered/read` 与扫描摘要来自 Context；它们不表示模型已使用技能。只有原生接口提供明确调用证据才能展示 invoked。Harness 的 started/completed 记录提供者、工具、调用 ID、耗时和状态，外部文件副作用为 `file_audit:"unknown"`，不会根据参数或工具名猜测写入成功。
 
@@ -118,22 +122,34 @@ activity_interval_secs = 5
 
 ## 后台会话日志
 
-`--daemon` 的服务进程关闭面板与颜色，使用 JSONL 输出；创建命令中的前台显示选项不会改变服务日志。普通 `sessions status` 和生命周期记录不包含登录码。确需登录码时才在本机显式调用 `sessions auth NAME`；其私有输出应只用于登录。[后台会话与权限](session-control.md#后台运行与延时重连)
+`ssmcp sessions logs NAME` 在候选源码中通过经过认证的现有 attach IPC 读取存活进程的 RAM 日志快照。这是源码契约说明，不代表功能已部署或通过现场验收。普通 `sessions status` 不包含登录码；确需登录码时，在本机显式调用 `sessions auth NAME`。[后台会话与权限](session-control.md#后台运行与延时重连)
 
 ```sh
 ssmcp sessions logs workstation --lines 100
 ssmcp sessions logs workstation --lines 100 --json
 ```
 
-`--lines` 默认 50，范围为 1–1000。JSON 返回 `source`、`fallback`、`warning`、`coverage`、`unit`、`events`、`limit` 和 `truncated`，读取时先判断来源：
+`--lines` 默认 **50**，范围为 **1–1000**。进程内的事件窗口最多保留 **2 MiB / 4096 条事件**。读取上限固定在 attach `Open` 时取得的快照；调用会读完这一有限范围，不会持续追逐之后新增的事件。
 
-| 来源与覆盖 | `events` 内容 | 如何解释 |
-| --- | --- | --- |
-| Linux：`source:"journal"`、`coverage:"native_events"` | 对应 unit 的实际 journal 消息；每项包含 `timestamp_us`、`pid`、`event` | `event` 为 MESSAGE 解析出的 JSON 或普通字符串，经过审计脱敏；时间或 PID 不可用时为 null |
-| Linux 降级：`source:"lifecycle"`、`fallback:true` | 原始生命周期观测字段，如 `phase`、`attempt`、`retry_after_secs`、`observed_at` | journal 不可用或无记录，`warning` 会说明；不能据此确认完整工具输出 |
-| macOS / Windows：`source:"lifecycle"`、`coverage:"lifecycle_only"` | 生命周期观测 | 这是当前支持范围，`warning` 明确说明；`fallback:false` 不表示具有完整原生输出 |
+`--json` 返回以下字段：
 
-两种来源不会拼接，以免把同一次活动重复显示。`truncated:true` 表示受本次读取界限约束，返回的事件不是完整历史。该接口不导出 journal 的环境变量、完整命令行等附加字段；也不会读取私有 `auth.json`。Linux 原生 journal 的保留策略由主机管理，ssmcp 的生命周期文件有独立容量界限；命令和 MCP 的完整结果仍按原有 OutputStore 策略保存、分页读取。[本地日志实现](../src/session.rs) · [连接输出保留](session-control.md#长输出自动转储)
+| 字段 | 含义 |
+| --- | --- |
+| `source` | 固定为 `"live"`，来自当前可用的 attach 通道 |
+| `storage` | 固定为 `"memory"`，内容只保存在进程 RAM 中 |
+| `generation` | 本次读取对应的进程事件窗口代次 |
+| `events` | 本次快照范围内返回的事件 |
+| `limit` | 本次 `--lines` 指定或默认采用的上限 |
+| `truncated` | `true` 表示返回内容有裁剪，不能当作完整历史 |
+| `start_cursor`、`next_cursor`、`live_cursor` | 本次读取的游标与 `Open` 时的窗口边界，用于说明实际覆盖范围 |
+
+`events` 保留 attach IPC 的帧格式，每条包含 `sequence`。`kind: "event"` 的正文位于 `value`；`kind: "terminal"` 携带 base64 终端数据，backend、finish 等帧按原形返回。普通 CLI 将每条帧输出为一行紧凑 JSON。
+
+进程已停止或没有可用 live 通道时，CLI 以非零退出状态报告 `live_logs_unavailable`，不会读取 `lifecycle.jsonl` 或退回 `journalctl`。`sessions status` 不再提供 `logs_path`。[本地日志实现](../src/session.rs)
+
+进程退出、重启或 `/reload` 会失去这份 RAM 日志；同一进程内的网络断线重连仍可访问尚保留的日志窗口。
+
+自动写入 `lifecycle.jsonl` 和读取旧日志历史的行为已退役；已有文件不读取、不删除。`state.json` 只保存必要的当前进程管理状态和配置，不包含会话内容。显式 JSONL 标准流和下节的 `ssmcpd` 服务端审计仍按各自方式使用。
 
 ## 服务端日志
 

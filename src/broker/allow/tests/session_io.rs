@@ -65,7 +65,7 @@ async fn account_chat_directory_send_and_poll_use_authenticated_exact_targets() 
         };
         assert!(matches!(operation, Operation::ListTools { .. }));
         send(&mut socket,Frame::Reply{id,result:Ok(json!({"tools":[{"name":"ssmcp.ui.reply","inputSchema":{"type":"object"}},
-            {"name":"ssmcp.ui.history","inputSchema":{"oneOf":[{"properties":{"action":{"const":"thread"}}}]}}]}))}).await;
+            {"name":"ssmcp.ui.events","inputSchema":{"type":"object","properties":{"action":{"const":"thread"}}}}]}))}).await;
     };
     let (response, ()) = timeout(Duration::from_secs(5), async { tokio::join!(post, native) })
         .await
@@ -78,7 +78,7 @@ async fn account_chat_directory_send_and_poll_use_authenticated_exact_targets() 
         .await
         .unwrap();
     assert!(session.io_reply_advertised());
-    assert!(session.thread_history_advertised());
+    assert!(session.thread_events_advertised());
     assert_eq!(sent["account"]["subject"], "42");
     assert_eq!(sent["recipients"].as_array().unwrap().len(), 2);
     let replay: Value = http

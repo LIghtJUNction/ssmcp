@@ -179,7 +179,7 @@ pub struct Session {
     chat_disabled: bool,
     tool_summary_advertised: AtomicBool,
     io_reply_advertised: AtomicBool,
-    thread_history_advertised: AtomicBool,
+    thread_events_advertised: AtomicBool,
     login: Mutex<Option<LoginCode>>,
     // Membership may change, but grants always identify immutable provider subjects.
     allow: Mutex<Vec<Identity>>,
@@ -251,8 +251,8 @@ impl Session {
         self.chat_enabled() && self.io_reply_advertised.load(Ordering::Acquire)
     }
 
-    pub(crate) fn thread_history_advertised(&self) -> bool {
-        self.thread_history_advertised.load(Ordering::Acquire)
+    pub(crate) fn thread_events_advertised(&self) -> bool {
+        self.thread_events_advertised.load(Ordering::Acquire)
     }
 
     pub fn supports_controller(&self) -> bool {
@@ -614,18 +614,8 @@ impl Session {
             {
                 self.io_reply_advertised.store(true, Ordering::Release);
             }
-            if tools.iter().any(|tool| {
-                tool["name"] == "ssmcp.ui.history"
-                    && tool["inputSchema"]["oneOf"]
-                        .as_array()
-                        .is_some_and(|variants| {
-                            variants
-                                .iter()
-                                .any(|variant| variant["properties"]["action"]["const"] == "thread")
-                        })
-            }) {
-                self.thread_history_advertised
-                    .store(true, Ordering::Release);
+            if tools.iter().any(advertises_thread_events) {
+                self.thread_events_advertised.store(true, Ordering::Release);
             }
         }
         if let Ok(value) = &result
@@ -879,7 +869,7 @@ impl Broker {
             chat_disabled: false,
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
-            thread_history_advertised: AtomicBool::new(false),
+            thread_events_advertised: AtomicBool::new(false),
             login: Mutex::new(Some(LoginCode {
                 value: login_code.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -1313,7 +1303,7 @@ impl Broker {
             chat_disabled,
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
-            thread_history_advertised: AtomicBool::new(false),
+            thread_events_advertised: AtomicBool::new(false),
             login: Mutex::new((!restricted).then(|| LoginCode {
                 value: login_code.clone(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -2200,7 +2190,7 @@ mod tests {
             chat_disabled: false,
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
-            thread_history_advertised: AtomicBool::new(false),
+            thread_events_advertised: AtomicBool::new(false),
             login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -3020,5 +3010,48 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+}
+
+/// Only an advertised live-events schema enables current chat attachment.
+/// Compatibility with an older thread-only namespace is negotiated by its caller.
+fn advertises_thread_events(tool: &Value) -> bool {
+    fn thread_action(schema: &Value) -> bool {
+        let action = &schema["properties"]["action"];
+        action["const"] == "thread"
+            || action["enum"]
+                .as_array()
+                .is_some_and(|actions| actions.iter().any(|action| action == "thread"))
+    }
+    tool["name"] == "ssmcp.ui.events"
+        && (thread_action(&tool["inputSchema"])
+            || tool["inputSchema"]["oneOf"]
+                .as_array()
+                .is_some_and(|variants| variants.iter().any(thread_action)))
+}
+
+#[cfg(test)]
+mod live_events_capability_tests {
+    use super::*;
+
+    #[test]
+    fn live_thread_capability_requires_the_advertised_name_and_action() {
+        for schema in [
+            json!({"properties":{"action":{"const":"thread"}}}),
+            json!({"properties":{"action":{"enum":["thread"]}}}),
+            json!({"oneOf":[{"properties":{"action":{"const":"thread"}}}]}),
+        ] {
+            assert!(advertises_thread_events(&json!({
+                "name":"ssmcp.ui.events","inputSchema":schema
+            })));
+        }
+        for descriptor in [
+            json!({"name":"ssmcp.ui.events","inputSchema":{"properties":{"action":{"const":"list"}}}}),
+            json!({"name":"ssmcp.ui.events","inputSchema":{"properties":{"action":{"enum":"thread"}}}}),
+            json!({"name":"ssmcp.ui.history","inputSchema":{"properties":{"action":{"const":"thread"}}}}),
+            json!({"name":"ssmcp.ui.events","inputSchema":{}}),
+        ] {
+            assert!(!advertises_thread_events(&descriptor));
+        }
     }
 }

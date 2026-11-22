@@ -1,7 +1,7 @@
 //! Authenticated remote task leases. This service never starts a model, shell,
 //! network callback or OS executor. An external agent explicitly claims work,
 //! performs its own tool calls and reports a result; delivery is not completion.
-use super::queue::{Actor, Lease, Outcome, Queue, TaskView};
+use super::queue::{Actor, Lease, Outcome, Queue, ReportEvent, ReportUpdate, Retirement, TaskView};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -64,6 +64,8 @@ impl Completion {
 
 pub(super) enum Claimed<T> {
     Waiting,
+    Retiring { retirement: Retirement },
+    Released { retirement: Retirement },
     Assigned { claim: Claim, lease: Lease<T> },
     Completed { claim: Claim, task: TaskView },
 }
@@ -82,10 +84,46 @@ struct Receipt {
     task: TaskView,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Report {
+    pub(super) claim: Claim,
+    pub(super) request_id: String,
+    pub(super) event: ReportEvent,
+    #[serde(default)]
+    pub(super) command: Option<String>,
+    #[serde(default)]
+    pub(super) progress: Option<String>,
+    #[serde(default)]
+    pub(super) detail: Option<String>,
+}
+
+struct ReportReceipt {
+    actor: Actor,
+    report: Report,
+}
+
+struct ReleaseReceipt {
+    actor: Actor,
+    retirement: Retirement,
+}
+
+/// Native execution keeps this opaque token from actual start to actual end.
+/// Its claim cannot drift to a subsequent task on the same authenticated actor.
+#[derive(Clone)]
+pub(crate) struct CommandLog {
+    actor: Actor,
+    claim: Claim,
+    command_id: String,
+    command: String,
+}
+
 struct State<T> {
     ready: bool,
     active: BTreeMap<String, Assignment<T>>,
     completed: VecDeque<Receipt>,
+    reported: VecDeque<ReportReceipt>,
+    released: VecDeque<ReleaseReceipt>,
 }
 
 pub(super) struct Remote<T> {
@@ -99,6 +137,8 @@ impl<T: Clone> Remote<T> {
                 ready: false,
                 active: BTreeMap::new(),
                 completed: VecDeque::new(),
+                reported: VecDeque::new(),
+                released: VecDeque::new(),
             }),
         }
     }
@@ -111,9 +151,7 @@ impl<T: Clone> Remote<T> {
         if queue.snapshot().closed {
             return Err("remote worker connection is closed".into());
         }
-        for slot in queue.snapshot().slots {
-            queue.online(slot.slot)?;
-        }
+        queue.remote_ready()?;
         state.ready = true;
         Ok(())
     }
@@ -156,6 +194,18 @@ impl<T: Clone> Remote<T> {
             return Ok(Claimed::Assigned {
                 claim: active.claim.clone(),
                 lease: active.lease.clone(),
+            });
+        }
+        if let Some(retirement) = queue.retirement(actor) {
+            return Ok(Claimed::Retiring { retirement });
+        }
+        if let Some(released) = state
+            .released
+            .iter()
+            .find(|receipt| &receipt.actor == actor)
+        {
+            return Ok(Claimed::Released {
+                retirement: released.retirement.clone(),
             });
         }
         // Generate the receipt identity before changing the queue. Failure to
@@ -230,6 +280,195 @@ impl<T: Clone> Remote<T> {
         Ok((task, false))
     }
 
+    pub(super) fn release(
+        &self,
+        queue: &Queue<T>,
+        actor: &Actor,
+        retirement: Retirement,
+        now_ms: u64,
+    ) -> Result<bool, String> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(receipt) = state
+            .released
+            .iter()
+            .find(|receipt| receipt.retirement.id == retirement.id)
+        {
+            return if &receipt.actor == actor && receipt.retirement == retirement {
+                Ok(true)
+            } else {
+                Err("worker release does not match its authenticated retained receipt".into())
+            };
+        }
+        if !state.ready || queue.snapshot().closed {
+            return Err("remote worker connection is not ready or has closed".into());
+        }
+        queue.release_remote(actor, &retirement, now_ms)?;
+        state.released.push_back(ReleaseReceipt {
+            actor: actor.clone(),
+            retirement,
+        });
+        while state.released.len() > MAX_RECEIPTS {
+            state.released.pop_front();
+        }
+        Ok(false)
+    }
+
+    pub(super) fn report(
+        &self,
+        queue: &Queue<T>,
+        actor: &Actor,
+        report: Report,
+        now_ms: u64,
+    ) -> Result<(bool, bool, bool), String> {
+        self.report_inner(queue, actor, report, now_ms, false)
+    }
+
+    fn report_inner(
+        &self,
+        queue: &Queue<T>,
+        actor: &Actor,
+        report: Report,
+        now_ms: u64,
+        native_end: bool,
+    ) -> Result<(bool, bool, bool), String> {
+        if report.request_id.is_empty()
+            || report.request_id.len() > 128
+            || report.request_id.chars().any(char::is_control)
+        {
+            return Err(
+                "worker report request_id must contain 1..128 bytes without control characters"
+                    .into(),
+            );
+        }
+        let update = ReportUpdate {
+            event: report.event.clone(),
+            command: report.command.clone(),
+            progress: report.progress.clone(),
+            detail: report.detail.clone(),
+        };
+        update.validate()?;
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(receipt) = state.reported.iter().find(|receipt| {
+            receipt.report.claim.id == report.claim.id
+                && receipt.report.request_id == report.request_id
+        }) {
+            if &receipt.actor != actor || receipt.report != report {
+                return Err("worker report request_id was already used with different authenticated content".into());
+            }
+            let active = state.active.get(&report.claim.id);
+            return Ok((
+                true,
+                active.is_some_and(|active| queue.cancellation_requested(&active.lease)),
+                active.is_some_and(|active| queue.retire_requested(&active.lease)),
+            ));
+        }
+        if !state.ready || queue.snapshot().closed {
+            return Err("remote worker connection is not ready or has closed".into());
+        }
+        let active = state
+            .active
+            .get(&report.claim.id)
+            .filter(|active| &active.actor == actor && active.claim == report.claim);
+        let (cancel, retiring) = if let Some(active) = active {
+            queue.report(&active.lease, &update, now_ms)?;
+            (
+                queue.cancellation_requested(&active.lease),
+                queue.retire_requested(&active.lease),
+            )
+        } else if native_end
+            && state
+                .completed
+                .iter()
+                .any(|receipt| &receipt.actor == actor && receipt.completion.claim == report.claim)
+        {
+            queue.command_end_after_completion(&report.claim, &update, now_ms)?;
+            (false, false)
+        } else {
+            return Err("worker activity requires this exact authenticated current claim".into());
+        };
+        state.reported.push_back(ReportReceipt {
+            actor: actor.clone(),
+            report,
+        });
+        while state.reported.len() > MAX_RECEIPTS {
+            state.reported.pop_front();
+        }
+        Ok((false, cancel, retiring))
+    }
+
+    pub(super) fn command_started(
+        &self,
+        queue: &Queue<T>,
+        actor: &Actor,
+        command_id: &str,
+        command: &str,
+        now_ms: u64,
+    ) -> Result<Option<CommandLog>, String> {
+        if command_id.is_empty()
+            || command_id.len() > 96
+            || command_id.chars().any(char::is_control)
+        {
+            return Err(
+                "native worker command ID must contain 1..96 bytes without control characters"
+                    .into(),
+            );
+        }
+        let claim = {
+            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state
+                .active
+                .values()
+                .find(|active| &active.actor == actor)
+                .map(|active| active.claim.clone())
+        };
+        let Some(claim) = claim else { return Ok(None) };
+        let command = super::queue::display_text(command, 4096);
+        self.report(
+            queue,
+            actor,
+            Report {
+                claim: claim.clone(),
+                request_id: format!("native-start:{command_id}"),
+                event: ReportEvent::CommandStart,
+                command: Some(command.clone()),
+                progress: None,
+                detail: None,
+            },
+            now_ms,
+        )?;
+        Ok(Some(CommandLog {
+            actor: actor.clone(),
+            claim,
+            command_id: command_id.into(),
+            command,
+        }))
+    }
+
+    pub(super) fn command_finished(
+        &self,
+        queue: &Queue<T>,
+        command: &CommandLog,
+        detail: &str,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        let detail = super::queue::display_text(detail, 1024);
+        self.report_inner(
+            queue,
+            &command.actor,
+            Report {
+                claim: command.claim.clone(),
+                request_id: format!("native-end:{}", command.command_id),
+                event: ReportEvent::CommandEnd,
+                command: Some(command.command.clone()),
+                progress: None,
+                detail: (!detail.is_empty()).then_some(detail),
+            },
+            now_ms,
+            true,
+        )
+        .map(|_| ())
+    }
+
     pub(super) fn close(&self, queue: &Queue<T>, now_ms: u64) -> Result<(), String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.ready = false;
@@ -252,6 +491,9 @@ pub(super) fn nonce() -> Result<String, String> {
     crate::platform::random_bytes(&mut bytes).map_err(|error| error.to_string())?;
     Ok(crate::hex::encode(bytes))
 }
+
+#[cfg(test)]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod tests {
@@ -303,8 +545,12 @@ mod tests {
         let client = "a".repeat(64);
         let owner = actor("manager");
         let executor = actor("executor");
-        let first = queue.submit_managed(owner.clone(), &client, "first", "work", "prepared", 1).unwrap();
-        let pending = queue.submit_managed(owner.clone(), &client, "pending", "queued", "prepared", 1).unwrap();
+        let first = queue
+            .submit_managed(owner.clone(), &client, "first", "work", "prepared", 1)
+            .unwrap();
+        let pending = queue
+            .submit_managed(owner.clone(), &client, "pending", "queued", "prepared", 1)
+            .unwrap();
         let claim = claimed(&remote, &queue, &executor, "take-first");
         assert_eq!(claim.task_id, first.task_id);
         assert!(queue.stop(&executor, &client, 2).is_err());
@@ -315,16 +561,43 @@ mod tests {
         assert_eq!(queue.snapshot().working, 1);
         assert_eq!(queue.snapshot().idle, 0);
         assert_eq!(queue.snapshot().queued, 0);
-        assert_eq!(queue.result(&owner, &first.task_id).unwrap().status, TaskStatus::Cancelling);
-        assert_eq!(queue.result(&owner, &pending.task_id).unwrap().status, TaskStatus::Cancelled);
-        assert!(queue.submit_managed(owner.clone(), &client, "new", "work", "prepared", 5).is_err());
-        let Claimed::Assigned { claim: retry, lease } = remote.claim(&queue, &executor, "take-first", 5).unwrap() else { panic!("active claim was lost after stop") };
+        assert_eq!(
+            queue.result(&owner, &first.task_id).unwrap().status,
+            TaskStatus::Cancelling
+        );
+        assert_eq!(
+            queue.result(&owner, &pending.task_id).unwrap().status,
+            TaskStatus::Cancelled
+        );
+        assert!(
+            queue
+                .submit_managed(owner.clone(), &client, "new", "work", "prepared", 5)
+                .is_err()
+        );
+        let Claimed::Assigned {
+            claim: retry,
+            lease,
+        } = remote.claim(&queue, &executor, "take-first", 5).unwrap()
+        else {
+            panic!("active claim was lost after stop")
+        };
         assert_eq!(retry, claim);
         assert!(queue.cancellation_requested(&lease));
-        let completion = Completion { claim, status: Status::Cancelled, output: None, error: None };
-        assert!(remote.complete(&queue, &owner, completion.clone(), 6).is_err());
+        let completion = Completion {
+            claim,
+            status: Status::Cancelled,
+            output: None,
+            error: None,
+        };
+        assert!(
+            remote
+                .complete(&queue, &owner, completion.clone(), 6)
+                .is_err()
+        );
         assert_eq!(queue.snapshot().working, 1);
-        let (task, duplicate) = remote.complete(&queue, &executor, completion.clone(), 7).unwrap();
+        let (task, duplicate) = remote
+            .complete(&queue, &executor, completion.clone(), 7)
+            .unwrap();
         assert!(!duplicate);
         assert_eq!(task.status, TaskStatus::Cancelled);
         assert!(!task.replay_safe);
@@ -340,7 +613,9 @@ mod tests {
         let client = "a".repeat(64);
         let owner = actor("old-manager");
         let executor = actor("executor");
-        let task = queue.submit_managed(owner.clone(), &client, "old-work", "work", "prepared", 1).unwrap();
+        let task = queue
+            .submit_managed(owner.clone(), &client, "old-work", "work", "prepared", 1)
+            .unwrap();
         let claim = claimed(&remote, &queue, &executor, "old-claim");
         queue.stop(&owner, &client, 3).unwrap();
         queue.close(4);
@@ -359,8 +634,13 @@ mod tests {
         fresh.attach(&new_owner, &new_client, 5).unwrap();
         assert!(fresh.is_manager(&new_owner, &new_client));
         assert!(!fresh.is_manager(&owner, &client));
-        assert!(remote_new.complete(&fresh, &executor, success(claim), 6).is_err());
-        assert_eq!(fresh.snapshot().idle, 1);
+        assert!(
+            remote_new
+                .complete(&fresh, &executor, success(claim), 6)
+                .is_err()
+        );
+        assert_eq!(fresh.snapshot().idle, 0);
+        assert_eq!(fresh.snapshot().offline, 1);
         assert_eq!(fresh.snapshot().queued, 0);
     }
 

@@ -168,7 +168,7 @@ pub(crate) fn process_directory(
         "account":{"provider":main_account.provider,"subject":main_account.subject,"login":main_account.login}}));
     json!({"id":info.id,"name":info.name,"title":info.title,"type":info.mode.name(),"hostname":info.hostname,"cwd":info.cwd,
         "kind":"process","threads":threads,"chat_io_version":1,"reply_native_supported":session.io_reply_advertised(),
-        "history_thread_supported":session.thread_history_advertised(),"unavailable_reason":if !session.chat_enabled(){json!(crate::wire::CHAT_DISABLED)}else if session.io_reply_advertised(){Value::Null}else{json!("Native ssmcp.ui.reply is not advertised; send verifies the catalog and otherwise requires a client update.")}})
+        "events_thread_supported":session.thread_events_advertised(),"unavailable_reason":if !session.chat_enabled(){json!(crate::wire::CHAT_DISABLED)}else if session.io_reply_advertised(){Value::Null}else{json!("Native ssmcp.ui.reply is not advertised; send verifies the catalog and otherwise requires a client update.")}})
 }
 
 struct Input {
@@ -788,7 +788,7 @@ impl TestFixture {
             &authorization,
         );
         let reply=self.native_reply(json!({"tools":[{"name":"ssmcp.ui.reply","inputSchema":{"type":"object"}},
-            {"name":"ssmcp.ui.history","inputSchema":{"oneOf":[{"properties":{"action":{"const":"thread"}}}]}}]}));
+            {"name":"ssmcp.ui.events","inputSchema":{"type":"object","properties":{"action":{"const":"thread"}}}}]}));
         let (result, operation) = tokio::join!(call, reply);
         result.unwrap();
         assert!(matches!(
@@ -796,6 +796,7 @@ impl TestFixture {
             crate::wire::Operation::ListTools { .. }
         ));
         assert!(self.session.io_reply_advertised());
+        assert!(self.session.thread_events_advertised());
     }
     pub(crate) fn enqueue(&self, request_id: &str, threads: &[Option<&str>]) -> Value {
         let targets = threads

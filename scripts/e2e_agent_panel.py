@@ -52,7 +52,7 @@ class AgentPanel(Composer):
         self.output = output
         self.font = font
         self.snapshots = []
-        self.history_artifacts = []
+        self.event_artifacts = []
 
     def config(self, name, **_options):
         path = self.directory / f"{name}.toml"
@@ -118,7 +118,7 @@ class AgentPanel(Composer):
         index = 1 + next(index for index, value in enumerate(roster)
                          if value["agent_id"] == member["agent_id"])
         front.send(HOME + DOWN * index + ENTER)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"]
+        front.until(lambda shot: (column(shot) or ())[:2] == ("conversation", 2) and not shot["hide_cursor"]
                     and "To Builder" in text(shot), "the selected member's composer")
         state = self.ui("/display/conversation")
         self.check(state["target"] == member["agent_id"],
@@ -155,23 +155,23 @@ class AgentPanel(Composer):
         native = result["structuredContent"]["result"]
         receipt = native.get("structuredContent", {})
         self.check(not native.get("isError") and receipt.get("accepted") is True
-                   and receipt.get("history_saved") is True and receipt.get("shown") is True,
-                   "owned thread marker is saved to the current conversation")
+                   and receipt.get("recorded") is True and receipt.get("storage") == "memory" and receipt.get("shown") is True,
+                   "owned thread marker is recorded in current process memory")
         return receipt["message_id"]
 
-    def history_result(self, name, arguments):
-        if name not in ("ssmcp.ui.history", "ssmcp.output.read"):
-            raise AssertionError("unexpected history observation tool")
+    def event_result(self, name, arguments):
+        if name not in ("ssmcp.ui.events", "ssmcp.output.read"):
+            raise AssertionError("unexpected event observation tool")
         result = self.response("return await call(%s, %s, %s);" % (
             json.dumps(self.client_id), json.dumps(name), json.dumps(arguments)))
         if self.messages(result):
-            raise AssertionError("history observation consumed a user requirement")
+            raise AssertionError("event observation consumed a user requirement")
         native = result["structuredContent"]["result"]
         if native.get("isError"):
-            raise AssertionError(f"native history observation failed: {native}")
+            raise AssertionError(f"native event observation failed: {native}")
         return native
 
-    def read_history_artifact(self, summary):
+    def read_event_artifact(self, summary):
         # The production transport may spill a valid large process page.
         # Use the same authenticated output reader as the references fixture.
         meta = summary.get("artifact", {})
@@ -179,21 +179,22 @@ class AgentPanel(Composer):
         if (summary.get("format") != "mcp_tool_result_json" or summary.get("output_error")
                 or meta.get("schema") != "ssmcp.output.v1"
                 or meta.get("scope") != "native_tool_result_json"
+                or meta.get("storage") != "memory"
                 or meta.get("complete") is not True
                 or not isinstance(size, int) or not 0 < size <= 1024 * 1024
                 or meta.get("observed_bytes") != size
                 or meta.get("sha256_scope") != "first_bytes_snapshot"
                 or not re.fullmatch(r"[0-9a-f]{32}", str(meta.get("id", "")))
                 or not re.fullmatch(r"[0-9a-f]{64}", str(meta.get("sha256", "")))):
-            raise AssertionError("history spill is not a complete bounded native JSON artifact")
+            raise AssertionError("event spill is not a complete bounded native JSON artifact")
         # output.read is eligible work; never let observation take a real request.
         if any(item["status"] != "delivered" for item in self.queue()["queue"]):
-            raise AssertionError("history artifact reads require an entirely delivered queue")
+            raise AssertionError("event artifact reads require an entirely delivered queue")
         payload = bytearray()
         chunks = 0
         while len(payload) < size:
             offset = len(payload)
-            part = self.history_result("ssmcp.output.read", {
+            part = self.event_result("ssmcp.output.read", {
                 "id": meta["id"], "offset": offset,
                 "max_bytes": min(8192, size - offset)})["structuredContent"]
             chunk = base64.b64decode(part["data_base64"], validate=True)
@@ -205,16 +206,16 @@ class AgentPanel(Composer):
                     or part.get("eof") is not (end == size)
                     or part.get("sha256_scope") != "returned_chunk"
                     or part.get("sha256") != hashlib.sha256(chunk).hexdigest()):
-                raise AssertionError("output.read returned an invalid history chunk")
+                raise AssertionError("output.read returned an invalid event chunk")
             payload.extend(chunk)
             chunks += 1
         if hashlib.sha256(payload).hexdigest() != meta["sha256"]:
-            raise AssertionError("complete history artifact digest differs from its manifest")
+            raise AssertionError("complete event artifact digest differs from its manifest")
         native = json.loads(payload)
         if (not isinstance(native, dict) or native.get("isError")
                 or not isinstance(native.get("structuredContent"), dict)):
-            raise AssertionError("history artifact is not a successful native MCP result")
-        self.history_artifacts.append({
+            raise AssertionError("event artifact is not a successful native MCP result")
+        self.event_artifacts.append({
             "id": meta["id"], "bytes": size, "sha256": meta["sha256"],
             "complete": True, "chunks": chunks})
         return native
@@ -227,23 +228,24 @@ class AgentPanel(Composer):
             arguments["agent_id"] = member["agent_id"]
         elif main:
             arguments["main"] = True
-        native = self.history_result("ssmcp.ui.history", arguments)
+        native = self.event_result("ssmcp.ui.events", arguments)
         data = native.get("structuredContent", {})
         if data.get("spilled"):
-            data = self.read_history_artifact(data)["structuredContent"]
+            data = self.read_event_artifact(data)["structuredContent"]
         if (data.get("schema_version") != 1 or not isinstance(data.get("events"), list)
-                or data.get("scope", {}).get("client_id") != self.client_id):
-            raise AssertionError("complete native result did not contain the thread history schema")
+                or data.get("scope", {}).get("client_id") != self.client_id
+                or data.get("retention") != "live_process_memory"):
+            raise AssertionError("complete native result did not contain the live event schema")
         return data
 
     @staticmethod
-    def saved_message_texts(page):
+    def message_texts(page):
         return {event["value"]["text"] for event in page["events"]
                 if event.get("value", {}).get("type") == "ssmcp.message"}
 
-    def history_containing_messages(self, wanted, *, main=False):
+    def events_containing_messages(self, wanted, *, main=False):
         # A page is not the whole journal. Follow the real cursor/generation,
-        # stopping at the known saved markers instead of chasing new observer calls.
+        # stopping at the known live markers instead of chasing new observer calls.
         wanted = set(wanted)
         events = []
         seen = set()
@@ -253,48 +255,48 @@ class AgentPanel(Composer):
                                     generation=generation, limit=16)
             if generation is not None and (page["generation"] != generation
                                            or page["scope"] != scope):
-                raise AssertionError("history paging changed the owner or process generation")
+                raise AssertionError("event paging changed the owner or process generation")
             if page.get("retention_gap_possible"):
-                raise AssertionError("owned fixture lost history before its marker assertions")
+                raise AssertionError("owned fixture lost live events before its marker assertions")
             generation, scope = page["generation"], page["scope"]
             for event in page["events"]:
                 if event["sequence"] in seen:
-                    raise AssertionError("history cursor repeated an event")
+                    raise AssertionError("event cursor repeated an event")
                 seen.add(event["sequence"])
                 events.append(event)
             combined = {**page, "events": events}
-            if wanted <= self.saved_message_texts(combined):
+            if wanted <= self.message_texts(combined):
                 return combined
             next_cursor = page["next_cursor"]
             if not page["has_more"] or (cursor is not None and next_cursor <= cursor):
-                raise AssertionError("saved history markers were not found before the journal ended")
+                raise AssertionError("retained event markers were not found before the journal ended")
             cursor = next_cursor
-        raise AssertionError("owned history marker search exceeded its bounded page count")
+        raise AssertionError("owned event marker search exceeded its bounded page count")
 
-    def leave_thread_history(self, front):
+    def leave_thread_events(self, front):
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("sessions", 1, 8),
-                    "history returns to Sessions")
+        front.until(lambda shot: (column(shot) or ())[:2] == ("sessions", 1),
+                    "live events return to Sessions")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8)
+        front.until(lambda shot: (column(shot) or ())[:2] == ("conversation", 2)
                     and not shot["hide_cursor"], "Sessions returns to the same composer")
 
-    def member_history_actions(self, front, members, composition):
+    def member_event_actions(self, front, members, composition):
         # Exercise the site's default sidebar=false layout first.
         front.send(b"\x1bOR")
         front.until(lambda shot: "│" not in shot["rows"][0],
                     "the member sidebar is explicitly hidden")
         self.check(self.ui("/config")["sidebar"] is False,
-                   "keyboard history works without the optional sidebar")
+                   "keyboard event viewing works without the optional sidebar")
         queue_before = self.queue()["queue"]
         first, second = members
         markers = ("AGENT_PANEL_A_ONLY", "AGENT_PANEL_B_ONLY", "AGENT_PANEL_MAIN_ONLY")
         self.marker(markers[0], first)
         self.marker(markers[1], second)
         self.marker(markers[2])
-        current = [item["id"] for item in self.observe(
-            "ssmcp.ui.history", {"action": "list"})["sessions"] if item["current"]]
-        self.check(len(current) == 1, "both same-name members share one current conversation owner")
+        current = self.thread_page()
+        self.check(current["scope"]["client_id"] == self.client_id,
+                   "both same-name members belong to this live client process")
 
         for member, own, other in ((first, markers[0], markers[1]),
                                    (second, markers[1], markers[0])):
@@ -308,19 +310,19 @@ class AgentPanel(Composer):
                        and markers[2] not in serialized
                        and all(event["source"]["agent_id"] == member["agent_id"]
                                for event in page["events"]),
-                       "same-name thread history contains only its authenticated marker")
+                       "same-name thread events contains only its authenticated marker")
             self.agents(front)
             self.highlight_recipient(front, member)
             front.send(b"h")
             state = self.wait_conversation(front, lambda state:
-                state["view"] == "history" and state["thread_history"] is not None
+                state["view"] == "live_logs" and state["thread_history"] is not None
                 and state["thread_history"]["scope"] == page["scope"],
-                "h opens the exact selected member history")
+                "h opens the exact selected member events")
             shown = front.until(lambda shot: own in text(shot), "the selected thread marker is visible")
             self.check(other not in text(shown) and markers[2] not in text(shown)
                        and state["thread_history"]["read_only"] is True
                        and {key: state[key] for key in composition} == composition,
-                       "the history frame excludes the other member and keeps the composition")
+                       "the live event frame excludes the other member and keeps the composition")
             if member is second:
                 self.marker("AGENT_PANEL_A_LATE", first)
                 late = self.thread_page(first)
@@ -328,33 +330,34 @@ class AgentPanel(Composer):
                     state["thread_history"] is not None
                     and state["thread_history"]["scope"] == page["scope"]
                     and state["thread_history"]["next_cursor"] >= late["next_cursor"],
-                    "the B history has scanned past the late A event")
+                    "the B event view has scanned past the late A event")
                 shown = front.snapshot()
                 self.check("AGENT_PANEL_A_LATE" not in text(shown)
                            and {key: state[key] for key in composition} == composition,
-                           "a late A reply never appears in B's already open history")
-            self.leave_thread_history(front)
+                           "a late A reply never appears in B's already open event view")
+            self.leave_thread_events(front)
 
         self.agents(front)
         self.highlight_recipient(front, first)
         front.send(b"h")
         front.until(lambda shot: "AGENT_PANEL_A_LATE" in text(shot),
                     "returning to A reveals its late reply")
-        self.leave_thread_history(front)
-        aggregate = self.history_containing_messages((*markers, "AGENT_PANEL_A_LATE"))
-        main = self.history_containing_messages((markers[2],), main=True)
-        self.check(set((*markers, "AGENT_PANEL_A_LATE")) <= self.saved_message_texts(aggregate)
-                   and markers[2] in self.saved_message_texts(main)
-                   and markers[0] not in self.saved_message_texts(main)
-                   and markers[1] not in self.saved_message_texts(main),
+        self.leave_thread_events(front)
+        aggregate = self.events_containing_messages((*markers, "AGENT_PANEL_A_LATE"))
+        main = self.events_containing_messages((markers[2],), main=True)
+        self.check(set((*markers, "AGENT_PANEL_A_LATE")) <= self.message_texts(aggregate)
+                   and markers[2] in self.message_texts(main)
+                   and markers[0] not in self.message_texts(main)
+                   and markers[1] not in self.message_texts(main),
                    "the process overview retains both members and main remains a separate scope")
         returned = self.ui("/display/conversation")
-        owner_after = [item["id"] for item in self.observe(
-            "ssmcp.ui.history", {"action": "list"})["sessions"] if item["current"]]
+        owner_after = self.thread_page()
         self.check(returned["view"] == "activity" and returned["thread_history"] is None
                    and {key: returned[key] for key in composition} == composition
-                   and owner_after == current and self.queue()["queue"] == queue_before,
-                   "history navigation preserves owner, draft, recipients, group and queue")
+                   and owner_after["scope"] == current["scope"]
+                   and owner_after["generation"] == current["generation"]
+                   and self.queue()["queue"] == queue_before,
+                   "event navigation preserves owner, draft, recipients, group and queue")
 
         front.send(b"\x1bOR")
         roster = self.queue()["agents"]
@@ -368,17 +371,17 @@ class AgentPanel(Composer):
                    and self.queue()["queue"] == queue_before,
                    "sidebar left-click selects a row without sending or changing recipients")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8), "return to sidebar overview")
+        front.until(lambda shot: (column(shot) or ())[:2] == ("conversation", 2), "return to sidebar overview")
         self.click_sidebar(front, "Builder", expected=2, button=2)
         opened = self.wait_conversation(front, lambda state:
-            state["view"] == "history" and state["thread_history"] is not None
+            state["view"] == "live_logs" and state["thread_history"] is not None
             and state["thread_history"]["scope"] == page["scope"],
             "sidebar right-click opens the exact member without prior selection")
         self.check(opened["thread_history"]["read_only"] is True
                    and {key: opened[key] for key in composition} == composition
                    and self.queue()["queue"] == queue_before,
-                   "sidebar history keeps the original composition and never sends")
-        self.leave_thread_history(front)
+                   "sidebar event view keeps the original composition and never sends")
+        self.leave_thread_events(front)
 
     def run(self):
         self.prepare()
@@ -407,7 +410,7 @@ class AgentPanel(Composer):
                    "observed callers do not fabricate authenticated session members")
         self.save_shot("callers", front)
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"], "the original composer")
+        front.until(lambda shot: (column(shot) or ())[:2] == ("conversation", 2) and not shot["hide_cursor"], "the original composer")
 
         members = []
         for role in ("Implementation", "Review"):
@@ -427,7 +430,7 @@ class AgentPanel(Composer):
         )
         composition = {key: original[key] for key in
                        ("draft", "target", "editing", "native_recipient", "group_selected")}
-        self.member_history_actions(front, members, composition)
+        self.member_event_actions(front, members, composition)
         self.agents(front)
         shown = self.select_name(front, CALLER["name"])
         self.check(sum("Builder" in row and "↳" not in row for row in list_rows(shown)) == 2,
@@ -464,7 +467,7 @@ class AgentPanel(Composer):
         front.send(ESC)
         front.until(lambda shot: selected_name(shot, CALLER["name"]), "back to the selected caller")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8), "the caller sidebar")
+        front.until(lambda shot: (column(shot) or ())[:2] == ("conversation", 2), "the caller sidebar")
         self.click_sidebar(front, CALLER["model"], button=2)
         front.until(lambda shot: "Observed call ·" in text(shot)
                     and "terminal.status" in text(shot), "sidebar opens the drawn call audit")
@@ -472,7 +475,7 @@ class AgentPanel(Composer):
         self.check(self.ui("/display/audit/detail") is True
                    and self.ui("/display/audit/selected/run_id") == expected_run
                    and {key: reopened[key] for key in composition} == composition,
-                   "observed sidebar history opens the exact run without changing the recipient")
+                   "observed sidebar event view opens the exact run without changing the recipient")
         front.send(ESC)
         front.until(lambda shot: selected_name(shot, CALLER["name"]),
                     "Escape returning to the same caller row")
@@ -494,7 +497,7 @@ class AgentPanel(Composer):
         self.save_shot("narrow-models", front)
 
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"], "the preserved composer")
+        front.until(lambda shot: (column(shot) or ())[:2] == ("conversation", 2) and not shot["hide_cursor"], "the preserved composer")
         returned = self.ui("/display/conversation")
         self.check({key: returned[key] for key in composition} == composition,
                    "returning from the resized roster preserves the exact original composition")
@@ -526,12 +529,19 @@ def main():
     signal.signal(signal.SIGTERM, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, default=Path("target/debug"))
+    parser.add_argument("--fixture-binary", type=Path, default=os.environ.get("SSMCP_E2E_FIXTURE_BINARY"),
+                        help="prebuilt library fixture; overrides SSMCP_E2E_FIXTURE_BINARY")
     parser.add_argument("--decoder", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--font", type=Path,
                         default=Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"))
     args = parser.parse_args()
+    if args.fixture_binary is not None:
+        fixture = args.fixture_binary.resolve()
+        if not fixture.is_file() or not os.access(fixture, os.X_OK):
+            parser.error(f"prebuilt fixture is not executable: {fixture}")
+        os.environ["SSMCP_E2E_FIXTURE_BINARY"] = str(fixture)
     decoder = args.decoder or args.bin_dir / "examples/vt_snapshot"
     for executable in (args.bin_dir / "ssmcp", args.bin_dir / "ssmcpd", decoder):
         if not executable.is_file():
@@ -542,12 +552,14 @@ def main():
     report = {
         "status": "failed", "platform": platform.system(),
         "transport": "isolated account/OAuth + owned PTY + independent vt100 decoder",
-        "scope": "caller grouping, keyboard/sidebar thread history, same-name isolation and exact delivery; no models",
+        "scope": "caller grouping, keyboard/sidebar live thread events, same-name isolation and exact delivery; no models",
         "binaries": {name: sha256(path) for name, path in (
             ("ssmcp", args.bin_dir / "ssmcp"), ("ssmcpd", args.bin_dir / "ssmcpd"),
             ("vt_snapshot", decoder),
         )},
     }
+    if args.fixture_binary is not None:
+        report["binaries"]["fixture"] = sha256(args.fixture_binary.resolve())
     with tempfile.TemporaryDirectory(prefix="ssmcp-agent-panel-e2e-") as directory:
         harness = AgentPanel(Path(directory), args.bin_dir, decoder, args.out, args.font)
         try:
@@ -566,7 +578,7 @@ def main():
             harness.cleanup()
             report.update(checks=harness.checks, metrics=harness.metrics,
                           snapshots=harness.snapshots,
-                          history_artifacts=harness.history_artifacts,
+                          event_artifacts=harness.event_artifacts,
                           duration_seconds=round(time.monotonic() - started, 3))
             destination = args.report or args.out / "agent-panel-result.json"
             destination.parent.mkdir(parents=True, exist_ok=True)

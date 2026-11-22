@@ -1,6 +1,5 @@
-//! Reload keeps user-chosen identities, never send plans or connection credentials.
+//! Verify exact recipients for current-process groups and parked drafts.
 use super::*;
-use serde::{Deserialize, Serialize};
 
 impl From<&Recipient> for SavedRecipient {
     fn from(recipient: &Recipient) -> Self {
@@ -47,32 +46,6 @@ impl SavedRecipient {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(in crate::client::terminal::conversation) struct ReloadGroups {
-    selected: Vec<SavedRecipient>,
-    saved: BTreeMap<String, Vec<SavedRecipient>>,
-}
-
-impl ReloadGroups {
-    pub(in crate::client::terminal::conversation) fn validate(&self) -> Result<(), String> {
-        SavedRecipient::validate_group(&self.selected)?;
-        if self.saved.len() > 16 {
-            return Err("A reload checkpoint contains more than 16 named groups".into());
-        }
-        for (name, members) in &self.saved {
-            if name.is_empty() || name.len() > 64 || name.chars().any(char::is_control) {
-                return Err("A saved group has an invalid name".into());
-            }
-            if members.is_empty() {
-                return Err("A named group has no selected recipients".into());
-            }
-            SavedRecipient::validate_group(members)?;
-        }
-        Ok(())
-    }
-}
-
 impl Selection {
     pub(in crate::client::terminal::conversation) fn saved_selection(&self) -> Vec<SavedRecipient> {
         self.restoring
@@ -110,26 +83,6 @@ impl Selection {
         self.restoring
             .as_ref()
             .map_or(self.selected.len(), Vec::len)
-    }
-
-    pub(in crate::client::terminal::conversation) fn reload_snapshot(&self) -> ReloadGroups {
-        ReloadGroups {
-            selected: self.saved_selection(),
-            saved: self.saved.clone(),
-        }
-    }
-
-    pub(in crate::client::terminal::conversation) fn restore(
-        &mut self,
-        saved: ReloadGroups,
-    ) -> Result<(), String> {
-        saved.validate()?;
-        *self = Self {
-            saved: saved.saved,
-            restoring: (!saved.selected.is_empty()).then_some(saved.selected),
-            ..Self::default()
-        };
-        Ok(())
     }
 
     pub(super) fn cancel_restoration(&mut self) {
@@ -179,9 +132,9 @@ mod tests {
     use super::*;
     use crate::client::terminal::conversation::groups::tests::{recipient, state};
 
-    fn saved() -> ReloadGroups {
-        let mut state = state();
-        state
+    fn prepare_group_selection(target: &mut State) {
+        let mut chosen = state();
+        chosen
             .chat_group_command(&format!(
                 "add {} {} {}",
                 recipient(1, false).id,
@@ -189,8 +142,10 @@ mod tests {
                 recipient(2, false).id
             ))
             .unwrap();
-        state.chat_group_command("save review team").unwrap();
-        state.conversation.groups.reload_snapshot()
+        chosen.chat_group_command("save review team").unwrap();
+        let selected = chosen.conversation.groups.saved_selection();
+        target.conversation.groups.saved = chosen.conversation.groups.saved;
+        target.conversation.groups.restore_selection(selected);
     }
 
     #[test]
@@ -217,46 +172,9 @@ mod tests {
     }
 
     #[test]
-    fn reload_group_configuration_contains_only_exact_identities_and_no_send_plan() {
-        let mut state = state();
-        state
-            .chat_group_command(&format!("add {}", recipient(1, false).id))
-            .unwrap();
-        state.chat_group_command("save one").unwrap();
-        state.conversation.groups.last = Some("old-request-must-not-restore".into());
-        let pending = Pending {
-            request_id: "old-request-must-not-restore".into(),
-            recipients: vec![recipient(1, false)],
-            body: "old-body-must-not-restore".into(),
-            stamp: state.chat_composer_stamp(),
-        };
-        state
-            .conversation
-            .groups
-            .retry
-            .insert(pending.request_id.clone(), pending);
-        let saved = state.conversation.groups.reload_snapshot();
-        let encoded = serde_json::to_value(&saved).unwrap();
-        let identity = &encoded["selected"][0];
-        assert_eq!(identity.as_object().unwrap().len(), 3);
-        assert_eq!(identity["id"], recipient(1, false).id);
-        assert_eq!(identity["provider"], "github");
-        assert_eq!(identity["subject"], "42");
-        assert!(!encoded.to_string().contains("old-request"));
-        assert!(!encoded.to_string().contains("old-body"));
-        assert!(!encoded.to_string().contains("token"));
-        state.conversation.groups.restore(saved).unwrap();
-        assert!(state.conversation.groups.selected.is_empty());
-        assert!(state.conversation.groups.pending.is_none());
-        assert!(state.conversation.groups.retry.is_empty());
-        assert!(state.conversation.groups.last.is_none());
-        assert!(state.conversation.groups.observed.is_none());
-    }
-
-    #[test]
     fn restored_group_waits_for_every_current_recipient_and_never_sends_automatically() {
         let mut state = state();
-        state.conversation.groups.restore(saved()).unwrap();
+        prepare_group_selection(&mut state);
         let ready = state.native_snapshot();
         let mut incomplete = ready.clone();
         incomplete["recipients"].as_array_mut().unwrap().pop();
@@ -297,10 +215,7 @@ mod tests {
         state
             .chat_group_command(&format!("add {}", recipient(2, false).id))
             .unwrap();
-        let saved = state.conversation.groups.reload_snapshot();
-        let encoded = serde_json::to_value(&draft).unwrap();
-        state.conversation.groups.restore(saved).unwrap();
-        state.chat_restore_draft(serde_json::from_value(encoded).unwrap());
+        state.chat_restore_draft(draft.clone());
         assert_eq!(state.chat_saved_draft(), draft);
         assert!(state.group_current_selection().is_err());
 
@@ -321,7 +236,7 @@ mod tests {
     #[test]
     fn removing_an_unavailable_saved_recipient_requires_an_explicit_user_change() {
         let mut state = state();
-        state.conversation.groups.restore(saved()).unwrap();
+        prepare_group_selection(&mut state);
         state.conversation.native_fixture.as_mut().unwrap()["recipients"]
             .as_array_mut()
             .unwrap()
@@ -340,7 +255,7 @@ mod tests {
     #[test]
     fn restored_group_rejects_changed_account_and_manual_choice_cancels_late_restore() {
         let mut state = state();
-        state.conversation.groups.restore(saved()).unwrap();
+        prepare_group_selection(&mut state);
         let mut changed = state.native_snapshot();
         changed["recipients"][0]["account"]["subject"] = json!("99");
         state.chat_restore_group_selection(&changed);
@@ -373,7 +288,7 @@ mod tests {
     #[test]
     fn restored_named_group_uses_fresh_descriptors_and_requires_account_revalidation() {
         let mut state = state();
-        state.conversation.groups.restore(saved()).unwrap();
+        prepare_group_selection(&mut state);
         state.chat_group_command("clear").unwrap();
         state.conversation.native_fixture.as_mut().unwrap()["recipients"][0]["account"]["subject"] =
             json!("99");
@@ -390,30 +305,5 @@ mod tests {
             "Fresh verified name"
         );
         assert!(state.conversation.groups.pending.is_none());
-    }
-
-    #[test]
-    fn reload_group_configuration_rejects_duplicates_wildcards_and_credential_fields() {
-        let original = serde_json::to_value(saved()).unwrap();
-        let mut duplicate = original.clone();
-        let repeated = duplicate["selected"][0].clone();
-        duplicate["selected"].as_array_mut().unwrap().push(repeated);
-        assert!(
-            serde_json::from_value::<ReloadGroups>(duplicate)
-                .unwrap()
-                .validate()
-                .is_err()
-        );
-        let mut wildcard = original.clone();
-        wildcard["selected"][0]["id"] = json!("*");
-        assert!(
-            serde_json::from_value::<ReloadGroups>(wildcard)
-                .unwrap()
-                .validate()
-                .is_err()
-        );
-        let mut credential = original;
-        credential["selected"][0]["token"] = json!("must-not-restore");
-        assert!(serde_json::from_value::<ReloadGroups>(credential).is_err());
     }
 }

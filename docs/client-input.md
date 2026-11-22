@@ -28,7 +28,7 @@ ssmcp local --input web --input-host 127.0.0.1 --input-port 8181 --input-token-f
 
 Linux 的 `ssmcp local --input sock` 默认监听 `/tmp/ssmcp-UID/chat-input.sock`。`--input-socket` 可指定另一个绝对路径，其父目录须为当前用户独占的私有目录。每个同 UID 的连接发送一行 UTF-8 文本，发完可关闭写半端，保留读半端接收实际 JSON 回执。完全关闭连接会取消仍在等待的确认，已入队的消息不会被自动撤回。已在监听的 socket 会导致启动失败。
 
-`--agent codex`、`--agent claude` 和 `--agent opencode` 使用本机安装的 CLI。每条普通消息启动一次处理，沿用各 CLI 的配置与非交互权限策略。进程正常退出并返回正文后，客户端将实际回复保存到发起时的会话，再返回 `completed`。发起正文使用原会话中的请求 ID。失败会报告退出状态与可识别的错误类别，并保留草稿。单个标准流最多读取 64 KiB，历史中的长回复会按 16 KiB 的消息限制保留带提示的预览。若需接入自己的处理程序，用 `--agent exec --agent-exec /绝对路径/程序`，可选的 `--agent-argv-file` 是私有 JSON 字符串数组文件。程序接收固定参数、分隔符 `--` 和一个完整的消息参数。为另一个 SSMCP 选择 `--agent ssmcp --agent-peer "$recipient" --agent-account "$account"`，其中 `recipient` 是已认证消息列表中的完整收件人 ID，`account` 是对应的 `github:账号数字ID`。收件人不可用或账号不符会报错。[程序处理实现](../src/client/chat_io/process.rs) · [原生消息与收据](thread-messaging.md)
+`--agent codex`、`--agent claude` 和 `--agent opencode` 使用本机安装的 CLI。每条普通消息启动一次处理，沿用各 CLI 的配置与非交互权限策略。进程正常退出并返回正文后，客户端将实际回复记录到发起时的实时会话，再返回 `completed`。发起正文沿用原请求 ID。失败会报告退出状态与可识别的错误类别，并保留草稿。单个标准流最多读取 64 KiB，长回复按 16 KiB 的消息限制保留带提示的内存预览。若需接入自己的处理程序，用 `--agent exec --agent-exec /绝对路径/程序`，可选的 `--agent-argv-file` 是私有 JSON 字符串数组文件。程序接收固定参数、分隔符 `--` 和一个完整的消息参数。为另一个 SSMCP 选择 `--agent ssmcp --agent-peer "$recipient" --agent-account "$account"`，其中 `recipient` 是已认证消息列表中的完整收件人 ID，`account` 是对应的 `github:账号数字ID`。收件人不可用或账号不符会报错。[程序处理实现](../src/client/chat_io/process.rs) · [原生消息与收据](thread-messaging.md)
 
 程序路由使用现有 `@文件` 和 `$技能` 准备流程。缺失引用保留正文并给出提示。原生 SSMCP 收件人收到字面正文。队列的 `queued` 与原生收据的 `included` 或 `acknowledged` 表示各自已确认的投递阶段。若回执为 `unconfirmed`，先核对请求 ID 和队列，客户端不会自动重发。保存会话与重载保留两个选项和已解析的连接目标，令牌内容留在私有文件中。管道与 MCP stdio 需要前台标准流，终端程序路由需要前台仪表板。后台会话可禁用聊天，也可用 Web、MCP HTTP 或 Linux socket 接收消息并选择处理方。
 
@@ -73,7 +73,7 @@ Linux 的 `ssmcp local --input sock` 默认监听 `/tmp/ssmcp-UID/chat-input.soc
 
 引用随原有文本消息投递。UTF-8 文本附最多 1 KiB 预览，图片和二进制附路径、类型、大小及原生读取方法；技能附来源和 `ssmcp.skills.read` 参数，agent 应完整读取技能后再应用。预览不会替代完整内容，也不会把路径伪装成已上传的副本。文件在后续读取前仍可能被用户修改。
 
-引用展开发生在网络发送前。未闭合引号、引用数或实际消息字节数超限仍会保留草稿并提示修正；缺失文件或技能本身不会阻止发送。相同请求重试复用已经准备好的正文与提示，取回编辑显示原稿。若此前缺失的文件已经创建，重新编辑并发送才会读取新内容。正文已经占满 16 KiB 时，不可用引用的详细提示保存在本地队列，传输仍使用完整原文；消息入队确认后显示提示。重试和会话重载继续使用同一份正文与提示，显式编辑后才重新解析。有效文件的附带资料仍遵守 16 KiB 传输预算。主要限制如下：
+引用展开发生在网络发送前。未闭合引号、引用数或实际消息字节数超限仍会保留草稿并提示修正；缺失文件或技能本身不会阻止发送。相同请求在同一进程内重试时复用已经准备好的正文与提示，取回编辑显示原稿。若此前缺失的文件已经创建，重新编辑并发送才会读取新内容。正文已经占满 16 KiB 时，不可用引用的详细提示保留在本地内存队列，传输仍使用完整原文；消息入队确认后显示提示。进程重启或 `/reload` 会清空这批正文与提示；同一进程内显式编辑后才重新解析引用。有效文件的附带资料仍遵守 16 KiB 传输预算。主要限制如下：
 
 | 范围 | 上限 |
 | --- | --- |
@@ -129,7 +129,7 @@ Linux 的 `ssmcp local --input sock` 默认监听 `/tmp/ssmcp-UID/chat-input.soc
 
 Linux 使用已安装的 Wayland/X11 剪贴板工具，macOS 和 Windows 使用各自的系统接口；不会自动安装工具。**私有图片、长文本、handoff 和文件批次保存目前只支持 Unix**，Windows 可先保存工作区文件再用 `@path`；工作区相对路径指向普通文件时，`/attach` 不另存副本。普通剪贴板文字即使看起来像路径，也保留为文字，不暗中读取该路径。
 
-最近回复超过 16 KiB 时，复制缓存会清空，`/copy` 明确显示无可用回复，不会悄悄复制较旧内容；长回复仍可通过历史或输出归档读取。
+最近回复超过 16 KiB 时，复制缓存会清空，`/copy` 明确显示无可用回复，不会悄悄复制较旧内容；当前保留的事件和工具输出可分别通过 `ssmcp.ui.events` 与输出 ID 分页读取，须检查返回的裁剪与完整性标记。
 
 图片源文件最多 **16 MiB、33,554,432 像素、单边 16384 像素**。小图保留原字节；需要处理时，将最长边限制到 4096 像素，再按实际编码大小缩小到 **400 KiB 原始文件字节**以内。PNG 透明度保留；处理结果会注明重编码或原始/结果尺寸。GIF/WebP 需要转码时只保存静态首帧，并显示提示。用户源文件不被覆盖。直接键入 `@image` 不触发这一步图像处理，仍适用下面的原生读取限制。
 
@@ -185,7 +185,7 @@ return result.structuredContent;
 
 自动保存目前支持 **Unix（Linux/macOS）**。目录通过无符号链接跟随的方式逐段打开，`.ssmcp/inputs` 为 0700，文件为 0600，随机名称不会覆盖已有文件；符号链接和 FIFO 等特殊路径被拒绝。Windows 当前提示先手工保存工作区文件，再用 `@path` 引用。
 
-成功保存的输入文件不会自动删除，避免 agent 尚未读取时内容消失。确认不再使用后，可手工清理 `.ssmcp/inputs`；在自己的项目中将该目录加入忽略规则，避免提交粘贴材料。它与要求队列、会话历史分别保存。
+成功保存的输入文件不会自动删除，避免 agent 尚未读取时内容消失。确认不再使用后，可手工清理 `.ssmcp/inputs`；在自己的项目中将该目录加入忽略规则，避免提交粘贴材料。这些文件来自用户的输入导入操作；要求队列与实时会话仍只保留在进程内存中。
 
 [长粘贴存储实现](../src/client/references/paste.rs)
 
@@ -205,13 +205,13 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.message", {
 
 `kind` 接受 `progress`（默认）或 `answer`，两者都按真实会话归属提交，最终回复不再需要结束审批。原有幂等键仍会复用相同内容的回执，并拒绝同一键的不同内容；旧 `finish_request_id` 字段保留为 `null`。[消息提交](../src/client/interface/messages.rs) · [入口退役说明](finish-and-questions.md#已退役的入口)
 
-两种消息都使用固定 `[AGENT]` 标签和客户端的 Markdown 排版，写入其归属会话的 JSONL，记录使用 `role: "assistant"`、`kind: "agent_message"`。已验证线程的回复沿用它首次发起原生调用时绑定的本地会话。切换到其他历史后，回复仍可保存到原会话。[本地消息的会话归属](client-ui.md#本地消息与回答问题)
+两种消息都使用客户端的 Markdown 排版，并记录到当前进程的有界内存中。消息归属来自已验证调用的账号、连接和线程；显示名称或正文中的身份字段不能把回复转给其他成员。后续的视图选择不改变原调用归属。[本地消息的会话归属](client-ui.md#本地消息与回答问题)
 
-回执中的 `history_saved: true` 表示已写入与 `message_id` 同 ID 的 JSONL 记录。写入失败时工具返回错误。保存成功后，如果原会话未选中，`shown` 为 `false`。`shown: true` 表示消息已交给本地显示，回执不记录用户是否阅读。
+回执中的 `recorded: true` 和 `storage: "memory"` 表示消息已记录在进程内存中，`message_id` 标识该消息。`shown: true` 表示消息已交给本地显示，不能据此判断用户是否阅读。记录与显示状态分别报告，重试时应检查原回执。
 
-需要重试时，使用原来的 `idempotency_key`、`text` 和 `kind`。匹配的重试返回原 ID 和 `duplicate: true`，不重复显示或追加历史；同一 key 搭配不同正文或 kind 会报错。key 限 1–96 个 ASCII 字母、数字、下划线或连字符。缓存最多保留 64 个新增 key，连接重连时保留，客户端进程重启后清空；这不是跨进程的永久去重保证。正文上限为 16 KiB UTF-8，只允许换行、制表符这两种控制字符。
+需要重试时，使用原来的 `idempotency_key`、`text` 和 `kind`。匹配的重试返回原 ID 和 `duplicate: true`，不重复显示或追加事件；同一 key 搭配不同正文或 kind 会报错。key 限 1–96 个 ASCII 字母、数字、下划线或连字符。缓存最多保留 64 个新增 key，同一进程断网重连时保留，客户端进程重启或 `/reload` 后清空。正文上限为 16 KiB UTF-8，只允许换行、制表符这两种控制字符。
 
-`/copy` 复制最近显示的 Agent 文本。`/resume` 恢复后，复制缓存来自所选 JSONL 会话中最后一条已保存的 assistant 文本；恢复过程不会重新显示为新消息或重复写入历史。大于 16 KiB 的恢复文本不进入复制缓存。
+`/copy` 复制当前进程最近显示的 Agent 文本，最多 16 KiB。复制缓存随进程重启或 `/reload` 清空；同一进程断网重连不会从旧文件恢复内容。
 
 本仓库的 relay 源码还提供 `say(clientId, text)` 和 `say(clientId, {text, kind, idempotency_key})` 简写，以及 `ui.message(clientId, arguments)`。这些 helper 随 relay 代码提供；单独更新客户端不会给已运行的旧 relay 添加 JS 全局。普通 `call(clientId, "ssmcp.ui.message", arguments)` 直接使用已注册的原生工具。当前 relay 源码把 `ui.message` 视为可领取 “next caller” 要求的交互；精确发给某个 Agent 的要求仍需 `collab.bind` 认证，显示名称不能代替绑定。
 
@@ -221,7 +221,7 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.message", {
 return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.ask", {
   title: "优先顺序",
   question: "下一步先处理哪一项？也可以直接填写其他要求。",
-  options: ["输入与编辑", "显示与历史"],
+  options: ["输入与编辑", "显示与事件"],
   idempotency_key: "priority-question-001"
 });
 ```
@@ -238,9 +238,9 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.questions", {
 
 问题队列属于当前客户端进程：进程重启（包括 `/reload`）时结束，旧连接记录不会自动交给新线程。最多 32 个待答问题、64 条保留记录，共用 256 KiB。回答可以来自本机 TUI，或同一账号、同一客户端上的另一个已验证 agent；只读 `attach` 不会因此获得答题能力。来源由后端记录，不能通过答案正文声明。
 
-上例没有提供已验证成员绑定，提问方需要手动读取。通过 `code_mode.agent` 或 `collab.bind` 绑定实际线程后，答案可在该线程下一次合格工具响应的 `question_answers` 中交付；只读 `ui.questions` 不消费答案。已保存的问题和答案可以出现在会话历史中，但历史不会恢复待答队列。完整来源、自动交付与确认语义见[异步问题与答案](finish-and-questions.md#异步问题与答案)。
+上例没有提供已验证成员绑定，提问方需要手动读取。通过 `code_mode.agent` 或 `collab.bind` 绑定实际线程后，答案可在该线程下一次合格工具响应的 `question_answers` 中交付；只读 `ui.questions` 不消费答案。问题与答案在当前进程内按各自保留范围读取，进程重启后无法恢复待答队列。完整来源、自动交付与确认语义见[异步问题与答案](finish-and-questions.md#异步问题与答案)。
 
-实现与限制：[消息与去重](../src/client/interface/messages.rs)、[本地问答接口](../src/client/interface/questions.rs)、[历史格式与交接](conversation-history.md)。
+实现与限制：[消息与去重](../src/client/interface/messages.rs)、[本地问答接口](../src/client/interface/questions.rs)、[实时事件与显式交接](conversation-history.md)。
 
 ## 6. /pi、/cc、/codex 使用当前真实工具目录
 
@@ -253,27 +253,27 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.questions", {
 | `/pi TOOL_FROM_CATALOG` | 只查看该工具的原生描述和参数 schema |
 | `/pi TOOL_FROM_CATALOG {"参数":"值"}` | 提供 JSON 对象后才显式调用该工具；请用真实目录名称与 schema 替换占位内容 |
 
-目录和 schema 查询不会安装插件或发起模型回合。显式调用异步执行，实际行为与授权检查仍由所选原生工具决定。结果在本地消息中展示；长结果提供完整 JSON 的输出归档位置。
+目录和 schema 查询不会安装插件或发起模型回合。显式调用异步执行，实际行为与授权检查仍由所选原生工具决定。结果在本地消息中展示；长结果提供当前内存捕获的输出 ID，供调用方在保留期限内分页读取。
 
 没有发现的工具会明确报错。Pi 的 `get_commands` 列出斜杠命令、技能和模板，不是内部 LSP 或模型工具目录；不能由此虚构 `pi.LSP` 等入口。需要某个能力时，先查看当前注册目录和实际 harness 状态。
 
 [真实目录与调用规则](../src/client/interface/harness.rs)
 
-## 7. 折叠事件、选择复制与恢复历史
+## 7. 折叠事件、选择复制与实时记录
 
 默认工具摘要显示最多 **8 行**，保留尾部并标记省略；会话正文不做工具式摘要。Activity 将每次本地日志发布保留为一条事件，最多 **128 条 / 2 MiB 展示正文**。长工具事件默认折叠，User、Agent、Answer 正文默认展开；图片先显示紧凑缩略图，点击或 Enter 可展开。Tab 将焦点切到内容区，↑/↓ 选择事件，Enter 切换折叠，→ 展开，← 收起；点击事件也可切换，滚轮和 PgUp/PgDn 浏览内容。
 
-展开只能显示当前本地保留的展示文本。它不会重新调用工具，也不会恢复摘要中已经省略的原文；完整执行输出仍按任务游标或输出归档读取。过滤视图和其他布局沿用原有日志浏览方式，不与逐事件预览缓存混为一份完整归档。
+展开显示当前本地保留的展示文本，不会重新调用工具或补回已经省略的原文。仍保留的执行输出按任务游标或输出 ID 读取；调用方须检查截断、缺口与完整性标记。日志筛选、逐事件预览和工具输出各自遵守保留范围。
 
 按 **F7** 进入复制模式：画面冻结并释放鼠标，拖选后使用终端自己的复制快捷键，通常为 Ctrl+Shift+C；F7 或 Esc 返回。支持的终端也可用 Shift+拖选直接调用原生选择。ssmcp 不把复制动作变成发给远端 shell 的输入。
 
-`/help` 或 F1 显示完整帮助，↑/↓、滚轮和 PgUp/PgDn 可滚动，Home/End 到起止位置。`/resume` 选择当前工作区的本地会话历史，展示保存的 Markdown，后续记录继续写入选中的会话。
+`/help` 或 F1 显示完整帮助，↑/↓、滚轮和 PgUp/PgDn 可滚动，Home/End 到起止位置。会话事件通过 `ssmcp.ui.events` 的 `action: "thread"` 读取；参数中的 `client_id` 使用实际客户端 ID，可选 `agent_id` 或 `main: true` 缩小到一个经过验证的线程范围。
 
-用户要求在**服务器确认发布后**写入历史，包括前台输入以及无 TUI 客户端通过 `ssmcp.ui.queue` 提交的要求。`requested:true` 只表示本地接收，不能据此认为历史已记录或要求已交付。保存错误会提示，不改变已经确认的队列结果。
+用户要求仍以服务器确认结果确定入队和交付状态，包括前台输入与无 TUI 客户端通过 `ssmcp.ui.queue` 提交的要求。`requested: true` 只表示本地接收；本地显示或事件记录也不等于要求已经交付。
 
-历史采用版本化 `ssmcp.conversation.v1` JSONL，并经过既有审计脱敏。恢复只展示内容并选择后续保存位置，不重放旧要求、工具或模型调用，也不恢复外部 harness 会话或成员凭据。路径、记录字段、容量和只读接口见[会话历史格式](conversation-history.md)。
+对话和事件只保留在当前进程的有界内存中。同一进程断网重连保留这批内容；退出、重启或 `/reload` 会清空。客户端不自动写入会话 JSONL、归档或上下文记忆，旧文件不会作为运行时状态读取，也不会被迁移删除。分页时沿用返回的 `generation` 和 `next_cursor`，并检查 `retention_gap_possible`。[实时事件、分页与显式导出](conversation-history.md)
 
-[完整 UI 配置与按键](client-ui.md) · [日志与输出归档](logging.md)
+[完整 UI 配置与按键](client-ui.md) · [日志与输出读取](logging.md)
 
 ## 8. 直接调用 Zuse CLI 操作桌面与浏览器
 
@@ -302,7 +302,7 @@ return await exec.run(clientId, {
 
 执行是异步的，输出、job ID 和退出码显示在会话里。最多同时运行四个本地命令或 harness 调用。长输出保留原生 output artifact，可用 `ssmcp.output.read` 读取；原生 `ssmcp.exec.cancel` 可以停止显示的 job ID。任务随当前客户端断开或 reload 停止。
 
-命令由本地用户显式提交，使用当前操作系统用户权限；它不进入 Agent 需求队列。预览模式不会执行命令。命令正文与结果进入本地会话记录。
+命令由本地用户显式提交，使用当前操作系统用户权限；它不进入 Agent 需求队列。预览模式不会执行命令。命令正文与结果进入当前进程的内存事件窗口。
 
 ## 10. 命令行帮助
 
@@ -310,8 +310,8 @@ return await exec.run(clientId, {
 
 下一版本的中文显示语言计划见 [next-version.md](next-version.md)。
 
-## 11. 本地记忆与结构化展示
+## 11. 显式交接与结构化展示
 
-`/context` 列出记忆分支，`/memory` 查看当前分支；`/compact [SUMMARY]` 保存检查点，`/fork [NAME]` 创建并激活分支，`/switch CONTEXT_ID` 按完整 ID 切换。它们使用统一 JSONL 的来源记录，不重放要求或工具，不启动模型。来源、容量、只读投影和本机客户端与 relay 的交付边界见 [本地上下文记忆](context-memory.md)。
+`/handoff [NOTE]` 显式导出当前保留的会话、待发要求与未回答问题，生成可编辑的私有 Markdown 引用。导出后仍由用户选择收件人并提交；文件不会随着后续事件自动更新。旧的记忆检查点和分支恢复入口已经退役。[显式交接](conversation-history.md) · [上下文记忆迁移说明](context-memory.md)
 
-需要卡片、表格、指标或步骤时，Agent 可用通用 `call(clientId, "ssmcp.ui.present", arguments)` 调用已注册的本地展示工具。它与 `ui.message` 共用消息身份、幂等回执和历史，不把展示内容加入用户要求队列。字段和支持的块类型见 [结构化展示](intelligence-ui.md)。
+需要卡片、表格、指标或步骤时，Agent 可用通用 `call(clientId, "ssmcp.ui.present", arguments)` 调用已注册的本地展示工具。它与 `ui.message` 共用消息身份、幂等回执和实时记录，不把展示内容加入用户要求队列。字段和支持的块类型见 [结构化展示](intelligence-ui.md)。

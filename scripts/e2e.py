@@ -37,6 +37,7 @@ LEGACY = "2025-11-25"
 PUBLIC_URL = "https://ssmcp.example"
 PROTOCOL_META = "io.modelcontextprotocol/protocolVersion"
 CAPABILITIES_META = "io.modelcontextprotocol/clientCapabilities"
+PUBLIC_TOOLS = frozenset({"list", "code_mode", "collab", "await", "messages", "link"})
 
 SHELL_TOOLS = frozenset({
     "terminal.read", "terminal.write", "terminal.resize", "terminal.status",
@@ -47,8 +48,6 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.fs.read_image", "ssmcp.fs.read_text", "ssmcp.fs.write_text", "ssmcp.fs.edit_text", "ssmcp.fs.events",
     "ssmcp.files.list", "ssmcp.files.cleanup", "ssmcp.files.config", "ssmcp.files.configure",
     "ssmcp.context.roots", "ssmcp.skills.list", "ssmcp.skills.read", "ssmcp.skills.view",
-    "ssmcp.context.status", "ssmcp.context.list", "ssmcp.context.read",
-    "ssmcp.context.compact", "ssmcp.context.fork", "ssmcp.context.switch",
     "ssmcp.agents.list", "ssmcp.agents.read", "ssmcp.agents.resolve",
     "ssmcp.net.listen", "ssmcp.net.accept", "ssmcp.net.connect", "ssmcp.net.read",
     "ssmcp.net.write", "ssmcp.net.shutdown", "ssmcp.net.close", "ssmcp.net.list",
@@ -66,8 +65,11 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.ui.reply",
     "ssmcp.ui.wait",
     "ssmcp.ui.tool_summary",
-    "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.present", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.question_ack","ssmcp.ui.question_delivery", "ssmcp.ui.history", "ssmcp.ui.harness",
-    "ssmcp.ui.history_archive", "ssmcp.ui.history_update",
+    "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.present", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.question_ack","ssmcp.ui.question_delivery", "ssmcp.ui.events", "ssmcp.ui.harness",
+    "ssmcp.worker.status", "ssmcp.worker.attach", "ssmcp.worker.tasks",
+    "ssmcp.worker.stop", "ssmcp.worker.resize", "ssmcp.worker.submit", "ssmcp.worker.result",
+    "ssmcp.worker.cancel", "ssmcp.worker.wait", "ssmcp.worker.claim", "ssmcp.worker.complete",
+    "ssmcp.worker.report", "ssmcp.worker.release",
     "ssmcp.computer.version", "ssmcp.computer.download",
     "ssmcp.computer.install", "ssmcp.computer.uninstall",
 })
@@ -234,6 +236,116 @@ class Harness:
         if result.get("isError"):
             raise AssertionError(f"Native tool {name} failed: {result}")
         return result["structuredContent"]
+
+    def live_events(self, *, agent_id=None, main=False, client_id=None, limit=16,
+                    cursor=None, generation=None):
+        """Read the current process journal with its real scope and cursor.
+
+        Observations must not substitute saved conversations or hide retention
+        gaps. A large native page may itself be a bounded in-memory artifact.
+        """
+        if agent_id is not None and main:
+            raise ValueError("main and agent_id are mutually exclusive")
+        selected = client_id or self.client_id
+        arguments = {"action": "thread", "client_id": selected, "limit": limit}
+        if agent_id is not None:
+            arguments["agent_id"] = agent_id
+        elif main:
+            arguments["main"] = True
+        if cursor is not None:
+            if cursor and not generation:
+                raise ValueError("a nonzero event cursor requires its returned generation")
+            arguments.update(cursor=cursor)
+        if generation is not None:
+            arguments["generation"] = generation
+        expected_kind = "thread" if agent_id is not None else "main" if main else "process"
+        events, seen = [], set()
+        scope = None
+        # A one-event page is useful while a targeted input is pending. The
+        # process journal can retain 4096 events, so 128 pages is not a complete
+        # upper bound for a small-page read of this bounded window.
+        for _ in range(4096):
+            page = self.live_event_call("ssmcp.ui.events", arguments, client_id=selected)
+            if page.get("spilled"):
+                page = self.read_live_native_page(page, client_id=selected)
+            if (page.get("schema_version") != 1 or not isinstance(page.get("events"), list)
+                    or page.get("retention") != "live_process_memory"
+                    or page.get("scope", {}).get("client_id") != selected
+                    or page["scope"].get("kind") != expected_kind
+                    or page["scope"].get("agent_id") != agent_id
+                    or not isinstance(page.get("generation"), str)):
+                raise AssertionError("ui.events did not return the exact live process scope")
+            if ((generation is not None and page["generation"] != generation)
+                    or (scope is not None and page["scope"] != scope)):
+                raise AssertionError("event paging changed the process generation or authenticated scope")
+            if page.get("truncated_since_cursor") or page.get("retention_gap_possible"):
+                raise AssertionError("the private fixture lost retained events before its assertions")
+            generation, scope = page["generation"], page["scope"]
+            for event in page["events"]:
+                sequence = event.get("sequence")
+                if not isinstance(sequence, int) or sequence in seen:
+                    raise AssertionError("ui.events repeated or returned an invalid event sequence")
+                seen.add(sequence)
+                events.append(event)
+            next_cursor = page["next_cursor"]
+            if not page["has_more"]:
+                return {**page, "events": events}
+            if not isinstance(next_cursor, int) or (cursor is not None and next_cursor <= cursor):
+                raise AssertionError("ui.events did not advance its real cursor")
+            cursor = next_cursor
+            arguments.update(cursor=cursor, generation=generation)
+        raise AssertionError("the live event fixture exceeded its bounded page count")
+
+    def live_event_call(self, name, arguments, *, client_id):
+        if name not in ("ssmcp.ui.events", "ssmcp.output.read"):
+            raise AssertionError("unexpected live event observation tool")
+        code = "return await call(%s, %s, %s);" % (
+            json.dumps(client_id), json.dumps(name), json.dumps(arguments),
+        )
+        outer = self.public_call("code_mode", {"code": code})
+        if outer.get("user_messages") or outer.get("native_messages"):
+            raise AssertionError("live event observation consumed pending fixture input")
+        native = outer["result"]
+        if native.get("isError"):
+            raise AssertionError(f"Native event observation {name} failed: {native}")
+        return native["structuredContent"]
+
+    def read_live_native_page(self, summary, *, client_id):
+        meta = summary.get("artifact", {})
+        size = meta.get("bytes")
+        if (summary.get("format") != "mcp_tool_result_json" or summary.get("output_error")
+                or meta.get("storage") != "memory" or meta.get("complete") is not True
+                or not isinstance(size, int) or not 0 < size <= 1024 * 1024
+                or meta.get("observed_bytes") != size
+                or not re.fullmatch(r"[0-9a-f]{32}", str(meta.get("id", "")))
+                or not re.fullmatch(r"[0-9a-f]{64}", str(meta.get("sha256", "")))):
+            raise AssertionError("event page is not a complete bounded memory artifact")
+        # output.read is eligible work. Do not let a large observation claim a
+        # pending user request while checking that UI reads are transparent.
+        if hasattr(self, "queue") and any(row["status"] in ("queued", "sending")
+                                          for row in self.queue()["queue"]):
+            raise AssertionError("an event artifact read would consume pending fixture input")
+        payload = bytearray()
+        while len(payload) < size:
+            offset = len(payload)
+            part = self.live_event_call("ssmcp.output.read", {
+                "id": meta["id"], "offset": offset, "max_bytes": min(4096, size - offset),
+            }, client_id=client_id)
+            chunk = base64.b64decode(part["data_base64"], validate=True)
+            end = offset + len(chunk)
+            if (not chunk or end > size or part.get("id") != meta["id"]
+                    or part.get("offset") != offset or part.get("next_offset") != end
+                    or part.get("size") != size or part.get("complete") is not True
+                    or part.get("eof") is not (end == size)
+                    or part.get("sha256") != hashlib.sha256(chunk).hexdigest()):
+                raise AssertionError("event artifact returned an incomplete or mismatched chunk")
+            payload.extend(chunk)
+        if hashlib.sha256(payload).hexdigest() != meta["sha256"]:
+            raise AssertionError("event artifact digest differs from its retained bytes")
+        native = json.loads(payload)
+        if native.get("isError") or not isinstance(native.get("structuredContent"), dict):
+            raise AssertionError("event artifact did not contain a successful native response")
+        return native["structuredContent"]
 
     def workspace_roundtrip(self, directory, *, client_id=None, label="workspace"):
         """Exercise universal file helpers over the account relay in a temporary root."""
@@ -578,8 +690,9 @@ class Harness:
         status, result, _ = self.rpc("notifications/initialized", notification=True)
         self.check(status == 202 and result is None, "initialized notification returns empty 202")
         status, result, headers = self.rpc("tools/list")
-        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode", "collab", "await", "messages"],
-                   "legacy tools/list exposes list, code_mode, collab, await and messages")
+        self.check(status == 200 and {tool["name"] for tool in result["result"]["tools"]} == PUBLIC_TOOLS
+                   and len(result["result"]["tools"]) == len(PUBLIC_TOOLS),
+                   "legacy tools/list exposes exactly list, code_mode, collab, await, messages and link")
         inventory = self.public_call("list")
         self.check(len(inventory["clients"]) == 1
                    and inventory["clients"][0]["id"] == self.client_id
@@ -624,7 +737,8 @@ class Harness:
         self.check(status == 200 and result["result"]["resultType"] == "complete"
                    and MODERN in result["result"]["supportedVersions"], "modern server/discover completes")
         status, result, _ = self.rpc("tools/list", modern=True)
-        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode", "collab", "await", "messages"],
+        self.check(status == 200 and {tool["name"] for tool in result["result"]["tools"]} == PUBLIC_TOOLS
+                   and len(result["result"]["tools"]) == len(PUBLIC_TOOLS),
                    "modern tools/list exposes the same public tools")
         self.check(self.rpc("tools/list", modern=True, headers={"Mcp-Method": "ping"})[0] == 400,
                    "modern method header must match body")
@@ -816,8 +930,15 @@ class Harness:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, default=Path("target/debug"))
+    parser.add_argument("--fixture-binary", type=Path, default=os.environ.get("SSMCP_E2E_FIXTURE_BINARY"),
+                        help="prebuilt library fixture; overrides SSMCP_E2E_FIXTURE_BINARY")
     parser.add_argument("--report", type=Path, help="write a JSON report without credentials")
     args = parser.parse_args()
+    if args.fixture_binary is not None:
+        fixture = args.fixture_binary.resolve()
+        if not fixture.is_file() or not os.access(fixture, os.X_OK):
+            parser.error(f"prebuilt fixture is not executable: {fixture}")
+        os.environ["SSMCP_E2E_FIXTURE_BINARY"] = str(fixture)
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="ssmcp-e2e-") as directory:
         harness = Harness(Path(directory), args.bin_dir)

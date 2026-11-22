@@ -22,6 +22,7 @@ mod highlight;
 mod incoming_tests;
 pub(crate) mod input;
 pub(crate) mod interface;
+mod invite;
 mod link_metrics;
 #[cfg(target_os = "linux")]
 mod local;
@@ -43,6 +44,8 @@ pub(crate) mod ui;
 mod ui_command;
 mod update;
 mod version;
+mod worker_control;
+mod worker_window;
 #[cfg(target_os = "linux")]
 mod zero;
 
@@ -56,17 +59,7 @@ use crate::{
     },
 };
 use serde_json::json;
-use std::{
-    ffi::OsString,
-    io,
-    path::PathBuf,
-    process::ExitStatus,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::{ffi::OsString, io, path::PathBuf, process::ExitStatus, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, BufReader},
     process::{Child, ChildStdout, Command},
@@ -75,15 +68,16 @@ use tokio::{
     time::timeout,
 };
 
+const WORKER_WINDOW_CHILD_FLAG: &str = "--ssmcp-worker-window-child";
+
 const HELP: &str = r#"ssmcp — connect a device; control its tools remotely
 
 Usage: ssmcp [username@server] [options]
 
 Start
   ssmcp                         Reuse your last authorized account
-  ssmcp --worker N              Open a worker pool with N task slots
+  ssmcp --worker N              Open chat and a worker window with N slots
   ssmcp local                   Run a local MCP session on Linux
-  ssmcp resume [options]        Open this workspace's saved conversation picker
   ssmcp alice@relay.example     Connect and sign in when needed
   ssmcp list                    List online processes and registered threads
   ssmcp -i                      Open an authorized remote terminal
@@ -104,14 +98,15 @@ Manage
 
 Options
   --name NAME   --title TEXT   --context NAME   --server URL   --context-root PATH
-  --worker N    Worker monitor; no local agent installation is required
+  --worker N    Open chat and a separate worker monitor
   --version [--all]    Show the version or the locked dependency tree
   --no-browser  --no-watchdog  --theme NAME   --no-color
   --allow USER@SERVER    Allow a registered account on this relay; repeat or comma-separate
   --account-compat       Use an existing verified self account on an older relay
 
 Use ssmcp COMMAND --help for command options; --help-full lists advanced connection and executor flags.
-Worker mode has no chat input; authorized remote agents submit, claim and complete tasks.
+Foreground --worker keeps chat here and opens a separate worker window.
+Workers use remote agents by default; no local model starts.
 In a connected chat: /help, @file, $skill, !command; Left opens Agents.
 "#;
 
@@ -119,9 +114,7 @@ const HELP_FULL: &str = r#"ssmcp — connect your devices and control authorized
 
 Usage: ssmcp username@server [options]
        ssmcp [--server URL] [options]
-       ssmcp resume [options]
-       ssmcp [connection options] --worker N [--agent remote]
-       ssmcp [connection options] --worker N --agent codex|claude|opencode|exec [--worker-k K]
+       ssmcp [connection options] --worker N
        ssmcp whoami|logout [--server URL] [--json]
        ssmcp list [--json | -i] [--client ID]
        ssmcp -i [--server URL] [--client ID]
@@ -157,8 +150,8 @@ Usage: ssmcp username@server [options]
   --input-port PORT    Port for web or MCP HTTP (required)
   --input-token-file PATH  Private bearer token file for web or MCP HTTP
   --input-socket PATH  Private Linux Unix socket path (default /tmp/ssmcp-UID/chat-input.sock)
-  --agent RECIPIENT    Advanced: remote (worker default), next-caller (chat default), codex, claude, opencode, exec or ssmcp
-  --worker N          Remote task pool by default; no chat composer or local harness
+  --agent RECIPIENT    Advanced chat recipient or explicitly configured local executor
+  --worker N          Open chat plus a separate remote task monitor
   --worker-k K        Resource share multiplier for explicit local worker executors (default 1)
   --load-harness NAME  Explicitly preload one native protocol outside worker mode
   --list-harnesses    List supported harness providers
@@ -455,7 +448,8 @@ struct Options {
     context_roots: Vec<PathBuf>,
     chat: chat_io::Settings,
     worker: Option<crate::worker::Config>,
-    resume_history: AtomicBool,
+    worker_window_child: bool,
+    worker_window: Option<Mutex<WorkerController>>,
     list_tools: bool,
     daemon: bool,
     session_control: bool,
@@ -546,6 +540,14 @@ impl Options {
             true,
             false,
         )?;
+        if parsed
+            .as_ref()
+            .is_some_and(|options| options.worker_window_child)
+        {
+            return Err(
+                "the internal worker window marker cannot be saved as a background session".into(),
+            );
+        }
         if let Some(options) = &mut parsed
             && options.worker.is_some()
         {
@@ -563,9 +565,10 @@ impl Options {
         new_connection: bool,
     ) -> Result<Option<Self>, String> {
         let mut args = args.into_iter().peekable();
-        let resume_history = new_connection && args.peek().is_some_and(|arg| arg == "resume");
-        if resume_history {
-            args.next();
+        if args.peek().is_some_and(|arg| arg == "resume") {
+            return Err(
+                "conversation resume is no longer available; start ssmcp for a live session".into(),
+            );
         }
         let mut local_mode = args.peek().is_some_and(|arg| arg == "local");
         if local_mode {
@@ -591,6 +594,7 @@ impl Options {
         let mut chat = chat_io::Flags::default();
         let mut worker_count = None;
         let mut worker_factor = None;
+        let mut worker_window_child = false;
         let mut list_tools = false;
         let mut daemon = false;
         let mut session_control = false;
@@ -610,6 +614,13 @@ impl Options {
         let mut harness_arguments = Vec::new();
         while let Some(arg) = args.next() {
             match arg.to_str() {
+                Some(WORKER_WINDOW_CHILD_FLAG) => {
+                    if std::mem::replace(&mut worker_window_child, true) {
+                        return Err(
+                            "the internal worker window marker may be supplied only once".into(),
+                        );
+                    }
+                }
                 Some("--worker" | "--worker-k") => {
                     let name = arg.to_str().expect("matched UTF-8 worker flag");
                     let value = args
@@ -933,23 +944,21 @@ impl Options {
             return Err("local worker executors require Linux cgroup v2 and the user's systemd manager; omit --agent to use the remote task pool".into());
         }
         if worker.is_some()
-            && (resume_history
-                || list_tools
+            && (list_tools
                 || harness_name.is_some()
                 || !matches!(chat.input, chat_io::Input::Terminal | chat_io::Input::None))
         {
-            return Err("--worker is a remote task monitor by default: omit resume, --list-tools, --load-harness and external chat inputs".into());
+            return Err("--worker opens chat and a separate worker window; omit --list-tools, --load-harness and external chat inputs".into());
         }
         if worker.is_some() && daemon {
             chat.input = chat_io::Input::None;
         }
-        if resume_history
-            && (daemon
-                || list_tools
-                || chat.input != chat_io::Input::Terminal
-                || log_format == Some(render::LogFormat::Jsonl))
+        if worker_window_child
+            && (worker.is_none() || daemon || chat.input != chat_io::Input::Terminal)
         {
-            return Err("ssmcp resume requires a foreground interactive dashboard; omit --daemon, --list-tools, non-terminal --input and JSONL output".into());
+            return Err(
+                "the internal worker window marker requires a foreground --worker monitor".into(),
+            );
         }
         if list_tools && !chat.arguments().is_empty() {
             return Err("--list-tools cannot configure chat input or an agent".into());
@@ -1132,7 +1141,8 @@ impl Options {
             context_roots,
             chat,
             worker,
-            resume_history: AtomicBool::new(resume_history),
+            worker_window_child,
+            worker_window: None,
             list_tools,
             daemon,
             session_control,
@@ -1213,6 +1223,24 @@ impl Options {
             metadata.allow.clear();
         }
         Ok(metadata)
+    }
+
+    fn worker_window_arguments(&self, args: &[OsString]) -> Option<Vec<OsString>> {
+        if self.worker_window_child
+            || self.daemon
+            || self.list_tools
+            || self.chat.input != chat_io::Input::Terminal
+        {
+            return None;
+        }
+        let worker = self.worker?;
+        worker_arguments(args, worker.count, true, false).ok()
+    }
+
+    fn become_worker_controller(&mut self) {
+        self.worker = None;
+        // Executor flags belong only to the child; the controller uses ordinary chat.
+        self.chat = chat_io::Settings::default();
     }
 
     /// Store only validated connection settings. Service stdout/stderr have a
@@ -1548,12 +1576,6 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
     let Some(mut options) = Options::parse_new(connection)? else {
         return Ok(());
     };
-    if options.resume_history.load(Ordering::Relaxed) {
-        return Err(
-            "ssmcp resume opens a foreground history picker and cannot create a background session"
-                .into(),
-        );
-    }
     if options.destination.is_some() {
         return Err("Use ssmcp sessions create NAME username@server for an OAuth session".into());
     }
@@ -1574,6 +1596,260 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         );
     }
     Ok(())
+}
+
+const MAX_WORKER_TOTAL: usize = 128;
+
+fn worker_total_after_delta(total: usize, delta: i32) -> Result<usize, String> {
+    total
+        .checked_add_signed(delta as isize)
+        .filter(|total| *total <= MAX_WORKER_TOTAL)
+        .ok_or_else(|| format!("Worker target must stay between 0 and {MAX_WORKER_TOTAL}."))
+}
+
+fn worker_arguments(
+    arguments: &[OsString],
+    total: usize,
+    child: bool,
+    reset_chat: bool,
+) -> Result<Vec<OsString>, String> {
+    if total > MAX_WORKER_TOTAL || (child && total == 0) {
+        return Err("invalid worker window size".into());
+    }
+    let mut result = Vec::with_capacity(arguments.len() + 3);
+    let mut tail = Vec::new();
+    let mut found = false;
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.to_str() {
+            Some("--") => {
+                tail.push(argument.clone());
+                tail.extend(arguments.cloned());
+                break;
+            }
+            Some("--worker") => {
+                arguments.next().ok_or("--worker requires a value")?;
+                found = true;
+                if total != 0 {
+                    result.extend([argument.clone(), OsString::from(total.to_string())]);
+                }
+            }
+            Some(value) if value.starts_with("--worker=") => {
+                found = true;
+                if total != 0 {
+                    result.push(OsString::from(format!("--worker={total}")));
+                }
+            }
+            Some("--worker-k") => {
+                let value = arguments.next().ok_or("--worker-k requires a value")?;
+                if total != 0 {
+                    result.extend([argument.clone(), value.clone()]);
+                }
+            }
+            Some(value) if value.starts_with("--worker-k=") => {
+                if total != 0 {
+                    result.push(argument.clone());
+                }
+            }
+            Some(WORKER_WINDOW_CHILD_FLAG) => {}
+            Some(value) if reset_chat && chat_io::takes_value(value) => {
+                arguments.next().ok_or("chat option requires a value")?;
+            }
+            Some(value)
+                if reset_chat
+                    && value
+                        .split_once('=')
+                        .is_some_and(|(name, _)| chat_io::takes_value(name)) => {}
+            Some(value) if connection_option_takes_value(value) => {
+                result.push(argument.clone());
+                result.push(
+                    arguments
+                        .next()
+                        .ok_or("connection option requires a value")?
+                        .clone(),
+                );
+            }
+            _ => result.push(argument.clone()),
+        }
+    }
+    if total != 0 && !found {
+        result.extend([
+            OsString::from("--worker"),
+            OsString::from(total.to_string()),
+        ]);
+    }
+    if child {
+        result.push(OsString::from(WORKER_WINDOW_CHILD_FLAG));
+    }
+    result.extend(tail);
+    Ok(result)
+}
+
+struct WorkerController {
+    executable: PathBuf,
+    arguments: Vec<OsString>,
+    cwd: PathBuf,
+    preserve_worker_agent: bool,
+    desired: usize,
+    window: Option<worker_window::WindowChild>,
+    launching: Option<JoinHandle<Result<worker_window::WindowChild, String>>>,
+    pending: Option<(u64, usize)>,
+}
+
+impl WorkerController {
+    fn new(options: &Options, arguments: &[OsString]) -> crate::Result<Self> {
+        Ok(Self {
+            executable: std::env::current_exe()?,
+            arguments: reload::connection_arguments(arguments.to_vec(), options, false)?,
+            cwd: std::env::current_dir()?,
+            preserve_worker_agent: options.worker.is_some(),
+            desired: options.worker.map_or(0, |worker| worker.count),
+            window: None,
+            launching: None,
+            pending: None,
+        })
+    }
+
+    async fn poll(&mut self) {
+        if self.launching.as_ref().is_some_and(JoinHandle::is_finished) {
+            let launch = self
+                .launching
+                .take()
+                .expect("finished worker window launch");
+            match launch.await {
+                Ok(Ok(window)) => {
+                    self.window = Some(window);
+                    terminal::notice("Worker window connected.");
+                }
+                result => {
+                    let error = match result {
+                        Ok(Err(error)) => error,
+                        Err(error) => format!("worker window launch ended: {error}"),
+                        Ok(Ok(_)) => unreachable!(),
+                    };
+                    self.desired = 0;
+                    self.pending = None;
+                    terminal::notice(&format!("Could not open worker window: {error}"));
+                }
+            }
+        }
+        let closed = self.window.as_ref().map(|window| window.poll_closed());
+        match closed {
+            Some(Ok(true)) => {
+                self.window = None;
+                self.pending = None;
+                self.desired = 0;
+                terminal::notice("Worker window closed; this chat session remains available.");
+            }
+            Some(Err(error)) => {
+                self.window = None;
+                self.pending = None;
+                self.desired = 0;
+                terminal::notice(&format!(
+                    "Worker window: {error}. This chat session remains available."
+                ));
+            }
+            _ => {}
+        }
+
+        let snapshot = self
+            .window
+            .as_ref()
+            .and_then(|_| worker_window::linked_snapshot());
+        if let (Some((id, target)), Some(snapshot)) = (self.pending, snapshot.as_ref()) {
+            let receipt = &snapshot["last_resize"];
+            if receipt["request_id"].as_u64() == Some(id) {
+                self.pending = None;
+                if receipt["accepted"].as_bool() != Some(true) {
+                    let actual = snapshot["desired_total"].as_u64().unwrap_or(0) as usize;
+                    let later_delta = self.desired as i32 - target as i32;
+                    self.desired = worker_total_after_delta(actual, later_delta).unwrap_or(actual);
+                    let error = receipt["error"]
+                        .as_str()
+                        .unwrap_or("worker resize was rejected");
+                    terminal::notice(&format!("Worker target unchanged: {error}"));
+                }
+            }
+        }
+
+        // A bounded batch keeps input responsive even if another producer is busy.
+        let previous_target = self.desired;
+        for _ in 0..8 {
+            let Some(delta) = worker_control::take() else {
+                break;
+            };
+            match worker_total_after_delta(self.desired, delta) {
+                Ok(total) => self.desired = total,
+                Err(error) => terminal::notice(&error),
+            }
+        }
+
+        if self.desired != previous_target
+            && snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot["retiring"]
+                    .as_u64()
+                    .is_some_and(|count| count != 0)
+                    && snapshot["desired_total"].as_u64() != Some(self.desired as u64)
+            })
+        {
+            terminal::notice("Worker target queued; waiting for retiring workers to leave.");
+        }
+
+        if self.window.is_none() && self.launching.is_none() && self.desired != 0 {
+            let arguments = match worker_arguments(
+                &self.arguments,
+                self.desired,
+                true,
+                !self.preserve_worker_agent,
+            ) {
+                Ok(arguments) => arguments,
+                Err(error) => {
+                    self.desired = 0;
+                    terminal::notice(&error);
+                    return;
+                }
+            };
+            let executable = self.executable.clone();
+            let cwd = self.cwd.clone();
+            self.launching = Some(tokio::task::spawn_blocking(move || {
+                worker_window::launch(&executable, &arguments, &cwd)
+            }));
+            terminal::notice("Opening worker window.");
+            return;
+        }
+
+        if let (Some(window), Some(snapshot)) = (self.window.as_ref(), snapshot.as_ref()) {
+            let actual = snapshot["desired_total"]
+                .as_u64()
+                .map(|value| value as usize);
+            let settled = snapshot["retiring"].as_u64() == Some(0)
+                && snapshot["total"].as_u64() == snapshot["desired_total"].as_u64();
+            if self.pending.is_none()
+                && settled
+                && snapshot["stopping"].as_bool() != Some(true)
+                && snapshot["closed"].as_bool() != Some(true)
+                && actual.is_some_and(|actual| actual != self.desired)
+            {
+                match window.request_resize(self.desired) {
+                    Ok(id) => self.pending = Some((id, self.desired)),
+                    Err(error) => {
+                        self.desired = actual.unwrap_or(0);
+                        terminal::notice(&format!("Could not change worker target: {error}"));
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Drop for WorkerController {
+    fn drop(&mut self) {
+        if let Some(launch) = self.launching.take() {
+            // A blocking launch that already started owns its eventual result;
+            // dropping the cancelled handle drops that WindowChild on completion.
+            launch.abort();
+        }
+    }
 }
 
 fn connection_option_takes_value(option: &str) -> bool {
@@ -1884,10 +2160,15 @@ pub async fn run() -> crate::Result<()> {
     let parsed = if let Some(runner) = &service {
         Options::parse_saved(runner.spec())?
     } else {
-        Options::parse_new(args)?
+        Options::parse_new(args.clone())?
     };
     let Some(mut options) = parsed else {
         return Ok(());
+    };
+    let mut worker_session = if options.worker_window_child {
+        Some(worker_window::child_session()?)
+    } else {
+        None
     };
     if service.is_some() || options.daemon {
         if options.worker.is_some() && options.chat.input != chat_io::Input::None {
@@ -1897,18 +2178,6 @@ pub async fn run() -> crate::Result<()> {
     }
     if options.destination.is_some() {
         return Err("SSH device connections have been removed. Use ssmcp username@server or ssmcp login --server https://server".into());
-    }
-    if options.resume_history.load(Ordering::Relaxed) {
-        if interface::history::sessions()?.is_empty() {
-            println!(
-                "No saved conversations in this workspace. Start ssmcp to begin a conversation."
-            );
-            return Ok(());
-        }
-        use std::io::IsTerminal;
-        if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
-            return Err("ssmcp resume requires an interactive terminal to choose a saved conversation; run it from a terminal in this workspace".into());
-        }
     }
     if options.is_local() {
         if service.is_some() {
@@ -1964,13 +2233,34 @@ pub async fn run() -> crate::Result<()> {
         ui.log_format = render::LogFormat::Jsonl;
         ui.show_raw_json = false;
     }
-    if options.resume_history.load(Ordering::Relaxed) {
-        if !ui.dashboard || ui.log_format == render::LogFormat::Jsonl {
-            return Err("ssmcp resume requires the interactive dashboard; enable ui.dashboard and use pretty log output".into());
+    let child_arguments = options.worker_window_arguments(&args);
+    let interactive_dashboard = {
+        use std::io::IsTerminal;
+        ui.dashboard
+            && ui.log_format != render::LogFormat::Jsonl
+            && io::stdin().is_terminal()
+            && io::stderr().is_terminal()
+    };
+    if child_arguments.is_some() && !interactive_dashboard {
+        return Err("opening a worker window requires an interactive chat dashboard".into());
+    }
+    if interactive_dashboard
+        && service.is_none()
+        && !options.list_tools
+        && !options.worker_window_child
+        && options.chat.input == chat_io::Input::Terminal
+    {
+        let mut controller = WorkerController::new(&options, &args)?;
+        if let Some(child_args) = child_arguments {
+            controller.window = Some(worker_window::launch(
+                &controller.executable,
+                &child_args,
+                &controller.cwd,
+            )?);
+            options.become_worker_controller();
+            ui.layout = ui::Layout::Chat;
         }
-        // Open the requested picker even when the saved layout is audit or logs.
-        // This startup choice does not write the user's appearance configuration.
-        ui.layout = ui::Layout::Chat;
+        options.worker_window = Some(Mutex::new(controller));
     }
     interface::initialize_path(options.ui_config.as_deref());
     render::configure(ui.clone());
@@ -1978,12 +2268,9 @@ pub async fn run() -> crate::Result<()> {
         render::status(
             "context",
             "Warning",
-            &format!(
-                "Local memory unavailable: {error}. Saved conversation history also requires an accessible workspace."
-            ),
+            &format!("Live context unavailable: {error}"),
         );
     }
-    steering::restore_handoff()?;
     let mut attachment = if let Some(runner) = &service {
         Some(crate::session::attach::serve(runner.directory().to_path_buf(), None).await?)
     } else {
@@ -2034,6 +2321,9 @@ pub async fn run() -> crate::Result<()> {
     let mut attempt = 0u64;
     let mut reauthenticated = false;
     loop {
+        if options.worker_window_child && worker_window::child_stop_requested() {
+            return Ok(());
+        }
         if let Some(runner) = &service
             && runner.stop_requested()
         {
@@ -2106,7 +2396,7 @@ pub async fn run() -> crate::Result<()> {
         )
         .await
         {
-            Ok(ConnectionExit::Reload { restart, output }) => {
+            Ok(ConnectionExit::Reload { mut restart }) => {
                 // The ACK and broker receipt were sent before connect cleaned
                 // up every old task. Stop wins over a reload arriving at exit.
                 let stopped = tokio::select! {
@@ -2130,7 +2420,15 @@ pub async fn run() -> crate::Result<()> {
                     handle.shutdown().await;
                 }
                 drop(service.take());
-                return restart.execute(output);
+                if let Some(controller) = &options.worker_window {
+                    let controller = controller.lock().await;
+                    restart
+                        .set_worker_total(controller.desired, controller.preserve_worker_agent)?;
+                }
+                // exec does not run Rust destructors; stop this controller's child first.
+                drop(options.worker_window.take());
+                drop(worker_session.take());
+                return restart.execute();
             }
             other => other,
         };
@@ -2197,6 +2495,7 @@ pub async fn run() -> crate::Result<()> {
         );
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(options.reconnect_delay_secs)) => {},
+            _ = worker_parent_stopped(&options) => return Ok(()),
             _ = interrupt.recv() => {
                 if let Some(runner) = &service { runner.record("stopped", attempt, None, None, None)?; }
                 return Ok(());
@@ -2206,6 +2505,15 @@ pub async fn run() -> crate::Result<()> {
                 return Ok(());
             },
         }
+    }
+}
+
+async fn worker_parent_stopped(options: &Options) {
+    if !options.worker_window_child {
+        std::future::pending::<()>().await;
+    }
+    while !worker_window::child_stop_requested() {
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -2221,19 +2529,14 @@ pub(crate) fn watchdog_retries(
 ) -> bool {
     enabled
         && error.is_none_or(|error| {
-            !error.is::<UnsupportedWireProtocol>()
-                && !error.is::<relay::PermanentFailure>()
-                && !error.is::<crate::output::StartupDirectoryError>()
+            !error.is::<UnsupportedWireProtocol>() && !error.is::<relay::PermanentFailure>()
         })
 }
 
 enum ConnectionExit {
     Stopped,
     Disconnected,
-    Reload {
-        restart: reload::Restart,
-        output: Arc<crate::output::OutputStore>,
-    },
+    Reload { restart: reload::Restart },
 }
 
 const UNSUPPORTED_WIRE_PROTOCOL: &str = "unsupported ssmcp wire protocol";
@@ -2736,6 +3039,7 @@ async fn connect_inner(
         tokio::select! {
             _ = interrupt.recv() => {},
             _ = terminate.recv() => {},
+            _ = worker_parent_stopped(options) => {},
         }
     };
     let mut metric_channel = None;
@@ -2830,20 +3134,8 @@ async fn connect_inner(
     {
         let _ = ssh.kill().await;
         return Err(Box::new(relay::PermanentFailure(
-            "worker monitor requires an interactive dashboard; use --daemon for a background pool"
-                .into(),
+            "the worker window requires an interactive terminal dashboard".into(),
         )));
-    }
-    if options.resume_history.load(Ordering::Relaxed) {
-        let Some(display) = display_session.as_ref() else {
-            let _ = ssh.kill().await;
-            return Err(Box::new(relay::PermanentFailure(
-                "ssmcp resume could not open the interactive history picker; use a supported terminal with the dashboard enabled".into(),
-            )));
-        };
-        if options.resume_history.swap(false, Ordering::Relaxed) {
-            display.resume_history();
-        }
     }
     if options.worker.is_none()
         && options.chat.input == chat_io::Input::Terminal
@@ -3112,15 +3404,17 @@ async fn connect_inner(
     let mut intentionally_stopped = false;
     let mut service_updates = tokio::time::interval(Duration::from_secs(1));
     service_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // Only connected sessions schedule cleanup. Constructors, discovery commands
-    // and the private worker child never initialize or scan a workspace here.
-    let cleanup_period = Duration::from_secs(5 * 60);
-    let mut cleanup_updates =
-        tokio::time::interval_at(tokio::time::Instant::now() + cleanup_period, cleanup_period);
-    cleanup_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut managed_cleanup = backend.start_managed_file_cleanup("startup");
     backend.start_workers();
+    let mut worker_start_error = if options.worker_window_child {
+        worker_window::child_ready(&client_id).err()
+    } else {
+        None
+    };
     let mut result: crate::Result<()> = 'connected: loop {
+        if let Some(error) = worker_start_error.take() {
+            intentionally_stopped = true;
+            break Err(error.into());
+        }
         tokio::select! {
             ended = chat_io::input_ended(&mut chat) => match ended {
                 Ok(()) if options.chat.input == chat_io::Input::Pipe => {
@@ -3189,15 +3483,6 @@ async fn connect_inner(
                 },
                 None => {},
             },
-            _ = cleanup_updates.tick() => {
-                // A slow scan never overlaps the next one or blocks relay calls.
-                if managed_cleanup.is_finished() {
-                    if let Err(error) = (&mut managed_cleanup).await {
-                        render::status("cleanup", "Warning", &format!("Managed-file cleanup task failed: {error}"));
-                    }
-                    managed_cleanup = backend.start_managed_file_cleanup("periodic");
-                }
-            },
             _ = service_updates.tick(), if service.is_some() => {
                 if service.expect("guarded service runner").stop_requested() {
                     intentionally_stopped = true;
@@ -3205,6 +3490,24 @@ async fn connect_inner(
                 }
             },
             _ = ui_updates.tick(), if display_session.is_some() => {
+                if options.worker_window_child && worker_window::child_stop_requested() {
+                    intentionally_stopped = true;
+                    break Ok(());
+                }
+                if options.worker_window_child
+                    && let Some(total) = worker_window::take_resize_request()
+                {
+                    let result = backend.resize_workers(total);
+                    if let Err(error) = &result {
+                        terminal::notice(&format!("Worker resize rejected: {error}"));
+                    }
+                    if let Err(error) = worker_window::report_resize_result(total, result) {
+                        terminal::notice(&format!("Worker resize receipt: {error}"));
+                    }
+                }
+                if let Some(controller) = &options.worker_window {
+                    controller.lock().await.poll().await;
+                }
                 if options.worker.is_some() && local_input.as_ref().is_none_or(input::Input::is_finished) {
                     intentionally_stopped = true;
                     break Err(worker_monitor_closed());
@@ -3401,13 +3704,6 @@ async fn connect_inner(
         reload_requested = false;
         result = Ok(());
     }
-    if let Err(error) = managed_cleanup.await {
-        render::status(
-            "cleanup",
-            "Warning",
-            &format!("Managed-file cleanup task failed: {error}"),
-        );
-    }
     git_status.shutdown().await;
     if matches!(&transport, Transport::Account { .. })
         && !intentionally_stopped
@@ -3432,10 +3728,7 @@ async fn connect_inner(
     }
     render::status("shell", "Result", "DISCONNECTED");
     if reload_requested {
-        return Ok(ConnectionExit::Reload {
-            restart,
-            output: backend.output(),
-        });
+        return Ok(ConnectionExit::Reload { restart });
     }
     result.map(|()| {
         if intentionally_stopped {
@@ -3460,6 +3753,245 @@ pub fn report_run_error(error: &(dyn std::error::Error + 'static)) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn worker_capacity_changes_accumulate_with_checked_bounds() {
+        let total = worker_total_after_delta(0, 3).unwrap();
+        let total = worker_total_after_delta(total, 2).unwrap();
+        assert_eq!(total, 5);
+        assert_eq!(worker_total_after_delta(total, -5).unwrap(), 0);
+        assert!(worker_total_after_delta(0, -1).is_err());
+        assert!(worker_total_after_delta(128, 1).is_err());
+        assert!(worker_total_after_delta(1, i32::MAX).is_err());
+        assert!(worker_total_after_delta(1, i32::MIN).is_err());
+    }
+
+    #[test]
+    fn worker_resize_arguments_preserve_literals_and_harness_tail() {
+        let original = [
+            "--title",
+            "--worker",
+            "--worker=3",
+            "--worker-k",
+            "2",
+            "--load-harness",
+            "fixture",
+            "--",
+            "--worker",
+            "99",
+        ]
+        .map(OsString::from);
+        let rewritten = worker_arguments(&original, 7, true, false).unwrap();
+        let expected = [
+            "--title",
+            "--worker",
+            "--worker=7",
+            "--worker-k",
+            "2",
+            "--load-harness",
+            "fixture",
+            WORKER_WINDOW_CHILD_FLAG,
+            "--",
+            "--worker",
+            "99",
+        ]
+        .map(OsString::from);
+        assert_eq!(rewritten, expected);
+    }
+
+    #[test]
+    fn worker_resize_zero_discards_only_worker_startup_settings() {
+        let original = [
+            "--title",
+            "--worker",
+            "--worker",
+            "3",
+            "--worker-k=2",
+            "--agent",
+            "codex",
+            "--agent-arg",
+            "--worker=99",
+        ]
+        .map(OsString::from);
+        let rewritten = worker_arguments(&original, 0, false, true).unwrap();
+        assert_eq!(rewritten, ["--title", "--worker"].map(OsString::from));
+        assert!(worker_arguments(&original, 0, true, false).is_err());
+        assert!(worker_arguments(&original, 129, true, false).is_err());
+    }
+
+    #[test]
+    fn dynamic_worker_creation_uses_external_agents_by_default() {
+        let original = [
+            "--server",
+            "https://relay.test",
+            "--agent",
+            "codex",
+            "--agent-arg",
+            "literal",
+            "--title",
+            "worker pool",
+        ]
+        .map(OsString::from);
+        let rewritten = worker_arguments(&original, 2, true, true).unwrap();
+        assert_eq!(
+            rewritten,
+            [
+                "--server",
+                "https://relay.test",
+                "--title",
+                "worker pool",
+                "--worker",
+                "2",
+                WORKER_WINDOW_CHILD_FLAG,
+            ]
+            .map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn worker_window_split_preserves_argv_and_normal_chat() {
+        let args = [
+            "--server",
+            "https://relay.example",
+            "--name",
+            "worker fixture",
+            "--worker=3",
+            "--title",
+            "spaces; $(literal) 中文",
+            "--no-watchdog",
+        ]
+        .map(OsString::from)
+        .to_vec();
+        let mut parent = Options::parse(args.clone()).unwrap().unwrap();
+        let child_args = parent.worker_window_arguments(&args).unwrap();
+        assert_eq!(&child_args[..args.len()], args.as_slice());
+        assert_eq!(child_args.last().unwrap(), WORKER_WINDOW_CHILD_FLAG);
+        let child = Options::parse(child_args.clone()).unwrap().unwrap();
+        assert!(child.worker_window_child);
+        assert_eq!(child.worker.unwrap().count, 3);
+        assert_eq!(child.chat.agent, chat_io::Agent::Remote);
+        assert_eq!(child.chat.input, chat_io::Input::Terminal);
+        assert!(child.worker_window_arguments(&child_args).is_none());
+        parent.become_worker_controller();
+        assert!(parent.worker.is_none());
+        assert_eq!(parent.chat, chat_io::Settings::default());
+        assert!(parent.chat.arguments().is_empty());
+        assert_eq!(parent.server, child.server);
+        assert_eq!(parent.name, child.name);
+        assert_eq!(parent.title, child.title);
+        assert_eq!(parent.watchdog, child.watchdog);
+        assert!(parent.worker_window_arguments(&args).is_none());
+    }
+
+    #[test]
+    fn worker_window_keeps_background_and_headless_pools_single() {
+        for flags in [
+            vec!["--worker", "3", "--daemon"],
+            vec!["--worker", "3", "--input", "none"],
+        ] {
+            let args = ["--server", "https://relay.example", "--name", "single-pool"]
+                .into_iter()
+                .chain(flags)
+                .map(OsString::from)
+                .collect::<Vec<_>>();
+            let options = Options::parse(args.clone()).unwrap().unwrap();
+            assert!(options.worker_window_arguments(&args).is_none());
+            assert_eq!(options.worker.unwrap().count, 3);
+            assert_eq!(options.chat.agent, chat_io::Agent::Remote);
+            let saved = options.session_spec().unwrap();
+            let restored = Options::parse_saved(&saved).unwrap().unwrap();
+            let saved_args = saved.args.iter().map(OsString::from).collect::<Vec<_>>();
+            assert!(restored.worker_window_arguments(&saved_args).is_none());
+            assert_eq!(restored.chat.input, chat_io::Input::None);
+        }
+    }
+
+    #[test]
+    fn worker_window_marker_requires_one_foreground_pool() {
+        for flags in [
+            vec![WORKER_WINDOW_CHILD_FLAG],
+            vec![
+                "--worker",
+                "3",
+                WORKER_WINDOW_CHILD_FLAG,
+                WORKER_WINDOW_CHILD_FLAG,
+            ],
+            vec!["--worker", "3", "--daemon", WORKER_WINDOW_CHILD_FLAG],
+            vec!["--worker", "3", "--input", "none", WORKER_WINDOW_CHILD_FLAG],
+        ] {
+            let args = ["--server", "https://relay.example"]
+                .into_iter()
+                .chain(flags)
+                .map(OsString::from);
+            assert!(Options::parse(args).is_err());
+        }
+        let title = Options::parse(
+            [
+                "--server",
+                "https://relay.example",
+                "--worker",
+                "3",
+                "--title",
+                WORKER_WINDOW_CHILD_FLAG,
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!title.worker_window_child);
+        let child = Options::parse(
+            [
+                "--server",
+                "https://relay.example",
+                "--name",
+                "child-fixture",
+                "--worker",
+                "3",
+                WORKER_WINDOW_CHILD_FLAG,
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        let mut saved = child.session_spec().unwrap();
+        saved.args.push(WORKER_WINDOW_CHILD_FLAG.into());
+        assert!(Options::parse_saved(&saved).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn worker_window_explicit_executor_remains_only_in_child() {
+        let executable = std::env::current_exe().unwrap();
+        let mut args = [
+            "--server",
+            "https://relay.example",
+            "--worker",
+            "2",
+            "--worker-k",
+            "0.5",
+            "--agent",
+            "exec",
+            "--agent-exec",
+        ]
+        .map(OsString::from)
+        .to_vec();
+        args.push(executable.as_os_str().to_owned());
+        let mut parent = Options::parse(args.clone()).unwrap().unwrap();
+        let child_args = parent.worker_window_arguments(&args).unwrap();
+        let child = Options::parse(child_args).unwrap().unwrap();
+        assert_eq!(child.worker.unwrap().factor, 0.5);
+        assert_eq!(
+            child.chat.agent,
+            chat_io::Agent::Exec {
+                program: executable,
+                argv_file: None
+            }
+        );
+        parent.become_worker_controller();
+        assert!(parent.worker.is_none());
+        assert_eq!(parent.chat.agent, chat_io::Agent::NextCaller);
+        assert!(parent.chat.arguments().is_empty());
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn worker_flags_default_remote_and_save_explicit_headless_execution() {
@@ -3604,100 +4136,48 @@ mod tests {
     }
 
     #[test]
-    fn resume_command_preserves_connection_flags_without_persisting_picker_state() {
-        let options = Options::parse_new(
-            [
-                "resume",
-                "--server",
-                "https://relay.example",
-                "--name",
-                "history-client",
-                "--session-control",
-                "--no-watchdog",
-            ]
-            .map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
-        assert!(options.resume_history.load(Ordering::Relaxed));
-        assert!(options.destination.is_none());
-        assert_eq!(options.server.as_deref(), Some("https://relay.example"));
-        assert_eq!(options.name.as_deref(), Some("history-client"));
-        assert_eq!(options.chat.input, chat_io::Input::Terminal);
-        assert!(!options.watchdog);
-        let spec = options.session_spec().unwrap();
-        assert!(!spec.args.iter().any(|arg| arg == "resume"));
-        let saved = Options::parse_saved(&spec).unwrap().unwrap();
-        assert!(!saved.resume_history.load(Ordering::Relaxed));
-        assert!(saved.session_control);
-        assert_eq!(saved.server, options.server);
+    fn retired_resume_command_is_rejected_before_startup() {
+        let expected = "conversation resume is no longer available; start ssmcp for a live session";
+        for flags in [
+            vec![],
+            vec!["--server", "https://relay.example"],
+            vec!["--worker", "3"],
+            vec!["--daemon"],
+            vec!["--input", "none"],
+            vec!["--help"],
+        ] {
+            let args = ["resume"].into_iter().chain(flags).map(OsString::from);
+            assert_eq!(Options::parse_new(args).err().unwrap(), expected);
+        }
+        assert!(!HELP.contains("ssmcp resume"));
+        assert!(!HELP_FULL.contains("ssmcp resume"));
     }
 
     #[test]
-    fn resume_is_only_a_leading_command_not_a_flag_value_or_harness_argument() {
+    fn resume_remains_literal_in_titles_and_provider_arguments() {
         let title = Options::parse_new(
             ["--server", "https://relay.example", "--title", "resume"].map(OsString::from),
         )
         .unwrap()
         .unwrap();
-        assert!(!title.resume_history.load(Ordering::Relaxed));
         assert_eq!(title.title.as_deref(), Some("resume"));
-        for leading_resume in [false, true] {
-            let mut args = vec![
+        let options = Options::parse_new(
+            [
                 "--server",
                 "https://relay.example",
                 "--load-harness",
                 "codex",
                 "--",
                 "resume",
-            ];
-            if leading_resume {
-                args.insert(0, "resume");
-            }
-            let options = Options::parse_new(args.into_iter().map(OsString::from))
-                .unwrap()
-                .unwrap();
-            assert_eq!(
-                options.resume_history.load(Ordering::Relaxed),
-                leading_resume
-            );
-            assert_eq!(
-                options.harness.unwrap().arguments,
-                vec![OsString::from("resume")]
-            );
-        }
-    }
-
-    #[test]
-    fn resume_rejects_noninteractive_modes_and_help_does_not_start_a_session() {
-        let foreground_error = "ssmcp resume requires a foreground interactive dashboard; omit --daemon, --list-tools, non-terminal --input and JSONL output";
-        let pipe_error = if cfg!(unix) {
-            foreground_error
-        } else {
-            "pipe and MCP stdio chat input require Unix; use web or MCP HTTP on Windows"
-        };
-        for (flags, expected) in [
-            (vec!["--daemon"], foreground_error),
-            (vec!["--list-tools"], foreground_error),
-            (vec!["--input", "none"], foreground_error),
-            (vec!["--input", "pipe"], pipe_error),
-            (vec!["--raw"], foreground_error),
-            (vec!["--log-format", "jsonl"], foreground_error),
-        ] {
-            let mut args = vec!["resume", "--server", "https://relay.example"];
-            args.extend(flags);
-            let error = Options::parse_new(args.into_iter().map(OsString::from))
-                .err()
-                .unwrap();
-            assert_eq!(error, expected);
-        }
-        for flag in ["--help", "--help-full"] {
-            assert!(
-                Options::parse_new(["resume", flag].map(OsString::from))
-                    .unwrap()
-                    .is_none()
-            );
-        }
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            options.harness.unwrap().arguments,
+            vec![OsString::from("resume")]
+        );
     }
 
     #[test]

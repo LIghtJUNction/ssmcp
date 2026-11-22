@@ -1,66 +1,26 @@
-//! Bounded inline output, streaming spill files, and retention for client-owned logs.
-//!
-//! Files are private to the local UID. A writer holds an advisory lock until its
-//! capture is finalized; cleanup only removes recognized, unlocked artifacts.
+//! Bounded, connection-owned output held only in this process's memory.
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-#[cfg(any(unix, test))]
-use std::path::Path;
 use std::{
-    fs::File,
-    io::{self, Read, Write},
-    path::PathBuf,
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
+    collections::BTreeMap,
+    io::{self, Write},
+    sync::{Arc, Mutex, OnceLock, Weak},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(windows)]
-use crate::platform::windows;
-#[cfg(windows)]
-use std::os::windows::fs::FileExt;
-#[cfg(unix)]
-use std::{
-    ffi::CString,
-    fs::OpenOptions,
-    os::{
-        fd::{AsRawFd, FromRawFd},
-        unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt},
-    },
-};
-#[cfg(unix)]
-type Directory = File;
-#[cfg(windows)]
-type Directory = cap_std::fs::Dir;
-
-#[derive(Clone, Copy)]
-enum Access {
-    Read,
-    ReadWrite,
-    CreateNewWrite,
-    CreateNewReadWrite,
-}
-
 pub const INLINE_BYTES: usize = 32 * 1024;
-/// Screenshot blocks travel as images, independently of the text spill budget.
 pub const MAX_IMAGE_BYTES: usize = 400 * 1024;
 pub const MAX_INLINE_IMAGE_RESULT_BYTES: usize = 1024 * 1024;
 pub const INLINE_LINES: u64 = 500;
-pub const RETENTION_SECS: u64 = 24 * 60 * 60;
-pub const RETAINED_BYTES: u64 = 512 * 1024 * 1024;
-pub const ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+pub const RETENTION_SECS: u64 = 15 * 60;
+pub const RETAINED_BYTES: u64 = 32 * 1024 * 1024;
+pub const ARTIFACT_BYTES: u64 = 8 * 1024 * 1024;
 pub const READ_BYTES: usize = 32 * 1024;
+const MAX_ARTIFACTS: usize = 512;
+const MAX_CAPTURES: usize = 512;
 const SCHEMA: &str = "ssmcp.output.v1";
-const JANITOR_SECS: u64 = 60;
-const MAX_MANIFEST_BYTES: u64 = 16 * 1024;
-const RELOAD_ENV: &str = "SSMCP_OUTPUT_RELOAD";
-const RELOAD_SCHEMA: &str = "ssmcp.output-reload.v1";
-const RELOAD_TTL: u64 = 60;
-static RELOAD_CHECKED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
 struct Policy {
@@ -69,6 +29,8 @@ struct Policy {
     retention_secs: u64,
     retained_bytes: u64,
     artifact_bytes: u64,
+    max_artifacts: usize,
+    max_captures: usize,
 }
 
 impl Default for Policy {
@@ -79,6 +41,8 @@ impl Default for Policy {
             retention_secs: RETENTION_SECS,
             retained_bytes: RETAINED_BYTES,
             artifact_bytes: ARTIFACT_BYTES,
+            max_artifacts: MAX_ARTIFACTS,
+            max_captures: MAX_CAPTURES,
         }
     }
 }
@@ -87,14 +51,13 @@ impl Default for Policy {
 pub struct ArtifactMetadata {
     pub schema: String,
     pub id: String,
-    pub path: String,
-    /// Identifies the source; a terminal capture is the whole PTY session.
+    pub path: Option<String>,
+    pub storage: String,
     pub scope: String,
-    /// Digest covers exactly the first `bytes` bytes in the file at this snapshot.
+    /// Digest of exactly the retained prefix described by `bytes`.
     pub sha256: String,
     pub sha256_scope: String,
     pub bytes: u64,
-    /// Newline-delimited records, including a final unterminated record.
     pub lines: u64,
     pub observed_bytes: u64,
     pub complete: bool,
@@ -105,317 +68,137 @@ pub struct ArtifactMetadata {
     pub error: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
-struct Manifest {
-    #[serde(flatten)]
+struct Entry {
+    data: Vec<u8>,
     metadata: ArtifactMetadata,
-    // Legacy manifests remain eligible for automatic retention, never for a new client.
-    #[serde(default)]
-    owner: String,
+    active: bool,
+    order: u64,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ReloadGrant {
-    schema: String,
-    owner: String,
-    expires_at_unix: u64,
+#[derive(Default)]
+struct State {
+    entries: BTreeMap<String, Entry>,
+    // Includes small inline captures as well as entries exposed through IDs.
+    used_bytes: u64,
+    captures: usize,
+    sequence: u64,
 }
 
-/// Keeps a one-use reload grant alive until the replacement consumes it.
-pub struct ReloadTicket {
-    store: Arc<OutputStore>,
-    name: String,
-}
-
-impl Drop for ReloadTicket {
-    fn drop(&mut self) {
-        self.store.unlink(&self.name);
+impl State {
+    fn remove(&mut self, id: &str) -> Option<Entry> {
+        let entry = self.entries.remove(id)?;
+        self.used_bytes = self.used_bytes.saturating_sub(entry.data.len() as u64);
+        Some(entry)
     }
-}
 
-/// Failure while establishing the private directory needed by a local connection.
-#[derive(Debug)]
-pub(crate) struct StartupDirectoryError {
-    directory: PathBuf,
-    operation: &'static str,
-    cause: io::Error,
-}
-
-impl StartupDirectoryError {
-    fn new(directory: &std::path::Path, operation: &'static str, cause: io::Error) -> Self {
-        Self {
-            directory: directory.to_path_buf(),
-            operation,
-            cause,
+    fn expire(&mut self, current: u64) -> (usize, u64) {
+        let ids: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| !entry.active && entry.metadata.expires_at_unix <= current)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut bytes = 0;
+        for id in &ids {
+            if let Some(entry) = self.remove(id) {
+                bytes += entry.data.len() as u64;
+            }
         }
+        (ids.len(), bytes)
     }
-}
 
-impl std::fmt::Display for StartupDirectoryError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "{} ssmcp output directory {}: {}",
-            self.operation,
-            self.directory.display(),
-            self.cause
-        )
+    fn evict_oldest(&mut self) -> bool {
+        let id = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| !entry.active)
+            .min_by_key(|(_, entry)| entry.order)
+            .map(|(id, _)| id.clone());
+        id.is_some_and(|id| self.remove(&id).is_some())
     }
-}
 
-impl std::error::Error for StartupDirectoryError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.cause)
+    fn room(&mut self, requested: usize, policy: &Policy) -> usize {
+        self.expire(now());
+        while requested as u64 > policy.retained_bytes.saturating_sub(self.used_bytes)
+            && self.evict_oldest()
+        {}
+        requested.min(policy.retained_bytes.saturating_sub(self.used_bytes) as usize)
     }
 }
 
 pub struct OutputStore {
-    owner: String,
-    directory: PathBuf,
-    directory_fd: Directory,
     policy: Policy,
-    observer: std::sync::Mutex<Option<std::sync::Weak<crate::observer::Pool>>>,
+    state: Mutex<State>,
+    observer: Mutex<Option<Weak<crate::observer::Pool>>>,
 }
 
 impl OutputStore {
     pub(crate) fn set_observer(&self, observer: &Arc<crate::observer::Pool>) {
-        *self.observer.lock().unwrap() = Some(Arc::downgrade(observer));
+        *self
+            .observer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(Arc::downgrade(observer));
     }
+
     pub(crate) fn observer(&self) -> Option<Arc<crate::observer::Pool>> {
         self.observer
             .lock()
-            .unwrap()
+            .unwrap_or_else(|error| error.into_inner())
             .as_ref()
-            .and_then(std::sync::Weak::upgrade)
+            .and_then(Weak::upgrade)
     }
 
-    /// Compatibility accessor for a single foreground connection.
     pub fn global() -> Result<Arc<Self>, String> {
-        static STORE: OnceLock<Result<Arc<OutputStore>, String>> = OnceLock::new();
-        STORE.get_or_init(Self::new_connection).clone()
+        static STORE: OnceLock<Arc<OutputStore>> = OnceLock::new();
+        Ok(Arc::clone(
+            STORE.get_or_init(|| Self::with_policy(Policy::default())),
+        ))
     }
 
-    /// Every connection gets a distinct owner. Acknowledged reload is the only
-    /// path that restores ownership, using a private, expiring, one-use grant.
+    /// A new connection always starts empty. No disk state or reload grants are read.
     pub fn new_connection() -> Result<Arc<Self>, String> {
-        Self::start_connection().map_err(|error| error.to_string())
+        Ok(Self::with_policy(Policy::default()))
     }
 
     pub(crate) fn start_connection() -> crate::Result<Arc<Self>> {
-        let reload = if !RELOAD_CHECKED.swap(true, Ordering::AcqRel) {
-            std::env::var(RELOAD_ENV).ok()
-        } else {
-            None
-        };
-        #[cfg(unix)]
-        {
-            Self::connection_in(Path::new("/tmp"), reload.as_deref())
-        }
-        #[cfg(windows)]
-        {
-            Self::at_restoring(Self::directory()?, Policy::default(), reload.as_deref())
-        }
+        Ok(Self::with_policy(Policy::default()))
     }
 
-    #[cfg(unix)]
-    fn connection_in(temporary: &Path, reload: Option<&str>) -> crate::Result<Arc<Self>> {
-        // A shared parent created by one ordinary user cannot be trusted by a
-        // second user. Each UID instead creates its own private top-level root.
-        let uid = unsafe { libc::geteuid() };
-        let directory = temporary.join(format!("ssmcp-{uid}"));
-        if let Some(token) = reload {
-            validate_id(token).map_err(|_| "invalid output reload grant".to_owned())?;
-            if let Some(legacy) = Self::legacy_reload_directory(temporary, uid, token) {
-                // Keep live artifacts at their advertised paths during an
-                // acknowledged upgrade. Ordinary connections never use this root.
-                return Self::at_restoring(legacy, Policy::default(), Some(token));
-            }
-        }
-        Self::at_restoring(directory, Policy::default(), reload)
-    }
-
-    #[cfg(unix)]
-    fn legacy_reload_directory(temporary: &Path, uid: u32, token: &str) -> Option<PathBuf> {
-        let base = temporary.join("ssmcp");
-        let parent = open_directory(&base).ok()?;
-        let metadata = parent.metadata().ok()?;
-        if (metadata.uid() != 0 && metadata.uid() != uid)
-            || (metadata.mode() & 0o022 != 0 && metadata.mode() & 0o1000 == 0)
-        {
-            return None;
-        }
-        let directory = base.join(uid.to_string());
-        let private = open_directory(&directory).ok()?;
-        let metadata = private.metadata().ok()?;
-        if metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
-            return None;
-        }
-        // Only the existing private one-use grant selects legacy storage. Its
-        // file type, ownership, contents and expiry are checked by consume_reload.
-        std::fs::symlink_metadata(directory.join(format!("reload-{token}.json"))).ok()?;
-        Some(directory)
-    }
-
-    #[cfg(windows)]
-    fn directory() -> Result<PathBuf, StartupDirectoryError> {
-        let base = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir)
-            .join("ssmcp");
-        std::fs::create_dir_all(&base)
-            .map_err(|error| StartupDirectoryError::new(&base, "create base for", error))?;
-        Ok(base.join("output"))
-    }
-
-    #[cfg(test)]
-    fn at(directory: PathBuf, policy: Policy) -> Result<Arc<Self>, String> {
-        Self::at_restoring(directory, policy, None).map_err(|error| error.to_string())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn at_for_test(directory: PathBuf) -> Result<Arc<Self>, String> {
-        Self::at(directory, Policy::default())
-    }
-
-    fn at_restoring(
-        directory: PathBuf,
-        policy: Policy,
-        reload: Option<&str>,
-    ) -> crate::Result<Arc<Self>> {
-        #[cfg(windows)]
-        let directory_fd = windows::private_directory(&directory)
-            .map_err(|error| StartupDirectoryError::new(&directory, "open private", error))?;
-        #[cfg(unix)]
-        let directory_fd = {
-            match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
-                Ok(()) => {}
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(error) => {
-                    return Err(
-                        StartupDirectoryError::new(&directory, "create private", error).into(),
-                    );
-                }
-            }
-            let directory_fd = open_directory(&directory)
-                .map_err(|error| StartupDirectoryError::new(&directory, "open private", error))?;
-            let metadata = directory_fd.metadata().map_err(|error| {
-                StartupDirectoryError::new(&directory, "inspect private", error)
-            })?;
-            if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
-                let cause = io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "must be owned by this user with private permissions",
-                );
-                return Err(
-                    StartupDirectoryError::new(&directory, "validate private", cause).into(),
-                );
-            }
-            directory_fd
-        };
-        let mut store = Self {
-            owner: random_id().map_err(|e| format!("generate output owner: {e}"))?,
-            directory,
-            directory_fd,
+    fn with_policy(policy: Policy) -> Arc<Self> {
+        let store = Arc::new(Self {
             policy,
-            observer: std::sync::Mutex::new(None),
-        };
-        if let Some(token) = reload
-            && let Some(owner) = store
-                .consume_reload(token)
-                .map_err(|e| format!("restore output ownership: {e}"))?
-        {
-            store.owner = owner;
-        }
-        let store = Arc::new(store);
-        store.cleanup_all().map_err(|error| {
-            StartupDirectoryError::new(
-                &store.directory,
-                "initialize retention for",
-                io::Error::other(error),
-            )
-        })?;
+            state: Mutex::new(State::default()),
+            observer: Mutex::new(None),
+        });
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let weak = Arc::downgrade(&store);
             runtime.spawn(async move {
                 loop {
-                    tokio::time::sleep(Duration::from_secs(JANITOR_SECS)).await;
-                    let Some(store) = weak.upgrade() else { break };
-                    // Directory scans and filesystem I/O must not stall the async reactor.
-                    let _ = tokio::task::spawn_blocking(move || store.cleanup_all()).await;
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    let Some(store) = weak.upgrade() else {
+                        break;
+                    };
+                    let _ = store.cleanup();
                 }
             });
         }
-        Ok(store)
+        store
     }
 
-    /// Call only after the broker has confirmed the reload acknowledgement.
-    /// The ticket is not a tool result and must never be logged.
-    pub fn prepare_reload(
-        self: &Arc<Self>,
-        command: &mut std::process::Command,
-    ) -> Result<ReloadTicket, String> {
-        let _guard = self.directory_lock()?;
-        for _ in 0..8 {
-            let token = random_id()?;
-            let name = format!("reload-{token}.json");
-            let mut file = match self.open(&name, Access::CreateNewWrite) {
-                Ok(file) => file,
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(error(e)),
-            };
-            let grant = ReloadGrant {
-                schema: RELOAD_SCHEMA.into(),
-                owner: self.owner.clone(),
-                expires_at_unix: now().saturating_add(RELOAD_TTL),
-            };
-            if let Err(e) = serde_json::to_writer(&mut file, &grant)
-                .map_err(error)
-                .and_then(|_| file.flush().map_err(error))
-            {
-                self.unlink(&name);
-                return Err(e);
-            }
-            command.env(RELOAD_ENV, token);
-            return Ok(ReloadTicket {
-                store: self.clone(),
-                name,
-            });
-        }
-        Err("could not create an output reload grant".into())
-    }
-
-    fn consume_reload(&self, token: &str) -> Result<Option<String>, String> {
-        validate_id(token).map_err(|_| "invalid output reload grant".to_owned())?;
-        let _guard = self.directory_lock()?;
-        let name = format!("reload-{token}.json");
-        let file = match self.open(&name, Access::Read) {
-            Ok(file) => file,
-            // A spent token inherited by a later child grants no old output access.
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(error(e)),
-        };
-        if file.metadata().map_err(error)?.len() > MAX_MANIFEST_BYTES {
-            return Err("output reload grant is oversized".into());
-        }
-        let grant: ReloadGrant =
-            serde_json::from_reader(file).map_err(|_| "invalid output reload grant".to_owned())?;
-        if !self.unlink(&name) {
-            return Err("could not consume the output reload grant".into());
-        }
-        if grant.schema != RELOAD_SCHEMA
-            || validate_id(&grant.owner).is_err()
-            || grant.expires_at_unix <= now()
-        {
-            return Err("output reload grant is invalid or expired".into());
-        }
-        Ok(Some(grant.owner))
+    #[cfg(test)]
+    pub(crate) fn at_for_test(_directory: std::path::PathBuf) -> Result<Arc<Self>, String> {
+        Self::new_connection()
     }
 
     pub fn capture(self: &Arc<Self>, scope: impl Into<String>) -> Capture {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let registered = state.captures < self.policy.max_captures;
+        if registered {
+            state.captures += 1;
+        }
         Capture {
-            store: self.clone(),
-            scope: scope.into(),
+            store: Arc::clone(self),
+            scope: bounded(scope.into(), 1024),
             inline: Vec::new(),
             artifact: None,
             digest: Sha256::new(),
@@ -424,375 +207,34 @@ impl OutputStore {
             last: None,
             observed_bytes: 0,
             finished: false,
-            failure: None,
+            failure: (!registered).then(|| "too many retained output capture handles".into()),
             modified: now(),
+            registered,
         }
     }
 
-    fn open(&self, name: &str, access: Access) -> io::Result<File> {
-        #[cfg(windows)]
-        {
-            use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
-            let mut options = cap_std::fs::OpenOptions::new();
-            options.follow(FollowSymlinks::No);
-            match access {
-                Access::Read => {
-                    options.read(true);
-                }
-                Access::ReadWrite => {
-                    options.read(true).write(true);
-                }
-                Access::CreateNewWrite => {
-                    options.write(true).create_new(true);
-                }
-                Access::CreateNewReadWrite => {
-                    options.read(true).write(true).create_new(true);
-                }
-            }
-            let file = self.directory_fd.open_with(name, &options)?.into_std();
-            windows::verify_file(&file)?;
-            Ok(file)
-        }
-        #[cfg(unix)]
-        {
-            let flags = match access {
-                Access::Read => libc::O_RDONLY,
-                Access::ReadWrite => libc::O_RDWR,
-                Access::CreateNewWrite => libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
-                Access::CreateNewReadWrite => libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
-            };
-            let name = CString::new(name).map_err(io::Error::other)?;
-            // A replaced FIFO must reach validation without waiting for a writer.
-            // SAFETY: the directory fd is live; names are single, checked components.
-            let fd = unsafe {
-                libc::openat(
-                    self.directory_fd.as_raw_fd(),
-                    name.as_ptr(),
-                    flags | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
-                    0o600,
-                )
-            };
-            if fd < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            // SAFETY: openat returned a newly owned descriptor.
-            let file = unsafe { File::from_raw_fd(fd) };
-            let metadata = file.metadata()?;
-            if !metadata.is_file()
-                || metadata.uid() != unsafe { libc::geteuid() }
-                || metadata.mode() & 0o077 != 0
-                || metadata.nlink() != 1
-            {
-                return Err(io::Error::other(
-                    "output artifact is not a private, singly linked regular file",
-                ));
-            }
-            Ok(file)
-        }
-    }
-
-    fn directory_lock(&self) -> Result<File, String> {
-        // Concurrent openat(O_CREAT) on an absent name can return a spurious
-        // ENOENT on Darwin. Exclusive creation avoids that create-or-open path;
-        // only an actual AlreadyExists permits opening the existing lock.
-        // Both paths retain the no-follow and private-file identity checks.
-        let file = match self.open(".cleanup.lock", Access::CreateNewReadWrite) {
-            Ok(file) => Ok(file),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                self.open(".cleanup.lock", Access::ReadWrite)
-            }
-            Err(error) => Err(error),
-        }
-        .map_err(|e| format!("open output cleanup lock: {e}"))?;
-        lock(&file, false).map_err(|e| format!("acquire output cleanup lock: {e}"))?;
-        Ok(file)
-    }
-
-    fn create(&self, scope: &str) -> Result<Artifact, String> {
-        self.cleanup_all()?;
-        let _guard = self.directory_lock()?;
-        for _ in 0..8 {
-            let mut random = [0u8; 16];
-            crate::platform::random_bytes(&mut random).map_err(error)?;
-            let id: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
-            let name = artifact_name(&id);
-            // Publish a recognizable manifest first. A crash between these two
-            // creates can leave only a tiny manifest, never an unowned log that
-            // cleanup cannot identify safely.
-            let initial = ArtifactMetadata {
-                schema: SCHEMA.into(),
-                id: id.clone(),
-                path: self.directory.join(&name).to_string_lossy().into_owned(),
-                scope: scope.into(),
-                sha256: crate::hex::encode(Sha256::digest(b"")),
-                sha256_scope: "first_bytes_snapshot".into(),
-                bytes: 0,
-                lines: 0,
-                observed_bytes: 0,
-                complete: false,
-                expires_at_unix: now().saturating_add(self.policy.retention_secs),
-                retention_secs: self.policy.retention_secs,
-                max_bytes: self.policy.artifact_bytes,
-                error: None,
-            };
-            let mut manifest = match self.open(&manifest_name(&id), Access::CreateNewWrite) {
-                Ok(file) => file,
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(error(e)),
-            };
-            if let Err(error) = serde_json::to_writer(
-                &mut manifest,
-                &Manifest {
-                    metadata: initial,
-                    owner: self.owner.clone(),
-                },
-            ) {
-                self.unlink(&manifest_name(&id));
-                return Err(error.to_string());
-            }
-            match self.open(&name, Access::CreateNewReadWrite) {
-                Ok(file) => {
-                    lock(&file, true).map_err(error)?;
-                    return Ok(Artifact {
-                        id,
-                        file: Some(file),
-                    });
-                }
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                    self.unlink(&manifest_name(&id));
-                    continue;
-                }
-                Err(e) => {
-                    self.unlink(&manifest_name(&id));
-                    return Err(error(e));
-                }
-            }
-        }
-        Err("could not allocate a unique output artifact".into())
-    }
-
-    fn manifest(&self, id: &str) -> Result<ArtifactMetadata, String> {
-        let manifest = self.load_manifest(id)?;
-        if manifest.owner != self.owner {
-            return Err("unknown output artifact for this connection".into());
-        }
-        Ok(manifest.metadata)
-    }
-
-    fn load_manifest(&self, id: &str) -> Result<Manifest, String> {
-        validate_id(id)?;
-        let file = self.open(&manifest_name(id), Access::Read).map_err(error)?;
-        if file.metadata().map_err(error)?.len() > MAX_MANIFEST_BYTES {
-            return Err("output manifest exceeds its size limit".into());
-        }
-        let manifest: Manifest = serde_json::from_reader(file).map_err(error)?;
-        if manifest.metadata.schema != SCHEMA
-            || manifest.metadata.id != id
-            || (!manifest.owner.is_empty() && validate_id(&manifest.owner).is_err())
-        {
-            return Err("unrecognized output manifest".into());
-        }
-        Ok(manifest)
-    }
-
-    fn write_manifest(&self, metadata: &ArtifactMetadata) -> Result<(), String> {
-        let _guard = self.directory_lock()?;
-        let temporary = format!("output-{}.meta.tmp", metadata.id);
-        let mut file = self
-            .open(&temporary, Access::CreateNewWrite)
-            .map_err(error)?;
-        let result = (|| {
-            serde_json::to_writer(
-                &mut file,
-                &Manifest {
-                    metadata: metadata.clone(),
-                    owner: self.owner.clone(),
-                },
-            )
-            .map_err(error)?;
-            file.flush().map_err(error)?;
-            #[cfg(windows)]
-            self.directory_fd
-                .rename(&temporary, &self.directory_fd, manifest_name(&metadata.id))
-                .map_err(error)?;
-            #[cfg(unix)]
-            {
-                let source = CString::new(temporary.as_str()).unwrap();
-                let destination = CString::new(manifest_name(&metadata.id)).unwrap();
-                // SAFETY: both paths are single components relative to the owned directory.
-                if unsafe {
-                    libc::renameat(
-                        self.directory_fd.as_raw_fd(),
-                        source.as_ptr(),
-                        self.directory_fd.as_raw_fd(),
-                        destination.as_ptr(),
-                    )
-                } < 0
-                {
-                    return Err(error(io::Error::last_os_error()));
-                }
-            }
-            Ok(())
-        })();
-        if result.is_err() {
-            self.unlink(&temporary);
-        }
-        result
-    }
-
-    fn unlink(&self, name: &str) -> bool {
-        #[cfg(windows)]
-        {
-            self.directory_fd.remove_file(name).is_ok()
-        }
-        #[cfg(unix)]
-        {
-            let Ok(name) = CString::new(name) else {
-                return false;
-            };
-            // SAFETY: the fd is owned; unlinkat does not follow the final component.
-            unsafe { libc::unlinkat(self.directory_fd.as_raw_fd(), name.as_ptr(), 0) == 0 }
-        }
-    }
-
-    /// Explicit cleanup is limited to this connection's artifacts.
     pub fn cleanup(&self) -> Result<Value, String> {
-        self.cleanup_scope(false)
-    }
-
-    // Automatic retention keeps the existing UID-wide quota and also reclaims
-    // expired artifacts after the connection that produced them has ended.
-    fn cleanup_all(&self) -> Result<Value, String> {
-        self.cleanup_scope(true)
-    }
-
-    fn cleanup_scope(&self, all: bool) -> Result<Value, String> {
-        let _guard = self.directory_lock()?;
-        let current = now();
-        let mut files = Vec::new();
-        let mut active = 0u64;
-        // Read through the opened directory, not a possibly replaced pathname.
-        let entries = directory_entries(&self.directory_fd)
-            .map_err(|e| format!("enumerate output artifacts: {e}"))?;
-        for name in entries {
-            let Some(name) = name.to_str() else { continue };
-            if let Some(token) = name
-                .strip_prefix("reload-")
-                .and_then(|v| v.strip_suffix(".json"))
-            {
-                if validate_id(token).is_ok()
-                    && let Ok(file) = self.open(name, Access::Read)
-                    && file.metadata().is_ok_and(|m| m.len() <= MAX_MANIFEST_BYTES)
-                    && let Ok(grant) = serde_json::from_reader::<_, ReloadGrant>(file)
-                    && grant.schema == RELOAD_SCHEMA
-                    && (all || grant.owner == self.owner)
-                    && grant.expires_at_unix <= current
-                {
-                    self.unlink(name);
-                }
-                continue;
-            }
-            if let Some(id) = name
-                .strip_prefix("output-")
-                .and_then(|v| v.strip_suffix(".meta.json"))
-            {
-                if validate_id(id).is_ok()
-                    && self
-                        .load_manifest(id)
-                        .is_ok_and(|m| all || m.owner == self.owner)
-                    && self
-                        .open(&artifact_name(id), Access::Read)
-                        .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
-                    && let Ok(file) = self.open(name, Access::Read)
-                    && let Ok(metadata) = file.metadata()
-                    && let Ok(modified) = metadata.modified()
-                    && current.saturating_sub(timestamp(modified)) >= self.policy.retention_secs
-                {
-                    self.unlink(name);
-                }
-                continue;
-            }
-            let Some(id) = name
-                .strip_prefix("output-")
-                .and_then(|v| v.strip_suffix(".log"))
-            else {
-                continue;
-            };
-            if validate_id(id).is_err()
-                || !self
-                    .load_manifest(id)
-                    .is_ok_and(|m| all || m.owner == self.owner)
-            {
-                continue;
-            }
-            let Ok(file) = self.open(name, Access::ReadWrite) else {
-                continue;
-            };
-            if lock(&file, true).is_err() {
-                active += 1;
-                continue;
-            }
-            let metadata = file
-                .metadata()
-                .map_err(|e| format!("inspect retained output artifact: {e}"))?;
-            let modified = metadata.modified().ok().map(timestamp).unwrap_or(current);
-            files.push((modified, id.to_owned(), metadata.len(), file));
-        }
-        files.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-        let mut retained = files.iter().map(|entry| entry.2).sum::<u64>();
-        let mut removed_files = 0u64;
-        let mut removed_bytes = 0u64;
-        for (modified, id, bytes, _file) in files {
-            if current.saturating_sub(modified) < self.policy.retention_secs
-                && retained <= self.policy.retained_bytes
-            {
-                continue;
-            }
-            if self.unlink(&artifact_name(&id)) {
-                self.unlink(&manifest_name(&id));
-                let temporary = format!("output-{id}.meta.tmp");
-                if self.open(&temporary, Access::Read).is_ok() {
-                    self.unlink(&temporary);
-                }
-                retained = retained.saturating_sub(bytes);
-                removed_files += 1;
-                removed_bytes += bytes;
-            }
-        }
-        Ok(json!({
-            "removed_files":removed_files,"removed_bytes":removed_bytes,
-            "retained_bytes":retained,"active_artifacts":active,
-            "retention_secs":self.policy.retention_secs,"max_retained_bytes":self.policy.retained_bytes
-        }))
-    }
-
-    fn check_snapshot_size(&self, metadata: &ArtifactMetadata, size: u64) -> Result<(), String> {
-        if size < metadata.bytes {
-            return Err("output artifact is shorter than its recorded length".into());
-        }
-        if metadata.complete && size != metadata.bytes {
-            return Err("completed output artifact differs from its recorded length".into());
-        }
-        if size > self.policy.artifact_bytes {
-            return Err("output artifact exceeds its configured size limit".into());
-        }
-        Ok(())
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let (removed, bytes) = state.expire(now());
+        Ok(
+            json!({"storage":"memory","removed_artifacts":removed,"removed_bytes":bytes,
+            "retained_bytes":state.used_bytes,"retained_artifacts":state.entries.len(),
+            "active_artifacts":state.entries.values().filter(|entry| entry.active).count(),
+            "retention_secs":self.policy.retention_secs,"max_retained_bytes":self.policy.retained_bytes,
+            "max_artifacts":self.policy.max_artifacts}),
+        )
     }
 
     pub fn tools() -> Vec<Value> {
         vec![
-            json!({"name":"ssmcp.output.read","description":"Read a bounded raw chunk of an owned output artifact by ID. Use next_offset for more; binary data is preserved in data_base64. Artifacts expire automatically.","inputSchema":{"type":"object","properties":{"id":{"type":"string","pattern":"^[a-f0-9]{32}$"},"offset":{"type":"integer","minimum":0,"default":0},"max_bytes":{"type":"integer","minimum":1,"maximum":READ_BYTES,"default":16384}},"required":["id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
-            json!({"name":"ssmcp.output.stat","description":"Inspect an owned output artifact and hash its current byte snapshot. Completed captures must match their recorded length and SHA-256; running captures may grow after this snapshot.","inputSchema":{"type":"object","properties":{"id":{"type":"string","pattern":"^[a-f0-9]{32}$"}},"required":["id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
-            json!({"name":"ssmcp.output.cleanup","description":"Run the same automatic retention cleanup now: remove expired artifacts and oldest completed logs above quota. Active captures and unrelated files are preserved.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
+            json!({"name":"ssmcp.output.read","description":"Read a bounded chunk of this connection's in-memory output by ID. Continue with next_offset; data_base64 preserves binary bytes. Memory outputs expire and are cleared by exit or reload.","inputSchema":{"type":"object","properties":{"id":{"type":"string","pattern":"^[a-f0-9]{32}$"},"offset":{"type":"integer","minimum":0,"default":0},"max_bytes":{"type":"integer","minimum":1,"maximum":READ_BYTES,"default":16384}},"required":["id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
+            json!({"name":"ssmcp.output.stat","description":"Inspect this connection's retained in-memory byte snapshot, digest, completion and truncation state. path is null; use output.read with its ID.","inputSchema":{"type":"object","properties":{"id":{"type":"string","pattern":"^[a-f0-9]{32}$"}},"required":["id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
+            json!({"name":"ssmcp.output.cleanup","description":"Release expired completed in-memory outputs. Active captures are preserved within the shared hard memory limit. This operation never reads or deletes files.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
         ]
     }
 
     pub async fn perform(self: &Arc<Self>, name: &str, arguments: Value) -> Result<Value, String> {
-        let store = self.clone();
-        let name = name.to_owned();
-        tokio::task::spawn_blocking(move || store.perform_sync(&name, arguments))
-            .await
-            .map_err(error)?
+        self.perform_sync(name, arguments)
     }
 
     fn perform_sync(&self, name: &str, arguments: Value) -> Result<Value, String> {
@@ -813,106 +255,55 @@ impl OutputStore {
         fn default_read() -> usize {
             16 * 1024
         }
+        if name == "ssmcp.output.cleanup" {
+            if arguments.as_object().is_none_or(|args| !args.is_empty()) {
+                return Err("cleanup accepts an empty arguments object".into());
+            }
+            return self.cleanup();
+        }
         match name {
             "ssmcp.output.read" => {
                 let args: ReadArgs = serde_json::from_value(arguments).map_err(error)?;
+                validate_id(&args.id)?;
                 if !(1..=READ_BYTES).contains(&args.max_bytes) {
                     return Err(format!("max_bytes must be 1..={READ_BYTES}"));
                 }
-                let metadata = self.manifest(&args.id)?;
-                let file = self
-                    .open(&artifact_name(&args.id), Access::Read)
-                    .map_err(error)?;
-                let file_metadata = file.metadata().map_err(error)?;
-                let size = file_metadata.len();
-                self.check_snapshot_size(&metadata, size)?;
+                let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+                state.expire(now());
+                let entry = state.entries.get(&args.id).ok_or(
+                    "output is unavailable in this connection; it may have expired or been evicted",
+                )?;
+                let size = entry.data.len() as u64;
                 if args.offset > size {
-                    return Err("offset is beyond the output artifact".into());
+                    return Err("offset is beyond the retained output".into());
                 }
-                let mut data = vec![0; args.max_bytes.min((size - args.offset) as usize)];
-                let mut read = 0;
-                while read < data.len() {
-                    match read_at(&file, &mut data[read..], args.offset + read as u64) {
-                        Ok(0) => {
-                            return Err("output artifact ended before its snapshot length".into());
-                        }
-                        Ok(n) => read += n,
-                        Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                        Err(e) => return Err(error(e)),
-                    }
-                }
-                let next = args.offset + read as u64;
+                let start = args.offset as usize;
+                let length = args.max_bytes.min(entry.data.len() - start);
+                let data = &entry.data[start..start + length];
+                let next = args.offset + length as u64;
                 Ok(
-                    json!({"id":args.id,"path":self.directory.join(artifact_name(&args.id)),"offset":args.offset,
-                    "next_offset":next,"bytes":read,"size":size,"eof":next == size,
-                    "complete":metadata.complete,"data_base64":STANDARD.encode(&data),
-                    "text":String::from_utf8_lossy(&data),"sha256":crate::hex::encode(Sha256::digest(&data)),
-                    "sha256_scope":"returned_chunk"}),
+                    json!({"id":args.id,"path":null,"storage":"memory","offset":args.offset,
+                    "next_offset":next,"bytes":length,"size":size,"eof":next == size,
+                    "complete":entry.metadata.complete,"observed_bytes":entry.metadata.observed_bytes,
+                    "truncated":entry.metadata.observed_bytes > size || entry.metadata.error.is_some(),
+                    "data_base64":STANDARD.encode(data),"text":String::from_utf8_lossy(data),
+                    "sha256":crate::hex::encode(Sha256::digest(data)),"sha256_scope":"returned_chunk"}),
                 )
             }
             "ssmcp.output.stat" => {
                 let args: Id = serde_json::from_value(arguments).map_err(error)?;
-                let mut metadata = self.manifest(&args.id)?;
-                let file = self
-                    .open(&artifact_name(&args.id), Access::Read)
-                    .map_err(error)?;
-                let file_metadata = file.metadata().map_err(error)?;
-                let size = file_metadata.len();
-                self.check_snapshot_size(&metadata, size)?;
-                let mut reader = file.take(size);
-                let mut data = [0u8; 64 * 1024];
-                let mut digest = Sha256::new();
-                let mut bytes = 0u64;
-                let mut newlines = 0u64;
-                let mut last = None;
-                loop {
-                    let n = reader.read(&mut data).map_err(error)?;
-                    if n == 0 {
-                        break;
-                    }
-                    digest.update(&data[..n]);
-                    bytes += n as u64;
-                    newlines += data[..n].iter().filter(|byte| **byte == b'\n').count() as u64;
-                    last = data.get(n - 1).copied();
-                }
-                if bytes != size {
-                    return Err("output artifact ended before its snapshot length".into());
-                }
-                let sha256 = crate::hex::encode(digest.finalize());
-                if metadata.complete && sha256 != metadata.sha256 {
-                    return Err(
-                        "completed output artifact does not match its recorded SHA-256".into(),
-                    );
-                }
-                metadata.bytes = bytes;
-                metadata.observed_bytes = metadata.observed_bytes.max(bytes);
-                metadata.lines = newlines + u64::from(last.is_some_and(|byte| byte != b'\n'));
-                metadata.sha256 = sha256;
-                metadata.path = self
-                    .directory
-                    .join(artifact_name(&args.id))
-                    .to_string_lossy()
-                    .into_owned();
-                metadata.expires_at_unix = file_metadata
-                    .modified()
-                    .ok()
-                    .map(timestamp)
-                    .unwrap_or(now())
-                    .saturating_add(self.policy.retention_secs);
-                serde_json::to_value(metadata).map_err(error)
-            }
-            "ssmcp.output.cleanup" => {
-                if arguments.as_object().is_none_or(|args| !args.is_empty()) {
-                    return Err("cleanup accepts an empty arguments object".into());
-                }
-                self.cleanup()
+                validate_id(&args.id)?;
+                let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+                state.expire(now());
+                let entry = state.entries.get(&args.id).ok_or(
+                    "output is unavailable in this connection; it may have expired or been evicted",
+                )?;
+                serde_json::to_value(&entry.metadata).map_err(error)
             }
             _ => Err("unknown output operation".into()),
         }
     }
 
-    /// Spill a large native result as JSON while preserving the MCP error flag
-    /// and a small set of execution-status fields useful without opening the log.
     pub fn guard_result(self: &Arc<Self>, value: Value) -> Value {
         if inline_image_result(&value, &self.policy) {
             return value;
@@ -1035,22 +426,17 @@ fn inline_image_result(value: &Value, policy: &Policy) -> bool {
         && !has_long_lines(&metadata, policy.inline_lines)
 }
 
-struct Artifact {
-    id: String,
-    file: Option<File>,
-}
-
 fn random_id() -> Result<String, String> {
     let mut bytes = [0u8; 16];
     crate::platform::random_bytes(&mut bytes).map_err(error)?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(crate::hex::encode(bytes))
 }
 
 pub struct Capture {
     store: Arc<OutputStore>,
     scope: String,
     inline: Vec<u8>,
-    artifact: Option<Artifact>,
+    artifact: Option<String>,
     digest: Sha256,
     bytes: u64,
     newlines: u64,
@@ -1059,6 +445,7 @@ pub struct Capture {
     finished: bool,
     failure: Option<String>,
     modified: u64,
+    registered: bool,
 }
 
 impl Capture {
@@ -1067,48 +454,6 @@ impl Capture {
     }
     pub fn inline_bytes(&self) -> &[u8] {
         &self.inline
-    }
-    /// Read an exact bounded range without retaining a second copy of a capture.
-    /// Completed artifacts still follow the store's normal TTL and quota policy;
-    /// an unavailable or shortened archive is an error, never a successful EOF.
-    pub(crate) fn read_range(&self, offset: u64, limit: usize) -> Result<Vec<u8>, String> {
-        if !(1..=READ_BYTES).contains(&limit) {
-            return Err(format!("max_bytes must be 1..={READ_BYTES}"));
-        }
-        if offset > self.bytes {
-            return Err("output cursor is ahead of the captured stream".into());
-        }
-        let length = limit.min((self.bytes - offset) as usize);
-        let Some(artifact) = &self.artifact else {
-            let start = offset as usize;
-            return self
-                .inline
-                .get(start..start + length)
-                .map(<[u8]>::to_vec)
-                .ok_or_else(|| "captured output is shorter than its recorded length".into());
-        };
-        let file = self
-            .store
-            .open(&artifact_name(&artifact.id), Access::Read)
-            .map_err(|error| format!("captured output archive is unavailable: {error}"))?;
-        if file.metadata().map_err(error)?.len() < self.bytes {
-            return Err("captured output archive is shorter than its recorded length".into());
-        }
-        let mut data = vec![0; length];
-        let mut read = 0;
-        while read < data.len() {
-            match read_at(&file, &mut data[read..], offset + read as u64) {
-                Ok(0) => {
-                    return Err("captured output archive ended before its recorded length".into());
-                }
-                Ok(count) => read += count,
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) => {
-                    return Err(format!("could not read captured output archive: {error}"));
-                }
-            }
-        }
-        Ok(data)
     }
     pub fn error(&self) -> Option<&str> {
         self.failure.as_deref()
@@ -1120,17 +465,45 @@ impl Capture {
         self.newlines + u64::from(self.last.is_some_and(|byte| byte != b'\n'))
     }
 
-    pub fn metadata(&self) -> Option<ArtifactMetadata> {
-        let artifact = self.artifact.as_ref()?;
+    pub(crate) fn read_range(&self, offset: u64, limit: usize) -> Result<Vec<u8>, String> {
+        if !(1..=READ_BYTES).contains(&limit) {
+            return Err(format!("max_bytes must be 1..={READ_BYTES}"));
+        }
+        if offset > self.bytes {
+            return Err("output cursor is ahead of the captured stream".into());
+        }
+        let length = limit.min((self.bytes - offset) as usize);
+        let start = offset as usize;
+        if let Some(id) = &self.artifact {
+            let mut state = self
+                .store
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            state.expire(now());
+            let entry = state
+                .entries
+                .get(id)
+                .ok_or("captured output is no longer retained in memory")?;
+            entry
+                .data
+                .get(start..start + length)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| "retained output is shorter than its recorded length".into())
+        } else {
+            self.inline
+                .get(start..start + length)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| "captured output is shorter than its recorded length".into())
+        }
+    }
+
+    fn snapshot(&self) -> Option<ArtifactMetadata> {
         Some(ArtifactMetadata {
             schema: SCHEMA.into(),
-            id: artifact.id.clone(),
-            path: self
-                .store
-                .directory
-                .join(artifact_name(&artifact.id))
-                .to_string_lossy()
-                .into_owned(),
+            id: self.artifact.clone()?,
+            path: None,
+            storage: "memory".into(),
             scope: self.scope.clone(),
             sha256: crate::hex::encode(self.digest.clone().finalize()),
             sha256_scope: "first_bytes_snapshot".into(),
@@ -1147,18 +520,48 @@ impl Capture {
         })
     }
 
-    pub fn fail(&mut self, reason: impl Into<String>) {
-        if self.failure.is_none() {
-            let mut reason = reason.into();
-            if reason.len() > 1024 {
-                let mut end = 1024;
-                while !reason.is_char_boundary(end) {
-                    end -= 1
-                }
-                reason.truncate(end);
-            }
-            self.failure = Some(reason);
+    pub fn metadata(&self) -> Option<ArtifactMetadata> {
+        let mut metadata = self.snapshot()?;
+        let mut state = self
+            .store
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.expire(now());
+        if !state.entries.contains_key(&metadata.id) {
+            metadata.complete = false;
+            metadata.error = Some("output is no longer retained in memory".into());
         }
+        Some(metadata)
+    }
+
+    fn sync_locked(&self, state: &mut State) {
+        if let Some(metadata) = self.snapshot()
+            && let Some(entry) = state.entries.get_mut(&metadata.id)
+        {
+            entry.metadata = metadata;
+            entry.active = !self.finished;
+        }
+    }
+
+    fn sync(&self) {
+        let mut state = self
+            .store
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.sync_locked(&mut state);
+    }
+
+    fn set_failure(&mut self, reason: impl Into<String>) {
+        if self.failure.is_none() {
+            self.failure = Some(bounded(reason.into(), 1024));
+        }
+    }
+
+    pub fn fail(&mut self, reason: impl Into<String>) {
+        self.set_failure(reason);
+        self.sync();
     }
 
     pub fn spill(&mut self) -> Result<(), String> {
@@ -1168,20 +571,48 @@ impl Capture {
         if self.finished {
             return Err("output capture is already complete".into());
         }
-        let artifact = match self.store.create(&self.scope) {
-            Ok(artifact) => artifact,
+        if let Some(error) = &self.failure {
+            return Err(error.clone());
+        }
+        let store = Arc::clone(&self.store);
+        let mut state = store
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.expire(now());
+        while state.entries.len() >= store.policy.max_artifacts && state.evict_oldest() {}
+        if state.entries.len() >= store.policy.max_artifacts {
+            self.set_failure("in-memory output entry limit reached; active captures are preserved");
+            return Err(self.failure.clone().unwrap());
+        }
+        let id = (0..8)
+            .map(|_| random_id())
+            .find_map(|id| match id {
+                Ok(id) if !state.entries.contains_key(&id) => Some(Ok(id)),
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .unwrap_or_else(|| Err("could not allocate a unique output ID".into()));
+        let id = match id {
+            Ok(id) => id,
             Err(error) => {
-                self.fail(error.clone());
+                self.set_failure(error.clone());
                 return Err(error);
             }
         };
-        self.artifact = Some(artifact);
-        let prefix = std::mem::take(&mut self.inline);
-        self.digest = Sha256::new();
-        self.bytes = 0;
-        self.newlines = 0;
-        self.last = None;
-        self.append(&prefix)
+        self.artifact = Some(id.clone());
+        state.sequence = state.sequence.wrapping_add(1);
+        let order = state.sequence;
+        state.entries.insert(
+            id,
+            Entry {
+                data: std::mem::take(&mut self.inline),
+                metadata: self.snapshot().expect("assigned output ID"),
+                active: true,
+                order,
+            },
+        );
+        Ok(())
     }
 
     pub fn push(&mut self, data: &[u8]) -> Result<(), String> {
@@ -1190,11 +621,15 @@ impl Capture {
         }
         self.observed_bytes = self.observed_bytes.saturating_add(data.len() as u64);
         if let Some(error) = &self.failure {
-            return Err(error.clone());
+            let error = error.clone();
+            self.sync();
+            return Err(error);
         }
-        let newlines = self.newlines + data.iter().filter(|byte| **byte == b'\n').count() as u64;
+        let newlines = self
+            .newlines
+            .saturating_add(data.iter().filter(|byte| **byte == b'\n').count() as u64);
         let last = data.last().copied().or(self.last);
-        let lines = newlines + u64::from(last.is_some_and(|byte| byte != b'\n'));
+        let lines = newlines.saturating_add(u64::from(last.is_some_and(|byte| byte != b'\n')));
         if !self.is_spilled()
             && (self.bytes.saturating_add(data.len() as u64)
                 > self.store.policy.inline_bytes as u64
@@ -1206,72 +641,77 @@ impl Capture {
     }
 
     fn append(&mut self, data: &[u8]) -> Result<(), String> {
-        let remaining = self.store.policy.artifact_bytes.saturating_sub(self.bytes);
-        let permitted = data.len().min(remaining as usize);
-        let mut offset = 0;
-        while offset < permitted {
-            let written = if let Some(file) = self.artifact.as_mut().and_then(|a| a.file.as_mut()) {
-                match file.write(&data[offset..permitted]) {
-                    Ok(0) => {
-                        let message = "output artifact write made no progress".to_owned();
-                        self.fail(message.clone());
-                        return Err(message);
-                    }
-                    Ok(n) => n,
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(e) => {
-                        let message = format!("could not write output artifact: {e}");
-                        self.fail(message.clone());
-                        return Err(message);
-                    }
-                }
-            } else {
-                self.inline.extend_from_slice(&data[offset..permitted]);
-                permitted - offset
-            };
-            let accepted = &data[offset..offset + written];
-            self.digest.update(accepted);
-            self.bytes += written as u64;
-            self.newlines += accepted.iter().filter(|byte| **byte == b'\n').count() as u64;
-            self.last = accepted.last().copied().or(self.last);
-            self.modified = now();
-            offset += written;
+        let store = Arc::clone(&self.store);
+        let mut state = store
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let requested = data
+            .len()
+            .min(store.policy.artifact_bytes.saturating_sub(self.bytes) as usize);
+        let permitted = state.room(requested, &store.policy);
+        let target = if let Some(id) = &self.artifact {
+            &mut state
+                .entries
+                .get_mut(id)
+                .expect("active capture stays retained")
+                .data
+        } else {
+            &mut self.inline
+        };
+        if let Err(error) = target.try_reserve_exact(permitted) {
+            self.set_failure(format!("could not allocate bounded output memory: {error}"));
+            self.sync_locked(&mut state);
+            return Err(self.failure.clone().unwrap());
         }
+        target.extend_from_slice(&data[..permitted]);
+        state.used_bytes += permitted as u64;
+        self.digest.update(&data[..permitted]);
+        self.bytes += permitted as u64;
+        self.newlines += data[..permitted]
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count() as u64;
+        self.last = data.get(permitted.wrapping_sub(1)).copied().or(self.last);
+        self.modified = now();
         if permitted < data.len() {
-            let message = format!(
-                "output artifact reached its {} byte limit; captured prefix is partial",
-                self.store.policy.artifact_bytes
-            );
-            self.fail(message.clone());
-            return Err(message);
+            self.set_failure(if requested < data.len() && permitted == requested {
+                format!(
+                    "in-memory output reached its {} byte limit; retained prefix is partial",
+                    store.policy.artifact_bytes
+                )
+            } else {
+                format!(
+                    "shared output memory reached its {} byte limit; retained prefix is partial",
+                    store.policy.retained_bytes
+                )
+            });
         }
-        Ok(())
+        self.sync_locked(&mut state);
+        self.failure.clone().map_or(Ok(()), Err)
     }
 
     pub fn finish(&mut self) -> Result<(), String> {
         if self.finished {
             return self.failure.clone().map_or(Ok(()), Err);
         }
-        if let Some(file) = self.artifact.as_mut().and_then(|a| a.file.as_mut())
-            && let Err(e) = file
-                .flush()
-                .and_then(|_| file.set_modified(SystemTime::now()))
-        {
-            self.fail(format!("could not finalize output artifact: {e}"));
-        }
         self.inline.shrink_to_fit();
         self.modified = now();
         self.finished = true;
-        if let Some(metadata) = self.metadata()
-            && let Err(error) = self.store.write_manifest(&metadata)
+        let mut state = self
+            .store
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.sequence = state.sequence.wrapping_add(1);
+        let order = state.sequence;
+        if let Some(id) = &self.artifact
+            && let Some(entry) = state.entries.get_mut(id)
         {
-            self.fail(error);
+            entry.data.shrink_to_fit();
+            entry.order = order;
         }
-        if let Some(artifact) = &mut self.artifact {
-            // Releasing the file also releases its lock. Completed job handles
-            // must not pin files forever and defeat TTL/quota cleanup.
-            artifact.file.take();
-        }
+        self.sync_locked(&mut state);
         self.failure.clone().map_or(Ok(()), Err)
     }
 }
@@ -1279,8 +719,19 @@ impl Capture {
 impl Drop for Capture {
     fn drop(&mut self) {
         if !self.finished && self.is_spilled() {
-            self.fail("capture ended before completion");
+            self.set_failure("capture ended before completion");
             let _ = self.finish();
+        }
+        let mut state = self
+            .store
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if self.artifact.is_none() {
+            state.used_bytes = state.used_bytes.saturating_sub(self.inline.len() as u64);
+        }
+        if self.registered {
+            state.captures = state.captures.saturating_sub(1);
         }
     }
 }
@@ -1311,13 +762,6 @@ fn has_long_lines(value: &Value, limit: u64) -> bool {
         _ => false,
     }
 }
-
-fn artifact_name(id: &str) -> String {
-    format!("output-{id}.log")
-}
-fn manifest_name(id: &str) -> String {
-    format!("output-{id}.meta.json")
-}
 fn validate_id(id: &str) -> Result<(), String> {
     if id.len() == 32
         && id
@@ -1329,1108 +773,338 @@ fn validate_id(id: &str) -> Result<(), String> {
         Err("output id must be 32 lowercase hexadecimal characters".into())
     }
 }
-#[cfg(unix)]
-fn open_directory(path: &Path) -> io::Result<File> {
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)
-}
 
-#[cfg(unix)]
-fn directory_entries(directory: &Directory) -> io::Result<Vec<std::ffi::OsString>> {
-    use std::os::unix::ffi::OsStringExt;
-    fn failure(step: &str) -> io::Error {
-        let cause = io::Error::last_os_error();
-        io::Error::new(cause.kind(), format!("{step}: {cause}"))
-    }
-    // openat(".") gives this scan an independent directory cursor. Dup would
-    // share the retained descriptor's offset and miss entries on later scans.
-    let fd = unsafe {
-        libc::openat(
-            directory.as_raw_fd(),
-            c".".as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-        )
-    };
-    if fd < 0 {
-        return Err(failure("open directory scan handle"));
-    }
-    let stream = unsafe { libc::fdopendir(fd) };
-    if stream.is_null() {
-        let error = failure("open directory stream");
-        unsafe {
-            libc::close(fd);
+fn bounded(mut text: String, length: usize) -> String {
+    if text.len() > length {
+        let mut end = length;
+        while !text.is_char_boundary(end) {
+            end -= 1;
         }
-        return Err(error);
+        text.truncate(end);
     }
-    struct Stream(*mut libc::DIR);
-    impl Drop for Stream {
-        fn drop(&mut self) {
-            unsafe {
-                libc::closedir(self.0);
-            }
-        }
-    }
-    let stream = Stream(stream);
-    let mut names = Vec::new();
-    loop {
-        #[cfg(target_os = "linux")]
-        let errno = unsafe { libc::__errno_location() };
-        #[cfg(target_os = "macos")]
-        let errno = unsafe { libc::__error() };
-        // SAFETY: errno is thread-local and stream is an owned live DIR pointer.
-        unsafe {
-            *errno = 0;
-        }
-        let entry = unsafe { libc::readdir(stream.0) };
-        if entry.is_null() {
-            if unsafe { *errno } != 0 {
-                return Err(failure("read directory stream"));
-            }
-            break;
-        }
-        let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
-        if name != b"." && name != b".." {
-            names.push(std::ffi::OsString::from_vec(name.to_vec()));
-        }
-    }
-    Ok(names)
-}
-
-#[cfg(windows)]
-fn directory_entries(directory: &Directory) -> io::Result<Vec<std::ffi::OsString>> {
-    directory
-        .entries()?
-        .map(|entry| entry.map(|entry| entry.file_name()))
-        .collect()
-}
-
-fn read_at(file: &File, data: &mut [u8], offset: u64) -> io::Result<usize> {
-    #[cfg(unix)]
-    {
-        file.read_at(data, offset)
-    }
-    #[cfg(windows)]
-    {
-        file.seek_read(data, offset)
-    }
-}
-
-fn lock(file: &File, nonblocking: bool) -> io::Result<()> {
-    crate::platform::lock_file(file, nonblocking)
-}
-fn timestamp(time: SystemTime) -> u64 {
-    time.duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    text
 }
 fn now() -> u64 {
-    timestamp(SystemTime::now())
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 fn error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
 #[cfg(test)]
-mod portable_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn live_spilled_output_is_readable_before_writer_unlocks() {
-        let mut random = [0u8; 16];
-        crate::platform::random_bytes(&mut random).unwrap();
-        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
-        let path = std::env::temp_dir().join(format!("ssmcp-output-portable-{suffix}"));
-        let store = OutputStore::at(path.clone(), Policy::default()).unwrap();
-        let mut capture = store.capture("portable-test");
-        capture.push(&vec![b'x'; INLINE_BYTES + 100]).unwrap();
-        let metadata = capture.metadata().unwrap();
-        let read = store
-            .perform(
-                "ssmcp.output.read",
-                json!({"id":metadata.id,"max_bytes":64}),
-            )
-            .await
-            .unwrap();
-        assert_eq!(read["bytes"], 64);
-        assert_eq!(read["text"], "x".repeat(64));
-        assert_eq!(store.cleanup().unwrap()["active_artifacts"], 1);
-        capture.finish().unwrap();
-        drop(capture);
-        drop(store);
-        std::fs::remove_dir_all(path).unwrap();
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
+
     struct Fixture {
-        path: PathBuf,
         store: Arc<OutputStore>,
     }
     impl Fixture {
         fn new(policy: Policy) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "ssmcp-output-test-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            let store = OutputStore::at(path.clone(), policy).unwrap();
-            Self { path, store }
-        }
-    }
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn per_user_directory_bypasses_and_preserves_the_legacy_parent() {
-        let fixture = Fixture::new(Policy::default());
-        let legacy = fixture.path.join("ssmcp");
-        crate::platform::private_directory(&legacy).unwrap();
-        std::fs::write(legacy.join("keep"), b"existing data").unwrap();
-        let before = std::fs::metadata(&legacy).unwrap();
-        let store = OutputStore::connection_in(&fixture.path, None).unwrap();
-        let uid = unsafe { libc::geteuid() };
-        assert_eq!(store.directory, fixture.path.join(format!("ssmcp-{uid}")));
-        let private = std::fs::metadata(&store.directory).unwrap();
-        assert_eq!(private.uid(), uid);
-        assert_eq!(private.mode() & 0o777, 0o700);
-        let after = std::fs::metadata(&legacy).unwrap();
-        assert_eq!(
-            (after.dev(), after.ino(), after.uid(), after.mode()),
-            (before.dev(), before.ino(), before.uid(), before.mode())
-        );
-        assert_eq!(
-            std::fs::read(legacy.join("keep")).unwrap(),
-            b"existing data"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn per_user_directory_rejects_symlinks_and_public_permissions() {
-        use std::os::unix::fs::PermissionsExt;
-        let fixture = Fixture::new(Policy::default());
-        let directory = fixture
-            .path
-            .join(format!("ssmcp-{}", unsafe { libc::geteuid() }));
-        let target = fixture.path.join("keep-target");
-        crate::platform::private_directory(&target).unwrap();
-        std::fs::write(target.join("keep"), b"untouched").unwrap();
-        std::os::unix::fs::symlink(&target, &directory).unwrap();
-        let error = OutputStore::connection_in(&fixture.path, None)
-            .err()
-            .unwrap();
-        let refused = error.downcast_ref::<StartupDirectoryError>().unwrap();
-        assert_eq!(refused.directory, directory);
-        assert_eq!(refused.operation, "open private");
-        let cause = std::error::Error::source(refused)
-            .unwrap()
-            .downcast_ref::<io::Error>()
-            .unwrap();
-        assert_eq!(
-            cause.raw_os_error(),
-            open_directory(&directory).unwrap_err().raw_os_error()
-        );
-        assert!(!crate::client::watchdog_retries(true, Some(error.as_ref())));
-        assert_eq!(std::fs::read_link(&directory).unwrap(), target);
-        assert_eq!(std::fs::read(target.join("keep")).unwrap(), b"untouched");
-        std::fs::remove_file(&directory).unwrap();
-        std::fs::create_dir(&directory).unwrap();
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let error = OutputStore::connection_in(&fixture.path, None)
-            .err()
-            .unwrap();
-        let refused = error.downcast_ref::<StartupDirectoryError>().unwrap();
-        assert_eq!(refused.operation, "validate private");
-        assert_eq!(refused.directory, directory);
-        assert_eq!(refused.cause.kind(), io::ErrorKind::PermissionDenied);
-        assert!(error.to_string().contains("private permissions"), "{error}");
-        assert!(!crate::client::watchdog_retries(true, Some(error.as_ref())));
-        assert_eq!(std::fs::metadata(&directory).unwrap().mode() & 0o777, 0o755);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn per_user_reload_retains_legacy_paths_and_consumes_the_grant_once() {
-        let fixture = Fixture::new(Policy::default());
-        let legacy = fixture.path.join("ssmcp");
-        crate::platform::private_directory(&legacy).unwrap();
-        let directory = legacy.join(unsafe { libc::geteuid() }.to_string());
-        let previous = OutputStore::at(
-            directory.clone(),
-            Policy {
-                inline_bytes: 1,
-                ..Policy::default()
-            },
-        )
-        .unwrap();
-        let mut capture = previous.capture("legacy-reload");
-        capture.push(b"keep advertised output path").unwrap();
-        capture.finish().unwrap();
-        let metadata = capture.metadata().unwrap();
-        let mut command = std::process::Command::new("ssmcp");
-        let ticket = previous.prepare_reload(&mut command).unwrap();
-        let token = command
-            .get_envs()
-            .find(|(key, _)| key.to_str() == Some(RELOAD_ENV))
-            .unwrap()
-            .1
-            .unwrap()
-            .to_str()
-            .unwrap();
-        let restored = OutputStore::connection_in(&fixture.path, Some(token)).unwrap();
-        assert_eq!(restored.directory, directory);
-        assert_eq!(restored.owner, previous.owner);
-        let result = restored
-            .perform_sync("ssmcp.output.read", json!({"id": metadata.id}))
-            .unwrap();
-        assert_eq!(result["text"], "keep advertised output path");
-        assert!(Path::new(&metadata.path).exists());
-        assert!(!directory.join(&ticket.name).exists());
-        let replay = OutputStore::connection_in(&fixture.path, Some(token)).unwrap();
-        assert_ne!(replay.directory, directory);
-        assert_ne!(replay.owner, previous.owner);
-        assert!(
-            replay
-                .perform_sync("ssmcp.output.stat", json!({"id": metadata.id}))
-                .is_err()
-        );
-        assert!(Path::new(&metadata.path).exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn per_user_reload_does_not_follow_a_legacy_parent_symlink() {
-        let fixture = Fixture::new(Policy::default());
-        let target = fixture.path.join("legacy-target");
-        crate::platform::private_directory(&target).unwrap();
-        let previous = OutputStore::at(
-            target.join(unsafe { libc::geteuid() }.to_string()),
-            Policy::default(),
-        )
-        .unwrap();
-        let mut command = std::process::Command::new("ssmcp");
-        let ticket = previous.prepare_reload(&mut command).unwrap();
-        let token = command
-            .get_envs()
-            .find(|(key, _)| key.to_str() == Some(RELOAD_ENV))
-            .unwrap()
-            .1
-            .unwrap()
-            .to_str()
-            .unwrap();
-        std::os::unix::fs::symlink(&target, fixture.path.join("ssmcp")).unwrap();
-        let current = OutputStore::connection_in(&fixture.path, Some(token)).unwrap();
-        assert_ne!(current.owner, previous.owner);
-        assert!(previous.directory.join(&ticket.name).exists());
-        assert!(fixture.path.join("ssmcp").is_symlink());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[ignore = "requires an isolated temporary root and unprivileged UID from the multi-user fixture"]
-    fn per_user_output_fixture() {
-        let base = PathBuf::from(std::env::var_os("SSMCP_TEST_OUTPUT_BASE").expect("fixture base"));
-        assert!(base.is_absolute());
-        assert_ne!(
-            unsafe { libc::geteuid() },
-            0,
-            "fixture must drop privileges"
-        );
-        let result = OutputStore::connection_in(&base, None);
-        if std::env::var_os("SSMCP_TEST_OUTPUT_REJECT").is_some() {
-            assert!(result.is_err(), "another UID must not open this directory");
-            return;
-        }
-        let store = result.unwrap();
-        let mut capture = store.capture("multi-user-fixture");
-        let content = vec![b'x'; INLINE_BYTES + 1];
-        capture.push(&content).unwrap();
-        capture.finish().unwrap();
-        let metadata = capture.metadata().unwrap();
-        assert_eq!(std::fs::read(&metadata.path).unwrap(), content);
-        assert_eq!(
-            std::fs::metadata(&store.directory).unwrap().mode() & 0o777,
-            0o700
-        );
-        assert_eq!(
-            std::fs::metadata(&metadata.path).unwrap().mode() & 0o777,
-            0o600
-        );
-        assert_eq!(
-            store
-                .perform_sync(
-                    "ssmcp.output.read",
-                    json!({"id": metadata.id, "max_bytes": 8})
-                )
-                .unwrap()["text"],
-            "xxxxxxxx"
-        );
-        if let Some(forbidden) = std::env::var_os("SSMCP_TEST_OUTPUT_FORBIDDEN") {
-            assert_eq!(
-                std::fs::read(forbidden).unwrap_err().kind(),
-                io::ErrorKind::PermissionDenied
-            );
-        }
-        println!("per-user output fixture passed for uid {}", unsafe {
-            libc::geteuid()
-        });
-    }
-
-    #[test]
-    fn initial_cleanup_error_identifies_the_failed_step_without_hiding_the_cause() {
-        let fixture = Fixture::new(Policy::default());
-        let lock = fixture.path.join(".cleanup.lock");
-        std::fs::remove_file(&lock).unwrap();
-        std::fs::create_dir(&lock).unwrap();
-        let error = OutputStore::at(fixture.path.clone(), Policy::default())
-            .err()
-            .expect("a directory cannot be used as the cleanup lock");
-        assert!(error.contains("open output cleanup lock:"), "{error}");
-        assert!(
-            lock.is_dir(),
-            "a failed initialization must not remove the unexpected entry"
-        );
-    }
-
-    #[test]
-    fn existing_cleanup_lock_is_preserved_across_connections() {
-        let fixture = Fixture::new(Policy::default());
-        let path = fixture.path.join(".cleanup.lock");
-        std::fs::write(&path, b"existing shared lock").unwrap();
-        #[cfg(unix)]
-        let before = std::fs::metadata(&path).unwrap();
-        let other = OutputStore::at(fixture.path.clone(), Policy::default()).unwrap();
-        assert_ne!(fixture.store.owner, other.owner);
-        other.cleanup_all().unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"existing shared lock");
-        #[cfg(unix)]
-        {
-            let after = std::fs::metadata(&path).unwrap();
-            assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
-            assert_eq!(after.mode() & 0o777, 0o600);
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn cleanup_lock_symlink_is_rejected_without_changing_its_target() {
-        let fixture = Fixture::new(Policy::default());
-        let target = fixture.path.join("keep-lock-target");
-        fixture
-            .store
-            .open("keep-lock-target", Access::CreateNewWrite)
-            .unwrap()
-            .write_all(b"untouched lock target")
-            .unwrap();
-        let path = fixture.path.join(".cleanup.lock");
-        std::fs::remove_file(&path).unwrap();
-        std::os::unix::fs::symlink(&target, &path).unwrap();
-        assert_eq!(
-            std::fs::metadata(&fixture.path).unwrap().mode() & 0o777,
-            0o700,
-            "the root itself passes private-directory validation"
-        );
-        let error = OutputStore::at_restoring(fixture.path.clone(), Policy::default(), None)
-            .err()
-            .expect("a symlink cannot be used as the cleanup lock");
-        let refused = error.downcast_ref::<StartupDirectoryError>().unwrap();
-        assert_eq!(refused.directory, fixture.path);
-        assert_eq!(refused.operation, "initialize retention for");
-        assert!(!crate::client::watchdog_retries(true, Some(error.as_ref())));
-        assert!(
-            error.to_string().contains("open output cleanup lock:"),
-            "{error}"
-        );
-        assert_eq!(std::fs::read_link(&path).unwrap(), target);
-        assert_eq!(std::fs::read(&target).unwrap(), b"untouched lock target");
-    }
-
-    #[test]
-    fn concurrent_store_initialization_and_cleanup_preserve_ownership() {
-        const CHILD_DIRECTORY: &str = "SSMCP_TEST_OUTPUT_CONCURRENCY_DIRECTORY";
-        if let Some(path) = std::env::var_os(CHILD_DIRECTORY) {
-            let path = PathBuf::from(path);
-            // Fixture::new has already created the parent's lock. Each round
-            // therefore gets a fresh private directory whose lock is absent.
-            // Join every worker before reporting an error or starting a new
-            // round; a failed opener cannot strand peers at a later barrier.
-            for round in 0..32 {
-                let directory = path.join(format!("cold-{round}"));
-                crate::platform::private_directory(&directory).unwrap();
-                assert!(!directory.join(".cleanup.lock").try_exists().unwrap());
-                let start = std::sync::Arc::new(std::sync::Barrier::new(8));
-                let failures = std::thread::scope(|scope| {
-                    let mut workers = Vec::new();
-                    for worker in 0..8 {
-                        let directory = directory.clone();
-                        let start = start.clone();
-                        workers.push((
-                            worker,
-                            scope.spawn(move || {
-                                start.wait();
-                                OutputStore::at(directory, Policy::default()).map(|_| ())
-                            }),
-                        ));
-                    }
-                    let mut failures = Vec::new();
-                    for (worker, handle) in workers {
-                        match handle.join() {
-                            Ok(Ok(())) => {}
-                            Ok(Err(error)) => failures.push(format!("worker {worker}: {error}")),
-                            Err(_) => failures.push(format!("worker {worker} panicked")),
-                        }
-                    }
-                    failures
-                });
-                assert!(
-                    failures.is_empty(),
-                    "cold output initialization round {round}: {failures:?}"
-                );
-                assert!(directory.join(".cleanup.lock").is_file());
-            }
-
-            // Retain the existing concurrent capture, ownership and integrity
-            // checks after exercising the previously missing cold-start race.
-            let start = std::sync::Arc::new(std::sync::Barrier::new(4));
-            std::thread::scope(|scope| {
-                for worker in 0..4 {
-                    let path = path.clone();
-                    let start = start.clone();
-                    scope.spawn(move || {
-                        start.wait();
-                        for iteration in 0..4 {
-                            let store = OutputStore::at(
-                                path.clone(),
-                                Policy {
-                                    inline_bytes: 1,
-                                    ..Policy::default()
-                                },
-                            )
-                            .unwrap();
-                            let bytes = format!("worker-{worker}-iteration-{iteration}\n");
-                            let mut capture = store.capture("concurrent-initialization");
-                            capture.push(bytes.as_bytes()).unwrap();
-                            assert!(
-                                store.cleanup_all().unwrap()["active_artifacts"]
-                                    .as_u64()
-                                    .unwrap()
-                                    >= 1
-                            );
-                            capture.finish().unwrap();
-                            let metadata = capture.metadata().unwrap();
-                            assert!(metadata.complete);
-                            assert_eq!(
-                                metadata.sha256,
-                                crate::hex::encode(Sha256::digest(bytes.as_bytes()))
-                            );
-                            let other = OutputStore::at(path.clone(), Policy::default()).unwrap();
-                            assert_eq!(
-                                other
-                                    .perform_sync("ssmcp.output.stat", json!({"id":metadata.id}))
-                                    .unwrap_err(),
-                                "unknown output artifact for this connection"
-                            );
-                            let read = store
-                                .perform_sync("ssmcp.output.read", json!({"id":metadata.id}))
-                                .unwrap();
-                            assert_eq!(read["text"], bytes);
-                            assert_eq!(read["eof"], true);
-                        }
-                    });
-                }
-            });
-            return;
-        }
-
-        // A separate test process bounds a deadlocked native filesystem lock as
-        // well as Rust joins. Only this fixture's private directory is shared;
-        // the real UID output directory and other tests' captures are untouched.
-        let fixture = Fixture::new(Policy::default());
-        struct Child(std::process::Child);
-        impl Drop for Child {
-            fn drop(&mut self) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
+            Self {
+                store: OutputStore::with_policy(policy),
             }
         }
-        // Ordinary files cannot block the worker on a full pipe. These names
-        // do not match the artifact namespace, so concurrent cleanup ignores them.
-        let stdout = fixture
-            .store
-            .open("concurrency-stdout.log", Access::CreateNewWrite)
-            .unwrap();
-        let stderr = fixture
-            .store
-            .open("concurrency-stderr.log", Access::CreateNewWrite)
-            .unwrap();
-        let mut child = Child(
-            std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "output::tests::concurrent_store_initialization_and_cleanup_preserve_ownership",
-                    "--nocapture",
-                ])
-                .env(CHILD_DIRECTORY, &fixture.path)
-                .stdout(std::process::Stdio::from(stdout))
-                .stderr(std::process::Stdio::from(stderr))
-                .spawn()
-                .unwrap(),
-        );
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        let (status, timed_out) = loop {
-            match child.0.try_wait() {
-                Ok(Some(status)) => break (Ok(status), false),
-                Err(error) => {
-                    let _ = child.0.kill();
-                    let _ = child.0.wait();
-                    break (Err(error), false);
-                }
-                Ok(None) => {}
-            }
-            if std::time::Instant::now() >= deadline {
-                let _ = child.0.kill();
-                break (child.0.wait(), true);
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        let mut diagnostics = String::new();
-        for name in ["concurrency-stdout.log", "concurrency-stderr.log"] {
-            let mut bytes = Vec::new();
-            let result = fixture
-                .store
-                .open(name, Access::Read)
-                .and_then(|file| file.take(32 * 1024).read_to_end(&mut bytes));
-            diagnostics.push_str(&format!("\n{name}:\n{}", String::from_utf8_lossy(&bytes)));
-            if let Err(error) = result {
-                diagnostics.push_str(&format!("\nfailed to read diagnostic log: {error}"));
-            }
-        }
-        assert!(
-            !timed_out && status.as_ref().is_ok_and(|status| status.success()),
-            "concurrent output child: timed_out={timed_out}; status={status:?}\n{diagnostics}"
-        );
     }
-
-    #[test]
-    fn connections_cannot_read_stat_or_explicitly_clean_each_others_artifacts() {
-        let fixture = Fixture::new(Policy {
-            inline_bytes: 1,
-            ..Policy::default()
-        });
-        let mut capture = fixture.store.capture("owned");
-        capture.push(b"private output").unwrap();
-        capture.finish().unwrap();
-        let metadata = capture.metadata().unwrap();
-        let other = OutputStore::at(fixture.path.clone(), Policy::default()).unwrap();
-        assert_ne!(fixture.store.owner, other.owner);
-        for method in ["ssmcp.output.read", "ssmcp.output.stat"] {
-            assert!(
-                other
-                    .perform_sync(method, json!({"id":metadata.id}))
-                    .is_err()
-            );
-            assert!(
-                fixture
-                    .store
-                    .perform_sync(method, json!({"id":metadata.id}))
-                    .is_ok()
-            );
-        }
-        assert!(
-            serde_json::to_value(&metadata)
-                .unwrap()
-                .get("owner")
-                .is_none()
-        );
-        File::options()
-            .write(true)
-            .open(&metadata.path)
-            .unwrap()
-            .set_modified(UNIX_EPOCH)
-            .unwrap();
-        assert_eq!(other.cleanup().unwrap()["removed_files"], 0);
-        assert!(Path::new(&metadata.path).exists());
-        assert_eq!(fixture.store.cleanup().unwrap()["removed_files"], 1);
-    }
-
-    #[test]
-    fn reload_grant_restores_only_its_owner_once_and_is_removed_on_failure() {
-        let fixture = Fixture::new(Policy {
-            inline_bytes: 1,
-            ..Policy::default()
-        });
-        let mut capture = fixture.store.capture("before-reload");
-        capture
-            .push(b"retained across acknowledged reload")
-            .unwrap();
-        capture.finish().unwrap();
-        let id = capture.metadata().unwrap().id;
-        let mut command = std::process::Command::new("ssmcp");
-        let ticket = fixture.store.prepare_reload(&mut command).unwrap();
-        let token = command
-            .get_envs()
-            .find(|(key, _)| key.to_str() == Some(RELOAD_ENV))
-            .unwrap()
-            .1
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_owned();
-        let restored =
-            OutputStore::at_restoring(fixture.path.clone(), Policy::default(), Some(&token))
-                .unwrap();
-        assert_eq!(restored.owner, fixture.store.owner);
-        assert_eq!(
-            restored
-                .perform_sync("ssmcp.output.read", json!({"id":id}))
-                .unwrap()["text"],
-            "retained across acknowledged reload"
-        );
-        let replay =
-            OutputStore::at_restoring(fixture.path.clone(), Policy::default(), Some(&token))
-                .unwrap();
-        assert_ne!(replay.owner, fixture.store.owner);
-        assert!(
-            replay
-                .perform_sync("ssmcp.output.stat", json!({"id":id}))
-                .is_err()
-        );
-        drop(ticket);
-        let pending = fixture.store.prepare_reload(&mut command).unwrap();
-        let pending_path = fixture.path.join(&pending.name);
-        assert!(pending_path.exists());
-        drop(pending);
-        assert!(!pending_path.exists());
-    }
-
-    #[test]
-    fn expired_reload_grant_never_restores_artifact_access() {
-        let fixture = Fixture::new(Policy::default());
-        let mut command = std::process::Command::new("ssmcp");
-        let ticket = fixture.store.prepare_reload(&mut command).unwrap();
-        let token = command
-            .get_envs()
-            .find(|(key, _)| key.to_str() == Some(RELOAD_ENV))
-            .unwrap()
-            .1
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_owned();
-        let mut file = fixture.store.open(&ticket.name, Access::ReadWrite).unwrap();
-        file.set_len(0).unwrap();
-        serde_json::to_writer(
-            &mut file,
-            &ReloadGrant {
-                schema: RELOAD_SCHEMA.into(),
-                owner: fixture.store.owner.clone(),
-                expires_at_unix: now().saturating_sub(1),
-            },
-        )
-        .unwrap();
-        drop(file);
-        assert!(
-            OutputStore::at_restoring(fixture.path.clone(), Policy::default(), Some(&token))
-                .is_err()
-        );
-        assert!(!fixture.path.join(&ticket.name).exists());
-    }
-
-    #[test]
-    fn short_bytes_stay_inline_and_count_unterminated_binary_lines() {
-        let fixture = Fixture::new(Policy::default());
-        let mut capture = fixture.store.capture("test");
-        capture.push(b"a\n\xff").unwrap();
-        assert_eq!(capture.lines(), 2);
-        capture.push(b"\n").unwrap();
-        capture.finish().unwrap();
-        assert_eq!(capture.lines(), 2);
-        assert_eq!(capture.inline_bytes(), b"a\n\xff\n");
-        assert!(capture.metadata().is_none());
-    }
-
-    #[test]
-    fn byte_threshold_preserves_prefix_and_hash_across_chunk_boundaries() {
-        let fixture = Fixture::new(Policy {
-            inline_bytes: 7,
-            ..Policy::default()
-        });
-        let mut capture = fixture.store.capture("stdout");
-        capture.push(b"prefix").unwrap();
-        capture.push(b"\n\xe4\xb8").unwrap();
-        capture.push(b"\xad\nend").unwrap();
-        let snapshot = capture.metadata().unwrap();
-        assert!(!snapshot.complete);
-        capture.finish().unwrap();
-        let metadata = capture.metadata().unwrap();
-        let bytes = std::fs::read(&metadata.path).unwrap();
-        assert_eq!(bytes, b"prefix\n\xe4\xb8\xad\nend");
-        assert_eq!(metadata.bytes, bytes.len() as u64);
-        assert_eq!(metadata.lines, 3);
-        assert_eq!(metadata.sha256, crate::hex::encode(Sha256::digest(&bytes)));
-        assert!(metadata.complete);
-        #[cfg(unix)]
-        assert_eq!(
-            std::fs::metadata(&metadata.path).unwrap().mode() & 0o777,
-            0o600
-        );
-        assert_eq!(capture.inline_bytes(), b"");
-    }
-
-    #[test]
-    fn line_threshold_spills_even_small_output() {
-        let fixture = Fixture::new(Policy {
-            inline_lines: 2,
-            ..Policy::default()
-        });
-        let mut capture = fixture.store.capture("stderr");
-        capture.push(b"a\nb\n").unwrap();
-        assert!(!capture.is_spilled());
-        capture.push(b"c").unwrap();
-        assert!(capture.is_spilled());
-        capture.finish().unwrap();
-        assert_eq!(capture.metadata().unwrap().lines, 3);
-    }
-
-    #[test]
-    fn hard_cap_reports_partial_prefix_with_correct_hash_and_counts() {
-        let fixture = Fixture::new(Policy {
+    fn tiny() -> Policy {
+        Policy {
             inline_bytes: 4,
-            artifact_bytes: 10,
+            inline_lines: 2,
+            retained_bytes: 24,
+            artifact_bytes: 16,
+            max_artifacts: 4,
+            max_captures: 8,
             ..Policy::default()
-        });
-        let mut capture = fixture.store.capture("stdout");
-        capture.push(b"1234").unwrap();
-        assert!(capture.push(b"567890EXCESS").is_err());
-        assert!(capture.finish().is_err());
+        }
+    }
+
+    #[test]
+    fn short_binary_output_stays_inline_and_releases_its_memory() {
+        let fixture = Fixture::new(tiny());
+        let mut capture = fixture.store.capture("inline");
+        capture.push(b"a\0\n").unwrap();
+        assert_eq!(capture.bytes(), 3);
+        assert_eq!(capture.lines(), 1);
+        assert_eq!(capture.read_range(0, 10).unwrap(), b"a\0\n");
+        assert!(!capture.is_spilled());
+        assert_eq!(fixture.store.state.lock().unwrap().used_bytes, 3);
+        capture.finish().unwrap();
+        drop(capture);
+        assert_eq!(fixture.store.state.lock().unwrap().used_bytes, 0);
+    }
+
+    #[test]
+    fn spill_moves_prefix_without_double_charging_and_hashes_exact_bytes() {
+        let fixture = Fixture::new(tiny());
+        let mut capture = fixture.store.capture("bytes");
+        capture.push(b"abc").unwrap();
+        capture.push(b"\0\xff\nxyz").unwrap();
+        capture.finish().unwrap();
+        assert!(capture.inline_bytes().is_empty());
         let metadata = capture.metadata().unwrap();
-        assert_eq!(std::fs::read(&metadata.path).unwrap(), b"1234567890");
-        assert_eq!(metadata.bytes, 10);
-        assert_eq!(metadata.observed_bytes, 16);
+        assert!(metadata.path.is_none());
+        assert_eq!(metadata.storage, "memory");
+        assert_eq!(metadata.bytes, 9);
+        assert_eq!(fixture.store.state.lock().unwrap().used_bytes, 9);
         assert_eq!(
             metadata.sha256,
-            crate::hex::encode(Sha256::digest(b"1234567890"))
+            crate::hex::encode(Sha256::digest(b"abc\0\xff\nxyz"))
         );
-        assert!(!metadata.complete);
-        assert!(metadata.error.unwrap().contains("limit"));
+        assert_eq!(capture.read_range(2, 5).unwrap(), b"c\0\xff\nx");
+        assert!(metadata.complete);
+    }
 
+    #[test]
+    fn line_limit_retains_small_results_by_id() {
+        let fixture = Fixture::new(Policy {
+            inline_bytes: 100,
+            inline_lines: 2,
+            ..tiny()
+        });
+        let mut capture = fixture.store.capture("lines");
+        capture.push(b"a\nb\nc").unwrap();
+        assert!(capture.is_spilled());
+        assert_eq!(capture.lines(), 3);
+    }
+
+    #[test]
+    fn hard_cap_preserves_prefix_and_keeps_observed_bytes_truthful() {
+        let fixture = Fixture::new(tiny());
+        let mut capture = fixture.store.capture("limited");
+        assert!(capture.push(b"0123456789abcdefghij").is_err());
+        assert!(capture.push(b"more").is_err());
+        assert!(capture.finish().is_err());
+        let metadata = capture.metadata().unwrap();
+        assert_eq!(metadata.bytes, 16);
+        assert_eq!(metadata.observed_bytes, 24);
+        assert!(!metadata.complete);
+        assert_eq!(capture.read_range(0, 32).unwrap(), b"0123456789abcdef");
+        assert_eq!(
+            metadata.sha256,
+            crate::hex::encode(Sha256::digest(b"0123456789abcdef"))
+        );
         let read = fixture
             .store
             .perform_sync("ssmcp.output.read", json!({"id":metadata.id}))
             .unwrap();
-        assert_eq!(read["complete"], false);
-        assert_eq!(read["text"], "1234567890");
-        let stat = fixture
-            .store
-            .perform_sync("ssmcp.output.stat", json!({"id":metadata.id}))
-            .unwrap();
-        assert_eq!(stat["bytes"], 10);
-        assert_eq!(stat["observed_bytes"], 16);
-        assert_eq!(stat["complete"], false);
-        assert!(stat["error"].as_str().unwrap().contains("limit"));
+        assert_eq!(read["next_offset"], 16);
+        assert_eq!(read["eof"], true);
+        assert_eq!(read["truncated"], true);
     }
 
     #[test]
-    fn cleanup_protects_live_captures_then_removes_expired_completed_files() {
+    fn active_captures_share_a_hard_budget_including_inline_bytes() {
         let fixture = Fixture::new(Policy {
-            inline_bytes: 1,
-            retention_secs: 1,
-            retained_bytes: 1,
-            ..Policy::default()
+            retained_bytes: 10,
+            ..tiny()
         });
-        let mut capture = fixture.store.capture("stdout");
-        capture.push(b"hello").unwrap();
-        let metadata = capture.metadata().unwrap();
-        File::options()
-            .write(true)
-            .open(&metadata.path)
-            .unwrap()
-            .set_modified(UNIX_EPOCH)
-            .unwrap();
-        let result = fixture.store.cleanup().unwrap();
-        assert_eq!(result["active_artifacts"], 1);
-        assert!(Path::new(&metadata.path).exists());
-        capture.finish().unwrap();
-        let result = fixture.store.cleanup().unwrap();
-        assert_eq!(result["removed_files"], 1);
-        assert!(!Path::new(&metadata.path).exists());
-        assert!(!fixture.path.join(manifest_name(&metadata.id)).exists());
+        let mut first = fixture.store.capture("first");
+        first.push(b"abc").unwrap();
+        let mut second = fixture.store.capture("second");
+        assert!(second.push(b"123456789").is_err());
+        assert_eq!(second.bytes(), 7);
+        assert_eq!(first.read_range(0, 10).unwrap(), b"abc");
+        assert_eq!(fixture.store.state.lock().unwrap().used_bytes, 10);
+        first.spill().unwrap();
+        assert_eq!(fixture.store.state.lock().unwrap().used_bytes, 10);
+        fixture.store.cleanup().unwrap();
+        assert_eq!(first.read_range(0, 10).unwrap(), b"abc");
     }
 
-    #[cfg(unix)]
     #[test]
-    fn cleanup_preserves_unrelated_files_and_symlinks() {
+    fn completed_entries_are_evicted_before_live_output_is_truncated() {
         let fixture = Fixture::new(Policy {
-            inline_bytes: 1,
-            retained_bytes: 0,
-            ..Policy::default()
+            retained_bytes: 10,
+            ..tiny()
         });
-        let unrelated = fixture.path.join("keep.txt");
-        std::fs::write(&unrelated, b"keep").unwrap();
-        let id = "f".repeat(32);
-        std::os::unix::fs::symlink(&unrelated, fixture.path.join(artifact_name(&id))).unwrap();
-        assert_eq!(fixture.store.cleanup().unwrap()["removed_files"], 0);
-        assert_eq!(std::fs::read(&unrelated).unwrap(), b"keep");
-        assert!(fixture.path.join(artifact_name(&id)).is_symlink());
+        let mut old = fixture.store.capture("old");
+        old.push(b"12345678").unwrap();
+        old.finish().unwrap();
+        let id = old.metadata().unwrap().id;
+        let mut live = fixture.store.capture("live");
+        live.push(b"abcdefghi").unwrap();
+        assert_eq!(fixture.store.state.lock().unwrap().used_bytes, 9);
         assert!(
             fixture
-                .store
-                .perform_sync("ssmcp.output.read", json!({"id":"../keep.txt"}))
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn bounded_binary_read_and_stat_reconstruct_exact_saved_bytes() {
-        let fixture = Fixture::new(Policy {
-            inline_bytes: 1,
-            ..Policy::default()
-        });
-        let mut capture = fixture.store.capture("stdout");
-        capture.push(b"a\0\xff\nb").unwrap();
-        capture.finish().unwrap();
-        let id = capture.metadata().unwrap().id;
-        let first = fixture
-            .store
-            .perform_sync("ssmcp.output.read", json!({"id":id,"max_bytes":3}))
-            .unwrap();
-        let last = fixture
-            .store
-            .perform_sync(
-                "ssmcp.output.read",
-                json!({"id":id,"offset":first["next_offset"],"max_bytes":3}),
-            )
-            .unwrap();
-        assert_eq!(
-            STANDARD
-                .decode(first["data_base64"].as_str().unwrap())
-                .unwrap(),
-            b"a\0\xff"
-        );
-        assert_eq!(
-            STANDARD
-                .decode(last["data_base64"].as_str().unwrap())
-                .unwrap(),
-            b"\nb"
-        );
-        assert_eq!(last["eof"], true);
-        let stat = fixture
-            .store
-            .perform_sync("ssmcp.output.stat", json!({"id":id}))
-            .unwrap();
-        assert_eq!(stat["lines"], 2);
-        assert_eq!(
-            stat["sha256"],
-            crate::hex::encode(Sha256::digest(b"a\0\xff\nb"))
-        );
-    }
-
-    #[test]
-    fn completed_artifacts_reject_changed_lengths() {
-        for length in [0, 2, 8] {
-            let fixture = Fixture::new(Policy {
-                inline_bytes: 1,
-                ..Policy::default()
-            });
-            let mut capture = fixture.store.capture("changed-length");
-            capture.push(b"abcdef").unwrap();
-            capture.finish().unwrap();
-            let metadata = capture.metadata().unwrap();
-            File::options()
-                .write(true)
-                .open(&metadata.path)
-                .unwrap()
-                .set_len(length)
-                .unwrap();
-            for operation in ["ssmcp.output.read", "ssmcp.output.stat"] {
-                let error = fixture
-                    .store
-                    .perform_sync(operation, json!({"id":metadata.id}))
-                    .unwrap_err();
-                assert!(error.contains("recorded length"), "{operation}: {error}");
-            }
-        }
-    }
-
-    #[test]
-    fn completed_artifact_stat_rejects_changed_contents() {
-        let fixture = Fixture::new(Policy {
-            inline_bytes: 1,
-            ..Policy::default()
-        });
-        let mut capture = fixture.store.capture("changed-contents");
-        capture.push(b"abcdef").unwrap();
-        capture.finish().unwrap();
-        let metadata = capture.metadata().unwrap();
-        File::options()
-            .write(true)
-            .open(&metadata.path)
-            .unwrap()
-            .write_all(b"ABCDEF")
-            .unwrap();
-        let error = fixture
-            .store
-            .perform_sync("ssmcp.output.stat", json!({"id":metadata.id}))
-            .unwrap_err();
-        assert!(error.contains("SHA-256"), "{error}");
-    }
-
-    #[test]
-    fn live_artifact_snapshots_allow_growth_before_completion() {
-        let fixture = Fixture::new(Policy {
-            inline_bytes: 1,
-            ..Policy::default()
-        });
-        let mut capture = fixture.store.capture("growing-output");
-        capture.push(b"first\n").unwrap();
-        let id = capture.metadata().unwrap().id;
-        for bytes in [b"first\n".as_slice(), b"first\nsecond\n".as_slice()] {
-            let read = fixture
-                .store
-                .perform_sync("ssmcp.output.read", json!({"id":id}))
-                .unwrap();
-            let stat = fixture
                 .store
                 .perform_sync("ssmcp.output.stat", json!({"id":id}))
+                .is_err()
+        );
+        assert!(old.read_range(0, 1).is_err());
+        assert!(!old.metadata().unwrap().complete);
+        assert_eq!(live.read_range(0, 32).unwrap(), b"abcdefghi");
+    }
+
+    #[test]
+    fn entry_and_capture_counts_are_bounded_even_for_empty_streams() {
+        let fixture = Fixture::new(Policy {
+            max_artifacts: 1,
+            max_captures: 2,
+            ..tiny()
+        });
+        let mut first = fixture.store.capture("first");
+        first.spill().unwrap();
+        let mut second = fixture.store.capture("second");
+        assert!(second.spill().is_err());
+        let rejected = fixture.store.capture("third");
+        assert!(rejected.error().is_some());
+        assert_eq!(fixture.store.state.lock().unwrap().entries.len(), 1);
+        drop(rejected);
+        drop(second);
+        drop(first);
+        let mut next = fixture.store.capture("next");
+        next.spill().unwrap();
+        assert_eq!(fixture.store.state.lock().unwrap().entries.len(), 1);
+    }
+
+    #[test]
+    fn expired_outputs_fail_instead_of_returning_a_successful_eof() {
+        let fixture = Fixture::new(tiny());
+        let mut capture = fixture.store.capture("expiry");
+        capture.push(b"content").unwrap();
+        let id = capture.metadata().unwrap().id;
+        fixture
+            .store
+            .state
+            .lock()
+            .unwrap()
+            .entries
+            .get_mut(&id)
+            .unwrap()
+            .metadata
+            .expires_at_unix = 0;
+        assert_eq!(fixture.store.cleanup().unwrap()["removed_artifacts"], 0);
+        capture.finish().unwrap();
+        fixture
+            .store
+            .state
+            .lock()
+            .unwrap()
+            .entries
+            .get_mut(&id)
+            .unwrap()
+            .metadata
+            .expires_at_unix = 0;
+        assert_eq!(fixture.store.cleanup().unwrap()["removed_artifacts"], 1);
+        assert!(capture.read_range(capture.bytes(), 1).is_err());
+        assert!(
+            fixture
+                .store
+                .perform_sync("ssmcp.output.read", json!({"id":id}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn connections_and_replacements_cannot_read_previous_outputs() {
+        let first = Fixture::new(tiny());
+        let replacement = Fixture::new(tiny());
+        let mut capture = first.store.capture("private");
+        capture.push(b"private output").unwrap();
+        capture.finish().unwrap();
+        let id = capture.metadata().unwrap().id;
+        assert!(
+            replacement
+                .store
+                .perform_sync("ssmcp.output.stat", json!({"id":id}))
+                .is_err()
+        );
+        replacement.store.cleanup().unwrap();
+        assert_eq!(capture.read_range(0, 32).unwrap(), b"private output");
+        assert!(
+            first
+                .store
+                .perform_sync("ssmcp.output.read", json!({"id":"../path"}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn paginated_binary_reads_reconstruct_exact_bytes_and_validate_cursors() {
+        let fixture = Fixture::new(tiny());
+        let data = b"a\0\xffb\nc\nend";
+        let mut capture = fixture.store.capture("binary");
+        capture.push(data).unwrap();
+        capture.finish().unwrap();
+        let id = capture.metadata().unwrap().id;
+        let mut offset = 0;
+        let mut restored = Vec::new();
+        loop {
+            let chunk = fixture
+                .store
+                .perform_sync(
+                    "ssmcp.output.read",
+                    json!({"id":id,"offset":offset,"max_bytes":3}),
+                )
                 .unwrap();
-            assert_eq!(
-                STANDARD
-                    .decode(read["data_base64"].as_str().unwrap())
-                    .unwrap(),
-                bytes
-            );
-            assert_eq!(read["complete"], false);
-            assert_eq!(stat["complete"], false);
-            assert_eq!(stat["bytes"], bytes.len());
-            assert_eq!(stat["sha256"], crate::hex::encode(Sha256::digest(bytes)));
-            if bytes == b"first\n" {
-                capture.push(b"second\n").unwrap();
+            let bytes = STANDARD
+                .decode(chunk["data_base64"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(chunk["sha256"], crate::hex::encode(Sha256::digest(&bytes)));
+            restored.extend(bytes);
+            offset = chunk["next_offset"].as_u64().unwrap();
+            if chunk["eof"] == true {
+                break;
             }
         }
+        assert_eq!(restored, data);
+        assert_eq!(offset, data.len() as u64);
+        assert!(
+            fixture
+                .store
+                .perform_sync("ssmcp.output.read", json!({"id":id,"offset":offset+1}))
+                .is_err()
+        );
+        assert!(
+            fixture
+                .store
+                .perform_sync(
+                    "ssmcp.output.read",
+                    json!({"id":id,"max_bytes":READ_BYTES+1})
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn output_store_never_creates_a_supplied_filesystem_location() {
+        let location =
+            std::env::temp_dir().join(format!("ssmcp-ram-output-{}", random_id().unwrap()));
+        assert!(!location.exists());
+        let store = OutputStore::at_for_test(location.clone()).unwrap();
+        let mut capture = store.capture("no disk");
+        capture.spill().unwrap();
+        capture.push(b"live data").unwrap();
         capture.finish().unwrap();
+        let metadata = capture.metadata().unwrap();
+        assert!(metadata.path.is_none());
+        store.cleanup().unwrap();
+        drop(capture);
+        drop(store);
+        assert!(!location.exists());
+    }
+
+    #[test]
+    fn dropped_writers_release_active_status_and_keep_incomplete_metadata() {
+        let fixture = Fixture::new(tiny());
+        let mut capture = fixture.store.capture("abandoned");
+        capture.push(b"unfinished").unwrap();
+        let id = capture.metadata().unwrap().id;
+        drop(capture);
         let stat = fixture
             .store
             .perform_sync("ssmcp.output.stat", json!({"id":id}))
             .unwrap();
-        assert_eq!(stat["complete"], true);
-        assert_eq!(stat["bytes"], 13);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn fifo_artifacts_are_rejected_without_blocking() {
-        const CHILD_DIRECTORY: &str = "SSMCP_TEST_FIFO_ARTIFACT_DIRECTORY";
-        if let Some(directory) = std::env::var_os(CHILD_DIRECTORY) {
-            let store = OutputStore::at(
-                PathBuf::from(directory),
-                Policy {
-                    inline_bytes: 1,
-                    ..Policy::default()
-                },
-            )
-            .unwrap();
-            let mut capture = store.capture("fifo-replacement");
-            capture.push(b"completed output").unwrap();
-            capture.finish().unwrap();
-            let metadata = capture.metadata().unwrap();
-            std::fs::remove_file(&metadata.path).unwrap();
-            let path = CString::new(metadata.path.as_bytes()).unwrap();
-            // SAFETY: the fixture owns this absent path and the C string is live.
-            assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
-            for operation in ["ssmcp.output.read", "ssmcp.output.stat"] {
-                let error = store
-                    .perform_sync(operation, json!({"id":metadata.id}))
-                    .unwrap_err();
-                assert!(error.contains("regular file"), "{operation}: {error}");
-            }
-            let error = capture.read_range(0, 32).unwrap_err();
-            assert!(error.contains("regular file"), "{error}");
-            return;
-        }
-
-        // A process deadline also bounds a blocking open in the old implementation.
-        let fixture = Fixture::new(Policy::default());
-        struct Child(std::process::Child);
-        impl Drop for Child {
-            fn drop(&mut self) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
-            }
-        }
-        let mut child = Child(
-            std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "output::tests::fifo_artifacts_are_rejected_without_blocking",
-                    "--nocapture",
-                ])
-                .env(CHILD_DIRECTORY, &fixture.path)
-                .stdout(std::process::Stdio::null())
-                .spawn()
-                .unwrap(),
-        );
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Some(status) = child.0.try_wait().unwrap() {
-                assert!(status.success(), "FIFO validation child failed: {status}");
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "FIFO validation blocked before rejecting a non-regular artifact"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    #[test]
-    fn output_artifacts_reject_additional_hard_links() {
-        let fixture = Fixture::new(Policy {
-            inline_bytes: 1,
-            ..Policy::default()
-        });
-        let mut capture = fixture.store.capture("stdout");
-        capture.push(b"private output").unwrap();
-        capture.finish().unwrap();
-        let metadata = capture.metadata().unwrap();
-        let linked = fixture.path.join("unrelated-hardlink");
-        std::fs::hard_link(&metadata.path, &linked).unwrap();
+        assert_eq!(stat["complete"], false);
         assert!(
-            fixture
-                .store
-                .perform_sync("ssmcp.output.read", json!({"id":metadata.id}))
-                .is_err()
+            stat["error"]
+                .as_str()
+                .unwrap()
+                .contains("before completion")
         );
-        assert_eq!(fixture.store.cleanup().unwrap()["removed_files"], 0);
-        assert_eq!(std::fs::read(linked).unwrap(), b"private output");
-    }
-
-    #[test]
-    fn abandoned_capture_is_marked_incomplete_and_released_for_cleanup() {
-        let fixture = Fixture::new(Policy {
-            inline_bytes: 1,
-            retained_bytes: 1,
-            ..Policy::default()
-        });
-        let metadata = {
-            let mut capture = fixture.store.capture("stdout");
-            capture.push(b"abandoned").unwrap();
-            capture.metadata().unwrap()
-        };
-        let manifest = fixture.store.manifest(&metadata.id).unwrap();
-        assert!(!manifest.complete);
-        assert!(manifest.error.unwrap().contains("before completion"));
-        assert_eq!(fixture.store.cleanup().unwrap()["removed_files"], 1);
+        assert_eq!(fixture.store.cleanup().unwrap()["active_artifacts"], 0);
     }
 
     #[test]
@@ -2513,12 +1187,17 @@ mod tests {
         assert_eq!(guarded["isError"], true);
         assert_eq!(guarded["structuredContent"]["exit_code"], 17);
         assert_eq!(guarded["structuredContent"]["job_id"], "job-1");
-        let path = guarded["structuredContent"]["artifact"]["path"]
+        assert!(guarded["structuredContent"]["artifact"]["path"].is_null());
+        let id = guarded["structuredContent"]["artifact"]["id"]
             .as_str()
             .unwrap();
-        assert_eq!(
-            serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap(),
-            native
-        );
+        let chunk = fixture
+            .store
+            .perform_sync("ssmcp.output.read", json!({"id":id}))
+            .unwrap();
+        let bytes = STANDARD
+            .decode(chunk["data_base64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), native);
     }
 }

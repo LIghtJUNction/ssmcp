@@ -192,7 +192,7 @@ mod tests {
      {
         let mut fixture = TestFixture::new().await;
         assert!(!fixture.session.io_reply_advertised());
-        assert!(!fixture.session.thread_history_advertised());
+        assert!(!fixture.session.thread_events_advertised());
         // An ordinary native tool cannot advertise support by returning the
         // same JSON as a real tools/list result.
         let session = fixture.session.clone();
@@ -210,7 +210,7 @@ mod tests {
         result.unwrap();
         assert!(!fixture.session.io_reply_advertised());
         fixture.advertise().await;
-        assert!(fixture.session.thread_history_advertised());
+        assert!(fixture.session.thread_events_advertised());
         fixture.enqueue("io_final_delivery", &[None]);
         let run = crate::code_mode::AuditRun::new("return {};", None).unwrap();
         let report = report(&fixture, run);

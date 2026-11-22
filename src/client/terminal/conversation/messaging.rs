@@ -83,6 +83,9 @@ fn message_body<'a>(text: &'a str, recipient: &Value) -> &'a str {
 }
 
 fn local_command(text: &str) -> bool {
+    if matches!(text.split_whitespace().next(), Some("/invite" | "/worker")) {
+        return true;
+    }
     matches!(
         text.split_whitespace().next(),
         Some(

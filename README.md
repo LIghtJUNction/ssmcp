@@ -24,10 +24,10 @@ ssmcp 把多个已授权的 Astra Pro 会话连接到你的开发机，围绕同
 | 你想做的事 | ssmcp 提供什么 |
 | --- | --- |
 | 让云端 Agent 操作开发机 | 原生 Shell、独立命令任务、文件、Zuse CLI 管理，以及按需加载的 Codex / Claude Code / Pi / OpenCode 工具 |
-| 在终端里持续协作 | Markdown 回复、代码高亮、文件和技能引用、问答队列、历史恢复；运行期间仍可继续输入 |
+| 在终端里持续协作 | Markdown 回复、代码高亮、文件和技能引用、问答队列与 worker 分工；运行期间仍可继续输入 |
 | 做自己的远程 harness | 客户端拥有工具目录、schema、上下文与 UI；复用协议和客户端扩展 hook，替换自己需要的部分 |
 
-它的基本过程很直接：Agent 选中一个在线客户端，提交带参数的工具调用，客户端在本机执行，再返回结果、图片或完整输出的归档位置。工具的名称和参数来自实时目录；安装了一个产品，不代表它的全部内部功能都可以直接调用。
+它的基本过程很直接：Agent 选中一个在线客户端，提交带参数的工具调用，客户端在本机执行，再返回结果、图片或可分页读取的输出 ID。工具的名称和参数来自实时目录；安装了一个产品，不代表它的全部内部功能都可以直接调用。
 
 ## 快速开始
 
@@ -78,15 +78,20 @@ ssmcp whoami    # 查看当前账号
 
 将终端显示的 `https://你的服务器/mcp` 加入 ChatGPT 或其他支持 OAuth 的 MCP 客户端，再完成该应用的授权。CLI 登录与 MCP 应用授权分别管理。
 
-对外入口有三个：
+对外 MCP 入口以实际服务的工具目录为准，当前源码包含以下入口：
 
 | 入口 | 作用 |
 | --- | --- |
 | `list` | 发现当前身份可访问的设备与客户端工具目录 |
 | `code_mode` | 用 JavaScript 组合原生调用，安排顺序、并发和结果读取 |
 | `collab` | 同一会话中的成员身份、定向消息、广播与确认 |
+| `await` | 等待执行任务、成员状态或消息、用户输入，不占用 JavaScript 运行槽 |
+| `messages` | 客户端与线程之间的定向消息、收件箱和确认 |
+| `link` | 为已授权客户端中的图片创建短期、单次下载链接 |
 
-被控设备可以不登录，直接运行 `ssmcp --allow 用户名@中继服务器`；控制者必须登录该服务器的既有账号。显式名单仅授权列出的人，已登录客户端省略名单时仅允许自己。CLI `invite` / `join` 和 MCP `invite` 已移除，会话内 agent 的 `collab.join` 保留。[账号与授权](docs/client-accounts.md)
+`link` 的候选实现调用目标客户端的图片读取工具，单图上限 400 KiB；默认 120 秒失效，首次 GET 会消费链接，HEAD 不消费。创建返回 URL、资源链接和清理 ID，不返回图片 base64。是否已部署须查看当前服务目录。[临时图片链接 API](docs/image-links.md)
+
+被控设备可以不登录，直接运行 `ssmcp --allow 用户名@中继服务器`；控制者必须登录该服务器的既有账号。显式名单仅授权列出的人，已登录客户端省略名单时仅允许自己。获准接入的 Agent 用 `collab.join` 登记会话内身份；主窗口中的 `/invite` 用于生成协作说明。[账号与授权](docs/client-accounts.md)
 
 先从 `list` 选择确切的客户端 ID，再查询工具的原始 schema：
 
@@ -108,7 +113,7 @@ return await exec.run(clientId, {
 });
 ```
 
-返回值包含任务 ID、运行状态、退出码与输出游标。等待时间到期后，任务可以继续运行；使用同一个 ID 读取或取消。大结果返回可追溯的归档元数据。[命令接口](docs/commands.md) · [编排与输出](docs/session-control.md)
+返回值包含任务 ID、运行状态、退出码与输出游标。等待时间到期后，任务可以继续运行；使用同一个 ID 读取或取消。大结果保留在有界内存中，通过返回的输出 ID 分页读取；容量不足或内容被裁剪时会明确标记。[命令接口](docs/commands.md) · [编排与输出](docs/session-control.md)
 
 ## 终端就是工作会话
 
@@ -148,28 +153,30 @@ ssmcp context use here
 | 运行本地命令 | `!pwd`、`!cargo test`；输出与退出码回到会话 |
 | 查看任务 | `/tasks`；`/tasks cancel JOB_ID` 停止指定命令任务 |
 | 回答问题 | **Shift + ↑** 打开待答问题，保留普通草稿 |
-| 继续旧会话 | `/resume` 选择本工作区的 JSONL 历史 |
-| 交接给另一个 Agent | `/handoff [备注]` 生成上下文文件与可编辑引用草稿，选好收件人后发送 |
-| 查看上下文 | `/context`、`/memory` 查看当前分支与有界记忆 |
-| 压缩与分支 | `/compact [摘要]`、`/fork [名称]`、`/switch CONTEXT_ID` |
+| 邀请协作者 | `/invite` 生成主 Agent 说明；`/invite worker` 生成关联 worker 池的接入说明 |
+| 管理 worker 席位 | `/worker ls` 查看状态；`/worker +N`、`/worker -N` 调整席位数 |
 | 查看原生工具 | `/pi`、`/cc`、`/codex` 列出真实目录；`TOOL {...}` 显式调用 |
 | 浏览工具输出 | 默认显示状态与最多两行已脱敏结果；点击 `Click expand` 或选中后按 Enter 展开 |
-| 查看成员历史 | 在成员列表右键点击进程或线程，查看该真实身份的记录；Esc 返回 |
+| 查看成员事件 | 在成员列表右键点击进程或线程，查看当前进程保留的对应事件；Esc 返回 |
 | 查看详细日志 | `/logs` 打开 Logs；其他对话页可用右键切换日志 |
 | 展开状态侧栏 | **F3** 或 `/sidebar`；再按一次收起，F8 保存当前设置 |
 | 复制与帮助 | `/copy` 复制最近回复；**F7** 原生选择；`/help` 打开完整帮助 |
 
-工具调用成功结束时显示 `done`，运行中、失败、取消或超时显示实际状态。对话页只预览简短结果，详细记录可在 Logs 中查看；长输出仍可按任务游标或归档读取。
+工具调用成功结束时显示 `done`，运行中、失败、取消或超时显示实际状态。对话页只预览简短结果，详细记录可在 Logs 中查看；仍保留的长输出可按任务游标或输出 ID 读取。
 
 回复支持 Markdown 和常见代码块语法高亮。读取图片后，客户端会探测终端的 Kitty 图像能力；支持时显示清晰图片，其他终端显示有界半块预览或文字说明。超过 8 KiB 的整段粘贴会保存为私有工作区文件并插入引用，便于继续补充文字。
 
-Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重试可带幂等键，回执提供消息 ID 与历史保存状态。使用 `ssmcp.ui.ask` 非阻塞提问，再通过 `ssmcp.ui.questions` 读取答案。这些工具提供本地沟通通道，外部聊天应用仍决定自己的消息显示方式。
+Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重试可带幂等键，回执提供消息 ID 与实际显示状态。使用 `ssmcp.ui.ask` 非阻塞提问，再通过 `ssmcp.ui.questions` 读取答案。这些工具提供本地沟通通道，外部聊天应用仍决定自己的消息显示方式。
 
-`ssmcp.ui.present` 支持文字、卡片、指标、表格、进度、步骤与条形图，复用同一条消息历史和复制通道。[结构化显示](docs/intelligence-ui.md)
-
-分支上下文保留消息来源 ID 与内容哈希，并限制保存和返回的大小。`/compact` 可使用本地抽取或你提供的摘要；`/fork` 和 `/switch` 管理分支。它们不启动模型，也不重放历史任务。[上下文与分支](docs/context-memory.md)
+`ssmcp.ui.present` 支持文字、卡片、指标、表格、进度、步骤与条形图，复用实时消息与复制通道。[结构化显示](docs/intelligence-ui.md)
 
 未选择接收人时，用户要求由下一次符合条件的单个调用领取；选择成员后，仅绑定该成员身份的调用能领取。**已交付**表示要求进入了工具响应，执行进度仍需由接收者反馈。[输入与交付语义](docs/client-input.md) · [成员协作](docs/agent-collaboration.md)
+
+### 主窗口与 worker 分工
+
+在交互终端运行 `ssmcp --worker 3`，主窗口保留普通聊天输入，并打开一个关联的 worker 监控窗口。三个席位初始为离线；外部 Agent 在对应的 worker 连接登记 `role: "worker"`，调用 `ssmcp.worker.wait` 等待任务，完成后提交回执并继续等待。启动席位不会自动启动模型。
+
+在主窗口输入 `/invite` 获取主 Agent 的协作说明，输入 `/invite worker` 获取指向关联任务池的 worker 说明。说明可在本地面板阅读，并尝试复制到剪贴板；已登记人数达到席位数时，worker 邀请会提示满员。用 `/worker ls` 查看实际状态，或用 `/worker +N`、`/worker -N` 调整席位数。退出或重载主窗口会清理它启动的 worker 窗口；单独关闭监控窗口后，主聊天仍可使用。[Worker 接入、任务回执与窗口生命周期](docs/workers.md)
 
 ### 从命令行连接对话与传递结果
 
@@ -188,11 +195,11 @@ ssmcp send thread THREAD_ID '整理当前结论' |
 
 聊天收发需要中继与接收端客户端同时支持相应接口，仅更新本机程序不会更新远端服务。请求和回复保存在服务端的有界内存中，最长保留 1 小时，服务端重启会丢失这批状态。原有 Shell 终端仍可用 `ssmcp -i` 或 `ssmcp attach process PROCESS_ID --terminal main`；本地保存会话使用 `ssmcp attach --local NAME`。[兼容与保留边界](docs/client-accounts.md#聊天接口的兼容与保留边界)
 
-成员历史只展示当前进程保留、能够核对真实身份的事件。旧记录中无法确定成员归属的内容留在进程视图，不会按显示名称分配给某个线程。[线程历史](docs/client-accounts.md#查看线程历史)
+成员事件只展示当前进程保留、能够核对真实身份的内容。`ssmcp.ui.events` 按经过验证的归属与线程分页读取；显示名称不会被用来推断线程身份。[实时事件与界面接口](docs/client-ui.md)
 
 ### 定时更新 Git 上游
 
-连接存续期间，ssmcp 默认每 300 秒检查当前分支的远端上游并更新对应的远端跟踪引用；JSONL、无终端和后台连接同样运行。可设为 60–86400 秒，或用 `0` 关闭，修改对新连接生效。
+连接存续期间，ssmcp 默认每 300 秒检查当前分支的远端上游并更新对应的远端跟踪引用；无终端和后台连接同样运行。可设为 60–86400 秒，或用 `0` 关闭，修改对新连接生效。
 
 ```sh
 ssmcp config get git-fetch-interval
@@ -246,7 +253,7 @@ ssmcp computer install DOWNLOAD_ID_FROM_REPLY --json
 
 ## 客户端掌握能力，服务端负责连接
 
-服务端负责身份、会话路由、成员通信与受限 JavaScript 编排。客户端负责执行工具、组织上下文、保存输出和绘制界面。增加客户端原语后，调用方可以通过实时目录发现它，并继续使用通用 `call(clientId, name, arguments)`。
+服务端负责身份、会话路由、成员通信与受限 JavaScript 编排。客户端负责执行工具、组织上下文、缓存当前输出和绘制界面。增加客户端原语后，调用方可以通过实时目录发现它，并继续使用通用 `call(clientId, name, arguments)`。
 
 因此，你可以重写客户端，接入自己的远程 harness，或只替换 UI。现有界面也通过小接口读取状态和控制任务：
 
@@ -255,7 +262,7 @@ ssmcp computer install DOWNLOAD_ID_FROM_REPLY --json
 | 能力发现 | 客户端版本、原生工具 schema、客户端资源 |
 | 执行 | `terminal.*`、`ssmcp.exec.*`、原生 harness 工具 |
 | 上下文 | `ssmcp.fs.*`、`ssmcp.skills.*`、`ssmcp.agents.*` |
-| 会话界面 | `ssmcp.ui.*`、问答、历史、队列与源码事件 |
+| 会话界面 | `ssmcp.ui.*`、问答、实时事件、队列与源码记录 |
 | 扩展策略 | 可选的客户端 `ToolCallHook`，调用前允许或拒绝，调用后观察结果 |
 
 hook 默认关闭，不内置额外审核流程，也不改变工具原生权限。自定义策略由客户端开发者接入。当前连接统一使用 **wire v7**，旧协议会明确拒绝。[扩展接口与最小客户端](docs/client-extension.md) · [上下文边界](docs/context.md)
@@ -268,9 +275,9 @@ hook 默认关闭，不内置额外审核流程，也不改变工具原生权限
 
 工具使用客户端进程的操作系统权限；MCP 账号授权控制谁能调用设备。文件 API 受工作区和显式 context roots 限制，Shell 仍按操作系统权限执行。
 
-本地历史采用版本化 JSONL，`/resume` 恢复文本上下文，不重放工具，也不恢复外部模型线程。问答队列当前保存在进程内；reload 后可从历史查看已记录正文。完整边界见[会话历史](docs/conversation-history.md)。
+对话、问题、事件和工具输出只保留在当前进程的有界内存中。退出或重载后，这些实时内容失效；客户端不自动保存会话 JSONL、历史归档或上下文记忆文件。需要长期保留的结果，应在退出前显式导出。账号凭据、连接配置及用户明确导入的文件仍按各自功能管理。[实时内容与保留边界](docs/client-ui.md)
 
-图片导入会在客户端生成有界预览文件，仍以私有文件引用发送；不改变 wire v7。原生图片读取限制为 400 KiB，支持 PNG / JPEG / GIF / WebP。GIF / WebP 经 `code_mode` 返回时还需要支持这些格式的 relay；旧 relay 的图像通道仍只有 PNG / JPEG。长工具输出保留有界预览与归档，展开界面事件只读取当前保留的显示正文。
+图片导入会在客户端生成有界预览文件，仍以私有文件引用发送；不改变 wire v7。原生图片读取限制为 400 KiB，支持 PNG / JPEG / GIF / WebP。GIF / WebP 经 `code_mode` 返回时还需要支持这些格式的 relay；旧 relay 的图像通道仍只有 PNG / JPEG。长工具输出保留有界预览与内存捕获，展开界面事件只读取当前保留的显示正文。
 
 ## 开发
 
@@ -281,7 +288,7 @@ cargo build --locked --bins --example vt_snapshot
 cargo run --locked --bin ssmcp -- ui preview
 ```
 
-`make check` 检查格式和 Clippy；`make test-client-ui` 在隔离的真实 PTY 中验证输入、问答、图片、历史和重载。验证脚本使用测试自己的进程与工作区。
+`make check` 检查格式和 Clippy；`make test-client-ui` 在隔离的真实 PTY 中验证输入、问答、图片与重载。验证脚本使用测试自己的进程与工作区，worker 双窗口流程见 [E2E 验证脚本](scripts/e2e_worker_windows.py)。
 
 项目持续使用 ssmcp 自己的远程工具开发。[发布与构建](docs/releases.md) · [下一版本计划](docs/next-version.md)
 
@@ -293,7 +300,7 @@ cargo run --locked --bin ssmcp -- ui preview
 | [输入框与本地工作流](docs/client-input.md) | [客户端扩展与上下文工程](docs/client-extension.md) |
 | [主题、布局与快捷键](docs/client-ui.md) | [Zuse、浏览器与能力资源](docs/browser-desktop.md) |
 | [部署服务器](docs/deployment.md) | [完整输出与会话控制](docs/session-control.md) |
-| [信任与默认服务器](docs/client-server.md) | [会话历史格式](docs/conversation-history.md) |
+| [信任与默认服务器](docs/client-server.md) | [Worker 接入与任务池](docs/workers.md) |
 
 <details>
 <summary>项目创作记录</summary>

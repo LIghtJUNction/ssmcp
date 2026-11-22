@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real composer /send -> native zcalld listen/serve -> fake HTTP provider -> original history.
+"""Real composer /send -> native zcalld listen/serve -> fake HTTP provider -> live owner events.
 
 All services, credentials, terminals and model responses are owned fixtures.
 Requires prebuilt immutable executables; this script never compiles or calls a real model.
@@ -185,14 +185,10 @@ class Integration(ForceSend):
             front.pump(0.03)
         raise AssertionError("owned SSMCP client has no local_endpoint")
 
-    def history_path(self):
-        current = [item for item in self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
-                   if item["current"]]
-        self.check(len(current) == 1, "exactly one local JSONL conversation is current")
-        return current[0]["id"], self.state_home / "ssmcp" / "conversations" / (current[0]["id"] + ".jsonl")
-
-    def history_messages(self, path):
-        return [item for item in map(json.loads, path.read_text().splitlines()) if item["type"] == "message"]
+    def message_events(self):
+        page = self.live_events(limit=4)
+        return [event["value"] for event in page["events"]
+                if event.get("value", {}).get("type") == "ssmcp.message"]
 
     def send_native(self, front, native, body, plan):
         self.draft(front, "/send " + body)
@@ -307,15 +303,16 @@ class Integration(ForceSend):
         result = native.event("result", front)
         native.exited(True)
         self.check(result["delivery_id"] == accepted["delivery_id"] and result["execution_state"] == "completed"
-                   and result["history_saved"] and result["shown"],
-                   "native result has the stable original delivery ID and a committed visible history receipt")
-        conversation, path = self.history_path()
-        messages = self.history_messages(path)
-        inputs = [i for i, item in enumerate(messages) if item["role"] == "user" and item["content"] == body]
-        replies = [(i, item) for i, item in enumerate(messages) if item["id"] == result["message_id"]]
-        self.check(result["conversation_id"] == conversation and len(inputs) == len(replies) == 1
-                   and inputs[0] < replies[0][0] and replies[0][1]["content"] == result_text,
-                   "original input precedes exactly one native result in the original JSONL conversation")
+                   and result["recorded"] and result["storage"] == "memory" and result["shown"],
+                   "native result has the stable original delivery ID and a visible in-memory receipt")
+        messages = self.message_events()
+        inputs = [i for i, item in enumerate(messages) if item.get("role") == "user" and item.get("text") == body]
+        replies = [(i, item) for i, item in enumerate(messages) if item.get("message_id") == result["message_id"]]
+        self.check(len(inputs) == len(replies) == 1 and inputs[0] < replies[0][0]
+                   and replies[0][1].get("text") == result_text
+                   and replies[0][1].get("kind") == "execution_result"
+                   and replies[0][1].get("delivery_id") == accepted["delivery_id"],
+                   "original live input precedes exactly one result with the exact accepted delivery identity")
         self.check(self.ui("/display/conversation")["draft"]["text"] == busy,
                    "late output does not clear a separately rejected editable draft")
         self.capture(front, "complete", "P1_NATIVE_RESULT")
@@ -335,22 +332,9 @@ class Integration(ForceSend):
                    "generation failure is separate from the already accepted input")
         visible = front.until(lambda shot: "HTTP 500" in text(shot), "bounded failed-generation result")
         self.check("DO_NOT_COPY_PRIVATE_PROVIDER_ERROR" not in text(visible)
-                   and "DO_NOT_COPY_PRIVATE_PROVIDER_ERROR" not in path.read_text(),
-                   "upstream error bodies are not copied into terminal or history")
+                   and "DO_NOT_COPY_PRIVATE_PROVIDER_ERROR" not in json.dumps(self.message_events(), ensure_ascii=False),
+                   "upstream error bodies are not copied into terminal or live events")
         self.evidence.append({"scenario": "tcp-generation-failed", "accepted": accepted, "result": result})
-
-        plan = self.provider.plan("P1_ARCHIVED_LATE_RESULT")
-        native = Native(self, endpoint, unix_config, "native-archived")
-        native.event("bound", front)
-        self.send_native(front, native, "P1_INPUT_BEFORE_ARCHIVE", plan)
-        front.send("/archive\r")
-        front.until(lambda shot: "Conversation archived" in text(shot), "explicit archive of the source conversation")
-        archived = path.read_bytes()
-        plan.release.set()
-        native.exited(False)
-        self.check(path.read_bytes() == archived and not any(event.get("event") == "result" for event in native.events),
-                   "archiving rejects late native output without modifying the old history")
-        self.ordinary_unchanged(ordinary)
 
         plan = self.provider.plan("P1_DISCONNECTED_LATE_RESULT")
         native = Native(self, endpoint, unix_config, "native-disconnected")
@@ -371,9 +355,8 @@ class Integration(ForceSend):
         self.check(len(self.provider.requests) == request_count
                    and not any(event.get("event") == "result" for event in native.events),
                    "disconnect triggers no second generation and publishes no zombie result")
-        self.check("P1_DISCONNECTED_LATE_RESULT" not in "\n".join(p.read_text() for p in
-                   (self.state_home / "ssmcp" / "conversations").glob("conversation_*.jsonl")),
-                   "the disconnected result is absent from every retained conversation")
+        self.check("P1_DISCONNECTED_LATE_RESULT" not in json.dumps(self.message_events(), ensure_ascii=False),
+                   "the disconnected result is absent from the current process event journal")
 
         endpoint = self.endpoint(front)
         program = Program(self, "unix", {"endpoint": str(endpoint)})
@@ -403,10 +386,9 @@ class Integration(ForceSend):
                    and conflict.get("ok") is False and "listener_reply_conflict" in conflict.get("error", ""),
                    "real Unix reply retries return one stable receipt while changed content conflicts")
         self.receipt(front, delivery_id, "accepted")
-        _, current = self.history_path()
         message_id = result["result"]["reply"]["message_id"]
-        self.check(sum(item["id"] == message_id for item in self.history_messages(current)) == 1,
-                   "real duplicate result requests create exactly one history message")
+        self.check(sum(item.get("message_id") == message_id for item in self.message_events()) == 1,
+                   "real duplicate result requests create exactly one live message event")
         closed = program.call("close", **lease)
         self.check(closed.get("ok") is True and closed["result"]["closed"] is True,
                    "the actual local lease closes successfully before testing stale credentials")
@@ -415,9 +397,9 @@ class Integration(ForceSend):
                    "closed local leases reject old reply credentials with an explicit lease error")
         program.close()
         self.evidence.append({"scenario": "real-reply-idempotency", "result": result["result"]["reply"]})
-        self.check(len(self.provider.requests) == 4
+        self.check(len(self.provider.requests) == 3
                    and all(not request["unexpected"] for request in self.provider.requests),
-                   "the provider saw exactly four planned HTTP requests and no hidden replay")
+                   "the provider saw exactly three planned HTTP requests and no hidden replay")
         gateway_log.close()
         return {"status": "passed", "provider_requests": self.provider.requests,
                 "receipts": self.evidence, "frames": self.frames}

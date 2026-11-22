@@ -5,9 +5,9 @@ Run after building ssmcp, ssmcpd and examples/vt_snapshot:
   python3 scripts/e2e_presentations.py --bin-dir target/debug \
     --report /tmp/presentations.json --out /tmp/presentation-snapshots
 
-Reuses InputHistory's isolated HOME/XDG and owned SSH/OAuth/PTY fixture.
+Reuses InputHistory's isolated state and owned account-router/OAuth/PTY fixture.
 A private clipboard writer captures exact /copy bytes. No model, real display,
-independent message-history buffer, or production server is used.
+synthetic message buffer, or production server is used.
 The two bounded VT cell snapshots can be rendered by render_ui_snapshot.py.
 """
 
@@ -130,7 +130,8 @@ class Presentations(InputHistory):
                    and isinstance(acknowledgement.get("message_id"), str)
                    and acknowledgement.get("kind") == "answer"
                    and acknowledgement.get("finish_request_id") is None
-                   and acknowledgement.get("history_saved") is True
+                   and acknowledgement.get("recorded") is True
+                   and acknowledgement.get("storage") == "memory"
                    and acknowledgement.get("format") == "intelligence_ui.v1"
                    and acknowledgement.get("block_count") == len(payload["blocks"]),
                    "a real final presentation requires no approval and retains its message ACK and structured metadata")
@@ -138,32 +139,15 @@ class Presentations(InputHistory):
                    "queued requirements do not overwrite the original native acknowledgement")
         return result, acknowledgement
 
-    def history(self):
-        sessions = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
-        current = [item for item in sessions if item["current"]]
-        if len(current) != 1:
-            raise AssertionError("expected one current shared JSONL conversation")
-        session_id = current[0]["id"]
-        page = self.observe("ssmcp.ui.history", {
-            "action": "read", "id": session_id, "limit": 64,
-        })
-        if page["next_offset"] is not None:
-            raise AssertionError("small presentation fixture unexpectedly requires history paging")
-        return {"session_id": session_id, "messages": page["messages"]}
-
-    def jsonl(self):
-        history = self.history()
-        path = self.state_home / "ssmcp" / "conversations" / (history["session_id"] + ".jsonl")
-        raw = path.read_bytes()
-        entries = [json.loads(line) for line in raw.splitlines()]
-        if not entries or entries[0].get("schema") != "ssmcp.conversation.v1":
-            raise AssertionError("presentation history is not the shared standard JSONL format")
-        return raw, entries
+    def message_events(self):
+        page = self.live_events(agent_id=self.presenter["agent_id"], limit=4)
+        return [event["value"] for event in page["events"]
+                if event.get("value", {}).get("type") == "ssmcp.message"]
 
     def message(self, message_id):
-        matching = [row for row in self.history()["messages"] if row["id"] == message_id]
+        matching = [row for row in self.message_events() if row.get("message_id") == message_id]
         if len(matching) != 1:
-            raise AssertionError("expected one retained presentation message")
+            raise AssertionError("expected one current-process presentation message")
         return matching[0]
 
     def wait_queue_state(self, front, message_id, state):
@@ -217,7 +201,7 @@ class Presentations(InputHistory):
         self.snapshots.append(record)
 
     def rejected(self, arguments, description, expected):
-        before = self.history()
+        before = self.message_events()
         # Native errors reject call(), so code_mode returns its own error result.
         # Exercise that HTTP boundary directly instead of the success-only helper.
         code = "return await call(%s, 'ssmcp.ui.present', %s);" % (
@@ -235,7 +219,7 @@ class Presentations(InputHistory):
             if block.get("type") == "text"
         )
         self.check(response.get("isError") is True and expected in error_text, description)
-        self.check(self.history() == before and not self.messages(response),
+        self.check(self.message_events() == before and not self.messages(response),
                    "rejected presentation input adds no retained message or unexpected requirement")
 
     def run(self):
@@ -261,15 +245,15 @@ class Presentations(InputHistory):
                    "the first presentation is accepted once without inventing a user request")
         self.snapshot(front, "WIDE")
         row = self.message(acknowledgement["message_id"])
-        self.check(row["content"] == expected_text("WIDE") and row["role"] == "assistant",
-                   "shared ui.history retains the complete unshortened presentation text")
-        before, entries = self.jsonl()
-        self.check(sum(entry.get("id") == acknowledgement["message_id"] for entry in entries) == 1,
-                   "the presentation ACK identifies exactly one shared JSONL message")
+        self.check(row["text"] == expected_text("WIDE") and row["kind"] == "answer",
+                   "current process ui.events retains the complete unshortened presentation text")
+        before = self.message_events()
+        self.check(sum(entry.get("message_id") == acknowledgement["message_id"] for entry in before) == 1,
+                   "the presentation ACK identifies exactly one live message event")
         _, repeated = self.present(wide)
         self.check(repeated["message_id"] == acknowledgement["message_id"]
-                   and repeated["duplicate"] is True and self.jsonl()[0] == before,
-                   "an identical presentation retry returns the same identity without another history row")
+                   and repeated["duplicate"] is True and self.message_events() == before,
+                   "an identical presentation retry returns the same identity without another live event")
         conflict = copy.deepcopy(wide)
         conflict["title"] = "DIFFERENT_PRESENTATION"
         self.rejected(conflict, "a changed payload cannot reuse a retained presentation idempotency key",
@@ -277,7 +261,7 @@ class Presentations(InputHistory):
         layout = {"title": "LAYOUT_IDENTITY", "kind": "answer", "idempotency_key": "same_plain",
                   "blocks": [{"type": "text", "text": "[SUCCESS] Status\nComplete"}]}
         _, layout_ack = self.present(layout)
-        self.check(self.message(layout_ack["message_id"])["content"]
+        self.check(self.message(layout_ack["message_id"])["text"]
                    == "LAYOUT_IDENTITY\n\n[SUCCESS] Status\nComplete",
                    "the layout-conflict fixture has exact known plain text")
         # Card and text deliberately have identical plain text but different
@@ -290,7 +274,7 @@ class Presentations(InputHistory):
         self.rejected({**wide_document, "author": "forged identity"},
                       "presentation fields cannot spoof a caller identity", "author")
         self.rejected({"title": "INVALID_CONTROL", "blocks": [{"type": "text", "text": "\x1b[2J"}]},
-                      "terminal escape input is rejected before display or history", "control characters")
+                      "terminal escape input is rejected before display or event recording", "control characters")
 
         draft = "PRESENT_DRAFT 保留输入界"
         front.send(draft.encode())
@@ -300,11 +284,16 @@ class Presentations(InputHistory):
         request_text = "PRESENT_NEXT_REQUIREMENT 实际送达"
         submitted = self.observe("ssmcp.ui.queue", {"action": "submit", "text": request_text})
         queued = self.wait_queue_state(front, submitted["id"], "queued")
-        self.history()
+        self.observe("ssmcp.ui.events", {
+            "action": "thread", "client_id": self.client_id, "limit": 1,
+        })
         self.observe("ssmcp.ui.questions", {})
-        self.observe("ssmcp.ui.history", {"action": "list", "limit": 8})
+        self.observe("ssmcp.ui.events", {
+            "action": "thread", "client_id": self.client_id,
+            "agent_id": self.presenter["agent_id"], "limit": 1,
+        })
         self.check(self.record(self.queue(), message_id=queued["id"])["status"] == "queued",
-                   "message, conversation and question history observations leave the next request queued")
+                   "process, thread and question observations leave the next request queued")
 
         self.resize(front, 80, 36)
         narrow_document = document("NARROW")
@@ -318,15 +307,15 @@ class Presentations(InputHistory):
                    "a successful ui.present call claims the actual queued revision exactly once")
         self.snapshot(front, "NARROW")
         row = self.message(narrow_ack["message_id"])
-        self.check(row["content"] == expected_text("NARROW") and row["role"] == "assistant",
-                   "narrow rendering retains every original table cell in shared plain-text history")
+        self.check(row["text"] == expected_text("NARROW") and row["kind"] == "answer",
+                   "narrow rendering retains every original table cell in the current presenter event scope")
         after = self.ui("/display/conversation")
         self.check({key: after[key] for key in composition} == composition,
                    "structured display and request delivery preserve the ordinary draft, cursor and target")
         repeat_response, repeated = self.present(narrow)
         self.check(repeated["duplicate"] is True and repeated["message_id"] == narrow_ack["message_id"]
                    and not self.messages(repeat_response),
-                   "a duplicate presentation neither duplicates history nor redelivers the user request")
+                   "a duplicate presentation neither duplicates the live event nor redelivers the user request")
 
         front.send(b"\x01\x0b")
         self.wait_state(front, lambda value: not value["draft"]["text"], "clearing only the fixture draft")
@@ -343,10 +332,15 @@ class Presentations(InputHistory):
                 break
         self.check(copied == expected_text("NARROW").encode(),
                    "/copy writes the complete latest presentation text to the private clipboard writer")
-        raw, entries = self.jsonl()
-        self.check(sum(entry.get("id") == narrow_ack["message_id"] for entry in entries) == 1,
-                   "a duplicate narrow presentation remains one standard JSONL message")
-        (self.output / "presentations-history.jsonl").write_bytes(raw)
+        entries = self.message_events()
+        self.check(sum(entry.get("message_id") == narrow_ack["message_id"] for entry in entries) == 1,
+                   "a duplicate narrow presentation remains one live message event")
+        (self.output / "presentations-events.json").write_text(
+            json.dumps(entries, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        state = self.state_home / "ssmcp"
+        self.check(not any(path.is_file() for namespace in ("conversations", "context-memory")
+                           for path in (state / namespace).rglob("*")),
+                   "presentation publication creates no conversation or memory-state files")
         final, restored = front.disconnect()
         self.check(not final["alternate_screen"] and restored == front.original_termios
                    and front.process.returncode == 0,
@@ -368,10 +362,17 @@ def main():
     signal.signal(signal.SIGTERM, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, default=Path("target/debug"))
+    parser.add_argument("--fixture-binary", type=Path, default=os.environ.get("SSMCP_E2E_FIXTURE_BINARY"),
+                        help="prebuilt library fixture; overrides SSMCP_E2E_FIXTURE_BINARY")
     parser.add_argument("--decoder", type=Path, help="defaults to BIN_DIR/examples/vt_snapshot")
     parser.add_argument("--report", type=Path, help="write checks and hashes without credentials")
-    parser.add_argument("--out", type=Path, required=True, help="write JSON report, shared JSONL and bounded actual VT cell snapshots")
+    parser.add_argument("--out", type=Path, required=True, help="write JSON report, explicit live-event evidence and bounded actual VT cell snapshots")
     args = parser.parse_args()
+    if args.fixture_binary is not None:
+        fixture = args.fixture_binary.resolve()
+        if not fixture.is_file() or not os.access(fixture, os.X_OK):
+            parser.error(f"prebuilt fixture is not executable: {fixture}")
+        os.environ["SSMCP_E2E_FIXTURE_BINARY"] = str(fixture)
     binary_dir = args.bin_dir.resolve()
     decoder = (args.decoder or binary_dir / "examples/vt_snapshot").resolve()
     for executable in (binary_dir / "ssmcp", binary_dir / "ssmcpd", decoder):
@@ -388,7 +389,7 @@ def main():
         "schema": "ssmcp.presentation-e2e.v1", "status": "failed",
         "source_commit": source_commit, "platform": platform.system(),
         "transport": "isolated account OAuth + owned PTY + independent vt100 decoder",
-        "scope": "native structured display, complete history/copy, idempotency and next-request delivery",
+        "scope": "native structured display, complete live events/copy, idempotency and next-request delivery",
         "models_started": False, "production_contacted": False,
         "display_mode": "NO_COLOR owned terminal; native wide and narrow block layout",
         "binaries": {name: sha256(path) for name, path in (
@@ -396,6 +397,8 @@ def main():
             ("vt_snapshot", decoder))},
         "sources": {str(path.relative_to(root)): sha256(path) for path in sources},
     }
+    if args.fixture_binary is not None:
+        report["binaries"]["fixture"] = sha256(args.fixture_binary.resolve())
     with tempfile.TemporaryDirectory(prefix="ssmcp-presentations-e2e-") as directory:
         harness = Presentations(Path(directory), binary_dir, decoder, args.out)
         try:

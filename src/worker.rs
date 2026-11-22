@@ -16,6 +16,7 @@ mod remote;
 pub(crate) use pool::Pool;
 #[cfg(target_os = "linux")]
 pub(crate) use pool::TaskContext;
+pub(crate) use remote::CommandLog;
 
 use serde::Serialize;
 use std::sync::{Mutex, OnceLock};
@@ -38,6 +39,24 @@ pub(crate) struct SlotView {
     pub(crate) reason: Option<String>,
     pub(crate) logs: Vec<SlotLog>,
     pub(crate) next_log_sequence: u64,
+    #[serde(default)]
+    pub(crate) registered: bool,
+    #[serde(default)]
+    pub(crate) retire_requested: bool,
+    #[serde(default)]
+    pub(crate) task_summary: Option<String>,
+    #[serde(default)]
+    pub(crate) last_command: Option<String>,
+    #[serde(default)]
+    pub(crate) progress: Option<String>,
+    #[serde(default)]
+    pub(crate) total_work_ms: u64,
+    #[serde(default)]
+    pub(crate) current_task_elapsed_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) task_started_at_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) recent_task_durations_ms: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -58,6 +77,12 @@ pub(crate) struct Snapshot {
     pub(crate) idle: usize,
     pub(crate) working: usize,
     pub(crate) offline: usize,
+    #[serde(default)]
+    pub(crate) retiring: usize,
+    #[serde(default)]
+    pub(crate) registered_workers: usize,
+    #[serde(default)]
+    pub(crate) desired_total: usize,
     pub(crate) queued: usize,
     pub(crate) closed: bool,
     pub(crate) stopping: bool,
@@ -87,6 +112,9 @@ pub(crate) fn prepare_display(config: Config) {
         idle: 0,
         working: 0,
         offline: config.count,
+        retiring: 0,
+        registered_workers: 0,
+        desired_total: config.count,
         queued: 0,
         closed: false,
         stopping: false,
@@ -99,6 +127,15 @@ pub(crate) fn prepare_display(config: Config) {
                 reason: Some("waiting for the authenticated worker connection".into()),
                 logs: Vec::new(),
                 next_log_sequence: 1,
+                registered: false,
+                retire_requested: false,
+                task_summary: None,
+                last_command: None,
+                progress: None,
+                total_work_ms: 0,
+                current_task_elapsed_ms: None,
+                task_started_at_ms: None,
+                recent_task_durations_ms: Vec::new(),
             })
             .collect(),
     });
@@ -111,6 +148,47 @@ pub(crate) fn display() -> Option<Snapshot> {
         return Some(pool.queue.snapshot());
     }
     view.pending.clone()
+}
+
+/// Kept by the real native job, not by a later read/wait caller. Holding the
+/// original pool also prevents a reconnect from redirecting its end event.
+pub(crate) struct NativeCommandLog {
+    pool: std::sync::Arc<Pool>,
+    command: CommandLog,
+}
+
+impl NativeCommandLog {
+    pub(crate) fn finish(self, detail: &str) {
+        // Activity logging must not alter the actual command's exit result.
+        let _ = self.pool.command_finished(&self.command, detail);
+    }
+}
+
+/// Called only after a native command has successfully started. Display state
+/// finds a candidate pool; verified client/connection and exact claim identity
+/// are still required before any command can be attributed to it.
+pub(crate) fn native_command_started(
+    source: &crate::runtime::call_scope::Source,
+    command_id: &str,
+    argv: &[String],
+) -> Option<NativeCommandLog> {
+    let call = source.call.as_ref()?;
+    let client_id = call.client_id()?;
+    let pool = view()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .pool
+        .as_ref()
+        .and_then(std::sync::Weak::upgrade)?;
+    let manager = pool.queue.snapshot().manager?;
+    if manager.client_id != client_id || manager.connection != call.connection() {
+        return None;
+    }
+    // JSON preserves argv boundaries; this string is display data, never shell
+    // input. Pool applies its bounded, control-character-safe display policy.
+    let command = serde_json::to_string(argv).ok()?;
+    let command = pool.command_started(source, command_id, &command).ok()??;
+    Some(NativeCommandLog { pool, command })
 }
 
 pub(crate) fn now_ms() -> u64 {

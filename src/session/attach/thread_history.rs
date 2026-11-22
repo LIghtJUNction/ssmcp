@@ -72,7 +72,8 @@ impl RecordScope {
 pub(super) fn observer(name: &str) -> bool {
     matches!(
         name,
-        "ssmcp.ui.history"
+        "ssmcp.ui.events"
+            | "ssmcp.ui.history"
             | "ssmcp.ui.get"
             | "ssmcp.ui.tool_summary"
             | "ssmcp.ui.question_delivery"
@@ -85,7 +86,7 @@ pub(super) fn observer(name: &str) -> bool {
 }
 
 /// One actual dispatch supplies its own stable provenance even when a provider
-/// emits no output. History reads and internal observations are transparent.
+/// emits no output. Live event reads and internal observations are transparent.
 pub(crate) struct ToolCall {
     source: Option<DisplaySource>,
     name: String,
@@ -442,12 +443,10 @@ mod tests {
         assert_eq!(page["events"][0]["source"]["account"]["subject"], "123");
         assert_eq!(page["events"][0]["source"]["tool"], "ssmcp.exec.read");
         let count = capture.ring.lock().unwrap().next;
-        assert!(observer("ssmcp.ui.history"));
-        assert!(
-            ToolCall::start(&Source::default(), "ssmcp.ui.history")
-                .source
-                .is_none()
-        );
+        for name in ["ssmcp.ui.events", "ssmcp.ui.history"] {
+            assert!(observer(name));
+            assert!(ToolCall::start(&Source::default(), name).source.is_none());
+        }
         assert_eq!(capture.ring.lock().unwrap().next, count);
         let raw = capture.ring.lock().unwrap();
         assert!(raw.bytes <= super::super::HISTORY_BYTES);

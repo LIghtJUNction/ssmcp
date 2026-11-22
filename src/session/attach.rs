@@ -10,7 +10,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     ffi::OsString,
     io::IsTerminal,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, Weak},
     time::{Duration, Instant},
 };
@@ -106,7 +106,7 @@ impl Capture {
             let history = event.get("local_history_id").cloned();
             event = json!({"kind":"event","label":"attach","value":{
                 "type":"ssmcp.status","level":"Warning",
-                "message":format!("One {bytes}-byte event exceeds attach history's per-event limit; use the session log/output artifact for its complete contents.")}});
+                "message":format!("One {bytes}-byte event exceeds attach history's per-event limit; inspect the live output artifact for retained contents.")}});
             if let Some(history) = history {
                 event["local_history_id"] = history;
             }
@@ -562,6 +562,180 @@ async fn handle_request(capture: &Capture, request: Value) -> Result<Value> {
             Ok(json!({"detached":removed,"session_stopped":false}))
         }
     }
+}
+
+/// A bounded snapshot of the running process, obtained with an observer lease.
+/// The Open cursor is the exclusive end: subsequent output never extends it.
+pub(super) async fn live_logs(directory: &Path, count: usize) -> Result<Value> {
+    let result: Result<Value> = async {
+        let open = ipc::request_with_timeout(
+            directory,
+            ENDPOINT,
+            json!({"op":"open","read_only":true}),
+            Duration::from_secs(3),
+        )
+        .await?;
+        let key = open["lease"]
+            .as_str()
+            .filter(|key| !key.is_empty() && key.len() <= 128)
+            .ok_or("attach endpoint returned no usable lease")?
+            .to_owned();
+        let mut lease = LiveLogLease {
+            directory: directory.to_owned(),
+            key: Some(key),
+        };
+        let result = match tokio::time::timeout(
+            Duration::from_secs(10),
+            read_live_logs(directory, lease.key.as_deref().unwrap(), &open, count),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err("live log snapshot timed out".into()),
+        };
+        lease.release().await;
+        result
+    }
+    .await;
+    result.map_err(|error| {
+        format!("live_logs_unavailable: historical session logs are retired; {error}").into()
+    })
+}
+
+struct LiveLogLease {
+    directory: PathBuf,
+    key: Option<String>,
+}
+
+impl LiveLogLease {
+    async fn release(&mut self) {
+        if let Some(key) = &self.key {
+            let _ = ipc::request_with_timeout(
+                &self.directory,
+                ENDPOINT,
+                json!({"op":"detach","lease":key}),
+                Duration::from_secs(2),
+            )
+            .await;
+        }
+        self.key = None;
+    }
+}
+
+impl Drop for LiveLogLease {
+    fn drop(&mut self) {
+        // Cancellation still attempts Detach. If the runtime or peer has gone,
+        // the server's normal lease expiry remains the final bound.
+        let Some(key) = self.key.take() else { return };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let directory = self.directory.clone();
+        runtime.spawn(async move {
+            let _ = ipc::request_with_timeout(
+                &directory,
+                ENDPOINT,
+                json!({"op":"detach","lease":key}),
+                Duration::from_secs(2),
+            )
+            .await;
+        });
+    }
+}
+
+async fn read_live_logs(
+    directory: &Path,
+    lease: &str,
+    open: &Value,
+    count: usize,
+) -> Result<Value> {
+    if open["read_only"] != true {
+        return Err("attach endpoint did not grant a read-only lease".into());
+    }
+    let generation = open["generation"]
+        .as_str()
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .ok_or("attach endpoint returned no generation")?;
+    let live_cursor = open["live_cursor"]
+        .as_u64()
+        .ok_or("attach endpoint returned no live cursor")?;
+    let limit = count.clamp(1, 1000);
+    let start_cursor = live_cursor.saturating_sub(limit as u64);
+    let mut cursor = start_cursor;
+    let mut ring_start = 0;
+    let mut events = Vec::new();
+    let mut bytes = 0usize;
+    let mut truncated = false;
+    'pages: for _ in 0..64 {
+        if cursor >= live_cursor {
+            break;
+        }
+        let mut page = ipc::request_with_timeout(
+            directory,
+            ENDPOINT,
+            json!({"op":"read","lease":lease,"cursor":cursor}),
+            Duration::from_secs(2),
+        )
+        .await?;
+        if page["generation"].as_str() != Some(generation) {
+            return Err("live log generation changed during the snapshot".into());
+        }
+        let start = page["start_cursor"]
+            .as_u64()
+            .ok_or("invalid log start cursor")?;
+        let next = page["next_cursor"]
+            .as_u64()
+            .ok_or("invalid log next cursor")?;
+        let evicted = page["truncated"]
+            .as_bool()
+            .ok_or("invalid log truncation flag")?;
+        if start < ring_start || next <= cursor || start > next || evicted != (cursor < start) {
+            return Err("live log cursors did not advance monotonically".into());
+        }
+        ring_start = start;
+        truncated |= evicted;
+        let page_events = page["events"]
+            .as_array_mut()
+            .map(std::mem::take)
+            .ok_or("invalid live log events")?;
+        if page_events.len() > 128 {
+            return Err("live log page exceeds its event limit".into());
+        }
+        let mut expected = cursor.max(start);
+        let mut page_bytes = 0usize;
+        for event in &page_events {
+            if event["sequence"].as_u64() != Some(expected) {
+                return Err("live log event sequence is inconsistent".into());
+            }
+            expected = expected.checked_add(1).ok_or("live log cursor overflow")?;
+            page_bytes = page_bytes.saturating_add(serde_json::to_vec(event)?.len());
+        }
+        if expected != next || page_bytes > PAGE_BYTES {
+            return Err("live log page exceeds its cursor or byte limit".into());
+        }
+        for event in page_events {
+            let sequence = event["sequence"].as_u64().unwrap();
+            if sequence >= live_cursor {
+                break;
+            }
+            let size = serde_json::to_vec(&event)?.len();
+            if events.len() >= limit || bytes.saturating_add(size) > HISTORY_BYTES {
+                truncated = true;
+                break 'pages;
+            }
+            bytes += size;
+            truncated |= event["truncated"] == true;
+            cursor = sequence + 1;
+            events.push(event);
+        }
+        cursor = next.min(live_cursor);
+    }
+    truncated |= cursor < live_cursor;
+    Ok(json!({
+        "source":"live", "storage":"memory", "generation":generation,
+        "events":events, "limit":limit, "truncated":truncated,
+        "start_cursor":start_cursor, "next_cursor":cursor, "live_cursor":live_cursor,
+    }))
 }
 
 /// Auto attach may fall back only when the saved definition is absent. A
@@ -1054,6 +1228,202 @@ async fn send_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    async fn log_endpoint(
+        capture: Arc<Capture>,
+        fault: &'static str,
+        append_after_open: usize,
+    ) -> (PathBuf, JoinHandle<Vec<String>>) {
+        let directory = std::env::temp_dir().join(format!(
+            "ssmcp-live-logs-{}",
+            super::super::random_suffix().unwrap()
+        ));
+        crate::platform::private_directory(&directory).unwrap();
+        let server = ipc::Server::bind(&directory, ENDPOINT).await.unwrap();
+        let task = tokio::spawn(async move {
+            let mut operations = Vec::new();
+            loop {
+                let mut peer = server.accept().await.unwrap();
+                let request = peer.read().await.unwrap();
+                let op = request["op"].as_str().unwrap().to_owned();
+                assert!(matches!(op.as_str(), "open" | "read" | "detach"));
+                if op == "open" {
+                    assert_eq!(request["read_only"], true);
+                }
+                let cursor = request["cursor"].as_u64().unwrap_or(0);
+                operations.push(op.clone());
+                let mut response = handle_request(&capture, request)
+                    .await
+                    .map_err(|error| error.to_string());
+                if op == "open" {
+                    for index in 0..append_after_open {
+                        capture.push(json!({"kind":"event","value":{"late":index}}));
+                    }
+                    if fault == "open" {
+                        response.as_mut().unwrap()["read_only"] = json!(false);
+                    }
+                }
+                if op == "read" {
+                    match fault {
+                        "generation" => {
+                            response.as_mut().unwrap()["generation"] = json!("new-process")
+                        }
+                        "cursor" => response.as_mut().unwrap()["next_cursor"] = json!(cursor),
+                        "sequence" => {
+                            response.as_mut().unwrap()["events"][0]["sequence"] = json!(cursor + 1)
+                        }
+                        "page_bytes" => {
+                            response.as_mut().unwrap()["events"][0]["value"] =
+                                json!("x".repeat(PAGE_BYTES + 1))
+                        }
+                        "read_error" => response = Err("fixture read failure".into()),
+                        _ => {}
+                    }
+                }
+                peer.reply(response).await.unwrap();
+                if op == "detach" {
+                    break;
+                }
+            }
+            operations
+        });
+        (directory, task)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_logs_page_to_the_open_boundary_without_taking_input() {
+        let capture = Arc::new(Capture::new().unwrap());
+        for index in 0..200 {
+            capture.push(json!({"kind":"event","value":{"index":index}}));
+        }
+        let writer = capture.open(false).unwrap();
+        let (directory, task) = log_endpoint(capture.clone(), "", 50).await;
+        let result = live_logs(&directory, 200).await.unwrap();
+        let operations = tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(operations, ["open", "read", "read", "detach"]);
+        assert_eq!(result["source"], "live");
+        assert_eq!(result["storage"], "memory");
+        assert_eq!(result["generation"], capture.generation);
+        assert_eq!(result["start_cursor"], 0);
+        assert_eq!(result["next_cursor"], 200);
+        assert_eq!(result["live_cursor"], 200);
+        assert_eq!(result["truncated"], false);
+        let events = result["events"].as_array().unwrap();
+        assert_eq!(events.len(), 200);
+        for (index, event) in events.iter().enumerate() {
+            assert_eq!(event["sequence"], index as u64);
+            assert_eq!(event["value"]["index"], index as u64);
+            assert!(event["value"].get("late").is_none());
+        }
+        let leases = capture.leases.lock().unwrap();
+        assert_eq!(leases.len(), 1);
+        assert!(!leases[&writer].read_only);
+        drop(leases);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_logs_report_ring_eviction_and_remain_within_the_memory_budget() {
+        let capture = Arc::new(Capture::new().unwrap());
+        for index in 0..300 {
+            capture.push(json!({"kind":"event","value":"x".repeat(8_000),"index":index}));
+        }
+        let (directory, task) = log_endpoint(capture.clone(), "", 0).await;
+        let result = live_logs(&directory, 1000).await.unwrap();
+        let operations = tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(operations.iter().filter(|op| *op == "read").count() > 1);
+        let events = result["events"].as_array().unwrap();
+        assert!(events.len() > 128 && events.len() < 300);
+        assert!(events[0]["sequence"].as_u64().unwrap() > 0);
+        assert_eq!(result["truncated"], true);
+        assert_eq!(result["next_cursor"], 300);
+        assert_eq!(result["live_cursor"], 300);
+        assert!(
+            events
+                .iter()
+                .map(|event| serde_json::to_vec(event).unwrap().len())
+                .sum::<usize>()
+                <= HISTORY_BYTES
+        );
+        assert!(capture.leases.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_logs_detach_after_protocol_and_transport_errors() {
+        for fault in [
+            "open",
+            "generation",
+            "cursor",
+            "sequence",
+            "page_bytes",
+            "read_error",
+        ] {
+            let capture = Arc::new(Capture::new().unwrap());
+            capture.push(json!({"kind":"event","value":"fixture"}));
+            let (directory, task) = log_endpoint(capture.clone(), fault, 0).await;
+            let error = live_logs(&directory, 1).await.unwrap_err();
+            assert!(
+                error.to_string().contains("live_logs_unavailable"),
+                "{fault}: {error}"
+            );
+            let operations = tokio::time::timeout(Duration::from_secs(3), task)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(operations.last().map(String::as_str), Some("detach"));
+            assert!(capture.leases.lock().unwrap().is_empty());
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn empty_live_logs_do_not_wait_for_new_events() {
+        let capture = Arc::new(Capture::new().unwrap());
+        let (directory, task) = log_endpoint(capture.clone(), "", 0).await;
+        let result = live_logs(&directory, 0).await.unwrap();
+        let operations = tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(operations, ["open", "detach"]);
+        assert_eq!(result["events"], json!([]));
+        assert_eq!(result["limit"], 1);
+        assert_eq!(result["live_cursor"], 0);
+        assert_eq!(result["truncated"], false);
+        assert!(capture.leases.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unavailable_live_logs_never_read_or_change_legacy_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "ssmcp-retired-logs-{}",
+            super::super::random_suffix().unwrap()
+        ));
+        crate::platform::private_directory(&directory).unwrap();
+        let sentinel = b"\xffnot-json: historical user data\n";
+        for filename in ["lifecycle.jsonl", "lifecycle.1.jsonl"] {
+            std::fs::write(directory.join(filename), sentinel).unwrap();
+        }
+        let error = live_logs(&directory, 50).await.unwrap_err();
+        assert!(error.to_string().contains("live_logs_unavailable"));
+        for filename in ["lifecycle.jsonl", "lifecycle.1.jsonl"] {
+            assert_eq!(std::fs::read(directory.join(filename)).unwrap(), sentinel);
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn attach_local_probe_keeps_damaged_definitions_local() {

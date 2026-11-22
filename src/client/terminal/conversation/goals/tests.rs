@@ -177,34 +177,17 @@ async fn late_goal_completion_cannot_replace_or_display_in_another_conversation(
 }
 
 #[tokio::test]
-async fn goal_reload_reads_saved_value_without_replaying_a_change() {
+async fn goal_ui_reads_current_process_memory_without_restoring_a_checkpoint() {
     let fixture = Fixture::new();
     history::with_test_history(fixture.0.join("history"), async {
         let mut before = state();
         before
-            .chat_command("/goal set Restore the saved goal")
+            .chat_command("/goal set Keep the current live goal")
             .unwrap();
         settle(&mut before).await;
         let conversation = history::current().unwrap().unwrap();
-        let snapshot = before.chat_reload_snapshot();
-        assert!(
-            serde_json::to_value(&snapshot)
-                .unwrap()
-                .get("goal")
-                .is_none()
-        );
-        let old_owner = history::current_owner().unwrap();
-        history::release_current().unwrap();
-        history::resume(&conversation.metadata.id).unwrap();
-        let new_owner = history::current_owner().unwrap();
-        assert_ne!(old_owner, new_owner);
+        let owner = history::current_owner().unwrap();
         let mut after = state();
-        after.chat_apply_reload_snapshot(
-            snapshot,
-            history::sessions().unwrap(),
-            Some(&conversation),
-        );
-        assert!(after.conversation.goal.task.is_none());
         after.chat_poll_goal();
         assert_eq!(
             after.conversation.goal.task.as_ref().unwrap().action,
@@ -213,10 +196,27 @@ async fn goal_reload_reads_saved_value_without_replaying_a_change() {
         settle(&mut after).await;
         assert_eq!(
             after.conversation.snapshot()["goal"]["text"],
-            "Restore the saved goal"
+            "Keep the current live goal"
         );
+        assert_eq!(history::current_owner().as_ref(), Some(&owner));
         assert_eq!(history::current().unwrap().unwrap(), conversation);
         assert!(after.actions.is_empty());
+    })
+    .await;
+
+    // A new process-local store using the same workspace does not recover the goal.
+    history::with_test_history(fixture.0.join("history"), async {
+        history::record("user", "Fresh process request").unwrap();
+        let mut fresh = state();
+        fresh.chat_poll_goal();
+        settle(&mut fresh).await;
+        assert_eq!(fresh.conversation.snapshot()["goal"]["status"], "unset");
+        assert!(fresh.conversation.snapshot()["goal"]["text"].is_null());
+        let current = history::current().unwrap().unwrap();
+        assert_eq!(current.messages.len(), 1);
+        assert_eq!(current.messages[0].content, "Fresh process request");
+        assert!(!screen(&mut fresh).contains("Keep the current live goal"));
+        assert!(fresh.actions.is_empty());
     })
     .await;
 }

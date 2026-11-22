@@ -29,16 +29,16 @@ ssmcp -i --server https://relay.example --client SESSION_ID
 
 用户名采用 3–32 个 ASCII 字符，首字符为字母、末字符为字母或数字，中间还可使用 `_` 或 `-`。名单中的用户名须已在目标服务器注册，并与本次连接的服务器匹配。凭据按服务器隔离；已登录设备省略名单时只允许自己，显式名单只授权其中的账号。[用户名](named-accounts.md) · [完整账号与设备流程](client-accounts.md)
 
-看门狗默认开启，`--no-watchdog` 可禁用；显式停止后不会继续恢复。CLI 的 `invite` / `join` 与 MCP 的 `invite` 已移除，设备授权使用 `--allow 用户名@服务器`；会话内 agent 登记继续使用 `collab.join`。[首次连接](onboarding.md)
+看门狗默认开启，`--no-watchdog` 可禁用；显式停止后不会继续恢复。设备访问授权使用 `--allow 用户名@服务器`，获准接入的 Agent 用 `collab.join` 登记会话内身份。主窗口中的 `/invite` 和 `/invite worker` 生成协作接入说明，沿用现有账号授权。[首次连接](onboarding.md)
 
 ## 查询本地路径
 
-`ssmcp paths` 枚举实际配置、凭据目录、工具仓库和本地状态的位置。它在连接与配置加载之前返回，不读取文件内容、不创建目录。可组合选择名称，按给定顺序输出；不指定名称时列出全部十项。
+`ssmcp paths` 枚举实际配置、凭据目录、工具仓库和本地状态的位置。它在连接与配置加载之前返回，不读取文件内容、不创建目录。可组合选择名称，按给定顺序输出；不指定名称时列出全部可查询项。
 
 ~~~sh
 ssmcp paths --list
-ssmcp paths config history --plain
-ssmcp paths history config --json
+ssmcp paths config tools --plain
+ssmcp paths tools config --json
 ~~~
 
 默认每行输出 `名称<TAB>路径`，`--plain` 只输出路径，`--json` 输出名称到路径的对象。`--list` 只枚举名称与说明，不解析环境；`--help` 显示用法。[名称、环境优先级与组合示例](paths.md)
@@ -75,14 +75,26 @@ Linux、macOS 使用系统 Shell、curl、tar 和校验工具；Windows 使用 W
 
 ## 远程任务池
 
-只接收远程 agent 分配的任务时，运行 `ssmcp --worker N`。默认远程模式不启动本地模型或 harness，也不要求设置 `--agent`、`--input`。终端显示每个 worker 的空闲／工作／离线状态与可滚动日志，没有聊天输入框。
+在交互终端运行 `ssmcp --worker N`，主窗口保留普通聊天输入，并打开一个关联的 worker 监控窗口。监控窗口显示席位的离线、空闲、工作和停止中状态。席位初始为离线，外部执行者接入并等待任务后才进入空闲状态；客户端不会自动启动模型。
 
 ~~~sh
 ssmcp --worker 2
 ssmcp --worker 2 --daemon
 ~~~
 
-主 Agent 通过 `ssmcp.worker.attach` 绑定自己的 worker 池，使用 `submit`、`tasks`、`result`、`cancel` 管理任务，并通过 `stop` 停止接单。管理权来自经过认证的会话线程；其他已授权执行者通过 `wait`／`claim` 领取任务并提交实际完成回执。忙满时进入有界队列；停止中的在途任务仍占槽，直到原执行者确认。后台模式自动禁用聊天输入。显式本地执行器和其 Linux 资源限额属于高级选项，见[Worker 模式、领取回执和资源边界](workers.md)。普通 `ssmcp` 继续提供聊天界面。
+| 主窗口命令 | 作用 |
+| --- | --- |
+| `/invite` | 展示主 Agent 的协作说明，并尝试复制到剪贴板 |
+| `/invite worker` | 展示指向关联 worker 池的接入说明，并尝试复制到剪贴板 |
+| `/worker ls` | 查看关联任务池、席位状态与已登记人数 |
+| `/worker +N` | 增加 N 个席位，等待外部执行者接入 |
+| `/worker -N` | 请求减少 N 个席位；在途任务沿停止流程收尾 |
+
+没有可用剪贴板时，邀请说明仍可在本地滚动面板阅读。已登记 worker 人数达到席位数时，`/invite worker` 显示 `Worker stations are fully staffed.` 并停止生成新邀请。已登记人数、空闲席位数和正在执行的任务数分别反映成员、容量与工作状态。
+
+外部执行者用 `collab.join` 登记 `role: "worker"`，绑定返回的真实成员身份，然后持续调用 `ssmcp.worker.wait`。领取任务后用原 claim 提交 `complete`，再开始下一次等待；等待期间不必占用本机聊天输入。主 Agent 通过 `ssmcp.worker.attach` 绑定任务池，使用 `submit`、`tasks`、`result`、`cancel` 管理任务，并通过 `stop` 停止接单。管理权来自经过认证的会话线程，停止中的在途任务仍占槽，直到原执行者确认。
+
+主窗口通过 `ssmcp.ui.get` 的 `/worker_pool` 字段提供关联任务池的实际连接 ID、进程 ID、席位与成员计数。退出或重载主窗口会清理它启动的 worker 窗口；单独关闭监控窗口后，主聊天仍可使用。`--daemon` 沿用后台服务路径，不打开交互窗口。[Worker 接入、任务回执与生命周期](workers.md)
 
 ## 前台观察与终端输入
 
@@ -90,21 +102,23 @@ ssmcp --worker 2 --daemon
 
 输入框要求通过支持协议 v7 的连接附加到下一次符合目标的 `code_mode` 响应，已交付不代表模型已阅读或执行。需要直接终端输入时，在另一个终端运行 `ssmcp -i`；自定义前端使用 `terminal.read/write/resize`。`ssmcp attach NAME` 用于观察本地后台会话，目前不转发 attach 输入框的要求队列；后台连接可通过 `ssmcp.ui.queue` 管理要求。独立命令继续使用下方的 `exec.*`。
 
+对话、事件和要求队列只保留在当前进程内。`ssmcp.ui.events` 按经过验证的归属与线程分页读取当前保留内容；退出或重载后无法继续读取旧进程内容。客户端不自动写入会话 JSONL、历史归档或上下文记忆文件。显式使用 `--log-format jsonl` 时，事件输出给调用方的日志消费者；是否保存由该消费者决定。
+
 ## 查看 OpenAI 调用标识和打开 ChatGPT
 
-在当前已保存的对话中输入 `/openai`，可以查看最近观察到的 `openai/session` 和 `openai/subject`。只看其中一项时用 `/openai-session` 或 `/openai-subject`。面板会标明来源、字段缺失状态和最后观察时间。字段来自当前 MCP 工具请求的 `_meta`，并且只由支持此能力的中继和客户端在已验证的调用线程上记录。客户端、请求或线程没有提供这些条件时，出现“未观察到”属正常情况。[OpenAI Plugins 参考](https://developers.openai.com/plugins/reference)
+在当前对话中输入 `/openai`，可以查看本进程最近观察到的 `openai/session` 和 `openai/subject`。只看其中一项时用 `/openai-session` 或 `/openai-subject`。面板会标明来源、字段缺失状态和最后观察时间。字段来自当前 MCP 工具请求的 `_meta`，并且只由支持此能力的中继和客户端在已验证的调用线程上记录。客户端、请求或线程没有提供这些条件时，出现“未观察到”属正常情况。[OpenAI Plugins 参考](https://developers.openai.com/plugins/reference)
 
 这两个值是匿名关联标识，无法从中解析出 ChatGPT 地址。要返回网页继续对话，请从浏览器复制会话地址，再在对应的 SSMCP 对话里执行以下命令。地址须使用 HTTPS，主机须为 `chatgpt.com` 或 `chat.openai.com`，路径为 `/c/ID` 或 `/g/ID/c/ID`。
 
 | 命令 | 用途 |
 | --- | --- |
-| `/chatgpt set <URL>` | 把浏览器复制的链接保存到当前已保存的本地对话 |
-| `/chatgpt open` 或 `/chatgpt` | 请求本机浏览器打开已保存的链接，然后可在网页手动发送「继续」 |
-| `/chatgpt copy` | 把已保存的链接复制到本机剪贴板 |
+| `/chatgpt set <URL>` | 在当前进程中记录从浏览器复制的对话链接 |
+| `/chatgpt open` 或 `/chatgpt` | 请求本机浏览器打开当前记录的链接，然后可在网页手动发送「继续」 |
+| `/chatgpt copy` | 把当前记录的链接复制到本机剪贴板 |
 | `/chatgpt clear` | 只删除该对话的链接，保留已观察到的标识 |
 | `/plugin-docs` | 在本机浏览器打开官方 Plugins 参考 |
 
-切换或恢复历史时只切换对应的本地数据。浏览器和剪贴板操作只在显式命令发出时执行，启动浏览器程序后仍由浏览器处理加载和登录。
+链接和观察到的调用标识只保留在当前进程内。浏览器和剪贴板操作只在显式命令发出时执行，启动浏览器程序后仍由浏览器处理加载和登录。
 
 ## 独立命令接口
 
@@ -214,7 +228,7 @@ return results.map(result => result.status === "fulfilled"
 
 每项分别返回 fulfilled 或 rejected；已经启动的合法项保留独立结果，不因其他项的参数错误而丢失。助手不自动重试命令。
 
-## 读取完整输出
+## 按游标读取保留的输出
 
 `read` 默认从偏移 0 开始，每个流最多返回 16384 字节，可设为 1–32768。两个流的游标分别推进：
 
@@ -229,7 +243,7 @@ return await exec.read(clientId, jobId, {
 
 下次沿用返回的 `stdout_cursor`、`stderr_cursor`。`stdout_base64` / `stderr_base64` 保留精确字节，文本字段便于阅读；UTF-8 字符可能横跨字节页，要求精确还原时拼接 base64 解码后的字节再解码文本。未来游标会报错，避免悄悄跳过尚未产生的内容。
 
-运行中的每个流在内存保留最近 64 KiB。此时游标落后于保留范围，`stdout_truncated` 或 `stderr_truncated` 为 true，并从可读尾部继续返回。流成功结束且捕获完整后会释放重复尾部；后续 `exec.read` 按游标读取完整 capture，小输出可保留一份内存捕获，较大输出从归档读取。归档缺失或缩短会返回错误，捕获失败仍保留尾部和错误信息。输出超过 32 KiB 或 500 行后保存转储文件；从 `snapshot.stdout.artifact` 或 `snapshot.stderr.artifact` 取得 ID，也可用 `outputs.read` 读取已捕获的完整前缀：
+运行中的每个流在内存保留最近 64 KiB。此时游标落后于保留范围，`stdout_truncated` 或 `stderr_truncated` 为 true，并从可读尾部继续返回。流结束后，`exec.read` 可按游标读取仍保留的内存捕获；捕获失败时保留实际尾部与错误信息。需要分页读取较大结果时，从 `snapshot.stdout.artifact` 或 `snapshot.stderr.artifact` 取得输出 ID：
 
 ```javascript
 return await outputs.read(clientId, {
@@ -239,11 +253,13 @@ return await outputs.read(clientId, {
 });
 ```
 
-`outputs.read` 和 `outputs.stat` 均拒绝实际长度小于 manifest 记录值的归档；`complete: true` 时，实际长度必须与记录值相等。`outputs.stat` 还会核对完整归档的原始 SHA-256；`outputs.read` 仅校验长度与分页，并返回本页内容的哈希。活动归档可以继续增长，`complete: false` 的部分捕获在满足长度要求时仍可读取。Unix 上，归档路径若被替换成 FIFO，会作为非普通文件及时报错，无需等待管道另一端。
+`outputs.read` 和 `outputs.stat` 读取当前连接的内存输出。元数据标记 `storage: "memory"`，没有磁盘文件路径；长度、哈希、分页游标和 `complete` 均反映实际保留的字节。活动输出可以继续增长，`complete: false` 的部分捕获仍可在保留范围内读取。
 
-继续沿用 `next_offset`。活动文件的 EOF 只表示当前已经读到文件末尾，仍可能产生后续内容。结束后结合任务状态与转储的 `complete`、`error` 检查捕获完整性。写入失败、单文件超过 256 MiB、收尾读取异常或超时都会明确记录，不应把不完整输出当作完整日志。[输出保留和清理规则](session-control.md)
+继续沿用 `next_offset`。活动输出的 EOF 只表示已经读到当前末尾，仍可能产生后续内容。结束后结合任务状态和输出元数据中的 `complete`、`error` 检查捕获完整性；出现截断或捕获错误时，已保留的前缀不代表完整日志。
 
-最多保留 128 条任务记录，达到上限后只淘汰最早完成的记录；每次启动都会返回实际被淘汰的 ID（若有）。`forget` 只移除任务记录，转储文件继续遵守输出目录的 24 小时与总量清理策略。对于需要长期保留的日志，应在清理前导出。
+输出默认每连接最多保留 32 MiB、单条最多 8 MiB、最多 512 条记录，保留时间为 15 分钟。短结果和较大结果共用该预算；容量不足时优先淘汰已完成的旧输出，活跃捕获只能保留可容纳的部分并明确报告截断或错误。退出或重载会丢失这些内存内容。需要长期保留的结果，应在内容淘汰前显式导出。
+
+任务记录与输出缓存分别受限。最多保留 128 条任务记录，达到上限后只淘汰最早完成的记录；每次启动都会返回实际被淘汰的 ID（若有）。`forget` 只移除任务记录，输出内容继续受内存容量与保留期限约束。[输出保留和清理规则](session-control.md)
 
 ## 重载与故障恢复
 

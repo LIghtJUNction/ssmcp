@@ -62,7 +62,6 @@ test-client-ui-ready:
 	python3 scripts/e2e_questions.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/questions.json --out $(CARGO_TARGET_DIR)/acceptance/questions
 	python3 scripts/e2e_input_history.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/input-history
 	python3 scripts/e2e_presentations.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/presentations --report $(CARGO_TARGET_DIR)/acceptance/presentations.json
-	python3 scripts/e2e_context_memory.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/context-memory --report $(CARGO_TARGET_DIR)/acceptance/context-memory.json
 	python3 scripts/e2e_file_paste.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/file-paste --report $(CARGO_TARGET_DIR)/acceptance/file-paste.json
 	python3 scripts/e2e_relay_composer.py --bin-dir $(CARGO_TARGET_DIR)/debug --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" --report $(CARGO_TARGET_DIR)/acceptance/relay-composer.json
 	@set -eu; mkdir -p "$(CARGO_TARGET_DIR)/acceptance"; \

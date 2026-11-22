@@ -4,7 +4,6 @@ use crate::{client::messaging as transport, wire::messages::Recipient};
 use std::collections::BTreeMap;
 
 mod reload;
-pub(super) use reload::ReloadGroups;
 use steering::SavedRecipient;
 
 #[derive(Default)]

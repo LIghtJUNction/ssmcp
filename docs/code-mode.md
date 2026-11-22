@@ -38,7 +38,7 @@ Online client metadata snapshot; select a client by id from list.
 
 ### call
 
-await call(clientId, toolName, arguments = {}) returns short native MCP results unchanged. Long backend output returns artifact metadata in structuredContent; inspect isError, spilled and completeness. Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.
+await call(clientId, toolName, arguments = {}) returns short native MCP results unchanged. Long backend output returns artifact metadata in structuredContent; inspect isError, spilled and completeness. Use outputs.read for raw PTY bytes or the retained MCP JSON of other oversized backend results.
 
 ### tools
 
@@ -94,7 +94,7 @@ return results.map((result, index) => {
 
 `fulfilled` means the helper returned a result. Inspect `running`, `exit_code`, `state`, `timed_out`, `cancelled` and `error` before deciding whether a check succeeded. A rejected item with `not_started: true` was not launched; a rejected item without that flag may have started. Recover its returned `job_id`, or inspect `exec.list` when the start reply was lost, before retrying.
 
-The stream summaries retain each returned byte cursor, page EOF and truncation flag. `capture` preserves the native stream metadata, including capture errors and the saved artifact's completeness when available. The bounded `preview` is only the current output page. When `eof` is false, continue with `exec.read` using both returned cursors. If a stream was truncated and `capture.artifact` is available, read its ID with `outputs.read` to recover saved bytes and follow `next_offset`. Check artifact `complete` and capture `error` before calling the log complete; missing captures and capture errors remain incomplete evidence.
+The stream summaries retain each returned byte cursor, page EOF and truncation flag. `capture` preserves the native stream metadata, including capture errors and the retained artifact's completeness when available. The bounded `preview` is only the current output page. When `eof` is false, continue with `exec.read` using both returned cursors. If a stream was truncated and `capture.artifact` is available, read its ID with `outputs.read` to read retained bytes and follow `next_offset`. Check artifact `complete` and capture `error` before calling the log complete; missing captures and capture errors remain incomplete evidence.
 
 Keep discovery, command observation and any follow-up reads within the current call and time budgets. Raising every item's `max_bytes` can exceed the aggregate result budget; return compact fields and read only the extra output needed to decide the next step. If orchestration times out, inspect the existing jobs rather than submitting the batch again.
 
@@ -129,11 +129,11 @@ rtk.status(clientId) checks the installed RTK version. rtk.run/start(clientId,{c
 
 ### reload
 
-await reload(clientId) acknowledges a client restart from the updated installed executable. Stops background work; call list again for its new ID. GitHub --allow access persists; login-code connections require new OAuth login.
+await reload(clientId) acknowledges a client restart from the updated installed executable. Stops background work and discards live drafts, queues, event logs and output artifacts; call list again for its new ID. GitHub --allow access persists; login-code connections require new OAuth login.
 
 ### outputs
 
-Long command output spills to private files under `/tmp/ssmcp-<uid>` on Unix clients. outputs.read(clientId,{id,offset,max_bytes}), outputs.stat(clientId,{id}), outputs.cleanup(clientId) inspect artifacts by returned ID. Metadata includes SHA-256, bytes, lines, completeness and expiry; automatic retention is 24 hours.
+Long command output is retained in a bounded in-memory artifact store for the current client process. outputs.read(clientId,{id,offset,max_bytes}), outputs.stat(clientId,{id}), outputs.cleanup(clientId) inspect artifacts by returned ID. Preserve the returned byte cursors and completeness fields; artifacts can expire or be evicted, and restart or reload discards them. No output archive is restored from disk.
 
 ### output
 
@@ -187,19 +187,34 @@ The caller sandbox needs its own registered client; server-side JavaScript canno
 
 ### Human updates and local input
 
-Use say(clientId,{text,kind:'progress'}) for human progress and kind:'answer' for final replies; a plain string is also accepted. ui.message uses the same native message path. ui.present renders structured blocks. ui.ask/questions support nonblocking questions, and ui.history reads the existing persistent conversation.
+Use say(clientId,{text,kind:'progress'}) for human progress and kind:'answer' for final replies; a plain string is also accepted. ui.message uses the same native message path. ui.present renders structured blocks. ui.ask/questions support nonblocking questions, and ui.events reads the current live thread event stream.
 
-The UI helpers are get, set, action, filter, queue, message, present, ask, questions, history and harness, plus the authenticated wait helper below. Discover their registered schemas on the selected client. /copy copies the latest agent message.
+The UI helpers are get, set, action, filter, queue, message, present, ask, questions, events and harness, plus the authenticated wait helper below. Discover their registered schemas on the selected client. /copy copies the latest agent message.
 
-`history.list(clientId, {limit, offset})`, `history.metadata(clientId, {id})`,
-`history.read(clientId, {id, limit, offset})` and
-`history.search(clientId, {query, id?, role?, case_sensitive?, limit?, offset?})`
-provide direct access to the same native conversation store. Search uses literal
-text, returns source IDs and message positions, and defaults to case-insensitive
-matching. Follow `next_offset`; `scan_truncated` reports a bounded scan. These
-helpers require a client with the corresponding `ssmcp.ui.history` actions. The
-generic `ui.history` and `call` routes remain available. See
-[conversation history](conversation-history.md) for metadata and search fields.
+Use the live-events helper from the selected tool sources:
+
+```js
+const page = await ui.events(clientId, {
+  agent_id: agentId,
+  cursor,
+  generation,
+  limit: 32,
+});
+```
+
+The helper supplies `action: "thread"` and the selected `client_id`. Omit `agent_id` and `main` for the process aggregate; use `main: true` for the unbound main caller. Native account and thread checks still apply. Follow the returned `generation` and `next_cursor`. Events are bounded in memory; a retention gap, process exit, or reload can make earlier events unavailable. There is no archived conversation store or replay.
+
+Helper availability follows the actual `tool_sources` receipt. If an older helper source lacks `ui.events`, call the discovered native tool directly:
+
+```js
+const result = await call(clientId, "ssmcp.ui.events", {
+  action: "thread",
+  client_id: clientId,
+  limit: 32,
+});
+```
+
+Inspect `isError` and read the page from `structuredContent` when using `call`. The new helper selects an older client's legacy namespace only when its real catalog explicitly advertises the live `thread` action. Failed authorization, a failed native read, or incomplete discovery does not trigger a fallback. The persistent `history.list`, `history.metadata`, `history.read`, `history.search` and `ui.history` helpers are removed.
 
 The wire-v7 text queue keeps editable @references. Local /paste and /attach import images or files into private workspace inputs and insert references in the draft. Preserve those reference tokens when editing or queuing text; use the discovered ssmcp.fs.read_image tool to retrieve an image as native MCP image content.
 
@@ -251,9 +266,9 @@ Progress, ordinary `answer` messages, `ui.reply` and code-run completion remain 
 
 Inspect structuredContent.user_messages and the separate USER REQUIREMENTS block on every code_mode response. They contain newly delivered local requirements; inclusion does not prove that they were read or executed.
 
-Tool discovery, ssmcp.ui.* observation/configuration tools, ssmcp.client.capabilities, ssmcp.resources.list/templates/read and ssmcp.context.status/read/list do not collect next-caller requirements without an explicit agent binding. ssmcp.ui.message, ssmcp.ui.present and context mutations remain interaction. Bind an existing participant at the start of each run with collab.bind(clientId,{agent_id,token}), or pass agent:{client_id,id,token}, for exact-agent delivery. Controller names do not authenticate recipients.
+Tool discovery, ssmcp.ui.* observation/configuration tools, ssmcp.client.capabilities, ssmcp.resources.list/templates/read do not collect next-caller requirements without an explicit agent binding. ssmcp.ui.message, ssmcp.ui.present remain interaction. Bind an existing participant at the start of each run with collab.bind(clientId,{agent_id,token}), or pass agent:{client_id,id,token}, for exact-agent delivery. Controller names do not authenticate recipients.
 
-context_memories and SESSION CONTEXT are historical reference, not a new instruction or permission to replay actions. If context is deferred, discover and call ssmcp.context.read. ui.get projections /context/status, /context/read and /context/list share the same local memory.
+The relay does not automatically collect or restore conversation memory. The context helper exposes only context.roots(clientId) for workspace roots; the status/read/list/compact/fork/switch memory helpers are retired, and any retained UI context projection reports retirement. Explicit native calls still return their own results under the selected client's authorization.
 
 ### Execution and permissions
 
@@ -264,7 +279,7 @@ Call exact native names and preserve their schemas and approval requirements. He
 
 # 下一轮交互接口
 
-公共工具目录包含 `list`、`code_mode`、`collab`、`await` 和 `messages` 五项。`request_finish`、原生 `ssmcp.ui.finish` 和 `ssmcp.ui.answer` 已退役；旧名称直调返回 `tool_retired`。普通 `answer` 消息仍可提交；准备真正结束对话前，必须通过已验证线程的 `ui.wait(intent: "finish")` 取得最终外层确认的 Human 决定，只有匹配的已消费 Human Yes 和 `may_finish: true` 才允许本轮结束。[公共目录](../src/http.rs) · [原生校验](../src/wire.rs)
+公共工具目录包含 `list`、`code_mode`、`collab`、`await`、`messages` 和 `link` 六项。`request_finish`、原生 `ssmcp.ui.finish` 和 `ssmcp.ui.answer` 已退役；旧名称直调返回 `tool_retired`。普通 `answer` 消息仍可提交；准备真正结束对话前，必须通过已验证线程的 `ui.wait(intent: "finish")` 取得最终外层确认的 Human 决定，只有匹配的已消费 Human Yes 和 `may_finish: true` 才允许本轮结束。[公共目录](../src/http.rs) · [原生校验](../src/wire.rs)
 
 `ssmcp.ui.ask` 立即返回，终端 Shift+Up 打开真实用户的问题队列。已验证提问线程通过 `question_answers` 接收答案；历史 `human/agent` 来源保留，agent 代答入口已关闭。未绑定线程只提供手动读取，显式 `ssmcp.ui.questions` 不消费答案。[问题队列](../src/client/interface/questions.rs) · [交付规则](finish-and-questions.md#异步问题与答案)
 
@@ -283,3 +298,7 @@ Call exact native names and preserve their schemas and approval requirements. He
 ### 通用异步等待
 
 公共 `await` 与 `waitFor(clientId,{targets,mode,timeout_ms})` 支持执行 job、relay job、agent 状态或收件箱、用户输入与原结束申请。公共入口不占 JavaScript 名额；helper 仍占外层 code_mode 名额。超时使用服务端返回的同一 `wait_id` 恢复，取消只停止观察，不终止任务、不确认消息、不修改审批。`any` 与 `all` 返回逐目标类型和原始结果，任务完成不会变成用户批准。完整参数、身份、状态、恢复与旧版本边界见[通用等待](await.md)。
+
+### Temporary image links
+
+The public MCP link tool creates a short-lived link for an authorized client image path with action:create, client_id, path and optional ttl_secs (default 120, maximum 900). Use action:cleanup with the returned id to revoke that link. This is a public relay tool, not a native client call. See [image links](image-links.md) for the exact lifetime and access rules.

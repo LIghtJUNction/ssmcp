@@ -28,7 +28,8 @@ pub(crate) struct ReplyReceipt {
     pub conversation_id: String,
     pub message_id: String,
     pub execution_state: ExecutionState,
-    pub history_saved: bool,
+    pub recorded: bool,
+    pub storage: &'static str,
     pub shown: bool,
     #[serde(skip)]
     epoch: u64,
@@ -187,7 +188,7 @@ impl Hub {
             .map(|b| format!("{b:02x}"))
             .collect();
         let message_id = format!("message_{suffix}");
-        // Lock order here is Hub -> History. This function never renders under either.
+        // Lock order here is Hub -> in-memory history. This function never renders under either.
         // The user source is committed first, even when a fast provider beats the sender task.
         sink.commit(
             conversation_id,
@@ -205,7 +206,8 @@ impl Hub {
             conversation_id: conversation_id.into(),
             message_id,
             execution_state: reply.execution_state,
-            history_saved: true,
+            recorded: true,
+            storage: "memory",
             shown: false,
             epoch,
         };
@@ -219,7 +221,7 @@ impl Hub {
         let safe = crate::audit::event(json!(reply.text));
         let text = safe.as_str().unwrap_or("[redacted]");
         // Publication rechecks the connection, lease, retained result and active history
-        // while holding the UI lock. A reconnect or /resume cannot receive an old result.
+        // while holding the UI lock. A reconnect or conversation switch cannot receive an old result.
         receipt.shown = sink.publish(&receipt, &label, &source, text);
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(result) = state

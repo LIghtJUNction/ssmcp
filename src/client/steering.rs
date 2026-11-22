@@ -9,9 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
-    fs::{self, OpenOptions},
-    io::{Read, Write},
-    path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -19,8 +16,6 @@ use tokio::sync::mpsc;
 
 const MAX_RECORDS: usize = 128;
 const MAX_TEXT_BYTES: usize = 512 * 1024;
-const MAX_HANDOFF_BYTES: u64 = 4 * 1024 * 1024;
-const HANDOFF_ENV: &str = "SSMCP_CLIENT_OUTBOX";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 static STATE: OnceLock<Mutex<Manager>> = OnceLock::new();
 
@@ -266,73 +261,13 @@ impl DraftContext {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Default)]
+#[cfg_attr(test, derive(Serialize))]
 struct Outbox {
-    schema_version: u32,
     room_id: Option<String>,
     draft: Draft,
-    #[serde(default)]
     context: DraftContext,
     records: Vec<Record>,
-}
-
-impl Default for Outbox {
-    fn default() -> Self {
-        Self {
-            schema_version: 1,
-            room_id: None,
-            draft: Draft::default(),
-            context: DraftContext::default(),
-            records: Vec::new(),
-        }
-    }
-}
-
-impl Outbox {
-    fn validate(&self) -> Result<(), String> {
-        self.context.validate()?;
-        if self.schema_version != 1
-            || self.records.len() > MAX_RECORDS
-            || self
-                .records
-                .iter()
-                .map(|record| record.message.text.len())
-                .sum::<usize>()
-                > MAX_TEXT_BYTES
-            || self.draft.text.len() > MAX_USER_MESSAGE_BYTES
-            || !self.draft.text.is_char_boundary(self.draft.cursor)
-            || self.room_id.as_ref().is_some_and(|room| !valid_id(room))
-        {
-            return Err("invalid or oversized client outbox".into());
-        }
-        let mut ids = std::collections::BTreeSet::new();
-        for record in &self.records {
-            let message = &record.message;
-            if !valid_id(&message.id)
-                || !valid_id(&message.target)
-                || !ids.insert(&message.id)
-                || record.room_id.as_ref().is_some_and(|room| !valid_id(room))
-                || record
-                    .retry_of
-                    .as_ref()
-                    .is_some_and(|source| !valid_id(source) || source == &message.id)
-                || record
-                    .error
-                    .as_ref()
-                    .is_some_and(|error| error.len() > 1024)
-                || record
-                    .pending
-                    .as_ref()
-                    .is_some_and(|pending| !valid_id(&pending.command_id))
-            {
-                return Err("invalid client outbox record".into());
-            }
-            validate_text(&message.text)?;
-            validate_reference_warnings(&record.reference_warnings)?;
-        }
-        Ok(())
-    }
 }
 
 struct Request {
@@ -379,7 +314,6 @@ struct Manager {
     frozen: bool,
     reload_requested: bool,
     error: Option<String>,
-    restored: bool,
 }
 
 fn state() -> &'static Mutex<Manager> {
@@ -1756,7 +1690,7 @@ fn with_history<T>(operation: impl FnOnce(&mut Manager) -> T) -> T {
             super::render::status(
                 "history",
                 "Warning",
-                &format!("Request was accepted, but its history could not be saved: {error}"),
+                &format!("Request was accepted, but its live request record unavailable: {error}"),
             );
         }
     }
@@ -1810,185 +1744,10 @@ pub(super) fn request_reload() -> Result<(), String> {
     with(Manager::request_reload)
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Handoff {
-    created_at_ms: u64,
-    outbox: Outbox,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    session: Option<super::reload::SessionState>,
-}
-
-pub(super) struct ReloadHandoff {
-    path: PathBuf,
-}
-impl Drop for ReloadHandoff {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-        if let Some(parent) = self.path.parent() {
-            let _ = fs::remove_dir(parent);
-        }
-    }
-}
-
-fn write_handoff(
-    outbox: Outbox,
-    session: Option<super::reload::SessionState>,
-    directory: &Path,
-) -> Result<ReloadHandoff, String> {
-    outbox.validate()?;
-    if let Some(session) = &session {
-        session.validate()?;
-    }
-    let mut payload = Handoff {
-        created_at_ms: now_ms(),
-        outbox,
-        session,
-    };
-    let mut bytes = serde_json::to_vec(&payload).map_err(|_| "cannot serialize client outbox")?;
-    if bytes.len() as u64 > MAX_HANDOFF_BYTES {
-        // Optional display previews must never crowd out the existing draft,
-        // delivery receipts or local conversation checkpoint.
-        if let Some(session) = &mut payload.session {
-            session.discard_display();
-        }
-        bytes = serde_json::to_vec(&payload).map_err(|_| "cannot serialize client outbox")?;
-    }
-    if bytes.len() as u64 > MAX_HANDOFF_BYTES {
-        return Err("client outbox exceeds reload handoff limit".into());
-    }
-    let folder = directory.join(format!("ssmcp-outbox-{}", random_id()?));
-    let builder = &mut fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder
-        .create(&folder)
-        .map_err(|_| "cannot create private outbox directory")?;
-    let handoff = ReloadHandoff {
-        path: folder.join("state.json"),
-    };
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    }
-    let mut file = options
-        .open(&handoff.path)
-        .map_err(|_| "cannot create private client outbox")?;
-    file.write_all(&bytes)
-        .and_then(|_| file.sync_all())
-        .map_err(|_| "cannot save client outbox")?;
-    Ok(handoff)
-}
-
-fn read_handoff(path: &Path) -> Result<Option<Handoff>, String> {
-    let folder = path.parent().ok_or("invalid client outbox handoff path")?;
-    let name = folder
-        .file_name()
-        .and_then(|name| name.to_str())
-        .and_then(|name| name.strip_prefix("ssmcp-outbox-"));
-    if !path.is_absolute()
-        || path.file_name().and_then(|name| name.to_str()) != Some("state.json")
-        || !name.is_some_and(|name| {
-            name.len() == 32 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
-        })
-    {
-        return Err("invalid client outbox handoff path".into());
-    }
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err("cannot inspect client outbox handoff".into()),
-    };
-    let directory =
-        fs::symlink_metadata(folder).map_err(|_| "cannot inspect private outbox directory")?;
-    if !metadata.is_file() || !directory.is_dir() || metadata.len() > MAX_HANDOFF_BYTES {
-        return Err("invalid client outbox handoff file".into());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        // SAFETY: geteuid only reads the process identity.
-        let uid = unsafe { libc::geteuid() };
-        if metadata.uid() != uid
-            || directory.uid() != uid
-            || metadata.permissions().mode() & 0o077 != 0
-            || directory.permissions().mode() & 0o077 != 0
-        {
-            return Err("client outbox handoff must be private to the current user".into());
-        }
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    let file = options
-        .open(path)
-        .map_err(|_| "cannot read client outbox handoff")?;
-    let mut bytes = Vec::new();
-    file.take(MAX_HANDOFF_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "cannot read client outbox handoff")?;
-    if bytes.len() as u64 > MAX_HANDOFF_BYTES {
-        return Err("client outbox handoff is oversized".into());
-    }
-    let handoff: Handoff =
-        serde_json::from_slice(&bytes).map_err(|_| "invalid client outbox handoff")?;
-    if now_ms().saturating_sub(handoff.created_at_ms) > 15 * 60 * 1000 {
-        return Err("client outbox handoff expired".into());
-    }
-    handoff.outbox.validate()?;
-    if let Some(session) = &handoff.session {
-        session.validate()?;
-    }
-    fs::remove_file(path).map_err(|_| "cannot consume client outbox handoff")?;
-    let _ = fs::remove_dir(folder);
-    Ok(Some(handoff))
-}
-
-pub(super) fn restore_handoff() -> Result<(), String> {
-    let session = with(
-        |manager| -> Result<Option<super::reload::SessionState>, String> {
-            if manager.restored {
-                return Ok(None);
-            }
-            manager.restored = true;
-            if let Some(path) = std::env::var_os(HANDOFF_ENV)
-                && let Some(handoff) = read_handoff(Path::new(&path))?
-            {
-                manager.outbox = handoff.outbox;
-                return Ok(handoff.session);
-            }
-            Ok(None)
-        },
-    )?;
-    // History and rendering have their own locks; never call them while holding
-    // the outbox manager lock. Failed history recovery must keep the draft.
-    if let Some(session) = session {
-        session.restore();
-    }
-    Ok(())
-}
-
-pub(super) fn prepare_reload(command: &mut std::process::Command) -> Result<ReloadHandoff, String> {
-    let outbox = with(|manager| manager.outbox.clone());
-    let session = super::reload::SessionState::capture()?;
-    let handoff = write_handoff(outbox, Some(session), &std::env::temp_dir())?;
-    command.env(HANDOFF_ENV, &handoff.path);
-    Ok(handoff)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn snapshot_for(room: &str, revision: u64, messages: Vec<SteeringMessage>) -> SteeringSnapshot {
         SteeringSnapshot {
@@ -2407,7 +2166,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn raw_reference_notices_survive_reload_and_only_explicit_edits_reprepare() {
+    fn raw_reference_notices_survive_reconnect_and_only_explicit_edits_reprepare() {
         let tail = " @missing.txt";
         let draft = format!("{}{tail}", "x".repeat(MAX_USER_MESSAGE_BYTES - tail.len()));
         let warnings = vec!["@missing.txt: not found at preparation time".to_owned()];
@@ -2428,60 +2187,53 @@ mod tests {
             )
             .unwrap();
         manager.disconnect();
-        let outbox: Outbox =
-            serde_json::from_slice(&serde_json::to_vec(&manager.outbox).unwrap()).unwrap();
-        outbox.validate().unwrap();
-        let mut restored = Manager {
-            outbox,
-            ..Manager::default()
-        };
-        let mut receiver = restored.connect("room_two", crate::wire::VERSION);
-        ready(&mut restored, &mut receiver, "room_two");
-        restored.poll().unwrap();
+        let mut receiver = manager.connect("room_two", crate::wire::VERSION);
+        ready(&mut manager, &mut receiver, "room_two");
+        manager.poll().unwrap();
         let Transport::Wire { id } = receiver.try_recv().unwrap() else {
-            panic!("restored publish required");
+            panic!("reconnected publish required");
         };
-        assert!(!restored.needs_preparation(id));
-        assert_eq!(restored.requests[&id].reference_warnings, warnings);
-        let frozen = restored.pending_command(id).unwrap();
+        assert!(!manager.needs_preparation(id));
+        assert_eq!(manager.requests[&id].reference_warnings, warnings);
+        let frozen = manager.pending_command(id).unwrap();
         assert!(matches!(&frozen, SteeringCommand::Publish { text, .. } if *text == draft));
-        assert!(restored.sent(id));
+        assert!(manager.sent(id));
         let server = crate::steering::Queue::default();
         let accepted = server.command("room_two", vec![], frozen).unwrap();
-        restored.reply(id, Ok(accepted)).unwrap();
+        manager.reply(id, Ok(accepted)).unwrap();
         assert!(matches!(
-            restored.events.pop_front(),
+            manager.events.pop_front(),
             Some(UiEvent::Accepted { reference_warnings, text, .. })
                 if reference_warnings == warnings && text == draft
         ));
 
-        // Poll also queued a snapshot after the restored publication. Drive it
+        // Poll also queued a snapshot after the reconnected publication. Drive it
         // before takeback, in the same FIFO order as the real transport.
-        let (snapshot_id, snapshot) = command(&mut restored, &mut receiver);
+        let (snapshot_id, snapshot) = command(&mut manager, &mut receiver);
         assert!(matches!(snapshot, SteeringCommand::Snapshot {}));
-        restored
+        manager
             .reply(
                 snapshot_id,
                 Ok(server.command("room_two", vec![], snapshot).unwrap()),
             )
             .unwrap();
-        restored.take_back(&message_id).unwrap();
-        let (takeback_id, takeback) = command(&mut restored, &mut receiver);
+        manager.take_back(&message_id).unwrap();
+        let (takeback_id, takeback) = command(&mut manager, &mut receiver);
         assert!(matches!(takeback, SteeringCommand::Takeback { .. }));
-        restored
+        manager
             .reply(
                 takeback_id,
                 Ok(server.command("room_two", vec![], takeback).unwrap()),
             )
             .unwrap();
-        restored.events.clear();
-        restored.publish_edit(&message_id, &draft, None).unwrap();
+        manager.events.clear();
+        manager.publish_edit(&message_id, &draft, None).unwrap();
         let Transport::Wire { id } = receiver.try_recv().unwrap() else {
             panic!("edited publish required");
         };
-        assert!(restored.needs_preparation(id));
-        assert!(restored.requests[&id].reference_warnings.is_empty());
-        assert!(restored.outbox.records[0].reference_warnings.is_empty());
+        assert!(manager.needs_preparation(id));
+        assert!(manager.requests[&id].reference_warnings.is_empty());
+        assert!(manager.outbox.records[0].reference_warnings.is_empty());
     }
 
     #[test]
@@ -2554,11 +2306,11 @@ mod tests {
     }
 
     #[test]
-    fn prepared_publish_survives_handoff_and_cancelled_transport_cannot_send() {
+    fn prepared_publish_survives_reconnect_and_cancelled_transport_cannot_send() {
         let mut manager = Manager::default();
         let mut receiver = manager.connect("room_one", 7);
         ready(&mut manager, &mut receiver, "room_one");
-        let draft = "重启后仍然是同一份 @notes.txt";
+        let draft = "重连后仍然是同一份 @notes.txt";
         manager.submit(draft, None).unwrap();
         let Transport::Wire { id, .. } = receiver.try_recv().unwrap() else {
             panic!("publish required");
@@ -2577,15 +2329,10 @@ mod tests {
                 .is_none()
         );
         assert!(!manager.sent(id));
-        let outbox = serde_json::from_slice(&serde_json::to_vec(&manager.outbox).unwrap()).unwrap();
-        let mut restored = Manager {
-            outbox,
-            ..Manager::default()
-        };
-        let mut receiver = restored.connect("room_two", 7);
-        ready(&mut restored, &mut receiver, "room_two");
-        restored.poll().unwrap();
-        let (_, request) = command(&mut restored, &mut receiver);
+        let mut receiver = manager.connect("room_two", 7);
+        ready(&mut manager, &mut receiver, "room_two");
+        manager.poll().unwrap();
+        let (_, request) = command(&mut manager, &mut receiver);
         assert!(matches!(request, SteeringCommand::Publish { text, .. } if text == frozen));
     }
 
@@ -2779,13 +2526,6 @@ mod tests {
             manager.outbox.records.len(),
             2,
             "retrying retarget reuses its held attempt"
-        );
-        let handoff: Outbox =
-            serde_json::from_value(serde_json::to_value(&manager.outbox).unwrap()).unwrap();
-        handoff.validate().unwrap();
-        assert_eq!(
-            handoff.records[1].retry_of.as_deref(),
-            Some(original_id.as_str())
         );
         manager.events.clear();
         manager.publish_edit(&retry_id, body, None).unwrap();
@@ -3243,7 +2983,7 @@ mod tests {
     }
 
     #[test]
-    fn planned_reload_reclaims_pending_delivery_and_round_trips_a_private_outbox() {
+    fn planned_reload_reclaims_pending_delivery_without_replacing_live_draft() {
         let mut manager = Manager::default();
         let mut receiver = manager.connect("room_one", 7);
         ready(&mut manager, &mut receiver, "room_one");
@@ -3289,70 +3029,13 @@ mod tests {
             manager.events.is_empty(),
             "reload reclamation must not overwrite the active draft"
         );
-        let session: super::super::reload::SessionState = serde_json::from_value(json!({
-            "conversation_id": format!("conversation_{}", "a".repeat(32)),
-            "terminal": null,
-        }))
-        .unwrap();
-        let ticket =
-            write_handoff(manager.outbox.clone(), Some(session), &std::env::temp_dir()).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(&ticket.path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-            assert_eq!(
-                fs::metadata(ticket.path.parent().unwrap())
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o700
-            );
-        }
-        let handoff = read_handoff(&ticket.path).unwrap().unwrap();
+        assert_eq!(manager.outbox.draft.text, "未发送草稿");
+        assert_eq!(manager.outbox.draft.cursor, "未发送".len());
+        assert_eq!(manager.outbox.context.target.as_deref(), Some("agent_one"));
         assert_eq!(
-            serde_json::to_value(handoff.session.unwrap()).unwrap()["conversation_id"],
-            format!("conversation_{}", "a".repeat(32)),
-            "the active history identity travels with the exact draft and outbox"
+            manager.outbox.context.parked.as_ref().unwrap().text,
+            "parked request"
         );
-        let outbox = handoff.outbox;
-        assert!(!ticket.path.exists());
-        assert!(
-            read_handoff(&ticket.path).unwrap().is_none(),
-            "handoff is consumed exactly once"
-        );
-        assert_eq!(outbox.draft.text, "未发送草稿");
-        assert_eq!(outbox.draft.cursor, "未发送".len());
-        assert_eq!(
-            outbox.context, manager.outbox.context,
-            "editing identity and displaced draft recipient must survive reload"
-        );
-        let mut restored = Manager {
-            outbox,
-            ..Manager::default()
-        };
-        let mut receiver = restored.connect("room_two", 7);
-        assert_eq!(
-            restored.snapshot()["queue"][0]["status"],
-            "sending",
-            "a reclaimed record is not server-queued in its replacement room yet"
-        );
-        ready(&mut restored, &mut receiver, "room_two");
-        restored.poll().unwrap();
-        let (id, request) = command(&mut restored, &mut receiver);
-        assert!(
-            matches!(request, SteeringCommand::Publish { expected_revision: 0, text, target, .. } if text == "known undelivered" && target == "next")
-        );
-        assert_eq!(restored.snapshot()["queue"][0]["status"], "sending");
-        let mut accepted = restored.outbox.records[0].message.clone();
-        accepted.revision = 1;
-        restored
-            .reply(id, Ok(snapshot_for("room_two", 1, vec![accepted])))
-            .unwrap();
-        assert_eq!(restored.snapshot()["queue"][0]["status"], "queued");
     }
 
     fn pending_reload_takeback(
@@ -3634,7 +3317,7 @@ mod tests {
     }
 
     #[test]
-    fn draft_persistence_reuses_storage_and_preserves_utf8_cursor() {
+    fn draft_updates_reuse_memory_and_preserve_utf8_cursor() {
         let mut manager = Manager::default();
         let text = "保留草稿 while idle";
         manager.set_draft(text, text.len()).unwrap();
@@ -3655,17 +3338,14 @@ mod tests {
                 .is_err()
         );
         manager.set_draft("新草稿", "新".len()).unwrap();
-        let restored: Outbox =
-            serde_json::from_value(serde_json::to_value(&manager.outbox).unwrap()).unwrap();
-        restored.validate().unwrap();
-        assert_eq!(restored.draft.text, "新草稿");
-        assert_eq!(restored.draft.cursor, "新".len());
+        assert_eq!(manager.outbox.draft.text, "新草稿");
+        assert_eq!(manager.outbox.draft.cursor, "新".len());
         manager.set_draft("", 0).unwrap();
         assert!(manager.outbox.draft.text.is_empty());
     }
 
     #[test]
-    fn draft_context_skips_unchanged_copies_but_persists_edits_and_destinations() {
+    fn draft_context_skips_unchanged_copies_but_retains_edits_and_destinations() {
         let mut manager = Manager::default();
         let mut expected = DraftContext {
             editing: Some("editing_one".into()),
@@ -3715,10 +3395,6 @@ mod tests {
             .update_draft_context(|stored| stored == &expected, || expected.clone())
             .unwrap();
         assert_eq!(manager.outbox.context, expected);
-        let restored: Outbox =
-            serde_json::from_value(serde_json::to_value(&manager.outbox).unwrap()).unwrap();
-        restored.validate().unwrap();
-        assert_eq!(restored.context, expected);
         assert!(
             manager
                 .update_draft_context(
@@ -3734,12 +3410,7 @@ mod tests {
     }
 
     #[test]
-    fn draft_context_is_bounded_and_older_handoffs_remain_readable() {
-        let mut previous = serde_json::to_value(Outbox::default()).unwrap();
-        previous.as_object_mut().unwrap().remove("context");
-        let previous: Outbox = serde_json::from_value(previous).unwrap();
-        assert_eq!(previous.context, DraftContext::default());
-        previous.validate().unwrap();
+    fn draft_context_is_bounded_and_invalid_values_are_redacted() {
         for context in [
             DraftContext {
                 editing: Some("private-fixture\n".into()),
@@ -3782,76 +3453,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn reload_display_overflow_drops_only_optional_preview_before_private_handoff() {
-        let mut terminal =
-            serde_json::to_value(super::super::terminal::ReloadState::fixture_for_test()).unwrap();
-        let mut column = terminal["canvas"]["columns"][1].clone();
-        column["position"]["events"]["reading"] = json!({
-            "selected":0,"selected_group":0,"expanded":[],
-            "panels":(0..128).map(|index|json!([index,{
-                "scroll":1,"folded_scroll":2,"group_scroll":3,"group_expanded":true
-            }])).collect::<Vec<_>>()
-        });
-        terminal["canvas"]["columns"] = json!(
-            (1..=1024)
-                .map(|id| {
-                    let mut column = column.clone();
-                    column["id"] = json!(id);
-                    column
-                })
-                .collect::<Vec<_>>()
-        );
-        terminal["canvas"]["active"] = json!(0);
-        terminal["canvas"]["next_id"] = json!(1025);
-        terminal["canvas"]["logs_return"] = Value::Null;
-        let session: super::super::reload::SessionState = serde_json::from_value(json!({
-            "conversation_id":null,"terminal":terminal
-        }))
-        .unwrap();
-        session.validate().unwrap();
-        assert!(serde_json::to_vec(&session).unwrap().len() as u64 > MAX_HANDOFF_BYTES);
-        let mut outbox = Outbox::default();
-        outbox.draft.text = "keep draft and cursor".into();
-        outbox.draft.cursor = 5;
-        let expected = serde_json::to_value(&outbox).unwrap();
-        let ticket = write_handoff(outbox, Some(session), &std::env::temp_dir()).unwrap();
-        assert!(fs::metadata(&ticket.path).unwrap().len() <= MAX_HANDOFF_BYTES);
-        let restored = read_handoff(&ticket.path).unwrap().unwrap();
-        assert_eq!(serde_json::to_value(restored.outbox).unwrap(), expected);
-        let session = serde_json::to_value(restored.session.unwrap()).unwrap();
-        assert_eq!(session["terminal"]["display"]["omitted"], true);
-        assert!(
-            session["terminal"]["canvas"]["columns"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|column| column["position"]["events"]["reading"].is_null())
-        );
-    }
-
-    #[test]
-    fn legacy_reload_handoff_remains_readable_without_a_session_checkpoint() {
-        let handoff: Handoff = serde_json::from_value(json!({
-            "created_at_ms": now_ms(),
-            "outbox": Outbox::default(),
-        }))
-        .unwrap();
-        handoff.outbox.validate().unwrap();
-        assert!(handoff.session.is_none());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn handoff_rejects_shared_permissions_without_consuming_private_data() {
-        use std::os::unix::fs::PermissionsExt;
-        let ticket = write_handoff(Outbox::default(), None, &std::env::temp_dir()).unwrap();
-        fs::set_permissions(&ticket.path, fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(read_handoff(&ticket.path).is_err());
-        assert!(ticket.path.exists());
-        fs::set_permissions(&ticket.path, fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(read_handoff(&ticket.path).unwrap().is_some());
-    }
     #[cfg(target_os = "linux")]
     #[test]
     fn trimmed_server_history_marks_requests_uncertain_without_replaying() {

@@ -276,7 +276,7 @@ test('ui.present preserves typed arguments and the native acceptance receipt', a
   };
   const receipt = {
     shown: true, accepted: true, message_id: 'message_native',
-    history_saved: true, duplicate: false, format: 'intelligence_ui.v1', block_count: 1,
+    recorded: true, storage: 'memory', duplicate: false, format: 'intelligence_ui.v1', block_count: 1,
   };
   const record = await run('return await ui.present("one", ' + JSON.stringify(document) + ');',
     request => {

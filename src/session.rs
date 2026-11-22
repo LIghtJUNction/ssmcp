@@ -39,7 +39,6 @@ const INHERITED_ENVIRONMENT: &[&str] = &[
     "SSMCP_CLIENT_CONFIG",
 ];
 const MAX_DOCUMENT: usize = 128 * 1024;
-const LOG_BYTES: u64 = 256 * 1024;
 const MANAGER_TIMEOUT: Duration = Duration::from_secs(25);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -230,7 +229,6 @@ impl Runner {
             generation: self.generation.clone(),
         };
         write_json(&self.directory.join("state.json"), &observation)?;
-        append_log(&self.directory, &observation)?;
         Ok(())
     }
 }
@@ -357,32 +355,11 @@ pub async fn manage(mut args: Vec<OsString>) -> Result<()> {
         if json_output {
             println!("{}", serde_json::to_string_pretty(&result)?);
         } else {
-            if let Some(warning) = result["warning"].as_str() {
-                eprintln!("ssmcp: {warning}");
-            }
             if let Some(events) = result["events"].as_array() {
-                for value in events {
-                    if result["source"] == "journal" {
-                        match &value["event"] {
-                            Value::String(text) => println!("{text}"),
-                            event => println!("{}", serde_json::to_string(event)?),
-                        }
-                    } else {
-                        println!(
-                            "{}  {}  attempt {}{}{}",
-                            value["observed_at"],
-                            value["phase"].as_str().unwrap_or("unknown"),
-                            value["attempt"],
-                            value["retry_after_secs"]
-                                .as_u64()
-                                .map(|v| format!(" · retry in {v}s"))
-                                .unwrap_or_default(),
-                            value["error"]
-                                .as_str()
-                                .map(|v| format!(" · {v}"))
-                                .unwrap_or_default()
-                        );
-                    }
+                for event in events {
+                    // JSON lines preserve event kinds and escape terminal control
+                    // bytes instead of replaying terminal output into this CLI.
+                    println!("{}", serde_json::to_string(event)?);
                 }
             }
         }
@@ -582,145 +559,12 @@ pub async fn remove(name: &str) -> Result<Value> {
     )
 }
 
-/// Return one explicitly identified source. Native journal records and
-/// lifecycle observations are never concatenated and replayed as duplicates.
+/// Read a bounded snapshot from the running session's authenticated observer
+/// channel. Historical lifecycle files and native journals are not log sources.
 pub async fn logs(name: &str, count: usize) -> Result<Value> {
     let root = session_root(false)?;
-    let (directory, manifest) = load(&root, name)?;
-    let limit = count.clamp(1, 1000);
-    if manifest.supervised {
-        return Ok(json!({"source":"lifecycle","fallback":false,
-            "coverage":"lifecycle_only","events":lifecycle_logs(&directory,limit)?,
-            "limit":limit,"truncated":false,
-            "warning":"Lifecycle observations only; attach to the running session for live tool and terminal output."}));
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let unit = format!("{}.service", manifest.manager_id);
-        let warning = match journal(&unit, limit).await {
-            Ok((events, truncated)) if !events.is_empty() => {
-                return Ok(json!({"source":"journal","fallback":false,"warning":null,
-                    "coverage":"native_events","unit":unit,"events":events,
-                    "limit":limit,"truncated":truncated}));
-            }
-            Ok(_) => "The user journal has no readable records for this unit; showing private lifecycle observations only.".to_owned(),
-            Err(error) => format!("The user journal is unavailable ({error}); showing private lifecycle observations only."),
-        };
-        Ok(
-            json!({"source":"lifecycle","fallback":true,"warning":warning,
-            "coverage":"lifecycle_only","unit":unit,"events":lifecycle_logs(&directory,limit)?,
-            "limit":limit,"truncated":false}),
-        )
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        Ok(json!({"source":"lifecycle","fallback":false,
-            "warning":"This platform records session lifecycle only; this view does not contain the complete native tool event stream.",
-            "coverage":"lifecycle_only","unit":manifest.manager_id,
-            "events":lifecycle_logs(&directory,limit)?,"limit":limit,"truncated":false}))
-    }
-}
-
-fn lifecycle_logs(directory: &Path, count: usize) -> Result<Vec<Value>> {
-    let mut lines = Vec::new();
-    for filename in ["lifecycle.1.jsonl", "lifecycle.jsonl"] {
-        let path = directory.join(filename);
-        if !path.try_exists()? {
-            continue;
-        }
-        let text = read_private(&path, LOG_BYTES as usize + MAX_DOCUMENT)?;
-        for line in text.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
-            lines.push(serde_json::from_slice(line)?);
-        }
-    }
-    let keep_from = lines.len().saturating_sub(count.clamp(1, 1000));
-    Ok(lines.drain(keep_from..).collect())
-}
-
-#[cfg(target_os = "linux")]
-async fn journal(unit: &str, count: usize) -> Result<(Vec<Value>, bool)> {
-    use tokio::io::AsyncReadExt;
-    const MAX_BYTES: usize = 1024 * 1024;
-    let mut child = Command::new("journalctl")
-        .args([
-            "--user",
-            "--no-pager",
-            "--output=json",
-            "--reverse",
-            "--unit",
-            unit,
-            "-n",
-            &count.to_string(),
-        ])
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-    let stdout = child.stdout.take().ok_or("journal stdout is unavailable")?;
-    let stderr = child.stderr.take().ok_or("journal stderr is unavailable")?;
-    let operation = async {
-        let read_output = async {
-            let mut bytes = Vec::new();
-            stdout
-                .take(MAX_BYTES as u64 + 1)
-                .read_to_end(&mut bytes)
-                .await?;
-            let truncated = bytes.len() > MAX_BYTES;
-            if truncated {
-                // Only the owned read-only journal query is stopped. Original
-                // records remain in the native journal and can be queried again.
-                let _ = child.start_kill();
-            }
-            let status = child.wait().await?;
-            Ok::<_, io::Error>((status, bytes, truncated))
-        };
-        let read_error = async {
-            let mut bytes = Vec::new();
-            stderr.take(8192).read_to_end(&mut bytes).await
-        };
-        let (result, error) = tokio::join!(read_output, read_error);
-        error?;
-        result
-    };
-    let (status, mut bytes, truncated) =
-        match tokio::time::timeout(MANAGER_TIMEOUT, operation).await {
-            Ok(result) => result?,
-            Err(_) => {
-                let _ = child.kill().await;
-                return Err("bounded journal query timed out".into());
-            }
-        };
-    if !status.success() && !truncated {
-        return Err("journalctl could not read this user service".into());
-    }
-    if truncated {
-        let complete = bytes[..MAX_BYTES]
-            .iter()
-            .rposition(|byte| *byte == b'\n')
-            .map_or(0, |position| position + 1);
-        bytes.truncate(complete);
-    }
-    let mut events = Vec::new();
-    for line in bytes
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-    {
-        let record: Value = serde_json::from_slice(line)?;
-        let message = record.get("MESSAGE").cloned().unwrap_or(Value::Null);
-        let event = match message {
-            Value::String(text) => serde_json::from_str(&text).unwrap_or(Value::String(text)),
-            other => other,
-        };
-        events.push(json!({
-            "timestamp_us":record["__REALTIME_TIMESTAMP"].as_str().and_then(|v| v.parse::<u64>().ok()),
-            "pid":record["_PID"].as_str().and_then(|v| v.parse::<u32>().ok()),
-            "event":crate::audit::event(event),
-        }));
-    }
-    events.reverse();
-    Ok((events, truncated))
+    let (directory, _) = load(&root, name)?;
+    attach::live_logs(&directory, count.clamp(1, 1000)).await
 }
 
 pub async fn auth(name: &str) -> Result<Value> {
@@ -845,7 +689,6 @@ fn status_observed(
         "scope":if manifest.supervised { "current_user_service" } else if cfg!(windows) || cfg!(target_os="macos") { "current_logged_in_user" } else { "current_user_manager" },
         "version":manifest.version, "executable_sha256":manifest.executable_sha256,
         "created_at":manifest.created_at, "state_directory":directory,
-        "logs_path":directory.join("lifecycle.jsonl"),
         "auth_available":connected && directory.join("auth.json").is_file(),
     }))
 }
@@ -1180,21 +1023,7 @@ fn write_management_state(directory: &Path, phase: &str, error: Option<&str>) ->
         error: error.map(|e| crate::audit::event(json!({"message":e}))["message"].clone()),
         ..Default::default()
     };
-    write_json(&directory.join("state.json"), &observation)?;
-    append_log(directory, &observation)
-}
-
-fn append_log(directory: &Path, observation: &Observation) -> Result<()> {
-    let path = directory.join("lifecycle.jsonl");
-    if path.try_exists()? && fs::metadata(&path)?.len() >= LOG_BYTES {
-        remove_file(&directory.join("lifecycle.1.jsonl"))?;
-        fs::rename(&path, directory.join("lifecycle.1.jsonl"))?;
-    }
-    let mut file = private_open(&path, true, true, true)?;
-    let mut bytes = serde_json::to_vec(observation)?;
-    bytes.push(b'\n');
-    file.write_all(&bytes)?;
-    Ok(())
+    write_json(&directory.join("state.json"), &observation)
 }
 
 fn snapshot_executable(source: &Path, destination: &Path) -> Result<String> {
@@ -1835,12 +1664,49 @@ mod tests {
         assert!(!directory.join("auth.json").exists());
         let state: Value = read_json(&directory.join("state.json")).unwrap();
         assert_eq!(state["phase"], "stopped");
-        assert!(
-            !String::from_utf8(
-                read_private(&directory.join("lifecycle.jsonl"), MAX_DOCUMENT).unwrap()
-            )
-            .unwrap()
-            .contains("PRIVATE")
+        assert!(!state.to_string().contains("PRIVATE"));
+        assert!(!directory.join("lifecycle.jsonl").exists());
+        assert!(!directory.join("lifecycle.1.jsonl").exists());
+        drop(runner);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn management_state_updates_neither_create_nor_rotate_legacy_logs() {
+        let directory = temporary();
+        let runner = Runner {
+            manifest: manifest(&directory),
+            _run_lock: lock(&directory.join("run.lock"), true).unwrap(),
+            directory: directory.clone(),
+            generation: None,
+            owner: None,
+        };
+        runner.record("starting", 1, None, None, None).unwrap();
+        write_management_state(&directory, "stopped", None).unwrap();
+        for filename in ["lifecycle.jsonl", "lifecycle.1.jsonl"] {
+            assert!(!directory.join(filename).exists());
+        }
+        // Exceed the retired rotation threshold so accidental append/rotation
+        // cannot pass by preserving just the previous file prefix.
+        let current = vec![b'x'; 300 * 1024];
+        let previous = b"historical user data, not JSON\n";
+        fs::write(directory.join("lifecycle.jsonl"), &current).unwrap();
+        fs::write(directory.join("lifecycle.1.jsonl"), previous).unwrap();
+        runner
+            .record("reconnecting", 2, Some(5), None, None)
+            .unwrap();
+        write_management_state(&directory, "stopped", None).unwrap();
+        assert_eq!(
+            fs::read(directory.join("lifecycle.jsonl")).unwrap(),
+            current
+        );
+        assert_eq!(
+            fs::read(directory.join("lifecycle.1.jsonl")).unwrap(),
+            previous
+        );
+        assert_eq!(
+            read_json::<Value>(&directory.join("state.json")).unwrap()["phase"],
+            "stopped"
         );
         drop(runner);
         fs::remove_dir_all(directory).unwrap();

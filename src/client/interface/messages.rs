@@ -1,5 +1,5 @@
-//! Accepted agent replies share the JSONL history; only retry receipts and the
-//! latest copyable text are cached here.
+//! Accepted agent replies use bounded process-local logs. Retry receipts and
+//! the latest copyable text have independent in-memory retention limits.
 use crate::client::presentation::Presentation;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -86,7 +86,7 @@ fn message_id() -> Result<String, String> {
 struct Receipt {
     id: String,
     kind: Kind,
-    history_saved: bool,
+    recorded: bool,
     shown: bool,
     finish_task: bool,
     finish_request_id: Option<String>,
@@ -162,10 +162,10 @@ fn response(receipt: &Receipt, duplicate: bool) -> Value {
     let mut value = json!({
         "shown":receipt.shown, "accepted":true, "message_id":receipt.id,
         "kind":receipt.kind, "duplicate":duplicate,
-        "history_saved":receipt.history_saved,
+        "recorded":receipt.recorded, "storage":"memory",
         "finish_request_id":receipt.finish_request_id,
         "terminal_active":crate::client::terminal::active(),
-        "note":if receipt.shown {"Accepted for local display; this does not prove the user read it."} else {"Saved to the original local conversation, which is not currently selected."}
+        "note":if duplicate {"Matching retry accepted; recorded and shown describe the first acceptance. Bounded live logs may have evicted that record."} else if receipt.shown {"Accepted for local display; this does not prove the user read it."} else {"Recorded in the original live thread, which is not currently selected."}
     });
     if receipt.finish_task {
         value["finish_task"] = json!(true);
@@ -221,7 +221,7 @@ fn send_with_presentation(
     let receipt = Receipt {
         id,
         kind: request.kind,
-        history_saved: true,
+        recorded: true,
         shown,
         finish_task: request.finish_task,
         finish_request_id: None,
@@ -257,7 +257,7 @@ pub(super) fn restore_copy(messages: &[super::history::Message]) {
 pub(super) fn tool() -> Value {
     json!({
         "name":"ssmcp.ui.message",
-        "description":"Display a Markdown progress report or final result to the local user with a fixed Agent label. kind is progress or answer. Progress and final replies require the authenticated conversation owner. finish_task defaults to false. Set finish_task:true to send this message and then block through the server finish approval wait (20 seconds per call, without holding the UI write lock). This requires the verified asking collab thread. Only the final outer user_wait receipt with status decided and may_finish:true after a consumed Human Yes permits ending. No, ordinary input, timeout, cancellation, disconnection and revocation keep the task active; follow completion_instruction and await ui.wait in a new tool call when approval is still required. A verified thread keeps its original local JSONL conversation across calls. When another history is selected, the original history receives the reply and shown is false. The returned message_id identifies the history record when history_saved is true. Optional idempotency_key deduplicates matching text, kind and finish_task within the last 64 retained keys of this client process; changed content with the same key is rejected. Restart clears this retry cache. /copy copies the latest visible Agent reply. shown and accepted do not prove the user read it. Use ssmcp.ui.ask for a nonblocking question and ssmcp.ui.questions to read its answer. External chat output is not intercepted.",
+        "description":"Display a Markdown progress report or final result to the local user with a fixed Agent label. kind is progress or answer. Progress and final replies require the authenticated conversation owner. finish_task defaults to false. Set finish_task:true to send this message and then block through the server finish approval wait (20 seconds per call, without holding the UI write lock). This requires the verified asking collab thread. Only the final outer user_wait receipt with status decided and may_finish:true after a consumed Human Yes permits ending. No, ordinary input, timeout, cancellation, disconnection and revocation keep the task active; follow completion_instruction and await ui.wait in a new tool call when approval is still required. A verified thread retains its own bounded in-memory records during this process. Replies stay with their original owner; shown is false when that thread is not selected. The returned message_id identifies the original accepted record; storage is memory. On a duplicate retry, recorded and shown describe the first acceptance. Bounded logs may evict that record while its retry receipt remains. Exit and reload clear these records. Optional idempotency_key deduplicates matching text, kind and finish_task within the last 64 retained keys of this client process; changed content with the same key is rejected. Restart clears this retry cache. /copy copies the latest visible Agent reply. shown and accepted do not prove the user read it. Use ssmcp.ui.ask for a nonblocking question and ssmcp.ui.questions to read its answer. External chat output is not intercepted.",
         "inputSchema":{
             "type":"object","required":["text"],"additionalProperties":false,
             "properties":{
@@ -282,7 +282,7 @@ mod tests {
         Receipt {
             id: format!("message_{index:032x}"),
             kind: Kind::Answer,
-            history_saved: true,
+            recorded: true,
             shown: true,
             finish_task: false,
             finish_request_id: None,
@@ -498,7 +498,7 @@ mod tests {
             let first = source.clone().blocking(|| send(arguments.clone())).unwrap();
             assert_eq!(first["accepted"], true);
             assert_eq!(first["duplicate"], false);
-            assert_eq!(first["history_saved"], true);
+            assert_eq!(first["recorded"], true);
             assert!(first["finish_request_id"].is_null());
             let retry = source.clone().blocking(|| send(arguments.clone())).unwrap();
             assert_eq!(retry["duplicate"], true);
@@ -516,7 +516,7 @@ mod tests {
                 document,
             )).unwrap();
             assert_eq!(panel["accepted"], true);
-            assert_eq!(panel["history_saved"], true);
+            assert_eq!(panel["recorded"], true);
             assert!(panel["finish_request_id"].is_null());
             let original = history::read(&owner).unwrap();
             assert_eq!(original.messages.iter().filter(|message| message.role == "assistant").count(), 2);

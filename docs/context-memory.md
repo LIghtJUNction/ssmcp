@@ -1,70 +1,33 @@
-# 本地上下文记忆
+# 实时上下文与记忆功能迁移
 
-本地记忆保存当前工作区的检查点与分支，方便后续工具调用重新取得已保存的背景。原始对话继续使用同一份 [JSONL 历史](conversation-history.md)；记忆不会重写原对话、重放要求或工具，也不会调用模型或改变外部模型的上下文窗口。
+ssmcp 当前只保留进程内的有界会话和事件，不再维护工作区记忆检查点或持久分支。同一进程断网重连保留已有内存；退出、重启或 `/reload` 会清空。旧会话与记忆文件不会作为运行时状态读取，也不会被本次迁移删除。
 
-## 本地命令
+## 已退役的入口
 
-| 命令 | 结果 |
+以下入口不再用于读取、压缩或恢复会话背景：
+
+| 旧入口 | 当前状态 |
 | --- | --- |
-| `/context` | 列出分支、当前分支与 revision；不接受参数 |
-| `/memory` | 查看当前分支的摘要、最近片段和来源；不接受参数 |
-| `/compact [SUMMARY]` | 无参数时保存标记为 `local_extractive` 的本地摘录；有参数时保存 `provided_summary`，并保留最近四条记录 |
-| `/fork [NAME]` | 从当前记忆创建并激活新分支；名称可省略 |
-| `/switch CONTEXT_ID` | 按 `/context` 返回的完整 `context_` 加 32 位十六进制 ID 切换分支 |
+| `/context`、`/memory` | 工作区记忆视图已退役 |
+| `/compact`、`/fork`、`/switch` | 记忆检查点与分支操作已退役 |
+| `ssmcp.context.status`、`ssmcp.context.list`、`ssmcp.context.read` | 持久记忆读取工具已退役 |
+| `ssmcp.context.compact`、`ssmcp.context.fork`、`ssmcp.context.switch` | 持久记忆修改工具已退役 |
+| `ssmcp.ui.get` 的 `/context/status`、`/context/read`、`/context/list` | 旧记忆投影已退役 |
 
-命令通过现有异步输入任务执行，结果显示为本地 Context 事件。执行期间继续编辑不会被返回结果覆盖。切换的是记忆分支，当前用户草稿、收件人、JSONL 会话与待发送队列保持各自状态。调用者提供的摘要不会被自动核验；来源 ID 和哈希标识原记录，不证明摘要中的每个判断正确。
+文件与技能来源仍可通过 `ssmcp.context.roots`、`ssmcp.skills.*` 和 `ssmcp.agents.*` 读取。命名连接目标的 `ssmcp context create/use/show` 也继续管理连接配置。这些功能分别处理已有文件和连接目标，不承担会话记忆恢复。[文件与技能来源](context.md) · [命名连接目标](connection-contexts.md)
 
-## 进入记忆的内容
+## 读取当前工作内容
 
-自动记录仅包含已经成功保存、经过现有脱敏处理的 assistant 文本，以及服务器新确认送达且目标为 `next` 的用户要求。排队中的要求、精确发给某个 Agent 的要求、原始工具输出和控制者元数据不会自动成为共享记忆。
+进度与结果继续由 `ssmcp.ui.message` 或 `ssmcp.ui.present` 记录，回执中的 `recorded: true`、`storage: "memory"` 表示内容已经进入进程内存。问题由 `ssmcp.ui.ask` 创建，答案通过 `ssmcp.ui.questions` 读取；各接口继续保留自己的身份与交付规则。
 
-用户要求在发布确认后进入 JSONL，在新的投递回执到达后才进入共享记忆；两者不是同一个时刻。因此，刚送达的要求可能到后续快照才可见。恢复旧投递快照或重复回执不会重新追加记录。
+读取当前事件使用 `ssmcp.ui.events`，参数包括 `action: "thread"` 与实际 `client_id`。需要某个成员时传 `agent_id`，需要已认证的未绑定主入口时传 `main: true`；二者互斥，都省略时读取所选进程范围的聚合事件。分页沿用返回的 `generation` 与 `next_cursor`，并检查 `retention_gap_possible`，不能把被裁剪的窗口当成完整记录。[完整字段、来源与保留边界](conversation-history.md)
 
-每个片段保留来源 conversation/message ID、SHA-256、原文 UTF-8 字节数，以及截断或省略标记。哈希对应 JSONL 中保留的脱敏正文。读取恢复状态会校验 schema、工作区、容量、来源身份及同一身份的哈希一致性；失败时保留原文件并明确报错。
+事件的来源由实际调用时的账号、连接和线程确定。客户端不会把私有线程输入自动合并为共享工作区检查点，也不会把旧文本作为新的用户要求或重新执行其中的工具调用。
 
-## 原生工具与只读 UI 投影
+## 显式保存与交接
 
-本机注册六个工具：`ssmcp.context.status`、`list`、`read`、`compact`、`fork`、`switch`，后五项同样使用完整 `ssmcp.context.` 前缀。修改操作支持 `expected_revision`；过期 revision 会拒绝整次修改，调用者应重新读取后作出决定。
+需要把当前内容交给另一个 Agent 时，使用 `/handoff [NOTE]`。它将仍保留的会话、待发要求和未回答问题导出为私有 Markdown 文件，并在输入框准备可编辑的 `@file` 引用。用户随后选择接收人并提交；导出本身不发送消息，也不改变队列状态。该文件由用户管理，后续事件不会自动更新它。[交接范围和容量](conversation-history.md)
 
-现有 `ssmcp.ui.get` 同时提供同一状态的正式投影：`/context/status`、`/context/read`、`/context/list`。它们没有第二份存储。只读检查可直接使用当前 relay 已有的通用 `call`：
+`/openai` 展示本进程观察到的调用标识，`/chatgpt set/open/copy/clear` 管理本进程的显式对话链接。它们只使用内存，重启或 `/reload` 后不从旧文件恢复。[调用标识与对话链接](commands.md#查看-openai-调用标识和打开-chatgpt)
 
-```javascript
-return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.get", {
-  path: "/context/status"
-});
-```
-
-投影返回 `{schema_version, path, value}`，最大 8 KiB。较长记忆使用 `/context/read/summary` 或 `/context/read/recent` 加 `offset`、`limit` 分页；字符串偏移按 Unicode 字符，数组偏移按条目。
-
-显式保存检查点：
-
-```javascript
-const clientId = "CLIENT_ID_FROM_LIST";
-const status = await call(clientId, "ssmcp.context.status", {});
-return await call(clientId, "ssmcp.context.compact", {
-  summary: "调用者核对后的当前目标、已完成工作与下一步。",
-  expected_revision: status.revision
-});
-```
-
-未显式绑定 Agent 的 UI 观察调用不领取 Next caller 要求；显式 `collab.bind` 保持现有精确投递规则。原生 context 观察工具的领取分类由承载 `code_mode` 的 relay 实现，不能仅凭工具的只读描述推断运行中 relay 的行为。
-
-## 容量、持久化与交付边界
-
-| 对象 | 上限 |
-| --- | --- |
-| 一个工作区 | 8 个分支；状态文件 256 KiB |
-| 一个分支 | 24 KiB；摘要 8 KiB；最近 8 条记录 |
-| 最近记录片段 | 每条 1536 UTF-8 字节；保留原来源与截断标记 |
-| 检查点来源 | 最多 16 个；超出时标记省略数量 |
-| 单次工具记忆快照 | 每条小于 12 KiB；relay 添加的结构化与文本内容合计最多 64 KiB |
-
-Linux 默认状态位置为 `$XDG_STATE_HOME/ssmcp/context-memory/<工作区哈希>/state.json`；未设置时沿用历史目录的默认状态根。它复用历史的私有目录、文件锁和原子替换机制，不使用项目内另一份对话日志。原 JSONL 仍遵循自己的保留上限；记忆不是无限归档。
-
-本轮交付只更新本机客户端，不部署生产 relay。通用 `call` 可使用已注册的本机原生工具；当前运行环境的只读检查优先使用上述 `ui.get` 投影。源码中的 `context.*` JavaScript helper，以及外层 `structuredContent.context_memories` / `SESSION CONTEXT` 自动添加，都需要对应的新 relay。后者是历史参考，不是新用户要求，且保持原工具结果不变；新要求只由 `user_messages` 表示。
-
-`/handoff [NOTE]` 另行导出当前对话、待发要求和问题为可编辑的私有 `@file` 草稿；它不会自动发送或切换 Agent。工作区记忆、原始历史与显式交接各自使用上述入口，均不恢复模型或工具执行。
-
-[记忆实现与模块回归](../src/client/context_memory.rs) · [隔离端到端夹具](../scripts/e2e_context_memory.py) · [输入与本地沟通](client-input.md)
-
-夹具使用临时工作区与新建的测试 relay；源码和夹具的存在不等于已安装或已运行通过。具体测试、安装与 reload 状态以本轮验证报告为准。
+外部模型使用哪些上下文、怎样压缩或持久化，由对应 harness 决定；ssmcp 的事件窗口和显式交接不会恢复模型内部会话。[客户端输入与本地沟通](client-input.md) · [自定义客户端的上下文组织](client-extension.md)

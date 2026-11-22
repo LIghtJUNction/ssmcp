@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Exercise references, image attachment cards, copy/help, and persisted history in owned PTYs.
+"""Exercise references, image attachment cards, copy/help, and live process events in owned PTYs.
 
 Build ssmcp, ssmcpd, and examples/vt_snapshot first, then run:
   python3 scripts/e2e_input_history.py --bin-dir target/debug --out /tmp/input-history
 
 Reuses the isolated SSH/OAuth fixture and independent VT decoder. HOME and all
 XDG data/config/state directories are temporary; the restarted client shares
-only this test's workspace and history. No model or installed harness is used.
+only this test's workspace and private state. No model or installed harness is used.
 """
 
 import argparse
@@ -84,12 +84,6 @@ class InputHistory(Composer):
         )
         launcher.chmod(0o700)
         self.binary_dir = launchers
-
-    def client_command(self, *, name="workstation", shell="/bin/sh", extra_args=()):
-        command = super().client_command(name=name, shell=shell, extra_args=extra_args)
-        if name == "input-history-restarted":
-            command.insert(1, "resume")
-        return command
 
     def client_environment(self, label, **options):
         environment = super().client_environment(label, **options)
@@ -235,12 +229,7 @@ class InputHistory(Composer):
     def start_front(self, label):
         front = self.frontend(label, self.config(label))
         self.oauth_login(front.credentials)
-        if label == "input-history-restarted":
-            front.until(lambda shot: column(shot) == ("history", 6, 8) and shot["hide_cursor"],
-                        "the saved conversation picker opened by ssmcp resume")
-        else:
-            front.until(empty_composer_ready,
-                        "the isolated live composer")
+        front.until(empty_composer_ready, "the isolated live composer")
         return front
 
     def reference_scenarios(self, front, member):
@@ -441,10 +430,14 @@ class InputHistory(Composer):
         request = {"text": reply, "kind": "progress", "idempotency_key": "handoff-reply-once"}
         receipt = self.observe("ssmcp.ui.message", request)
         duplicate = self.observe("ssmcp.ui.message", request)
-        self.check(receipt["accepted"] and receipt["history_saved"] and not receipt["duplicate"]
+        self.check(receipt["accepted"] and receipt["recorded"] and receipt["storage"] == "memory" and not receipt["duplicate"]
                    and receipt["kind"] == "progress" and duplicate["duplicate"]
                    and duplicate["message_id"] == receipt["message_id"],
-                   "an idempotent native reply preserves its ID and is saved only once")
+                   "an idempotent native reply preserves its ID and is recorded in memory only once")
+        events_before = self.live_events(limit=1)
+        self.check(sum(event.get("value", {}).get("message_id") == receipt["message_id"]
+                       for event in events_before["events"]) == 1,
+                   "the ui.message receipt identifies exactly one live event")
         pending_text = "HANDOFF_PENDING 界：尚未领取的用户要求"
         pending = self.submit_source(front, pending_text)
         self.check(pending["target"] == target, "the handoff pending fixture targets the selected real member")
@@ -452,14 +445,6 @@ class InputHistory(Composer):
             "question": "HANDOFF_QUESTION 界：下一步先检查哪里？",
             "options": ["输入", "历史"], "idempotency_key": "handoff-question-once",
         })
-        sessions = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
-        current = next(session for session in sessions if session["current"])
-        history_path = self.state_home / "ssmcp" / "conversations" / (current["id"] + ".jsonl")
-        history_before = history_path.read_bytes()
-        entries = [json.loads(line) for line in history_before.splitlines()]
-        self.check(sum(entry.get("id") == receipt["message_id"] for entry in entries) == 1,
-                   "the ui.message receipt identifies exactly one record in the shared JSONL history")
-
         marker = self.workspace / "handoff-must-not-run.txt"
         note = "HANDOFF_NOTE 界 $(touch handoff-must-not-run.txt)"
         before = {item["id"] for item in self.queue()["queue"]}
@@ -473,7 +458,7 @@ class InputHistory(Composer):
         exported = saved.read_text(encoding="utf-8")
         self.check(saved.stat().st_mode & 0o777 == 0o600 and len(saved.read_bytes()) <= 2 * 1024 * 1024,
                    "handoff writes one private bounded Markdown input file")
-        for expected in [current["id"], receipt["message_id"], reply, pending_text,
+        for expected in [receipt["message_id"], reply, pending_text,
                          question["id"], question["question"]["question"], note]:
             self.check(expected in exported, "handoff contains the actual current context: " + expected[:48])
         native = self.read_text_pages(path, exported.encode("utf-8"))
@@ -483,9 +468,12 @@ class InputHistory(Composer):
         self.check(state["target"] == target and {item["id"] for item in after["queue"]} == before
                    and self.record(after, message_id=pending["id"])["status"] == "queued",
                    "handoff preserves the recipient and pending delivery without submitting another request")
+        added = self.live_events(limit=1, cursor=events_before["next_cursor"],
+                                 generation=events_before["generation"])
         self.check(self.observe("ssmcp.ui.questions", {"id": question["id"]})["question"]["state"] == "pending"
-                   and history_path.read_bytes() == history_before and not marker.exists(),
-                   "handoff does not answer questions, duplicate history, or execute shell text from its note")
+                   and not any(event.get("value", {}).get("message_id") == receipt["message_id"]
+                               for event in added["events"]) and not marker.exists(),
+                   "handoff does not answer questions, duplicate the live reply, or execute shell text from its note")
         suffix = " 补充：继续核对。"
         front.send(suffix)
         self.wait_state(front, lambda state: state["draft"]["text"] == draft + suffix,
@@ -540,172 +528,102 @@ class InputHistory(Composer):
         self.wait_state(front, lambda state: not state["draft"]["text"],
                         "the test-owned preservation draft did not clear")
 
-    def history_scenario(self, front, first_source):
+    def live_restart_scenario(self, front):
         counter = self.workspace / "tool-once.txt"
         job = self.run_job([
             "python3", "-c",
             "from pathlib import Path; p=Path('tool-once.txt'); "
-            "p.write_text((p.read_text() if p.exists() else '') + 'once\\n')",
+            "p.write_text((p.read_text() if p.exists() else '') + 'once' + chr(10))",
         ])
         self.finish_job(job, front)
         self.check(counter.read_text() == "once\n", "the owned native tool fixture executes exactly once")
-        reply = "# HISTORY_REPLY_FIXTURE\n\n已读取文件、技能和图片。"
-        self.observe("ssmcp.ui.message", {"text": reply})
-        sessions = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
-        self.check(len(sessions) == 1, "user requirements and the agent reply share one automatic history")
-        session_id = sessions[0]["id"]
-        path = self.state_home / "ssmcp" / "conversations" / f"{session_id}.jsonl"
-        raw = path.read_bytes()
-        entries = [json.loads(line) for line in raw.splitlines()]
-        self.check(entries[0]["type"] == "session"
-                   and entries[0]["schema"] == "ssmcp.conversation.v1"
-                   and entries[0]["schema_version"] == 1,
-                   "automatic history is a versioned JSONL stream with session metadata")
-        messages = [entry for entry in entries[1:] if entry["type"] == "message"]
-        self.check(all(item["role"] in {"system", "user", "assistant", "tool"}
-                       and isinstance(item["content"], str) for item in messages)
-                   and any(item["role"] == "user" and item["content"] == first_source for item in messages)
-                   and any(item["role"] == "assistant" and item["content"] == reply for item in messages),
-                   "JSONL records the original user text and agent reply using standard message roles")
-        (self.output / "input-history-before.jsonl").write_bytes(raw)
-        self.save_shot("before-restart", front)
+        reply = "# LIVE_REPLY_FIXTURE\n\n已读取文件、技能和图片。"
+        receipt = self.observe("ssmcp.ui.message", {"text": reply})
+        before = self.live_events()
+        values = [event.get("value", {}) for event in before["events"]]
+        self.check(receipt["recorded"] is True and receipt["storage"] == "memory"
+                   and sum(value.get("message_id") == receipt["message_id"] for value in values) == 1,
+                   "current RAM events contain exactly one newly recorded agent reply")
+        legacy_root = self.state_home / "ssmcp" / "conversations"
+        self.check(not legacy_root.exists() or not any(legacy_root.rglob("*")),
+                   "normal live input creates no conversation files")
+        memory_root = self.state_home / "ssmcp" / "context-memory"
+        self.check(not memory_root.exists() or not any(memory_root.rglob("*")),
+                   "normal live input creates no context-memory state")
+
+        # This deliberately created legacy fixture must be ignored and left
+        # byte-for-byte intact. It is never a real user's saved conversation.
+        legacy_root.mkdir(parents=True, exist_ok=True)
+        legacy_id = "conversation_" + "a" * 32
+        legacy = legacy_root / (legacy_id + ".jsonl")
+        legacy_marker = "LEGACY_RECORD_MUST_NOT_LOAD"
+        legacy_rows = [
+            {"type": "session", "schema": "ssmcp.conversation.v1", "schema_version": 1,
+             "id": legacy_id, "workspace": str(self.workspace.resolve()), "created_at_ms": 1,
+             "truncated_messages": 0},
+            {"type": "message", "id": "message_" + "b" * 32, "role": "assistant",
+             "kind": "agent_message", "content": legacy_marker, "created_at_ms": 2,
+             "truncated": False},
+        ]
+        legacy_bytes = ("\n".join(json.dumps(row) for row in legacy_rows) + "\n").encode()
+        legacy.write_bytes(legacy_bytes)
+
+        # Leave one real next-caller request pending only after all event and
+        # native file reads. From submission to exit, observe only read-only UI state.
+        self.agents(front)
+        self.highlight_recipient(front)
+        front.send(ENTER)
+        front.until(empty_composer_ready, "the next-caller composer before restart")
+        selected = self.ui("/display/conversation")
+        self.check(selected["target"] == "next" and selected["native_recipient"] is None,
+                   "the restart fixture selects the exact next-caller route")
+        pending_text = "LIVE_PENDING_MUST_NOT_REDELIVER 界"
+        pending = self.submit_source(front, pending_text)
+        waiting = [item for item in self.queue()["queue"]
+                   if item["status"] in ("queued", "sending")]
+        self.check(len(waiting) == 1 and waiting[0]["id"] == pending["id"]
+                   and waiting[0]["target"] == "next" and waiting[0]["text"] == pending_text
+                   and waiting[0]["status"] == "queued",
+                   "one exact next-caller requirement remains unclaimed immediately before exit")
         self.metrics["first_pty"] = {
             "bytes": len(front.transcript), "sha256": hashlib.sha256(front.transcript).hexdigest(),
         }
         front.disconnect()
         front.close()
 
-        resumed = self.start_front("input-history-restarted")
-        saved = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
-        selected = next(index for index, item in enumerate(saved) if item["id"] == session_id)
-        resumed.until(lambda shot: column(shot) == ("history", 6, 8) and session_id in text(shot)
-                      and shot["hide_cursor"],
-                      "the persisted conversation in the ssmcp resume picker")
-        self.check(self.ui("/display/conversation")["focus"] == "content",
-                   "/resume gives keyboard focus to the history picker")
-        resumed.send(HOME + DOWN * selected + ENTER)
-        resumed.until(lambda shot: column(shot) == ("history", 6, 8)
-                      and "HISTORY_REPLY_FIXTURE" in text(shot) and not shot["hide_cursor"],
-                      "the saved agent reply restored in the new process")
-        self.save_shot("resumed", resumed)
-        self.check(path.read_bytes() == raw, "viewing a saved conversation does not duplicate its JSONL records")
-        self.check(not self.queue()["queue"] and not self.messages(self.work()),
-                   "resuming in a new process neither restores nor redelivers old queued requirements")
-        self.check(counter.read_text() == "once\n", "resuming history does not replay the old native tool")
-
-        continuation = "HISTORY_CONTINUATION 界"
-        record = self.submit_source(resumed, continuation)
+        fresh = self.start_front("input-live-restarted")
+        self.check(not self.queue()["queue"],
+                   "restart does not restore old queued requirements")
+        self.check(not self.messages(self.work()),
+                   "restart does not redeliver the old pending requirement")
+        after = self.live_events()
+        values_after = [event.get("value", {}) for event in after["events"]]
+        serialized = json.dumps(after["events"], ensure_ascii=False)
+        self.check(after["generation"] != before["generation"]
+                   and not any(value.get("message_id") == receipt["message_id"]
+                               or value.get("text") == reply for value in values_after)
+                   and legacy_marker not in serialized,
+                   "a new process starts a fresh event generation without loading old RAM or legacy files")
+        self.check(legacy.read_bytes() == legacy_bytes and list(legacy_root.iterdir()) == [legacy],
+                   "restart neither reads into live state nor rewrites or deletes the private legacy fixture")
+        self.check(counter.read_text() == "once\n", "restart does not replay the old native tool")
+        continuation = "LIVE_NEW_PROCESS_REQUEST 界"
+        record = self.submit_source(fresh, continuation)
         self.expect_delivery(self.work(), record, request_text=continuation, agent_id=None)
-        history = self.observe("ssmcp.ui.history", {"action": "read", "id": session_id, "limit": 64})
-        self.check(history["messages"][-1]["role"] == "user"
-                   and history["messages"][-1]["content"] == continuation
-                   and len(history["messages"]) == len(messages) + 1,
-                   "a new requirement continues the selected saved conversation exactly once")
-        (self.output / "input-history-after.jsonl").write_bytes(path.read_bytes())
-        self.save_shot("continued", resumed)
+        current = self.live_events()
+        self.check(any(event.get("value", {}).get("type") == "ssmcp.message"
+                       and event["value"].get("role") == "user"
+                       and event["value"].get("text") == continuation for event in current["events"]),
+                   "new input belongs to the new process event journal")
+        self.check(legacy.read_bytes() == legacy_bytes, "new live work leaves the legacy fixture unchanged")
+        (self.output / "input-live-events.json").write_text(
+            json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         self.metrics["restarted_pty"] = {
-            "bytes": len(resumed.transcript), "sha256": hashlib.sha256(resumed.transcript).hexdigest(),
+            "bytes": len(fresh.transcript), "sha256": hashlib.sha256(fresh.transcript).hexdigest(),
         }
-        self.metrics["history_messages"] = len(history["messages"])
-        self.archive_scenario(resumed, session_id, path, counter)
-
-    def archive_scenario(self, front, session_id, path, counter):
-        original = path.read_bytes()
-        before_queue = [item["id"] for item in self.queue()["queue"]]
-        front.send("/archive\r")
-        front.until(lambda shot: "Conversation archived" in text(shot)
-                    and "No active history" in text(shot),
-                    "archiving the current conversation without deleting its messages")
-        active = self.observe("ssmcp.ui.history", {"action": "list"})
-        archived = self.observe("ssmcp.ui.history", {"action": "list", "state": "archived"})
-        self.check(active["state"] == "active" and not active["sessions"]
-                   and len(archived["sessions"]) == 1
-                   and archived["sessions"][0]["id"] == session_id
-                   and archived["sessions"][0]["archived"]
-                   and not archived["sessions"][0]["current"],
-                   "default history hides the archive and releases its active selection")
-        self.check(path.read_bytes() == original
-                   and [item["id"] for item in self.queue()["queue"]] == before_queue,
-                   "archiving keeps the original JSONL bytes and does not enqueue any requirement")
-        front.send("/archived\r")
-        front.until(lambda shot: "Archived conversations" in text(shot)
-                    and session_id in text(shot) and shot["hide_cursor"],
-                    "the explicit archived-conversation picker")
-        picker = self.ui("/display/conversation")
-        self.check(picker["history_archived"] and picker["focus"] == "content"
-                   and not picker["draft"]["text"],
-                   "the history canvas exposes its archive filter and focuses the picker after clearing the command")
-        draft = "ARCHIVE_DRAFT_KEEP 界"
-        front.send(draft)
-        self.wait_state(front, lambda state: state["draft"]["text"] == draft,
-                        "the archive fixture draft was not visible")
-        original_draft = self.ui("/display/conversation")["draft"]
-        restored = self.observe("ssmcp.ui.history_archive", {"action": "restore", "id": session_id})
-        self.check(restored["changed"] and not restored["archived"] and not restored["current"],
-                   "the explicit restore tool changes visibility without selecting the conversation")
-        again = self.observe("ssmcp.ui.history_archive", {"action": "restore", "id": session_id})
-        archived = self.observe("ssmcp.ui.history_archive", {"action": "archive", "id": session_id})
-        duplicate = self.observe("ssmcp.ui.history_archive", {"action": "archive", "id": session_id})
-        self.check(not again["changed"] and archived["changed"] and not duplicate["changed"]
-                   and self.ui("/display/conversation")["draft"] == original_draft
-                   and path.read_bytes() == original,
-                   "archive and restore are idempotent and preserve the live UTF-8 draft and saved bytes")
-        found = self.observe("ssmcp.ui.history", {
-            "action": "search", "query": "HISTORY_CONTINUATION", "id": session_id,
-        })
-        self.check(len(found["matches"]) == 1
-                   and found["matches"][0]["conversation_id"] == session_id,
-                   "archived content remains explicitly searchable through the read-only history tool")
-        self.save_resized_shots("archived", front, "Archived conversations")
-        front.send(b"\x01\x0b")
-        self.wait_state(front, lambda state: not state["draft"]["text"],
-                        "the archive preservation draft did not clear")
-        front.disconnect()
-        front.close()
-
-        restored_front = self.start_front("input-history-archive-restarted")
-        active = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
-        archives = self.observe("ssmcp.ui.history", {"action": "list", "state": "archived"})["sessions"]
-        self.check(not active and len(archives) == 1 and archives[0]["id"] == session_id
-                   and path.read_bytes() == original,
-                   "archive state survives a new process without rewriting the conversation")
-        restored_front.send("/resume\r")
-        restored_front.until(lambda shot: "No active history" in text(shot) and shot["hide_cursor"],
-                             "the normal history picker excluding the persisted archive")
-        self.check(self.ui("/display/conversation")["focus"] == "content",
-                   "the empty active-history picker still owns keyboard focus")
-        restored_front.send("/archived\r")
-        restored_front.until(lambda shot: "Archived conversations" in text(shot)
-                             and session_id in text(shot) and shot["hide_cursor"],
-                             "the persisted archive in its own picker")
-        picker = self.ui("/display/conversation")
-        self.check(picker["history_archived"] and picker["focus"] == "content"
-                   and not picker["draft"]["text"],
-                   "/archived refocuses the existing history column before Home and Enter restore it")
-        restored_front.send(HOME + ENTER)
-        restored_front.until(lambda shot: "HISTORY_CONTINUATION" in text(shot)
-                             and "History restored" in text(shot),
-                             "Enter restoring and resuming the archived conversation")
-        metadata = self.observe("ssmcp.ui.history", {"action": "metadata", "id": session_id})
-        self.check(not metadata["summary"]["archived"] and metadata["summary"]["current"]
-                   and path.read_bytes() == original and not self.queue()["queue"]
-                   and not self.messages(self.work()) and counter.read_text() == "once\n",
-                   "restoring selects the saved history without replaying requests or native tools")
-        continuation = "ARCHIVE_RESTORED_CONTINUATION 中文"
-        record = self.submit_source(restored_front, continuation)
-        self.expect_delivery(self.work(), record, request_text=continuation, agent_id=None)
-        history = self.observe("ssmcp.ui.history", {"action": "read", "id": session_id, "limit": 64})
-        previous = [json.loads(line) for line in original.splitlines()][1:]
-        self.check(history["messages"][:-1] == [
-            {key: value for key, value in item.items() if key != "type"} for item in previous
-        ] and history["messages"][-1]["content"] == continuation,
-                   "an explicit new requirement appends once to the restored original messages")
-        self.save_resized_shots("archive-restored", restored_front, "ARCHIVE_RESTORED_CONTINUATION")
-        self.metrics["archive_pty"] = {
-            "bytes": len(restored_front.transcript),
-            "sha256": hashlib.sha256(restored_front.transcript).hexdigest(),
-        }
-        restored_front.close()
+        self.metrics["live_event_count"] = len(current["events"])
+        fresh.disconnect()
+        fresh.close()
 
     def shell_scenario(self, front):
         before = len(self.queue()["queue"])
@@ -721,7 +639,7 @@ class InputHistory(Composer):
         self.save_shot("shell-command", front)
         front.send("/tasks")
         front.send(ENTER)
-        tasks = front.until(lambda shot: column(shot) == ("tasks", 8, 8)
+        tasks = front.until(lambda shot: (column(shot) or ())[:1] == ("tasks",)
                             and "Tasks ·" in text(shot) and "exit 7" in text(shot)
                             and "SHELL_PREFIX" in text(shot),
                             "the independent Tasks column includes the completed shell job")
@@ -748,7 +666,7 @@ class InputHistory(Composer):
         front = self.start_front("input-history-first")
         member = self.public_call("collab", {
             "action": "join", "client_id": self.client_id,
-            "name": "Input fixture member", "role": "local input/history test",
+            "name": "Input fixture member", "role": "local input/live-event test",
         })
         self.sensitive.append(member["token"])
         self.agents(front)
@@ -765,18 +683,23 @@ class InputHistory(Composer):
         self.highlight_recipient(front, member)
         front.send(ENTER)
         front.until(lambda shot: "To Input fixture member" in text(shot)
-                    and column(shot) == ("conversation", 2, 8),
+                    and (column(shot) or ())[:2] == ("conversation", 2),
                     "Enter selecting the exact registered fixture recipient")
         selected = self.ui("/display/conversation")
         self.check(selected["target"] == member["agent_id"]
                    and selected["native_recipient"] is None,
                    "input setup selects the exact local member rather than a native namesake")
         first_source = self.reference_scenarios(front, member)
+        self.check(any(event.get("value", {}).get("type") == "ssmcp.message"
+                       and event["value"].get("role") == "user"
+                       and event["value"].get("text") == first_source
+                       for event in self.live_events()["events"]),
+                   "the retained live user event preserves the original delivered reference text")
         self.paste_scenario(front, member)
         self.attachment_handoff_scenario(front, member)
         self.copy_and_help(front)
         self.shell_scenario(front)
-        self.history_scenario(front, first_source)
+        self.live_restart_scenario(front)
 
 
 def main():
@@ -786,12 +709,20 @@ def main():
     signal.signal(signal.SIGTERM, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, default=Path("target/debug"))
+    parser.add_argument("--fixture-binary", type=Path, default=os.environ.get("SSMCP_E2E_FIXTURE_BINARY"),
+                        help="prebuilt library fixture; overrides SSMCP_E2E_FIXTURE_BINARY")
     parser.add_argument("--decoder", type=Path, help="defaults to BIN_DIR/examples/vt_snapshot")
     parser.add_argument("--out", type=Path, required=True, help="write JSON report and actual VT snapshots")
     parser.add_argument("--report", type=Path, help="also write the report at this location")
     args = parser.parse_args()
     decoder = args.decoder or args.bin_dir / "examples/vt_snapshot"
     binaries = {"ssmcp": args.bin_dir / "ssmcp", "ssmcpd": args.bin_dir / "ssmcpd", "vt_snapshot": decoder}
+    if args.fixture_binary is not None:
+        fixture = args.fixture_binary.resolve()
+        if not fixture.is_file() or not os.access(fixture, os.X_OK):
+            parser.error(f"prebuilt fixture is not executable: {fixture}")
+        os.environ["SSMCP_E2E_FIXTURE_BINARY"] = str(fixture)
+        binaries["fixture"] = fixture
     for executable in binaries.values():
         if not executable.is_file():
             parser.error(f"missing {executable}; build the binaries and vt_snapshot first")
@@ -800,7 +731,7 @@ def main():
     report = {
         "status": "failed", "platform": platform.system(),
         "transport": "isolated account OAuth + owned PTY + independent vt100 decoder",
-        "scope": "enumerated @/$ completion, file/skill/image delivery, large paste, private image attach, editable handoff, idempotent replies, copy/help, local shell/tasks, automatic JSONL, resume, and reversible conversation archives; no models",
+        "scope": "enumerated @/$ completion, file/skill/image delivery, large paste, private image attach, editable handoff, idempotent replies, copy/help, local shell/tasks, current RAM events, fresh-process reset, and preservation of ignored legacy files; no models",
         "binaries": {name: sha256(path) for name, path in binaries.items()},
         "sources": {name: sha256(Path(__file__).with_name(name)) for name in (
             "e2e_input_history.py", "e2e.py", "e2e_dashboard.py", "e2e_composer.py",

@@ -126,15 +126,17 @@ ssmcp send thread THREAD_ID '检查失败用例' --wait --json
 
 ### 查看线程历史
 
-成员列表中的右键操作按实际点击行的身份打开历史。进程视图显示当前进程保留的事件，成员视图只显示能够核对该成员 ID 的事件；没有先左键选中也不会误读另一行。Esc 或再次右键返回成员页，其他对话页仍可用右键切换日志。[界面选择](../src/client/terminal/conversation/history.rs) · [鼠标路由](../src/client/terminal/conversation.rs)
+成员列表中的右键操作按实际点击行的身份打开当前事件。进程视图显示本进程仍保留的事件，成员视图只显示能够核对该成员 ID 的事件；没有先左键选中也不会误读另一行。Esc 或再次右键返回成员页，其他对话页仍可用右键切换日志。[界面选择](../src/client/terminal/conversation/history.rs) · [鼠标路由](../src/client/terminal/conversation.rs)
 
-线程归属来自真正调用时冻结的账号、连接和成员信息。更新后的事件可以按这个来源筛选；旧记录、未带身份的记录以及已经离开保留窗口的内容不会被补造为某个成员的聊天。无法归属的保留记录留在进程视图，本机界面也不会把自己的日志标成另一个客户端的历史。[来源记录与分页](../src/session/attach/thread_history.rs) · [调用身份](../src/runtime/call_scope.rs)
+线程归属来自真正调用时冻结的账号、连接和成员信息。事件按这个来源筛选；未带身份的记录与已经离开保留窗口的内容不会被补造为某个成员的聊天。无法归属的保留记录留在进程视图，本机界面也不会把自己的日志标成另一个客户端的事件。[来源记录与分页](../src/session/attach/thread_history.rs) · [调用身份](../src/runtime/call_scope.rs)
 
-这份线程历史是当前进程的有界事件窗口。它最多保留 4096 个事件和 2 MiB 预算，重启进程会失去该窗口；原有 JSONL 历史和 `/resume` 保持各自的会话恢复用途。远程 `attach --read-only` 读取所选客户端的身份筛选历史及本账号的已确认回复，不会恢复模型内部对话状态。[窗口限制](../src/session/attach.rs) · [远程观察](../src/client/account/chat.rs)
+线程事件使用当前进程的有界内存窗口，最多保留 4096 个事件、2 MiB。当前读取接口为 `ssmcp.ui.events`，使用 `action: "thread"` 与实际 `client_id`；可传 `agent_id` 或 `main: true`，二者互斥。不传这两个过滤参数时返回所选进程范围的聚合事件，包括无法归属到具体线程的内容。分页沿用 `generation` 和 `next_cursor`，并检查 `retention_gap_possible`。[事件参数与分页](conversation-history.md)
+
+同一进程断网重连保留内存窗口；退出、重启或 `/reload` 会清空。旧会话和记忆文件不参与恢复，也不会被迁移删除。远程 `attach --read-only` 读取所选客户端的身份筛选事件及本账号的已确认回复，不会恢复模型内部对话状态。[窗口限制](../src/session/attach.rs) · [远程观察](../src/client/account/chat.rs)
 
 ### 聊天接口的兼容与保留边界
 
-聊天收发需要命令所在客户端、接收端客户端和中继都支持相应接口。中继提供 `/api/client/io`、线程目录、定向输入交付和回复确认；接收端提供真实的 `ssmcp.ui.reply` 与线程历史。仅更新本机客户端不会给旧中继增加这些能力；旧接收端不能在未支持回复接口时被加入聊天队列，原有显式 PTY 入口仍可使用。[HTTP 接口](../src/device/session_io.rs) · [原生回复确认](../src/http/session_io.rs)
+聊天收发需要命令所在客户端、接收端客户端和中继都支持相应接口。中继提供 `/api/client/io`、线程目录、定向输入交付和回复确认；接收端提供真实的 `ssmcp.ui.reply` 与 `ssmcp.ui.events`。仅更新本机客户端不会给旧中继增加这些能力；旧接收端不能在未支持回复接口时被加入聊天队列，原有显式 PTY 入口仍可使用。[HTTP 接口](../src/device/session_io.rs) · [原生回复确认](../src/http/session_io.rs)
 
 请求和回复最多保留 1 小时，保留期从请求创建时计算。状态位于服务端内存，服务端重启会丢失未完成请求及已保留回复；容量满时拒绝新的请求或进度，最终回复预留所需空间。连接或成员失效后，待处理输入标为过期，不会改投同名对象或新连接。这套接口不提供跨服务端重启的持久任务队列。[保留与容量实现](../src/broker/session_io.rs)
 
@@ -145,7 +147,7 @@ ssmcp send thread THREAD_ID '检查失败用例' --wait --json
 | 等待超时 | 0.001–86400 秒；不取消接收者工作 |
 | 服务端请求保留 | 全局最多 1024 条、每账号最多 128 条，最长 1 小时 |
 | 服务端输出预算 | 总预算 16 MiB；每请求最多 2 MiB、256 条进度与最终输出 |
-| 客户端线程历史 | 进程内最多 4096 个事件、2 MiB 预算；不补造旧记录身份 |
+| 客户端线程事件 | 进程内最多 4096 个事件、2 MiB 预算；不补造缺失的记录身份 |
 
 这些限制分别来自[输入解析](../src/client/account/send.rs)、[等待解析](../src/client/account/wait.rs)、[服务端账本](../src/broker/session_io.rs)和[事件窗口](../src/session/attach.rs)。版本号或显示名称不能替代真实工具目录和接口检查。
 

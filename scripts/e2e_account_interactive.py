@@ -110,15 +110,43 @@ class ChatIO:
             raise ValueError("io_invalid_request")
 
     @staticmethod
-    def history(args):
-        rows = [(1, None, "MAIN_HISTORY_ONLY"), (2, THREAD_A, "THREAD_A_HISTORY_ONLY"),
-                (3, THREAD_B, "THREAD_B_HISTORY_ONLY")]
-        events = [dict(sequence=seq, id=f"event_{seq}", kind="tool", text=text)
-                  for seq, thread, text in rows if seq >= args.get("cursor", 0)
-                  and (not args.get("main") or thread is None)
-                  and (not args.get("agent_id") or thread == args["agent_id"])]
-        return dict(schema_version=1, generation="fixture-history-generation", events=events,
-                    next_cursor=4, has_more=False, truncated_since_cursor=False)
+    def events(args):
+        generation = "fixture-events-generation"
+        if (args.get("action") != "thread" or args.get("client_id") != CLIENT_ID
+                or (args.get("main") and args.get("agent_id"))):
+            raise ValueError("events_invalid_scope")
+        cursor = args.get("cursor", 1)
+        limit = args.get("limit", 16)
+        if (not isinstance(limit, int) or not 1 <= limit <= 64
+                or not isinstance(cursor, int) or not 0 <= cursor <= 4
+                or ("cursor" in args and cursor > 0 and args.get("generation") != generation)
+                or args.get("generation", generation) != generation):
+            raise ValueError("events_invalid_cursor")
+        rows = [(1, None, "MAIN_EVENTS_ONLY"), (2, THREAD_A, "THREAD_A_EVENTS_ONLY"),
+                (3, THREAD_B, "THREAD_B_EVENTS_ONLY")]
+        events, next_cursor = [], max(cursor, 1)
+        for sequence, thread, text in rows:
+            if sequence < next_cursor:
+                continue
+            matches = ((not args.get("main") or thread is None)
+                       and (not args.get("agent_id") or thread == args["agent_id"]))
+            if matches and len(events) >= limit:
+                break
+            next_cursor = sequence + 1
+            if matches:
+                source = dict(client_id=CLIENT_ID, agent_id=thread,
+                              kind="thread" if thread else "main")
+                events.append(dict(sequence=sequence, id=f"event_{sequence}",
+                                   kind="ssmcp.tool_call", text=text, source=source,
+                                   value=dict(type="ssmcp.tool_call", text=text),
+                                   unattributed=False, truncated=False, text_lossy=False))
+        kind = "thread" if args.get("agent_id") else "main" if args.get("main") else "process"
+        return dict(schema_version=1, generation=generation, events=events,
+                    scope=dict(kind=kind, client_id=CLIENT_ID, agent_id=args.get("agent_id"),
+                               provenance="authenticated_call_scope", includes_unattributed=kind == "process"),
+                    next_cursor=next_cursor, start_cursor=1, has_more=next_cursor < 4,
+                    truncated_since_cursor=False, retention_gap_possible=False,
+                    truncation_scope="process_journal_window", retention="live_process_memory")
 
 
 def chat_checks(binary, environment, root, directory, cli, backend):
@@ -209,8 +237,8 @@ def chat_checks(binary, environment, root, directory, cli, backend):
     child, descriptor = spawn_terminal([str(binary), "attach", "thread", THREAD_A, "--read-only"], environment, root)
     try:
         captured = TerminalOutput(child, descriptor)
-        captured.until("THREAD_A_HISTORY_ONLY")
-        assert b"THREAD_B_HISTORY_ONLY" not in captured.output and b"MAIN_HISTORY_ONLY" not in captured.output
+        captured.until("THREAD_A_EVENTS_ONLY")
+        assert b"THREAD_B_EVENTS_ONLY" not in captured.output and b"MAIN_EVENTS_ONLY" not in captured.output
         os.write(descriptor, b"MUST_NOT_SEND\n\x1b[200~PASTED_TEXT\x1b[201~")
         fcntl.ioctl(descriptor, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 48, 0, 0))
         os.killpg(child.pid, signal.SIGWINCH)
@@ -226,7 +254,7 @@ def chat_checks(binary, environment, root, directory, cli, backend):
     child, descriptor = spawn_terminal([str(binary), "attach", "thread", THREAD_B], environment, root)
     try:
         captured = TerminalOutput(child, descriptor)
-        captured.until("THREAD_B_HISTORY_ONLY")
+        captured.until("THREAD_B_EVENTS_ONLY")
         os.write(descriptor, "interactive 中文 request\n".encode())
         captured.until("IO_RESULT:" + THREAD_B + ":interactive 中文 request")
 
@@ -283,7 +311,7 @@ def chat_checks(binary, environment, root, directory, cli, backend):
             "wait_any_gather_and_n_of_m_emit_exact_counts", "send_wait_send_pipe_carries_actual_output",
             "wait_timeout_does_not_cancel_pending_input", "wait_rejects_foreign_receipt_origin", "wait_rejects_foreign_account_before_poll",
             "wait_error_result_prints_actual_output_and_exits_nonzero", "send_wait_json_emits_actual_result_json",
-            "readonly_thread_attach_filters_history_and_blocks_all_writes_and_resize",
+            "readonly_thread_attach_filters_events_and_blocks_all_writes_and_resize",
             "thread_chat_attach_stdin_and_correlated_stdout_keep_target_alive",
             "thread_chat_coalesced_navigation_preserves_exact_unicode_input_and_reply",
             "thread_chat_fragmented_csi_preserves_exact_input_and_reply",
@@ -443,8 +471,8 @@ def fixture_handler(backend, token, directory):
                 self.reply(404, {"error": "not_found"})
                 return
             try:
-                result = (directory["io"].history(body.get("arguments", {}))
-                          if body["name"] == "ssmcp.ui.history"
+                result = (directory["io"].events(body.get("arguments", {}))
+                          if body["name"] == "ssmcp.ui.events"
                           else backend.call(body["name"], body.get("arguments", {})))
                 self.reply(200, {"structuredContent": result,
                                  "content": [{"type": "text", "text": json.dumps(result)}],

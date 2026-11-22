@@ -65,6 +65,7 @@ pub(crate) fn get() -> Value {
         "activity": render::snapshot(),
         "identity": client_identity(&steering),
         "steering": steering,
+        "worker_pool": super::worker_window::linked_snapshot(),
         "listener": listener::snapshot(),
         "user_wait": user_wait::snapshot(),
         "time": crate::runtime::time::snapshot(),
@@ -516,8 +517,8 @@ pub(crate) async fn call(
     if name == "ssmcp.ui.listener" {
         return listener::call(arguments).await;
     }
-    // User-facing messages commit JSONL and derived memory before their ACK.
-    // Keep their existing serial order while all storage/display work runs on
+    // Keep live messages in serial order before their acknowledgement.
+    // Preserve their owner while display work runs on
     // a blocking worker; no mutex is held across an await.
     if matches!(name, "ssmcp.ui.message" | "ssmcp.ui.present") {
         let presentation = name == "ssmcp.ui.present";
@@ -533,36 +534,30 @@ pub(crate) async fn call(
             })
         })
         .await
-        .map_err(|_| "message storage worker stopped".to_owned())?;
+        .map_err(|_| "message delivery worker stopped".to_owned())?;
     }
-    if name == "ssmcp.ui.history_update" {
-        return tokio::task::spawn_blocking(move || history::descriptions::call(arguments))
-            .await
-            .map_err(|_| "history description worker stopped".to_owned())?;
+    if matches!(
+        name,
+        "ssmcp.ui.history" | "ssmcp.ui.history_update" | "ssmcp.ui.history_archive"
+    ) {
+        return Err("tool_retired: saved history and archives were removed; use ssmcp.ui.events for live process logs".into());
     }
-    if name == "ssmcp.ui.history_archive" {
-        return tokio::task::spawn_blocking(move || {
-            let result = history::archive::call(arguments);
-            if result.is_ok() {
-                terminal::refresh_history_owner();
-            }
-            result
-        })
-        .await
-        .map_err(|_| "history archive worker stopped".to_owned())?;
+    if name == "ssmcp.ui.events" {
+        return history::call(arguments);
     }
-    if name == "ssmcp.ui.history" {
-        // Search may inspect retained files; it must not hold the display lock
-        // or block the async runtime while doing disk I/O.
-        let source = crate::runtime::call_scope::Source::capture();
-        return tokio::task::spawn_blocking(move || source.blocking(|| history::call(arguments)))
-            .await
-            .map_err(|_| "history storage worker stopped".to_owned())?;
-    }
-    // Memory reads are a projection of the same document, not a second cache.
-    // Finish every disk read before taking the UI configuration/update mutex.
     if name == "ssmcp.ui.get" {
         let projection = parse_get(&arguments)?;
+        if projection.as_ref().is_some_and(|value| {
+            value.path == "/worker_pool" || value.path.starts_with("/worker_pool/")
+        }) {
+            return project_snapshot(
+                json!({
+                    "schema_version": 1,
+                    "worker_pool": super::worker_window::linked_snapshot(),
+                }),
+                projection,
+            );
+        }
         let context_requested = projection
             .as_ref()
             .is_some_and(|p| p.path == "/context" || p.path.starts_with("/context/"));
@@ -661,8 +656,6 @@ pub(crate) fn tools() -> Vec<Value> {
         json!({"name":"ssmcp.ui.action","description":"Perform one display action. reload validates and reloads appearance only (F5); use ssmcp.client.reload for a process restart. save persists current appearance. logs.clear clears visible history, leaving audit events intact.","inputSchema":{"type":"object","required":["action"],"additionalProperties":false,"properties":{"action":{"type":"string","enum":ACTIONS}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
     ].into_iter().chain(questions::tools())
     .chain(std::iter::once(history::tool()))
-    .chain(std::iter::once(history::archive::tool()))
-    .chain(std::iter::once(history::descriptions::tool()))
     .chain(std::iter::once(harness::tool()))
     .chain(std::iter::once(super::presentation::tool())).collect()
 }
@@ -670,7 +663,7 @@ pub(crate) fn tools() -> Vec<Value> {
 fn get_tool() -> Value {
     json!({
         "name":"ssmcp.ui.get",
-        "description":"Read versioned display configuration and sanitized client state with or without the built-in TUI. Empty arguments preserve the full snapshot. The /identity projection reports this client's actual OS process_id and current relay client_id; /steering/agents enumerates registered logical thread IDs, not kernel thread IDs. For bounded polling, use a nonempty JSON Pointer such as /display/conversation, /config, /steering/queue or /display/audit/entries. The /context/status, /context/read and /context/list projections read the same local memory document off the UI thread; use /context/read/summary or /context/read/recent for bounded paging. Projections return {schema_version:1,path,value}; arrays and strings also return total and next_offset when more remains. Page offsets count array items or Unicode code points. Objects and scalars reject paging. Projected responses are limited to 8 KiB serialized; choose a narrower path or smaller page if rejected. Use terminal.*, ssmcp.exec.* and ssmcp.audit.events for independent I/O and events.",
+        "description":"Read versioned display configuration and sanitized client state with or without the built-in TUI. Empty arguments preserve the full snapshot. The /identity projection reports this client's actual OS process_id and current relay client_id; /steering/agents enumerates registered logical thread IDs, not kernel thread IDs. For bounded polling, use a nonempty JSON Pointer such as /display/conversation, /config, /steering/queue or /display/audit/entries. The /worker_pool projection reads the linked live worker window, including actual registration, capacity and shutdown state, without collecting the full display. Projections return {schema_version:1,path,value}; arrays and strings also return total and next_offset when more remains. Page offsets count array items or Unicode code points. Objects and scalars reject paging. Projected responses are limited to 8 KiB serialized; choose a narrower path or smaller page if rejected. Use terminal.*, ssmcp.exec.* and ssmcp.audit.events for independent I/O and events.",
         "inputSchema":{
             "type":"object",
             "additionalProperties":false,
@@ -1153,9 +1146,7 @@ mod tests {
             "ssmcp.ui.filter",
             "ssmcp.ui.get",
             "ssmcp.ui.harness",
-            "ssmcp.ui.history",
-            "ssmcp.ui.history_archive",
-            "ssmcp.ui.history_update",
+            "ssmcp.ui.events",
             "ssmcp.ui.listener",
             "ssmcp.ui.message",
             "ssmcp.ui.present",

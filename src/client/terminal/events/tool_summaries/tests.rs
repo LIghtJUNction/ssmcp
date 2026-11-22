@@ -459,16 +459,8 @@ async fn exec_read_native_result_expands_without_replaying_folded_output() {
         assert!(expanded.contains("API_TOKEN=[redacted]"), "{expanded}");
         assert!(!expanded.contains("fixture-token-value"), "{expanded}");
         assert!(view.back());
-        let saved = serde_json::to_value(view.reload_display()).unwrap();
-        let mut restored = new_view(&call);
-        restored.restore_reload_display(serde_json::from_value(saved).unwrap());
-        let folded = restored.render(120, 30, &ui, true).join("\n");
+        let folded = view.render(120, 30, &ui, true).join("\n");
         assert!(!folded.contains("reader-stdout"), "{folded}");
-        assert!(restored.open());
-        let expanded = restored.render(120, 30, &ui, true).join("\n");
-        assert!(expanded.contains("reader-stdout"), "{expanded}");
-        assert!(expanded.contains("reader-stderr"), "{expanded}");
-        assert!(!expanded.contains("fixture-token-value"), "{expanded}");
 
         // The same details and two-line preview also work inside a tool window.
         let group = group_id(&view, &call);
@@ -790,18 +782,6 @@ async fn inactive_canvas_keeps_group_choice_after_every_saved_command_is_evicted
         assert!(view.tool_groups()[0].expanded);
         assert!(view.position().tool_groups.len() <= MAX_EVENTS);
 
-        // Reload may capture the inactive canvas before it is visited again.
-        // Rebase its group reading state to current ordinals, not stale IDs.
-        let reading = serde_json::to_value(first_canvas.for_reload(&view)).unwrap();
-        assert_eq!(reading["reading"]["selected"], 0);
-        assert_eq!(reading["reading"]["selected_group"], 0);
-        let panels = reading["reading"]["panels"].as_array().unwrap();
-        assert_eq!(panels.len(), MAX_EVENTS);
-        assert!(panels.iter().all(|panel| {
-            panel[1]["group_expanded"] == false && panel[1]["group_automatic"] == false
-        }));
-        assert!(!reading.to_string().contains(&id));
-
         for width in [120, 48] {
             view.restore_position(&first_canvas);
             let text = view.render(width, 24, &ui, true).join("\n");
@@ -968,7 +948,7 @@ async fn updating_summary_preserves_fold_scroll_and_fits_both_widths() {
 }
 
 #[tokio::test]
-async fn group_identity_survives_eviction_and_reload_is_read_only() {
+async fn group_identity_and_authorization_survive_eviction() {
     let fixture = Fixture::new().await;
     history::with_test_history(fixture.root.join("history"), async {
         let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
@@ -986,35 +966,13 @@ async fn group_identity_survives_eviction_and_reload_is_read_only() {
             view.snapshot()["tool_groups"][0]["call_count"],
             MAX_EVENTS as u64 + 5
         );
-        let saved = serde_json::to_value(view.reload_display()).unwrap();
-        let encoded = serde_json::to_string(&saved).unwrap();
-        assert!(!encoded.contains("same-label"));
-        assert!(!encoded.contains("\"connection\""));
-        let mut restored = new_view(&first);
-        restored.restore_reload_display(serde_json::from_value(saved).unwrap());
-        assert_eq!(restored.snapshot()["tool_groups"][0]["group_id"], id);
         assert_eq!(
-            restored.snapshot()["tool_groups"][0]["summary"],
+            view.snapshot()["tool_groups"][0]["summary"],
             "Inspecting many files"
         );
-        assert_eq!(
-            restored.snapshot()["tool_groups"][0]["summary_editable"],
-            false
-        );
-        assert!(
-            restored.tool_summary_list(&first).unwrap()["groups"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            restored
-                .tool_summary_set(&first, &id, "must remain historical", None)
-                .is_err()
-        );
-        assert!(restored.take_tool_summary_reminder(&first).is_none());
-        let native = stat(&mut restored, &fixture.runtime, 1000).await;
-        assert_ne!(group_id(&restored, &native), id);
+        assert_eq!(view.snapshot()["tool_groups"][0]["summary_editable"], true);
+        view.tool_summary_set(&first, &id, "Live summary remains editable", Some(1))
+            .unwrap();
     })
     .await;
 }
@@ -1120,7 +1078,7 @@ async fn ui_mutations_keep_non_conversation_image_question_and_task_events() {
 }
 
 #[tokio::test]
-async fn command_summary_scroll_and_explicit_fold_survive_position_and_reload() {
+async fn command_summary_scroll_and_explicit_fold_survive_canvas_position_changes() {
     let fixture = Fixture::new().await;
     history::with_test_history(fixture.root.join("summary-position-history"), async {
         let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
@@ -1151,31 +1109,21 @@ async fn command_summary_scroll_and_explicit_fold_survive_position_and_reload() 
         assert_eq!(view.scroll, outer_scroll);
         let group = view.tool_groups()[0].clone();
         assert!(view.set_tool_expanded(&group, false));
-        let saved_position = serde_json::to_value(view.position().for_reload(&view)).unwrap();
-        let saved_position: super::super::ReloadPosition =
-            serde_json::from_value(saved_position).unwrap();
-        let display = serde_json::to_value(view.reload_display()).unwrap();
-        let mut restored = new_view(&first);
-        restored.restore_reload_display(serde_json::from_value(display).unwrap());
-        restored.restore_position(&saved_position.position(&restored));
+        let saved_position = view.position();
+        view.restore_position(&super::super::EventPosition::default());
+        view.restore_position(&saved_position);
         for width in [48, 120] {
-            let text = restored.render(width, 24, &ui, true).join("\n");
+            let text = view.render(width, 24, &ui, true).join("\n");
             assert_eq!(text.matches("Checked command results").count(), 1, "{text}");
-            assert!(!restored.tool_groups()[0].expanded, "{text}");
+            assert!(!view.tool_groups()[0].expanded, "{text}");
         }
-        let group = restored.tool_groups()[0].clone();
-        assert_eq!(
-            restored.events[group.start].group_panel.scroll,
-            inner_scroll
-        );
-        assert!(!restored.events[group.start].group_automatic);
-        assert!(restored.set_tool_expanded(&group, true));
-        restored.render(120, 24, &ui, true);
-        assert_eq!(restored.events[group.start].group_panel.offset(), 2);
-        assert_eq!(
-            restored.snapshot()["tool_groups"][0]["summary_editable"],
-            false
-        );
+        let group = view.tool_groups()[0].clone();
+        assert_eq!(view.events[group.start].group_panel.scroll, inner_scroll);
+        assert!(!view.events[group.start].group_automatic);
+        assert!(view.set_tool_expanded(&group, true));
+        view.render(120, 24, &ui, true);
+        assert_eq!(view.events[group.start].group_panel.offset(), 2);
+        assert_eq!(view.snapshot()["tool_groups"][0]["summary_editable"], true);
     })
     .await;
 }

@@ -29,100 +29,11 @@ struct Position {
     detail: bool,
     detail_scroll: usize,
     question_id: Option<String>,
-    history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
-    history_archived: bool,
     scoped_history: Option<history::ScopedHistoryHandle>,
-    selected_history: Option<String>,
     audit: crate::client::audit_view::AuditPosition,
     events: events::EventPosition,
     logs: Option<LogPosition>,
     tasks: Option<tasks::TaskPosition>,
-}
-
-/// Only local view state crosses a reload. Native agents, questions, tasks and
-/// authorization handles are deliberately resolved again by the new connection.
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct ReloadCanvas {
-    columns: Vec<ReloadColumn>,
-    active: usize,
-    next_id: u64,
-    logs_return: Option<u64>,
-}
-
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-struct ReloadColumn {
-    id: u64,
-    view: View,
-    position: Option<ReloadPosition>,
-}
-
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-struct ReloadPosition {
-    content_focus: bool,
-    detail: bool,
-    detail_scroll: usize,
-    history: Option<String>,
-    #[serde(default)]
-    history_archived: bool,
-    selected_history: Option<String>,
-    events: events::ReloadPosition,
-    logs: Option<ReloadLogs>,
-}
-
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-struct ReloadLogs {
-    scrollback: usize,
-    query: String,
-    level: u8,
-    filter_offset: usize,
-}
-
-impl ReloadCanvas {
-    pub(super) fn discard_display_positions(&mut self) {
-        for column in &mut self.columns {
-            if let Some(position) = &mut column.position {
-                position.events.discard_display();
-            }
-        }
-    }
-
-    pub(super) fn validate(&self) -> Result<(), String> {
-        let ids = self
-            .columns
-            .iter()
-            .map(|column| column.id)
-            .collect::<std::collections::BTreeSet<_>>();
-        if self.columns.is_empty()
-            || self.columns.len() > 1024
-            || self.active >= self.columns.len()
-            || ids.len() != self.columns.len()
-            || ids.contains(&0)
-            || ids.last().is_some_and(|id| *id >= self.next_id)
-            || self.next_id == u64::MAX
-            || self.logs_return.is_some_and(|id| !ids.contains(&id))
-            || self
-                .columns
-                .iter()
-                .filter_map(|column| column.position.as_ref())
-                .any(|position| {
-                    position
-                        .logs
-                        .as_ref()
-                        .is_some_and(|logs| logs.query.len() > 4096 || logs.level > 2)
-                        || [&position.history, &position.selected_history]
-                            .into_iter()
-                            .flatten()
-                            .any(|id| id.len() > 128 || id.chars().any(char::is_control))
-                })
-        {
-            return Err("invalid reload canvas".into());
-        }
-        Ok(())
-    }
 }
 
 impl Default for Canvas {
@@ -134,7 +45,6 @@ impl Default for Canvas {
                 View::Audit,
                 View::Queue,
                 View::Questions,
-                View::History,
                 View::Logs,
                 View::Tasks,
             ]
@@ -147,7 +57,7 @@ impl Default for Canvas {
             })
             .collect(),
             active: 1,
-            next_id: 9,
+            next_id: 8,
             logs_return: None,
         }
     }
@@ -188,7 +98,7 @@ impl Canvas {
 
     pub(super) fn is_default_conversation(&self) -> bool {
         self.active == 1
-            && self.columns.len() == 8
+            && self.columns.len() == 7
             && self
                 .columns
                 .iter()
@@ -203,100 +113,6 @@ impl Canvas {
 }
 
 impl State {
-    pub(super) fn canvas_reload_snapshot(&mut self) -> ReloadCanvas {
-        self.canvas_save();
-        let canvas = &self.conversation.canvas;
-        ReloadCanvas {
-            columns: canvas
-                .columns
-                .iter()
-                .map(|column| ReloadColumn {
-                    id: column.id,
-                    view: column.view,
-                    position: column.position.as_ref().map(|position| ReloadPosition {
-                        content_focus: position.content_focus,
-                        detail: position.detail,
-                        detail_scroll: position.detail_scroll,
-                        history: position
-                            .history
-                            .as_ref()
-                            .map(|history| history.metadata.id.clone()),
-                        history_archived: position.history_archived,
-                        selected_history: position.selected_history.clone(),
-                        events: position.events.for_reload(&self.events),
-                        logs: position.logs.as_ref().map(|logs| ReloadLogs {
-                            scrollback: logs.scrollback,
-                            query: logs.query.clone(),
-                            level: logs.level,
-                            filter_offset: logs.filter_offset,
-                        }),
-                    }),
-                })
-                .collect(),
-            active: canvas.active,
-            next_id: canvas.next_id,
-            logs_return: canvas.logs_return,
-        }
-    }
-
-    pub(super) fn canvas_restore_reload(&mut self, saved: ReloadCanvas) {
-        let active = saved.active;
-        self.conversation.canvas = Canvas {
-            columns: saved
-                .columns
-                .into_iter()
-                .map(|column| Column {
-                    id: column.id,
-                    view: column.view,
-                    position: column.position.map(|position| {
-                        let history = position
-                            .history
-                            .as_deref()
-                            .and_then(|id| crate::client::interface::history::read(id).ok())
-                            .map(std::sync::Arc::new);
-                        Position {
-                            content_focus: position.content_focus,
-                            selected: position
-                                .selected_history
-                                .as_deref()
-                                .and_then(|id| {
-                                    self.conversation
-                                        .sessions
-                                        .iter()
-                                        .position(|session| session.id == id)
-                                })
-                                .unwrap_or_default(),
-                            selected_agent: None,
-                            detail: column.view == View::History
-                                && position.detail
-                                && history.is_some(),
-                            detail_scroll: position.detail_scroll,
-                            question_id: None,
-                            history,
-                            history_archived: position.history_archived,
-                            scoped_history: None,
-                            selected_history: position.selected_history,
-                            audit: Default::default(),
-                            events: position.events.position(&self.events),
-                            logs: position.logs.map(|logs| LogPosition {
-                                scrollback: logs.scrollback,
-                                query: logs.query,
-                                level: logs.level,
-                                filter_offset: logs.filter_offset,
-                            }),
-                            tasks: None,
-                        }
-                    }),
-                })
-                .collect(),
-            active,
-            next_id: saved.next_id,
-            logs_return: saved.logs_return,
-        };
-        self.canvas_restore(active);
-        self.canvas_sync_logs();
-    }
-
     pub(super) fn canvas_sync_logs(&mut self) {
         self.conversation.logs_open = self.conversation.view == View::Logs;
         self.raw_logs = self.conversation.logs_open;
@@ -310,17 +126,7 @@ impl State {
             detail: self.conversation.detail,
             detail_scroll: self.conversation.detail_scroll,
             question_id: self.conversation.question_id.clone(),
-            history: self.conversation.history.clone(),
-            history_archived: self.conversation.history_archived,
             scoped_history: self.conversation.scoped_history.clone(),
-            selected_history: (self.conversation.view == View::History)
-                .then(|| {
-                    self.conversation
-                        .sessions
-                        .get(self.conversation.selected)
-                        .map(|session| session.id.clone())
-                })
-                .flatten(),
             audit: self.audit.position(),
             events: self.events.position(),
             logs: (self.conversation.view == View::Logs).then(|| LogPosition {
@@ -361,9 +167,6 @@ impl State {
             let column = &mut self.conversation.canvas.columns[index];
             (column.view, column.position.take())
         };
-        let selected_history = position
-            .as_ref()
-            .and_then(|position| position.selected_history.clone());
         self.conversation.view = view;
         if let Some(position) = position {
             self.conversation.content_focus = position.content_focus;
@@ -372,8 +175,6 @@ impl State {
             self.conversation.detail = position.detail;
             self.conversation.detail_scroll = position.detail_scroll;
             self.conversation.question_id = position.question_id;
-            self.conversation.history = position.history;
-            self.conversation.history_archived = position.history_archived;
             self.conversation.scoped_history = position.scoped_history;
             self.audit.restore_position(&position.audit);
             self.events.restore_position(&position.events);
@@ -399,10 +200,7 @@ impl State {
                     .events
                     .restore_position(&events::EventPosition::default()),
                 View::Audit => self.audit.restore_position(&Default::default()),
-                View::History => {
-                    self.conversation.history = None;
-                    self.conversation.history_archived = false;
-                }
+                View::History => {}
                 View::Queue => {
                     self.conversation.selected = 0;
                     self.conversation.detail = false;
@@ -422,38 +220,11 @@ impl State {
             }
         }
         self.canvas_sync_logs();
-        self.conversation.history_width = 0;
-        self.conversation.history_rows.clear();
         self.conversation.drawn_agents.clear();
         self.conversation.list_start = 0;
         self.conversation.list_count = 0;
         self.help = false;
         self.notice = None;
-        if view == View::History && self.conversation.scoped_history.is_none() && !self.preview {
-            let filter = if self.conversation.history_archived {
-                crate::client::interface::history::archive::Filter::Archived
-            } else {
-                crate::client::interface::history::archive::Filter::Active
-            };
-            match crate::client::interface::history::archive::sessions(filter) {
-                Ok(sessions) => self.conversation.sessions = sessions,
-                Err(error) => self.notice = Some(format!("Could not read history: {error}")),
-            }
-        }
-        if view == View::History {
-            if let Some(id) = selected_history {
-                self.conversation.selected = self
-                    .conversation
-                    .sessions
-                    .iter()
-                    .position(|session| session.id == id)
-                    .unwrap_or_default();
-            }
-            self.conversation.selected = self
-                .conversation
-                .selected
-                .min(self.conversation.sessions.len().saturating_sub(1));
-        }
         self.dirty = true;
     }
 
@@ -739,22 +510,6 @@ mod tests {
         assert!(state.conversation.composer.left());
         state.conversation.target = Some("example-builder".into());
         state.conversation.editing = Some("example-request".into());
-        state
-            .conversation
-            .sessions
-            .push(crate::client::interface::history::SessionSummary {
-                id: "session-kept".into(),
-                workspace: "/fixture".into(),
-                title: "Retained conversation".into(),
-                summary: None,
-                created_at_ms: 1,
-                updated_at_ms: 2,
-                message_count: 1,
-                truncated_messages: 0,
-                current: true,
-                archived: false,
-            });
-        let sessions = state.conversation.sessions.clone();
         state.events.ingest_event(
             "agent",
             &json!({"type":"ssmcp.message","text":"A retained reply."}),
@@ -782,7 +537,6 @@ mod tests {
         assert!(state.chat_command("/close").unwrap());
         assert_eq!(state.conversation.canvas.columns.len(), 1);
         assert_eq!(state.chat_data(), data);
-        assert_eq!(state.conversation.sessions, sessions);
         assert_eq!(state.events.snapshot()["retained_events"], 1);
         assert_eq!(
             (
@@ -898,92 +652,6 @@ mod tests {
     }
 
     #[test]
-    fn history_columns_restore_their_own_shared_source_and_rebuild_rows() {
-        use crate::client::interface::history::{
-            Conversation as SavedConversation, Message, SessionMetadata,
-        };
-        use std::sync::Arc;
-
-        let history = |id: &str, content: &str| {
-            Arc::new(SavedConversation {
-                metadata: SessionMetadata {
-                    schema: "test.history".into(),
-                    schema_version: 1,
-                    id: id.into(),
-                    workspace: "/fixture".into(),
-                    created_at_ms: 0,
-                    truncated_messages: 0,
-                },
-                messages: vec![Message {
-                    id: format!("{id}-message"),
-                    role: "assistant".into(),
-                    content: content.into(),
-                    kind: "answer".into(),
-                    created_at_ms: 0,
-                    truncated: false,
-                }],
-            })
-        };
-        let first = history("first", "First history body.");
-        let second = history("second", "Second history body.");
-        let mut state = state();
-        state
-            .conversation
-            .sessions
-            .push(crate::client::interface::history::SessionSummary {
-                id: "first".into(),
-                workspace: "/fixture".into(),
-                title: "Fixture history".into(),
-                summary: None,
-                created_at_ms: 0,
-                updated_at_ms: 0,
-                message_count: 1,
-                truncated_messages: 0,
-                current: false,
-                archived: false,
-            });
-        state.canvas_focus(View::History);
-        assert_eq!(state.conversation.sessions[0].id, "first");
-        assert!(
-            state.notice.is_none(),
-            "preview must not read global history"
-        );
-        state.conversation.history = Some(Arc::clone(&first));
-        state.conversation.detail = true;
-        assert!(
-            state
-                .chat_history_rows(10)
-                .join("\n")
-                .contains("First history body.")
-        );
-        state.canvas_new(View::History);
-        assert!(state.conversation.history.is_none());
-        assert!(!state.conversation.detail);
-        state.conversation.history = Some(Arc::clone(&second));
-        state.conversation.detail = true;
-        assert!(
-            state
-                .chat_history_rows(10)
-                .join("\n")
-                .contains("Second history body.")
-        );
-        state.canvas_move(-1);
-        assert!(Arc::ptr_eq(
-            state.conversation.history.as_ref().unwrap(),
-            &first
-        ));
-        let rows = state.chat_history_rows(10).join("\n");
-        assert!(rows.contains("First history body.") && !rows.contains("Second history body."));
-        state.canvas_move(1);
-        assert!(Arc::ptr_eq(
-            state.conversation.history.as_ref().unwrap(),
-            &second
-        ));
-        let rows = state.chat_history_rows(10).join("\n");
-        assert!(rows.contains("Second history body.") && !rows.contains("First history body."));
-    }
-
-    #[test]
     fn output_home_and_end_keep_the_active_duplicate_chat_and_draft() {
         let mut state = state();
         state.canvas_new(View::Activity);
@@ -1024,7 +692,6 @@ mod tests {
                 View::Audit,
                 View::Queue,
                 View::Questions,
-                View::History,
                 View::Logs,
                 View::Tasks
             ],
@@ -1190,57 +857,5 @@ mod tests {
         for field in ["selected_id", "detail", "detail_scroll", "jobs"] {
             assert_eq!(restored[field], task[field], "{field}");
         }
-    }
-}
-
-#[cfg(test)]
-mod reload_history_tests {
-    use super::*;
-
-    fn summary(id: &str) -> crate::client::interface::history::SessionSummary {
-        crate::client::interface::history::SessionSummary {
-            id: id.into(),
-            workspace: "/fixture".into(),
-            title: id.into(),
-            summary: None,
-            created_at_ms: 1,
-            updated_at_ms: 1,
-            message_count: 0,
-            truncated_messages: 0,
-            current: false,
-            archived: true,
-        }
-    }
-
-    #[test]
-    fn reload_restores_archive_mode_and_selects_history_by_id_after_reordering() {
-        let mut before = State::new(24, 80, &Ui::default());
-        before.preview = true;
-        before.canvas_focus(View::History);
-        before.conversation.history_archived = true;
-        before.conversation.sessions = vec![summary("first"), summary("selected")];
-        before.conversation.selected = 1;
-        let saved = before.canvas_reload_snapshot();
-        saved.validate().unwrap();
-        let saved: ReloadCanvas =
-            serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
-
-        let mut after = State::new(24, 80, &Ui::default());
-        after.preview = true;
-        after.conversation.sessions = vec![summary("selected"), summary("first")];
-        after.canvas_restore_reload(saved);
-        assert_eq!(after.conversation.view, View::History);
-        assert!(after.conversation.history_archived);
-        assert_eq!(after.conversation.selected, 0);
-        assert_eq!(
-            after.conversation.sessions[after.conversation.selected].id,
-            "selected"
-        );
-
-        let saved = after.canvas_reload_snapshot();
-        after.conversation.sessions = vec![summary("first")];
-        after.canvas_restore_reload(saved);
-        assert_eq!(after.conversation.selected, 0);
-        assert!(after.conversation.history.is_none());
     }
 }

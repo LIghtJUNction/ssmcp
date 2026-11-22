@@ -6,7 +6,7 @@ use crate::client::{
 };
 
 const DOCS: &str = "https://developers.openai.com/plugins/reference";
-const NO_URL: &str = "No ChatGPT URL saved for this conversation · use /chatgpt set <URL>";
+const NO_URL: &str = "No ChatGPT URL is set for this live session · use /chatgpt set <URL>";
 const LINK_USAGE: &str = "Use /chatgpt set <URL>, /chatgpt open, /chatgpt copy, or /chatgpt clear";
 
 pub(super) struct Panel {
@@ -26,10 +26,10 @@ fn link_command(owner: Option<&HistoryOwner>, arguments: &str) -> Result<LinkOut
     let rest = rest.trim();
     match (verb, rest) {
         ("set", url) if !url.is_empty() => {
-            let owner = owner.ok_or("Start or resume a saved conversation before saving a URL")?;
+            let owner = owner.ok_or("Start a live conversation before saving a URL")?;
             store::change_url(owner, Some(url))?;
             Ok(LinkOutcome::Notice(
-                "ChatGPT URL saved for this conversation",
+                "ChatGPT URL kept for this live session",
             ))
         }
         ("clear", "") => {
@@ -37,7 +37,7 @@ fn link_command(owner: Option<&HistoryOwner>, arguments: &str) -> Result<LinkOut
                 .map(|owner| store::change_url(owner, None))
                 .transpose()?;
             Ok(LinkOutcome::Notice(if changed == Some(true) {
-                "Saved ChatGPT URL removed"
+                "ChatGPT URL cleared from this session"
             } else {
                 NO_URL
             }))
@@ -69,17 +69,17 @@ fn observation(text: &mut String, key: &str, value: Option<&store::Observed>) {
         let _ = writeln!(text, "{}", value.value);
         let _ = writeln!(text, "Last observed · UTC Unix ms {}", value.observed_ms);
     } else {
-        let _ = writeln!(text, "Not observed for this saved conversation");
+        let _ = writeln!(text, "Not observed for this live conversation");
     }
     text.push('\n');
 }
 
 fn panel_text(command: &str, record: Option<&store::Saved>) -> String {
     let mut text = String::from(
-        "OpenAI caller metadata · Esc closes\n\nSource: MCP tools/call _meta · saved conversation\n\n",
+        "OpenAI caller metadata · Esc closes\n\nSource: MCP tools/call _meta · live conversation\n\n",
     );
     if record.is_none() {
-        text.push_str("Start or resume a saved conversation to see its observations.\n\n");
+        text.push_str("Start a live conversation to see its observations.\n\n");
     }
     if command != "/openai-subject" {
         observation(
@@ -99,6 +99,17 @@ fn panel_text(command: &str, record: Option<&store::Saved>) -> String {
 }
 
 impl State {
+    pub(super) fn chat_show_local_text(&mut self, text: String) {
+        let owner = (!self.preview).then(saved::current_owner).flatten();
+        self.conversation.openai_panel = Some(Panel { owner, text });
+        self.conversation.about = false;
+        self.conversation.plugin_help = false;
+        self.conversation.help_scroll = 0;
+        self.help = true;
+        self.conversation.content_focus = true;
+        self.dirty = true;
+    }
+
     pub(super) fn chat_openai_command(&mut self, command: &str, args: &str) -> Result<(), String> {
         let owner = (!self.preview).then(saved::current_owner).flatten();
         match command {

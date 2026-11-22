@@ -1,4 +1,4 @@
-//! Process-local capabilities for writing to an explicitly captured history.
+//! Process-local capabilities for appending to an explicitly captured live log.
 #[cfg(test)]
 use super::HistoryStore;
 use super::{Committed, HISTORY, History, random_id, with};
@@ -104,6 +104,12 @@ pub(super) struct Ownership {
 }
 
 impl Ownership {
+    pub(super) fn is_live(&self, id: &str) -> bool {
+        self.issued
+            .get(id)
+            .is_some_and(|entry| entry.id.strong_count() != 0)
+    }
+
     pub(super) fn select(&mut self, id: &str, pending: bool) -> HistoryOwner {
         self.issued.retain(|_, entry| entry.id.strong_count() != 0);
         let entry = self.issued.get_mut(id);
@@ -227,7 +233,7 @@ pub(super) fn with_owner<T>(
     with(|history| operation(history, owner))
 }
 
-/// Append using the captured capability and return the persisted message ID.
+/// Append using the captured capability and return the live message ID.
 pub(crate) fn record_owned_agent(
     owner: &HistoryOwner,
     id: Option<&str>,
@@ -438,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reserved_inactive_owner_can_materialize_only_its_own_file() {
+    fn a_reserved_inactive_owner_can_materialize_only_its_own_log() {
         let temp = super::super::tests::Temporary::new();
         let mut history = temp.history();
         history.record_request("b", "Saved B").unwrap();
@@ -464,25 +470,20 @@ mod tests {
     }
 
     #[test]
-    fn an_inactive_owner_cannot_write_through_another_clients_lease() {
+    fn separate_process_logs_do_not_share_records_or_writer_capabilities() {
         let temp = super::super::tests::Temporary::new();
-        let mut history = temp.history();
-        history.record_request("b", "Saved B").unwrap();
-        let b = history.current().unwrap().unwrap();
-        history.release_current();
-        history.record_request("a", "Saved A").unwrap();
-        let a = history.capture_owner().unwrap();
-        history.resume(&b.metadata.id).unwrap();
-
-        // Separate History instances open independent file handles, as another client does.
-        let mut other = temp.history();
-        let original_a = other.resume(a.id()).unwrap();
-        let error = history
-            .record_owned(&a, "assistant", "Blocked reply", None)
-            .unwrap_err();
-        assert!(error.contains("history_owner_unavailable"), "{error}");
-        assert_eq!(other.current().unwrap().unwrap(), original_a);
-        assert_eq!(history.current().unwrap().unwrap(), b);
+        let mut first = temp.history();
+        first.record_request("a", "Process A").unwrap();
+        let owner = first.capture_owner().unwrap();
+        let mut second = temp.history();
+        assert!(second.read(owner.id()).is_err());
+        assert!(
+            second
+                .record_owned(&owner, "assistant", "Cross-process reply", None)
+                .is_err()
+        );
+        assert!(second.current().unwrap().is_none());
+        assert_eq!(first.read(owner.id()).unwrap().messages.len(), 1);
     }
 
     #[test]
@@ -518,9 +519,8 @@ mod tests {
         );
         assert_eq!(history.current().unwrap().unwrap(), b);
 
-        // The thread survives as a tombstone, including across archive restore.
-        history.archive_change(Some(first.id()), true).unwrap();
-        history.archive_change(Some(first.id()), false).unwrap();
+        // A revoked owner remains a tombstone for its original verified thread.
+        history.ownership.revoke(first.id());
         let old = history.bind_owner(identity(0)).unwrap();
         assert_eq!(old, first);
         let error = history

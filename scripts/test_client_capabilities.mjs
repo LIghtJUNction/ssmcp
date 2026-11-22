@@ -194,14 +194,14 @@ test('say preserves Markdown, kind and retry identity through the registered mes
       assert.deepEqual(request.arguments,requests[index]);
       return {ok:true,value:{isError:false,content:[],structuredContent:{
         shown:true,accepted:true,message_id:'message-'+index,
-        kind:request.arguments.kind??'progress',duplicate:index===1,history_saved:true,
+        kind:request.arguments.kind??'progress',duplicate:index===1,recorded:true,storage:'memory',
       }}};
     });
   success(record);
   assert.equal(record.requests.length,3);
   assert.deepEqual(value(record),requests.map((request,index)=>({
     shown:true,accepted:true,message_id:'message-'+index,
-    kind:request.kind??'progress',duplicate:index===1,history_saved:true,
+    kind:request.kind??'progress',duplicate:index===1,recorded:true,storage:'memory',
   })));
 });
 

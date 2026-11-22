@@ -21,7 +21,6 @@ mod paste;
 mod questions;
 mod queue;
 mod receipts;
-pub(super) mod reload_state;
 mod sessions;
 #[cfg(all(test, target_os = "linux"))]
 mod skill_picker_tests;
@@ -52,7 +51,7 @@ impl View {
             Self::Agents => "sessions",
             Self::Queue => "queue",
             Self::Questions => "questions",
-            Self::History => "history",
+            Self::History => "Live logs",
             Self::Logs => "Logs",
             Self::Tasks => "Tasks",
         }
@@ -63,7 +62,7 @@ impl View {
             Self::Audit => Self::Queue,
             Self::Agents => Self::Activity,
             Self::Queue => Self::Questions,
-            Self::Questions => Self::History,
+            Self::Questions => Self::Logs,
             Self::History => Self::Logs,
             Self::Logs => Self::Tasks,
             Self::Tasks => Self::Agents,
@@ -181,7 +180,6 @@ pub(super) struct Conversation {
     input_stamp: Option<InputStamp>,
     input_command: Option<String>,
     restored: bool,
-    reload_input_history: Option<crate::client::composer::InputHistory>,
     question_id: Option<String>,
     answers: BTreeMap<String, Composer>,
     finish_choices: BTreeMap<String, crate::client::interface::questions::FinishChoice>,
@@ -197,22 +195,16 @@ pub(super) struct Conversation {
     about: bool,
     plugin_help: bool,
     openai_panel: Option<openai::Panel>,
-    sessions: Vec<crate::client::interface::history::SessionSummary>,
-    pub(super) history_list_stale: bool,
-    history_archived: bool,
     scoped_history: Option<history::ScopedHistoryHandle>,
-    history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
-    history_rows: Vec<String>,
-    pub(super) history_width: u16,
 }
 
 impl Conversation {
     pub(super) fn snapshot(&self) -> Value {
-        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"history",View::Logs=>"logs",View::Tasks=>"tasks" },
+        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"live_logs",View::Logs=>"logs",View::Tasks=>"tasks" },
             "focus":if self.content_focus {"content"} else {"input"},
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"native_recipient":self.native_recipient,"native_pending":self.native_pending.is_some(),"editing":self.editing,
-            "force_pending":self.force_task.is_some(),"history_archived":self.history_archived,
+            "force_pending":self.force_task.is_some(),
             "thread_history":self.scoped_history.as_ref().map(|history|history.lock().unwrap_or_else(|error|error.into_inner()).snapshot()),
             "goal":self.goal.snapshot(),
             "process_id":self.process_id,"group_selected":self.groups.selected.keys().collect::<Vec<_>>(),
@@ -438,13 +430,6 @@ impl State {
             return;
         };
         self.events.recall_message(&identity);
-        if let Some(history) = self.conversation.history.as_mut() {
-            std::sync::Arc::make_mut(history)
-                .messages
-                .retain(|message| message.id != identity);
-            self.conversation.history_width = 0;
-            self.conversation.history_rows.clear();
-        }
         // The audit transcript keeps the actual queue acceptance and its later
         // confirmed recall; only the current conversation presentation retracts it.
         self.log_raw(
@@ -509,7 +494,6 @@ impl State {
             });
             self.conversation.editing = context.editing;
             self.conversation.parked = context.parked;
-            self.chat_restore_reload_input();
             self.conversation.restored = true;
             self.chat_restore_interrupted_force_send();
         }
@@ -818,6 +802,40 @@ impl State {
                     .ok_or("No agent message is available to copy")?;
                 self.chat_start_input(attachments::Source::Copy(text), true)?;
             }
+            "/invite" => {
+                let prompt = crate::client::invite::current_prompt(rest)?;
+                let copied = self.chat_start_input(attachments::Source::Copy(prompt.clone()), true);
+                self.chat_show_local_text(format!("Invitation · Esc closes\n\n{prompt}"));
+                if let Err(error) = copied {
+                    self.notice = Some(format!(
+                        "{error} · The invitation remains visible for manual copy"
+                    ));
+                }
+            }
+            "/worker" => {
+                use crate::client::worker_control::{self, Command};
+                if self.preview {
+                    return Err("Preview does not manage live workers".into());
+                }
+                match worker_control::parse(rest)? {
+                    Command::List => {
+                        let text = crate::client::worker_window::linked_snapshot().map(|pool| {
+                            let count = |name: &str| pool[name].as_u64().unwrap_or(0);
+                            format!("SSMCP workers · Esc closes\n\nSession: {}\nPID: {}\n\nStations: {} · target: {}\nRegistered: {}\nWorking: {} · standby: {} · offline: {} · closing: {}\nQueued: {}\n\n/worker +N adds stations\n/worker -N retires stations after acknowledgement",
+                                pool["client_id"].as_str().unwrap_or("unavailable"), count("process_id"),
+                                count("total"), pool["desired_total"].as_u64().unwrap_or_else(|| count("total")),
+                                count("registered_workers"), count("working"), count("idle"), count("offline"), count("retiring"), count("queued"))
+                        }).unwrap_or_else(|| "SSMCP workers · Esc closes\n\nNo worker window is connected.\nUse /worker +N to open one with N offline stations.".into());
+                        self.chat_show_local_text(text);
+                    }
+                    Command::Delta(delta) => {
+                        worker_control::enqueue_delta(delta)?;
+                        self.notice = Some(
+                            "Worker change queued · active workers must confirm departure".into(),
+                        );
+                    }
+                }
+            }
             "/login" => self.chat_login(rest)?,
             "/allow" => self.chat_allow(rest)?,
             "/logout" => self.chat_logout(rest)?,
@@ -830,23 +848,9 @@ impl State {
                     true,
                 )?;
             }
-            "/context" | "/memory" | "/compact" | "/fork" | "/switch" => {
-                self.chat_start_input(
-                    attachments::Source::Context {
-                        command: command[1..].into(),
-                        arguments: rest.into(),
-                    },
-                    true,
-                )?;
-            }
-            "/resume" => {
-                if !rest.is_empty() {
-                    return Err("Use /resume to choose a saved conversation".into());
-                }
-                self.chat_resume();
-            }
-            "/archive" | "/archived" | "/unarchive" => {
-                self.chat_archive_command(command, rest)?;
+            "/context" | "/memory" | "/compact" | "/fork" | "/switch" | "/resume" | "/archive"
+            | "/archived" | "/unarchive" => {
+                return Err("Saved history, archives and context checkpoints have been removed. This session keeps only live process logs.".into());
             }
             "/pi" | "/cc" | "/codex" => {
                 if self.preview {
@@ -923,8 +927,7 @@ impl State {
                     "audit" => View::Audit,
                     "queue" => View::Queue,
                     "questions" => View::Questions,
-                    "history" => View::History,
-                    _ => return Err("Use /new [chat|agents|audit|queue|questions|history]".into()),
+                    _ => return Err("Use /new [chat|agents|audit|queue|questions]".into()),
                 };
                 self.canvas_new(view);
             }
@@ -1390,7 +1393,9 @@ impl State {
                     }
                 }
             }
-            View::History => self.chat_resume_selected(),
+            View::History => {
+                self.notice = Some("Live logs are read-only · Esc returns to Sessions".into());
+            }
             View::Tasks => {
                 self.conversation.tasks.open();
             }
@@ -1420,16 +1425,13 @@ impl State {
             View::Logs => self.scroll_logs(-delta),
             View::Tasks => self.conversation.tasks.scroll_by(delta),
             View::Agents if self.conversation.detail => self.audit.scroll_by(delta),
-            View::Queue | View::History if self.conversation.detail => {
+            View::History => {
                 self.conversation.detail_scroll =
                     self.conversation.detail_scroll.saturating_add_signed(delta);
             }
-            View::History => {
-                self.conversation.selected = self
-                    .conversation
-                    .selected
-                    .saturating_add_signed(delta)
-                    .min(self.conversation.sessions.len().saturating_sub(1));
+            View::Queue if self.conversation.detail => {
+                self.conversation.detail_scroll =
+                    self.conversation.detail_scroll.saturating_add_signed(delta);
             }
             view => {
                 let data = self.chat_data();
@@ -1744,7 +1746,6 @@ impl State {
                 self.conversation.content_focus = self.help;
             }
             Key::Layout => match self.conversation.view.next() {
-                View::History => self.chat_resume(),
                 View::Questions => self.chat_questions(),
                 view => self.chat_change_view(view),
             },
@@ -1759,11 +1760,7 @@ impl State {
             }
             Key::FocusBack => self.conversation.content_focus = !content,
             Key::Up | Key::Down => {
-                let page = if self.conversation.view == View::History && !self.conversation.detail {
-                    self.conversation.list_count
-                } else {
-                    usize::from(self.geometry.log_rows.saturating_sub(1))
-                };
+                let page = usize::from(self.geometry.log_rows.saturating_sub(1));
                 let step = isize::try_from(page.max(1)).unwrap_or(isize::MAX);
                 self.chat_page(if matches!(key, Key::Up) { -step } else { step });
             }
@@ -1952,10 +1949,8 @@ impl State {
                         self.dirty = true;
                         return;
                     }
-                    if matches!(
-                        self.conversation.view,
-                        View::Agents | View::Queue | View::History
-                    ) && !self.conversation.detail
+                    if matches!(self.conversation.view, View::Agents | View::Queue)
+                        && !self.conversation.detail
                     {
                         if self.conversation.view == View::Agents
                             && x >= self.chat_agent_list_width()
@@ -2024,17 +2019,7 @@ impl State {
             return;
         }
         if self.conversation.view == View::History {
-            if self.conversation.scoped_history.is_some() {
-                self.chat_change_view(View::Agents);
-                return;
-            }
-            if self.conversation.detail {
-                self.conversation.detail = false;
-                self.conversation.content_focus = true;
-                self.notice = None;
-            } else {
-                self.chat_change_view(View::Activity);
-            }
+            self.chat_change_view(View::Agents);
             return;
         }
         if self.conversation.view == View::Agents {
@@ -2378,7 +2363,7 @@ impl State {
         self.conversation.input_command = original;
         self.notice = Some(
             if copying {
-                "Copying the latest agent message…"
+                "Copying text to the system clipboard…"
             } else if web {
                 "Requesting the local browser or clipboard…"
             } else if context {
@@ -2430,7 +2415,7 @@ impl State {
                 ));
             }
             Ok(attachments::Loaded::Copied) => {
-                self.notice = Some("Latest agent message copied to the system clipboard".into());
+                self.notice = Some("Text copied to the system clipboard".into());
             }
             Ok(attachments::Loaded::WebNotice(notice)) => self.notice = Some(notice.into()),
             Ok(attachments::Loaded::Context(text)) => {
@@ -2817,10 +2802,7 @@ impl State {
             };
             details.extend([
                 (field(selected, "model").into(), PanelTone::Normal),
-                (
-                    format!("{calls} calls in retained history"),
-                    PanelTone::Muted,
-                ),
+                (format!("{calls} calls in live logs"), PanelTone::Muted),
                 (
                     format!("{running} running · {}", field(selected, "status")),
                     tone,
@@ -2928,9 +2910,6 @@ impl State {
         let relative = row.checked_sub(body_top(self.geometry.rows) + 1)?;
         if relative >= self.geometry.log_rows.saturating_sub(1) {
             return None;
-        }
-        if self.conversation.view == View::History {
-            return self.chat_history_list_hit(usize::from(relative));
         }
         let index = usize::from(relative / 2);
         (index < self.conversation.list_count).then_some(self.conversation.list_start + index)
@@ -3185,8 +3164,7 @@ impl State {
                         if let Some(history)=&self.conversation.scoped_history {
                             return format!("{} · live records · PgUp/PgDn · Esc Sessions",history.lock().unwrap_or_else(|error|error.into_inner()).title());
                         }
-                        return if self.conversation.detail { "Saved conversation · PgUp/PgDn · type to continue · Esc list".into() }
-                            else { "↑↓ select · Enter resume · Esc back".into() };
+                        return "Live logs · select a current member in Sessions · Esc back".into();
                     }
                     if self.conversation.view == View::Questions {
                         return self.question_navigation_hint().into();
@@ -3196,9 +3174,9 @@ impl State {
                             "Esc · back to Sessions · ←/→ panels".into()
                         } else {
                             if selected_agent.as_ref().is_some_and(|entry| field(entry, "kind") == "observed") {
-                                "Esc back · h history · Enter call history · ←/→ panels".into()
+                                "Esc back · h live logs · Enter call audit · ←/→ panels".into()
                             } else {
-                                format!("Esc back · h history · Enter recipient · {} selected · Space/g group · i IDs",
+                                format!("Esc back · h live logs · Enter recipient · {} selected · Space/g group · i IDs",
                                     self.conversation.groups.selected.len())
                             }
                         };
@@ -3251,11 +3229,11 @@ impl State {
                     format!("{}{suffix}", self.conversation.canvas.label(g.left))
                 };
                 if g.left < 32 {
-                    self.chat_line(&format!("ssmcp · {label}"), PanelTone::Muted, g.left)
+                    self.chat_line(&format!("SSMCP main · {label}"), PanelTone::Muted, g.left)
                 } else {
-                    let label = fit(&label, g.left.saturating_sub(11));
+                    let label = fit(&label, g.left.saturating_sub(16));
                     let title = fit(
-                        &format!("  ssmcp{}", self.context_label),
+                        &format!("  SSMCP main{}", self.context_label),
                         g.left.saturating_sub(label.width() as u16 + 4),
                     );
                     let gap = usize::from(g.left).saturating_sub(title.width() + label.width() + 2);
@@ -3349,7 +3327,7 @@ impl State {
                             None,
                         )];
                         section.push((
-                            " Click select · right-click history".into(),
+                            " Click select · right-click live logs".into(),
                             PanelTone::Muted,
                             None,
                         ));
@@ -4136,13 +4114,17 @@ mod tests {
         };
         let mut state = super::super::preview_state(24, 100, &ui);
         for (cwd, title, expected) in [
-            ("/workspace/alpha-project/", None, "ssmcp  /  alpha-project"),
+            (
+                "/workspace/alpha-project/",
+                None,
+                "SSMCP main  /  alpha-project",
+            ),
             (
                 "/workspace/终端",
                 Some("修复输入框"),
-                "ssmcp  /  终端  /  修复输入框",
+                "SSMCP main  /  终端  /  修复输入框",
             ),
-            ("", None, "ssmcp"),
+            ("", None, "SSMCP main"),
         ] {
             state.set_context(cwd, title);
             let screen = display(&mut state).screen().contents();
@@ -4155,8 +4137,8 @@ mod tests {
         state.chat_change_view(View::Queue);
         let screen = display(&mut state).screen().contents();
         let header = screen.lines().next().unwrap().trim();
-        assert!(header.starts_with("ssmcp  /  alpha-project  /  Review uploads"));
-        assert!(header.ends_with("queue  4/8"));
+        assert!(header.starts_with("SSMCP main  /  alpha-project  /  Review uploads"));
+        assert!(header.ends_with("queue  4/7"));
     }
 
     #[test]
@@ -4520,7 +4502,7 @@ mod tests {
                     let visible = shot.screen().contents();
                     assert!(visible.contains("Sessions"));
                     assert!(visible.contains("Esc back"), "{cols}×{rows}: {visible}");
-                    assert!(visible.contains("h history"), "{cols}×{rows}: {visible}");
+                    assert!(visible.contains("h live logs"), "{cols}×{rows}: {visible}");
                     assert!(!visible.contains("collab.join"));
                 }
                 state.chat_key(Key::Escape);

@@ -8,30 +8,8 @@ impl History {
             return Ok(active.metadata.id.clone());
         }
         let owner = self.capture_owner()?;
-        let _lock = self.directory.lock()?;
-        let metadata = SessionMetadata {
-            schema: SCHEMA.into(),
-            schema_version: 1,
-            id: owner.id().to_owned(),
-            workspace: self.workspace.clone(),
-            created_at_ms: now_ms(),
-            truncated_messages: 0,
-        };
-        let lease = self.lease(&metadata.id)?;
-        let conversation = Conversation {
-            metadata: metadata.clone(),
-            messages: Vec::new(),
-        };
-        let bytes = Self::encode(&conversation)?;
-        self.retain(&metadata.id, bytes.len())?;
-        self.directory
-            .write_atomic(&session_name(&metadata.id)?, &bytes)?;
-        self.ownership.materialized(&owner);
-        let id = metadata.id.clone();
-        self.active = Some(Active {
-            metadata,
-            _lease: lease,
-        });
+        self.materialize(&owner)?;
+        let id = owner.id().to_owned();
         Ok(id)
     }
 
@@ -40,7 +18,6 @@ impl History {
             .active
             .as_ref()
             .is_none_or(|active| active.metadata.id != id)
-            || self.archive_index()?.contains(id)
         {
             return Err(
                 "listener_conversation_changed: the original conversation is no longer active"
@@ -87,8 +64,7 @@ pub(crate) fn record_request_in(
     })
 }
 
-/// Used only by the small publication append. The History mutex prevents /resume
-/// or archive from changing its destination until that append completes.
+/// The live-log mutex keeps the accepted input owner stable during publication.
 pub(crate) fn with_listener_conversation<T>(
     id: &str,
     publish: impl FnOnce() -> T,

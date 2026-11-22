@@ -181,7 +181,7 @@ fn output(text: &str, draft: &Draft, read_only: bool) {
 }
 
 enum Update {
-    History(Value),
+    Events(Value),
     Outputs(Value),
     Error(String),
 }
@@ -202,11 +202,11 @@ async fn observe(
             else if target.kind==directory::Kind::Thread{args["main"]=json!(true);}
             if let Some(cursor)=&cursor{args["cursor"]=cursor.clone();}
             if let Some(generation)=&generation{args["generation"]=generation.clone();}
-            let page=api.call(&credential,&target.client_id,"ssmcp.ui.history",args).await?;
-            cursor=Some(page.get("next_cursor").filter(|v|v.is_u64()).ok_or("chat history omitted its cursor")?.clone());
-            generation=Some(page.get("generation").filter(|v|v.is_string()).ok_or("chat history omitted its generation")?.clone());
-            let history_more=page["has_more"]==true;
-            tx.send(Update::History(page)).await.map_err(|_|"chat attachment closed")?;
+            let page=api.call(&credential,&target.client_id,"ssmcp.ui.events",args).await?;
+            cursor=Some(page.get("next_cursor").filter(|v|v.is_u64()).ok_or("chat events omitted its cursor")?.clone());
+            generation=Some(page.get("generation").filter(|v|v.is_string()).ok_or("chat events omitted its generation")?.clone());
+            let events_more=page["has_more"]==true;
+            tx.send(Update::Events(page)).await.map_err(|_|"chat attachment closed")?;
             let mut args=json!({"action":"outputs","client_id":target.client_id,"cursor":output_cursor,"limit":64});
             if let Some(thread)=&target.thread_id{args["thread_id"]=json!(thread);}
             else if target.kind==directory::Kind::Thread{args["main"]=json!(true);}
@@ -225,7 +225,7 @@ async fn observe(
             output_generation=Some(page.get("generation").filter(|v|v.is_string()).ok_or("chat output omitted its generation")?.clone());
             let output_more=page["has_more"]==true;
             tx.send(Update::Outputs(page)).await.map_err(|_|"chat attachment closed")?;
-            if !history_more && !output_more{tokio::time::sleep(Duration::from_millis(500)).await;}
+            if !events_more && !output_more{tokio::time::sleep(Duration::from_millis(500)).await;}
             Ok(())
         }.await;
         if let Err(error) = result {
@@ -280,9 +280,9 @@ pub(super) async fn run(
             _=terminate.recv()=>break,
             update=rx.recv()=>match update.ok_or("chat observer ended")? {
                 Update::Error(message)=>return Err(message.into()),
-                Update::History(page)=>{
-                    if page["retention_gap_possible"]==true || page["truncated_since_cursor"]==true{eprintln!("\r\x1b[2KSome earlier history may be outside the retained process window.");}
-                    for event in page["events"].as_array().ok_or("chat history page has no events")? {
+                Update::Events(page)=>{
+                    if page["retention_gap_possible"]==true || page["truncated_since_cursor"]==true{eprintln!("\r\x1b[2KSome earlier events may be outside the retained process window.");}
+                    for event in page["events"].as_array().ok_or("chat event page has no events")? {
                         if let Some(text)=event["text"].as_str().filter(|text|!text.is_empty()){output(text,&draft,read_only);}
                     }
                 },

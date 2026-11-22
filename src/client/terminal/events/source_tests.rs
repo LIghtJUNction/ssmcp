@@ -16,7 +16,7 @@ use std::{
 };
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
-// These tests share the process-wide copy cache even while using separate JSONL fixtures.
+// These tests share the process-wide copy cache even while using separate in-memory session fixtures.
 static HISTORY_FIXTURES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct Scratch(PathBuf);
@@ -185,19 +185,6 @@ async fn call_scope_native_exec_keeps_creator_through_concurrency_reads_and_exit
             assert!(event.meta.scope.as_ref().unwrap().same_call(expected));
         }
     }
-    let encoded = serde_json::to_vec(&view.reload_display()).unwrap();
-    let mut restored = EventView::new();
-    restored.restore_reload_display(serde_json::from_slice(&encoded).unwrap());
-    assert_eq!(restored.events.len(), view.events.len());
-    assert!(
-        restored
-            .events
-            .iter()
-            .all(|event| event.meta.scope.is_none()
-                && event.meta.keys.is_empty()
-                && event.meta.message_id.is_none()
-                && !event.meta.started)
-    );
     runtime.shutdown().await;
 }
 
@@ -683,7 +670,7 @@ async fn verified_reply_routing(name: &str, arguments: Value) {
                 .await,
             a,
         );
-        history::resume(&b).unwrap();
+        history::resume_test_history(&b).unwrap();
         let second = verified(&runtime, 2, "456", 'b');
         let b_id = native_call(
             &runtime,
@@ -695,8 +682,8 @@ async fn verified_reply_routing(name: &str, arguments: Value) {
             .as_str()
             .unwrap()
             .to_owned();
-        let b_file = path.join(format!("{b}.jsonl"));
-        let b_bytes = std::fs::read(&b_file).unwrap();
+        let b_messages = history::read(&b).unwrap().messages;
+        assert!(!path.exists());
 
         // A fresh relay call after the switch uses the original authenticated binding.
         let late =
@@ -706,9 +693,10 @@ async fn verified_reply_routing(name: &str, arguments: Value) {
             .scope(native_call(&runtime, name, arguments.clone()))
             .await
             .unwrap();
-        assert_eq!(first["history_saved"], true);
+        assert_eq!(first["recorded"], true);
+        assert_eq!(first["storage"], "memory");
         assert_eq!(first["shown"], false);
-        assert_eq!(std::fs::read(&b_file).unwrap(), b_bytes);
+        assert_eq!(history::read(&b).unwrap().messages, b_messages);
         assert_eq!(messages::last_text().as_deref(), Some("B current reply"));
         let retry = verified(&runtime, 4, "123", 'a')
             .scope(native_call(&runtime, name, arguments))
@@ -748,7 +736,7 @@ async fn verified_reply_routing(name: &str, arguments: Value) {
             assert!(source.call.is_none());
             let bytes = crate::client::render::render_event_for_test(label, value, 100).unwrap();
             attached.log_scoped_event(label, value, &bytes, source.clone());
-            // A live projection can arrive twice (or after saved-text replay).
+            // The same live projection can be delivered twice.
             attached.log_scoped_event(label, value, &bytes, source);
         }
         for (owner, id) in [(&b, b_id.as_str()), (&a, first_id)] {
@@ -802,8 +790,8 @@ async fn verified_reply_routing(name: &str, arguments: Value) {
         assert_eq!(actual_b[1].id, b_id);
         assert_eq!(actual_b[2].content, "B concurrent");
 
-        history::archive::change(Some(&a), true).unwrap();
-        history::archive::change(Some(&a), false).unwrap();
+        // Releasing the live session invalidates earlier verified bindings.
+        history::release_current().unwrap();
         let stale = verified(&runtime, 5, "123", 'a')
             .scope(native_call(
                 &runtime,
@@ -821,7 +809,7 @@ async fn verified_reply_routing(name: &str, arguments: Value) {
 }
 
 #[tokio::test]
-async fn verified_ui_message_retries_stay_with_the_original_jsonl() {
+async fn verified_ui_message_retries_stay_with_the_original_memory_session() {
     verified_reply_routing(
         "ssmcp.ui.message",
         json!({"text":"A late reply","idempotency_key":"late_message"}),
@@ -830,7 +818,7 @@ async fn verified_ui_message_retries_stay_with_the_original_jsonl() {
 }
 
 #[tokio::test]
-async fn verified_ui_present_retries_stay_with_the_original_jsonl() {
+async fn verified_ui_present_retries_stay_with_the_original_memory_session() {
     verified_reply_routing(
         "ssmcp.ui.present",
         json!({"title":"A late reply","blocks":[{"type":"text","text":"A presentation fixture"}],
@@ -840,7 +828,7 @@ async fn verified_ui_present_retries_stay_with_the_original_jsonl() {
 }
 
 #[tokio::test]
-async fn rendered_messages_keep_distinct_jsonl_ids_across_reload() {
+async fn rendered_messages_keep_distinct_ids_in_the_live_projection() {
     use crate::{
         client::{interface::history, render},
         session::attach,
@@ -882,36 +870,24 @@ async fn rendered_messages_keep_distinct_jsonl_ids_across_reload() {
             assert_eq!(message.content, text);
             assert_eq!(value["text"], text);
             assert_eq!(value["message_id"].as_str(), Some(message.id.as_str()));
+            view.ingest_scoped_event(label, value, b"", source.clone());
             view.ingest_scoped_event(label, value, b"", source);
         }
 
-        let snapshot = serde_json::to_vec(&view.reload_display()).unwrap();
-        let mut restored = EventView::new();
-        restored.set_history_owner(Some(owner));
-        assert!(
-            restored
-                .restore_reload_display(serde_json::from_slice(&snapshot).unwrap())
-                .is_none()
-        );
-        restored.reconcile_reload_history(&saved);
-
-        let visible = restored.visible_ids();
-        let cards: Vec<_> = restored
+        let visible = view.visible_ids();
+        let cards: Vec<_> = view
             .events
             .iter()
             .filter(|event| visible.contains(&event.id))
             .map(|event| {
-                assert!(
-                    event.reload_index.is_some(),
-                    "expected a restored display card"
-                );
-                (event.history_id.as_deref(), event.text.as_str())
+                assert!(event.text.contains(text));
+                event.meta.message_id.as_deref().unwrap()
             })
             .collect();
         let expected: Vec<_> = saved
             .messages
             .iter()
-            .map(|message| (Some(message.id.as_str()), message.content.as_str()))
+            .map(|message| message.id.as_str())
             .collect();
         assert_eq!(cards, expected);
     })
@@ -933,9 +909,10 @@ async fn history_capture_is_lazy_and_headless_first_message_uses_its_reserved_ow
             .scope(async { current_source().require_owner().unwrap().clone() })
             .await;
         let read = first_call.scope(native_call(&runtime, "ssmcp.exec.list", json!({})));
-        // Dispatching a native observation reserves no JSONL.
+        // A read-only native observation creates no session record or directory.
         assert_eq!(read.await.unwrap()["jobs"], json!([]));
-        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
+        assert!(!path.exists());
+        assert!(history::sessions().unwrap().is_empty());
         assert!(history::current().unwrap().is_none());
         let nested = first_call
             .scope(async {
@@ -955,7 +932,8 @@ async fn history_capture_is_lazy_and_headless_first_message_uses_its_reserved_ow
             ))
             .await
             .unwrap();
-        assert_eq!(first["history_saved"], true);
+        assert_eq!(first["recorded"], true);
+        assert_eq!(first["storage"], "memory");
         assert_eq!(first["terminal_active"], false);
         let conversation = history::current().unwrap().unwrap();
         assert_eq!(conversation.metadata.id, reserved.id());

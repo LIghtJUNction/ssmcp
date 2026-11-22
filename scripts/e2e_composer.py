@@ -164,7 +164,7 @@ class Composer(Dashboard):
         if self.ui("/display/conversation")["draft"]["text"]:
             raise AssertionError("local command helper would overwrite a nonempty draft")
         front.send(command + "\r")
-        destination = {"/queue": ("queue", 4, 8), "/logs": ("logs", 7, 8)}[command]
+        destination = {"/queue": ("queue", 4, 7), "/logs": ("logs", 6, 7)}[command]
         front.until(lambda shot: column(shot) == destination, f"local {command} column")
 
     def activate_column(self, front, name):
@@ -178,7 +178,7 @@ class Composer(Dashboard):
 
     def wait_submitted(self, front, request_text, *, next_draft="", waiting=False):
         draft = next_draft or "Message the agent"
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8)
+        front.until(lambda shot: column(shot) == ("conversation", 2, 7)
                                  and request_text in body_text(shot)
                                  and shot["rows"][-1].lstrip().startswith("Queued ·")
                                  and request_text not in input_text(shot)
@@ -199,7 +199,7 @@ class Composer(Dashboard):
                     "the accepted request visible in the queue")
         self.check(record["status"] == "queued", "typed input is acknowledged by the server queue")
         self.focus_input(front)
-        front.until(lambda shot: column(shot) == ("queue", 4, 8) and not shot["hide_cursor"],
+        front.until(lambda shot: column(shot) == ("queue", 4, 7) and not shot["hide_cursor"],
                     "the visible Queue composer regaining input focus")
         return record
 
@@ -223,7 +223,7 @@ class Composer(Dashboard):
 
     def agents(self, front):
         self.focus_input(front)
-        # Queue, audit and history are independent columns. Reach the existing
+        # Queue and audit are independent columns. Reach the existing
         # conversation first, then exercise ordinary Left at the draft edge.
         self.activate_column(front, "conversation")
         self.focus_input(front)
@@ -231,7 +231,7 @@ class Composer(Dashboard):
         if draft["cursor"] != 0:
             raise AssertionError("agent panel helper requires the start of the current draft")
         front.send(LEFT)
-        front.until(lambda shot: column(shot) == ("sessions", 1, 8) and shot["hide_cursor"],
+        front.until(lambda shot: column(shot) == ("sessions", 1, 7) and shot["hide_cursor"],
                     "Left entering the adjacent Sessions column")
 
     def highlight_recipient(self, front, member=None):
@@ -250,7 +250,7 @@ class Composer(Dashboard):
             selected_key = "member:" + member["agent_id"]
         front.send(HOME + DOWN * index)
         front.until(
-            lambda shot: column(shot) == ("sessions", 1, 8) and shot["hide_cursor"]
+            lambda shot: column(shot) == ("sessions", 1, 7) and shot["hide_cursor"]
             and self.ui("/display/conversation")["selected_agent"] == selected_key,
             "the exact local recipient highlighted in Sessions",
         )
@@ -264,7 +264,7 @@ class Composer(Dashboard):
         # retain their explicit recipient label above the input.
         visible_recipient = f"To {label}"
         front.until(lambda shot: visible_recipient in text(shot)
-                                 and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
+                                 and column(shot) == ("conversation", 2, 7) and not shot["hide_cursor"],
                     "selected recipient returning to the conversation composer")
         selected = self.ui("/display/conversation")
         self.check(selected["target"] == ("next" if member is None else member["agent_id"])
@@ -435,7 +435,7 @@ class Composer(Dashboard):
         self.check(all(member["token"] not in json.dumps(roster) for member in members),
                    "the roster shows the registered threads and their statuses without participant tokens")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
+        front.until(lambda shot: column(shot) == ("conversation", 2, 7) and not shot["hide_cursor"],
                     "Escape returning from agents to the default conversation")
         navigation_draft = "保留草稿 界"
         front.send(navigation_draft.encode() + LEFT)
@@ -447,14 +447,14 @@ class Composer(Dashboard):
                                                 "cursor": len(navigation_draft.encode()) - len("界".encode())},
                    "Left within nonempty UTF-8 input moves the cursor without opening agents")
         front.send(b"\x01" + LEFT)
-        front.until(lambda shot: column(shot) == ("sessions", 1, 8) and navigation_draft in input_text(shot),
+        front.until(lambda shot: column(shot) == ("sessions", 1, 7) and navigation_draft in input_text(shot),
                     "Left at the start of a draft opening the agent panel")
         before_choice = self.ui("/display/conversation")
         self.check(before_choice["draft"] == {"text": navigation_draft, "cursor": 0}
                    and before_choice["target"] is None and before_choice["editing"] is None,
                    "opening agents preserves the draft and does not choose or send a recipient")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
+        front.until(lambda shot: column(shot) == ("conversation", 2, 7) and not shot["hide_cursor"],
                     "Escape closing the panel without clearing the Unicode draft")
         after_escape = self.ui("/display/conversation")
         self.check(after_escape["draft"] == before_choice["draft"] and after_escape["target"] is None,
@@ -462,7 +462,7 @@ class Composer(Dashboard):
         self.agents(front)
         self.highlight_recipient(front, members[0])
         front.send(RIGHT)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8)
+        front.until(lambda shot: column(shot) == ("conversation", 2, 7)
                                  and navigation_draft in input_text(shot) and not shot["hide_cursor"],
                     "Right moving to the conversation without choosing a member")
         navigated = self.ui("/display/conversation")
@@ -472,7 +472,7 @@ class Composer(Dashboard):
         self.check(self.ui("/display/conversation")["selected_agent"] == "member:" + members[0]["agent_id"],
                    "horizontal navigation preserves the independently highlighted member")
         front.send(ENTER)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8)
+        front.until(lambda shot: column(shot) == ("conversation", 2, 7)
                                  and "To Shared name" in text(shot) and not shot["hide_cursor"],
                     "Enter choosing the member and returning to the conversation")
         chosen = self.ui("/display/conversation")
@@ -483,7 +483,7 @@ class Composer(Dashboard):
         self.check(self.ui("/display/conversation")["selected_agent"] == "member:" + members[0]["agent_id"],
                    "reopening agents highlights the currently selected member")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
+        front.until(lambda shot: column(shot) == ("conversation", 2, 7) and not shot["hide_cursor"],
                     "the selected member conversation restored")
         front.send(b"\x01\x0b")
         front.until(lambda shot: "Message the agent" in input_text(shot), "the navigation fixture draft cleared")
@@ -513,7 +513,7 @@ class Composer(Dashboard):
                    "Left preserves the held request, exact recipient and original text during retargeting")
         front.send(HOME + ENTER)
         front.until(lambda shot: editing_queue(shot, "Next caller")
-                                 and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
+                                 and column(shot) == ("conversation", 2, 7) and not shot["hide_cursor"],
                     "the explicit Next caller choice returning to the active edit")
         retargeted_text = "COMPOSER_RETARGET_NEXT_CALLER"
         front.send(b"\x01\x0b" + retargeted_text.encode() + ENTER)
@@ -591,7 +591,7 @@ class Composer(Dashboard):
         # Inspect the existing Queue column without writing a slash command
         # into the restored draft or relying on the old F2 view order.
         self.activate_column(front, "queue")
-        front.until(lambda shot: column(shot) == ("queue", 4, 8)
+        front.until(lambda shot: column(shot) == ("queue", 4, 7)
                                  and visible_record(shot, handoff["text"], "queued", handoff["id"]),
                     "confirmed undelivered work republished after the reload handoff")
         # Restored records are locally queued at revision zero until the client

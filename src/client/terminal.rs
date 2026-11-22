@@ -22,9 +22,6 @@ use std::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod conversation;
-pub(super) use conversation::reload_state::{
-    Snapshot as ReloadState, restore as restore_reload, snapshot as reload_snapshot,
-};
 mod events;
 mod footer;
 mod guide;
@@ -149,7 +146,6 @@ impl Session {
         }
         if !worker_mode {
             state.graphics = images::Graphics::environment(&options);
-            state.chat_restore_reload_state();
         }
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
@@ -253,14 +249,6 @@ impl Session {
             }
         }
     }
-
-    pub(crate) fn resume_history(&self) {
-        self.shared
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .chat_resume();
-    }
 }
 
 impl Drop for Session {
@@ -278,11 +266,6 @@ impl Drop for Session {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
-        self.shared
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .chat_capture_reload_state();
         if let Some(global) = DISPLAY.get() {
             let mut global = global.lock().unwrap_or_else(|e| e.into_inner());
             if global
@@ -421,17 +404,6 @@ pub(crate) fn invalidate() {
     }
 }
 
-pub(super) fn history_description_changed() {
-    if let Some(shared) = shared() {
-        let mut state = shared
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        state.conversation.history_list_stale = true;
-        state.dirty = true;
-    }
-}
-
 pub(super) fn log_width() -> Option<usize> {
     let shared = shared()?;
     if !shared.alive.load(Ordering::Acquire) {
@@ -550,8 +522,8 @@ pub(super) fn diagnostics(updates: &[super::render::DiagnosticUpdate]) {
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     for update in updates {
         if state.events.ingest_diagnostic(update) {
-            // Keep the retained raw pane's safe first warning. Unfolded original
-            // records remain available in explicit verbose/JSONL and the archive.
+            // Keep the live raw pane's safe first warning. Original records remain
+            // available in the current process's verbose output.
             state.log_raw(update.text().as_bytes());
         }
     }
@@ -657,7 +629,6 @@ pub(crate) fn apply_ui(ui: &Ui) -> Option<(u16, u16)> {
         state.chat_cancel_native_lookup();
     }
     state.ui = ui.clone();
-    state.conversation.history_width = 0;
     state.ui.color &= std::env::var_os("NO_COLOR").is_none();
     let (rows, cols) = (state.geometry.rows, state.geometry.cols);
     state.resize(rows, cols);
@@ -2444,7 +2415,7 @@ impl State {
         if self.help {
             self.media.clear();
             let mut lines = vec![
-                "SSMCP  /  Help & appearance".to_string(),
+                "SSMCP main  /  Help & appearance".to_string(),
                 String::new(),
                 format!(
                     "Theme  {}     View  {}",
@@ -2475,7 +2446,7 @@ impl State {
                 "ssmcp ui show     ssmcp ui check     ssmcp ui preview".into(),
                 String::new(),
                 self.notice.clone().unwrap_or_else(|| {
-                    "Appearance changes keep running tasks and audit history.".into()
+                    "Appearance changes keep running tasks and live logs.".into()
                 }),
             ];
             if let Some(guide) = &self.guide {
@@ -2867,6 +2838,8 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
             output.media.complete();
             let (refresh, requests) = {
                 let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+                // Worker metrics and elapsed times also need this bounded tick
+                // when no task or log event has made the display dirty.
                 if last_panel.elapsed() >= Duration::from_secs(1) {
                     state.dirty = true;
                     last_panel = Instant::now();

@@ -1,12 +1,14 @@
 //! Bounded local event previews. Expanding reveals retained display text, not a
-//! reread of tools or an unbounded replacement for their original output archive.
+//! reread of tools or an unbounded replacement for their original output.
 use super::{super::ui::Ui, images};
+#[cfg(all(test, unix))]
+use crate::client::interface::history::HistoryOwner;
 use crate::{
-    client::interface::history::{HistoryId, HistoryOwner},
+    client::interface::history::HistoryId,
     runtime::call_scope::{DisplayHistory, DisplaySource},
 };
 use serde_json::{Value, json};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 mod command_rows;
 #[cfg(test)]
@@ -14,8 +16,6 @@ mod command_visibility_tests;
 mod correlation;
 mod diff;
 mod read_activity;
-mod reload_display;
-pub(super) use reload_display::{ReloadPosition, Snapshot as ReloadDisplay};
 #[cfg(all(test, unix))]
 mod source_tests;
 mod tool_activity;
@@ -583,7 +583,6 @@ pub(crate) struct EventView {
     summary_calls: VecDeque<tool_summaries::Call>,
     summary_observers: VecDeque<(u64, u64)>,
     active_summary_group: Option<String>,
-    reload_history_preview: bool,
     diff_mode: DiffMode,
     read_boundary: read_activity::Boundary,
     read_expanded: Vec<u64>,
@@ -809,23 +808,17 @@ impl EventView {
     }
 
     pub(super) fn set_history_owner(&mut self, owner: Option<HistoryId>) {
-        if owner.is_none() && self.reload_history_preview {
-            return;
-        }
         self.set_history_selection(
             owner.map_or(DisplayHistory::NoSelection, DisplayHistory::Local),
         );
     }
 
     pub(super) fn set_history_selection(&mut self, selection: DisplayHistory) {
-        // The first legacy page may arrive after the frontend selected a saved history.
-        if selection == DisplayHistory::LegacyAttach
-            && self.history_selection.local_id().is_some()
-            && !self.reload_history_preview
+        // A late legacy page cannot replace an already verified live owner.
+        if selection == DisplayHistory::LegacyAttach && self.history_selection.local_id().is_some()
         {
             return;
         }
-        self.reload_history_preview = false;
         if self.history_selection != selection {
             self.history_selection = selection;
             self.read_boundary.interrupt();
@@ -833,23 +826,15 @@ impl EventView {
         }
     }
 
-    pub(super) fn set_reload_history_preview(&mut self, history: HistoryId) {
-        self.set_history_selection(DisplayHistory::Local(history));
-        self.reload_history_preview = true;
-    }
-
     fn local_display_history(&self) -> DisplayHistory {
-        if self.reload_history_preview {
-            // A restored preview can filter old cards, but cannot route new events.
-            return DisplayHistory::Global;
-        }
         match &self.history_selection {
             DisplayHistory::Local(owner) => DisplayHistory::Local(owner.clone()),
             _ => DisplayHistory::NoSelection,
         }
     }
 
-    /// Replace saved prose while retaining native activity and its correlation.
+    /// Populate an in-memory owner fixture while retaining native event correlation.
+    #[cfg(all(test, unix))]
     pub(super) fn rehydrate_history(
         &mut self,
         owner: HistoryOwner,
@@ -864,37 +849,6 @@ impl EventView {
         for message in messages {
             self.ingest_identified_message(&message.id, &message.role, &message.content, b"");
         }
-    }
-
-    pub(super) fn reconcile_reload_history(
-        &mut self,
-        history: &crate::client::interface::history::Conversation,
-    ) {
-        let selection = self.history_selection.clone();
-        if selection.local_id().map(HistoryId::as_str) != Some(history.metadata.id.as_str()) {
-            return;
-        }
-        let saved_ids: HashSet<_> = history
-            .messages
-            .iter()
-            .map(|message| message.id.as_str())
-            .collect();
-        let mut displayed_ids = HashSet::new();
-        self.events.retain(|event| {
-            if !event.owned_by(&selection) {
-                return true;
-            }
-            event.history_id.as_ref().is_none_or(|id| {
-                saved_ids.contains(id.as_str()) && displayed_ids.insert(id.clone())
-            })
-        });
-        self.prune();
-        for message in &history.messages {
-            if !displayed_ids.contains(&message.id) {
-                self.ingest_identified_message(&message.id, &message.role, &message.content, b"");
-            }
-        }
-        self.refresh_visibility();
     }
 
     fn refresh_visibility(&mut self) {

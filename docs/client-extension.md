@@ -114,15 +114,15 @@ fn install_extension(runtime: &Runtime) {
 // runtime.set_tool_call_hook(None);
 ~~~
 
-示例只拒绝一个确定的写入目标，并保存有界的调用元信息。它展示的是客户端扩展入口；真正的路径授权继续由 Workspace 执行。项目没有因此增加审核弹窗、审批队列或默认拒绝规则。
+示例只拒绝一个确定的写入目标，并在内存中保留有界的调用元信息。它展示的是客户端扩展入口；真正的路径授权继续由 Workspace 执行。项目没有因此增加审核弹窗、审批队列或默认拒绝规则。
 
 ### 调用顺序与结果语义
 
 Runtime 先验证 operation 和已注册工具，将旧式 terminal read/write/resize/status 操作归一化为对应工具名。安装了 hook 时，它为该调用保留一个 hook 快照，并提供本地调用 ID、公开工具名、native_name、provider、generation 和参数。[Runtime::perform](../src/runtime.rs)
 
-before_call 返回 Ok 才继续执行；返回 Err 会产生明确的本地拒绝，after_call 也能观察该拒绝。before_call 完成后，Runtime 再次验证同一个 RegisteredTool 的 generation，避免检查过的提供方在执行前被替换。之后的原生参数检查、工作区权限、harness 审批和输出归档都保持原来的边界。
+before_call 返回 Ok 才继续执行；返回 Err 会产生明确的本地拒绝，after_call 也能观察该拒绝。before_call 完成后，Runtime 再次验证同一个 RegisteredTool 的 generation，避免检查过的提供方在执行前被替换。之后仍执行原生参数检查、工作区权限、harness 审批与有界输出处理。
 
-after_call 收到借用的最终 Result<Value, String>。大型工具结果已经通过输出保护，可能是带归档 ID 的 spilled envelope；原生 MCP 内容、isError 和普通错误仍保持各自形式。观察器不复制或改写这个结果。before_call 的 panic 会拒绝执行；after_call 的 panic 只产生本地 warning，不能把已经完成的写入改成失败响应。
+after_call 收到借用的最终 Result<Value, String>。大型工具结果已经通过输出保护，可能是带内存输出 ID 的 spilled envelope；元数据标记 `storage: "memory"`，没有磁盘归档路径。原生 MCP 内容、isError 和普通错误仍保持各自形式，观察器不复制或改写结果。before_call 的 panic 会拒绝执行；after_call 的 panic 只产生本地 warning，不能把已经完成的写入改成失败响应。
 
 回调是同步的、可并发的，并且不持有 Runtime 的 hook 锁。耗时的记录工作适合交给调用方自己的有界通道；这里没有内置网络回调或命令执行器。替换 hook 只影响后续调用，已开始的调用保留自己的快照。取消或丢弃尚未完成的调用不会保证收到 after_call，也不表示已经发生的副作用被撤销。[Hook 契约](../src/runtime/hooks.rs)
 
@@ -131,6 +131,12 @@ after_call 收到借用的最终 Result<Value, String>。大型工具结果已�
 hook 覆盖通过 Runtime::perform 分派的注册工具和归一化 terminal 操作。工具目录 tools/list 直接返回目录；连接层的认证、特殊 reload 握手、内部引用准备和补全读取不属于这个入口。外部 harness 自己执行的内部操作也不会自动变成 Runtime 调用。定制客户端应按需要在自己的连接层或 harness 适配层加入对应处理，而不是把一次允许回调视作全局授权。[客户端连接循环](../src/client.rs) · [Runtime](../src/runtime.rs) · [References](../src/client/references.rs)
 
 这个扩展是受信任的客户端代码，没有沙箱效果。不要让未经校验的模型文本直接变成 hook 程序；回调收到的参数和结果也可能包含私有内容，应只保留上下文工程实际需要的信息。
+
+### 读取当前进程事件
+
+自定义前端使用 `ssmcp.ui.events` 的 `action: "thread"` 分页读取当前事件，并传入实际客户端 ID。`agent_id` 和 `main: true` 是互斥的身份过滤条件；二者都省略时读取所选进程的聚合事件。事件来源来自经过验证的调用范围，不能由 hook 写入的展示名或 JSON 字段伪造。[字段与游标](conversation-history.md) · [来源投影实现](../src/session/attach/thread_history.rs)
+
+事件和内存输出在同一进程断网重连时保留，重启或 `/reload` 后清空。前端须保存每个读取范围返回的 `generation` 与 `next_cursor`，并处理 `retention_gap_possible`；旧 generation 的游标不能用于新进程。ssmcp 不自动保存或恢复会话、归档与上下文记忆文件，旧文件不读不删。用户显式导出的文件和自定义 harness 自行保存的产物由各自实现管理。
 
 ## 3. 保持服务端不变，重写客户端
 
@@ -176,7 +182,7 @@ hook 覆盖通过 Runtime::perform 分派的注册工具和归一化 terminal �
 
 ## 4. 验证与后续范围
 
-新增 Runtime 回归使用临时工作区、独立测试进程、临时 HOME/XDG 目录和空 PATH。它检查拒绝不写文件、允许后仍受 Root 约束、generation 变化不能执行、观察成功与错误、panic 处理、归档后结果以及清空 hook 后恢复原生行为。空 PATH 防止发现开发机上已经安装的模型 harness。[实际测试](../src/runtime/hooks.rs)
+Runtime 回归使用临时工作区、独立测试进程、临时 HOME/XDG 目录和空 PATH。检查内容包括拒绝不写文件、允许后仍受 Root 约束、generation 变化不能执行、观察成功与错误、panic 处理、有界输出结果以及清空 hook 后恢复原生行为。空 PATH 防止发现开发机上已经安装的模型 harness。[实际测试](../src/runtime/hooks.rs)
 
 ~~~sh
 cargo test --lib runtime::hooks::tests::hooks_guard_real_workspace_calls_and_preserve_native_outcomes

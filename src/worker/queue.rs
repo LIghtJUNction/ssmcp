@@ -1,10 +1,15 @@
 //! One native worker pool owns a bounded FIFO. A lease is internal authority;
 //! display labels and request JSON never select or complete an execution slot.
 use super::{ManagerView, SlotLog, SlotView, Snapshot};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;
+use std::time::Instant;
 use tokio::sync::watch;
+
+mod lifecycle;
+mod telemetry;
+pub(super) use telemetry::{ReportEvent, ReportUpdate, display_text};
 
 const MAX_QUEUED: usize = 128;
 const MAX_FINISHED: usize = 128;
@@ -30,7 +35,10 @@ struct Manager {
 
 impl Manager {
     fn new(actor: &Actor, client_id: &str, now_ms: u64) -> Result<Self, String> {
-        let participant = actor.participant.as_ref().filter(|id| !id.is_empty())
+        let participant = actor
+            .participant
+            .as_ref()
+            .filter(|id| !id.is_empty())
             .ok_or("worker management requires a verified participant thread")?;
         if client_id.len() != 64 || !client_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err("worker management requires the verified native client identity".into());
@@ -67,9 +75,13 @@ pub(crate) struct TaskSummary {
 impl From<&TaskView> for TaskSummary {
     fn from(task: &TaskView) -> Self {
         Self {
-            task_id: task.task_id.clone(), status: task.status, slot: task.slot,
-            attempt: task.attempt, created_ms: task.created_ms,
-            updated_ms: task.updated_ms, replay_safe: task.replay_safe,
+            task_id: task.task_id.clone(),
+            status: task.status,
+            slot: task.slot,
+            attempt: task.attempt,
+            created_ms: task.created_ms,
+            updated_ms: task.updated_ms,
+            replay_safe: task.replay_safe,
         }
     }
 }
@@ -146,13 +158,55 @@ enum SlotState {
     Offline(String),
     Idle,
     Working(String),
+    Retiring,
+}
+
+/// A shutdown acknowledgement is authority over exactly one station epoch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Retirement {
+    pub(super) id: String,
+    pub(super) generation: String,
+    pub(super) slot: usize,
+    pub(super) epoch: u64,
 }
 
 struct Slot {
+    enabled: bool,
     epoch: u64,
     state: SlotState,
+    registered: Option<Actor>,
+    retirement: Option<Retirement>,
     logs: VecDeque<SlotLog>,
     next_log_sequence: u64,
+    task_summary: Option<String>,
+    last_command: Option<String>,
+    progress: Option<String>,
+    started: Option<Instant>,
+    task_started_at_ms: Option<u64>,
+    total_work_ms: u64,
+    recent_task_durations_ms: VecDeque<u64>,
+}
+
+impl Slot {
+    fn new() -> Self {
+        Self {
+            enabled: true,
+            epoch: 0,
+            state: SlotState::Offline("executor not connected".into()),
+            registered: None,
+            retirement: None,
+            logs: VecDeque::new(),
+            next_log_sequence: 1,
+            task_summary: None,
+            last_command: None,
+            progress: None,
+            started: None,
+            task_started_at_ms: None,
+            total_work_ms: 0,
+            recent_task_durations_ms: VecDeque::new(),
+        }
+    }
 }
 
 struct State<T> {
@@ -161,6 +215,8 @@ struct State<T> {
     fifo: VecDeque<String>,
     finished: VecDeque<String>,
     slots: Vec<Slot>,
+    desired_total: usize,
+    remote_ready: bool,
     sequence: u64,
     revision: u64,
     closed: bool,
@@ -188,14 +244,9 @@ impl<T: Clone> Queue<T> {
                 tasks: BTreeMap::new(),
                 fifo: VecDeque::new(),
                 finished: VecDeque::new(),
-                slots: (0..count)
-                    .map(|_| Slot {
-                        epoch: 0,
-                        state: SlotState::Offline("executor not connected".into()),
-                        logs: VecDeque::new(),
-                        next_log_sequence: 1,
-                    })
-                    .collect(),
+                slots: (0..count).map(|_| Slot::new()).collect(),
+                desired_total: count,
+                remote_ready: false,
                 sequence: 0,
                 revision: 0,
                 closed: false,
@@ -221,18 +272,31 @@ impl<T: Clone> Queue<T> {
     pub(crate) fn check_submitter(&self, actor: &Actor, client_id: &str) -> Result<(), String> {
         let _ = Manager::new(actor, client_id, 0)?;
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.manager.as_ref().is_some_and(|manager| !manager.matches(actor, client_id)) {
+        if state
+            .manager
+            .as_ref()
+            .is_some_and(|manager| !manager.matches(actor, client_id))
+        {
             return Err("worker pool belongs to a different authenticated manager".into());
         }
         Ok(())
     }
 
     pub(crate) fn is_manager(&self, actor: &Actor, client_id: &str) -> bool {
-        self.state.lock().unwrap_or_else(|error| error.into_inner())
-            .manager.as_ref().is_some_and(|manager| manager.matches(actor, client_id))
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .manager
+            .as_ref()
+            .is_some_and(|manager| manager.matches(actor, client_id))
     }
 
-    pub(crate) fn attach(&self, actor: &Actor, client_id: &str, now_ms: u64) -> Result<ManagerView, String> {
+    pub(crate) fn attach(
+        &self,
+        actor: &Actor,
+        client_id: &str,
+        now_ms: u64,
+    ) -> Result<ManagerView, String> {
         let manager = Manager::new(actor, client_id, now_ms)?;
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(current) = &state.manager {
@@ -251,14 +315,27 @@ impl<T: Clone> Queue<T> {
         Ok(view)
     }
 
-    pub(crate) fn tasks(&self, actor: &Actor, client_id: &str, cursor: Option<&str>, limit: usize) -> Result<TaskPage, String> {
-        if !(1..=128).contains(&limit) || cursor.is_some_and(|cursor| cursor.len() > 256 || cursor.chars().any(char::is_control)) {
+    pub(crate) fn tasks(
+        &self,
+        actor: &Actor,
+        client_id: &str,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<TaskPage, String> {
+        if !(1..=128).contains(&limit)
+            || cursor
+                .is_some_and(|cursor| cursor.len() > 256 || cursor.chars().any(char::is_control))
+        {
             return Err("worker tasks requires limit 1..128 and a valid task cursor".into());
         }
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         require_manager(&state, actor, client_id)?;
-        let mut tasks: Vec<_> = state.tasks.iter()
-            .filter(|(id, task)| &task.actor == actor && cursor.is_none_or(|cursor| id.as_str() > cursor))
+        let mut tasks: Vec<_> = state
+            .tasks
+            .iter()
+            .filter(|(id, task)| {
+                &task.actor == actor && cursor.is_none_or(|cursor| id.as_str() > cursor)
+            })
             .take(limit + 1)
             .map(|(_, task)| TaskSummary::from(&task.view))
             .collect();
@@ -284,7 +361,11 @@ impl<T: Clone> Queue<T> {
                 state.finished.push_back(id);
             }
         }
-        for task in state.tasks.values_mut().filter(|task| task.view.status == TaskStatus::Working) {
+        for task in state
+            .tasks
+            .values_mut()
+            .filter(|task| task.view.status == TaskStatus::Working)
+        {
             task.view.status = TaskStatus::Cancelling;
             task.view.updated_ms = now_ms;
         }
@@ -292,7 +373,13 @@ impl<T: Clone> Queue<T> {
             if matches!(slot.state, SlotState::Idle) {
                 slot.state = SlotState::Offline("stopped by manager; no new tasks accepted".into());
             }
-            log(slot, now_ms, "warning", "Manager requested stop; active tasks await completion acknowledgement", None);
+            log(
+                slot,
+                now_ms,
+                "warning",
+                "Manager requested stop; active tasks await completion acknowledgement",
+                None,
+            );
         }
         trim(&mut state);
         self.changed(&mut state);
@@ -305,14 +392,18 @@ impl<T: Clone> Queue<T> {
     }
 
     /// Only the owner calls this after its execution backend is ready. For a
-    /// local executor that requires the limited-child handshake; for remote
-    /// mode it means the in-process claim service is ready, not a model process.
+    /// local executor that requires the limited-child handshake. Remote mode
+    /// registers each authenticated external worker during its first wait.
     pub(crate) fn online(&self, slot: usize) -> Result<u64, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.closed || state.stopping {
             return Err("worker pool is closed or stopped by its manager".into());
         }
-        let worker = state.slots.get_mut(slot).ok_or("unknown worker slot")?;
+        let worker = state
+            .slots
+            .get_mut(slot)
+            .filter(|slot| slot.enabled)
+            .ok_or("unknown worker slot")?;
         if !matches!(worker.state, SlotState::Offline(_)) {
             return Err("worker slot must finish owned cleanup before reconnecting".into());
         }
@@ -335,12 +426,16 @@ impl<T: Clone> Queue<T> {
 
     pub(crate) fn offline(&self, slot: usize, epoch: u64, reason: &str) -> Result<(), String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let worker = state.slots.get_mut(slot).ok_or("unknown worker slot")?;
+        let worker = state
+            .slots
+            .get_mut(slot)
+            .filter(|slot| slot.enabled)
+            .ok_or("unknown worker slot")?;
         if worker.epoch != epoch {
             return Err("stale worker epoch".into());
         }
-        if matches!(worker.state, SlotState::Working(_)) {
-            return Err("working slot stays busy until its owned execution is cleaned up".into());
+        if matches!(worker.state, SlotState::Working(_) | SlotState::Retiring) {
+            return Err("active or retiring worker requires its exact completion or release acknowledgement".into());
         }
         worker.state = SlotState::Offline(bounded(reason, 1024));
         log(
@@ -367,15 +462,29 @@ impl<T: Clone> Queue<T> {
     }
 
     pub(crate) fn submit_managed(
-        &self, actor: Actor, client_id: &str, key: &str, text: &str, context: T, now_ms: u64,
+        &self,
+        actor: Actor,
+        client_id: &str,
+        key: &str,
+        text: &str,
+        context: T,
+        now_ms: u64,
     ) -> Result<TaskView, String> {
         self.submit_inner(actor, key, text, context, now_ms, Some(client_id))
     }
 
     fn submit_inner(
-        &self, actor: Actor, key: &str, text: &str, context: T, now_ms: u64, client_id: Option<&str>,
+        &self,
+        actor: Actor,
+        key: &str,
+        text: &str,
+        context: T,
+        now_ms: u64,
+        client_id: Option<&str>,
     ) -> Result<TaskView, String> {
-        let manager = client_id.map(|client_id| Manager::new(&actor, client_id, now_ms)).transpose()?;
+        let manager = client_id
+            .map(|client_id| Manager::new(&actor, client_id, now_ms))
+            .transpose()?;
         if key.is_empty() || key.len() > 128 || key.chars().any(char::is_control) {
             return Err(
                 "worker request_id must contain 1..128 bytes without control characters".into(),
@@ -386,7 +495,10 @@ impl<T: Clone> Queue<T> {
         }
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(manager) = &manager
-            && state.manager.as_ref().is_some_and(|current| !current.matches(&actor, &manager.view.client_id))
+            && state
+                .manager
+                .as_ref()
+                .is_some_and(|current| !current.matches(&actor, &manager.view.client_id))
         {
             return Err("worker pool belongs to a different authenticated manager".into());
         }
@@ -413,11 +525,11 @@ impl<T: Clone> Queue<T> {
         if state.closed || state.stopping {
             return Err("worker pool is closed or stopped; no task was admitted".into());
         }
-        if state
-            .slots
-            .iter()
-            .all(|slot| matches!(slot.state, SlotState::Offline(_)))
-        {
+        if !state.slots.iter().any(|slot| {
+            slot.enabled
+                && slot.retirement.is_none()
+                && (state.remote_ready || !matches!(slot.state, SlotState::Offline(_)))
+        }) {
             return Err("worker pool has no ready execution backend; no task was admitted".into());
         }
         if state.fifo.len() >= MAX_QUEUED {
@@ -473,7 +585,11 @@ impl<T: Clone> Queue<T> {
         if state.closed || state.stopping {
             return Ok(None);
         }
-        let worker = state.slots.get(slot).ok_or("unknown worker slot")?;
+        let worker = state
+            .slots
+            .get(slot)
+            .filter(|slot| slot.enabled)
+            .ok_or("unknown worker slot")?;
         if worker.epoch != epoch {
             return Err("stale worker epoch".into());
         }
@@ -494,14 +610,57 @@ impl<T: Clone> Queue<T> {
         now_ms: u64,
     ) -> Result<Option<Lease<T>>, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.closed || state.stopping {
+        if state.closed || state.stopping || !state.remote_ready {
             return Ok(None);
         }
-        let Some((slot, epoch)) = state.slots.iter().enumerate().find_map(|(index, slot)| {
-            matches!(slot.state, SlotState::Idle).then_some((index, slot.epoch))
-        }) else {
+        // An authenticated caller owns one stable station, even while idle.
+        // Foreign-account waits must not consume capacity reserved for the
+        // connection's manager or its already delegated tasks.
+        let account = state
+            .manager
+            .as_ref()
+            .map(|manager| &manager.actor)
+            .or_else(|| state.tasks.values().next().map(|task| &task.actor));
+        if account.is_some_and(|owner| !lifecycle::same_account(owner, actor)) {
             return Ok(None);
+        }
+        let registered = state
+            .slots
+            .iter()
+            .position(|slot| slot.enabled && slot.registered.as_ref() == Some(actor));
+        let slot = if let Some(slot) = registered {
+            slot
+        } else {
+            let Some(slot) = state.slots.iter().position(|slot| {
+                slot.enabled
+                    && slot.registered.is_none()
+                    && slot.retirement.is_none()
+                    && matches!(slot.state, SlotState::Offline(_))
+            }) else {
+                return Ok(None);
+            };
+            let worker = &mut state.slots[slot];
+            worker.epoch = worker
+                .epoch
+                .checked_add(1)
+                .ok_or("worker epoch exhausted")?;
+            worker.registered = Some(actor.clone());
+            worker.state = SlotState::Idle;
+            log(
+                worker,
+                now_ms,
+                "info",
+                "Authenticated external worker registered; waiting for a task",
+                None,
+            );
+            self.changed(&mut state);
+            slot
         };
+        let worker = &state.slots[slot];
+        if !matches!(worker.state, SlotState::Idle) || worker.retirement.is_some() {
+            return Ok(None);
+        }
+        let epoch = worker.epoch;
         let Some(position) = state.fifo.iter().position(|id| {
             state.tasks.get(id).is_some_and(|task| {
                 task.actor.provider == actor.provider
@@ -545,6 +704,12 @@ impl<T: Clone> Queue<T> {
             context: task.context.clone(),
         };
         state.slots[slot].state = SlotState::Working(id.clone());
+        let worker = &mut state.slots[slot];
+        worker.task_summary = Some(telemetry::display_text(&lease.text, 256));
+        worker.last_command = None;
+        worker.progress = None;
+        worker.started = Some(Instant::now());
+        worker.task_started_at_ms = Some(now_ms);
         log(
             &mut state.slots[slot],
             now_ms,
@@ -702,7 +867,11 @@ impl<T: Clone> Queue<T> {
         task.view.updated_ms = now_ms;
         task.view.replay_safe = false;
         let view = task.view.clone();
-        state.slots[lease.slot].state = if reusable && !closed && !stopping {
+        let worker = &mut state.slots[lease.slot];
+        telemetry::settle_time(worker, status != TaskStatus::Unknown);
+        worker.state = if worker.retirement.is_some() && !closed {
+            SlotState::Retiring
+        } else if reusable && !closed && !stopping {
             SlotState::Idle
         } else if stopping && !closed {
             SlotState::Offline("stopped by manager; task completion acknowledged".into())
@@ -711,6 +880,10 @@ impl<T: Clone> Queue<T> {
         } else {
             SlotState::Offline("owned executor stopped; reconnect required".into())
         };
+        if closed {
+            worker.registered = None;
+            worker.retirement = None;
+        }
         let outcome = match status {
             TaskStatus::Completed => "completed",
             TaskStatus::Failed => "failed",
@@ -757,8 +930,10 @@ impl<T: Clone> Queue<T> {
             task.view.updated_ms = now_ms;
         }
         for slot in &mut state.slots {
-            if matches!(slot.state, SlotState::Idle) {
+            if !matches!(slot.state, SlotState::Working(_)) {
                 slot.state = SlotState::Offline("connection closed".into());
+                slot.registered = None;
+                slot.retirement = None;
             }
             log(slot, now_ms, "warning", "Worker connection closed", None);
         }
@@ -772,12 +947,19 @@ impl<T: Clone> Queue<T> {
             .slots
             .iter()
             .enumerate()
+            .filter(|(_, slot)| slot.enabled)
             .map(|(index, slot)| {
                 let (name, task_id, reason) = match &slot.state {
                     SlotState::Offline(reason) => ("offline", None, Some(reason.clone())),
                     SlotState::Idle => ("idle", None, None),
                     SlotState::Working(id) => ("working", Some(id.clone()), None),
+                    SlotState::Retiring => (
+                        "retiring",
+                        None,
+                        Some("waiting for external shutdown acknowledgement".into()),
+                    ),
                 };
+                let elapsed = telemetry::elapsed_ms(slot);
                 SlotView {
                     slot: index,
                     epoch: slot.epoch,
@@ -786,6 +968,19 @@ impl<T: Clone> Queue<T> {
                     reason,
                     logs: slot.logs.iter().cloned().collect(),
                     next_log_sequence: slot.next_log_sequence,
+                    registered: slot.registered.is_some(),
+                    retire_requested: slot.retirement.is_some(),
+                    task_summary: slot.task_summary.clone(),
+                    last_command: slot.last_command.clone(),
+                    progress: slot.progress.clone(),
+                    total_work_ms: slot.total_work_ms.saturating_add(elapsed.unwrap_or(0)),
+                    current_task_elapsed_ms: elapsed,
+                    task_started_at_ms: slot.task_started_at_ms,
+                    recent_task_durations_ms: slot
+                        .recent_task_durations_ms
+                        .iter()
+                        .copied()
+                        .collect(),
                 }
             })
             .collect();
@@ -797,6 +992,9 @@ impl<T: Clone> Queue<T> {
             idle: slots.iter().filter(|slot| slot.state == "idle").count(),
             working: slots.iter().filter(|slot| slot.state == "working").count(),
             offline: slots.iter().filter(|slot| slot.state == "offline").count(),
+            retiring: slots.iter().filter(|slot| slot.state == "retiring").count(),
+            registered_workers: slots.iter().filter(|slot| slot.registered).count(),
+            desired_total: state.desired_total,
             queued: state.fifo.len(),
             closed: state.closed,
             stopping: state.stopping,
@@ -828,7 +1026,10 @@ impl<T: Clone> Queue<T> {
         }
         state.finished.extend(finished);
         for slot in &mut state.slots {
+            telemetry::settle_time(slot, false);
             slot.state = SlotState::Offline("connection closed; owned cleanup complete".into());
+            slot.registered = None;
+            slot.retirement = None;
             log(
                 slot,
                 now_ms,
@@ -844,7 +1045,11 @@ impl<T: Clone> Queue<T> {
 }
 
 fn require_manager<T>(state: &State<T>, actor: &Actor, client_id: &str) -> Result<(), String> {
-    if state.manager.as_ref().is_some_and(|manager| manager.matches(actor, client_id)) {
+    if state
+        .manager
+        .as_ref()
+        .is_some_and(|manager| manager.matches(actor, client_id))
+    {
         Ok(())
     } else {
         Err("this worker management action requires the pool's authenticated manager".into())
@@ -855,6 +1060,7 @@ fn valid<T>(state: &State<T>, generation: &str, lease: &Lease<T>) -> bool {
     lease.generation == generation
         && state.slots.get(lease.slot).is_some_and(|slot| {
             slot.epoch == lease.epoch
+                && slot.enabled
                 && matches!(&slot.state, SlotState::Working(id) if id == &lease.task_id)
         })
         && state.tasks.get(&lease.task_id).is_some_and(|task| {

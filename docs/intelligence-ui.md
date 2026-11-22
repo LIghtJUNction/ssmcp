@@ -67,11 +67,13 @@ return await call(clientId, "ssmcp.ui.present", {
 
 ## 消息、复制和交互
 
-`kind` 和 `idempotency_key` 沿用 `ssmcp.ui.message`；发送者来自调用上下文，`author`、`role` 等冒名字段会被拒绝。回执保留 `accepted`、`shown`、`message_id`、`duplicate`、`history_saved` 和 `terminal_active`，另加 `format: "intelligence_ui.v1"` 与 `block_count`。接收回执不代表用户已经阅读。
+`kind` 和 `idempotency_key` 沿用 `ssmcp.ui.message`；发送者来自调用上下文，`author`、`role` 等冒名字段会被拒绝。回执包含 `accepted`、`shown`、`message_id`、`duplicate`、`recorded`、`storage: "memory"` 和 `terminal_active`，另加 `format: "intelligence_ui.v1"` 与 `block_count`。`recorded: true` 表示消息已记入进程内存，接收或显示回执均不代表用户已经阅读。
 
-同一保留期内重试相同的键和内容不会重复显示或写入历史。去重身份包含完整结构化文档：即使两种布局生成相同文字，复用同一个键也会报错。消息和展示共用最多 64 条回执缓存；它不是第二份消息历史。
+同一保留期内重试相同的键和内容不会重复显示或追加事件。去重身份包含完整结构化文档：即使两种布局生成相同文字，复用同一个键也会报错。消息和展示共用最多 64 条内存回执缓存；同一进程断网重连保留缓存，重启或 `/reload` 会清空。
 
-完整文字进入现有 `/copy` 缓存和同一份标准 JSONL 对话历史，沿用现有脱敏与持久化规则；使用 `ssmcp.ui.history` 读取。视觉表格的省略不改写完整正文。`/resume` 恢复历史文字，不重放工具；本版本不恢复历史的结构化布局。展示沿用当前活动流的浏览和折叠行为。
+完整文字进入现有 `/copy` 缓存和实时消息记录，沿用现有脱敏规则。事件中的 `value.message_id` 对应原生回执的 `message_id`。视觉表格的省略不改写生成的正文；事件投影仍受自身分页和保留预算限制。当前事件使用 `ssmcp.ui.events` 的 `action: "thread"` 读取，查询沿用真实客户端与线程身份，分页检查 `generation`、`next_cursor` 和 `retention_gap_possible`。[事件接口与边界](conversation-history.md)
+
+展示沿用当前活动流的浏览和折叠行为。对话与结构化布局只保留在当前进程内存中，重启或 `/reload` 后清空；旧文件不会作为历史恢复来源，也不会被迁移删除。需要保留当前内容时，可显式复制或使用 `/handoff` 导出。
 
 交互问题调用 `ssmcp.ui.ask` 创建，Agent 可继续工作；用户通过 `/questions` 回答，调用 `ssmcp.ui.questions` 读取结果。结构化展示本身不提交草稿、不回答问题，也不切换当前收件目标。
 
@@ -81,4 +83,4 @@ return await call(clientId, "ssmcp.ui.present", {
 
 每次展示 1–16 块，完整文字最多 14 KiB，结构化文档最多 24 KiB，含请求元数据的 JSON 最多 25 KiB。指标组最多 8 项；表格最多 8 列、30 行，每行列数一致；步骤和条形图最多 24 项。未知字段与类型、终端控制字符、异常数值和超限内容会在显示前被拒绝。渲染复用现有文本脱敏与终端字符清洗，按 Unicode 显示宽度折行，并保留 NO_COLOR 语义。没有通过校验的展示不会改写当前消息。
 
-实现位于 [presentation.rs](../src/client/presentation.rs)，与 [共享消息路径](../src/client/interface/messages.rs) 共用回执和去重，通过 [现有 renderer](../src/client/render.rs) 写入同一份 JSONL、活动流和复制缓存。真实终端验收使用 [e2e_presentations.py](../scripts/e2e_presentations.py)，检查结构化布局、原生调用、完整复制和 JSONL、去重与追加需求交付。脚本使用临时 HOME/XDG 和私有剪贴板 fixture；测试脚本存在不代表某一构建已经通过，需要保留对应二进制哈希与运行报告。
+实现位于 [presentation.rs](../src/client/presentation.rs)，与 [共享消息路径](../src/client/interface/messages.rs) 共用回执和去重，通过 [现有 renderer](../src/client/render.rs) 更新活动流与复制缓存。真实终端验收入口为 [e2e_presentations.py](../scripts/e2e_presentations.py)，验收应覆盖结构化布局、原生调用、完整复制、内存事件、去重与追加需求交付。脚本使用临时 HOME/XDG 和私有剪贴板 fixture；测试脚本存在不代表某一构建已经通过，需要保留对应二进制哈希与运行报告。

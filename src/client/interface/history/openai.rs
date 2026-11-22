@@ -1,20 +1,19 @@
-//! Private caller observations associated with a saved local conversation.
-use super::{History, HistoryOwner, ownership::with_owner, session_name};
+//! Caller observations retained only in the owning process's live context.
+use super::{History, HistoryOwner, ownership::with_owner};
 use crate::wire::openai::{self, OpenAiContext};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use std::io::Read as _;
 
-const MAX_SIDECAR_BYTES: usize = 16 * 1024;
+const MAX_OBSERVATION_BYTES: usize = 16 * 1024;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Observed {
     pub(crate) value: String,
     pub(crate) observed_ms: u64,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Saved {
     schema_version: u32,
@@ -69,11 +68,6 @@ pub(crate) fn validate_chatgpt_url(raw: &str) -> Result<Url, String> {
     }
 }
 
-fn name(id: &str) -> Result<String, String> {
-    session_name(id)?;
-    Ok(format!("{id}.openai.json"))
-}
-
 fn update(field: &mut Option<Observed>, value: Option<&str>, observed_ms: u64) -> bool {
     if let Some(value) = value.filter(|value| openai::valid(value))
         && field
@@ -90,29 +84,19 @@ fn update(field: &mut Option<Observed>, value: Option<&str>, observed_ms: u64) -
 }
 
 impl History {
-    fn openai_sidecar(&self, id: &str) -> Result<Saved, String> {
-        let filename = name(id)?;
-        if !self.directory.names()?.contains(&filename) {
-            return Ok(Saved {
-                schema_version: 1,
-                id: id.into(),
-                workspace: self.workspace.clone(),
-                session: None,
-                subject: None,
-                chatgpt_url: None,
-            });
+    fn openai_state(&self, id: &str) -> Result<Saved, String> {
+        let conversation = self.load(id)?;
+        if conversation.metadata.workspace != self.workspace {
+            return Err("The original conversation belongs to a different workspace".into());
         }
-        let mut bytes = Vec::new();
-        self.directory
-            .open(&filename, false, false, false)?
-            .take(MAX_SIDECAR_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| "Cannot read saved OpenAI context")?;
-        if bytes.len() > MAX_SIDECAR_BYTES {
-            return Err("Saved OpenAI context exceeds its storage limit".into());
-        }
-        let saved: Saved =
-            serde_json::from_slice(&bytes).map_err(|_| "Invalid saved OpenAI context")?;
+        let saved = self.openai.get(id).cloned().unwrap_or_else(|| Saved {
+            schema_version: 1,
+            id: id.into(),
+            workspace: self.workspace.clone(),
+            session: None,
+            subject: None,
+            chatgpt_url: None,
+        });
         if saved.schema_version != 1
             || saved.id != id
             || saved.workspace != self.workspace
@@ -125,17 +109,18 @@ impl History {
                 .as_deref()
                 .is_some_and(|url| validate_chatgpt_url(url).is_err())
         {
-            return Err("Invalid saved OpenAI context".into());
+            return Err("Invalid live OpenAI context".into());
         }
         Ok(saved)
     }
 
-    fn save_openai(&self, saved: &Saved) -> Result<(), String> {
-        let bytes = serde_json::to_vec(saved).map_err(|_| "Cannot encode saved OpenAI context")?;
-        if bytes.len() > MAX_SIDECAR_BYTES {
-            return Err("Saved OpenAI context exceeds its storage limit".into());
+    fn save_openai(&mut self, saved: &Saved) -> Result<(), String> {
+        let bytes = serde_json::to_vec(saved).map_err(|_| "Cannot encode live OpenAI context")?;
+        if bytes.len() > MAX_OBSERVATION_BYTES {
+            return Err("Live OpenAI context exceeds its memory limit".into());
         }
-        self.directory.write_atomic(&name(&saved.id)?, &bytes)
+        self.openai.insert(saved.id.clone(), saved.clone());
+        Ok(())
     }
 
     fn observe_openai(
@@ -144,33 +129,10 @@ impl History {
         metadata: &OpenAiContext,
         observed_ms: u64,
     ) -> Result<bool, String> {
-        let _lock = self.directory.lock()?;
         if self.ownership.pending(owner)? {
             return Ok(false);
         }
-        let id = owner.id();
-        if self.archive_index()?.contains(id) {
-            return Err("The original conversation is archived".into());
-        }
-        // Keep the original lease when current; a switch neither transfers
-        // ownership nor authorizes writing through another process's lease.
-        let _lease = match &self.active {
-            Some(active)
-                if self.ownership.current.get().as_ref() == Some(owner)
-                    && active.metadata.id == id
-                    && active.metadata.workspace == self.workspace =>
-            {
-                None
-            }
-            _ => {
-                let lease = self.lease(id)?;
-                if self.load(id)?.metadata.workspace != self.workspace {
-                    return Err("The original conversation belongs to a different workspace".into());
-                }
-                Some(lease)
-            }
-        };
-        let mut saved = self.openai_sidecar(id)?;
+        let mut saved = self.openai_state(owner.id())?;
         let session_changed = update(&mut saved.session, metadata.session.as_deref(), observed_ms);
         let subject_changed = update(&mut saved.subject, metadata.subject.as_deref(), observed_ms);
         if session_changed || subject_changed {
@@ -187,26 +149,39 @@ impl History {
         if pending {
             return Ok(None);
         }
-        if self.archive_index()?.contains(owner.id())
-            || self.active.as_ref().is_none_or(|active| {
-                active.metadata.id != owner.id() || active.metadata.workspace != self.workspace
-            })
-        {
+        if self.active.as_ref().is_none_or(|active| {
+            active.metadata.id != owner.id() || active.metadata.workspace != self.workspace
+        }) {
             return Err("The selected conversation is no longer available".into());
         }
-        self.openai_sidecar(owner.id()).map(Some)
+        self.openai_state(owner.id()).map(Some)
     }
 
-    pub(super) fn remove_openai(&self, id: &str, names: &[String]) -> Result<(), String> {
-        let filename = name(id)?;
-        if names.contains(&filename) {
-            self.directory.remove(&filename)?;
+    fn change_openai_url(
+        &mut self,
+        owner: &HistoryOwner,
+        url: Option<&str>,
+    ) -> Result<bool, String> {
+        if let Some(url) = url {
+            validate_chatgpt_url(url)?;
         }
-        Ok(())
+        let mut saved = self
+            .selected_openai(owner)?
+            .ok_or("Start the current session before associating a ChatGPT URL")?;
+        if saved.chatgpt_url.as_deref() == url {
+            return Ok(false);
+        }
+        saved.chatgpt_url = url.map(str::to_owned);
+        if saved.chatgpt_url.is_none() && saved.session.is_none() && saved.subject.is_none() {
+            self.openai.remove(owner.id());
+        } else {
+            self.save_openai(&saved)?;
+        }
+        Ok(true)
     }
 }
 
-/// Record display metadata using the original verified history capability.
+/// Record display metadata using the original verified live context capability.
 pub(crate) fn observe(
     owner: &HistoryOwner,
     metadata: &OpenAiContext,
@@ -217,76 +192,28 @@ pub(crate) fn observe(
     })
 }
 
-/// Read the saved values only through the currently selected history lease.
+/// Read current-process values only for the currently selected owner.
 pub(crate) fn read_selected(owner: &HistoryOwner) -> Result<Option<Saved>, String> {
-    with_owner(owner, |history, owner| {
-        let _lock = history.directory.lock()?;
-        history.selected_openai(owner)
-    })
+    with_owner(owner, |history, owner| history.selected_openai(owner))
 }
 
-/// Update only the explicitly supplied URL on the original selected history.
+/// Associate a validated URL with the original selected live context.
 pub(crate) fn change_url(owner: &HistoryOwner, url: Option<&str>) -> Result<bool, String> {
-    if let Some(url) = url {
-        validate_chatgpt_url(url)?;
-    }
     with_owner(owner, |history, owner| {
-        let _lock = history.directory.lock()?;
-        let mut saved = history
-            .selected_openai(owner)?
-            .ok_or("Start or resume a saved conversation before associating a ChatGPT URL")?;
-        if saved.chatgpt_url.as_deref() == url {
-            return Ok(false);
-        }
-        saved.chatgpt_url = url.map(str::to_owned);
-        if saved.chatgpt_url.is_none() && saved.session.is_none() && saved.subject.is_none() {
-            history.remove_openai(owner.id(), &history.directory.names()?)?;
-        } else {
-            history.save_openai(&saved)?;
-        }
-        Ok(true)
+        history.change_openai_url(owner, url)
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        runtime::call_scope::CallScope,
-        wire::{CodeContext, ControlAccount, ControlAgent, ControlAttribution},
-    };
-    use std::sync::{Arc, Mutex};
+    use std::path::PathBuf;
 
-    fn scope(thread: Option<char>, request: u64) -> Arc<CallScope> {
-        let client = "a".repeat(64);
-        let agent = thread.map(|digit| ControlAgent {
-            id: format!("agent_{}", digit.to_string().repeat(32)),
-            name: "fixture agent".into(),
-        });
-        let context = CodeContext {
-            run_id: "b".repeat(32),
-            code: "return null".into(),
-            timestamp_ms: request,
-            session_id: agent.as_ref().map(|_| client.clone()),
-            thread_id: agent.as_ref().map(|agent| agent.id.clone()),
-        };
-        let attribution = ControlAttribution {
-            account: ControlAccount {
-                provider: "github".into(),
-                subject: "123".into(),
-                login: "fixture-account".into(),
-            },
-            owner: None,
-            agent,
-        };
-        CallScope::from_relay_for_client(
-            1,
-            Some(&client),
-            request,
-            Some(&attribution),
-            Some(&context),
-        )
-        .unwrap()
+    fn memory() -> (PathBuf, History) {
+        let path =
+            std::env::temp_dir().join(super::super::random_id("ssmcp-openai-memory").unwrap());
+        let history = History::with_workspace(path.clone(), "/openai-fixture".into()).unwrap();
+        (path, history)
     }
 
     fn metadata(session: &str, subject: Option<&str>) -> OpenAiContext {
@@ -331,91 +258,143 @@ mod tests {
     }
 
     #[test]
-    fn retention_reclaims_sidecar_with_its_closed_history() {
-        let temp = super::super::tests::Temporary::new();
-        let mut history = temp.history();
-        history.record("user", "Saved for fixture").unwrap();
+    fn pending_observations_do_not_create_a_context_or_files() {
+        let (path, mut history) = memory();
+        let owner = history.capture_owner().unwrap();
+        assert!(
+            !history
+                .observe_openai(&owner, &metadata("pending", None), 1)
+                .unwrap()
+        );
+        assert!(history.selected_openai(&owner).unwrap().is_none());
+        assert!(history.active.is_none());
+        assert!(history.conversations.is_empty());
+        assert!(history.openai.is_empty());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn observations_are_bounded_to_the_original_ram_context_and_timestamp() {
+        let (path, mut history) = memory();
+        history.record("user", "Current task").unwrap();
         let owner = history.capture_owner().unwrap();
         assert!(
             history
-                .observe_openai(&owner, &metadata("synthetic", None), 11)
+                .observe_openai(&owner, &metadata("newer", None), 20)
                 .unwrap()
         );
-        let sidecar = name(owner.id()).unwrap();
-        assert!(history.directory.names().unwrap().contains(&sidecar));
-        history.release_current();
-
-        let replacement = super::super::random_id("conversation").unwrap();
-        history
-            .retain(&replacement, super::super::MAX_TOTAL_BYTES)
-            .unwrap();
-        let names = history.directory.names().unwrap();
-        assert!(!names.contains(&sidecar));
-        assert!(!names.contains(&session_name(owner.id()).unwrap()));
         assert!(
             history
-                .observe_openai(&owner, &metadata("stale", None), 12)
+                .observe_openai(&owner, &metadata("older", Some("subject")), 10)
+                .unwrap()
+        );
+        let saved = history.selected_openai(&owner).unwrap().unwrap();
+        assert_eq!(saved.session.unwrap().value, "newer");
+        assert_eq!(saved.subject.unwrap().value, "subject");
+        assert!(!path.exists());
+
+        let mut other = History::with_workspace(path.clone(), "/openai-fixture".into()).unwrap();
+        assert!(other.openai.is_empty());
+        assert!(
+            other
+                .observe_openai(&owner, &metadata("wrong process", None), 30)
                 .is_err()
         );
+        assert!(other.selected_openai(&owner).is_err());
+        assert!(!path.exists());
     }
 
-    #[tokio::test]
-    async fn late_openai_observation_cannot_relabel_another_history_or_replace_newer_values() {
-        use super::super::{HistoryStore, ownership::TEST_HISTORY, tests::Temporary, with};
-        let temp = Temporary::new();
-        let mut history = temp.history();
-        history.record("user", "Conversation B").unwrap();
-        let b = history.capture_owner().unwrap();
-        history.release_current();
-        history.record("user", "Conversation A").unwrap();
-        let a = history.capture_owner().unwrap();
-        let store = HistoryStore {
-            current: history.ownership.current.clone(),
-            state: Mutex::new(Some(history)),
-        };
-        TEST_HISTORY
-            .scope(Arc::new(store), async {
-                let a_call = scope(Some('1'), 1);
-                let a_late = a_call
-                    .openai_observation(metadata("session-A", Some("claimed-B")), 10)
-                    .unwrap();
-                let a_newer = scope(Some('1'), 2)
-                    .openai_observation(metadata("session-A-newer", None), 20)
-                    .unwrap();
-                assert!(a_newer.record().unwrap());
+    #[test]
+    fn selected_reads_and_url_changes_reject_a_different_owner() {
+        let (path, mut history) = memory();
+        history.record("user", "Current task").unwrap();
+        let owner = history.capture_owner().unwrap();
+        history
+            .observe_openai(&owner, &metadata("original", None), 1)
+            .unwrap();
+        history
+            .ownership
+            .select(&super::super::random_id("conversation").unwrap(), true);
+        assert!(history.selected_openai(&owner).is_err());
+        assert!(
+            history
+                .change_openai_url(&owner, Some("https://chatgpt.com/c/other"))
+                .is_err()
+        );
+        assert!(
+            history
+                .observe_openai(&owner, &metadata("late-original", None), 2)
+                .unwrap()
+        );
+        assert_eq!(
+            history
+                .openai_state(owner.id())
+                .unwrap()
+                .session
+                .unwrap()
+                .value,
+            "late-original"
+        );
+        assert!(!path.exists());
+    }
 
-                with(|history| history.resume(b.id())).unwrap();
-                let unbound = scope(None, 3);
-                assert!(
-                    unbound
-                        .openai_observation(metadata("unbound", Some("unbound")), 30)
-                        .is_none()
-                );
-                let b_call = scope(Some('2'), 4);
-                let b_write = b_call
-                    .openai_observation(metadata("session-B", Some("subject-B")), 40)
-                    .unwrap();
-                assert!(b_write.record().unwrap());
-                assert!(a_late.record().unwrap());
-                assert_eq!(a_call.attribution().unwrap().account.subject, "123");
-                assert_eq!(b_call.attribution().unwrap().account.subject, "123");
+    #[test]
+    fn revoked_owner_cannot_read_write_or_recreate_observations() {
+        let (path, mut history) = memory();
+        history.record("user", "Current task").unwrap();
+        let owner = history.capture_owner().unwrap();
+        history
+            .observe_openai(&owner, &metadata("original", None), 1)
+            .unwrap();
+        history.ownership.revoke(owner.id());
+        assert!(
+            history
+                .observe_openai(&owner, &metadata("stale", None), 2)
+                .is_err()
+        );
+        assert!(history.selected_openai(&owner).is_err());
+        assert!(
+            history
+                .change_openai_url(&owner, Some("https://chatgpt.com/c/stale"))
+                .is_err()
+        );
+        assert_eq!(
+            history
+                .openai_state(owner.id())
+                .unwrap()
+                .session
+                .unwrap()
+                .value,
+            "original"
+        );
+        assert!(!path.exists());
+    }
 
-                with(|history| {
-                    let saved_a = history.openai_sidecar(a.id())?;
-                    let saved_b = history.openai_sidecar(b.id())?;
-                    assert_eq!(saved_a.session.unwrap().value, "session-A-newer");
-                    assert_eq!(saved_a.subject.unwrap().value, "claimed-B");
-                    assert_eq!(saved_b.session.unwrap().value, "session-B");
-                    assert_eq!(saved_b.subject.unwrap().value, "subject-B");
-                    assert_eq!(history.active.as_ref().unwrap().metadata.id, b.id());
-                    // The old verified thread remains pinned and cannot write
-                    // through its revoked lease after archive.
-                    history.archive_change(Some(a.id()), true)?;
-                    Ok(())
-                })
-                .unwrap();
-                assert!(a_late.record().is_err());
-            })
-            .await;
+    #[test]
+    fn url_association_is_validated_idempotent_and_memory_only() {
+        let (path, mut history) = memory();
+        history.record("user", "Current task").unwrap();
+        let owner = history.capture_owner().unwrap();
+        let url = "https://chatgpt.com/c/live-session";
+        assert!(history.change_openai_url(&owner, Some(url)).unwrap());
+        assert!(!history.change_openai_url(&owner, Some(url)).unwrap());
+        assert!(
+            history
+                .change_openai_url(&owner, Some("https://evil.test/c/session"))
+                .is_err()
+        );
+        assert_eq!(
+            history
+                .selected_openai(&owner)
+                .unwrap()
+                .unwrap()
+                .chatgpt_url
+                .as_deref(),
+            Some(url)
+        );
+        assert!(history.change_openai_url(&owner, None).unwrap());
+        assert!(history.openai.is_empty());
+        assert!(!history.change_openai_url(&owner, None).unwrap());
+        assert!(!path.exists());
     }
 }

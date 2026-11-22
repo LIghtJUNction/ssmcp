@@ -45,8 +45,6 @@ pub(crate) fn human_chat_tool(name: &str) -> bool {
 pub const CAPABILITIES_HEADER: &str = "ssmcp-capabilities";
 pub const MAX_TITLE_BYTES: usize = 512;
 pub const MAX_CODE_BYTES: usize = 64 * 1024;
-/// Shared per-client context budget for native and orchestrated results.
-pub(crate) const MAX_CONTEXT_ENTRY_BYTES: usize = 12 * 1024;
 pub const MAX_USER_MESSAGE_BYTES: usize = 16 * 1024;
 pub const MAX_USER_MESSAGES: usize = 64;
 

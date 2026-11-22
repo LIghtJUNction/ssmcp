@@ -1,170 +1,113 @@
 use super::*;
-use crate::client::interface::history::tests::Temporary;
+use std::path::PathBuf;
+
+fn memory() -> (PathBuf, History) {
+    let path = std::env::temp_dir().join(random_id("ssmcp-goal-memory").unwrap());
+    let history = History::with_workspace(path.clone(), "/goal-fixture".into()).unwrap();
+    (path, history)
+}
 
 #[test]
-fn goal_round_trip_and_archive_preserve_original_message_bytes() {
-    let fixture = Temporary::new();
-    let mut history = fixture.history();
+fn goal_validation_keeps_existing_text_bounds() {
+    assert_eq!(
+        normalize("  Finish the current task  ").unwrap(),
+        "Finish the current task"
+    );
+    assert_eq!(normalize("完成当前任务").unwrap(), "完成当前任务");
+    for invalid in [
+        "",
+        "   ",
+        "two\nlines",
+        "tab\there",
+        "line\u{2028}break",
+        "line\u{2029}break",
+    ] {
+        assert!(normalize(invalid).is_err(), "{invalid:?}");
+    }
+    assert!(normalize(&"x".repeat(MAX_GOAL_CHARS + 1)).is_err());
+    assert!(normalize(&"🙂".repeat(MAX_GOAL_CHARS)).is_ok());
+    assert!(normalize(&"🙂".repeat(MAX_GOAL_CHARS + 1)).is_err());
+}
+
+#[test]
+fn clearing_a_pending_goal_does_not_create_a_context_or_files() {
+    let (path, mut history) = memory();
     let owner = history.capture_owner().unwrap();
     assert_eq!(history.read_goal(&owner).unwrap(), None);
     assert_eq!(history.change_goal(&owner, None).unwrap(), None);
-    assert!(history.current().unwrap().is_none());
-    history
-        .change_goal(&owner, Some("  Ship the local fixture  "))
-        .unwrap();
-    assert!(history.current().unwrap().unwrap().messages.is_empty());
-    history.record("user", "original input").unwrap();
-    let original = History::encode(&history.current().unwrap().unwrap()).unwrap();
-    history
-        .change_goal(&owner, Some("Verify the local fixture"))
-        .unwrap();
-    assert_eq!(
-        History::encode(&history.current().unwrap().unwrap()).unwrap(),
-        original
-    );
-    let id = owner.id().to_owned();
-    history.archive_change(Some(&id), true).unwrap();
-    assert!(history.read_goal(&owner).is_err());
-    assert!(
-        history
-            .directory
-            .names()
-            .unwrap()
-            .contains(&name(&id).unwrap())
-    );
-    history.archive_change(Some(&id), false).unwrap();
-    history.resume(&id).unwrap();
-    let resumed = history.capture_owner().unwrap();
-    assert_eq!(
-        history.read_goal(&resumed).unwrap().as_deref(),
-        Some("Verify the local fixture")
-    );
-    history.change_goal(&resumed, None).unwrap();
-    assert_eq!(history.read_goal(&resumed).unwrap(), None);
-    assert!(
-        !history
-            .directory
-            .names()
-            .unwrap()
-            .contains(&name(&id).unwrap())
-    );
-    assert_eq!(
-        History::encode(&history.current().unwrap().unwrap()).unwrap(),
-        original
-    );
+    assert!(history.active.is_none());
+    assert!(history.conversations.is_empty());
+    assert!(history.goals.is_empty());
+    assert!(!path.exists());
 }
 
 #[test]
-fn goal_rejects_old_owner_even_after_same_history_is_resumed() {
-    let fixture = Temporary::new();
-    let mut history = fixture.history();
+fn setting_a_pending_goal_materializes_only_the_original_ram_context() {
+    let (path, mut history) = memory();
+    let owner = history.capture_owner().unwrap();
+    assert_eq!(
+        history
+            .change_goal(&owner, Some("  current task  "))
+            .unwrap(),
+        Some("current task".into())
+    );
+    assert_eq!(history.active.as_ref().unwrap().metadata.id, owner.id());
+    assert!(history.load(owner.id()).unwrap().messages.is_empty());
+    assert_eq!(
+        history.read_goal(&owner).unwrap(),
+        Some("current task".into())
+    );
+    assert!(!path.exists());
+
+    let replacement = History::with_workspace(path.clone(), "/goal-fixture".into()).unwrap();
+    assert!(replacement.goals.is_empty());
+    assert!(replacement.read_goal(&owner).is_err());
+    assert!(!path.exists());
+}
+
+#[test]
+fn goal_changes_require_the_selected_unrevoked_owner() {
+    let (path, mut history) = memory();
     let first = history.capture_owner().unwrap();
-    history.change_goal(&first, Some("First goal")).unwrap();
-    history.release_current();
-    let second = history.capture_owner().unwrap();
-    history.change_goal(&second, Some("Second goal")).unwrap();
-    assert!(history.change_goal(&first, Some("late write")).is_err());
-    assert_eq!(
-        history.read_goal(&second).unwrap().as_deref(),
-        Some("Second goal")
-    );
-    history.resume(first.id()).unwrap();
-    let resumed = history.capture_owner().unwrap();
-    assert_ne!(resumed, first);
-    assert!(history.change_goal(&first, Some("stale lease")).is_err());
-    assert!(history.change_goal(&second, Some("wrong current")).is_err());
-    assert_eq!(
-        history.read_goal(&resumed).unwrap().as_deref(),
-        Some("First goal")
-    );
-}
-
-#[test]
-fn goal_text_is_bounded_single_line_redacted_and_identity_checked() {
-    assert_eq!(
-        normalize(&"😀".repeat(MAX_GOAL_CHARS)).unwrap().len(),
-        MAX_GOAL_BYTES
-    );
-    for invalid in [
-        "".into(),
-        "   ".into(),
-        "x".repeat(MAX_GOAL_CHARS + 1),
-        "a\nb".into(),
-        "a\rb".into(),
-        "a\u{1b}[2J".into(),
-        "a\u{2028}b".into(),
-    ] {
-        assert!(normalize(&invalid).is_err(), "{invalid:?}");
-    }
-    let fixture = Temporary::new();
-    let mut history = fixture.history();
-    let owner = history.capture_owner().unwrap();
-    history
-        .change_goal(&owner, Some("API_TOKEN=private_fixture_goal_secret"))
-        .unwrap();
+    history.change_goal(&first, Some("first goal")).unwrap();
+    let second = history
+        .ownership
+        .select(&random_id("conversation").unwrap(), true);
+    assert!(history.read_goal(&first).is_err());
     assert!(
-        !history
-            .read_goal(&owner)
-            .unwrap()
-            .unwrap()
-            .contains("private_fixture_goal_secret")
-    );
-    let valid = Goal {
-        schema_version: 1,
-        id: owner.id().into(),
-        workspace: history.workspace.clone(),
-        text: "safe".into(),
-    };
-    let mut value = serde_json::to_value(valid).unwrap();
-    for key in ["id", "workspace"] {
-        let saved = value[key].clone();
-        value[key] = json!("different-owner");
         history
-            .directory
-            .write_atomic(
-                &name(owner.id()).unwrap(),
-                &serde_json::to_vec(&value).unwrap(),
-            )
-            .unwrap();
-        assert!(
-            history
-                .read_goal(&owner)
-                .unwrap_err()
-                .contains("identity or workspace")
-        );
-        value[key] = saved;
-    }
-    value["text"] = json!("unsafe\u{1b}[2J");
-    history
-        .directory
-        .write_atomic(
-            &name(owner.id()).unwrap(),
-            &serde_json::to_vec(&value).unwrap(),
-        )
-        .unwrap();
-    assert!(history.read_goal(&owner).is_err());
-    // Explicit clear can recover a malformed private sidecar without changing history.
-    history.change_goal(&owner, None).unwrap();
-    assert_eq!(history.read_goal(&owner).unwrap(), None);
+            .change_goal(&first, Some("wrong destination"))
+            .is_err()
+    );
+    history.change_goal(&second, Some("second goal")).unwrap();
+    assert_eq!(history.goals.get(first.id()).unwrap(), "first goal");
+    assert_eq!(
+        history.read_goal(&second).unwrap(),
+        Some("second goal".into())
+    );
+
+    history.ownership.revoke(second.id());
+    assert!(history.read_goal(&second).is_err());
+    assert!(history.change_goal(&second, None).is_err());
+    assert_eq!(history.goals.get(second.id()).unwrap(), "second goal");
+    assert!(!path.exists());
 }
 
 #[test]
-fn conversation_retention_removes_its_goal_sidecar() {
-    let fixture = Temporary::new();
-    let mut history = fixture.history();
+fn invalid_goal_leaves_current_ram_value_unchanged() {
+    let (path, mut history) = memory();
     let owner = history.capture_owner().unwrap();
-    history
-        .change_goal(&owner, Some("Reclaim with its conversation"))
-        .unwrap();
-    let id = owner.id().to_owned();
-    history.release_current();
-    history
-        .retain(
-            "conversation_ffffffffffffffffffffffffffffffff",
-            MAX_TOTAL_BYTES,
-        )
-        .unwrap();
-    let names = history.directory.names().unwrap();
-    assert!(!names.contains(&session_name(&id).unwrap()));
-    assert!(!names.contains(&name(&id).unwrap()));
+    history.change_goal(&owner, Some("keep this goal")).unwrap();
+    assert!(
+        history
+            .change_goal(&owner, Some("invalid\nchange"))
+            .is_err()
+    );
+    assert_eq!(
+        history.read_goal(&owner).unwrap(),
+        Some("keep this goal".into())
+    );
+    assert_eq!(history.change_goal(&owner, None).unwrap(), None);
+    assert!(history.read_goal(&owner).unwrap().is_none());
+    assert!(!path.exists());
 }

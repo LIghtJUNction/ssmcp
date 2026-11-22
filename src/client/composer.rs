@@ -73,7 +73,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/reload",
-        description: "Restart this client session; preserve pending requests",
+        description: "Restart this client with a fresh live session",
     },
     SlashCommand {
         name: "/restart",
@@ -216,44 +216,16 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Copy the latest agent reply",
     },
     SlashCommand {
+        name: "/invite",
+        description: "Copy a coordinator invitation; /invite worker recruits an external worker",
+    },
+    SlashCommand {
+        name: "/worker",
+        description: "List or resize worker stations: /worker ls | +N | -N",
+    },
+    SlashCommand {
         name: "/handoff",
         description: "Prepare a context file and editable handoff draft",
-    },
-    SlashCommand {
-        name: "/context",
-        description: "List local memory branches",
-    },
-    SlashCommand {
-        name: "/memory",
-        description: "Read the active local memory branch",
-    },
-    SlashCommand {
-        name: "/compact",
-        description: "Create a local checkpoint; optional explicit summary",
-    },
-    SlashCommand {
-        name: "/fork",
-        description: "Fork local memory; optional branch name",
-    },
-    SlashCommand {
-        name: "/switch",
-        description: "Switch memory branch by exact ID; never replay work",
-    },
-    SlashCommand {
-        name: "/resume",
-        description: "Resume saved local conversation history",
-    },
-    SlashCommand {
-        name: "/archive",
-        description: "Archive the current or named conversation without deleting messages",
-    },
-    SlashCommand {
-        name: "/archived",
-        description: "Browse archived conversations; Enter restores and resumes",
-    },
-    SlashCommand {
-        name: "/unarchive",
-        description: "Restore a named archived conversation without replaying it",
     },
     SlashCommand {
         name: "/pi",
@@ -1288,10 +1260,10 @@ mod tests {
                 .iter()
                 .map(|command| command.name)
                 .collect::<Vec<_>>(),
-            vec!["/reload", "/restart", "/resume"]
+            vec!["/reload", "/restart"]
         );
         let rendered = draft.rows(60, 4, &ui, true);
-        assert_eq!(rendered.lines.len(), 4);
+        assert_eq!(rendered.lines.len(), 3);
         assert!(rendered.lines[1].contains("/reload"));
         assert_eq!(rendered.cursor_col, 5);
         draft.set_text("/plugin");

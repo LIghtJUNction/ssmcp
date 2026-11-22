@@ -524,7 +524,7 @@ mod tests {
     }
 
     #[test]
-    fn force_listener_pending_ack_blocks_history_switch_without_touching_draft() {
+    fn force_listener_retired_history_command_keeps_pending_ack_and_draft() {
         let mut state = preview("/send pending original");
         let stamp = state.chat_input_stamp().unwrap();
         let (_sender, receiver) = oneshot::channel();
@@ -535,13 +535,8 @@ mod tests {
             handle: None,
         });
         let events = state.events.snapshot();
-        state.chat_resume_selected();
-        assert!(
-            state
-                .notice
-                .as_deref()
-                .is_some_and(|notice| { notice.contains("before switching history") })
-        );
+        let error = state.chat_command("/resume").unwrap_err();
+        assert!(error.contains("removed"));
         assert!(state.conversation.force_task.is_some());
         assert_eq!(state.chat_input_stamp().unwrap(), stamp);
         assert_eq!(state.events.snapshot(), events);

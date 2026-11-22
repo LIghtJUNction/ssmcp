@@ -1,4 +1,4 @@
-//! Independent command jobs with bounded live output and durable output artifacts.
+//! Independent command jobs with bounded live output retained only in memory.
 use super::{events::EventLog, process::Managed};
 use crate::output::{Capture, OutputStore};
 use crate::runtime::time::ExecutionTiming;
@@ -98,8 +98,8 @@ impl Output {
             self.capture.fail(error);
         }
         // Successful completed jobs can read their full capture directly. Keep
-        // tiny output inline; larger output uses the existing artifact store.
-        // A failed archive keeps the live tail and its explicit error metadata.
+        // tiny output inline; larger output uses the shared bounded memory store.
+        // A failed capture keeps the live tail and its explicit error metadata.
         if self.capture.error().is_none() && self.capture.bytes() > COMPLETED_INLINE_BYTES as u64 {
             let _ = self.capture.spill();
         }
@@ -719,6 +719,8 @@ impl Shell {
         }
         registry.jobs.insert(id.clone(), job.clone());
         drop(registry);
+        let worker_command =
+            crate::worker::native_command_started(&job.creator, &job.id, &job.command);
         let mut started = job.snapshot();
         started["type"] = json!("exec.started");
         self.events
@@ -765,9 +767,9 @@ impl Shell {
                 state.exit_signal = outcome.4;
                 state.finished = Some(Instant::now());
             }
-            if let Some(lease) = worker.observation.lock().unwrap().take() {
+            let status = {
                 let state = worker.state();
-                let status = if state.cancelled {
+                if state.cancelled {
                     "cancelled".into()
                 } else if state.timed_out {
                     "timed out".into()
@@ -775,9 +777,16 @@ impl Shell {
                     format!("failed: {error}")
                 } else if let Some(code) = state.exit_code {
                     format!("exit {code}")
+                } else if let Some(signal) = state.exit_signal {
+                    format!("signal {signal}")
                 } else {
-                    format!("signal {}", state.exit_signal.unwrap_or(0))
-                };
+                    "finished without a reported exit status".into()
+                }
+            };
+            if let Some(command) = worker_command {
+                command.finish(&status);
+            }
+            if let Some(lease) = worker.observation.lock().unwrap().take() {
                 lease.finish(&status);
             }
             worker.changed.notify_waiters();
@@ -1037,22 +1046,8 @@ mod tests {
     use serde_json::json;
     use std::io::Write;
 
-    struct OutputDirectory(PathBuf);
-
-    impl Drop for OutputDirectory {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn isolated_output() -> (OutputDirectory, Arc<OutputStore>) {
-        let mut random = [0u8; 16];
-        crate::platform::random_bytes(&mut random).unwrap();
-        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
-        let directory =
-            OutputDirectory(std::env::temp_dir().join(format!("ssmcp-shell-output-{suffix}")));
-        let store = OutputStore::at_for_test(directory.0.clone()).unwrap();
-        (directory, store)
+    fn isolated_output() -> Arc<OutputStore> {
+        OutputStore::new_connection().unwrap()
     }
 
     fn completed_job(store: &Arc<OutputStore>) -> Arc<Job> {
@@ -1218,17 +1213,9 @@ mod tests {
         assert_eq!(shell.slots.available_permits(), MAX_JOBS);
     }
 
-    fn remove_capture_artifact(output: &Output) {
-        if let Some(artifact) = output.capture.metadata() {
-            let path = PathBuf::from(artifact.path);
-            let _ = std::fs::remove_file(path.with_extension("meta.json"));
-            let _ = std::fs::remove_file(path);
-        }
-    }
-
     #[tokio::test]
-    async fn retained_completed_output_is_bounded_and_reads_exact_archive_ranges() {
-        let (_directory, store) = isolated_output();
+    async fn retained_completed_output_is_bounded_and_reads_exact_memory_ranges() {
+        let store = isolated_output();
         let shell = Shell::with_workspace(std::env::current_dir().unwrap(), store).unwrap();
         let payload: Vec<u8> = (0..MAX_OUTPUT + 137).map(|i| (i % 251) as u8).collect();
         let reversed: Vec<u8> = payload.iter().rev().copied().collect();
@@ -1314,17 +1301,12 @@ mod tests {
             assert_eq!(page["stdout_cursor"], end);
             assert_eq!(page["stdout_eof"], end == payload.len());
         }
-        for job in &jobs {
-            let state = job.state();
-            remove_capture_artifact(&state.stdout);
-            remove_capture_artifact(&state.stderr);
-        }
         shell.shutdown().await;
     }
 
     #[test]
     fn completed_small_output_keeps_only_one_inline_copy() {
-        let (_directory, store) = isolated_output();
+        let store = isolated_output();
         let mut output = Output::new(&store, "small-completed-fixture".into());
         let data = vec![b'x'; COMPLETED_INLINE_BYTES];
         output.append(&data);
@@ -1339,8 +1321,8 @@ mod tests {
     }
 
     #[test]
-    fn failed_archive_preserves_the_tail_and_unavailable_archives_are_errors() {
-        let (_directory, store) = isolated_output();
+    fn failed_capture_preserves_the_tail_and_evicted_memory_output_returns_errors() {
+        let store = isolated_output();
         let data = vec![b'x'; MAX_OUTPUT + 137];
         let mut failed = Output::new(&store, "failed-completed-fixture".into());
         failed.append(&data);
@@ -1350,26 +1332,36 @@ mod tests {
         assert_eq!(failed.read(0, 127).unwrap(), (vec![b'x'; 127], 264, true));
         assert_eq!(failed.metadata()["error"], "fixture capture failure");
         assert!(!failed.capture.metadata().unwrap().complete);
-        remove_capture_artifact(&failed);
 
-        let mut archived = Output::new(&store, "unavailable-completed-fixture".into());
-        archived.append(&data);
-        archived.finish(None);
-        let path = PathBuf::from(archived.capture.metadata().unwrap().path);
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_len(7)
-            .unwrap();
-        assert!(archived.read(0, 127).unwrap_err().contains("shorter"));
-        remove_capture_artifact(&archived);
-        assert!(archived.read(0, 127).unwrap_err().contains("unavailable"));
+        let mut retained = Output::new(&store, "evicted-completed-fixture".into());
+        retained.append(&data);
+        retained.finish(None);
+        assert!(retained.read_from_capture);
+        assert!(retained.capture.metadata().unwrap().path.is_none());
+        assert_eq!(
+            retained.read(0, 127).unwrap(),
+            (vec![b'x'; 127], 127, false)
+        );
+        // Fill the real shared memory budget so completed output is evicted by
+        // the same policy used in production, without modifying private state.
+        let pressure = vec![b'p'; crate::output::ARTIFACT_BYTES as usize];
+        for index in 0..crate::output::RETAINED_BYTES.div_ceil(crate::output::ARTIFACT_BYTES) {
+            let mut capture = store.capture(format!("quota-pressure-{index}"));
+            capture.push(&pressure).unwrap();
+            capture.finish().unwrap();
+        }
+        assert!(!retained.capture.metadata().unwrap().complete);
         assert!(
-            archived
+            retained
+                .read(0, 127)
+                .unwrap_err()
+                .contains("no longer retained")
+        );
+        assert!(
+            retained
                 .read(data.len() as u64, 127)
                 .unwrap_err()
-                .contains("unavailable")
+                .contains("no longer retained")
         );
     }
 
@@ -1859,7 +1851,7 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn completed_job_releases_capacity_before_reporting_finished() {
-        let (_directory, store) = isolated_output();
+        let store = isolated_output();
         let shell = Shell::with_workspace(std::env::current_dir().unwrap(), store).unwrap();
         let occupied = shell
             .slots

@@ -480,7 +480,7 @@ class Interactions(InputHistory):
             "text": "Final result without completion approval",
             "kind": "answer", "idempotency_key": "retired-hooks-final",
         })
-        self.check(receipt["accepted"] is True and receipt["history_saved"] is True
+        self.check(receipt["accepted"] is True and receipt["recorded"] is True and receipt["storage"] == "memory"
                    and receipt.get("finish_request_id") is None,
                    "a real final message commits without completion approval")
         self.check(self.ui("/display/conversation")["draft"]["text"] == draft,

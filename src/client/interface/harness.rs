@@ -369,8 +369,8 @@ fn prepare(output: &Arc<OutputStore>, value: Value) -> Result<Prepared, String> 
     }
     if let Some(metadata) = &artifact {
         text.push_str(&format!(
-            "\n\nComplete native JSON: {}\n\nArtifact ID: {}\nSHA-256: {}\nBytes: {}\nRead with ssmcp.output.read.",
-            metadata.path, metadata.id, metadata.sha256, metadata.bytes
+            "\n\nComplete native JSON is retained in memory.\n\nArtifact ID: {}\nSHA-256: {}\nBytes: {}\nRead with ssmcp.output.read before it expires. Exit or reload clears it.",
+            metadata.id, metadata.sha256, metadata.bytes
         ));
     }
     Ok(Prepared {
@@ -903,27 +903,48 @@ mod tests {
         assert_eq!(bounded("你好world", 5), "你");
     }
 
-    #[test]
-    fn preview_has_an_exact_complete_artifact_when_native_output_is_large() {
-        let mut random = [0u8; 16];
-        crate::platform::random_bytes(&mut random).unwrap();
-        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
-        let directory = std::env::temp_dir()
-            .canonicalize()
-            .unwrap()
-            .join(format!("ssmcp-harness-preview-{suffix}"));
-        let output = OutputStore::at_for_test(directory.clone()).unwrap();
+    #[tokio::test]
+    async fn preview_has_an_exact_complete_memory_output_when_native_output_is_large() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let output = OutputStore::new_connection().unwrap();
         let value = json!({"large":"界".repeat(MAX_PREVIEW)});
         let prepared = prepare(&output, value.clone()).unwrap();
         let metadata = prepared.artifact.unwrap();
         assert!(metadata.complete);
-        assert_eq!(
-            std::fs::read(&metadata.path).unwrap(),
-            serde_json::to_vec(&value).unwrap()
-        );
+        assert!(metadata.path.is_none());
+        assert_eq!(metadata.storage, "memory");
+        let stat = output
+            .perform("ssmcp.output.stat", json!({"id":metadata.id}))
+            .await
+            .unwrap();
+        assert_eq!(stat["complete"], true);
+        assert!(stat["path"].is_null());
+        let mut raw = Vec::new();
+        let mut offset = 0;
+        loop {
+            let chunk = output
+                .perform(
+                    "ssmcp.output.read",
+                    json!({"id":metadata.id,"offset":offset,"max_bytes":257}),
+                )
+                .await
+                .unwrap();
+            raw.extend(
+                STANDARD
+                    .decode(chunk["data_base64"].as_str().unwrap())
+                    .unwrap(),
+            );
+            let next = chunk["next_offset"].as_u64().unwrap();
+            assert!(next > offset || chunk["eof"] == true);
+            offset = next;
+            if chunk["eof"] == true {
+                break;
+            }
+        }
+        assert_eq!(offset, metadata.bytes);
+        assert_eq!(raw, serde_json::to_vec(&value).unwrap());
+        assert!(prepared.text.contains("retained in memory"));
         assert!(prepared.text.contains("Preview shortened"));
         assert!(prepared.text.len() < 12 * 1024);
-        drop(output);
-        std::fs::remove_dir_all(directory).unwrap();
     }
 }

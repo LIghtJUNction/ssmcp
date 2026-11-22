@@ -15,9 +15,9 @@ use std::{
 pub(crate) const URI: &str = "ssmcp-client://tool-sources";
 pub(crate) const ORIGIN: &str = "https://github.com/LIghtJUNction/ssmcp-tools.git";
 const SCHEMA: &str = "ssmcp-tool-sources-v1";
-const SEED_COMMIT: &str = "d80054cf16f38b93a94fb2867fbfbfde78832066";
+const SEED_COMMIT: &str = "5426ef7bab59dfd76cdbce36375d9254e318cb30";
 #[cfg(any(target_os = "linux", test))]
-const SEED_SOURCE_SHA256: &str = "885e958633713b500983eac37848487ed34d079dad8ae7db4bfa1262688ca7b8";
+const SEED_SOURCE_SHA256: &str = "3d5879cd851f439192d870d613d287f0ce86b740e6b8c9276440d6596371e77b";
 const SEED: &[u8] = include_bytes!("tool_repository/official.bundle");
 const MAX_RC: usize = 64 * 1024;
 const MAX_SOURCE: usize = 128 * 1024;

@@ -226,17 +226,17 @@ fn native_limits(chat_enabled: bool) -> Value {
             "delivery":chat_enabled.then_some("eligible code_mode response; delivery does not confirm agent execution")
         },
         "client_output_guard":{
-            "directory":"private client output storage; use artifact metadata for the actual path",
-            "linux_default_directory":"/tmp/ssmcp-<uid>",
-            "windows_default_directory":"%LOCALAPPDATA%\\ssmcp\\output",
+            "storage":"memory",
+            "path":null,
+            "reload_preserved":false,
             "inline_bytes":crate::output::INLINE_BYTES,
             "inline_lines":crate::output::INLINE_LINES,
             "retention_seconds":crate::output::RETENTION_SECS,
-            "completed_artifacts_max_bytes":crate::output::RETAINED_BYTES,
+            "shared_memory_max_bytes":crate::output::RETAINED_BYTES,
             "artifact_max_bytes":crate::output::ARTIFACT_BYTES,
             "read_max_bytes":crate::output::READ_BYTES,
-            "scope":"terminal_session archives the cumulative PTY stream; native_tool_result_json contains the native MCP result",
-            "overflow":"partial artifact with explicit error; active artifacts are never deleted by cleanup"
+            "scope":"bounded live streams owned by this client connection; terminal_session contains PTY bytes and native_tool_result_json contains the native MCP result",
+            "overflow":"oldest completed outputs are evicted first; active streams retain a partial prefix with an explicit error when capacity is full; cleanup preserves active streams"
         },
         "resources":{"page_size":PAGE_SIZE,"max_response_bytes":MAX_BYTES,"max_uri_bytes":MAX_URI},
         "text_files":{"max_write_bytes":262144,"max_read_bytes":262144,"offset_unit":"UTF-8 bytes"},
@@ -479,7 +479,7 @@ Use code_mode with clients, await call(clientId, toolName, arguments), \
 await tools(clientId, cursor), print/console.log and an explicit return. \
 Short native results are returned unchanged. Long backend output returns artifact metadata in \
 structuredContent; inspect isError, spilled and capture completeness before claiming success. \
-Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.\n\n\
+Use outputs.read for raw PTY bytes or the in-memory MCP JSON of other oversized backend results.\n\n\
 SSMCP does not embed desktop or browser control. Use the standalone Zuse CLI directly for those operations. The computer namespace only manages that CLI: computer.version(clientId), computer.download(clientId,{version}), computer.install(clientId,{download_id}) and computer.uninstall(clientId,{installation_id}). Omit version to download the latest stable release for the client's platform. Downloading does not execute or install it. Installation uses only an opaque managed download_id and returns its exact path; it does not replace an external Zuse executable or add itself to PATH. Version queries prefer an existing Zuse CLI on PATH. Uninstall requires the installation_id and removes only an unchanged managed installation. These helpers return complete native MCP results; inspect isError and structuredContent. There is no browser, cua or omarchy convenience facade and no automatic control fallback.\n\n\
 Use image(nativeResult) for visible MCP image content from a registered tool, then return only metadata. Do not print image base64. Generic image output and ui.present remain available independently of Zuse installation.\n\n\
 Use exec.run(clientId,{command:[\"cargo\",\"test\"],wait_ms:5000}) for an independent \
@@ -523,13 +523,13 @@ and ui.action(clientId,{action}) performs one navigation or configuration action
 ssmcp.ui.* schemas for supported values. \
 Use public await to observe typed jobs, agents and messages without a JavaScript worker. \
 waitFor(clientId,args) uses that coordinator inside code_mode. Resume an observation with the \
-server-issued wait_id. Cancellation only stops observation. ssmcp.ui.history lists or reads \
-versioned JSONL conversations. Read images with ssmcp.fs.read_image, then image(result).\n\n\
+server-issued wait_id. Cancellation only stops observation. ssmcp.ui.events paginates bounded \
+events from the current process; exit or reload clears them. Read images with ssmcp.fs.read_image, then image(result).\n\n\
 A custom frontend can read ssmcp.audit.events for source lifecycle events and ssmcp.exec.events \
 for command output/results. Full code_mode source goes only to actual authorized target clients; \
-the client applies audit redaction before display and storage. The local composer retains pending \
-requirements and drafts through a private reload handoff; uncertain delivery requires explicit \
-review instead of automatic replay.\n\n\
+the client applies audit redaction before retaining source in bounded process memory. The local \
+composer keeps pending requirements and drafts only in memory. Exit or reload clears them, \
+together with audit events and conversation history.\n\n\
 Use the code_mode controller parameter with name and/or model to identify the caller. Each \
 request preserves its own declaration; the client displays active and last controllers. Models \
 are caller-reported, while MCP clientInfo supplies only the application name. Missing models \
@@ -538,14 +538,15 @@ Use await reload(clientId) after installing an updated client binary. The client
 the request, waits for the server's receipt, stops local background work, and executes its \
 installed entry point with the original arguments, cwd and environment. In-flight requests \
 must finish first. Call list again for the new ID. Connections reconnect using the same login or server-qualified --allow policy. Both client and server must support reload.\n\n\
-Long command output is streamed to the client's private ssmcp storage \
-(normally /tmp/ssmcp-<uid> on Unix or LOCALAPPDATA/ssmcp/output on Windows). Read the \
-returned artifact metadata, including SHA-256, bytes, lines, complete and expiry. Use \
-outputs.read(clientId,{id,offset,max_bytes}) for bounded chunks, outputs.stat(clientId,{id}) \
-for a fresh snapshot, and outputs.cleanup(clientId) for retention cleanup. Automatic cleanup \
-retains completed artifacts for up to 24 hours within a 512 MiB budget. Each artifact is \
-capped at 256 MiB with explicit partial/error metadata. Active captures are not deleted. \
-PTY artifacts describe the cumulative terminal session, not individual shell commands.\n\n\
+Long command output remains in this connection's bounded process memory. Artifact metadata \
+has path:null and storage:memory, together with SHA-256, retained bytes, observed bytes, \
+completion and expiry. Use outputs.read(clientId,{id,offset,max_bytes}) for bounded chunks, \
+outputs.stat(clientId,{id}) for a fresh snapshot, and outputs.cleanup(clientId) to release \
+expired completed outputs. Completed outputs expire after 15 minutes and may be evicted \
+earlier to keep all captures, including inline bytes, within a shared 32 MiB budget. Each \
+output retains at most 8 MiB. Active captures are preserved by cleanup; capacity limits \
+produce explicit partial/error metadata. Exit or reload clears all retained output. PTY \
+output describes the cumulative terminal session, not individual shell commands.\n\n\
 Read ssmcp://clients/{id}/context for configured context roots, /skills for skill metadata, \
  /skills/view for a Markdown index with project skills overlaid on explicitly granted global \
  roots, and /agents for the applicable AGENTS.md chain including exact contents. /skills accepts \
@@ -587,8 +588,8 @@ fn client_guide(chat_enabled: bool) -> String {
         ssmcp.ui.present with kind:answer. The original conversation owner and idempotency checks apply. \
         Use ssmcp.ui.reply to report progress or a result for its exact authenticated thread input. \
         Public await also supports user input. ui.wait ends on input, cancellation, or its deadline. \
-        /resume restores local chat history without replaying tools or a model thread. The composer \
-        accepts @file and $skill."
+        Human chat, pending requirements and drafts remain only in the current process and are \
+        cleared on exit or reload. The composer accepts @file and $skill."
     } else {
         "\n\nHuman chat is disabled on this client. Human prompts and replies are unavailable."
     };

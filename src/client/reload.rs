@@ -1,6 +1,5 @@
 //! Re-execute the installed client entry point after an acknowledged reload.
 use crate::wire::Operation;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 #[cfg(unix)]
 use std::os::unix::{
@@ -17,7 +16,7 @@ pub(crate) const TOOL: &str = "ssmcp.client.reload";
 pub(crate) fn tool() -> Value {
     json!({
         "name": TOOL,
-        "description": "Acknowledge and restart this foreground client from its installed executable, preserving its resolved connection target, other startup arguments, cwd and environment. Reject while other requests are in flight. Stops local background commands, harnesses and forwards. The client reconnects with a new ID; use list again. Server-qualified --allow accounts are checked again after reconnect; control apps retain their independent sign-in.",
+        "description": "Acknowledge and restart this foreground client from its installed executable, preserving its resolved connection target, other startup arguments, cwd and environment. Reject while other requests are in flight. Stops local background commands, harnesses and forwards. Live logs, drafts and pending requests are discarded at restart. The client reconnects with a new ID; use list again. Server-qualified --allow accounts are checked again after reconnect; control apps retain their independent sign-in.",
         "inputSchema": {"type":"object","properties":{},"additionalProperties":false},
         "annotations": {"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false}
     })
@@ -44,66 +43,6 @@ pub(crate) fn acknowledgement(client_id: &str, github_auth: bool) -> Value {
         "background_jobs":"stopped",
         "next_step":"Call list again and select the new client ID by title, name and cwd."
     }))
-}
-
-/// The active conversation is a local history identity, never a server client
-/// or agent identity. The existing private outbox handoff owns this checkpoint.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct SessionState {
-    conversation_id: Option<String>,
-    terminal: Option<super::terminal::ReloadState>,
-}
-
-impl SessionState {
-    pub(super) fn capture() -> Result<Self, String> {
-        let state = Self {
-            conversation_id: super::interface::history::current()?
-                .map(|conversation| conversation.metadata.id),
-            terminal: super::terminal::reload_snapshot(),
-        };
-        state.validate()?;
-        Ok(state)
-    }
-
-    pub(super) fn validate(&self) -> Result<(), String> {
-        if self
-            .conversation_id
-            .as_ref()
-            .is_some_and(|id| id.len() > 128 || id.chars().any(char::is_control))
-        {
-            return Err("invalid reload conversation identity".into());
-        }
-        if let Some(terminal) = &self.terminal {
-            terminal.validate()?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn discard_display(&mut self) {
-        if let Some(terminal) = &mut self.terminal {
-            terminal.discard_display();
-        }
-    }
-
-    pub(super) fn restore(self) {
-        let (restored, notice) = match self.conversation_id.as_deref() {
-            Some(id) => match super::interface::history::resume(id) {
-                Ok(_) => (true, None),
-                Err(error) => (
-                    false,
-                    Some(format!(
-                        "Could not restore conversation: {error} · use /resume to choose history"
-                    )),
-                ),
-            },
-            None => (false, None),
-        };
-        if let Some(notice) = &notice {
-            super::render::status("shell", "Warning", notice);
-        }
-        super::terminal::restore_reload(self.terminal, restored, notice);
-    }
 }
 
 pub(crate) struct Restart {
@@ -162,64 +101,28 @@ impl Restart {
         Ok(acknowledgement(client_id, github_auth))
     }
 
-    pub(crate) fn execute(
-        &self,
-        output: std::sync::Arc<crate::output::OutputStore>,
-    ) -> crate::Result<()> {
+    pub(super) fn set_worker_total(
+        &mut self,
+        total: usize,
+        preserve_worker_agent: bool,
+    ) -> Result<(), String> {
+        // An explicitly chosen worker executor belongs only to that pool.
+        // A new pool created from ordinary chat always starts with remote workers.
+        let reset_chat = if total == 0 {
+            preserve_worker_agent
+        } else {
+            !preserve_worker_agent
+        };
+        self.arguments = super::worker_arguments(&self.arguments, total, false, reset_chat)?;
+        Ok(())
+    }
+
+    pub(crate) fn execute(&self) -> crate::Result<()> {
         validate_executable(&self.program)?;
-        // Old requests, commands and backends have already stopped. Clean only
-        // registered temporary files before creating the new reload handoff.
-        // A cleanup error must not discard the draft or replace a reload error.
-        match crate::managed_files::cleanup(&self.cwd, false, "reload") {
-            Ok(summary)
-                if !summary.errors.is_empty()
-                    || !summary.recoveries.is_empty()
-                    || !summary.retention.recoveries.is_empty()
-                    || summary.scan_truncated =>
-            {
-                let errors = summary.errors.len();
-                let recoveries = summary.recoveries.len() + summary.retention.recoveries.len();
-                let truncated = summary.scan_truncated;
-                // Preserve only redacted metadata, never file contents. Spill
-                // even a short diagnostic so it survives the following exec
-                // under the existing output owner, quota and retention policy.
-                let diagnostic = crate::audit::event(json!({
-                    "type": "ssmcp.files.cleanup",
-                    "trigger": "reload",
-                    "summary": summary,
-                }));
-                let mut capture = output.capture("managed-files:reload:json");
-                let saved = capture
-                    .spill()
-                    .and_then(|()| capture.push(diagnostic.to_string().as_bytes()));
-                let saved = saved.and(capture.finish());
-                let mut details = capture.metadata().map_or_else(
-                    || "diagnostic archive unavailable".to_owned(),
-                    |metadata| format!("diagnostic {} ({})", metadata.id, metadata.path),
-                );
-                if let Err(error) = saved {
-                    details.push_str(&format!("; diagnostic is incomplete: {error}"));
-                }
-                super::render::status(
-                    "cleanup",
-                    "Warning",
-                    &format!(
-                        "Reload cleanup: {errors} errors, {recoveries} recoveries, scan_truncated={truncated}; {details}"
-                    ),
-                );
-            }
-            Ok(_) => {}
-            Err(error) => super::render::status(
-                "files",
-                "Warning",
-                &format!("Temporary-file cleanup was skipped: {error}"),
-            ),
-        }
+        // Reload starts a fresh live session. No conversation, output, draft,
+        // or queue checkpoint is written or read across the process boundary.
         let mut command = std::process::Command::new(&self.program);
         command.args(&self.arguments).current_dir(&self.cwd);
-        let _resume = output.prepare_reload(&mut command)?;
-        let _steering = super::steering::prepare_reload(&mut command)?;
-        super::interface::history::release_current()?;
         #[cfg(windows)]
         {
             // Windows has no exec. All old backends have already stopped; keep
@@ -254,7 +157,7 @@ impl Restart {
 /// Keep the service entry point intact so its saved SessionSpec remains the
 /// authority. Foreground invocations record only the resolved endpoint, never
 /// credentials; all other arguments retain their original values and order.
-fn connection_arguments(
+pub(super) fn connection_arguments(
     arguments: Vec<OsString>,
     options: &super::Options,
     saved_session: bool,

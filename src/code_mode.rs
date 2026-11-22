@@ -34,8 +34,6 @@ pub const MAX_IMAGES: usize = 4;
 pub const MAX_IMAGE_ENCODED_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_CALLS: usize = 128;
 pub const MAX_NATIVE_INFLIGHT: usize = 16;
-pub(crate) const MAX_CONTEXT_ENTRY_BYTES: usize = crate::wire::MAX_CONTEXT_ENTRY_BYTES;
-pub(crate) const MAX_CONTEXT_BYTES: usize = 64 * 1024;
 pub const MAX_CONCURRENT: usize = 4;
 const MAX_ERROR_BYTES: usize = 4096;
 static SLOTS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
@@ -59,26 +57,10 @@ pub(crate) struct AuditRun {
     connections: Arc<Mutex<HashMap<String, Weak<crate::broker::Session>>>>,
     question_answers_deferred: Arc<Mutex<HashMap<String, String>>>,
     question_delivery_activity: Arc<Mutex<HashMap<String, bool>>>,
-    memories: Arc<Mutex<ContextMemories>>,
     question_answers: Arc<Mutex<question_answers::Capture>>,
     tool_summaries: Arc<Mutex<tool_summaries::Capture>>,
     waits: Arc<Mutex<user_wait::State>>,
     started: Instant,
-}
-
-/// Per-run capture only; no workspace history is cached between callers.
-#[derive(Default)]
-struct ContextMemories {
-    clients: HashMap<String, ContextMemory>,
-    bytes: usize,
-    overflowed: bool,
-}
-
-struct ContextMemory {
-    workspace: String,
-    revision: u64,
-    entry: Option<Value>,
-    bytes: usize,
 }
 
 /// Private server-side proof for one room, never serialized to a native client.
@@ -128,7 +110,6 @@ impl AuditRun {
             connections: Arc::new(Mutex::new(HashMap::new())),
             question_answers_deferred: Arc::new(Mutex::new(HashMap::new())),
             question_delivery_activity: Arc::new(Mutex::new(HashMap::new())),
-            memories: Arc::new(Mutex::new(ContextMemories::default())),
             question_answers: Arc::new(Mutex::new(question_answers::Capture::default())),
             tool_summaries: Arc::new(Mutex::new(tool_summaries::Capture::default())),
             waits: Arc::new(Mutex::new(user_wait::State::default())),
@@ -212,9 +193,6 @@ impl AuditRun {
                         | "ssmcp.resources.list"
                         | "ssmcp.resources.templates"
                         | "ssmcp.resources.read"
-                        | "ssmcp.context.status"
-                        | "ssmcp.context.read"
-                        | "ssmcp.context.list"
                         | "ssmcp.time.now"
                         | "ssmcp.time.wait"
                 )
@@ -429,86 +407,6 @@ impl AuditRun {
             .get(client_id)
             .copied()
             .unwrap_or(true)
-    }
-
-    /// Called only after the host has reauthorized a completed native call.
-    /// Older concurrent replies cannot overwrite a newer workspace revision.
-    pub(crate) fn capture_context(&self, client_id: &str, result: &Value) {
-        if client_id.is_empty()
-            || client_id.len() > 128
-            || !self
-                .targets
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .contains(client_id)
-        {
-            return;
-        }
-        let Some(context) = result
-            .get("_meta")
-            .and_then(|meta| meta.get("ssmcp.context"))
-            .filter(|context| context.is_object())
-        else {
-            return;
-        };
-        let Some(workspace) = context["workspace"]["id"]
-            .as_str()
-            .filter(|id| id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        else {
-            return;
-        };
-        let Some(revision) = context["revision"].as_u64() else {
-            return;
-        };
-        let mut memories = self
-            .memories
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if let Some(old) = memories.clients.get(client_id) {
-            if old.workspace == workspace && old.revision >= revision {
-                return;
-            }
-        } else if memories.clients.len() >= MAX_CALLS {
-            memories.overflowed = true;
-            return;
-        }
-        let old_bytes = memories.clients.get(client_id).map_or(0, |old| old.bytes);
-        let retained = memories.bytes.saturating_sub(old_bytes);
-        let entry = json!({"client_id":client_id,"context":context});
-        let bytes = entry.to_string().len();
-        // Include array separators in the capture bound. HTTP separately bounds
-        // the complete structured + textual presentation before claiming requests.
-        let fits = bytes <= MAX_CONTEXT_ENTRY_BYTES
-            && retained
-                .saturating_add(bytes)
-                .saturating_add(memories.clients.len() + 3)
-                <= MAX_CONTEXT_BYTES;
-        let bytes = if fits { bytes } else { 0 };
-        memories.bytes = retained + bytes;
-        memories.clients.insert(
-            client_id.into(),
-            ContextMemory {
-                workspace: workspace.into(),
-                revision,
-                entry: fits.then_some(entry),
-                bytes,
-            },
-        );
-    }
-
-    pub(crate) fn context_memories(&self) -> (Vec<Value>, bool) {
-        let memories = self
-            .memories
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let mut clients = memories.clients.iter().collect::<Vec<_>>();
-        clients.sort_by(|left, right| left.0.cmp(right.0));
-        let omitted = memories.overflowed || clients.iter().any(|(_, value)| value.entry.is_none());
-        let entries = clients
-            .into_iter()
-            .filter_map(|(_, value)| value.entry.clone())
-            .collect();
-        (entries, omitted)
     }
 
     pub(crate) fn completion(&self, result: &Result<Value, String>) -> crate::wire::CodeCompletion {
@@ -1233,13 +1131,6 @@ mod tests {
 
     static TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    fn memory_result(workspace: char, revision: u64, text: &str) -> Value {
-        json!({"content":[],"_meta":{"ssmcp.context":{
-            "workspace":{"id":workspace.to_string().repeat(64)},
-            "revision":revision,"summary":text,"mode":"provided_summary"
-        }}})
-    }
-
     #[test]
     fn native_argument_size_has_an_explicit_error_at_the_unchanged_boundary() {
         let limit = crate::wire::MAX_FRAME / 2;
@@ -1263,81 +1154,6 @@ mod tests {
             .unwrap_err(),
             "invalid native tool name or arguments",
         );
-    }
-
-    #[test]
-    fn context_capture_is_per_run_per_client_and_keeps_the_latest_revision() {
-        let run = AuditRun::new("return native.stdout;", None).unwrap();
-        run.capture_context("one", &memory_result('a', 4, "not dispatched"));
-        assert!(run.context_memories().0.is_empty());
-        run.native_dispatched("one", Some("ssmcp.exec.run"));
-        run.capture_context("one", &memory_result('a', 4, "newest"));
-        run.capture_context("one", &memory_result('a', 3, "late old reply"));
-        run.capture_context("one", &memory_result('a', 4, "duplicate"));
-        let (memories, omitted) = run.context_memories();
-        assert!(!omitted);
-        assert_eq!(memories.len(), 1);
-        assert_eq!(memories[0]["client_id"], "one");
-        assert_eq!(memories[0]["context"]["summary"], "newest");
-        run.capture_context("one", &memory_result('b', 1, "different workspace"));
-        assert_eq!(
-            run.context_memories().0[0]["context"]["summary"],
-            "different workspace"
-        );
-        let other_run = AuditRun::new("return 1;", None).unwrap();
-        assert!(other_run.context_memories().0.is_empty());
-    }
-
-    #[test]
-    fn context_capture_enforces_budgets_without_reintroducing_an_older_snapshot() {
-        let run = AuditRun::new("return 1;", None).unwrap();
-        run.native_dispatched("one", Some("ssmcp.exec.run"));
-        run.capture_context("one", &memory_result('a', 1, "old"));
-        run.capture_context(
-            "one",
-            &memory_result('a', 2, &"x".repeat(MAX_CONTEXT_ENTRY_BYTES)),
-        );
-        run.capture_context("one", &memory_result('a', 1, "late old"));
-        assert!(run.context_memories().0.is_empty());
-        assert!(run.context_memories().1);
-        run.capture_context("one", &memory_result('a', 3, "new compact snapshot"));
-        assert!(!run.context_memories().1);
-        for index in 0..20 {
-            let client = format!("client-{index}");
-            run.native_dispatched(&client, Some("ssmcp.exec.run"));
-            run.capture_context(&client, &memory_result('a', 1, &"x".repeat(11 * 1024)));
-        }
-        let (memories, omitted) = run.context_memories();
-        assert!(omitted);
-        assert!(serde_json::to_vec(&memories).unwrap().len() <= MAX_CONTEXT_BYTES);
-        assert!(
-            memories
-                .iter()
-                .all(|entry| entry.to_string().len() <= MAX_CONTEXT_ENTRY_BYTES)
-        );
-    }
-
-    #[test]
-    fn context_reads_are_observation_and_context_mutations_are_interaction() {
-        let run = AuditRun::new("return 1;", None).unwrap();
-        for tool in [
-            "ssmcp.context.status",
-            "ssmcp.context.read",
-            "ssmcp.context.list",
-        ] {
-            run.native_dispatched("reader", Some(tool));
-        }
-        assert!(run.steering_targets().is_empty());
-        assert_eq!(run.targets(), ["reader"]);
-        for tool in [
-            "ssmcp.context.compact",
-            "ssmcp.context.fork",
-            "ssmcp.context.switch",
-        ] {
-            let run = AuditRun::new("return 1;", None).unwrap();
-            run.native_dispatched("writer", Some(tool));
-            assert_eq!(run.steering_targets(), ["writer"]);
-        }
     }
 
     #[test]
@@ -1494,7 +1310,7 @@ mod tests {
             "ssmcp.ui.action",
             "ssmcp.ui.filter",
             "ssmcp.ui.questions",
-            "ssmcp.ui.history",
+            "ssmcp.ui.events",
             "ssmcp.ui.harness",
             "ssmcp.ui.listener",
             "ssmcp.ui.wait",
@@ -1555,7 +1371,7 @@ mod tests {
     fn agent_messages_receive_next_caller_without_fabricating_an_exact_agent_binding() {
         for tool in ["ssmcp.ui.message", "ssmcp.ui.present"] {
             let run = AuditRun::new("return await say('work', 'Ready');", None).unwrap();
-            run.native_dispatched("observed", Some("ssmcp.ui.history"));
+            run.native_dispatched("observed", Some("ssmcp.ui.events"));
             run.native_dispatched("work", Some(tool));
             assert_eq!(run.targets(), ["observed", "work"]);
             assert_eq!(run.steering_targets(), ["work"]);
@@ -2183,39 +1999,89 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn history_helpers_route_metadata_search_and_reject_action_overrides() {
+    async fn live_event_helpers_select_advertised_thread_apis_without_archive_exports() {
         let _guard = TESTS.lock().await;
-        let output = run_code(r#"
-            const list = await history.list('work',{limit:8});
-            const metadata = await history.metadata('work',{id:'conversation_fixture'});
-            const read = await history.read('work',{id:'conversation_fixture',offset:4,limit:1});
-            const search = await history.search('work',{query:'登录',role:'user',case_sensitive:true,offset:2,limit:3});
-            const rejected = [];
-            for (const args of [null, [], 'bad', {action:'list'}]) {
-                try { await history.search('work',args); }
-                catch (error) { rejected.push(error.message); }
-            }
-            return {list,metadata,read,search,rejected,frozen:Object.isFrozen(history)};
-        "#).await.unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let host: Host = Arc::new(move |request| {
+            let calls = observed.clone();
+            Box::pin(async move {
+                match request {
+                    HostRequest::Tools { client_id, cursor } => {
+                        assert!(cursor.is_none());
+                        let descriptor = if client_id == "legacy" {
+                            json!({"name":"ssmcp.ui.history","inputSchema":{"oneOf":[
+                                {"properties":{"action":{"const":"thread"}}}
+                            ]}})
+                        } else {
+                            json!({"name":"ssmcp.ui.events","inputSchema":{
+                                "type":"object","properties":{"action":{"const":"thread"}}
+                            }})
+                        };
+                        Ok(json!({"tools":[descriptor]}))
+                    }
+                    HostRequest::Call {
+                        client_id,
+                        name,
+                        arguments,
+                    } => {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        Ok(json!({"isError":false,"structuredContent":{
+                            "id":client_id,"name":name,"arguments":arguments
+                        }}))
+                    }
+                    _ => Err("unexpected live-event helper host operation".into()),
+                }
+            })
+        });
+        let output = trusted_execute(
+            r#"
+                const current = await ui.events('work', {
+                    agent_id:'agent_exact',cursor:7,generation:'live',limit:32
+                });
+                const legacy = await ui.events('legacy', {main:true});
+                const roots = await context.roots('work');
+                const rejected = [];
+                for (const args of [null, [], 'bad', {action:'list'}, {client_id:'other'}]) {
+                    try { await ui.events('work',args); }
+                    catch (error) { rejected.push(error.message); }
+                }
+                return {
+                    current,legacy,roots,rejected,frozen:Object.isFrozen(ui),
+                    historyMissing:typeof history === 'undefined' && ui.history === undefined,
+                    contextExports:Object.keys(context)
+                };
+            "#
+            .into(),
+            2_000,
+            json!([{"id":"work"},{"id":"legacy"}]),
+            host,
+        )
+        .await
+        .unwrap();
         let result = &output["result"];
-        for action in ["list", "metadata", "read", "search"] {
-            assert_eq!(result[action]["name"], "ssmcp.ui.history");
-            assert_eq!(result[action]["id"], "work");
-            assert_eq!(result[action]["arguments"]["action"], action);
-        }
+        assert_eq!(result["current"]["name"], "ssmcp.ui.events");
+        assert_eq!(result["current"]["id"], "work");
         assert_eq!(
-            result["metadata"]["arguments"]["id"],
-            "conversation_fixture"
-        );
-        assert_eq!(result["read"]["arguments"]["offset"], 4);
-        assert_eq!(
-            result["search"]["arguments"],
+            result["current"]["arguments"],
             json!({
-                "action":"search","query":"登录","role":"user","case_sensitive":true,"offset":2,"limit":3
+                "action":"thread","client_id":"work","agent_id":"agent_exact",
+                "cursor":7,"generation":"live","limit":32
             })
         );
-        assert_eq!(result["rejected"].as_array().unwrap().len(), 4);
+        assert_eq!(result["legacy"]["name"], "ssmcp.ui.history");
+        assert_eq!(
+            result["legacy"]["arguments"],
+            json!({
+                "action":"thread","client_id":"legacy","main":true
+            })
+        );
+        assert_eq!(result["roots"]["name"], "ssmcp.context.roots");
+        assert_eq!(result["contextExports"], json!(["roots"]));
+        assert_eq!(result["historyMissing"], true);
+        assert_eq!(result["rejected"].as_array().unwrap().len(), 5);
         assert_eq!(result["frozen"], true);
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
     }
 
     #[tokio::test]

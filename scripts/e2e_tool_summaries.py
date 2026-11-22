@@ -185,19 +185,11 @@ return {failed,unexpected};""" % json.dumps(self.client_id)
                 return events, group
         raise AssertionError(description + "\n" + front.failure_detail())
 
-    def history_messages(self):
-        sessions = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
-        messages = []
-        for session in sessions:
-            page = self.observe("ssmcp.ui.history", {
-                "action": "read", "id": session["id"], "limit": 64,
-            })
-            if page.get("next_offset") is not None:
-                raise AssertionError("the bounded fixture unexpectedly has more than 64 history messages")
-            messages.extend((session["id"], item["role"], item["content"])
-                            for item in page["messages"]
-                            if item["role"] in ("user", "assistant", "system"))
-        return messages
+    def live_messages(self):
+        return [(event["source"].get("agent_id"), event["value"].get("message_id"),
+                 event["value"].get("text"))
+                for event in self.live_events()["events"]
+                if event.get("value", {}).get("type") == "ssmcp.message"]
 
     def mouse(self, front, marker, button):
         shot = front.until(lambda value: marker in body_text(value),
@@ -320,7 +312,7 @@ return {failed,unexpected};""" % json.dumps(self.client_id)
         listed_response, group = self.group(group_id)
         self.check(group["call_count"] == 11 and not self.reminders(listed_response),
                    "listing does not count as work or repeat an already delivered reminder")
-        messages_before = self.history_messages()
+        messages_before = self.live_messages()
         first = self.update(group, FIRST)
         self.frames_for(front, "first-folded", FIRST, first["call_count"])
         # The tool viewport holds twelve rows. Create real overflow before
@@ -349,7 +341,7 @@ return {failed,unexpected};""" % json.dumps(self.client_id)
                    == (visible_before["expanded"], visible_before["scroll"], events_before["scroll"]),
                    "summary replacement preserves group expansion, inner scroll, and outer scroll")
         self.check(events_after["retained_events"] == events_before["retained_events"]
-                   and self.history_messages() == messages_before,
+                   and self.live_messages() == messages_before,
                    "two summary updates replace metadata without appending chat messages or tool records")
         self.frames_for(front, "updated-expanded", SECOND, second["call_count"])
 
@@ -410,8 +402,8 @@ return {failed,unexpected};""" % json.dumps(self.client_id)
         self.mouse(front, final["summary"], 0)
         self.wait_group(front, group_id, lambda item: not item["expanded"], "collapse the updated tool group")
         self.frames_for(front, "final-folded", final["summary"], final["call_count"])
-        self.check(self.history_messages() == messages_before,
-                   "the summary lifecycle adds no user or assistant chat body")
+        self.check(self.live_messages() == messages_before,
+                   "the summary lifecycle adds no published message body to the live event journal")
         return {
             "status": "passed", "checks": len(self.checks), "passed_checks": self.checks,
             "frames": self.frames, "summary_receipts": self.receipts, "metrics": self.metrics,

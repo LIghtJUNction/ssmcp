@@ -32,7 +32,7 @@ import tempfile
 import time
 
 if sys.platform == "linux":
-    from e2e import Harness, wait_for
+    from e2e import Harness, PUBLIC_TOOLS, wait_for
     from e2e_account_gateway import FIXTURE_ENV
 else:
     Harness = object
@@ -121,6 +121,7 @@ class Daemon(Harness):
         self.command_output = []
         self.metrics = {}
         self.probe_job_id = None
+        self.live_log_snapshots = {}
         self.case = "setup"
         self.case_checks = {}
         self.cleanup_errors = []
@@ -201,8 +202,8 @@ class Daemon(Harness):
         state = Path(value["state_directory"])
         if state.parent != self.state_home or state.is_symlink() or not state.is_dir():
             raise AssertionError("session state escaped the owned private directory")
-        if Path(value["logs_path"]) != state / "lifecycle.jsonl":
-            raise AssertionError("session logs escaped their owned state directory")
+        if "logs_path" in value:
+            raise AssertionError("session status advertises the retired logs_path field")
         if "login_code" in json.dumps(value):
             raise AssertionError("session status unexpectedly includes login-code data")
         self.statuses[name] = value
@@ -286,11 +287,12 @@ class Daemon(Harness):
         auth_home = Path(self.environment["SSMCP_AUTH_HOME"])
         account = auth_home / (hashlib.sha256(self.origin.encode()).hexdigest() + ".json")
         paths = [self.state_home, directory, directory / "manifest.json", directory / "state.json",
-                 directory / "lifecycle.jsonl", directory / "ssmcp",
-                 auth_home, account, auth_home / "default"]
+                 directory / "ssmcp", auth_home, account, auth_home / "default"]
         self.check(all(path.lstat().st_uid == os.getuid() and not path.is_symlink()
                        and not stat.S_IMODE(path.stat().st_mode) & 0o077 for path in paths),
-                   "saved executable, state, lifecycle logs and account login are owned and private")
+                   "saved executable, management state and account login are owned and private")
+        self.check(not any(directory.glob("lifecycle*.jsonl")),
+                   "the fresh private session creates no automatic lifecycle log files")
         saved = json.loads(account.read_text())
         self.check(saved.get("server") == self.origin and saved.get("token") == self.account_token,
                    "the daemon uses only the owned fixture account credential")
@@ -300,8 +302,9 @@ class Daemon(Harness):
 
     def probe_tools(self):
         http, value, _ = self.rpc("tools/list", modern=True)
-        self.check(http == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["list", "code_mode", "collab", "await", "messages"],
-                   "daemon mode publishes exactly list, code_mode, collab, await and messages")
+        names = [tool["name"] for tool in value["result"]["tools"]]
+        self.check(http == 200 and len(names) == len(PUBLIC_TOOLS) and set(names) == PUBLIC_TOOLS,
+                   "daemon mode publishes the exact current public tool catalog, including link")
         catalog = self.public_call("list", {"client_id": self.client_id})
         self.check(all(not tool["name"].startswith(("codex.", "claude.", "pi.", "opencode."))
                        for tool in catalog["tools"]), "the fixture discovers no installed coding Harness")
@@ -342,39 +345,65 @@ class Daemon(Harness):
                    "owned daemon task records its actual live process tree")
         return job, identities
 
+    def capture_live_logs(self, name, *, stdout_job_id=None):
+        logs = self.cli("logs", name, lines=1000)
+        self.check(isinstance(logs, dict) and logs.get("source") == "live"
+                   and logs.get("storage") == "memory"
+                   and isinstance(logs.get("generation"), str) and bool(logs["generation"])
+                   and isinstance(logs.get("events"), list) and len(logs["events"]) <= 1000
+                   and logs.get("limit") == 1000 and isinstance(logs.get("truncated"), bool),
+                   "sessions logs returns a bounded snapshot of the live process memory")
+        self.check(all(isinstance(row, dict) and type(row.get("sequence")) is int
+                       for row in logs["events"]),
+                   "live logs preserve the real attach-frame sequence identifiers")
+        if stdout_job_id is not None:
+            stdout = []
+            for row in logs["events"]:
+                event = row.get("value")
+                if (row.get("kind") == "event" and isinstance(event, dict)
+                        and event.get("type") == "exec.stdout"
+                        and event.get("job_id") == stdout_job_id):
+                    stdout.append(base64.b64decode(event["params"]["deltaBase64"], validate=True))
+            self.check(b"DAEMON_EXEC_READY\n" in b"".join(stdout),
+                       "the live memory snapshot contains the actual probe job's stdout event")
+        self.live_log_snapshots.setdefault(name, []).append(logs)
+        return logs
+
+    def assert_live_logs_unavailable(self, name):
+        _, output, error = self.command(
+            ["sessions", "logs", name, "--lines", "1000", "--json"], expected="failure")
+        self.check(b"live_logs_unavailable" in error,
+                   "stopped sessions report live_logs_unavailable without a file or journal fallback")
+
     def no_credentials_in_logs(self):
+        self.check(set(self.live_log_snapshots) == set(self.statuses),
+                   "every owned session had its actual live log snapshot captured before shutdown")
         for name in self.managed:
             if name not in self.statuses:
                 continue
-            logs = self.cli("logs", name, lines=1000)
-            self.check(isinstance(logs, dict) and logs.get("source") == "journal"
-                       and logs.get("fallback") is False and isinstance(logs.get("events"), list)
-                       and logs.get("coverage") == "native_events" and logs.get("warning") is None
-                       and logs.get("limit") == 1000 and isinstance(logs.get("truncated"), bool)
-                       and logs.get("unit") == self.statuses[name]["manager_id"] + ".service",
-                       "Linux sessions logs identifies its actual native journal source")
-            if name == self.names[0]:
-                stdout = []
-                for row in logs["events"]:
-                    event = row.get("event")
-                    if (isinstance(event, dict) and event.get("type") == "exec.stdout"
-                            and event.get("job_id") == self.probe_job_id):
-                        stdout.append(base64.b64decode(event["params"]["deltaBase64"], validate=True))
-                self.check(b"DAEMON_EXEC_READY\n" in b"".join(stdout),
-                           "sessions logs exposes the real command stdout event, not just lifecycle or request text")
-            self.command_output.append(json.dumps(logs).encode())
-            directory = Path(self.statuses[name]["state_directory"])
-            observations = []
-            for filename in ("lifecycle.jsonl", "lifecycle.1.jsonl", "state.json", "manifest.json"):
-                path = directory / filename
-                if path.exists():
-                    raw = path.read_bytes()
-                    self.command_output.append(raw)
-                    if filename.startswith("lifecycle"):
-                        observations.extend(json.loads(line) for line in raw.splitlines() if line)
-            self.check(observations and all(row.get("phase") in {
-                "starting", "connected", "reconnecting", "disconnected", "stopped"
-            } for row in observations), "private lifecycle records retain their separate, accurately labelled phases")
+            status = self.cli("status", name)
+            if status["manager_active"]:
+                self.capture_live_logs(name)
+            else:
+                self.assert_live_logs_unavailable(name)
+            for logs in self.live_log_snapshots[name]:
+                self.command_output.append(json.dumps(logs).encode())
+            directory = Path(status["state_directory"])
+            self.check(not any(directory.glob("lifecycle*.jsonl")),
+                       "the owned session never creates automatic lifecycle log files")
+            management = [(directory / filename).read_bytes()
+                          for filename in ("state.json", "manifest.json")]
+            self.command_output.extend(management)
+            self.check(all(marker not in raw for raw in management
+                           for marker in (b"DAEMON_EXEC_READY", b"DAEMON_PTY_READY", b"DAEMON_TREE_READY")),
+                       "management state and configuration contain none of the observed task output bodies")
+        self.metrics["live_log_snapshots"] = {
+            name: [{"generation": logs["generation"], "events": len(logs["events"]),
+                    "truncated": logs["truncated"]} for logs in snapshots]
+            for name, snapshots in self.live_log_snapshots.items()
+        }
+        # This independent audit reads the real service journal directly. It is
+        # never a fallback for the authenticated sessions logs command above.
         units = [value["manager_id"] + ".service" for value in self.statuses.values()]
         command = [self.programs["journalctl"], "--user", "--no-pager", "--output=json", "--since", f"@{self.journal_since}"]
         for unit in units:
@@ -454,6 +483,7 @@ class Daemon(Harness):
         first = self.connected(primary)
         self.authenticate(primary, first)
         self.probe_tools()
+        self.capture_live_logs(primary, stdout_job_id=self.probe_job_id)
         native = self.native_status(primary)
         self.check(native.get("Transient") == "yes" and native.get("Restart") == "on-failure"
                    and native.get("KillMode") == "control-group", "the real native unit is transient with bounded explicit crash recovery and group cleanup")
@@ -487,6 +517,7 @@ class Daemon(Harness):
         self.case = "D07"
         self.create(peer, watchdog=False)
         peer_status = self.connected(peer)
+        self.capture_live_logs(peer)
         peer_runner = self.runner_identity(peer)
         self.check(peer_status["reconnect_delay_secs"] == 5 and not peer_status["watchdog"],
                    "a daemon without watchdog keeps the default delay but does not enable retries")
