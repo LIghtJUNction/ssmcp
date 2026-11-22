@@ -120,7 +120,16 @@ mod tests {
                 "/resume",
                 "ssmcp --server https://relay.example:8443 --allow yourname@relay.example:8443",
                 "collab.join",
-                r#"desktop: "host""#,
+                "ssmcp computer version --json",
+                "--worker 10 --agent codex",
+                "ssmcp.worker.submit",
+                "ssmcp tools status",
+                "ssmcp tools check",
+                "ssmcp tools update",
+                "finish_task: true",
+                "ssmcp resume",
+                "href=\"#workers\"",
+                "href=\"#extensions\"",
             ] {
                 assert!(html.contains(expected), "missing {expected}");
             }

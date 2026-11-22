@@ -2,7 +2,9 @@
 
 需要持久系统服务、原子新建/重启/关闭，以及 `ssmcp attach [NAME]`，请先阅读[常驻服务与 attach](session-service.md)。本页保留旧 native 后台模式、重连及输出转储的完整说明。
 
-本页说明连接标题、客户端重载、本机后台会话及长输出读取。公开 MCP 工具仍是 `list` 和 `code_mode`；`reload`、`outputs` 是 `code_mode` 内的 JavaScript 原语。`ssmcp sessions list` 枚举本地保存会话；登录后使用 `ssmcp list` 查看账号可控的在线会话，使用 `ssmcp -i` 进入其终端，详见[客户端账号与临时接入](client-accounts.md)。
+下文涉及 `--ssh`、SSH 目标和 `--allow ...@github` 的示例与认证说明仅记录已退役的 SSH 接入方式，不作为当前启动命令。当前账号连接使用 `ssmcp alice@relay.example`；新建后台会话使用 `ssmcp sessions create workstation alice@relay.example`，授权步骤见[客户端账号与授权](client-accounts.md)。
+
+本页说明连接标题、客户端重载、本机后台会话及长输出读取。公开 MCP 工具为 `list`、`code_mode`、`collab`、`await` 和 `messages`；`reload`、`outputs` 是 `code_mode` 内的 JavaScript 原语。`ssmcp sessions list` 枚举本地保存会话；登录后使用 `ssmcp list` 查看账号可控的在线会话，使用 `ssmcp attach process PROCESS_ID` 进入远程聊天，其中 `PROCESS_ID` 来自 `ssmcp list`；使用 `ssmcp -i` 选择远程 Shell PTY，详见[客户端账号、授权与被控设备](client-accounts.md)。
 
 ## 用标题说明本次任务
 

@@ -115,7 +115,7 @@ fn error(error: Error) -> Response {
         }
     };
     (status,Html(view::page("流量购买",&format!(
-        "<section class=card><h1>暂未完成</h1><p role=alert>{message}</p><a class=button href=/account/traffic>查看流量与订单</a></section>"
+        "<section class=\"card payment-error\"><p class=eyebrow>流量与订单</p><h1>暂未完成</h1><p role=alert>{message}</p><a class=button href=/account/traffic>查看流量与订单</a></section>"
     )))).into_response()
 }
 fn state(order: &Order) -> &'static str {
@@ -127,6 +127,21 @@ fn state(order: &Order) -> &'static str {
         OrderState::PaidExpired => "跨月到账，待联系管理员核对退款",
     }
 }
+// Presentation only: these messages follow persisted order states.
+fn state_help(order: &Order) -> &'static str {
+    match order.state {
+        OrderState::Reserved => {
+            "尚未收到已验证的支付通知。若已付款，请等待通知或联系管理员核对，避免重复付款。"
+        }
+        OrderState::Cancelled => "支付方已确认取消，订单预留的库存已释放。",
+        OrderState::Paid => "付款已经核验，流量尚待入账。请稍后查看；状态长时间不变时联系管理员。",
+        OrderState::Granted => "本订单流量已记入所属自然月额度。到期时未用完的部分不结转。",
+        OrderState::PaidExpired => {
+            "付款跨月到达，未授予当前月份流量。请联系管理员核对退款；此状态不代表退款已完成。"
+        }
+    }
+}
+
 async fn traffic(
     State(broker): State<Arc<Broker>>,
     headers: HeaderMap,
@@ -134,18 +149,18 @@ async fn traffic(
     let (subject, csrf) = authenticate(&broker.portal, &headers).await?;
     let quota = broker.traffic_quota(&subject).await?;
     let mut body = format!(
-        "<section class=card><h1>流量与订单</h1>{}<p>1 GB = 1,000,000,000 字节。</p></section>",
+        "<div class=commerce-page><nav class=account-breadcrumb aria-label=\"当前位置\"><a href=/>账户</a><span aria-hidden=true>/</span><span>流量与订单</span></nav><header class=commerce-heading><p class=eyebrow>TRAFFIC &amp; BILLING</p><h1>流量与订单</h1><p>先看本月用量，再按需要购买。</p></header><section class=\"quota-overview account-traffic\" aria-label=\"当前账户用量\">{}<p class=billing-unit>1 GB = 1,000,000,000 字节。</p></section>",
         view::traffic_panel(&quota)
     );
     let Some(commerce) = &broker.portal.commerce else {
-        body.push_str("<section class=card><h2>购买流量</h2><p>暂未开放购买。</p></section>");
+        body.push_str("<section class=commerce-unavailable><h2>购买流量</h2><p>暂未开放购买。</p><a href=/>返回账户</a></section></div>");
         return Ok(Html(view::page("流量与订单", &body)).into_response());
     };
     let (period, month_end) = commerce::month(commerce::now(), commerce.config.utc_offset_minutes)
         .map_err(|_| Problem::Storage)?;
     let expires = commerce::expiry_label(month_end, commerce.config.utc_offset_minutes)
         .map_err(|_| Problem::Storage)?;
-    body.push_str(&format!("<section class=card><p>本次购买到期时间：<strong>{}</strong>。到时未用完的流量清零。</p></section>", view::escape(&expires)));
+    body.push_str(&format!("<aside class=purchase-notice aria-label=\"流量有效期\"><p>本次购买到期时间：<strong>{}</strong></p><p>仅限所属自然月使用，到时未用完的流量清零。</p></aside>", view::escape(&expires)));
     let capacity = commerce.config.monthly_sellable_gb;
     let copy = subject.clone();
     let stock_period = period.clone();
@@ -165,7 +180,7 @@ async fn traffic(
     getrandom::fill(&mut bytes).map_err(|_| Problem::Storage)?;
     let nonce = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
     body.push_str(&format!(
-        "<section class=card><h2>购买当月流量</h2><p>{} · 每 GB {} {}（税前）· 当前可售 {} GB</p>",
+        "<div class=commerce-grid><section class=purchase-card aria-labelledby=\"purchase-title\"><p class=eyebrow>购买流量</p><h2 id=purchase-title>购买当月流量</h2><dl class=price-facts><div><dt>适用月份</dt><dd>{}</dd></div><div><dt>每 GB 税前单价</dt><dd>{} {}</dd></div><div><dt>当前可售</dt><dd>{} GB</dd></div></dl>",
         view::escape(&period),
         commerce::amount(
             commerce.config.price_per_gb_minor.unwrap_or(0),
@@ -175,9 +190,11 @@ async fn traffic(
         available
     ));
     if commerce.config.environment == "test" {
-        body.push_str("<p>支付测试环境：此入口仅用于测试。</p>");
+        body.push_str(
+            "<p class=payment-test-notice role=note>支付测试环境：此入口仅用于测试。</p>",
+        );
     }
-    body.push_str("<p>收银台如计税，会在付款前显示税额及含税应付金额。</p>");
+    body.push_str("<p class=billing-note>收银台如计税，会在付款前显示税额及含税应付金额。</p>");
     if let Some((minimum, maximum)) = commerce.config.quantity_range(available)
         && quota.remaining_bytes.is_some()
         && month_end.saturating_sub(commerce::now()) >= commerce::CHECKOUT_SECONDS + 60
@@ -192,18 +209,22 @@ async fn traffic(
         let step = commerce::amount(unit_price, decimals);
         let currency = view::escape(&commerce.config.currency);
         body.push_str(&format!(
-            "<form method=post action=/account/traffic/orders><input type=hidden name=csrf value=\"{}\"><input type=hidden name=request_nonce value=\"{nonce}\"><input type=hidden name=period value=\"{}\"><label>税前金额（{currency}）<input type=number name=amount value={min_amount} min={min_amount} max={max_amount} step={step} required></label><label><input type=checkbox name=acknowledge_month value=yes required>我已了解：本次流量只在 {} 自然月有效，未用完部分下月清零。</label><button type=submit>创建订单</button></form>",
+            "<form method=post action=/account/traffic/orders><input type=hidden name=csrf value=\"{}\"><input type=hidden name=request_nonce value=\"{nonce}\"><input type=hidden name=period value=\"{}\"><div class=amount-field><label>税前金额（{currency}）<input type=number name=amount value={min_amount} min={min_amount} max={max_amount} step={step} required></label><p class=field-help>每增加 {step} {currency} 对应 1 GB。可选金额：{min_amount}–{max_amount} {currency}。</p></div><label class=month-consent><input type=checkbox name=acknowledge_month value=yes required>我已了解：本次流量只在 {} 自然月有效，未用完部分下月清零。</label><div class=purchase-submit><button type=submit>创建订单</button><p>下一步核对信息，再前往收银台付款。</p></div></form>",
             view::escape(&csrf),view::escape(&period),view::escape(&period)
         ));
     } else if quota.remaining_bytes.is_none() {
-        body.push_str("<p>你的流量额度为无限，无需购买。</p>");
+        body.push_str("<p class=purchase-unavailable>你的流量额度为无限，无需购买。</p>");
     } else {
-        body.push_str("<p>当月库存不足或已接近月底，购买已关闭。</p>");
+        body.push_str("<p class=purchase-unavailable>当月库存不足或已接近月底，购买已关闭。</p>");
     }
-    body.push_str("</section><section class=card><h2>我的订单</h2><ul>");
+    body.push_str("</section><aside class=purchase-explainer aria-labelledby=\"payment-flow-title\"><h2 id=payment-flow-title>付款会经过三步</h2><ol><li><strong>确认金额</strong><p>核对数量、币种和本月到期时间。</p></li><li><strong>前往收银台</strong><p>如有税费，在付款前查看含税应付金额。</p></li><li><strong>查看入账状态</strong><p>服务端核验支付通知后入账，返回页面不等于支付成功。</p></li></ol><a href=\"/guide/zh#boundaries\">了解计费与状态</a></aside></div><section class=orders-section aria-labelledby=\"orders-title\"><div class=orders-heading><h2 id=orders-title>我的订单</h2><p>查看真实支付与入账进度。</p></div>");
+    if orders.is_empty() {
+        body.push_str("<p class=orders-empty>还没有订单。需要更多流量时，可以在上方创建。</p>");
+    }
+    body.push_str("<ul class=order-list>");
     for order in orders {
         body.push_str(&format!(
-            "<li><a href=\"/account/traffic/orders/{}\">{} · {} GB · {} {} · {}</a></li>",
+            "<li><a class=order-row href=\"/account/traffic/orders/{}\"><span class=order-period><span class=order-label>适用月份</span><strong>{}</strong></span><span class=order-quantity><strong>{} GB</strong><span class=order-label>流量额度</span></span><span class=order-amount><strong>{} {}</strong><span class=order-label>税前金额</span></span><span class=order-status>{}</span><span class=order-arrow aria-hidden=true>↗</span></a></li>",
             view::escape(&order.id),
             view::escape(&order.period),
             order.quantity_gb,
@@ -212,7 +233,7 @@ async fn traffic(
             state(&order)
         ));
     }
-    body.push_str("</ul></section>");
+    body.push_str("</ul></section></div>");
     Ok(Html(view::page("流量与订单", &body)).into_response())
 }
 async fn checked_form(
@@ -329,7 +350,7 @@ fn checkout_page(order: &Order, url: &str) -> Response {
         Err(e) => return error(e),
     };
     Html(view::page("继续付款", &format!(
-        "<section class=card><h1>继续付款</h1><p>{} GB · 税前 {} {} · 到期时间 {}</p><p>上下行合计，按 ssmcp 序列化数据帧字节计量，包含协议封装与重试。未用完流量到期清零。</p><p>页面价格为税前基础价；收银台如计税，会在付款前显示税额及含税应付金额。</p><p>流量在支付通知核验后入账。完成付款后可返回查看订单。</p><a class=button href=\"{}\" rel=\"noreferrer noopener\" referrerpolicy=no-referrer>前往收银台</a><a href=\"/account/traffic/orders/{}\">查看订单</a></section>",
+        "<section class=\"card checkout-card\"><p class=eyebrow>订单已创建 · 等待支付确认</p><h1>核对订单，继续付款</h1><ol class=payment-steps aria-label=\"付款流程\"><li>1 确认金额</li><li aria-current=step>2 前往收银台</li><li>3 查看入账</li></ol><dl class=checkout-summary><div><dt>流量额度</dt><dd>{} GB</dd></div><div class=checkout-total><dt>税前金额</dt><dd>{} {}</dd></div><div><dt>到期时间</dt><dd>{}</dd></div></dl><p class=billing-note>上下行合计，按 ssmcp 序列化数据帧字节计量，包含协议封装与重试。未用完流量到期清零。</p><p>页面价格为税前基础价；收银台如计税，会在付款前显示税额及含税应付金额。</p><p class=payment-confirmation-note>流量在支付通知核验后入账。完成付款后可返回查看订单；回到此页本身不会确认付款。</p><div class=checkout-actions><a class=button href=\"{}\" rel=\"noreferrer noopener\" referrerpolicy=no-referrer>前往收银台 <span aria-hidden=true>↗</span></a><a href=\"/account/traffic/orders/{}\">查看订单状态</a></div></section>",
         order.quantity_gb, commerce::amount(order.base_minor, order.currency_decimals),
         view::escape(&order.currency), view::escape(&expires), view::escape(url), view::escape(&order.id)
     ))).into_response()
@@ -376,16 +397,20 @@ async fn order(
         Err(e) => return Ok(error(e)),
     };
     let mut body = format!(
-        "<section class=card><h1>流量订单</h1><p>状态：{}</p><p>{} GB · 税前 {} {} · 仅限 {} 自然月使用</p><p>返回本页不会确认付款。到账结果以支付服务的已验证通知为准。</p>",
+        "<section class=\"card order-detail\"><p class=eyebrow>流量与订单</p><h1>流量订单</h1><p class=order-state><span>当前状态</span><strong>{}</strong></p><dl class=checkout-summary><div><dt>流量额度</dt><dd>{} GB</dd></div><div class=checkout-total><dt>税前金额</dt><dd>{} {}</dd></div><div><dt>适用月份</dt><dd>{} 自然月</dd></div></dl><p class=payment-confirmation-note>返回本页不会确认付款。到账结果以支付服务的已验证通知为准。</p>",
         state(&order),
         order.quantity_gb,
         commerce::amount(order.base_minor, order.currency_decimals),
         view::escape(&order.currency),
         view::escape(&order.period)
     );
+    body.push_str(&format!(
+        "<p class=order-state-help>{}</p>",
+        state_help(&order)
+    ));
     if let Some(receipt) = &order.receipt {
         body.push_str(&format!(
-            "<p>已核验税额：{} {}；含税实收：{} {}</p>",
+            "<dl class=verified-payment><div><dt>已核验税额</dt><dd>{} {}</dd></div><div><dt>含税实收</dt><dd>{} {}</dd></div></dl>",
             commerce::amount(receipt.tax_minor, order.currency_decimals),
             view::escape(&order.currency),
             commerce::amount(receipt.charged_minor, order.currency_decimals),
@@ -410,7 +435,9 @@ async fn order(
         body.push_str(&format!("<form method=post action=\"/account/traffic/orders/{}/reconcile\"><input type=hidden name=csrf value=\"{}\"><button type=submit>核对已取消订单并释放库存</button></form><p>仅在支付方确认取消且没有待付或成功付款时释放库存。查询失败或信息不足会保留订单。</p>",
             view::escape(&order.id), view::escape(&csrf)));
     }
-    body.push_str("<a href=/account/traffic>返回流量与订单</a></section>");
+    body.push_str(
+        "<div class=order-return><a href=/account/traffic>返回流量与订单</a></div></section>",
+    );
     Ok(Html(view::page("流量订单", &body)).into_response())
 }
 async fn grant(broker: &Broker, commerce: &Commerce, order: Order) -> Result<(), Problem> {

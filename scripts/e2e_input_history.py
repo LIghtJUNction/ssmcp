@@ -85,6 +85,12 @@ class InputHistory(Composer):
         launcher.chmod(0o700)
         self.binary_dir = launchers
 
+    def client_command(self, *, name="workstation", shell="/bin/sh", extra_args=()):
+        command = super().client_command(name=name, shell=shell, extra_args=extra_args)
+        if name == "input-history-restarted":
+            command.insert(1, "resume")
+        return command
+
     def client_environment(self, label, **options):
         environment = super().client_environment(label, **options)
         environment.update({
@@ -229,8 +235,12 @@ class InputHistory(Composer):
     def start_front(self, label):
         front = self.frontend(label, self.config(label))
         self.oauth_login(front.credentials)
-        front.until(empty_composer_ready,
-                    "the isolated live composer")
+        if label == "input-history-restarted":
+            front.until(lambda shot: column(shot) == ("history", 6, 8) and shot["hide_cursor"],
+                        "the saved conversation picker opened by ssmcp resume")
+        else:
+            front.until(empty_composer_ready,
+                        "the isolated live composer")
         return front
 
     def reference_scenarios(self, front, member):
@@ -568,10 +578,9 @@ class InputHistory(Composer):
         resumed = self.start_front("input-history-restarted")
         saved = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
         selected = next(index for index, item in enumerate(saved) if item["id"] == session_id)
-        resumed.send("/resume\r")
         resumed.until(lambda shot: column(shot) == ("history", 6, 8) and session_id in text(shot)
                       and shot["hide_cursor"],
-                      "the persisted conversation in the /resume picker")
+                      "the persisted conversation in the ssmcp resume picker")
         self.check(self.ui("/display/conversation")["focus"] == "content",
                    "/resume gives keyboard focus to the history picker")
         resumed.send(HOME + DOWN * selected + ENTER)

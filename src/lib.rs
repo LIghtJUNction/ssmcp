@@ -20,6 +20,7 @@ pub(crate) mod http_client;
 pub mod identity;
 #[cfg(target_os = "linux")]
 pub(crate) mod local_socket;
+pub mod managed_files;
 #[cfg(target_os = "linux")]
 pub mod management;
 pub(crate) mod memory;
@@ -43,7 +44,9 @@ pub mod session;
 #[cfg(target_os = "linux")]
 mod steering;
 pub mod terminals;
+pub(crate) mod tool_repository;
 pub mod wire;
+pub(crate) mod worker;
 pub mod workspace;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;

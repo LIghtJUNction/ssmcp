@@ -5,7 +5,7 @@ pkgdesc='Bridge native local tools and concurrent shell tasks to MCP over SSH'
 arch=('x86_64' 'aarch64')
 url='https://github.com/LIghtJUNction/ssmcp'
 license=('MIT')
-depends=('gcc-libs' 'glibc' 'nodejs>=18' 'bubblewrap>=0.8' 'util-linux')
+depends=('gcc-libs' 'glibc' 'nodejs>=18' 'bubblewrap>=0.8' 'util-linux' 'git')
 makedepends=('git' 'rust' 'cargo')
 checkdepends=('python' 'rsync')
 optdepends=('rsync: synchronize workspace directory contents'

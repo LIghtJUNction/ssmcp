@@ -1108,7 +1108,7 @@ impl Drop for HistoryLock {
     fn drop(&mut self) {
         // flock is owned by the open file description. A concurrent fork can
         // retain a duplicate until exec, so closing only our fd can leave a
-        // finished transaction or released conversation locked.
+        // completed transaction locked. Explicitly release our own lock first.
         #[cfg(unix)]
         while let Err(error) = self._file.unlock() {
             if error.kind() != io::ErrorKind::Interrupted {
@@ -1954,22 +1954,9 @@ mod tests {
         let saved = parent.current().unwrap().unwrap();
         let mut replacement = temp.history();
         assert!(replacement.resume(&saved.metadata.id).is_err());
-        // A concurrently forked child can retain a copy until exec.
-        #[cfg(unix)]
-        let inherited = parent
-            .active
-            .as_ref()
-            .unwrap()
-            ._lease
-            ._file
-            .try_clone()
-            .unwrap();
         parent.release_current();
         assert!(parent.current().unwrap().is_none());
         assert_eq!(replacement.resume(&saved.metadata.id).unwrap(), saved);
-        #[cfg(unix)]
-        drop(inherited);
-        assert!(parent.resume(&saved.metadata.id).is_err());
         assert_eq!(replacement.current().unwrap().unwrap(), saved);
         replacement.record("user", "Continue after reload").unwrap();
         let continued = replacement.current().unwrap().unwrap();
@@ -2190,6 +2177,36 @@ mod tests {
         assert_eq!(history.directory.lock().err().as_deref(), busy);
         drop(next);
         assert!(history.directory.lock().is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn conversation_lease_releases_while_an_inherited_descriptor_stays_open() {
+        let temp = Temporary::new();
+        let mut original = temp.history();
+        original.record("user", "Retained lease fixture").unwrap();
+        let saved = original.current().unwrap().unwrap();
+        let inherited = original
+            .active
+            .as_ref()
+            .unwrap()
+            ._lease
+            ._file
+            .try_clone()
+            .unwrap();
+        let mut next = temp.history();
+        let busy = Some("conversation is open in another client; choose a different history");
+        assert_eq!(next.resume(&saved.metadata.id).err().as_deref(), busy);
+
+        original.release_current();
+        assert!(original.current().unwrap().is_none());
+        assert_eq!(next.resume(&saved.metadata.id).unwrap(), saved);
+        let mut other = temp.history();
+        assert_eq!(other.resume(&saved.metadata.id).err().as_deref(), busy);
+        drop(inherited);
+        assert_eq!(other.resume(&saved.metadata.id).err().as_deref(), busy);
+        next.release_current();
+        assert_eq!(other.resume(&saved.metadata.id).unwrap(), saved);
     }
 
     #[test]

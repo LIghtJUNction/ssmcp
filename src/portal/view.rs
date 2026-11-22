@@ -26,8 +26,8 @@ pub(super) fn page(title: &str, body: &str) -> String {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light">
-  <meta name="theme-color" content="#eeefeb">
-  <meta name="description" content="使用用户名连接本机工具。GitHub 自动登录绑定，HTTPS 接入，管理账户与在线连接。">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="description" content="把 AI 对话连接到你的工作目录。三步安装和连接 ssmcp，在自己的电脑上执行命令、处理文件、跟进任务。">
   <title>{} · ssmcp</title>
   <link rel="icon" href="{favicon_url}" type="image/png">
   <link rel="stylesheet" href="{base_css_url}">
@@ -39,7 +39,7 @@ pub(super) fn page(title: &str, body: &str) -> String {
 <header class="site-header">
   <nav class="site-nav container" aria-label="主导航">
     <a class="brand" href="/" aria-label="ssmcp 首页"><img class="brand-mark" src="{favicon_url}" width="36" height="36" alt="" aria-hidden="true"><span class="brand-name">ssmcp</span></a>
-    <div class="nav-links"><a href="/#guide">连接指南 <span class="arrow" aria-hidden="true">↓</span></a><a href="https://github.com/LIghtJUNction/ssmcp">GitHub <span class="arrow" aria-hidden="true">↗</span></a><a class="nav-account" href="/#account">账户 <span class="arrow" aria-hidden="true">↗</span></a></div>
+    <div class="nav-links"><a href="/guide/zh">使用指南</a><a href="https://github.com/LIghtJUNction/ssmcp">GitHub <span class="arrow" aria-hidden="true">↗</span></a><a class="nav-account" href="/#account">我的账户</a></div>
   </nav>
 </header>
 <main class="container" id="content">{body}</main>
@@ -174,9 +174,9 @@ fn account_panel(
         ));
     } else if enabled {
         html.push_str(&format!(
-            r#"<h2 id="account-title">从这里开始连接。</h2><p class="account-description">使用 GitHub 登录，管理用户名、连接与流量。</p>
+            r#"<h2 id="account-title">已有账户？在这里继续。</h2><p class="account-description">使用 GitHub 登录，查看用户名、在线连接与本月流量。</p>
 <form class="login-form" method="post" action="/account/login"><input type="hidden" name="csrf" value="{csrf}"><button class="login-button" type="submit">{GITHUB_ICON}使用 GitHub 登录<span class="arrow" aria-hidden="true">↗</span></button></form>
-<small class="account-note">首次使用？先安装客户端也可以。</small>"#
+<small class="account-note">第一次使用可从下面的安装步骤开始，连接时再完成登录。</small>"#
         ));
     } else {
         html.push_str(
@@ -208,33 +208,27 @@ fn connect_panel(account: Option<&Account>, public_url: &str) -> String {
 <div class="section-content"><div class="terminal" aria-label="本机连接命令"><div class="terminal-bar"><span>terminal</span><span class="terminal-label">~/your-project</span></div><div class="terminal-content"><p class="terminal-comment"># 在本机执行</p><pre class="command"><code id="client-command">{}</code></pre></div></div>
 <div class="connect-actions"><p class="command-hint">{hint}</p><button id="copy-client-command" class="secondary" type="button" hidden>复制命令</button><span id="copy-command-status" role="status"></span></div>
 <script src="{copy_script_url}" defer></script>
-<p class="section-description">首次连接时，浏览器会引导 GitHub 登录。核对用户名和设备后允许连接；后续自动复用本机凭据。</p>
-<a class="text-link" href="https://github.com/LIghtJUNction/ssmcp#安装与升级">安装与升级 <span class="arrow" aria-hidden="true">↗</span></a>
-<details><summary>用户名和工具发现</summary><p>用户名为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾。名称不区分大小写，已占名称只允许原绑定 GitHub 账户登录。</p><p>终端命令始终可用。客户端默认提供内置工具，额外工具在你启用后加载；工具需要的本机登录和授权仍由你管理。</p></details></div></section>"#,
+<p class="section-description">首次连接会引导你使用 GitHub 登录。核对用户名和设备后允许连接；后续会复用本机凭据。保持这个终端运行，客户端连接成功后继续第三步。</p>
+<a class="text-link" href="/guide/zh#help">连接遇到问题？ <span class="arrow" aria-hidden="true">↗</span></a>
+<details><summary>用户名和工具发现</summary><p>用户名为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾。名称不区分大小写，已占名称只允许原绑定 GitHub 账户登录。</p><p>连接后，应用可以调用当前客户端已注册的工具。终端命令和文件操作在你的电脑上执行；额外工具的安装、登录与授权仍由你管理。</p></details></div></section>"#,
         escape(&command)
     )
 }
 
-const GUIDE: &str = r#"<section class="guide" id="guide" aria-labelledby="guide-title">
-<div class="guide-header"><div><p class="eyebrow">第三步</p><h2 id="guide-title">在 ChatGPT 中添加连接</h2></div><a class="text-link" href="https://chatgpt.com/plugins">打开插件设置 <span class="arrow" aria-hidden="true">↗</span></a></div>
-<div class="guide-grid">
-<div class="guide-step"><span class="step-number">01</span><h3>添加一个插件</h3><p>启动本机客户端后，打开 <a href="https://chatgpt.com/plugins">ChatGPT Plugins</a>，点击 <strong>Add</strong>。</p></div>
-<div class="guide-step"><span class="step-number">02</span><h3>填写连接信息</h3><dl class="connection-fields"><div><dt>Name</dt><dd>ssmcp</dd></div><div><dt>Connection</dt><dd>{mcp_url}</dd></div></dl></div>
-<div class="guide-step"><span class="step-number">03</span><h3>授权，然后开始</h3><p>勾选同意后点击 <strong>Create</strong>。按提示使用 GitHub 登录，核对身份与客户端，再点击“允许连接”。</p></div>
-</div>
-<details class="guide-help"><summary>已添加插件，接下来怎么用？</summary><div><p>回到 ChatGPT，调用 <code>list</code> 查看在线客户端，再使用 <code>code_mode</code> 调用工具。列表为空时，检查本机客户端是否运行，以及插件与客户端是否使用同一 GitHub 账户。</p><p>插件授权时请核对 MCP 客户端与回调来源。插件可以调用你已授权的本机工具，包括执行命令和修改文件。</p></div></details>
+const GUIDE: &str = r#"<section class="workspace-section setup-section connection-section" id="guide" aria-labelledby="guide-title">
+<div class="section-heading"><p class="eyebrow">第三步</p><h2 id="guide-title">在 AI 应用中添加连接</h2><p class="section-description">以下以 ChatGPT 为例。其他支持 MCP 的应用使用同一个连接地址。</p></div>
+<div class="section-content"><ol class="connection-checklist">
+<li><strong>打开插件设置。</strong><p>进入 <a href="https://chatgpt.com/plugins">ChatGPT Plugins</a>，点击 <strong>Add</strong>。</p></li>
+<li><strong>填写连接信息。</strong><dl class="connection-fields"><div><dt>Name</dt><dd>ssmcp</dd></div><div><dt>Connection</dt><dd><code>{mcp_url}</code></dd></div></dl></li>
+<li><strong>授权同一个 GitHub 账户。</strong><p>勾选同意后点击 <strong>Create</strong>。核对身份与客户端，再点击“允许连接”。回到对话，让 AI 列出在线客户端并选择你的电脑。</p></li>
+</ol><details class="guide-help"><summary>添加后没有看到电脑？</summary><div><p>先检查本机客户端是否仍在运行，以及应用和客户端是否使用同一 GitHub 账户与中继。调用 <code>list</code> 刷新在线客户端，再通过 <code>code_mode</code> 查询并调用该客户端的工具。</p><p>插件授权时请核对 MCP 客户端与回调来源。获准的应用可以执行命令和修改文件。<a href="/guide/zh#tools">了解工具与授权边界</a>。</p></div></details></div>
 </section>"#;
 
 // A static explanation of the product, never a simulated live account or session.
 const PRODUCT_SCENE: &str = r#"<figure class="product-scene" aria-labelledby="scene-caption">
-<div class="scene-topline"><span>FROM PROMPT TO LOCAL TOOLS</span><span>连接示意 / 非实时状态</span></div>
-<div class="scene-flow">
-  <div class="scene-client"><span class="scene-symbol" aria-hidden="true"><svg viewBox="0 0 80 80" fill="none" stroke="currentColor" stroke-width="2"><path d="M40 7v66M7 40h66M17 17l46 46m0-46L17 63"/><circle cx="40" cy="40" r="16"/></svg></span><strong>你的 AI</strong><span>ChatGPT · MCP 客户端</span></div>
-  <span class="scene-wire" aria-hidden="true">→</span>
-  <div class="scene-terminal"><div class="scene-terminal-bar"><span><i></i><i></i><i></i></span><span>~/your-project</span><span>本机执行</span></div><div class="scene-terminal-body"><div class="scene-command"><span>$</span> ssmcp<span class="scene-cursor" aria-hidden="true">_</span></div><p>把项目目录连接到对话。</p><div class="scene-tool-row"><span>01</span><span>终端命令</span><span>exec</span></div><div class="scene-tool-row"><span>02</span><span>文件与代码</span><span>files</span></div><div class="scene-tool-row"><span>03</span><span>已启用的本机工具</span><span>tools</span></div></div></div>
-  <span class="scene-wire" aria-hidden="true">→</span>
-  <div class="scene-local"><span class="scene-folder" aria-hidden="true"><svg viewBox="0 0 100 76" fill="none"><path d="M4 20V6h33l10 14h49v50H4V20Z" stroke="currentColor" stroke-width="2"/><path d="M4 20h92" stroke="currentColor" stroke-width="2"/><path d="m41 38-8 8 8 8m18-16 8 8-8 8" stroke="currentColor" stroke-width="2"/></svg></span><strong>你的工作目录</strong><span>工具在你的电脑上运行</span></div>
-</div><figcaption id="scene-caption"><span>一个连接，继续用你的环境。</span><span>Linux / macOS / Windows</span></figcaption></figure>"#;
+<figcaption id="scene-caption">一个连接，继续用你熟悉的环境。<span>连接示意 · 非实时状态</span></figcaption>
+<ol class="scene-flow"><li><span class="scene-index">01</span><strong>AI 应用</strong><span>通过 MCP 发起工具调用</span></li><li><span class="scene-index">02</span><strong>SSMCP 中继</strong><span>把已授权请求送到客户端</span></li><li><span class="scene-index">03</span><strong>你的工作目录</strong><span>本机执行，结果回到对话</span></li></ol>
+</figure>"#;
 
 pub(super) fn home(
     account: Option<&Account>,
@@ -252,7 +246,7 @@ pub(super) fn home(
         )
     } else {
         String::from(
-            r##"<div class="portal-home"><section class="hero" aria-labelledby="hero-title"><div class="hero-copy"><div class="hero-kicker"><p class="eyebrow">本地工具 · 开放连接</p><span>SSMCP / 01</span></div><h1 id="hero-title">让 AI，<br><span>在你的电脑上动手。</span></h1><div class="hero-bottom"><p class="hero-description">从对话到终端、文件与项目。<br>用一个用户名，连接你已经在用的工作环境。</p><div class="hero-actions"><a class="button" href="#install">安装客户端 <span class="arrow" aria-hidden="true">↗</span></a><a class="button secondary source-link" href="https://github.com/LIghtJUNction/ssmcp" target="_blank" rel="noopener noreferrer">源代码仓库 <span class="arrow" aria-hidden="true">↗</span></a></div></div></div>"##,
+            r##"<div class="portal-home"><section class="hero" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow">LOCAL TOOLS. YOUR WORKSPACE.</p><h1 id="hero-title">把对话，连接到<br><span>你的工作目录。</span></h1><p class="hero-description">在自己的电脑上执行命令、读写文件、跟进任务。<br>从安装到连接，三步开始。</p><div class="hero-actions"><a class="button" href="#install">开始连接 <span class="arrow" aria-hidden="true">↓</span></a><a class="button secondary" href="/guide/zh">阅读使用指南 <span class="arrow" aria-hidden="true">↗</span></a></div><p class="hero-platforms">Linux · macOS · Windows <span aria-hidden="true">/</span> MCP · code_mode</p></div>"##,
         )
     };
     if let Some(traffic) = traffic.filter(|_| account.is_some()) {
@@ -279,7 +273,7 @@ pub(super) fn home(
         body.push_str("</div>");
     }
     body.push_str(
-        r#"<div class="workspace-header"><h2>连接新设备</h2><p>从安装客户端开始，三步完成连接。</p></div><div class="workspace-flow">"#,
+        r#"<div class="workspace-header"><h2>三步，连接你的电脑。</h2><p>准备一个 GitHub 账户，以及你要操作的项目目录。</p></div><div class="workspace-flow">"#,
     );
     body.push_str(&include_str!("client-install.html").replace(
         "{install_script_url}",
@@ -289,6 +283,9 @@ pub(super) fn home(
     body.push_str("</div>");
     let mcp_url = format!("{}/mcp", public_url.trim_end_matches('/'));
     body.push_str(&GUIDE.replace("{mcp_url}", &escape(&mcp_url)));
+    body.push_str(
+        r#"<section class="learn-more" aria-labelledby="learn-more-title"><div><p class="eyebrow">继续探索</p><h2 id="learn-more-title">先连起来，再按需要深入。</h2><p>文件引用、长任务、多人协作与连接排查，都放在使用指南中。</p></div><nav aria-label="深入使用"><a href="/guide/zh#basics">输入与文件引用 <span aria-hidden="true">↗</span></a><a href="/guide/zh#tools">工具与执行方式 <span aria-hidden="true">↗</span></a><a href="/guide/zh#help">连接排查 <span aria-hidden="true">↗</span></a></nav></section>"#,
+    );
     body.push_str("</div>");
     page("账号门户", &body)
 }

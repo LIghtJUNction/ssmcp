@@ -45,6 +45,7 @@ SHELL_TOOLS = frozenset({
 BUILTIN_TOOLS = frozenset({
     "ssmcp.fs.list", "ssmcp.fs.stat", "ssmcp.fs.read", "ssmcp.fs.write", "ssmcp.fs.mkdir",
     "ssmcp.fs.read_image", "ssmcp.fs.read_text", "ssmcp.fs.write_text", "ssmcp.fs.edit_text", "ssmcp.fs.events",
+    "ssmcp.files.list", "ssmcp.files.cleanup", "ssmcp.files.config", "ssmcp.files.configure",
     "ssmcp.context.roots", "ssmcp.skills.list", "ssmcp.skills.read", "ssmcp.skills.view",
     "ssmcp.context.status", "ssmcp.context.list", "ssmcp.context.read",
     "ssmcp.context.compact", "ssmcp.context.fork", "ssmcp.context.switch",
@@ -442,7 +443,7 @@ class Harness:
         directory = self.directory / f"{label}-bin"
         directory.mkdir(mode=0o700)
         (directory / "client.toml").touch(exist_ok=True)
-        for name in ("stty", "tty", "sleep", "head", "tr"):
+        for name in ("stty", "tty", "sleep", "head", "tr", "git"):
             executable = shutil.which(name)
             if not executable:
                 raise RuntimeError(f"test requires system {name}")

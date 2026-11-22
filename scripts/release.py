@@ -44,6 +44,7 @@ REGISTRY_EXPORT_LOCK = "ssmcp-registry-Cargo.lock"
 RELEASE_CONTRACT = "git-source-v1"
 CRATE_DEFERRALS = {
     "0.10.25": "Independent registry dependencies and the external package require separate verification.",
+    "0.10.26": "Independent registry dependencies and the external package require separate verification.",
 }
 
 

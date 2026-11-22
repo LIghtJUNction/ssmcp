@@ -114,6 +114,101 @@ fn session_summary(entry: &Value) -> Option<&str> {
 }
 
 impl State {
+    pub(super) fn chat_observed_history(&mut self, run_id: &str) {
+        if self.audit.open_run(run_id) {
+            self.conversation.detail = true;
+            self.conversation.content_focus = true;
+            self.notice = Some("Observed call · Esc returns to Sessions".into());
+        } else {
+            self.notice = Some("This call is no longer in the retained audit history".into());
+        }
+        self.dirty = true;
+    }
+
+    pub(super) fn chat_session_history(&mut self) {
+        if let Some(entry) = self.chat_selected()
+            && field(&entry, "kind") == "observed"
+        {
+            self.chat_observed_history(field(&entry, "run_id"));
+        } else {
+            self.chat_thread_history_selected();
+        }
+    }
+
+    pub(super) fn chat_sidebar_agent_mouse(&mut self, button: u16, x: u16, y: u16) -> bool {
+        if button & (32 | 64) != 0
+            || !matches!(button & 3, 0 | 2)
+            || self.ui.layout != Layout::Chat
+            || !self.ui.sidebar
+            || !self.ui.panels.contains(&crate::client::ui::Panel::Agents)
+            || self.help
+            || self.selection
+            || self.sleep.visible
+        {
+            return false;
+        }
+        let Some(rect) = PanelLayout::configured(
+            self.geometry.cols,
+            self.geometry.rows,
+            self.ui.sidebar,
+            self.ui.sidebar_width,
+        )
+        .sidebar
+        else {
+            return false;
+        };
+        let Some(hit) = self
+            .conversation
+            .sidebar_agents
+            .iter()
+            .find(|hit| {
+                hit.rect == rect
+                    && hit.row == y
+                    && x >= rect.col
+                    && x < rect.col.saturating_add(rect.width)
+            })
+            .cloned()
+        else {
+            return false;
+        };
+        if hit.view != self.conversation.view
+            || hit.process_generation != self.conversation.process_generation
+        {
+            self.notice = Some(
+                "Sessions changed · choose a newly displayed row; draft and recipient kept".into(),
+            );
+            self.dirty = true;
+            return true;
+        }
+        // A painted row is an identity, not an index into a refreshed roster.
+        let data = self.chat_data();
+        let entries = self.chat_recipients(&data);
+        let Some(index) = entries
+            .iter()
+            .position(|entry| agent_key(entry) == hit.identity.key)
+        else {
+            self.notice = Some(
+                "This member or caller is no longer available · draft and recipient kept".into(),
+            );
+            self.dirty = true;
+            return true;
+        };
+        self.chat_change_view(View::Agents);
+        self.conversation.selected = index;
+        self.conversation.selected_agent = Some(hit.identity.key);
+        self.conversation.content_focus = true;
+        self.conversation.detail = false;
+        if button & 3 == 2 {
+            if let Some(run_id) = hit.identity.run_id {
+                // Inspect the exact call that was drawn, even if its display group has a newer call.
+                self.chat_observed_history(&run_id);
+            } else {
+                self.chat_thread_history_selected();
+            }
+        }
+        true
+    }
+
     pub(super) fn session_details(&self, entry: &Value, data: &Value) -> Vec<(String, PanelTone)> {
         let process = field(entry, "session_role") == "process";
         let width = if self.chat_agent_list_width() < self.geometry.left {
@@ -178,7 +273,7 @@ impl State {
                 .into(),
                 PanelTone::Accent,
             ));
-            rows.push(("Enter · message this recipient".into(), PanelTone::Normal));
+            rows.push(("Enter · choose message recipient".into(), PanelTone::Normal));
             rows.push(("g · compose to selected group".into(), PanelTone::Muted));
             rows.push(("i · show full IDs".into(), PanelTone::Muted));
             rows.push(("".into(), PanelTone::Normal));
@@ -192,13 +287,21 @@ impl State {
                 PanelTone::Muted,
             ));
         } else {
-            rows.push(("Enter · choose local recipient".into(), PanelTone::Normal));
+            rows.push(("Enter · choose message recipient".into(), PanelTone::Normal));
             rows.push(("i · show available IDs".into(), PanelTone::Muted));
             rows.push((
                 "Group sending needs native messaging".into(),
                 PanelTone::Muted,
             ));
         }
+        rows.push((
+            "h / right-click · read-only history".into(),
+            PanelTone::Normal,
+        ));
+        rows.push((
+            "History keeps your draft and recipient".into(),
+            PanelTone::Muted,
+        ));
         rows
     }
 

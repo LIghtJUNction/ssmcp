@@ -1,3 +1,4 @@
+import { officialSources } from '../src/tool_repository/fixture.mjs';
 // Exercise the real code_mode worker over its JSON transport. No model is invoked.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -46,7 +47,7 @@ function run(code, reply) {
       else resolve({ frames, requests, exitCode, signal, stderr });
     });
     child.stdin.write(JSON.stringify({
-      type: 'run', code, clients: [{ id: 'one', type: 'shell', name: 'execution-fixture' }],
+      tool_sources: officialSources(), type: 'run', code, clients: [{ id: 'one', type: 'shell', name: 'execution-fixture' }],
     }) + '\n');
   });
 }

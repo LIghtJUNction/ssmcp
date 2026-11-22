@@ -89,6 +89,11 @@ fn resource_catalog() -> Vec<Value> {
             "application/json",
         ),
         ("tools", "Live native tool schemas", "application/json"),
+        (
+            "tool-sources",
+            "RC-registered editable code-mode sources",
+            "application/json",
+        ),
         ("context", "Configured context roots", "application/json"),
         ("skills", "Discovered skills", "application/json"),
         (
@@ -276,7 +281,7 @@ fn parse_uri(uri: &str) -> Result<(&str, BTreeMap<String, String>), String> {
         "tools" => &["cursor"],
         "skills" | "skills/view" => &["root", "scope", "cursor"],
         "skills/read" | "agents" | "agents/read" => &["root", "path"],
-        "guide" | "skill" | "capabilities" | "limits" | "context" => &[],
+        "guide" | "skill" | "capabilities" | "limits" | "context" | "tool-sources" => &[],
         _ => return Err("unknown client resource".into()),
     };
     let mut values = BTreeMap::new();
@@ -316,6 +321,7 @@ impl Runtime {
         manifest["client_version"] = json!(env!("CARGO_PKG_VERSION"));
         manifest["wire_version"] = json!(crate::wire::VERSION);
         manifest["thread_scope"] = json!(1);
+        manifest["tool_sources"] = json!({"schema":1,"uri":crate::tool_repository::URI,"selection":"explicit authorized client; RC registered sources only"});
         manifest["chat_enabled"] = json!(self.chat_enabled());
         manifest["timing"] = json!({"primitives_available":self.time.time_tools_enabled()});
         if self.chat_enabled() {
@@ -381,6 +387,9 @@ impl Runtime {
                 );
             }
             "capabilities" => return json_content(uri, self.client_capabilities()?),
+            "tool-sources" => {
+                return json_content(uri, crate::tool_repository::bundle(&self.tool_root).await?);
+            }
             "limits" => return json_content(uri, native_limits(self.chat_enabled())),
             "tools" => {
                 let mut page = match query.get("cursor") {

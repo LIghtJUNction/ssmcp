@@ -133,7 +133,11 @@ impl Flags {
         Ok(path)
     }
 
-    pub(crate) fn finish(mut self) -> Result<Settings, String> {
+    pub(crate) fn finish(self) -> Result<Settings, String> {
+        self.finish_for_worker(false)
+    }
+
+    pub(crate) fn finish_for_worker(mut self, worker: bool) -> Result<Settings, String> {
         let mode = self
             .values
             .remove("--input")
@@ -240,7 +244,7 @@ impl Flags {
                 );
             }
         };
-        if input == Input::None && agent != Agent::NextCaller {
+        if !worker && input == Input::None && agent != Agent::NextCaller {
             return Err("--input none cannot dispatch chat to an explicit agent".into());
         }
         if let Some(flag) = self.values.keys().next() {
