@@ -26,7 +26,7 @@ impl Default for Guard {
     fn default() -> Self {
         static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(1);
         let instance = NEXT_INSTANCE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .expect("attach bridge instance counter exhausted");

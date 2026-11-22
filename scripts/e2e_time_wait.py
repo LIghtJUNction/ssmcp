@@ -342,11 +342,18 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
                                    and entry["id"] == first["id"] and entry["episode"] > first["episode"])
         self.capture_clock(front, "public-await", "Wait", False)
         self.preserve_queued(public_queued)
-        updated = self.public_call("collab", {"action":"update", "client_id":self.client_id,
-            "agent_id":member["agent_id"], "token":member["token"], "status":"timer-fixture-ready"})
+        status, updated_rpc, _ = self.rpc("tools/call", {"name":"collab", "arguments":{
+            "action":"update", "client_id":self.client_id, "agent_id":member["agent_id"],
+            "token":member["token"], "status":"timer-fixture-ready"}}, modern=True)
+        if status != 200 or not isinstance(updated_rpc, dict) or "error" in updated_rpc:
+            raise AssertionError("explicit collaboration update failed at the HTTP boundary")
+        updated = updated_rpc["result"]
+        self.check(not updated.get("isError"), "the explicit collaboration status update succeeds")
         # The separate explicit collaboration update is ordinary accepted work;
         # its existing queue-delivery semantics must remain unchanged.
-        self.expect_delivery({"structuredContent":updated}, public_queued)
+        # Keep the real MCP content block as well as structuredContent so the
+        # shared receipt check can verify the visible requirement and its scope.
+        self.expect_delivery(updated, public_queued, agent_id=member["agent_id"])
         ready = self.finish_public_wait(front, future)
         self.check(ready["status"] == "ready" and ready["wait_id"] == resumed["id"]
                    and ready["results"][0]["data"]["matched"] is True,

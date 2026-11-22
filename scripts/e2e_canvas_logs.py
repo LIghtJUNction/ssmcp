@@ -154,7 +154,7 @@ def run(binary, decoder, output, checks):
             audit = preview.until(lambda shot: view(shot, "code audit"),
                                   "Right from recipients navigating to code audit")
             check(column(audit) == ("code audit", 4, initial_count),
-                  "the explicit recipient column retains the other eight logical columns")
+                  "the explicit recipient column brings the canvas to eight logical columns")
             check(draft in prompt_text(audit), "Right at the draft boundary changes columns without changing text")
             preview.send(ALT_LEFT * 2)
             returned = preview.until(lambda shot: view(shot, "conversation"), "Alt+Left returning to conversation")
@@ -190,7 +190,7 @@ def run(binary, decoder, output, checks):
             )
             check(body(retained) == selected_body, "recipient selection is retained independently in its logical column")
 
-            # Sessions reserves right-click for the clicked thread's history.
+            # Recipients reserves right-click for the clicked thread's live logs.
             # Preview members use synthetic IDs, so this must report unavailable
             # without falling back to diagnostics or another selected member.
             builder_row = next(index for index, row in enumerate(retained["rows"])
@@ -198,7 +198,7 @@ def run(binary, decoder, output, checks):
             preview.send(mouse(2, y=builder_row + 1))
             history_unavailable = preview.until(
                 lambda shot: view(shot, "recipients") and not logs_open(shot)
-                and "Live thread logs unavailable" in text(shot),
+                and "Live thread logs unavailable:" in text(shot),
                 "right-click routing to the selected preview thread's history",
             )
             check(body(history_unavailable) == selected_body
@@ -493,11 +493,11 @@ def run_tasks(binary, decoder, output, checks):
         config.write_text('[ui]\nlayout="chat"\nsidebar=false\ncolor=true\n', encoding="utf-8")
         preview = Preview(binary, decoder, config, rows=30, cols=110)
         try:
-            initial = preview.until(lambda shot: view(shot, "conversation"), "the eight-column canvas")
+            initial = preview.until(lambda shot: view(shot, "conversation"), "the seven-column canvas")
             preview.send(ALT_LEFT)
             statistics = preview.until(lambda shot: view(shot, "statistics"), "the real default canvas counter")
             check(column(statistics) == ("statistics", 1, 7),
-                  "the default canvas has eight columns with Statistics first")
+                  "the default canvas has seven columns with Statistics first")
             preview.send(ESCAPE)
             preview.until(lambda shot: view(shot, "conversation"), "the empty task fixture composer")
             preview.send(b"/sessions\r")
@@ -567,7 +567,7 @@ def run_tasks(binary, decoder, output, checks):
             check(draft in prompt_text(listed) and "To Builder" in text(listed),
                   "Escape leaves task details while keeping the selected job and draft")
 
-            preview.send(ALT_LEFT * 5)
+            preview.send(ALT_LEFT * 4)
             audit = preview.until(lambda shot: view(shot, "code audit"), "the Audit return bookmark origin")
             original_column, original_body = column(audit), body(audit)
             preview.send(mouse(2) + mouse(2, release=True))
@@ -602,7 +602,11 @@ def run_tasks(binary, decoder, output, checks):
             command(preview, current_logs, "/close")
             closed_logs = preview.until(lambda shot: view(shot, "questions") and column(shot)[2] == 7,
                                         "closing the actual Logs column")
-            command(preview, closed_logs, "/tasks")
+            # Questions owns an answer editor; use Queue's shared composer for commands.
+            preview.send(ALT_LEFT)
+            reopen_from = preview.until(lambda shot: column(shot) == ("queue", 5, 7),
+                                        "leaving Questions before reopening Tasks")
+            command(preview, reopen_from, "/tasks")
             repaired = preview.until(lambda shot: task_list(shot) and column(shot) == ("tasks", 8, 8),
                                      "Tasks restoring its missing Logs neighbor")
             preview.send(LEFT)

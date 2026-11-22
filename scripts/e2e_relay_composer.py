@@ -22,6 +22,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import secrets
 import shutil
 import signal
@@ -141,6 +142,127 @@ class RelayComposer(Composer):
         self.account_token = ""
         self.account_expires_at = 0
         self.user = "mcp"
+        # These are the actual HOME/XDG locations of this fixture's child, not
+        # aliases for host state. Reexec inherits the same private directories.
+        self.private_environment = {
+            "HOME": str(directory / "home"),
+            "XDG_STATE_HOME": str(directory / "state"),
+            "XDG_CONFIG_HOME": str(directory / "config"),
+            "XDG_DATA_HOME": str(directory / "data"),
+            "XDG_CACHE_HOME": str(directory / "cache"),
+            "XDG_RUNTIME_DIR": str(directory / "runtime"),
+        }
+        for path in self.private_environment.values():
+            Path(path).mkdir(mode=0o700)
+        self.state_home = Path(self.private_environment["XDG_STATE_HOME"])
+
+    def client_environment(self, label, **options):
+        environment = super().client_environment(label, **options)
+        environment.update(self.private_environment)
+        return environment
+
+    def assert_current_context(self, value):
+        retired = getattr(self, "retired_context", ())
+        if retired:
+            encoded = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+            if any(marker in encoded for marker in retired):
+                raise AssertionError("the new relay exposed retired fixture text or a retired message/context identity")
+
+    def rpc(self, method, params=None, **options):
+        status, body, headers = super().rpc(method, params, **options)
+        if method == "tools/call" and isinstance(params, dict) and params.get("name") == "code_mode":
+            # Cover UI projections and event/artifact reads as well as work().
+            # Composer.rpc separately records the actual user-message receipts.
+            self.assert_current_context(body)
+        return status, body, headers
+
+    def live_events(self, **options):
+        page = super().live_events(**options)
+        if getattr(self, "retired_context", ()):
+            self.assert_current_context(page)
+            self.check(page["generation"] != self.retired_generation
+                       and page["scope"]["client_id"] == self.client_id
+                       and all(event.get("source") is None
+                               or event["source"].get("client_id") in (None, self.client_id)
+                               for event in page["events"]),
+                       "every post-reload event snapshot has the new process scope and no old-client provenance")
+        return page
+
+    def seed_legacy_state(self):
+        conversations = self.state_home / "ssmcp" / "conversations"
+        memory = self.state_home / "ssmcp" / "context-memory"
+        self.check(not any(path.is_file() for root in (conversations, memory)
+                           for path in root.rglob("*")),
+                   "ordinary relay work creates no conversation archives or memory checkpoints")
+        legacy_id = "conversation_" + "a" * 32
+        message_id = "message_" + "b" * 32
+        context_id = "context_" + "c" * 32
+        workspace = str(self.workspace.resolve())
+        markers = ("RELAY_LEGACY_CONVERSATION_MUST_NOT_LOAD",
+                   legacy_id,
+                   "RELAY_LEGACY_CHECKPOINT_MUST_NOT_LOAD")
+        rows = [
+            {"type": "session", "schema": "ssmcp.conversation.v1", "schema_version": 1,
+             "id": legacy_id, "workspace": workspace, "created_at_ms": 1,
+             "truncated_messages": 0},
+            {"type": "message", "id": message_id, "role": "assistant",
+             "kind": "agent_message", "content": markers[0], "created_at_ms": 2,
+             "truncated": False},
+        ]
+        # All bodies are synthetic. The JSONL and archive index follow their
+        # historical formats; the checkpoint follows Document/Branch/Source
+        # and Store::at in the retired context_memory.rs, including the real
+        # workspace SHA-256 key. No real saved user history is copied here.
+        workspace_key = hashlib.sha256(workspace.encode()).hexdigest()
+        for directory in (self.state_home / "ssmcp", conversations, memory, memory / workspace_key):
+            directory.mkdir(mode=0o700, exist_ok=True)
+            directory.chmod(0o700)
+        checkpoint = {
+            "schema": "ssmcp.context-memory.v1", "schema_version": 1,
+            "workspace": workspace, "workspace_id": workspace_key, "revision": 1,
+            "active_id": context_id,
+            "branches": [{
+                "id": context_id, "name": "synthetic fixture", "parent_id": None,
+                "revision": 1, "created_at_ms": 3, "updated_at_ms": 3,
+                "checkpoint": {
+                    "mode": "provided_summary", "text": markers[2], "created_at_ms": 3,
+                    "sources": [{"conversation_id": legacy_id, "message_id": message_id,
+                                 "sha256": hashlib.sha256(markers[0].encode()).hexdigest()}],
+                    "omitted_sources": 0,
+                },
+                "recent": [], "omitted_recent": 0,
+            }],
+        }
+        contents = {
+            conversations / (legacy_id + ".jsonl"):
+                ("\n".join(json.dumps(row) for row in rows) + "\n").encode(),
+            conversations / "archives.json":
+                (json.dumps({"schema_version": 1, "conversations": [legacy_id]}) + "\n").encode(),
+            memory / workspace_key / "state.json":
+                (json.dumps(checkpoint) + "\n").encode(),
+        }
+        records = {}
+        for path, raw in contents.items():
+            with path.open("xb") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                stream.write(raw)
+            metadata = path.stat()
+            records[path] = {"bytes": raw,
+                             "identity": (metadata.st_dev, metadata.st_ino, metadata.st_mtime_ns)}
+        return records, markers, {"conversation_id": legacy_id, "message_id": message_id,
+                                  "context_id": context_id}
+
+    def assert_legacy_state_unchanged(self, records):
+        for path, saved in records.items():
+            metadata = path.stat()
+            self.check(not path.is_symlink() and path.read_bytes() == saved["bytes"]
+                       and (metadata.st_dev, metadata.st_ino, metadata.st_mtime_ns) == saved["identity"],
+                       "the synthetic legacy file is neither rewritten nor replaced: "
+                       + str(path.relative_to(self.state_home)))
+        actual = {path for namespace in ("conversations", "context-memory")
+                  for path in (self.state_home / "ssmcp" / namespace).rglob("*") if path.is_file()}
+        self.check(actual == set(records),
+                   "reload and new work add no automatic archive or checkpoint files")
 
     def prepare(self):
         self.fixture_directory.mkdir(mode=0o700)
@@ -308,7 +430,8 @@ class RelayComposer(Composer):
         self.workspace = self.directory / "workspace"
         self.workspace.mkdir()
         subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q"],
-                       cwd=self.workspace, env={**os.environ, **self.safe_git_env},
+                       cwd=self.workspace,
+                       env={**os.environ, **self.private_environment, **self.safe_git_env},
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=5)
         front = self.frontend("relay-composer", self.config("relay-composer"))
         front.until(empty_composer_ready,
@@ -321,7 +444,11 @@ class RelayComposer(Composer):
         self.check(any(item["id"] == self.client_id for item in self.public_call("list")["clients"]),
                    "the independently authorized MCP identity sees the same account relay session")
         self.command(front, "/queue")
-        self.check(self.queue()["supported"], "the real WebSocket relay negotiated the v7 composer protocol")
+        initial_queue = self.queue()
+        self.check(initial_queue["supported"], "the real WebSocket relay negotiated the v7 composer protocol")
+        initial_queue_target = initial_queue["draft_context"]["target"]
+        initial_composition = self.ui("/display/conversation")
+        initial_routing = {key: initial_composition[key] for key in ("target", "native_recipient")}
 
         first = self.submit(front, "touch relay-composer-hidden-shell-leak")
         self.check(not (self.workspace / "relay-composer-hidden-shell-leak").exists(),
@@ -352,28 +479,77 @@ class RelayComposer(Composer):
         self.expect_delivery(self.work(), editable, revised)
         self.wait_delivered(front, editable, revised)
 
-        pending = self.submit(front, "RELAY_COMPOSER_SAFE_RELOAD_REQUEST")
+        old_reply = "RELAY_COMPOSER_OLD_RAM_REPLY 界"
+        reply_receipt = self.observe("ssmcp.ui.message", {"text": old_reply, "kind": "progress"})
+        before_events = self.live_events()
+        self.check(reply_receipt["recorded"] is True and reply_receipt["storage"] == "memory"
+                   and sum(event.get("value", {}).get("message_id") == reply_receipt["message_id"]
+                           for event in before_events["events"]) == 1,
+                   "the pre-reload reply belongs to one real event in the current process generation")
+        legacy_records, legacy_markers, legacy_ids = self.seed_legacy_state()
+
+        # After this last submission, use only non-consuming UI observations
+        # until real reexec. Native work or artifact reads could claim it.
+        pending = self.submit(front, "RELAY_COMPOSER_PENDING_MUST_NOT_REPLAY")
         parked = "RELAY_COMPOSER_UNSENT_DRAFT 界"
         self.focus_input(front)
         front.send(parked.encode() + LEFT * 2)
         front.until(lambda shot: parked in input_text(shot), "an unsent relay draft before reexec")
         before = self.queue()
         cursor = before["draft"]["cursor"]
-        # Copy delivered history into the editor, parking the unrelated draft.
-        # The local /reload command must restore it before writing the handoff.
+        self.check(before["draft"]["text"] == parked
+                   and cursor == len(parked.encode()) - len(" 界".encode()),
+                   "the live draft retains its exact interior UTF-8 cursor before parking")
         self.select_request(front, first["id"])
         front.send(b"r")
         front.until(lambda shot: first["text"] in input_text(shot), "a delivered history copy before relay reload")
-        self.check(self.queue()["draft_context"]["parked"]["text"] == parked,
-                   "the relay composer parks an unrelated draft before local reload")
+        copied = self.queue()
+        self.check(copied["draft_context"]["parked"]["text"] == before["draft"]["text"]
+                   and copied["draft_context"]["parked"]["cursor"] == before["draft"]["cursor"],
+                   "copying a delivered request preserves the unrelated live draft and cursor")
+        front.send(b"\x1b")
+        front.until(lambda shot: parked in input_text(shot), "Escape restores the draft within the same process")
+        escaped = self.queue()
+        self.check(escaped["draft"] == before["draft"]
+                   and escaped["draft_context"]["parked"] is None
+                   and escaped["draft_context"]["target"] == "next",
+                   "same-process navigation preserves the exact draft, cursor and recipient")
+        self.select_request(front, first["id"])
+        front.send(b"r")
+        front.until(lambda shot: first["text"] in input_text(shot), "a fresh parked copy before real reload")
+        waiting = [row for row in self.queue()["queue"] if row["status"] in ("queued", "sending")]
+        self.check(len(waiting) == 1 and waiting[0]["id"] == pending["id"]
+                   and waiting[0]["text"] == pending["text"] and waiting[0]["target"] == "next"
+                   and waiting[0]["status"] == "queued",
+                   "one exact next-caller request remains unclaimed immediately before reexec")
+        old_texts = (first["text"], editable["text"], revised, pending["text"], parked,
+                     old_reply, *legacy_markers)
+        # These are message/request/context identities, not the event_N journal
+        # projection IDs whose sequence numbers may restart in a new generation.
+        # If a receipt ever uses that local namespace too, its old identity is
+        # (generation, id); the new generation may legitimately reuse the id.
+        reusable_reply_id = re.fullmatch(r"event_[0-9]+", reply_receipt["message_id"]) is not None
+        old_ids = (first["id"], editable["id"], pending["id"],
+                   *(() if reusable_reply_id else (reply_receipt["message_id"],)),
+                   *legacy_ids.values())
+        old_context = tuple(dict.fromkeys((*old_texts, *old_ids)))
         old_id, old_pid, old_token = self.client_id, front.process.pid, self.secret
+        self.check(first["room_id"] == old_id and accepted["room_id"] == old_id
+                   and pending["room_id"] == old_id,
+                   "all pre-reload request identities belong to the actual original relay room")
         front.send(b"\x01\x0b/reload\r")
         credentials = self.connection_record(front, "account relay reexec")
         self.check(front.process.pid == old_pid and credentials["client_id"] != old_id,
                    "local relay /reload reexecs the same foreground process with a new client ID")
         front.credentials = credentials
         front.client_id = self.client_id = credentials["client_id"]
-        front.until(lambda shot: parked in input_text(shot), "the parked draft restored after relay reexec")
+        self.retired_context = old_context
+        self.retired_generation = before_events["generation"]
+        fresh_screen = front.until(
+            lambda shot: empty_composer_ready(shot)
+            and all(marker not in text(shot) for marker in old_context),
+            "a fresh empty composer after real relay reexec",
+        )
         self.check(self.account("/api/client/whoami")["identity"] == whoami,
                    "the replacement relay remains authenticated as the same named account")
 
@@ -389,25 +565,151 @@ class RelayComposer(Composer):
         self.check(any(item["id"] == self.client_id for item in listed)
                    and all(item["id"] != old_id for item in listed),
                    "the same MCP grant controls the replacement account relay without new login")
-        restored = self.queue()
-        self.check(restored["draft"]["text"] == parked and restored["draft"]["cursor"] == cursor
-                   and restored["draft_context"]["parked"] is None,
-                   "relay reexec restores the parked draft, UTF-8 cursor, and visible editor state")
-        self.check(self.record(restored, message_id=first["id"])["status"] == "delivered"
-                   and self.record(restored, message_id=editable["id"])["status"] == "delivered",
-                   "previously delivered relay history remains delivered after the room changes")
-        self.activate_column(front, "queue")
-        front.until(lambda shot: visible_record(shot, pending["text"], "queued", pending["id"]),
-                    "safe undelivered work acknowledged by the replacement relay room")
-        resumed = self.record(self.queue(), message_id=pending["id"])
-        self.check(resumed["status"] == "queued" and resumed["revision"] > 0
-                   and resumed["room_id"] == self.client_id and resumed["target"] == "next",
-                   "planned relay reload republishes only confirmed undelivered work with a real server acknowledgement")
-        self.expect_delivery(self.work(), pending)
-        self.wait_delivered(front, pending)
-        self.check(not self.messages(self.work()), "relay reexec never replays either old delivered requests or a newly delivered handoff")
-        self.check(self.ui("/display/conversation")["draft"]["text"] == parked,
-                   "relay replay acknowledgements preserve the restored unsent draft")
+        fresh = self.queue()
+        self.check(fresh["queue"] == [] and fresh["draft"] == {"text": "", "cursor": 0}
+                   and fresh["draft_context"]["parked"] is None
+                   and fresh["draft_context"]["target"] == initial_queue_target,
+                   "real reexec starts with no delivered history, pending queue, draft or parked editor")
+        composition = self.ui("/display/conversation")
+        self.check(composition["draft"] == fresh["draft"] and composition["editing"] is None
+                   and {key: composition[key] for key in initial_routing} == initial_routing,
+                   "the new composer has its original default routing and an empty editor")
+        fresh_response = self.work()
+        self.check(not self.messages(fresh_response),
+                   "the new relay never automatically redelivers the old pending or delivered requirements")
+        after_events = self.live_events()
+        serialized = json.dumps(after_events["events"], ensure_ascii=False)
+        self.check(after_events["generation"] != before_events["generation"]
+                   and after_events["scope"]["client_id"] == self.client_id
+                   and all(marker not in serialized and marker not in text(fresh_screen) for marker in old_context)
+                   and not any(event.get("value", {}).get("message_id") == reply_receipt["message_id"]
+                               and (not reusable_reply_id or event["value"].get("text") == old_reply)
+                               for event in after_events["events"]),
+                   "the replacement event generation contains no old RAM body or legacy file contents")
+        self.assert_legacy_state_unchanged(legacy_records)
+
+        members = []
+        for role in ("implementation", "review"):
+            member = self.public_call("collab", {"action": "join", "client_id": self.client_id,
+                                                "name": "Relay member", "role": role})
+            self.sensitive.append(member["token"])
+            members.append(member)
+
+        def registered():
+            front.pump(0.05)
+            return {member["agent_id"] for member in self.queue()["agents"]} == {
+                member["agent_id"] for member in members}
+
+        wait_for(registered, "both exact post-reload member identities in the current relay roster")
+        self.recipient(front, members[0])
+        continuation = self.submit(front, "RELAY_COMPOSER_FRESH_EXACT_REQUEST 界")
+        self.check(continuation["target"] == members[0]["agent_id"]
+                   and continuation["room_id"] == self.client_id
+                   and continuation["id"] not in {first["id"], editable["id"], pending["id"]},
+                   "new input has its own identity and exact authenticated recipient in the new relay room")
+        current_draft = "RELAY_POST_RELOAD_UNSENT_DRAFT 界"
+        self.focus_input(front)
+        front.send(current_draft.encode() + LEFT * 2)
+        front.until(lambda shot: current_draft in input_text(shot), "an independent draft beside the new exact request")
+        current_composition = self.ui("/display/conversation")
+        self.check(current_composition["draft"] == {
+            "text": current_draft, "cursor": len(current_draft.encode()) - len(" 界".encode())},
+            "the new exact-recipient request coexists with an independent UTF-8 draft")
+        controller_response = self.work(controller={"name": "Relay member"})
+        self.check(not self.messages(controller_response),
+                   "a matching display name cannot claim the new exact-recipient requirement")
+        other_response = self.work(member=members[1])
+        self.check(not self.messages(other_response),
+                   "another authenticated post-reload member cannot claim the selected member's requirement")
+        unclaimed = self.record(self.queue(), message_id=continuation["id"])
+        self.check(unclaimed["status"] == "queued" and unclaimed["target"] == members[0]["agent_id"],
+                   "wrong-recipient calls leave the exact queued identity and target unchanged")
+        exact_response = self.work(member=members[0])
+        self.expect_delivery(exact_response, continuation, agent_id=members[0]["agent_id"])
+        self.wait_delivered(front, continuation)
+        duplicate_response = self.work(member=members[0])
+        self.check(not self.messages(duplicate_response),
+                   "the authenticated recipient receives the new requirement only once")
+        self.check(all(marker not in json.dumps(response, ensure_ascii=False)
+                       for response in (fresh_response, controller_response, other_response,
+                                        exact_response, duplicate_response)
+                       for marker in old_context),
+                   "post-reload work responses contain no old RAM or legacy checkpoint context")
+        delivered = self.queue()
+        self.check({row["id"] for row in delivered["queue"]} == {continuation["id"]}
+                   and self.record(delivered, message_id=continuation["id"])["status"] == "delivered",
+                   "only explicitly submitted post-reload input enters the new room's queue")
+        after_composition = self.ui("/display/conversation")
+        self.check(after_composition["draft"] == current_composition["draft"]
+                   and after_composition["target"] == members[0]["agent_id"],
+                   "same-process recipient checks and delivery preserve the fresh draft and cursor")
+        expected_deliveries = [
+            {"observed_target_client_id": old_id, "message_id": first["id"],
+             "text": first["text"], "agent_id": None},
+            {"observed_target_client_id": old_id, "message_id": editable["id"],
+             "text": revised, "agent_id": None},
+            {"observed_target_client_id": self.client_id, "message_id": continuation["id"],
+             "text": continuation["text"], "agent_id": members[0]["agent_id"]},
+        ]
+        self.check(self.gateway_deliveries == expected_deliveries
+                   and all(row["message_id"] != pending["id"] and row["text"] != pending["text"]
+                           for row in self.gateway_deliveries),
+                   "gateway responses deliver only the three explicit inputs, never the pre-reload pending request")
+        continued_events = self.live_events()
+        continued_screen = front.until(
+            lambda shot: visible_record(shot, continuation["text"], "delivered", continuation["id"])
+            and current_draft in input_text(shot)
+            and all(marker not in text(shot) for marker in old_context),
+            "the new delivered request and fresh draft without old RAM or legacy markers",
+        )
+        continued_text = json.dumps(continued_events["events"], ensure_ascii=False)
+        self.check(continued_events["generation"] == after_events["generation"]
+                   and continued_events["scope"] == after_events["scope"]
+                   and any(event.get("value", {}).get("type") == "ssmcp.message"
+                           and event["value"].get("role") == "user"
+                           and event["value"].get("text") == continuation["text"]
+                           for event in continued_events["events"])
+                   and all(marker not in continued_text
+                           and marker not in json.dumps(after_composition, ensure_ascii=False)
+                           and marker not in text(continued_screen) for marker in old_context),
+                   "successful new delivery stays in the new generation without reviving old draft, pending input or history")
+        # Explicit export is tested only after the new requirement has been
+        # delivered. Clearing this owned draft is not the reload-freshness test.
+        handoff_before = self.queue()["queue"]
+        note = "RELAY_EXPLICIT_HANDOFF_NOTE 界"
+        self.focus_input(front)
+        front.send(b"\x01\x0b/handoff " + note.encode() + ENTER)
+
+        def exported_handoff():
+            front.pump(0.05)
+            state = self.ui("/display/conversation")
+            match = re.fullmatch(r'\n@"(\.ssmcp/inputs/handoff-[0-9a-f]{32}\.md)"\n', state["draft"]["text"])
+            return (state, match.group(1)) if match else None
+
+        handoff_state, handoff_path = wait_for(exported_handoff, "the explicit private handoff reference")
+        handoff_file = self.workspace / handoff_path
+        handoff_bytes = handoff_file.read_bytes()
+        handoff_text = handoff_bytes.decode("utf-8")
+        self.check(not handoff_file.is_symlink() and stat.S_IMODE(handoff_file.stat().st_mode) == 0o600
+                   and 0 < len(handoff_bytes) <= 2 * 1024 * 1024
+                   and note in handoff_text and continuation["text"] in handoff_text
+                   and current_draft not in handoff_text
+                   and all(marker not in handoff_text for marker in old_context),
+                   "explicit handoff exports only the fresh context into a bounded private Markdown file")
+        self.check(self.queue()["queue"] == handoff_before
+                   and handoff_state["target"] == members[0]["agent_id"]
+                   and handoff_state["native_recipient"] is None,
+                   "handoff preserves the exact recipient and neither queues nor sends its editable reference")
+        handoff_response = self.work(member=members[0])
+        self.check(not self.messages(handoff_response)
+                   and all(marker not in json.dumps(handoff_response, ensure_ascii=False) for marker in old_context),
+                   "the explicit handoff reference is never delivered without a separate submission")
+        handoff_events = self.live_events()
+        self.check(handoff_events["generation"] == after_events["generation"],
+                   "explicit handoff retains the fresh event generation and exposes no retired context")
+        self.check(self.gateway_deliveries == expected_deliveries,
+                   "explicit handoff causes no additional gateway user-message delivery")
+        self.assert_legacy_state_unchanged(legacy_records)
         self.check(not (self.workspace / "relay-composer-hidden-shell-leak").exists(),
                    "all relay composer interactions keep request text separate from shell execution")
         final, restored_termios = front.disconnect()
@@ -417,7 +719,14 @@ class RelayComposer(Composer):
         self.check(all(secret.encode() not in front.transcript for secret in self.sensitive if secret),
                    "the physical terminal transcript contains no fixture account or OAuth credentials")
         self.metrics["relay_composer"] = {"bytes": len(front.transcript),
-            "sha256": hashlib.sha256(front.transcript).hexdigest(), "request_count": len(restored["queue"])}
+            "sha256": hashlib.sha256(front.transcript).hexdigest(), "request_count": len(delivered["queue"]),
+            "before_generation": before_events["generation"], "after_generation": after_events["generation"],
+            "old_reply_identity": {"generation": before_events["generation"],
+                                   "message_id": reply_receipt["message_id"]},
+            "gateway_response_deliveries": self.gateway_deliveries,
+            "handoff_bytes": len(handoff_bytes), "handoff_sha256": hashlib.sha256(handoff_bytes).hexdigest(),
+            "legacy_sha256": {str(path.relative_to(self.state_home)): hashlib.sha256(saved["bytes"]).hexdigest()
+                              for path, saved in legacy_records.items()}}
         front.close()
 
     def cleanup(self):
@@ -458,7 +767,7 @@ def main():
         "transport": "real production Broker/router in compiled Rust test executable + loopback HTTP/WS account relay + owned PTY",
         "oauth": "actual DCR/PKCE/consent/token exchange with an isolated synthetic GitHub provider",
         "tls_verified": False, "real_github_account": False, "models_started": False,
-        "scope": "account queue response delivery, CAS editing, same-account local reexec and safe handoff",
+        "scope": "account queue delivery, CAS editing, same-account reexec with fresh RAM, legacy files left untouched, exact-recipient continuation and explicit handoff",
         "binaries": {"ssmcp": sha256(args.bin_dir / "ssmcp"), "vt_snapshot": sha256(decoder),
                      "router_test_fixture": sha256(args.fixture_binary)},
         "sources": {str(path.relative_to(source_directory.parent)): sha256(path) for path in sources}}

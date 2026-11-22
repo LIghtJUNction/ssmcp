@@ -203,11 +203,12 @@ class MessageReferences(InputHistory):
                 path = f"/steering/queue/{entry['index']}"
                 self.check(self.projection_matches(path + "/text", source),
                            "the exact new queue identity contains every submitted byte")
+                room_id = self.ui(path + "/room_id")
                 warnings = self.ui(path + "/reference_warnings")
                 self.wait_state(front, lambda state: not state["draft"]["text"],
                                 "the accepted maximum-size draft did not clear")
                 return {"id": entry["id"], "status": entry["status"],
-                        "text": source, "reference_warnings": warnings}
+                        "text": source, "room_id": room_id, "reference_warnings": warnings}
         raise AssertionError("the maximum-size requirement was not acknowledged exactly once")
 
     def received(self, front, member, record, source):

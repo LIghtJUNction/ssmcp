@@ -4,7 +4,7 @@
 Build ssmcp, ssmcpd, and examples/vt_snapshot first, then run:
   python3 scripts/e2e_composer.py --bin-dir target/debug --report /tmp/composer.json
 
-Reuses the isolated SSH/OAuth harness and independent VT decoder. All keys,
+Reuses the isolated account/OAuth harness and independent VT decoder. All keys,
 ports, processes, workspaces, and collaboration members belong to this test.
 No live session, installed coding harness, or model is used. Native UI calls
 are checked to be observational; screen waits never call a native work tool.
@@ -74,6 +74,24 @@ def visible_record(snapshot, request_text, status, message_id=None, *, selected=
 
 
 class Composer(Dashboard):
+    def client_environment(self, label, **options):
+        environment = super().client_environment(label, **options)
+        root = (self.directory / "composer-environment").resolve()
+        root.mkdir(mode=0o700, exist_ok=True)
+        homes = {
+            "HOME": root / "home",
+            "XDG_STATE_HOME": root / "state",
+            "XDG_CONFIG_HOME": root / "config",
+            "XDG_DATA_HOME": root / "data",
+            "XDG_CACHE_HOME": root / "cache",
+            "XDG_RUNTIME_DIR": root / "runtime",
+        }
+        for path in homes.values():
+            path.mkdir(mode=0o700, exist_ok=True)
+        self.composer_state_home = homes["XDG_STATE_HOME"]
+        environment.update({name: str(path) for name, path in homes.items()})
+        return environment
+
     def config(self, name, **_options):
         # e2e_dashboard deliberately exercises split layout. This scenario
         # independently selects chat without changing that existing test.
@@ -83,6 +101,31 @@ class Composer(Dashboard):
             'timestamps=false\nlayout="chat"\nsidebar=false\n'
         )
         return path
+
+    def rpc(self, method, params=None, **options):
+        # Capture the actual code_mode HTTP boundary once, including callers
+        # that bypass response() through Harness.call/live_event_call.
+        if not hasattr(self, "gateway_deliveries"):
+            self.gateway_deliveries = []
+        observed_target = self.client_id
+        status, body, headers = super().rpc(method, params, **options)
+        if (method == "tools/call" and isinstance(params, dict)
+                and params.get("name") == "code_mode" and isinstance(body, dict)):
+            result = body.get("result")
+            structured = result.get("structuredContent") if isinstance(result, dict) else None
+            if isinstance(structured, dict):
+                messages = structured.get("user_messages", [])
+                if not isinstance(messages, list) or any(not isinstance(item, dict) for item in messages):
+                    raise AssertionError("code_mode returned an invalid user-requirements envelope")
+                self.gateway_deliveries.extend({
+                    # This is the fixture's observation target, not a client ID
+                    # returned by the server. Real scope is checked by ui.events.
+                    "observed_target_client_id": observed_target,
+                    "message_id": item.get("message_id"),
+                    "text": item.get("text"),
+                    "agent_id": item.get("agent_id"),
+                } for item in messages)
+        return status, body, headers
 
     def response(self, code, *, agent=None, controller=None):
         arguments = {"code": code}
@@ -288,6 +331,10 @@ class Composer(Dashboard):
             raise AssertionError(f"expected delivery {record['id']}, received identities {received}")
         self.check(len(messages) == 1 and messages[0]["message_id"] == record["id"],
                    "only the expected queued identity is included in the tool response")
+        self.check(messages[0]["client_id"] == record["room_id"]
+                   and messages[0]["session_id"] == record["room_id"]
+                   and messages[0]["thread_id"] == agent_id,
+                   "the actual HTTP delivery identifies the queued room and authenticated recipient thread")
         expected = request_text if request_text is not None else record["text"]
         self.check(messages[0]["text"] == expected and messages[0].get("agent_id") == agent_id,
                    "delivery retains the exact revised text and authenticated recipient")
@@ -330,6 +377,12 @@ class Composer(Dashboard):
         self.oauth_login(front.credentials)
         front.until(empty_composer_ready,
                     "the live chat composer in the owned terminal")
+        initial_composition = self.ui("/display/conversation")
+        initial_recipient = {key: initial_composition[key] for key in ("target", "native_recipient")}
+        default_columns = ["statistics", "conversation", "code audit", "queue", "questions", "Logs", "Tasks"]
+        self.check(initial_composition["canvas"]["columns"] == default_columns
+                   and initial_composition["canvas"]["active"] == 1,
+                   "the live client starts on Conversation in the exact seven-column default canvas")
         self.command(front, "/queue")
         self.check(self.queue()["supported"], "the account relay negotiated the request-queue wire protocol")
 
@@ -430,6 +483,10 @@ class Composer(Dashboard):
             expected_statuses[member["agent_id"]] = status
             subtitles.append(f"…{member['agent_id'][-8:]} · {role}")
         self.agents(front)
+        recipient_canvas = self.ui("/display/conversation")["canvas"]
+        self.check(recipient_canvas["columns"] == default_columns[:2] + ["recipients"] + default_columns[2:]
+                   and recipient_canvas["active"] == 2,
+                   "explicit Sessions inserts only Recipients as the third column of the eight-column canvas")
         front.until(lambda shot: all(subtitle in text(shot) for subtitle in subtitles),
                     "the public summaries beside the two same-name threads' ID suffixes")
 
@@ -537,13 +594,86 @@ class Composer(Dashboard):
         self.wait_delivered(front, retargeted, retargeted_text)
         self.recipient(front)
 
-        handoff = self.submit(front, "COMPOSER_QUEUED_ACROSS_RELOAD")
+        legacy_root = self.composer_state_home / "ssmcp" / "conversations"
+        memory_root = self.composer_state_home / "ssmcp" / "context-memory"
+        namespaces = (legacy_root, memory_root)
+        self.check(not any(path.is_file() for root in namespaces for path in root.rglob("*")),
+                   "normal composer activity creates no automatic conversation or checkpoint files")
+        workspace = str(self.workspace.resolve())
+        workspace_id = hashlib.sha256(workspace.encode("utf-8")).hexdigest()
+        memory_workspace = memory_root / workspace_id
+        for path in (legacy_root.parent, legacy_root, memory_root, memory_workspace):
+            path.mkdir(mode=0o700, exist_ok=True)
+        legacy_id = "conversation_" + "a" * 32
+        legacy_message_id = "message_" + "b" * 32
+        legacy_branch_id = "context_" + "c" * 32
+        legacy_text = "COMPOSER_LEGACY_CONVERSATION_IGNORED"
+        checkpoint_text = "COMPOSER_LEGACY_CHECKPOINT_IGNORED"
+        legacy_markers = (legacy_text, checkpoint_text, legacy_id)
+        legacy_rows = [
+            {"type": "session", "schema": "ssmcp.conversation.v1", "schema_version": 1,
+             "id": legacy_id, "workspace": workspace, "created_at_ms": 1,
+             "truncated_messages": 0},
+            {"type": "message", "id": legacy_message_id, "role": "assistant",
+             "kind": "agent_message", "content": legacy_text, "created_at_ms": 2,
+             "truncated": False},
+        ]
+        # Match the retired context_memory.rs Document/Branch/Checkpoint schema
+        # and canonical workspace hash. All source IDs and bytes are synthetic.
+        checkpoint = {
+            "schema": "ssmcp.context-memory.v1", "schema_version": 1,
+            "workspace": workspace, "workspace_id": workspace_id, "revision": 1,
+            "active_id": legacy_branch_id, "branches": [{
+                "id": legacy_branch_id, "name": "main", "parent_id": None, "revision": 1,
+                "created_at_ms": 1, "updated_at_ms": 2,
+                "checkpoint": {"mode": "provided_summary", "text": checkpoint_text,
+                               "created_at_ms": 2, "sources": [{
+                                   "conversation_id": legacy_id, "message_id": legacy_message_id,
+                                   "sha256": hashlib.sha256(legacy_text.encode("utf-8")).hexdigest(),
+                               }], "omitted_sources": 0},
+                "recent": [], "omitted_recent": 0,
+            }],
+        }
+        legacy_files = {
+            legacy_root / (legacy_id + ".jsonl"):
+                ("\n".join(json.dumps(row) for row in legacy_rows) + "\n").encode("utf-8"),
+            memory_workspace / "state.json": (json.dumps(checkpoint) + "\n").encode("utf-8"),
+            # Match the retired archive::Index schema without unknown fields.
+            legacy_root / "archives.json": (json.dumps({
+                "schema_version": 1, "conversations": [legacy_id],
+            }) + "\n").encode("utf-8"),
+        }
+        for path, payload in legacy_files.items():
+            with path.open("xb") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                stream.write(payload)
+
+        def legacy_unchanged():
+            actual = {path for root in namespaces for path in root.rglob("*") if path.is_file()}
+            return actual == set(legacy_files) and all(
+                not path.is_symlink() and path.read_bytes() == payload
+                and path.stat().st_mode & 0o777 == 0o600
+                for path, payload in legacy_files.items()
+            )
+
+        live_marker = "COMPOSER_LIVE_BEFORE_RELOAD"
+        live_receipt = self.observe("ssmcp.ui.message", {"text": live_marker})
+        events_before = self.live_events(limit=4)
+        self.check(live_receipt.get("recorded") is True
+                   and live_receipt.get("storage") == "memory"
+                   and sum(event.get("value", {}).get("message_id") == live_receipt["message_id"]
+                           for event in events_before["events"]) == 1,
+                   "one real live message is retained before the reload boundary")
+
+        # Leave the next-caller requirement pending after all native work and
+        # event-artifact reads. Until /reload, use only UI observation and keys.
+        pending = self.submit(front, "COMPOSER_PENDING_MUST_NOT_REPLAY")
         self.focus_input(front)
         front.send(parked.encode() + LEFT * 2)
         front.until(lambda shot: parked in input_text(shot), "the unsent draft before parking")
         parked_cursor = self.queue()["draft"]["cursor"]
-        # R copies delivered text into a fresh draft while parking this
-        # unrelated text. Both remain live-only and must not survive reexec.
+        # R copies delivered history into a fresh draft while parking this
+        # unrelated text. Same-process Escape restores it; reexec clears RAM.
         self.select_request(front, first["id"])
         front.send(b"r")
         front.until(lambda shot: first_text in input_text(shot), "a delivered history item copied to a new draft")
@@ -574,6 +704,32 @@ class Composer(Dashboard):
         self.select_request(front, first["id"])
         front.send(b"r")
         front.until(lambda shot: first_text in input_text(shot), "a fresh copy before the reload command")
+        before_reload = self.queue()
+        before_reload_state = self.ui("/display/conversation")
+        self.check(before_reload_state["editing"] is None
+                   and before_reload["draft"]["text"] == first_text
+                   and before_reload["draft_context"]["parked"]["text"] == parked,
+                   "reload starts with a copied delivered message and parked draft, without a held queue edit")
+        waiting = [item for item in before_reload["queue"]
+                   if item["status"] in ("queued", "sending", "editing")]
+        self.check(len(waiting) == 1 and waiting[0]["id"] == pending["id"]
+                   and waiting[0]["text"] == pending["text"]
+                   and waiting[0]["target"] == "next"
+                   and waiting[0]["status"] == "queued"
+                   and waiting[0]["room_id"] == self.client_id,
+                   "the exact next-caller requirement is still unclaimed immediately before reload")
+        old_request_ids = {item["id"] for item in before_reload["queue"]}
+        expected_before = [
+            {"observed_target_client_id": self.client_id, "message_id": record["id"],
+             "text": body, "agent_id": recipient}
+            for record, body, recipient in (
+                (first, first_text, None), (second, revised, None),
+                (third, revised_third, None), (exact, exact["text"], members[0]["agent_id"]),
+                (retargeted, retargeted_text, None),
+            )
+        ]
+        self.check(self.gateway_deliveries == expected_before,
+                   "every pre-reload code_mode response delivered only the five expected requests")
         old_id, old_token, old_pid = self.client_id, self.secret, front.process.pid
         front.send(b"\x01\x0b/reload\r")
         credentials = self.new_credentials(front)
@@ -581,38 +737,151 @@ class Composer(Dashboard):
                    "local /reload reexecs the same process and reconnects under a new session ID")
         front.credentials = credentials
         front.client_id = self.client_id = credentials["client_id"]
-        front.until(empty_composer_ready, "the fresh empty composer after client reexec")
+        front.until(empty_composer_ready, "the fresh empty composer after real reexec")
         # A device reconnect replaces its client ID, while the user's independent
         # account authorization remains valid for the newly registered device.
         status, _, _ = self.rpc("ping", modern=True, secret=old_token)
         self.check(status == 200 and self.secret == old_token,
                    "reexec preserves the independently authorized account OAuth grant")
-        listed = self.public_call("list", secret=old_token)["clients"]
-        self.check(any(item["id"] == self.client_id for item in listed)
-                   and all(item["id"] != old_id for item in listed),
-                   "the same account grant sees the replacement without the disconnected client ID")
-        restarted = self.queue()
-        self.check(restarted["draft"] == {"text": "", "cursor": 0}
-                   and restarted["draft_context"]["parked"] is None
-                   and restarted["draft_context"]["target"] is None,
-                   "reexec starts a fresh draft without restoring a parked input or its recipient")
-        self.check(not restarted["queue"],
-                   "reexec restores neither delivered records nor the old queued requirement")
-        self.check(not self.messages(self.work()),
-                   "fresh-session work does not redeliver the old queued or delivered requirements")
-        fresh_text = "COMPOSER_FRESH_AFTER_RELOAD"
+        def replacement_visible():
+            listed = self.public_call("list", secret=old_token)["clients"]
+            return (any(item["id"] == self.client_id for item in listed)
+                    and all(item["id"] != old_id for item in listed))
+
+        wait_for(replacement_visible, "the same account grant seeing only the replacement client")
+        self.check(True, "the same account grant sees the replacement without the disconnected client ID")
+        fresh_queue = self.queue()
+        fresh_state = self.ui("/display/conversation")
+        self.check(fresh_queue["queue"] == []
+                   and fresh_queue["draft"] == {"text": "", "cursor": 0}
+                   and fresh_queue["draft_context"]["parked"] is None
+                   and fresh_queue["draft_context"]["target"] is None
+                   and fresh_state["editing"] is None
+                   and {key: fresh_state[key] for key in initial_recipient} == initial_recipient,
+                   "reexec clears delivered and pending records plus visible and parked drafts")
+        self.check(fresh_state["canvas"]["columns"] == default_columns
+                   and fresh_state["canvas"]["active"] == 1,
+                   "reexec also resets the explicitly expanded canvas to the seven-column conversation default")
+
+        forbidden_after = {live_marker, parked, legacy_message_id, legacy_branch_id,
+                           *legacy_markers, *old_request_ids}
+        for row in before_reload["queue"]:
+            old_body = row.get("text")
+            if isinstance(old_body, str) and old_body:
+                forbidden_after.add(old_body)
+        for event in events_before["events"]:
+            old_value = event.get("value", {})
+            if old_value.get("type") == "ssmcp.message":
+                for field in ("text", "message_id"):
+                    old_marker = old_value.get(field)
+                    if isinstance(old_marker, str) and old_marker:
+                        # Journal event_N identifiers are local to a generation;
+                        # their reuse alone is not evidence of restored history.
+                        if field == "message_id" and re.fullmatch(r"event_\d+", old_marker):
+                            continue
+                        forbidden_after.add(old_marker)
+
+        def post_reload_work(**options):
+            response = self.work(**options)
+            encoded = json.dumps(response, ensure_ascii=False)
+            self.check(not any(marker in encoded for marker in forbidden_after),
+                       "the actual gateway response contains no discarded RAM or legacy checkpoint text")
+            return response
+
+        for attempt in range(3):
+            response = post_reload_work()
+            self.check(not self.messages(response),
+                       f"post-reload gateway response {attempt + 1} replays no old requirement")
+            front.pump(0.05)
+            self.check(self.queue()["queue"] == [],
+                       "actual gateway delivery boundaries leave the fresh queue empty")
+        events_after = self.live_events(limit=4)
+        serialized_after = json.dumps(events_after["events"], ensure_ascii=False)
+        self.check(events_after["generation"] != events_before["generation"]
+                   and events_after["scope"]["client_id"] == self.client_id
+                   and events_before["scope"]["client_id"] == old_id
+                   and not any(event.get("value", {}).get("message_id") == live_receipt["message_id"]
+                               and event["value"].get("text") == live_marker
+                               for event in events_after["events"])
+                   and all(marker not in serialized_after for marker in forbidden_after),
+                   "real reexec starts a new event generation without old messages, pending input or draft text")
+        self.check(self.gateway_deliveries == expected_before,
+                   "all post-reload observations and work responses leave the old pending request undelivered")
+        self.check(legacy_unchanged(),
+                   "reexec leaves the synthetic legacy JSONL, checkpoint and archive index bytes unchanged")
+
+        # Register fresh authority for the replacement client. A former member
+        # identity or a matching display name cannot select this recipient.
+        new_members = []
+        for role in ("recipient", "other"):
+            member = self.public_call("collab", {
+                "action": "join", "client_id": self.client_id,
+                "name": "Reload member", "role": role,
+            })
+            self.sensitive.append(member["token"])
+            new_members.append(member)
+        expected_ids = {member["agent_id"] for member in new_members}
+        wait_for(lambda: expected_ids <= {member["agent_id"] for member in self.queue()["agents"]},
+                 "the fresh authenticated recipients in the replacement client roster")
+        self.recipient(front, new_members[0])
+        fresh_text = "COMPOSER_NEW_PROCESS_EXACT_RECIPIENT 界"
         fresh = self.submit(front, fresh_text)
-        self.expect_delivery(self.work(), fresh, fresh_text)
-        self.wait_delivered(front, fresh, fresh_text)
-        self.check(not self.messages(self.work()),
-                   "the new process delivers its new requirement only once")
+        self.check(fresh["id"] not in old_request_ids
+                   and fresh["room_id"] == self.client_id
+                   and fresh["target"] == new_members[0]["agent_id"],
+                   "fresh input has a new identity and the exact new-client recipient")
+        self.ui("/display/conversation/draft")
+        observed = self.record(self.queue(), message_id=fresh["id"])
+        self.check(observed["status"] == "queued" and observed["text"] == fresh_text
+                   and observed["target"] == new_members[0]["agent_id"],
+                   "UI-only observation keeps fresh exact-recipient input pending")
+        self.check(not self.messages(post_reload_work(controller={"name": "Reload member"})),
+                   "a matching post-reload display name cannot claim the new exact recipient")
+        self.check(not self.messages(post_reload_work(member=new_members[1])),
+                   "another fresh authenticated member cannot claim the exact-recipient input")
+        self.expect_delivery(post_reload_work(member=new_members[0]), fresh,
+                             request_text=fresh_text, agent_id=new_members[0]["agent_id"])
+        self.wait_delivered(front, fresh)
+        self.check(not self.messages(post_reload_work(member=new_members[0]))
+                   and not self.messages(post_reload_work()),
+                   "later gateway responses duplicate neither fresh input nor the discarded pending requirement")
         final_queue = self.queue()
         self.check(len(final_queue["queue"]) == 1
                    and final_queue["queue"][0]["id"] == fresh["id"]
-                   and final_queue["queue"][0]["status"] == "delivered",
-                   "the new queue contains only the new process's acknowledged requirement")
-        self.check(not self.ui("/display/conversation")["draft"]["text"],
-                   "new delivery acknowledgements do not recreate the old local draft")
+                   and final_queue["queue"][0]["status"] == "delivered"
+                   and final_queue["draft"] == {"text": "", "cursor": 0}
+                   and final_queue["draft_context"]["parked"] is None,
+                   "only the newly delivered request belongs to the fresh process queue")
+        continued_events = self.live_events(limit=4)
+        continued_state = self.ui("/display/conversation")
+        continued_screen = front.until(
+            lambda shot: visible_record(shot, fresh_text, "delivered", fresh["id"])
+            and all(marker not in text(shot) for marker in forbidden_after),
+            "the newly delivered request without old draft or message bodies",
+        )
+        continued_body = json.dumps(continued_events["events"], ensure_ascii=False)
+        continued_ui = json.dumps(continued_state, ensure_ascii=False)
+        self.check(continued_events["generation"] == events_after["generation"]
+                   and continued_events["scope"] == events_after["scope"]
+                   and any(event.get("value", {}).get("type") == "ssmcp.message"
+                           and event["value"].get("role") == "user"
+                           and event["value"].get("text") == fresh_text
+                           for event in continued_events["events"])
+                   and all(marker not in continued_body for marker in forbidden_after),
+                   "successful fresh delivery stays in the new event generation without old bodies or identities")
+        self.check(continued_state["draft"] == {"text": "", "cursor": 0}
+                   and continued_state["editing"] is None
+                   and all(marker not in continued_ui and marker not in text(continued_screen)
+                           for marker in forbidden_after),
+                   "the current UI still excludes every old draft and message after fresh delivery and late probes")
+        expected_after = [*expected_before, {
+            "observed_target_client_id": self.client_id, "message_id": fresh["id"],
+            "text": fresh_text, "agent_id": new_members[0]["agent_id"],
+        }]
+        self.check(self.gateway_deliveries == expected_after,
+                   "the complete HTTP delivery record contains exactly the five old deliveries and one fresh exact-recipient delivery")
+        self.check(legacy_unchanged(),
+                   "new live work neither modifies nor deletes synthetic files in the retired state namespaces")
         self.check(not (self.workspace / "composer-hidden-shell-leak").exists(),
                    "all composer and reload interactions leave the hidden shell untouched")
         final, restored_termios = front.disconnect()
@@ -621,7 +890,18 @@ class Composer(Dashboard):
         self.check(front.process.returncode == 0, "the reexecuted client disconnects successfully")
         self.metrics["composer"] = {"bytes": len(front.transcript),
                                     "sha256": hashlib.sha256(front.transcript).hexdigest(),
-                                    "request_count": len(final_queue["queue"])}
+                                    "request_count": len(final_queue["queue"]),
+                                    "client_id_before": old_id,
+                                    "client_id_after": self.client_id,
+                                    "generation_before": events_before["generation"],
+                                    "generation_after": events_after["generation"],
+                                    "discarded_pending_id": pending["id"],
+                                    "gateway_deliveries": list(self.gateway_deliveries),
+                                    "legacy_files_sha256": {
+                                        str(path.relative_to(self.composer_state_home)):
+                                            hashlib.sha256(payload).hexdigest()
+                                        for path, payload in legacy_files.items()
+                                    }}
         front.close()
 
 
@@ -642,7 +922,7 @@ def main():
     started = time.monotonic()
     report = {"status": "failed", "platform": platform.system(),
               "transport": "production account router over loopback HTTP/WebSocket, synthetic GitHub provider",
-              "scope": "real composer, queue revisions, bound recipients, and local reexec; no models",
+              "scope": "real composer, queue revisions, same-process drafts, exact recipients, and RAM reset on local reexec; no models",
               "binaries": {name: sha256(path) for name, path in (
                   ("ssmcp", args.bin_dir / "ssmcp"), ("ssmcpd", args.bin_dir / "ssmcpd"), ("vt_snapshot", decoder))},
               "sources": {path.name: sha256(path) for path in (

@@ -279,7 +279,7 @@ class AgentPanel(Composer):
                     "live events return to Recipients")
         front.send(ESC)
         front.until(lambda shot: view(shot, "conversation")
-                    and not shot["hide_cursor"], "Sessions returns to the same composer")
+                    and not shot["hide_cursor"], "Recipients returns to the same composer")
 
     def member_event_actions(self, front, members, composition):
         # Exercise the site's default sidebar=false layout first.
@@ -318,7 +318,8 @@ class AgentPanel(Composer):
                 state["view"] == "live_logs" and state["thread_history"] is not None
                 and state["thread_history"]["scope"] == page["scope"],
                 "h opens the exact selected member events")
-            shown = front.until(lambda shot: own in text(shot), "the selected thread marker is visible")
+            shown = front.until(lambda shot: view(shot, "live logs") and own in text(shot),
+                                "the selected thread marker is visible in Live logs")
             self.check(other not in text(shown) and markers[2] not in text(shown)
                        and state["thread_history"]["read_only"] is True
                        and {key: state[key] for key in composition} == composition,
@@ -340,7 +341,7 @@ class AgentPanel(Composer):
         self.agents(front)
         self.highlight_recipient(front, first)
         front.send(b"h")
-        front.until(lambda shot: "AGENT_PANEL_A_LATE" in text(shot),
+        front.until(lambda shot: view(shot, "live logs") and "AGENT_PANEL_A_LATE" in text(shot),
                     "returning to A reveals its late reply")
         self.leave_thread_events(front)
         aggregate = self.events_containing_messages((*markers, "AGENT_PANEL_A_LATE"))
@@ -377,6 +378,7 @@ class AgentPanel(Composer):
             state["view"] == "live_logs" and state["thread_history"] is not None
             and state["thread_history"]["scope"] == page["scope"],
             "sidebar right-click opens the exact member without prior selection")
+        front.until(lambda shot: view(shot, "live logs"), "the sidebar opens the scoped Live logs page")
         self.check(opened["thread_history"]["read_only"] is True
                    and {key: opened[key] for key in composition} == composition
                    and self.queue()["queue"] == queue_before,

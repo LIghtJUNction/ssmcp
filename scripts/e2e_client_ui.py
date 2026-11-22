@@ -651,6 +651,35 @@ def main():
                                          and "Keep the interface simple;" in body_text(s),
                                          "Escape restoring the originating queue column")
             check("To Builder" in text(queue_return), "Logs preserves the shared recipient")
+            slash(preview, "/logs")
+            preview.until(lambda s: column(s) == ("logs", 7, 8),
+                          "reopening the existing diagnostic Logs column without adding a page")
+            preview.send(b"\x1b[1;3C")
+            tasks = preview.until(lambda s: column(s) == ("tasks", 8, 8),
+                                  "Tasks immediately to the right of diagnostic Logs")
+            check("To Builder" in text(tasks), "Tasks navigation preserves the shared recipient")
+            preview.send(b"\x1b[1;3D")
+            preview.until(lambda s: column(s) == ("logs", 7, 8),
+                          "horizontal navigation back to diagnostic Logs")
+            # Escape restores the origin; /close actually removes the column.
+            # Its left neighbour is Questions, and the canvas now has seven pages.
+            slash(preview, "/close")
+            closed_logs = preview.until(lambda s: column(s) == ("questions", 6, 7),
+                                        "closing Logs and landing on the existing Questions column")
+            save_shot(args.out, "logs-closed", closed_logs)
+            # Questions owns its own answer input. Leave by canvas navigation
+            # before typing a composer command into the known Queue editor.
+            preview.send(b"\x1b[1;3D")
+            preview.until(lambda s: column(s) == ("queue", 5, 7),
+                          "leaving Questions without entering or submitting an answer")
+            slash(preview, "/logs")
+            preview.until(lambda s: column(s) == ("logs", 7, 8),
+                          "the Logs command restoring the missing column before Tasks")
+            preview.send(b"\x1b")
+            restored_queue = preview.until(lambda s: column(s) == ("queue", 5, 8),
+                                           "Escape returning to Queue after restoring Logs")
+            check("To Builder" in text(restored_queue),
+                  "closing and restoring Logs preserve the shared recipient")
             preview.send(b"\x1b[1;3D" * 3)
             preview.until(lambda s: view(s, "conversation")
                           and not s["hide_cursor"], "horizontal navigation back to the conversation")

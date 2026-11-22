@@ -68,7 +68,7 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.present", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.question_ack","ssmcp.ui.question_delivery", "ssmcp.ui.events", "ssmcp.ui.harness",
     "ssmcp.worker.status", "ssmcp.worker.attach", "ssmcp.worker.tasks",
     "ssmcp.worker.stop", "ssmcp.worker.resize", "ssmcp.worker.submit", "ssmcp.worker.result",
-    "ssmcp.worker.cancel", "ssmcp.worker.wait", "ssmcp.worker.claim", "ssmcp.worker.complete",
+    "ssmcp.worker.cancel", "ssmcp.worker.wait", "ssmcp.worker.wait_available", "ssmcp.worker.claim", "ssmcp.worker.complete",
     "ssmcp.worker.report", "ssmcp.worker.release",
     "ssmcp.computer.version", "ssmcp.computer.download",
     "ssmcp.computer.install", "ssmcp.computer.uninstall",
