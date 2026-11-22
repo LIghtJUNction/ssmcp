@@ -10,21 +10,12 @@ __pycache__/
 /.worktrees/
 /out/
 
-# Generated evidence is stored in Drive or release assets, outside Git.
-/artifacts/**/*.zip
-/artifacts/**/*.png
-/artifacts/**/*.jpg
-/artifacts/**/*.jpeg
-/artifacts/**/*.webp
-/artifacts/**/*.gif
-/artifacts/**/*.pdf
-/artifacts/**/*.mp4
-/artifacts/**/*.webm
-/artifacts/**/*.tar
-/artifacts/**/*.gz
-/artifacts/**/*.xz
-/artifacts/**/*.zst
+# Local acceptance and build outputs are stored outside Git.
+/artifacts/
+
+# Keep generated documentation media, archives, and binaries in external storage.
 /docs/reports/**/*.zip
+/docs/reports/**/*.7z
 /docs/reports/**/*.png
 /docs/reports/**/*.jpg
 /docs/reports/**/*.jpeg
@@ -33,13 +24,21 @@ __pycache__/
 /docs/reports/**/*.pdf
 /docs/reports/**/*.mp4
 /docs/reports/**/*.webm
+/docs/reports/**/*.mov
+/docs/reports/**/*.mkv
 /docs/reports/**/*.tar
 /docs/reports/**/*.gz
+/docs/reports/**/*.tgz
+/docs/reports/**/*.bz2
 /docs/reports/**/*.xz
 /docs/reports/**/*.zst
+/docs/reports/**/*.exe
+/docs/reports/**/*.dll
+/docs/reports/**/*.so
+/docs/reports/**/*.dylib
 
-# Historical documentation screenshots and recordings are archived externally.
 /docs/assets/**/*.zip
+/docs/assets/**/*.7z
 /docs/assets/**/*.png
 /docs/assets/**/*.jpg
 /docs/assets/**/*.jpeg
@@ -48,11 +47,21 @@ __pycache__/
 /docs/assets/**/*.pdf
 /docs/assets/**/*.mp4
 /docs/assets/**/*.webm
+/docs/assets/**/*.mov
+/docs/assets/**/*.mkv
 /docs/assets/**/*.tar
 /docs/assets/**/*.gz
+/docs/assets/**/*.tgz
+/docs/assets/**/*.bz2
 /docs/assets/**/*.xz
 /docs/assets/**/*.zst
+/docs/assets/**/*.exe
+/docs/assets/**/*.dll
+/docs/assets/**/*.so
+/docs/assets/**/*.dylib
+
 /docs/qa/**/*.zip
+/docs/qa/**/*.7z
 /docs/qa/**/*.png
 /docs/qa/**/*.jpg
 /docs/qa/**/*.jpeg
@@ -61,7 +70,15 @@ __pycache__/
 /docs/qa/**/*.pdf
 /docs/qa/**/*.mp4
 /docs/qa/**/*.webm
+/docs/qa/**/*.mov
+/docs/qa/**/*.mkv
 /docs/qa/**/*.tar
 /docs/qa/**/*.gz
+/docs/qa/**/*.tgz
+/docs/qa/**/*.bz2
 /docs/qa/**/*.xz
 /docs/qa/**/*.zst
+/docs/qa/**/*.exe
+/docs/qa/**/*.dll
+/docs/qa/**/*.so
+/docs/qa/**/*.dylib
