@@ -13,7 +13,7 @@ counter is implemented. Reviewed main: `628960c74ca97fd29766c7271ac7f0bc959ed095
 - `src/client/git_status.rs` has a fixed local Git observer, with optional index
   locking, fsmonitor and maintenance disabled. It is not a remotely authorized
   native status operation. Its refresh/cache behavior is not execution savings.
-- `Session::call_inner` and pending-call checks (`src/broker.rs`) hold actual
+- `Session::call_with_actor` and `charge_pending` (`src/broker.rs`) hold actual
   authorization and cancellation state and recheck authority at delivery.
   Native `CallScope` has verified account/thread attribution, but not the full
   live authorization lease or final delivery status. Account equality is not
@@ -134,3 +134,49 @@ Use deterministic admission/spawn/exit/completion barriers, not sleep races:
 6. Render supported 0/9, old backend, malformed/unknown snapshot, disconnect and
    new epoch. Preserve narrow-screen layout, drafts, audit totals and approvals.
    Fixtures do not substitute for live-client or model-understanding E2E.
+
+## Focused legacy/hardcoded-value audit
+
+Audited execution, source loading and Stats only, against the base above and the
+UI change in `71d38c50e4c2e7b39128fcd87bb3ea6b0adc0308`. No claim of a whole-repository
+unreachable-code proof.
+
+### A. Cleanup justified in this increment
+
+No duplicated runtime constants, extra source selectors, execution state or
+provably unreachable branches were introduced by the Stats change. It reuses
+`statistics.rs:rows`, `wrapped`, existing audit totals and `chat_statistics_rows`.
+The rendering assertion repeats user-visible text as an independent test oracle;
+creating a shared constant solely to make this assertion pass would add coupling.
+No production deletion is justified by the inspected call graph and tests, so no
+cosmetic cleanup framework or speculative branch deletion is included.
+
+### B. Compatibility and deliberate fixed boundaries retained
+
+| File:symbol | Call evidence and reason to keep |
+| --- | --- |
+| `src/http/tool_sources.rs:select_client` | `load` calls it once with explicit ID, verified agent binding and authorized sessions. Explicit / bound / sole / unselected cases are distinct; the selection test exercises all, including rejecting foreign IDs. |
+| `src/http/tool_sources.rs:load` legacy branch | Missing valid capability support selects a declared legacy seed only for implicit clients. Explicit selection and malformed/error manifests remain strict. Three source-support HTTP fixtures exercise retry, connection refresh and revoked waiters. This is live compatibility, not dead source selection. |
+| `src/broker.rs:Session::tool_source_support` | `load` uses its connection-local OnceCell to coalesce successful capability negotiation only. RC/bundles are re-read. It does not deduplicate native processes and must not feed the savings counter. |
+| `src/tool_repository.rs:URI` | Already reused by HTTP resource loading and capability advertisement; do not introduce a second URI/config source. |
+| `src/tool_repository.rs:SEED_COMMIT`, `SEED_SOURCE_SHA256`, `ORIGIN` | `official_seed` reads pinned bundled objects; `ensure_official` validates the offline bootstrap commit. Fixed origin and hash are supply-chain boundaries, not arbitrary workspace activation defaults. |
+| `src/tool_repository.rs:MAX_SOURCE`, `MAX_TOTAL`, `MAX_OVERRIDES`; `src/code_mode.js:run` limits | Rust validates client bundles and JS independently validates the worker frame (17 layers, 128 KiB per source, 192 KiB total). Equal values guard separate trust boundaries. Removing either check is not deduplication; future limit changes need cross-language contract tests first. |
+| `src/code_mode.rs:MAX_CALLS`; `src/code_mode.js:MAX_CALLS`, `MAX_PENDING` | Server orchestration and worker each bound native-call traffic. Keep independent enforcement rather than trusting editable helpers or a peer's validation. |
+| `src/backend/shell.rs:MAX_JOBS`, `Shell::start` | `try_acquire_owned` rejects capacity exhaustion before spawn; it is not a command coalescing queue. Keep admission and retained-job behavior separate from savings. |
+
+### C. Narrow migration order, no broad rewrite
+
+| Order and file:symbol | Migration and gate |
+| --- | --- |
+| 1. `src/runtime/native_plugins/files.rs:Files::call`, `src/client/git_status.rs:base_command`, `command` | Add the fixed, permission-scoped native wrapper only after auditing/reusing the command builder's safe subset. Test no index/config-helper/network effects and no external Git metadata escape. Do not expose the UI observer or generic argv. |
+| 2. `src/runtime.rs:Runtime::perform_inner`, `perform_registered`; `src/broker.rs:Session::call_with_actor`, `PendingCall`, `charge_pending` | Preserve native per-call hooks and broker admission/delivery validation. Add one host in-flight group lifecycle and its counter at that existing boundary; tests must prove exact lease isolation, cancellation linearization and a single actual spawn. Do not turn protocol-negotiation OnceCell into an execution cache. |
+| 3. `src/client/render.rs:snapshot`, `src/client/terminal/conversation/statistics.rs:rows`, `State::chat_statistics_rows` | Carry the authoritative connected-session summary into the existing render snapshot, then replace only the unavailable row. Verify snapshot producer naming and transport when implementing; no new polling worker or UI counting logic. Test supported 0/9 and unknown/old/disconnected/epoch cases before removal of the fallback. |
+| 4. `src/http/tool_sources.rs:Loaded::append`, `src/tool_repository.rs:Bundle::provenance` | No migration required for execution savings. Preserve the existing host-selected per-layer projection. Metadata-only discovery and per-export resolution remain separately queued work, not part of this PR. |
+
+Actual cloud checks on the staged UI source: nine Stats Rust tests, one source
+selection test, five repository tests, and three authenticated HTTP source-support
+tests passed. The broad `source_support` filter also ran one existing command
+visibility test (four total for that invocation). These validate current retained
+compatibility, not future execution coalescing. Concurrent command savings,
+per-authority execution separation, cancellation/failure credits and supported
+numeric Stats rendering remain unimplemented and untested.
