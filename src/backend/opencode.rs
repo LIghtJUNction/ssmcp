@@ -2929,27 +2929,30 @@ mod tests {
     #[cfg(unix)]
     impl HeldOutputLock {
         fn new(output: &PrivateStreamOutput) -> Self {
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(output.path.join(".cleanup.lock"))
-                .unwrap();
-            file.lock().unwrap();
+            let store = output.store.clone();
             let (release, waiting) = std::sync::mpsc::channel();
-            let held = Arc::new(AtomicBool::new(true));
+            let (ready, acquired) = std::sync::mpsc::channel();
+            let held = Arc::new(AtomicBool::new(false));
             let state = held.clone();
             let worker = std::thread::spawn(move || {
-                // Even the old synchronous destructor cannot hang the test process.
-                // Its delayed runtime must fail the held-lock/latency assertions.
-                let _ = waiting.recv_timeout(Duration::from_secs(10));
-                drop(file);
-                state.store(false, Ordering::Release);
+                store.with_state_lock_for_test(|| {
+                    state.store(true, Ordering::Release);
+                    let _ = ready.send(());
+                    // A synchronous destructor must fail the existing latency
+                    // checks without leaving the fixture permanently locked.
+                    let _ = waiting.recv_timeout(Duration::from_secs(10));
+                    state.store(false, Ordering::Release);
+                });
             });
-            Self {
+            let lock = Self {
                 release: Some(release),
                 worker: Some(worker),
                 held,
-            }
+            };
+            acquired
+                .recv_timeout(Duration::from_secs(1))
+                .expect("fixture thread must hold the actual output state lock");
+            lock
         }
 
         fn release(&mut self) {
@@ -2981,6 +2984,10 @@ mod tests {
     #[cfg(unix)]
     async fn blocked_archive_does_not_hold_attached_transport(mode: StopAttachedStream) {
         let private = PrivateStreamOutput::new();
+        assert!(
+            !private.path.exists(),
+            "the output store must stay in memory"
+        );
         let fixture = AttachmentFixture::new().await;
         let backend = OpenCode::attach_with_output(
             &fixture.endpoint,
@@ -3034,7 +3041,7 @@ mod tests {
         if let Some(task) = &shutdown {
             assert!(
                 !task.is_finished(),
-                "shutdown must await the durable partial archive"
+                "shutdown must await the retained partial output"
             );
         }
         let page = events.read(json!({"max_events":256})).await.unwrap();
@@ -3078,8 +3085,10 @@ mod tests {
             .expect("cancelled raw bytes must remain inspectable")["artifact"]
             .clone();
         assert_eq!(artifact["complete"], false);
+        assert_eq!(artifact["storage"], "memory");
+        assert!(artifact["path"].is_null());
         // The audit projection omits response-like error text. The owner-only
-        // artifact stat is the source of its complete persisted failure record.
+        // artifact stat is the source of its complete retained failure record.
         assert_eq!(artifact["error"]["message_omitted"], true);
         let metadata = private
             .store
@@ -3087,6 +3096,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(metadata["complete"], false);
+        assert_eq!(metadata["storage"], "memory");
+        assert!(metadata["path"].is_null());
         assert!(
             metadata["error"]
                 .as_str()
@@ -3095,6 +3106,11 @@ mod tests {
         );
         let saved = artifact_bytes(&private.store, artifact["id"].as_str().unwrap()).await;
         assert_eq!(saved, b"data: {\"type\":\"server.connected\"}\n\n");
+        assert!(!output_lock.held.load(Ordering::Acquire));
+        assert!(
+            !private.path.exists(),
+            "teardown must not create state files"
+        );
     }
 
     #[cfg(unix)]

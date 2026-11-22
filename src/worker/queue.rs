@@ -483,6 +483,7 @@ impl<T: Clone> Queue<T> {
     /// Only the owner calls this after its execution backend is ready. For a
     /// local executor that requires the limited-child handshake. Remote mode
     /// registers each authenticated external worker during its first wait.
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn online(&self, slot: usize) -> Result<u64, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.closed || state.stopping {

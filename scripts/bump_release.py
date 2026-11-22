@@ -84,7 +84,7 @@ def version_commit(root, baseline, tag):
     }
     sha = git(root, "-c", "commit.gpgSign=false", "-c", "i18n.commitEncoding=UTF-8",
               "commit-tree", tree,
-              "-p", baseline, "-m", f"chore: release {tag}", env=env)
+              "-p", baseline, "-m", f"chore: release {tag} [skip ci]", env=env)
     # The index and worktree already contain precisely the new version bytes.
     git(root, "reset", "--soft", sha)
     return sha

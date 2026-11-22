@@ -190,6 +190,13 @@ impl OutputStore {
         Self::new_connection()
     }
 
+    /// Hold the real memory-store lock inside an owned fixture thread.
+    #[cfg(all(test, unix))]
+    pub(crate) fn with_state_lock_for_test(&self, work: impl FnOnce()) {
+        let _state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        work();
+    }
+
     pub fn capture(self: &Arc<Self>, scope: impl Into<String>) -> Capture {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let registered = state.captures < self.policy.max_captures;

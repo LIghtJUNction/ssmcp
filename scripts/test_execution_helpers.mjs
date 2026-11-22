@@ -456,11 +456,11 @@ test('job object calls preserve native failures without retrying side effects', 
 
 
 test('UI helpers expose registered workflows and preserve native arguments and failures', async () => {
-  const names = ['get','set','action','filter','queue','message','present','ask','questions','history','harness'];
+  const names = ['get','set','action','filter','queue','message','present','ask','questions','harness'];
   const record = await run(
     'const names=' + JSON.stringify(names) + ';'
     + 'const values=await Promise.all(names.map(name=>ui[name]("one",{fixture:name})));'
-    + 'return {values,frozen:Object.isFrozen(ui),unsupported:typeof ui.messages};',
+    + 'return {values,frozen:Object.isFrozen(ui),unsupported:typeof ui.messages,retiredHistory:typeof ui.history};',
     request => {
       assert(names.some(name => request.name === 'ssmcp.ui.' + name));
       assert.equal(request.client_id, 'one');
@@ -471,13 +471,56 @@ test('UI helpers expose registered workflows and preserve native arguments and f
   succeeded(record);
   assert.equal(result(record).frozen, true);
   assert.equal(result(record).unsupported, 'undefined');
+  assert.equal(result(record).retiredHistory, 'undefined');
   assert.deepEqual(result(record).values.map(value=>value.name), names.map(name=>'ssmcp.ui.'+name));
   const rejected = await run(
-    'try{await ui.history("one",{action:"read"});return "unexpected";}catch(error){return error.message;}',
-    () => ({ok:true,value:{isError:true,content:[{type:'text',text:'history unavailable'}]}}),
+    'try{await ui.questions("one",{id:"question-id"});return "unexpected";}catch(error){return error.message;}',
+    request => {
+      assert.deepEqual(request, {
+        op:'call',client_id:'one',name:'ssmcp.ui.questions',arguments:{id:'question-id'},
+      });
+      return {ok:true,value:{isError:true,content:[{type:'text',text:'questions unavailable'}]}};
+    },
   );
   succeeded(rejected);
-  assert.match(result(rejected), /history unavailable/);
+  assert.equal(result(rejected), 'questions unavailable');
+  assert.equal(rejected.requests.length, 1);
+});
+
+test('live UI events preserve selectors and failures without retrying native reads', async () => {
+  const options = {agent_id:'agent_'+'a'.repeat(32),cursor:7,generation:'live-generation',limit:16};
+  const expectedRequests = [
+    {op:'tools',client_id:'one',cursor:null},
+    {op:'call',client_id:'one',name:'ssmcp.ui.events',arguments:{...options,action:'thread',client_id:'one'}},
+  ];
+  for (const response of [
+    native({fixture:'live-events'}),
+    {ok:false,error:'events transport interrupted'},
+    {ok:true,value:{isError:true,content:[{type:'text',text:'events unavailable'}]}},
+  ]) {
+    const record = await run(`
+      const options = Object.freeze(${JSON.stringify(options)});
+      let value, error;
+      try { value = await ui.events('one', options); }
+      catch (failure) { error = failure.message; }
+      return {value, error, options};
+    `, request => {
+      if (request.op === 'tools') {
+        assert.deepEqual(request, expectedRequests[0]);
+        return {ok:true,value:{tools:[{
+          name:'ssmcp.ui.events',inputSchema:{type:'object',properties:{action:{const:'thread'}}},
+        }]}};
+      }
+      assert.deepEqual(request, expectedRequests[1]);
+      return response;
+    });
+    succeeded(record);
+    assert.deepEqual(record.requests, expectedRequests);
+    const message = response.error ?? response.value.content?.[0]?.text;
+    assert.deepEqual(result(record), message
+      ? {error:message,options}
+      : {value:response.value.structuredContent,options});
+  }
 });
 
 test('exec.run passes the artifact budget through start and returns the scoped read notice', async () => {

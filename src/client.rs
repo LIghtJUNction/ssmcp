@@ -3951,7 +3951,7 @@ mod tests {
             "--worker-k=2",
             "--agent",
             "codex",
-            "--agent-arg",
+            "--agent-argv-file",
             "--worker=99",
         ]
         .map(OsString::from);
@@ -3968,7 +3968,7 @@ mod tests {
             "https://relay.test",
             "--agent",
             "codex",
-            "--agent-arg",
+            "--agent-argv-file",
             "literal",
             "--title",
             "worker pool",
