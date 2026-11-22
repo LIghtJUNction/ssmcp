@@ -664,6 +664,8 @@ async fn dashboard_http_uses_sessions_enforces_admin_and_bounds_failure_audits()
             store.login(&identity("123", "alice"))?;
             store.login(&identity("456", "bob"))?;
             store.login(&identity("789", "reader"))?;
+            store.claim_handle("123", "alice-home")?;
+            store.claim_handle("456", "bob-office")?;
             store.add("456", parse_key(&key(), "admin private metadata")?)
         })
         .await
@@ -750,7 +752,9 @@ async fn dashboard_http_uses_sessions_enforces_admin_and_bounds_failure_audits()
         .unwrap();
     assert_eq!(administrator.status(), 200);
     let body = administrator.text().await.unwrap();
-    assert!(body.contains("alice") && body.contains("bob"));
+    assert!(body.contains("alice-home@ssmcp.test"));
+    assert!(body.contains("bob-office@ssmcp.test"));
+    assert!(!body.contains("alice@github") && !body.contains("bob@github"));
     assert!(!body.contains(&key()));
     assert!(!body.contains("admin private metadata"));
 

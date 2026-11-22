@@ -566,7 +566,8 @@ async fn github_http_requires_bound_callback_and_explicit_consent_then_filters_a
     assert_eq!(response.status(), StatusCode::OK);
     assert!(!response.headers().contains_key(header::LOCATION));
     let consent = response.text().await.unwrap();
-    assert!(consent.contains("Alice@github"));
+    assert!(consent.contains("<strong>alice@ssmcp.example.test</strong>"));
+    assert!(!consent.contains("Alice@github"));
     assert!(consent.contains("name=decision value=allow"));
     assert!(consent.contains("name=decision value=deny"));
     assert!(!consent.contains("github-alice-token"));
@@ -584,7 +585,9 @@ async fn github_http_requires_bound_callback_and_explicit_consent_then_filters_a
         .callback(&state, Some(&flow.cookie), "alice-code")
         .await;
     assert_eq!(retry.status(), StatusCode::OK);
-    assert!(retry.text().await.unwrap().contains("Alice@github"));
+    let retry_page = retry.text().await.unwrap();
+    assert!(retry_page.contains("<strong>alice@ssmcp.example.test</strong>"));
+    assert!(!retry_page.contains("Alice@github"));
     assert_eq!(fixture.github.exchanges.load(Ordering::SeqCst), 1);
     assert!(fixture.broker.oauth.state.lock().unwrap().codes.is_empty());
     // A stale consent page cannot have its already-verified identity replaced by another login.
@@ -714,7 +717,9 @@ async fn github_http_denial_consumes_consent_without_issuing_an_mcp_grant() {
         .callback(&state, Some(&flow.cookie), "bob-code")
         .await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.text().await.unwrap().contains("bob@github"));
+    let consent = response.text().await.unwrap();
+    assert!(consent.contains("<strong>bob@ssmcp.example.test</strong>"));
+    assert!(!consent.contains("bob@github"));
     let response = fixture.action(&flow, "decision", "deny").await;
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     let callback = Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();

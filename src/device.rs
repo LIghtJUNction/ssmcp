@@ -1643,12 +1643,11 @@ mod tests {
         use crate::{client::interface::history, runtime::call_scope::CallScope};
         use tokio_tungstenite::tungstenite::Message;
 
-        let b_history = history::with_test_history(directory.clone(), async {
-            history::record("user", "Conversation B").unwrap();
-            history::current().unwrap().unwrap().metadata.id
-        })
-        .await;
         history::with_test_history(directory, async {
+            // Both conversations are live records in the same process-scoped store.
+            history::record("user", "Conversation B").unwrap();
+            let b_history = history::current().unwrap().unwrap().metadata.id;
+            history::release_current().unwrap();
             history::record("user", "Conversation A").unwrap();
             let a_owner = history::current_owner().unwrap();
             let client = crate::http_client::builder().no_proxy().build().unwrap();

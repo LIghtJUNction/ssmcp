@@ -1,5 +1,7 @@
 use super::*;
-use zbridge::{Effect, Operation};
+#[cfg(unix)]
+use zbridge::Effect;
+use zbridge::Operation;
 
 fn req(operation: Operation) -> Request {
     Request {

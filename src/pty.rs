@@ -979,7 +979,9 @@ child.wait(timeout=2)
     #[tokio::test]
     async fn long_terminal_output_keeps_full_prefix_beyond_ring_capacity() {
         use sha2::{Digest, Sha256};
-        let terminal = Terminal::spawn(Path::new("/bin/sh")).unwrap();
+        let store = OutputStore::new_connection().unwrap();
+        let terminal =
+            Terminal::spawn_with_logging(Path::new("/bin/sh"), false, store.clone()).unwrap();
         terminal.perform(Operation::Write {
             data: "stty -echo; head -c 1100000 /dev/zero | tr '\\0' x; printf '\\nLONG_DONE\\n'; exit\n".into(),
         }).await.unwrap();
@@ -1007,7 +1009,31 @@ child.wait(timeout=2)
         assert_eq!(result["artifact"]["scope"], "terminal_session");
         assert_eq!(result["artifact"]["complete"], true);
         assert_eq!(result["range"]["start"], 0);
-        let bytes = std::fs::read(result["artifact"]["path"].as_str().unwrap()).unwrap();
+        assert!(result["artifact"]["path"].is_null());
+        let id = result["artifact"]["id"].as_str().unwrap();
+        let total = result["artifact"]["bytes"].as_u64().unwrap();
+        let mut bytes = Vec::new();
+        while (bytes.len() as u64) < total {
+            let page = store
+                .perform(
+                    "ssmcp.output.read",
+                    json!({
+                        "id":id,"offset":bytes.len(),"max_bytes":32768
+                    }),
+                )
+                .await
+                .unwrap();
+            assert_eq!(page["offset"], bytes.len());
+            assert_eq!(page["complete"], true);
+            assert_eq!(page["truncated"], false);
+            let chunk = STANDARD
+                .decode(page["data_base64"].as_str().unwrap())
+                .unwrap();
+            assert!(!chunk.is_empty());
+            bytes.extend(chunk);
+            assert_eq!(page["next_offset"], bytes.len());
+            assert_eq!(page["eof"], bytes.len() as u64 == total);
+        }
         assert!(
             bytes
                 .windows(1100000)

@@ -382,8 +382,8 @@ async fn named_login_validates_before_oauth_and_claims_only_after_consent() {
         .text()
         .await
         .unwrap();
-    assert!(page.contains("alice-home"));
-    assert!(page.contains("服务器用户名"));
+    assert!(page.contains("客户端请求使用用户名：<strong>alice-home</strong>"));
+    assert!(page.contains("首次选择用户名时会保存此名称"));
     assert!(
         fixture
             .broker
