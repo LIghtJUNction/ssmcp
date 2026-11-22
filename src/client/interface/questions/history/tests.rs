@@ -69,7 +69,7 @@ async fn retrying_question_from_another_history_keeps_its_first_owner() {
             saved::record("user", "First conversation seed").unwrap();
             let original = saved::current_owner().unwrap();
             let first = enqueue_for_test(true, "May I finish the fixture?", "stable-question");
-            saved::resume(&second.metadata.id).unwrap();
+            saved::resume_test_history(&second.metadata.id).unwrap();
             let repeated = enqueue_for_test(true, "May I finish the fixture?", "stable-question");
             assert_eq!(first.question.id, repeated.question.id);
             assert_eq!(owner(&first.question.id).unwrap(), original);
@@ -92,5 +92,6 @@ async fn retrying_question_from_another_history_keeps_its_first_owner() {
         }),
     )
     .await;
+    assert!(std::fs::read_dir(&directory).unwrap().next().is_none());
     std::fs::remove_dir_all(directory).unwrap();
 }

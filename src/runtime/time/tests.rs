@@ -186,7 +186,11 @@ async fn timer_and_late_observation_stay_with_the_original_history_lease() {
                 .cancel_timer(&Owner::from_source(&source_b), &id, Instant::now())
                 .is_err()
         );
-        history::resume(source_a.owner().unwrap().id()).unwrap();
+        history::resume_test_history(source_a.owner().unwrap().id()).unwrap();
+        assert_eq!(
+            history::current_owner().unwrap().id(),
+            source_a.owner().unwrap().id()
+        );
         assert_ne!(history::current_owner(), source_a.owner().cloned());
         assert!(
             clock
@@ -199,13 +203,31 @@ async fn timer_and_late_observation_stay_with_the_original_history_lease() {
                 .cancel_timer(&Owner::from_source(&Source::capture()), &id, Instant::now())
                 .is_err()
         );
+        let original = clock.snapshot(&owner_a.history, Instant::now());
+        assert_eq!(original.active.len(), 2);
+        assert!(
+            original
+                .active
+                .iter()
+                .any(|entry| entry.id == observation.id)
+        );
         drop(observation);
+        let original = clock.snapshot(&owner_a.history, Instant::now());
+        assert_eq!(original.active.len(), 1);
+        assert_eq!(original.active[0].id, id);
+        assert!(
+            clock
+                .snapshot(&history::current_owner(), Instant::now())
+                .active
+                .is_empty()
+        );
         assert_eq!(
             clock.read(&owner_a, &id, Instant::now()).unwrap().0.status,
             Status::Running
         );
     })
     .await;
+    assert!(std::fs::read_dir(&path).unwrap().next().is_none());
     std::fs::remove_dir_all(path).unwrap();
 }
 

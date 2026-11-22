@@ -707,143 +707,6 @@ pub(super) fn tool() -> Value {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    pub(super) struct Temporary(PathBuf);
-    impl Temporary {
-        pub(super) fn new() -> Self {
-            let path = std::env::temp_dir()
-                .canonicalize()
-                .unwrap()
-                .join(random_id("live_log_test").unwrap());
-            crate::platform::private_directory(&path).unwrap();
-            Self(path)
-        }
-        pub(super) fn history(&self) -> History {
-            History::with_workspace(self.0.join("conversations"), "/fixture/workspace".into())
-                .unwrap()
-        }
-    }
-    impl Drop for Temporary {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[test]
-    fn recording_uses_only_bounded_memory_and_creates_no_state_directory() {
-        let temporary = Temporary::new();
-        let mut history = temporary.history();
-        history
-            .record_request("fixture", "Current request")
-            .unwrap();
-        history.record("assistant", "Current response").unwrap();
-        assert_eq!(history.current().unwrap().unwrap().messages.len(), 2);
-        assert!(fs::read_dir(&temporary.0).unwrap().next().is_none());
-    }
-
-    #[test]
-    fn old_files_are_ignored_without_modification_or_recovery() {
-        let temporary = Temporary::new();
-        let directory = temporary.0.join("conversations");
-        fs::create_dir(&directory).unwrap();
-        let original = b"private old conversation data";
-        let old = directory.join("conversation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jsonl");
-        fs::write(&old, original).unwrap();
-        let mut history = temporary.history();
-        assert!(history.current().unwrap().is_none());
-        assert!(history.sessions().unwrap().is_empty());
-        assert!(
-            history
-                .read("conversation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-                .is_err()
-        );
-        history.record("user", "New process only").unwrap();
-        assert_eq!(fs::read(&old).unwrap(), original);
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
-        assert!(temporary.history().sessions().unwrap().is_empty());
-    }
-
-    #[test]
-    fn live_record_bytes_and_message_count_are_bounded() {
-        let temporary = Temporary::new();
-        let mut history = temporary.history();
-        let body = "x".repeat(MAX_CONTENT);
-        for _ in 0..MAX_MESSAGES + 4 {
-            history.record("user", &body).unwrap();
-        }
-        let current = history.current().unwrap().unwrap();
-        assert!(current.messages.len() <= MAX_MESSAGES);
-        assert!(History::encoded_bytes(&current).unwrap() <= MAX_SESSION_BYTES);
-        assert!(current.metadata.truncated_messages > 0);
-        assert!(fs::read_dir(&temporary.0).unwrap().next().is_none());
-    }
-
-    #[test]
-    fn retained_message_identity_still_deduplicates_and_rejects_changed_results() {
-        let temporary = Temporary::new();
-        let mut history = temporary.history();
-        let id = "message_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        history.record_agent(id, "Result").unwrap();
-        assert!(history.record_agent(id, "Result").unwrap().is_none());
-        assert!(history.record_agent(id, "Different result").is_err());
-        assert_eq!(history.current().unwrap().unwrap().messages.len(), 1);
-    }
-
-    #[test]
-    fn released_owner_cannot_write_into_the_next_live_session() {
-        let temporary = Temporary::new();
-        let mut history = temporary.history();
-        history.record("user", "Original request").unwrap();
-        let original = history.capture_owner().unwrap();
-        history.release_current();
-        history.record("user", "Later request").unwrap();
-        assert!(
-            history
-                .record_owned(&original, "assistant", "Late response", None)
-                .unwrap_err()
-                .contains("history_owner_released")
-        );
-        assert_eq!(history.current().unwrap().unwrap().messages.len(), 1);
-    }
-
-    #[test]
-    fn closed_process_contexts_are_bounded_and_never_written_to_disk() {
-        let temporary = Temporary::new();
-        let mut history = temporary.history();
-        for _ in 0..MAX_SESSIONS + 4 {
-            history.record("user", "Transient request").unwrap();
-            history.release_current();
-        }
-        assert!(history.conversations.len() <= MAX_SESSIONS);
-        assert!(fs::read_dir(&temporary.0).unwrap().next().is_none());
-    }
-
-    #[test]
-    fn legacy_history_and_resume_requests_are_retired() {
-        for action in ["list", "read", "metadata", "search", "archive", "restore"] {
-            assert!(
-                call(json!({"action":action}))
-                    .unwrap_err()
-                    .starts_with("tool_retired:")
-            );
-        }
-        assert!(
-            resume("conversation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-                .unwrap_err()
-                .starts_with("tool_retired:")
-        );
-        let descriptor = tool();
-        assert_eq!(descriptor["name"], "ssmcp.ui.events");
-        assert_eq!(
-            descriptor["inputSchema"]["properties"]["action"]["const"],
-            "thread"
-        );
-    }
-}
-
 // Private filesystem helpers remain for the client updater, which owns its own state.
 pub(crate) struct SafeDirectory {
     path: PathBuf,
@@ -1123,5 +986,142 @@ impl SafeDirectory {
             let _ = self.remove(&temporary);
         }
         outcome
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    pub(super) struct Temporary(PathBuf);
+    impl Temporary {
+        pub(super) fn new() -> Self {
+            let path = std::env::temp_dir()
+                .canonicalize()
+                .unwrap()
+                .join(random_id("live_log_test").unwrap());
+            crate::platform::private_directory(&path).unwrap();
+            Self(path)
+        }
+        pub(super) fn history(&self) -> History {
+            History::with_workspace(self.0.join("conversations"), "/fixture/workspace".into())
+                .unwrap()
+        }
+    }
+    impl Drop for Temporary {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn recording_uses_only_bounded_memory_and_creates_no_state_directory() {
+        let temporary = Temporary::new();
+        let mut history = temporary.history();
+        history
+            .record_request("fixture", "Current request")
+            .unwrap();
+        history.record("assistant", "Current response").unwrap();
+        assert_eq!(history.current().unwrap().unwrap().messages.len(), 2);
+        assert!(fs::read_dir(&temporary.0).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn old_files_are_ignored_without_modification_or_recovery() {
+        let temporary = Temporary::new();
+        let directory = temporary.0.join("conversations");
+        fs::create_dir(&directory).unwrap();
+        let original = b"private old conversation data";
+        let old = directory.join("conversation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jsonl");
+        fs::write(&old, original).unwrap();
+        let mut history = temporary.history();
+        assert!(history.current().unwrap().is_none());
+        assert!(history.sessions().unwrap().is_empty());
+        assert!(
+            history
+                .read("conversation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .is_err()
+        );
+        history.record("user", "New process only").unwrap();
+        assert_eq!(fs::read(&old).unwrap(), original);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        assert!(temporary.history().sessions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn live_record_bytes_and_message_count_are_bounded() {
+        let temporary = Temporary::new();
+        let mut history = temporary.history();
+        let body = "x".repeat(MAX_CONTENT);
+        for _ in 0..MAX_MESSAGES + 4 {
+            history.record("user", &body).unwrap();
+        }
+        let current = history.current().unwrap().unwrap();
+        assert!(current.messages.len() <= MAX_MESSAGES);
+        assert!(History::encoded_bytes(&current).unwrap() <= MAX_SESSION_BYTES);
+        assert!(current.metadata.truncated_messages > 0);
+        assert!(fs::read_dir(&temporary.0).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn retained_message_identity_still_deduplicates_and_rejects_changed_results() {
+        let temporary = Temporary::new();
+        let mut history = temporary.history();
+        let id = "message_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        history.record_agent(id, "Result").unwrap();
+        assert!(history.record_agent(id, "Result").unwrap().is_none());
+        assert!(history.record_agent(id, "Different result").is_err());
+        assert_eq!(history.current().unwrap().unwrap().messages.len(), 1);
+    }
+
+    #[test]
+    fn released_owner_cannot_write_into_the_next_live_session() {
+        let temporary = Temporary::new();
+        let mut history = temporary.history();
+        history.record("user", "Original request").unwrap();
+        let original = history.capture_owner().unwrap();
+        history.release_current();
+        history.record("user", "Later request").unwrap();
+        assert!(
+            history
+                .record_owned(&original, "assistant", "Late response", None)
+                .unwrap_err()
+                .contains("history_owner_released")
+        );
+        assert_eq!(history.current().unwrap().unwrap().messages.len(), 1);
+    }
+
+    #[test]
+    fn closed_process_contexts_are_bounded_and_never_written_to_disk() {
+        let temporary = Temporary::new();
+        let mut history = temporary.history();
+        for _ in 0..MAX_SESSIONS + 4 {
+            history.record("user", "Transient request").unwrap();
+            history.release_current();
+        }
+        assert!(history.conversations.len() <= MAX_SESSIONS);
+        assert!(fs::read_dir(&temporary.0).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn legacy_history_and_resume_requests_are_retired() {
+        for action in ["list", "read", "metadata", "search", "archive", "restore"] {
+            assert!(
+                call(json!({"action":action}))
+                    .unwrap_err()
+                    .starts_with("tool_retired:")
+            );
+        }
+        assert!(
+            resume("conversation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .unwrap_err()
+                .starts_with("tool_retired:")
+        );
+        let descriptor = tool();
+        assert_eq!(descriptor["name"], "ssmcp.ui.events");
+        assert_eq!(
+            descriptor["inputSchema"]["properties"]["action"]["const"],
+            "thread"
+        );
     }
 }
