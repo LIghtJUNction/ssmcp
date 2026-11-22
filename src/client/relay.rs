@@ -88,6 +88,10 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(capability) = crate::peer_port::offered_capability() {
+        let offer = parent_offer(&command).expect("built-in relay capability offer");
+        command.env("SSMCP_RELAY_CAPABILITIES", format!("{offer},{capability}"));
+    }
     if let Some(credential) = credential {
         command.env("SSMCP_RELAY_TOKEN", &credential.token);
     }
@@ -125,6 +129,37 @@ fn parent_offer(command: &Command) -> Option<&str> {
         .and_then(|(_, value)| value)
         .and_then(|value| value.to_str())
         .filter(|value| access_capability_header(Some(value)).is_some())
+}
+
+pub(super) fn peer_ports_offer(command: &Command) -> Option<&'static str> {
+    let offer = parent_offer(command)?;
+    [
+        crate::wire::peer_port::CAPABILITY,
+        crate::wire::peer_port::AUTO_CAPABILITY,
+    ]
+    .into_iter()
+    .find(|wanted| offer.split(',').any(|name| name == *wanted))
+}
+
+pub(super) fn negotiated_peer_ports(
+    offer: Option<&'static str>,
+    capabilities: &[String],
+) -> Option<&'static str> {
+    use crate::wire::peer_port::{AUTO_CAPABILITY, CAPABILITY};
+    let has = |name: &str| capabilities.iter().any(|value| value == name);
+    if !has(crate::wire::SESSION_ACCESS_CAPABILITY)
+        || !has(crate::wire::CONTROL_ATTRIBUTION_CAPABILITY)
+    {
+        return None;
+    }
+    offer.filter(|offered| {
+        has(offered)
+            && match *offered {
+                CAPABILITY => !has(AUTO_CAPABILITY),
+                AUTO_CAPABILITY => !has(CAPABILITY),
+                _ => false,
+            }
+    })
 }
 
 pub(super) fn openai_context_offer(command: &Command) -> bool {
@@ -170,8 +205,15 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::wait_display::TIME_CAPABILITY
                 | crate::wire::CHAT_DISABLED_CAPABILITY
                 | crate::wire::openai::CAPABILITY
+                | crate::wire::peer_port::CAPABILITY
+                | crate::wire::peer_port::AUTO_CAPABILITY
         ) || capabilities[..index].contains(value)
     }) {
+        return None;
+    }
+    if capabilities.contains(&crate::wire::peer_port::CAPABILITY)
+        && capabilities.contains(&crate::wire::peer_port::AUTO_CAPABILITY)
+    {
         return None;
     }
     HeaderValue::from_str(&capabilities.join(",")).ok()
@@ -438,6 +480,54 @@ mod tests {
         ] {
             assert!(access_capability_header(Some(invalid)).is_none());
         }
+    }
+
+    #[test]
+    fn peer_candidates_require_exact_mode_and_current_authority_echo() {
+        use crate::wire::peer_port::{AUTO_CAPABILITY, CAPABILITY};
+        let mut parent = Command::new("/fixture/ssmcp");
+        for capability in [CAPABILITY, AUTO_CAPABILITY] {
+            let offer = format!(
+                "{},{},{capability}",
+                crate::wire::SESSION_ACCESS_CAPABILITY,
+                crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+            );
+            parent.env("SSMCP_RELAY_CAPABILITIES", &offer);
+            assert_eq!(peer_ports_offer(&parent), Some(capability));
+            let capabilities: Vec<String> = offer.split(',').map(String::from).collect();
+            assert_eq!(
+                negotiated_peer_ports(peer_ports_offer(&parent), &capabilities),
+                Some(capability)
+            );
+            assert_eq!(
+                negotiated_peer_ports(peer_ports_offer(&parent), &capabilities[..2]),
+                None
+            );
+            assert_eq!(
+                negotiated_peer_ports(peer_ports_offer(&parent), &capabilities[2..]),
+                None
+            );
+            let other = if capability == CAPABILITY {
+                AUTO_CAPABILITY
+            } else {
+                CAPABILITY
+            };
+            assert_eq!(negotiated_peer_ports(Some(other), &capabilities), None);
+            let mut mixed = capabilities.clone();
+            mixed.push(other.into());
+            assert_eq!(negotiated_peer_ports(Some(capability), &mixed), None);
+            assert_eq!(negotiated_peer_ports(Some(other), &mixed), None);
+            restrict_to_self(&mut parent);
+            assert_eq!(peer_ports_offer(&parent), None);
+            assert_eq!(
+                negotiated_peer_ports(peer_ports_offer(&parent), &capabilities),
+                None
+            );
+        }
+        assert!(
+            access_capability_header(Some(&format!("{CAPABILITY},{AUTO_CAPABILITY}"))).is_none()
+        );
+        assert!(access_capability_header(Some("peer_ports_auto_v10")).is_none());
     }
 
     #[test]

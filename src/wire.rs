@@ -414,6 +414,9 @@ impl Mode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    PeerPort {
+        command: Box<peer_port::Command>,
+    },
     Read {
         #[serde(default)]
         cursor: u64,
@@ -457,11 +460,14 @@ pub(crate) fn retired_tool_error(name: &str) -> Option<&'static str> {
     }
 }
 
+pub mod peer_port;
+
 impl Operation {
     /// The actual operation, independent of caller-supplied display descriptions.
     pub fn name(&self) -> &str {
         match self {
             Self::CallTool { name, .. } => name,
+            Self::PeerPort { .. } => "ports.peer_control",
             Self::ListTools { .. } => "tools/list",
             Self::Read { .. } => "terminal.read",
             Self::Write { .. } => "terminal.write",
