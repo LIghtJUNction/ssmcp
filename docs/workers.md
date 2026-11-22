@@ -1,6 +1,6 @@
 # Worker sessions
 
-A worker session accepts tasks from authenticated agents and assigns each task to one idle execution slot. Start it with `--worker N`; its terminal shows **空闲中**, **正在工作**, **离线**, the total slot count, and the queued task count. It has no chat composer. Keyboard input, paste, layout changes, and a failed display cannot become input to a hidden shell.
+A worker session accepts tasks from its authenticated main agent and assigns each task to one idle execution slot. Start it with `--worker N`; its terminal shows **空闲中**, **正在工作**, **离线**, the total slot count, and the queued task count. The main agent binds to the pool, submits and lists its tasks, requests cancellation, and stops the pool from accepting new work. The monitor has no chat composer. Keyboard input, paste, layout changes, and a failed display cannot become input to a hidden shell.
 
 ## Start a pool
 
@@ -11,7 +11,7 @@ ssmcp --worker 2
 ssmcp alice@relay.example --worker 10
 ```
 
-Remote is the default on Linux, macOS and Windows. The pool holds a bounded task queue; authorized remote agents claim tasks, do the work through their own tools, and report completion. Starting the pool does not start a model, a local harness, or a task executable. No `--agent` or `--input` option is required. `--agent remote` is an explicit equivalent; the older worker spelling `--agent next-caller` is accepted as the same remote mode.
+Remote is the default on Linux, macOS and Windows. The pool holds a bounded task queue; its main agent manages that queue, while authorized remote executors claim tasks, do the work through their own tools, and report completion. Starting the pool does not start a model, a local harness, or a task executable. No `--agent` or `--input` option is required. `--agent remote` is an explicit equivalent; the older worker spelling `--agent next-caller` is accepted as the same remote mode.
 
 The foreground terminal is a monitor with per-slot state and bounded, scrollable logs. It has no chat input or human question dialog. For a background pool, use `ssmcp --worker 2 --daemon`; saved and daemon workers disable chat input internally. The advanced `--input none` spelling remains available for an explicitly headless foreground pool.
 
@@ -54,9 +54,9 @@ ssmcp alice@relay.example --worker 2 --daemon \
 
 Optional `--agent-argv-file /absolute/path/to/argv.json` supplies a private JSON array of fixed arguments. SSMCP appends `--` and the task prompt as one argument; it does not evaluate a shell command. Normal remote workers never enter this executable path.
 
-## Submit and observe tasks
+## Bind the main agent and manage tasks
 
-Worker tools use the existing authenticated native call route. Bind a real collaboration participant to the target client before calling them; task arguments cannot supply an account, owner, slot, or connection identity.
+Worker tools use the existing authenticated native call route. Bind a real collaboration participant to the target client, then call `ssmcp.worker.attach` to become the pool's main agent. The pool derives this identity from the verified call scope; arguments cannot supply an account, owner, slot, or connection identity. Reading status or claiming a task does not acquire management rights.
 
 ```js
 const id = "the-worker-client-id";
@@ -70,6 +70,9 @@ await collab.bind(id, {
   token: participant.token
 });
 
+const attached = await call(id, "ssmcp.worker.attach", {});
+if (attached.isError) throw new Error(JSON.stringify(attached));
+
 const reply = await call(id, "ssmcp.worker.submit", {
   request_id: "review-issue-123-attempt-1",
   text: "Review @src/example.rs and report the concrete findings."
@@ -78,14 +81,17 @@ if (reply.isError) throw new Error(JSON.stringify(reply));
 return reply.structuredContent;
 ```
 
-Keep that participant's credentials and reuse the same binding for subsequent calls. Native calls return the ordinary MCP envelope: task data is under `structuredContent`, not directly on the outer reply.
+Keep that participant's credentials private and reuse the same binding for subsequent calls. A pool has one main agent; a different participant cannot take it over or manage its tasks. The first successful `submit` can also establish the binding for existing callers; a rejected submission does not reserve the pool. Native calls return the ordinary MCP envelope: task data is under `structuredContent`, not directly on the outer reply.
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
-| `ssmcp.worker.status` | `{}` | The typed monitor snapshot, execution mode, resource status, and any cleanup error. |
+| `ssmcp.worker.attach` | `{}` | Bind the authenticated main agent; return its verified identity, `caller_is_manager`, and the worker snapshot. |
+| `ssmcp.worker.status` | `{}` | The typed monitor snapshot, main agent identity, `caller_is_manager`, execution mode, resource status, and any cleanup error. Reading it does not change the main agent. |
+| `ssmcp.worker.tasks` | `{cursor?, limit?: 1..128}` | Main agent only: a bounded page of task IDs and lifecycle metadata, with `next_cursor`; default limit 32. It excludes task text, output, and error bodies. |
 | `ssmcp.worker.submit` | `{request_id, text}` | One task receipt, reference warnings, and the current worker snapshot. |
 | `ssmcp.worker.result` | `{task_id, wait_ms?: 0..5000}` | That caller's task state and any confirmed output. |
 | `ssmcp.worker.cancel` | `{task_id}` | A cancellation request; a running task remains occupied until completion or confirmed cleanup. |
+| `ssmcp.worker.stop` | `{}` | Main agent only: stop accepting new tasks, cancel queued work, and request cancellation of running work while retaining its occupied slots. |
 | `ssmcp.worker.wait` | `{request_id, wait_ms?: 0..5000}` | Remote mode: wait for a claim, default 5000 ms; return `waiting`, `assigned`, or `already_completed`. |
 | `ssmcp.worker.claim` | `{request_id}` | Remote mode: the same claim operation without waiting. |
 | `ssmcp.worker.complete` | `{claim, status, output?, error?}` | Remote mode: report the result for the exact claim and its authenticated claimant. |
@@ -93,6 +99,10 @@ Keep that participant's credentials and reuse the same binding for subsequent ca
 To wait once for a result, use `call(id, "ssmcp.worker.result", {task_id, wait_ms: 5000})` under the same verified binding. A timeout returns the current task state; it does not complete or re-submit the task.
 
 Tasks keep the authenticated caller and original history owner captured at submission. Completion does not follow a later UI selection. File and skill references use local expansion; a missing file warns while retaining the literal message.
+
+The snapshot exposes `manager` and `stopping`. An unbound pool has `manager: null`. A bound manager includes the actual `client_id`, verified `thread_id` and participant identity, connection, and binding time. The snapshot's `process_id` is the local operating-system PID; it is separate from the session's client ID and the main agent's logical thread ID.
+
+`stop` returns `stop_requested: true` and whether this call changed the state. Repeating it is safe. Its `external_execution_stopped: false` explicitly means that requesting a stop does not prove an external model or process has stopped. Running remote tasks remain occupied with cancellation requested until their original claimant acknowledges completion; their slots then go offline. A real connection loss continues to use the existing `unknown` outcome and must not trigger automatic replay.
 
 ## Remote claim and completion
 
@@ -146,3 +156,4 @@ These limits govern owned worker process trees; they are not an OS security sand
 The CLI and lifecycle are in [client.rs](../src/client.rs). The [queue](../src/worker/queue.rs), [executor](../src/worker/executor.rs), [child protocol](../src/worker/child.rs), and [resource registry](../src/worker/registry.rs) keep assignment, execution, and cleanup separate. The [worker tools](../src/worker/pool.rs) derive task ownership from the existing authenticated call scope. The [monitor](../src/client/terminal/worker.rs) consumes the same typed snapshot used by the status tool.
 
 This page describes the source contract. A build or test result applies only to the exact candidate on which it was run.
+

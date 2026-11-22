@@ -1,5 +1,94 @@
 use super::*;
 
+const MANAGER_CLIENT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+#[test]
+fn management_observation_and_rejected_work_never_acquire_ownership() {
+    let pool = queue(1);
+    let owner = actor("manager");
+    assert!(pool.snapshot().manager.is_none());
+    assert!(pool.claim_remote(&actor("executor"), 0).unwrap().is_none());
+    assert!(pool.submit_managed(owner.clone(), MANAGER_CLIENT, "first", "work", "context", 1).is_err());
+    assert!(pool.snapshot().manager.is_none());
+    pool.online(0).unwrap();
+    for (key, text) in [("", "work"), ("first", " "), ("bad\nkey", "work")] {
+        assert!(pool.submit_managed(owner.clone(), MANAGER_CLIENT, key, text, "context", 2).is_err());
+        assert!(pool.snapshot().manager.is_none());
+        assert_eq!(pool.snapshot().queued, 0);
+    }
+    assert!(pool.attach(&owner, "not-a-client", 3).is_err());
+    let mut unbound = owner.clone();
+    unbound.participant = None;
+    assert!(pool.attach(&unbound, MANAGER_CLIENT, 3).is_err());
+    assert!(pool.snapshot().manager.is_none());
+    let manager = pool.attach(&owner, MANAGER_CLIENT, 4).unwrap();
+    assert_eq!(manager.thread_id, "manager");
+    assert_eq!(manager.client_id, MANAGER_CLIENT);
+    assert_eq!(manager.attached_at_ms, 4);
+    assert_eq!(pool.attach(&owner, MANAGER_CLIENT, 5).unwrap().attached_at_ms, 4);
+    for foreign in [actor("other"), Actor { subject: "other-account".into(), ..owner.clone() }, Actor { connection: 8, ..owner.clone() }] {
+        assert!(pool.attach(&foreign, MANAGER_CLIENT, 6).is_err());
+        assert!(pool.submit_managed(foreign.clone(), MANAGER_CLIENT, "foreign", "work", "context", 6).is_err());
+        assert!(pool.tasks(&foreign, MANAGER_CLIENT, None, 32).is_err());
+        assert!(pool.stop(&foreign, MANAGER_CLIENT, 6).is_err());
+    }
+    assert_eq!(pool.snapshot().queued, 0);
+    assert!(!pool.snapshot().stopping);
+}
+
+#[test]
+fn simultaneous_first_submissions_bind_only_the_successful_manager() {
+    let pool = Arc::new(queue(2));
+    pool.online(0).unwrap();
+    pool.online(1).unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let mut joins = Vec::new();
+    for participant in ["a", "b"] {
+        let pool = pool.clone();
+        let barrier = barrier.clone();
+        joins.push(std::thread::spawn(move || {
+            barrier.wait();
+            (participant, pool.submit_managed(actor(participant), MANAGER_CLIENT, "first", "work", "context", 1))
+        }));
+    }
+    let results: Vec<_> = joins.into_iter().map(|join| join.join().unwrap()).collect();
+    assert_eq!(results.iter().filter(|(_, result)| result.is_ok()).count(), 1);
+    let (winner, result) = results.iter().find(|(_, result)| result.is_ok()).unwrap();
+    let first = result.as_ref().unwrap();
+    assert_eq!(pool.snapshot().manager.unwrap().participant_id, *winner);
+    assert_eq!(pool.snapshot().queued, 1);
+    assert_eq!(pool.submit_managed(actor(winner), MANAGER_CLIENT, "first", "work", "context", 2).unwrap().task_id, first.task_id);
+    assert!(pool.submit_managed(actor(winner), MANAGER_CLIENT, "first", "different", "context", 2).is_err());
+    assert_eq!(pool.snapshot().queued, 1);
+}
+
+#[test]
+fn manager_task_pages_are_bounded_without_exposing_bodies_or_results() {
+    let pool = queue(1);
+    let epoch = pool.online(0).unwrap();
+    let owner = actor("manager");
+    let first = pool.submit_managed(owner.clone(), MANAGER_CLIENT, "a", "private prompt", "private expanded input", 1).unwrap();
+    let lease = pool.claim(0, epoch, 2).unwrap().unwrap();
+    pool.finish(&lease, Outcome::Completed("private result".into()), true, true, 3).unwrap();
+    let second = pool.submit_managed(owner.clone(), MANAGER_CLIENT, "b", "another private prompt", "context", 4).unwrap();
+    let page = pool.tasks(&owner, MANAGER_CLIENT, None, 1).unwrap();
+    assert_eq!(page.tasks.len(), 1);
+    assert_eq!(page.tasks[0].task_id, first.task_id);
+    let next = pool.tasks(&owner, MANAGER_CLIENT, page.next_cursor.as_deref(), 1).unwrap();
+    assert_eq!(next.tasks.len(), 1);
+    assert_eq!(next.tasks[0].task_id, second.task_id);
+    assert!(next.next_cursor.is_none());
+    let encoded = serde_json::to_value(&page).unwrap();
+    assert!(encoded["tasks"][0].get("text").is_none());
+    assert!(encoded["tasks"][0].get("output").is_none());
+    assert!(encoded["tasks"][0].get("error").is_none());
+    assert!(!encoded.to_string().contains("private"));
+    assert_eq!(pool.result(&owner, &first.task_id).unwrap().output.as_deref(), Some("private result"));
+    assert!(pool.tasks(&actor("executor"), MANAGER_CLIENT, None, 1).is_err());
+    assert!(pool.tasks(&owner, MANAGER_CLIENT, None, 0).is_err());
+    assert!(pool.tasks(&owner, MANAGER_CLIENT, None, 129).is_err());
+}
+
 #[test]
 fn slot_logs_are_bounded_real_events_without_task_bodies_or_results() {
     let pool = queue(1);

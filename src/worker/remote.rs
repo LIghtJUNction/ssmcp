@@ -298,6 +298,73 @@ mod tests {
     }
 
     #[test]
+    fn manager_stop_preserves_remote_claim_until_exact_acknowledgement() {
+        let (queue, remote) = service(1);
+        let client = "a".repeat(64);
+        let owner = actor("manager");
+        let executor = actor("executor");
+        let first = queue.submit_managed(owner.clone(), &client, "first", "work", "prepared", 1).unwrap();
+        let pending = queue.submit_managed(owner.clone(), &client, "pending", "queued", "prepared", 1).unwrap();
+        let claim = claimed(&remote, &queue, &executor, "take-first");
+        assert_eq!(claim.task_id, first.task_id);
+        assert!(queue.stop(&executor, &client, 2).is_err());
+        assert!(queue.stop(&owner, &client, 3).unwrap());
+        assert!(!queue.stop(&owner, &client, 4).unwrap());
+        assert!(queue.snapshot().stopping);
+        assert!(!queue.snapshot().closed);
+        assert_eq!(queue.snapshot().working, 1);
+        assert_eq!(queue.snapshot().idle, 0);
+        assert_eq!(queue.snapshot().queued, 0);
+        assert_eq!(queue.result(&owner, &first.task_id).unwrap().status, TaskStatus::Cancelling);
+        assert_eq!(queue.result(&owner, &pending.task_id).unwrap().status, TaskStatus::Cancelled);
+        assert!(queue.submit_managed(owner.clone(), &client, "new", "work", "prepared", 5).is_err());
+        let Claimed::Assigned { claim: retry, lease } = remote.claim(&queue, &executor, "take-first", 5).unwrap() else { panic!("active claim was lost after stop") };
+        assert_eq!(retry, claim);
+        assert!(queue.cancellation_requested(&lease));
+        let completion = Completion { claim, status: Status::Cancelled, output: None, error: None };
+        assert!(remote.complete(&queue, &owner, completion.clone(), 6).is_err());
+        assert_eq!(queue.snapshot().working, 1);
+        let (task, duplicate) = remote.complete(&queue, &executor, completion.clone(), 7).unwrap();
+        assert!(!duplicate);
+        assert_eq!(task.status, TaskStatus::Cancelled);
+        assert!(!task.replay_safe);
+        assert_eq!(queue.snapshot().working, 0);
+        assert_eq!(queue.snapshot().offline, 1);
+        assert_eq!(queue.snapshot().idle, 0);
+        assert!(remote.complete(&queue, &executor, completion, 8).unwrap().1);
+    }
+
+    #[test]
+    fn reconnect_requires_a_new_manager_and_never_replays_unknown_work() {
+        let (queue, remote) = service(1);
+        let client = "a".repeat(64);
+        let owner = actor("old-manager");
+        let executor = actor("executor");
+        let task = queue.submit_managed(owner.clone(), &client, "old-work", "work", "prepared", 1).unwrap();
+        let claim = claimed(&remote, &queue, &executor, "old-claim");
+        queue.stop(&owner, &client, 3).unwrap();
+        queue.close(4);
+        remote.close(&queue, 4).unwrap();
+        let old = queue.result(&owner, &task.task_id).unwrap();
+        assert_eq!(old.status, TaskStatus::Unknown);
+        assert!(!old.replay_safe);
+        let fresh = Queue::new("new-native-generation".into(), 1).unwrap();
+        let remote_new = Remote::<&'static str>::new();
+        remote_new.start(&fresh).unwrap();
+        assert!(fresh.snapshot().manager.is_none());
+        assert_eq!(fresh.snapshot().queued, 0);
+        let mut new_owner = actor("new-manager");
+        new_owner.connection += 1;
+        let new_client = "b".repeat(64);
+        fresh.attach(&new_owner, &new_client, 5).unwrap();
+        assert!(fresh.is_manager(&new_owner, &new_client));
+        assert!(!fresh.is_manager(&owner, &client));
+        assert!(remote_new.complete(&fresh, &executor, success(claim), 6).is_err());
+        assert_eq!(fresh.snapshot().idle, 1);
+        assert_eq!(fresh.snapshot().queued, 0);
+    }
+
+    #[test]
     fn remote_claims_are_exclusive_and_retries_keep_the_exact_lease() {
         let (queue, remote) = service(2);
         let a = queue

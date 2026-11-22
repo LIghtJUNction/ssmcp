@@ -174,7 +174,10 @@ pub(crate) async fn supervise(pool: Arc<Pool>, program: Program, cwd: PathBuf) {
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = Some(registry.clone());
     let units = loop {
-        if pool.queue.snapshot().closed {
+        if !pool.queue.accepting() {
+            if let Err(error) = registry.leave(&pool.generation).await {
+                *pool.cleanup_error.lock().unwrap_or_else(|error| error.into_inner()) = Some(error);
+            }
             return;
         }
         match registry
@@ -204,8 +207,8 @@ pub(crate) async fn supervise(pool: Arc<Pool>, program: Program, cwd: PathBuf) {
     let mut children = Vec::new();
     let mut startup_error = None;
     for (slot, unit) in units.into_iter().enumerate() {
-        if pool.queue.snapshot().closed {
-            startup_error = Some("worker connection closed during startup".into());
+        if !pool.queue.accepting() {
+            startup_error = Some("worker connection closed or stopped during startup".into());
             break;
         }
         match Child::start(&pool, &registry, unit, slot, &program, &cwd).await {
@@ -269,8 +272,8 @@ async fn run_slot(pool: Arc<Pool>, registry: Arc<Registry>, slot: usize, mut chi
     let mut wake = pool.queue.subscribe();
     let mut unfinished = None;
     let reason = loop {
-        if pool.queue.snapshot().closed {
-            break "connection closed".to_owned();
+        if !pool.queue.accepting() {
+            break "connection closed or stopped by manager".to_owned();
         }
         let lease = match pool.queue.claim(slot, epoch, super::now_ms()) {
             Ok(Some(lease)) => lease,
@@ -366,12 +369,12 @@ async fn execute(
         registry.idle(&pool.generation, lease.slot).await?;
         return Ok((
             Outcome::Failed(format!("task was not dispatched: {error}")),
-            !pool.queue.snapshot().closed,
+            pool.queue.accepting(),
         ));
     }
     if pool.queue.cancellation_requested(lease) {
         registry.idle(&pool.generation, lease.slot).await?;
-        return Ok((Outcome::Cancelled, !pool.queue.snapshot().closed));
+        return Ok((Outcome::Cancelled, pool.queue.accepting()));
     }
     child::write(
         &mut child.input,
@@ -448,5 +451,5 @@ async fn execute(
         }
         _ => return Err("worker returned an unknown completion state".into()),
     };
-    Ok((outcome, !pool.queue.snapshot().closed))
+    Ok((outcome, pool.queue.accepting()))
 }

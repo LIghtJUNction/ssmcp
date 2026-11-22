@@ -410,6 +410,9 @@ fn prepare(
             Provider::Worker => matches!(
                 id.as_str(),
                 "ssmcp.worker.status"
+                    | "ssmcp.worker.attach"
+                    | "ssmcp.worker.tasks"
+                    | "ssmcp.worker.stop"
                     | "ssmcp.worker.submit"
                     | "ssmcp.worker.result"
                     | "ssmcp.worker.cancel"
