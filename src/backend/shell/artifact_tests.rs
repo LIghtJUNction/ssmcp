@@ -115,7 +115,7 @@ async fn tracked_exec_counts_child_and_workspace_writes_and_isolates_notices() {
     let second = shell
         .call_scoped(
             "ssmcp.exec.start",
-            json!({"command":["/bin/true"],"artifact_budget_bytes":10}),
+            json!({"command":["/bin/true"],"track_artifacts":true,"artifact_budget_bytes":10}),
             other_agent.clone(),
         )
         .await
@@ -123,6 +123,12 @@ async fn tracked_exec_counts_child_and_workspace_writes_and_isolates_notices() {
     let second_id = second["job_id"].as_str().unwrap();
     let second_dir = second["artifacts"]["directory"].as_str().unwrap();
     assert_ne!(directory, second_dir);
+    assert_eq!(second["artifacts"]["soft_limit_bytes"], 10);
+    for path in [directory, second_dir] {
+        let token = path.strip_prefix(".ssmcp/task-artifacts/").unwrap();
+        assert_eq!(token.len(), 16);
+        assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
     fs::write(root.join(second_dir).join("other"), "abcdefghijkl").unwrap();
 
     let external = fixture.0.join("outside");
@@ -250,7 +256,7 @@ async fn tracked_exec_counts_child_and_workspace_writes_and_isolates_notices() {
 #[test]
 fn event_pressure_marks_incomplete_and_reconciles_the_dedicated_root() {
     let fixture = Fixture::new();
-    let mut tracker = artifacts::Artifacts::new(&fixture.0, "queue-test", 10).unwrap();
+    let mut tracker = artifacts::Artifacts::new(&fixture.0, 10).unwrap();
     fs::write(tracker.path.join("known"), "123456").unwrap();
     let outside = fixture.0.join("shared");
     fs::write(&outside, "not in the dedicated root").unwrap();
@@ -270,4 +276,80 @@ fn event_pressure_marks_incomplete_and_reconciles_the_dedicated_root() {
     let next = tracker.sample();
     assert_eq!(next["incomplete"], true);
     assert_eq!(next["logical_bytes"], 8);
+}
+
+#[tokio::test]
+async fn tracked_exec_default_budget_is_opt_in_and_rearms_at_low_water() {
+    let fixture = Fixture::new();
+    let outside = fixture.0.join("outside");
+    let workspace = fixture.0.join("workspace");
+    fs::create_dir(&outside).unwrap();
+    fs::create_dir(&workspace).unwrap();
+    let shell =
+        Shell::with_workspace(workspace.clone(), OutputStore::new_connection().unwrap()).unwrap();
+    let owner = source('a', "42", 81, 1);
+    let ordinary = shell.call_scoped("ssmcp.exec.start", json!({
+        "command": ["/bin/sh", "-c", "test \"$TMPDIR\" = caller-tmp && test \"$SSMCP_ARTIFACT_DIR\" = caller-dir"],
+        "env": {"TMPDIR":"caller-tmp","SSMCP_ARTIFACT_DIR":"caller-dir"}
+    }), owner.clone()).await.unwrap();
+    let done = shell
+        .call("ssmcp.exec.wait", json!({"job_id":ordinary["job_id"]}))
+        .await
+        .unwrap();
+    assert_eq!(done["exit_code"], 0);
+    assert!(ordinary.get("artifacts").is_none());
+    assert!(!workspace.join(".ssmcp").exists());
+
+    fs::create_dir(workspace.join(".ssmcp")).unwrap();
+    let managed = workspace.join(".ssmcp/task-artifacts");
+    symlink(&outside, &managed).unwrap();
+    let args = json!({"command":["/bin/true"],"track_artifacts":true});
+    assert!(
+        shell
+            .call_scoped("ssmcp.exec.start", args.clone(), owner.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+    fs::remove_file(&managed).unwrap();
+
+    let job = shell
+        .call_scoped("ssmcp.exec.start", args, owner.clone())
+        .await
+        .unwrap();
+    let budget = DEFAULT_ARTIFACT_BUDGET_BYTES;
+    assert_eq!(budget, 20_000_000_000);
+    assert_eq!(job["artifacts"]["soft_limit_bytes"], budget);
+    let file = fs::File::create(
+        workspace
+            .join(job["artifacts"]["directory"].as_str().unwrap())
+            .join("sparse"),
+    )
+    .unwrap();
+    let status = || {
+        shell.call_scoped(
+            "ssmcp.exec.status",
+            json!({"job_id":job["job_id"]}),
+            owner.clone(),
+        )
+    };
+    file.set_len(budget).unwrap();
+    assert!(status().await.unwrap()["artifacts"].get("notice").is_none());
+    file.set_len(budget + 1).unwrap();
+    assert_eq!(
+        status().await.unwrap()["artifacts"]["notice"]["logical_bytes"],
+        budget + 1
+    );
+    file.set_len(budget * 4 / 5 + 1).unwrap();
+    assert!(status().await.unwrap()["artifacts"].get("notice").is_none());
+    file.set_len(budget + 2).unwrap();
+    assert!(status().await.unwrap()["artifacts"].get("notice").is_none());
+    file.set_len(budget * 4 / 5).unwrap();
+    assert!(status().await.unwrap()["artifacts"].get("notice").is_none());
+    file.set_len(budget + 3).unwrap();
+    assert_eq!(
+        status().await.unwrap()["artifacts"]["notice"]["logical_bytes"],
+        budget + 3
+    );
+    shell.shutdown().await;
 }

@@ -94,18 +94,41 @@ fn proc_fd(file: &File) -> String {
     format!("/proc/self/fd/{}", file.as_raw_fd())
 }
 
+fn mkdir(parent: &File, name: &Path) -> io::Result<()> {
+    let name = CString::new(name.as_os_str().as_bytes())?;
+    if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn ensure_dir(parent: &File, name: &Path) -> io::Result<File> {
+    match mkdir(parent, name) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    let directory = beneath(parent, name)?;
+    if !directory.metadata()?.is_dir() {
+        return Err(io::ErrorKind::NotADirectory.into());
+    }
+    Ok(directory)
+}
+
 impl Artifacts {
-    pub(super) fn new(workspace: &Path, id: &str, budget: u64) -> io::Result<Self> {
-        let relative = PathBuf::from(format!(".ssmcp-artifacts-{id}"));
+    pub(super) fn new(workspace: &Path, budget: u64) -> io::Result<Self> {
+        let mut nonce = [0u8; 8];
+        crate::platform::random_bytes(&mut nonce)?;
+        let token = format!("{:016x}", u64::from_be_bytes(nonce));
+        let relative = Path::new(".ssmcp/task-artifacts").join(&token);
         let path = workspace.join(&relative);
         // The caller's workspace path was canonicalized. Refuse any symlink
         // inserted into that path since authorization.
         let workspace = open_path(libc::AT_FDCWD, workspace, 0)?;
         let mut ledger = Ledger::new()?;
-        let name = CString::new(relative.as_os_str().as_bytes())?;
-        if unsafe { libc::mkdirat(workspace.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
+        let state_dir = ensure_dir(&workspace, Path::new(".ssmcp"))?;
+        let managed = ensure_dir(&state_dir, Path::new("task-artifacts"))?;
+        mkdir(&managed, Path::new(&token))?;
         let root = beneath(&workspace, &relative)?;
         // Watch before spawning, even when the directory is empty.
         ledger.refresh(&root, Path::new(""), &mut { MAX_ENTRIES })?;

@@ -59,17 +59,17 @@ return await fs.write(workspaceId, {
 
 ## 命令任务产物与软额度
 
-Linux 客户端上的已验证 Agent 可以给一次原生命令任务设置正整数 `artifact_budget_bytes`。一个 `exec.start` 对应一个独占目录。跨多条命令共享的构建缓存仍属于调用者管理的共享路径。
+Linux 客户端上的已验证 Agent 可以在 `exec.start` 传入 `track_artifacts: true`，为一次原生命令任务启用追踪，默认软额度为 20 GB（20,000,000,000 字节）。正整数 `artifact_budget_bytes` 覆盖默认值，旧调用单独传入该参数仍会启用追踪。每个启用的任务在工作区 `.ssmcp/task-artifacts/` 下有一个以短标识命名的独占目录。跨多条命令共享的构建缓存仍属于调用者管理的共享路径。
 
 ```js
 const job = await exec.start(clientId, {
   command: ["sh", "-c", 'cargo build --target-dir "$SSMCP_ARTIFACT_DIR/target"'],
-  artifact_budget_bytes: 512 * 1024 * 1024,
+  track_artifacts: true,
 });
 return { job_id: job.job_id, directory: job.artifacts.directory };
 ```
 
-启动结果中的 `artifacts.directory` 相对于所选客户端的工作区。harness 可以用原有授权下的 `fs.writeText`、`fs.write` 等工具写入该目录。命令及其子进程得到指向同一目录的 `TMPDIR` 和 `SSMCP_ARTIFACT_DIR`，本次显式启用时这两个变量优先于 `env` 中的同名值。示例通过本次命令的 `--target-dir` 指定 Cargo 产物位置。省略额度时继续使用原有环境和启动行为。
+启动结果中的 `artifacts.directory` 相对于所选客户端的工作区。harness 可以用原有授权下的 `fs.writeText`、`fs.write` 等工具写入该目录。命令及其子进程得到指向同一目录的 `TMPDIR` 和 `SSMCP_ARTIFACT_DIR`，本次显式启用时这两个变量优先于 `env` 中的同名值。示例通过本次命令的 `--target-dir` 指定 Cargo 产物位置。普通命令省略这两个选项时继续使用原有环境和启动行为。
 
 ```js
 const status = await exec.status(clientId, jobId);

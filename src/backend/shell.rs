@@ -28,6 +28,7 @@ use tokio::{
     time::{Instant, timeout, timeout_at},
 };
 
+const DEFAULT_ARTIFACT_BUDGET_BYTES: u64 = 20_000_000_000;
 const MAX_JOBS: usize = 32;
 const MAX_RETAINED: usize = 128;
 const MAX_OUTPUT: usize = 64 * 1024;
@@ -324,7 +325,8 @@ impl Shell {
                     "title":{"type":"string","minLength":1,"maxLength":MAX_TITLE_CHARS,"description":"Optional display-only purpose, such as Check deployment status. At most 160 Unicode characters; surrounding whitespace is trimmed, blank titles and control or line-separator characters are rejected. Does not change argv, cwd, permissions or job identity."},
                     "cwd":{"type":"string","description":"Existing directory inside the authorized workspace; relative paths and the default resolve from that workspace."},
                     "env":{"type":"object","additionalProperties":{"type":"string"}},
-                    "artifact_budget_bytes":{"type":"integer","minimum":1,"description":"Linux opt-in for a verified Agent. Create a private job artifact directory and point this command's TMPDIR and SSMCP_ARTIFACT_DIR at it. The logical-byte budget is advisory."},
+                    "track_artifacts":{"type":"boolean","default":false,"description":format!("Enable Linux task artifact tracking for a verified Agent. Sets the job's TMPDIR and SSMCP_ARTIFACT_DIR. Default soft limit when enabled: {DEFAULT_ARTIFACT_BUDGET_BYTES} logical bytes.")},
+                    "artifact_budget_bytes":{"type":"integer","minimum":1,"description":"Custom logical-byte soft limit. Providing a positive value also enables tracking for compatibility."},
                     "stdin":{"enum":["null","pipe"],"type":"string","default":"null","description":"null delivers EOF immediately; pipe enables bounded exec.write input and explicit close_stdin."},
                     "timeout_ms":{"type":"integer","minimum":0,"maximum":MAX_TIMEOUT,"default":0,"description":"0 means no execution deadline. A nonzero deadline terminates the command."}}),
                 &["command"],
@@ -605,13 +607,19 @@ impl Shell {
             env: Option<HashMap<String, String>>,
             artifact_budget_bytes: Option<u64>,
             #[serde(default)]
+            track_artifacts: bool,
+            #[serde(default)]
             stdin: InputMode,
             #[serde(default)]
             timeout_ms: u64,
         }
         let args: Start = parse(args)?;
         let title = job_title(args.title)?;
-        if let Some(budget) = args.artifact_budget_bytes {
+        let artifact_budget = args.artifact_budget_bytes.or_else(|| {
+            args.track_artifacts
+                .then_some(DEFAULT_ARTIFACT_BUDGET_BYTES)
+        });
+        if let Some(budget) = artifact_budget {
             if budget == 0 {
                 return Err("artifact_budget_bytes must be positive".into());
             }
@@ -730,9 +738,8 @@ impl Shell {
             command.envs(env);
         }
         #[cfg(target_os = "linux")]
-        let artifacts = args
-            .artifact_budget_bytes
-            .map(|limit| artifacts::Artifacts::new(&self.root, &id, limit))
+        let artifacts = artifact_budget
+            .map(|limit| artifacts::Artifacts::new(&self.root, limit))
             .transpose()
             .map_err(|err| format!("could not prepare task artifact directory: {err}"))?;
         #[cfg(target_os = "linux")]

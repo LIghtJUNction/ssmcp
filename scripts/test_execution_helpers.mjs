@@ -482,7 +482,7 @@ test('UI helpers expose registered workflows and preserve native arguments and f
 
 test('exec.run passes the artifact budget through start and returns the scoped read notice', async () => {
   const artifacts = {
-    directory: '.ssmcp-artifacts-example',
+    directory: '.ssmcp/task-artifacts/0123456789abcdef',
     logical_bytes: 12,
     soft_limit_bytes: 10,
     incomplete: false,
@@ -493,11 +493,11 @@ test('exec.run passes the artifact budget through start and returns the scoped r
     },
   };
   const record = await run(`
-    return await exec.run('one', {command:['true'],artifact_budget_bytes:10});
+    return await exec.run('one', {command:['true'],track_artifacts:true,artifact_budget_bytes:10});
   `, ({name, arguments: args}) => {
     const snapshot = {job_id:'job',running:false,exit_code:0};
     if (name === 'ssmcp.exec.start') {
-      assert.deepEqual(args, {command:['true'],artifact_budget_bytes:10});
+      assert.deepEqual(args, {command:['true'],track_artifacts:true,artifact_budget_bytes:10});
       return native({job_id:'job',running:true});
     }
     assert.equal(args.job_id, 'job');
