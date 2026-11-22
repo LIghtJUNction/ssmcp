@@ -132,6 +132,14 @@ fn rows(
         );
     }
     push("", PanelTone::Normal);
+    // Retained audit outcomes and retry suppression do not prove that a native
+    // process spawn was avoided. No authoritative host metric exists yet.
+    push("Avoided command executions", PanelTone::Muted);
+    push(
+        "unavailable · host metric not implemented",
+        PanelTone::Muted,
+    );
+    push("", PanelTone::Normal);
     if let Some(workers) = workers {
         push(
             &format!(
@@ -432,6 +440,34 @@ mod tests {
             let lines = wrapped(id, width);
             assert_eq!(lines.concat(), id);
             assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
+        }
+    }
+
+    #[test]
+    fn statistics_without_host_execution_metrics_reports_unavailable_not_zero() {
+        // Old snapshots, disconnected views and unrelated audit success counts
+        // cannot manufacture a native avoided-spawn count.
+        for data in [
+            json!({}),
+            json!({"connected":false}),
+            json!({"connected":true,"session_id":"client"}),
+        ] {
+            let audit = json!({"entries":[{"calls":[
+                {"finished":true,"success":true},
+                {"finished":true,"success":true}
+            ]}]});
+            let text = rows(&data, &audit, None, None, 123, 120)
+                .into_iter()
+                .map(|(text, _)| text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                text.contains(
+                    "Avoided command executions\nunavailable · host metric not implemented"
+                )
+            );
+            assert!(!text.contains("Avoided command executions\n0"));
+            assert!(text.contains("Succeeded 2"));
         }
     }
 
