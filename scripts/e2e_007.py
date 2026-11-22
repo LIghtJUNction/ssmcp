@@ -105,14 +105,28 @@ class Socket(relay.WebSocket):
             else:
                 assert self.hello["version"] in relay.SUPPORTED_WIRE_VERSIONS
             assert self.hello["mode"] == "shell"
-            assert self.hello["metadata"].get("allow", []) in ([], [relay.IDENTITY["principal"]])
-            self.send({"type": "ready", "url": self.state.origin + "/mcp",
-                       "client_id": self.id, "login_code": "", "login_expires_in": 0})
+            assert self.hello["metadata"].get("allow", []) in ([], [self.state.allow_principal])
+            ready = {"type": "ready", "url": self.state.origin + "/mcp",
+                     "client_id": self.id, "login_code": "", "login_expires_in": 0}
+            if self.hello["metadata"]["name"] != self.state.recovery_name:
+                ready["capabilities"] = list(self.state.capabilities)
+            self.send(ready)
             with self.state.lock:
                 self.state.sessions[self.id] = self
                 self.state.connections.setdefault(self.token, []).append(self)
             while True:
                 frame = self.read()
+                if frame["type"] == "access":
+                    # Full clients read the relay-owned allow list at startup.
+                    assert self.hello["metadata"]["name"] != self.state.recovery_name
+                    assert frame["command"] == {"action": "list"}
+                    self.send({"type": "access_reply", "id": frame["id"], "result": {"Ok": {
+                        "entries": [{"principal": self.state.allow_principal,
+                                     "login": relay.IDENTITY["username"],
+                                     "subject": relay.IDENTITY["subject"],
+                                     "owner": bool(self.token)}],
+                    }}})
+                    continue
                 if frame["type"] == "steering":
                     # Woken full clients use v7 presence polling. This recovery
                     # fixture has no queue: do not simulate publication or delivery.

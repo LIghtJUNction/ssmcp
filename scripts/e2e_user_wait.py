@@ -128,7 +128,7 @@ class UserWait(InputHistory):
                         "the owned fixture did not select its exact recipient")
 
     def begin(self, *, reason, intent="need_user", timeout_ms=20000, member=None,
-              finish_request_id=None):
+              finish_request_id=None, expect_disconnect=False):
         client_id = self.client_id
         arguments = {"timeout_ms": timeout_ms, "intent": intent, "reason": reason, "notify": False}
         if finish_request_id is not None:
@@ -149,7 +149,7 @@ class UserWait(InputHistory):
             if status != 200 or not isinstance(envelope, dict) or "error" in envelope:
                 raise AssertionError(f"user wait HTTP response is invalid: status {status}")
             result = envelope["result"]
-            if result.get("isError"):
+            if result.get("isError") and not expect_disconnect:
                 raise AssertionError(f"user wait orchestration failed: {result}")
             return result
 
@@ -201,6 +201,26 @@ class UserWait(InputHistory):
             self.check(not self.messages(response) and not receipt["messages"],
                        "an unfinished delivery includes no ordinary user requirement")
         return response, receipt
+
+    def disconnected_response(self, front, future, *, client_id, wait_id):
+        deadline = time.monotonic() + 8
+        while not future.done() and time.monotonic() < deadline:
+            front.pump(0.03)
+        if not future.done():
+            raise AssertionError("the disconnected wait did not finish its HTTP response")
+        response = future.result()
+        self.check(response.get("isError") is True and response.get("content") == [{
+            "type": "text",
+            "text": "client is unavailable; call list to refresh connected clients",
+        }], "the final HTTP boundary rejects the disconnected tool-source connection")
+        self.check(set(response) <= {"_meta", "content", "isError", "resultType"}
+                   and set(response.get("_meta", {})) <= {"io.modelcontextprotocol/serverInfo"},
+                   "disconnect exposes no program result, user data, source provenance or finish permission")
+        # This identity was observed while the original native wait was active.
+        # It is evidence of the fixture action, not a fabricated outer receipt.
+        self.metrics["disconnected_wait"] = {
+            "client_id": client_id, "active_wait_id": wait_id, "response": response,
+        }
 
     def targeted_unchanged(self, record):
         current = self.record(self.queue(), message_id=record["id"])
@@ -440,11 +460,11 @@ class UserWait(InputHistory):
 
         self.finish_decisions(front, member, unsent)
 
-        disconnected = self.begin(reason="Synthetic WSS disconnect")
+        disconnected = self.begin(reason="Synthetic WSS disconnect", expect_disconnect=True)
         disconnect_id = self.active(front, 1)["active"][0]["wait_id"]
         previous_id = self.client_id
         self.account_gateway.disconnect_client(previous_id)
-        self.completed(front, disconnected, "disconnected", wait_id=disconnect_id)
+        self.disconnected_response(front, disconnected, client_id=previous_id, wait_id=disconnect_id)
         credentials = self.new_credentials(front)
         self.client_id = credentials["client_id"]
         front.client_id = self.client_id
