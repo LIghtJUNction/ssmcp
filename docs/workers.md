@@ -88,6 +88,7 @@ Keep that participant's credentials private and reuse the same binding for subse
 | `ssmcp.worker.attach` | `{}` | Bind the authenticated main agent; return its verified identity, `caller_is_manager`, and the worker snapshot. |
 | `ssmcp.worker.status` | `{}` | The typed monitor snapshot, main agent identity, `caller_is_manager`, execution mode, resource status, and any cleanup error. Reading it does not change the main agent. |
 | `ssmcp.worker.tasks` | `{cursor?, limit?: 1..128}` | Main agent only: a bounded page of task IDs and lifecycle metadata, with `next_cursor`; default limit 32. It excludes task text, output, and error bodies. |
+| `ssmcp.worker.wait_available` | `{after?: {generation, revision}, wait_ms?: 0..5000}` | Main agent only: return initial availability immediately, or wait for the pool state to change after the supplied cursor. Default wait 5000 ms. |
 | `ssmcp.worker.submit` | `{request_id, text}` | One task receipt, reference warnings, and the current worker snapshot. |
 | `ssmcp.worker.result` | `{task_id, wait_ms?: 0..5000}` | That caller's task state and any confirmed output. |
 | `ssmcp.worker.cancel` | `{task_id}` | A cancellation request; a running task remains occupied until completion or confirmed cleanup. |
@@ -103,6 +104,28 @@ Tasks keep the authenticated caller and original history owner captured at submi
 The snapshot exposes `manager` and `stopping`. An unbound pool has `manager: null`. A bound manager includes the actual `client_id`, verified `thread_id` and participant identity, connection, and binding time. The snapshot's `process_id` is the local operating-system PID; it is separate from the session's client ID and the main agent's logical thread ID.
 
 `stop` returns `stop_requested: true` and whether this call changed the state. Repeating it is safe. Its `external_execution_stopped: false` explicitly means that requesting a stop does not prove an external model or process has stopped. Running remote tasks remain occupied with cancellation requested until their original claimant acknowledges completion; their slots then go offline. A real connection loss continues to use the existing `unknown` outcome and must not trigger automatic replay. Stopping does not restart or resize the pool. A new connection creates a fresh pool whose main agent must bind again; it does not inherit old tasks or claims.
+
+## Learn which slots can accept work
+
+Every successful worker call made by the verified main agent includes an `availability` object. The main agent can use that result directly when deciding whether to submit more work. Its `idle_slots` list contains the actual zero-based `slot` IDs and their `epoch`; counts include idle, working, offline, queued, and total slots. `accepting`, `stopping`, and `closed` describe whether the pool still admits work. A stopped or closed pool reports no assignable idle slots.
+
+Availability has `scope: "coordination_slots"`, the actual `execution` mode, and `claim_required`. In remote mode, an idle slot represents queue capacity; an authenticated executor still has to claim a task. SSMCP has no heartbeat for each external agent, so this snapshot does not establish that a model is online. Submissions keep their FIFO order and do not reserve a particular slot or executor.
+
+Use `wait_available` under the same manager binding to receive a state change without repeatedly reading status:
+
+```js
+const current = await call(id, "ssmcp.worker.wait_available", {wait_ms: 0});
+if (current.isError) throw new Error(JSON.stringify(current));
+const {generation, revision} = current.structuredContent.availability;
+return await call(id, "ssmcp.worker.wait_available", {
+  after: {generation, revision},
+  wait_ms: 5000
+});
+```
+
+Omitting `after` returns the current snapshot immediately. An unchanged cursor waits for the requested duration, up to five seconds, using queue notifications. The response contains `status`, `changed`, and `availability`: `current` is the initial snapshot, `changed` means the pool revision advanced, `unchanged` means the wait elapsed without a new revision, and `not_accepting` means the pool stopped or closed. A revision may advance because work was queued, claimed, completed, or stopped; inspect `idle_slots` and the counts before assigning more work.
+
+The `generation` and `revision` cursor belongs to this pool. A different generation or a future revision is rejected; after reconnecting, attach to the new pool and request its current snapshot. This tool uses the existing native call route and does not occupy a human `ui.wait`. It delivers availability through the waiting tool response; it does not start or wake an external model.
 
 ## Remote claim and completion
 

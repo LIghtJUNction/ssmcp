@@ -3,6 +3,47 @@ use super::*;
 const MANAGER_CLIENT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[test]
+fn availability_is_a_manager_scoped_capacity_snapshot_without_binding_observers() {
+    let pool = queue(2);
+    let owner = actor("manager");
+    assert!(pool.availability(&owner, MANAGER_CLIENT).is_err());
+    assert!(pool.snapshot().manager.is_none());
+    let epochs = [pool.online(0).unwrap(), pool.online(1).unwrap()];
+    pool.attach(&owner, MANAGER_CLIENT, 1).unwrap();
+    let initial = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert!(initial.accepting);
+    assert_eq!(initial.idle_slots.len(), 2);
+    for (index, slot) in initial.idle_slots.iter().enumerate() {
+        assert_eq!(slot.slot, index);
+        assert_eq!(slot.epoch, epochs[index]);
+    }
+    let value = serde_json::to_value(&initial).unwrap();
+    assert_eq!(value["scope"], "coordination_slots");
+    assert_eq!(value["queued"], 0);
+    assert_eq!(value["working"], 0);
+    for foreign in [
+        actor("observer"),
+        Actor {
+            connection: owner.connection + 1,
+            ..owner.clone()
+        },
+        Actor {
+            subject: "other-account".into(),
+            ..owner.clone()
+        },
+    ] {
+        assert!(pool.availability(&foreign, MANAGER_CLIENT).is_err());
+    }
+    assert!(pool.availability(&owner, &"b".repeat(64)).is_err());
+    pool.attach(&owner, MANAGER_CLIENT, 2).unwrap();
+    assert_eq!(
+        pool.availability(&owner, MANAGER_CLIENT).unwrap().revision,
+        initial.revision
+    );
+    assert_eq!(pool.snapshot().manager.unwrap().thread_id, "manager");
+}
+
+#[test]
 fn management_observation_and_rejected_work_never_acquire_ownership() {
     let pool = queue(1);
     let owner = actor("manager");

@@ -412,6 +412,7 @@ fn prepare(
                 "ssmcp.worker.status"
                     | "ssmcp.worker.attach"
                     | "ssmcp.worker.tasks"
+                    | "ssmcp.worker.wait_available"
                     | "ssmcp.worker.stop"
                     | "ssmcp.worker.submit"
                     | "ssmcp.worker.result"

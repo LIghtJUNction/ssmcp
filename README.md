@@ -171,6 +171,14 @@ Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重
 
 未选择接收人时，用户要求由下一次符合条件的单个调用领取；选择成员后，仅绑定该成员身份的调用能领取。**已交付**表示要求进入了工具响应，执行进度仍需由接收者反馈。[输入与交付语义](docs/client-input.md) · [成员协作](docs/agent-collaboration.md)
 
+### 由主 Agent 管理 worker
+
+```sh
+ssmcp --worker 2
+```
+
+主 Agent 在 worker 会话中完成身份绑定后，通过 `ssmcp.worker.attach` 管理自己的任务池：提交与查看任务、请求取消、停止接单。管理结果直接列出真实空闲槽位、排队数和工作状态；`ssmcp.worker.wait_available` 可等待状态变化，最长 5 秒。任务按顺序排队，由已认证的执行者领取并回报结果。[Worker 管理、空闲信息与执行边界](docs/workers.md)
+
 ### 从命令行连接对话与传递结果
 
 `ssmcp list` 按进程和已登记线程显示树形目录，远程 `attach` 默认连接所选对象的聊天输入与输出。进程输入发给选定目录中的主接收入口及已登记线程；线程输入只发给确切的成员 ID。数字引用最近一次列表，保留 5 分钟；显示名称不会被当成线程身份。[选择规则](docs/client-accounts.md#选择进程与线程)

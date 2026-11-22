@@ -87,6 +87,30 @@ pub(crate) struct TaskPage {
     next_cursor: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct IdleSlot {
+    pub(crate) slot: usize,
+    pub(crate) epoch: u64,
+}
+
+/// An observation of pool capacity, never a reservation or a remote-agent
+/// heartbeat. Revisions belong to this connection's pool generation.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct Availability {
+    pub(crate) generation: String,
+    pub(crate) revision: u64,
+    scope: &'static str,
+    pub(crate) idle_slots: Vec<IdleSlot>,
+    total: usize,
+    idle: usize,
+    working: usize,
+    offline: usize,
+    queued: usize,
+    pub(crate) accepting: bool,
+    stopping: bool,
+    closed: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TaskStatus {
@@ -245,6 +269,48 @@ impl<T: Clone> Queue<T> {
             .manager
             .as_ref()
             .is_some_and(|manager| manager.matches(actor, client_id))
+    }
+
+    pub(crate) fn availability(
+        &self,
+        actor: &Actor,
+        client_id: &str,
+    ) -> Result<Availability, String> {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        require_manager(&state, actor, client_id)?;
+        let accepting = !state.closed && !state.stopping;
+        let idle_slots: Vec<_> = state
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| accepting && matches!(slot.state, SlotState::Idle))
+            .map(|(slot, state)| IdleSlot {
+                slot,
+                epoch: state.epoch,
+            })
+            .collect();
+        Ok(Availability {
+            generation: self.generation.clone(),
+            revision: state.revision,
+            scope: "coordination_slots",
+            idle: idle_slots.len(),
+            idle_slots,
+            total: state.slots.len(),
+            working: state
+                .slots
+                .iter()
+                .filter(|slot| matches!(slot.state, SlotState::Working(_)))
+                .count(),
+            offline: state
+                .slots
+                .iter()
+                .filter(|slot| matches!(slot.state, SlotState::Offline(_)))
+                .count(),
+            queued: state.fifo.len(),
+            accepting,
+            stopping: state.stopping,
+            closed: state.closed,
+        })
     }
 
     pub(crate) fn attach(

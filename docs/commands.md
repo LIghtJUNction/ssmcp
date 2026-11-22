@@ -84,6 +84,8 @@ ssmcp --worker 2 --daemon
 
 主 Agent 通过 `ssmcp.worker.attach` 绑定自己的 worker 池，使用 `submit`、`tasks`、`result`、`cancel` 管理任务，并通过 `stop` 停止接单。管理权来自经过认证的会话线程；其他已授权执行者通过 `wait`／`claim` 领取任务并提交实际完成回执。忙满时进入有界队列；停止中的在途任务仍占槽，直到原执行者确认。后台模式自动禁用聊天输入。显式本地执行器和其 Linux 资源限额属于高级选项，见[Worker 模式、领取回执和资源边界](workers.md)。普通 `ssmcp` 继续提供聊天界面。
 
+主 Agent 的成功管理调用会带回 `availability`，列出真实空闲槽位 ID、各槽位 epoch、排队数和是否接单。需要等待空闲变化时，使用 `ssmcp.worker.wait_available`，携带上次结果的 `generation`、`revision`，最多等待 5 秒；状态变化时返回，不必反复查询。空闲槽位表示当前接单容量，远程执行者仍须经过认证并领取任务；这份快照不预留指定槽位，也不证明外部模型在线。[空闲信息与等待语义](workers.md#learn-which-slots-can-accept-work)
+
 ## 前台观察与终端输入
 
 前台默认使用 `dark` 主题和 `chat` 布局，连续显示执行记录，底部输入框用于追加用户要求。最左侧是统计页，展示会话进程 ID、本连接已登记的会话线程 ID、worker 管理者线程、OS PID 和实际计数。Enter 提交到队列；`/queue` 管理待交付项，`/sessions` 或 `/message` 显式选择收件人，`/audit` 打开源码审计。`/agents` 与旧的默认 Agent 页已移除。Tab 切换输入与内容焦点，滚轮或 PgUp/PgDn 直接浏览当前内容；`/filter 文本` 搜索日志，F9 切换类别。[客户端 UI 与队列原子接口](client-ui.md)
