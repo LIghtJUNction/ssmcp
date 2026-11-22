@@ -670,6 +670,7 @@ class ReleaseTests(unittest.TestCase):
             first = bump_release.prepare("patch", baseline, self.root)
             self.assertEqual(first["version"], "0.5.1")
             self.assertEqual(first["status"], "prepared")
+            self.assertIn("[skip ci]", self.git("show", "-s", "--format=%B", first["sha"]))
             self.assertEqual(self.git("diff", "--name-only", baseline, first["sha"]).splitlines(),
                              ["Cargo.lock", "Cargo.toml"])
             (self.root / "new-work.txt").write_text("keep later work\n")

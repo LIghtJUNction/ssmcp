@@ -36,6 +36,7 @@ test: test-code-mode
 .PHONY: test-account-acceptance
 test-account-acceptance:
 	python3 scripts/e2e_account_relay.py --binary $(CARGO_TARGET_DIR)/debug/ssmcp
+	python3 scripts/e2e_account_names.py --bin-dir "$(CARGO_TARGET_DIR)/debug" --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" --report "$(CARGO_TARGET_DIR)/acceptance/account-names.json"
 	python3 scripts/e2e.py --bin-dir $(CARGO_TARGET_DIR)/debug
 	python3 scripts/e2e_session_features.py --bin-dir $(CARGO_TARGET_DIR)/debug
 	python3 scripts/e2e_agents.py --bin-dir $(CARGO_TARGET_DIR)/debug

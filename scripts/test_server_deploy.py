@@ -217,7 +217,7 @@ class DeploymentContracts(unittest.TestCase):
              self.assertRaisesRegex(RuntimeError, "page_asset_set_changed_after_stage"):
             deploy.checks("http://127.0.0.1:8080", request)
 
-    def simulate_switch(self, *, had_managed_unit, public_failure=False, stage_only=False, changed_pid=False):
+    def simulate_switch(self, *, had_managed_unit, public_failure=False, stage_only=False, changed_pid=False, maintenance=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             install, units, folder = root / "install", root / "units", root / "run"
@@ -251,6 +251,8 @@ class DeploymentContracts(unittest.TestCase):
                        "assets": {}, "release": {"repository": deploy.REPOSITORY, "tag": TAG, "commit": COMMIT},
                        "managed_dropin_before": saved,
                        "public_baseline": {"footer_count": 1, "proxy_fragment_sha256": hashlib.sha256(deploy.proxy_fragment(old_html)).hexdigest()}}
+            if maintenance is not None:
+                request["maintenance"] = maintenance
             if stage_only:
                 request["stage_only"] = True
                 del request["backup_sha256"]
@@ -297,8 +299,8 @@ class DeploymentContracts(unittest.TestCase):
             with mock.patch.object(deploy, "Path", side_effect=mapped_path), mock.patch.object(deploy, "MANAGED_DROPIN", managed), \
                  mock.patch("builtins.open", side_effect=local_open), mock.patch.object(deploy, "snapshot", side_effect=snapshot), \
                  mock.patch.object(deploy, "run", side_effect=run), mock.patch.object(deploy, "stage", side_effect=stage), \
-                 mock.patch.object(deploy, "checks", side_effect=checks), mock.patch.object(deploy, "health"), \
-                 mock.patch.object(deploy, "request", return_value=(200, old_html)), \
+                 mock.patch.object(deploy, "checks", side_effect=checks), mock.patch.object(deploy, "health") as health, \
+                 mock.patch.object(deploy, "request", return_value=(200, old_html)) as http, \
                  mock.patch.object(deploy, "current_sha", side_effect=lambda **_: snapshot()["live_sha256"]), \
                  mock.patch.object(deploy.shutil, "disk_usage", return_value=SimpleNamespace(free=1_000_000_000)):
                 exit_code = deploy.apply(request_path)
@@ -319,6 +321,10 @@ class DeploymentContracts(unittest.TestCase):
                 else:
                     self.assertEqual(receipt["running_sha256"], before["live_sha256"])
             elif public_failure:
+                self.assertEqual(health.call_args.kwargs["maintenance"], maintenance)
+                self.assertIn("deadline", health.call_args.kwargs)
+                self.assertEqual(http.call_args.kwargs["maintenance"], maintenance)
+                self.assertLessEqual(http.call_args.kwargs["timeout"], 10)
                 self.assertEqual(exit_code, 1)
                 self.assertEqual(receipt["status"], "rolled_back")
                 self.assertTrue(receipt["rollback_runtime_fingerprint_verified"])
@@ -355,6 +361,320 @@ class DeploymentContracts(unittest.TestCase):
 
     def test_failed_next_deployment_restores_exact_previous_dropin(self):
         self.simulate_switch(had_managed_unit=True, public_failure=True)
+
+
+class MaintenanceProbeContracts(unittest.TestCase):
+    asset_fixture = DeploymentContracts.asset_fixture
+    simulate_switch = DeploymentContracts.simulate_switch
+    ORIGIN = "https://example.test"
+    TOKEN = "0123456789abcdef" * 4
+    FRAGMENT = ('<section id="pricing">price</section><footer><nav aria-label="网站政策">'
+                '<a href="/legal/privacy">p</a><a href="/legal/terms">t</a>'
+                '<a href="/legal/refund">r</a></nav></footer>').encode()
+
+    @staticmethod
+    def owned(metadata):
+        # CI is unprivileged; only ownership is simulated, not type/mode/content.
+        fields = list(metadata)
+        fields[4] = 0
+        return os.stat_result(fields)
+
+    def setUp(self):
+        DeploymentContracts.setUp(self)
+        previous_umask = os.umask(0o077)
+        self.addCleanup(os.umask, previous_umask)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.token_file = self.root / "maintenance-token"
+        self.token_file.write_bytes((self.TOKEN + "\n").encode())
+        self.token_file.chmod(0o600)
+        self.maintenance = {"origin": self.ORIGIN, "token_file": str(self.token_file),
+                            "token_sha256": deploy.sha(self.token_file)}
+        original_fstat = os.fstat
+        patcher = mock.patch.object(deploy.os, "fstat", side_effect=lambda fd: self.owned(original_fstat(fd)))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_token_requires_root_owned_regular_0600_without_symlink(self):
+        self.assertEqual(deploy.maintenance_token(self.ORIGIN, self.maintenance), self.TOKEN)
+        for mode in (0o400, 0o640, 0o644, 0o1600):
+            self.token_file.chmod(mode)
+            with self.subTest(mode=oct(mode)), self.assertRaisesRegex(RuntimeError, "maintenance_token_private_file"):
+                deploy.read_maintenance_token(str(self.token_file))
+        self.token_file.chmod(0o600)
+        fields = list(self.token_file.stat())
+        fields[4] = 1000
+        with mock.patch.object(deploy.os, "fstat", return_value=os.stat_result(fields)), \
+             self.assertRaisesRegex(RuntimeError, "maintenance_token_private_file"):
+            deploy.read_maintenance_token(str(self.token_file))
+        alias = self.root / "alias"
+        alias.symlink_to(self.token_file)
+        with self.assertRaisesRegex(RuntimeError, "maintenance_token_unavailable"):
+            deploy.read_maintenance_token(str(alias))
+        fifo = self.root / "fifo"
+        os.mkfifo(fifo, 0o600)
+        with self.assertRaisesRegex(RuntimeError, "maintenance_token_private_file"):
+            deploy.read_maintenance_token(str(fifo))
+        with self.assertRaisesRegex(RuntimeError, "maintenance_token_absolute_path"):
+            deploy.read_maintenance_token("relative-token")
+
+    def test_token_format_is_bounded_and_pinned(self):
+        for body in (self.TOKEN.encode(), (self.TOKEN + "\n").encode()):
+            self.token_file.write_bytes(body)
+            self.assertEqual(deploy.read_maintenance_token(str(self.token_file)), body)
+        for body in (b"", b"a" * 63, b"a" * 66, b"a" * 1_000_000, self.TOKEN.upper().encode(),
+                     (self.TOKEN + "\r\nX-Other: injected").encode(), (self.TOKEN + "\n\n").encode()):
+            self.token_file.write_bytes(body)
+            with self.subTest(length=len(body)), self.assertRaisesRegex(RuntimeError, "maintenance_token_format"):
+                deploy.read_maintenance_token(str(self.token_file))
+        self.token_file.write_bytes(b"f" * 64)
+        with self.assertRaisesRegex(RuntimeError, "maintenance_token_changed"):
+            deploy.maintenance_token(self.ORIGIN, self.maintenance)
+
+    def test_header_is_scoped_to_exact_configured_https_origin_and_origin_form_path(self):
+        with mock.patch.object(deploy.http.client, "HTTPSConnection") as https, \
+             mock.patch.object(deploy.http.client, "HTTPConnection") as http:
+            for base in ("https://other.test", "http://example.test", "https://example.test:444",
+                         "https://example.test/path", "https://user@example.test", "https://example.test.evil"):
+                with self.subTest(base=base), self.assertRaisesRegex(RuntimeError, "maintenance_public_origin"):
+                    deploy.request(base, "/", maintenance=self.maintenance)
+            for path in ("https://other.test/", "//other.test/", "/\r\nX-Other: injected"):
+                with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, "maintenance_probe_path"):
+                    deploy.request(self.ORIGIN, path, maintenance=self.maintenance)
+            with self.assertRaisesRegex(RuntimeError, "maintenance_probe_path"):
+                deploy.request(self.ORIGIN, "/", payload={"write": True}, maintenance=self.maintenance)
+        https.assert_not_called()
+        http.assert_not_called()
+
+    def test_redirect_response_is_not_followed_and_default_requests_have_no_token(self):
+        connection = mock.Mock()
+        response = connection.getresponse.return_value
+        response.status = 302
+        response.read.return_value = b"redirect"
+        response.getheaders.return_value = [("Location", "https://other.test/steal")]
+        with mock.patch.object(deploy.http.client, "HTTPSConnection", return_value=connection) as https:
+            status, body, headers = deploy.request(self.ORIGIN, "/account/admin", include_headers=True,
+                                                  maintenance=self.maintenance)
+            self.assertEqual((status, body, headers["location"]), (302, b"redirect", "https://other.test/steal"))
+            https.assert_called_once_with("example.test", None, timeout=12)
+            connection.request.assert_called_once_with("GET", "/account/admin", body=None,
+                headers={"Content-Type": "application/json", "Cache-Control": "no-cache",
+                         "Accept-Encoding": "identity", deploy.MAINTENANCE_HEADER: self.TOKEN})
+            response.read.assert_called_once_with(8_388_609)
+            connection.close.assert_called_once()
+            connection.reset_mock()
+            deploy.request(self.ORIGIN, "/")
+            self.assertNotIn(deploy.MAINTENANCE_HEADER, connection.request.call_args.kwargs["headers"])
+
+    def test_download_transport_never_inherits_maintenance_header(self):
+        # A prior probe must not modify urllib's independent download transport.
+        connection = mock.Mock()
+        connection.getresponse.return_value.read.return_value = b"ok"
+        with mock.patch.object(deploy.http.client, "HTTPSConnection", return_value=connection):
+            deploy.request(self.ORIGIN, "/healthz", maintenance=self.maintenance)
+        for url in ("https://api.github.com/repos/LIghtJUNction/ssmcp/releases/tags/" + TAG,
+                    URL, "https://raw.githubusercontent.com/LIghtJUNction/ssmcp/" + COMMIT + "/src/code_mode.js"):
+            response = mock.MagicMock()
+            response.__enter__.return_value = response
+            response.read.side_effect = [b"fixture", b""]
+            with self.subTest(url=url), mock.patch.object(deploy.urllib.request, "urlopen", return_value=response) as opener:
+                self.assertEqual(deploy.fetch(url, 1024), b"fixture")
+            sent = opener.call_args.args[0]
+            self.assertEqual(sent.full_url, url)
+            self.assertNotIn(deploy.MAINTENANCE_HEADER.lower(), {key.lower() for key, _ in sent.header_items()})
+            self.assertNotIn(self.TOKEN, repr(sent.header_items()))
+            self.assertEqual(opener.call_args.kwargs["timeout"], 30)
+
+    def public_fixture(self):
+        request, direct = self.asset_fixture()
+        with mock.patch.object(deploy, "health"), mock.patch.object(deploy, "request", side_effect=direct):
+            deploy.checks("http://127.0.0.1:8080", request)
+        request.update(maintenance=self.maintenance, assets_frozen=True)
+        observed = []
+
+        def public(base, path, **options):
+            self.assertEqual(base, self.ORIGIN)
+            self.assertEqual(options.get("maintenance"), self.maintenance)
+            observed.append(path)
+            if path == "/healthz":
+                self.assertLessEqual(options["timeout"], 3)
+                return 200, b"ok"
+            if path == "/":
+                status, html = direct(base, path)
+                return status, html.replace(b"</body>", self.FRAGMENT + b"</body>")
+            if path in deploy.LEGAL_PATHS:
+                return 200, ("policy " + path).encode()
+            return direct(base, path, **options)
+        return request, direct, public, observed
+
+    def test_baseline_all_public_checks_and_health_use_token_but_direct_checks_do_not(self):
+        request, direct, public, observed = self.public_fixture()
+        with mock.patch.object(deploy, "request", side_effect=public):
+            request["public_baseline"] = deploy.public_baseline(self.ORIGIN, maintenance=self.maintenance)
+            result = deploy.checks(self.ORIGIN, request, public=True)
+        self.assertTrue(result["proxy_pricing_policy_preserved"])
+        self.assertTrue(result["mcp_rejects_unauthenticated"])
+        self.assertTrue(result["admin_rejects_unauthenticated"])
+        self.assertTrue(set(deploy.LEGAL_PATHS) | {"/", "/healthz", "/mcp", "/account/admin",
+            "/.well-known/oauth-authorization-server"} <= set(observed))
+        self.assertEqual(len([path for path in observed if path.startswith("/account/assets/")]), len(request["assets"]))
+        with mock.patch.object(deploy, "health") as health, mock.patch.object(deploy, "request", side_effect=direct) as http:
+            deploy.checks("http://127.0.0.1:8080", request)
+        self.assertIsNone(health.call_args.kwargs["maintenance"])
+        self.assertTrue(all(call.kwargs["maintenance"] is None for call in http.call_args_list))
+        self.assertNotIn(self.TOKEN, json.dumps(result))
+
+    def test_maintenance_keeps_public_integrity_and_authentication_assertions(self):
+        failures = [("/", "public_pricing_policy_changed"), ("/legal/privacy", "legal_page_changed"),
+                    ("/mcp", "mcp_rejects_unauthenticated"), ("/account/admin", "admin_rejects_unauthenticated")]
+        for changed_path, failure in failures:
+            request, _, public, _ = self.public_fixture()
+            with mock.patch.object(deploy, "request", side_effect=public):
+                request["public_baseline"] = deploy.public_baseline(self.ORIGIN, maintenance=self.maintenance)
+
+            def changed(base, path, **options):
+                status, body, *headers = public(base, path, **options)
+                if path == changed_path:
+                    status, body = 200, body.replace(b"price", b"WRONG") if path == "/" else b"changed"
+                return (status, body, *headers)
+
+            with self.subTest(path=changed_path), mock.patch.object(deploy, "request", side_effect=changed), \
+                 self.assertRaisesRegex(RuntimeError, failure):
+                deploy.checks(self.ORIGIN, request, public=True)
+
+    def test_maintenance_failure_keeps_original_rollback_and_deadlines(self):
+        for managed in (False, True):
+            with self.subTest(had_managed_unit=managed):
+                self.simulate_switch(had_managed_unit=managed, public_failure=True, maintenance=self.maintenance)
+
+    def test_private_binding_is_not_in_public_receipt(self):
+        receipt = deploy.public_receipt({"status": "failed", "maintenance": self.maintenance,
+                                        "maintenance_token": self.TOKEN})
+        self.assertEqual(receipt, {"status": "failed"})
+
+    def run_main(self, argv, **patches):
+        original_stat = Path.stat
+        with mock.patch.object(deploy, "BASE", self.root / "deployments"), \
+             mock.patch.object(deploy.sys, "argv", [deploy.__file__, *argv]), \
+             mock.patch.object(deploy.os, "geteuid", return_value=0), \
+             mock.patch.object(deploy.os, "umask"), \
+             mock.patch.object(Path, "stat", autospec=True,
+                               side_effect=lambda path, **kw: self.owned(original_stat(path, **kw))), \
+             mock.patch.object(deploy, "configure_target", return_value=self.ORIGIN), \
+             mock.patch("sys.stdout", new_callable=io.StringIO) as output, \
+             mock.patch.multiple(deploy, **patches):
+            result = deploy.main()
+        return result, output.getvalue()
+
+    def test_worker_forwarding_resume_and_binding_never_put_token_in_arguments(self):
+        argv = ["--tag", TAG, "--commit", COMMIT, "--run-id", "123-1",
+                "--maintenance-token-file", str(self.token_file)]
+        folder = self.root / "deployments" / "123-1"
+
+        def launched(command):
+            self.assertEqual(command[-2:], ["--maintenance-token-file", str(self.token_file)])
+            self.assertNotIn(self.TOKEN, " ".join(command))
+            self.assertIn("--property=RuntimeMaxSec=900s", command)
+            self.assertIn("--property=TimeoutStopSec=120s", command)
+            deploy.save(folder / "receipt.json", {"completed": True, "status": "deployed"})
+
+        launch = mock.Mock(side_effect=launched)
+        result, output = self.run_main(argv, run=launch)
+        self.assertEqual(result, 0)
+        launch.assert_called_once()
+        self.assertEqual(json.loads((folder / "intent.json").read_text())["maintenance"], self.maintenance)
+        self.assertEqual((folder / "intent.json").stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(self.TOKEN, (folder / "intent.json").read_text())
+        self.assertNotIn(str(self.token_file), output)
+        resume = mock.Mock(side_effect=AssertionError("resume launched a second deployment"))
+        self.assertEqual(self.run_main(argv, run=resume)[0], 0)
+        worker = mock.Mock(return_value=7)
+        self.assertEqual(self.run_main(["--worker", *argv], worker=worker)[0], 7)
+        self.assertEqual(worker.call_args.args[0]["maintenance"], self.maintenance)
+        self.token_file.write_bytes(b"f" * 64)
+        with self.assertRaisesRegex(RuntimeError, "request_identity_conflict"):
+            self.run_main(argv, run=resume)
+        with self.assertRaisesRegex(RuntimeError, "owned_worker_request"):
+            self.run_main(["--worker", *argv], worker=worker)
+        self.assertEqual(worker.call_count, 1)
+
+    def test_normal_cli_intent_and_worker_arguments_remain_unextended(self):
+        argv = ["--tag", TAG, "--commit", COMMIT, "--run-id", "123-1"]
+        folder = self.root / "deployments" / "123-1"
+
+        def launched(command):
+            self.assertNotIn("--maintenance-token-file", command)
+            deploy.save(folder / "receipt.json", {"completed": True, "status": "deployed"})
+
+        self.assertEqual(self.run_main(argv, run=mock.Mock(side_effect=launched))[0], 0)
+        self.assertEqual(json.loads((folder / "intent.json").read_text()),
+                         {"tag": TAG, "commit": COMMIT, "run_id": "123-1"})
+
+    def test_status_does_not_accept_maintenance_credentials(self):
+        with self.assertRaisesRegex(RuntimeError, "status_has_no_arguments"):
+            self.run_main(["--status", "--maintenance-token-file", str(self.token_file)],
+                          snapshot=mock.Mock(side_effect=AssertionError("invalid status reached snapshot")))
+
+    def test_prepare_persists_private_binding_and_scopes_baseline_only(self):
+        release, manifest = DeploymentContracts.release(self)
+        raw = json.dumps(manifest).encode()
+        manifest_url = "https://github.com/" + deploy.REPOSITORY + "/releases/download/" + TAG + "/release-manifest.json"
+        release["assets"].append({"name": "release-manifest.json", "browser_download_url": manifest_url})
+        runner = b"fixture runner"
+        fetched = []
+
+        def fetch(url, maximum, destination=None):
+            fetched.append(url)
+            if destination is not None:
+                self.assertEqual(url, URL)
+                destination.write_bytes(b"fixture archive")
+                return destination.stat().st_size
+            if url == manifest_url:
+                return raw
+            if url.startswith("https://api.github.com/"):
+                return json.dumps(release).encode()
+            if url.endswith("/src/code_mode.js"):
+                return runner
+            self.assertTrue(url.startswith("https://raw.githubusercontent.com/"))
+            return b"fixture asset"
+
+        def extract(_archive, folder, _record):
+            (folder / "candidate").write_bytes(b"fixture binary")
+            (folder / "runner.js").write_bytes(runner)
+
+        intent = {"tag": TAG, "commit": COMMIT, "run_id": "123-1", "maintenance": self.maintenance}
+        before = {"exe": "/synthetic/ssmcpd", "live_sha256": "d" * 64, "prestart_commands": []}
+        with mock.patch.object(deploy, "configure_target", return_value=self.ORIGIN), \
+             mock.patch.object(deploy, "fetch", side_effect=fetch), \
+             mock.patch.object(deploy, "extract_runtime", side_effect=extract), \
+             mock.patch.object(deploy, "run", return_value="ssmcpd " + TAG[1:]), \
+             mock.patch.object(deploy, "snapshot", return_value=before), \
+             mock.patch.object(deploy, "MANAGED_DROPIN", self.root / "absent.conf"), \
+             mock.patch.object(deploy, "backup", side_effect=lambda _, stream: stream.write(b"checkpoint")), \
+             mock.patch.object(deploy, "verify_checkpoint") as checkpoint, \
+             mock.patch.object(deploy, "public_baseline", return_value={"fixture": True}) as baseline, \
+             mock.patch.object(deploy.platform, "machine", return_value="x86_64"):
+            prepared = deploy.prepare(intent, self.root)
+        checkpoint.assert_called_once_with(self.root / "backup.tar", before)
+        baseline.assert_called_once_with(self.ORIGIN, maintenance=self.maintenance)
+        saved = self.root / "request.json"
+        self.assertEqual(json.loads(saved.read_text())["maintenance"], self.maintenance)
+        self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(prepared["public_baseline"], {"fixture": True})
+        self.assertNotIn(self.TOKEN, saved.read_text())
+        self.assertEqual(len(fetched), 4 + len(deploy.CORE_ASSET_NAMES))
+
+    def test_prepare_rejects_changed_origin_or_token_before_download(self):
+        intent = {"tag": TAG, "commit": COMMIT, "run_id": "123-1", "maintenance": self.maintenance}
+        for changed in ("origin", "token"):
+            if changed == "token":
+                self.token_file.write_bytes(b"f" * 64)
+            origin = "https://other.test" if changed == "origin" else self.ORIGIN
+            with self.subTest(changed=changed), mock.patch.object(deploy, "configure_target", return_value=origin), \
+                 mock.patch.object(deploy, "fetch") as fetch, self.assertRaisesRegex(RuntimeError, "maintenance_"):
+                deploy.prepare(intent, self.root)
+            fetch.assert_not_called()
 
 
 

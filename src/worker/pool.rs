@@ -195,11 +195,13 @@ impl Pool {
         command_id: &str,
         command: &str,
     ) -> Result<Option<CommandLog>, String> {
+        #[cfg(target_os = "linux")]
         let remote = match &self.execution {
             Execution::Remote(remote) => remote,
-            #[cfg(target_os = "linux")]
             Execution::Local(_) => return Ok(None),
         };
+        #[cfg(not(target_os = "linux"))]
+        let Execution::Remote(remote) = &self.execution;
         let actor = actor(source)?;
         remote.command_started(&self.queue, &actor, command_id, command, now_ms())
     }
