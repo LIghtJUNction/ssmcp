@@ -580,6 +580,14 @@ impl State {
     }
 
     pub(super) fn chat_help_rows(&mut self, height: u16) -> Vec<String> {
+        if self.conversation.plugin_help {
+            let lines = markdown::rows(
+                crate::client::interface::plugins::HELP,
+                self.geometry.left,
+                &self.ui,
+            );
+            return self.chat_help_page(lines, height);
+        }
         if self.conversation.about {
             let text = format!(
                 "# About {}\n\nVersion: {}\n\n{}\n\nLicense: {}\nProject: {}\n\n/help: keyboard shortcuts and local commands.\n\nUp/Down, PgUp/PgDn, Home/End: scroll. Esc or F1: close.\n",

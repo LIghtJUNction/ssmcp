@@ -245,6 +245,14 @@ def main():
             raise AssertionError(label)
         checks.append(label)
 
+    version_result = subprocess.run(
+        [str(binary), "--version"], check=True, capture_output=True, text=True, timeout=10,
+    )
+    version_line = version_result.stdout.strip()
+    check(re.fullmatch(r"ssmcp [^\s]+", version_line) is not None,
+          "candidate --version supplies one explicit version for the UI assertions")
+    candidate_version = version_line.split(" ", 1)[1]
+
     with tempfile.TemporaryDirectory(prefix="ssmcp-ui-smoke-") as temp:
         config = Path(temp) / "config.toml"
         subprocess.run([str(binary), "ui", "init", "--ui-config", str(config)], check=True,
@@ -601,6 +609,96 @@ def main():
             check(True, "F1 exposes the full scrollable command help")
             preview.send(b"\x1b")
             preview.until(lambda s: "ssmcp help" not in text(s), "help closed")
+
+            slash(preview, "/version")
+            version = preview.until(
+                lambda s: version_line in s["rows"][-1] and empty_composer_ready(s),
+                "slash version notice matching the candidate binary",
+            )
+            check("About ssmcp" not in text(version) and "ssmcp help" not in text(version),
+                  "/version shows the candidate version as a notice and clears only its command")
+            save_shot(args.out, "slash-version", version)
+
+            slash(preview, "/about")
+            about = preview.until(lambda s: "About ssmcp" in text(s)
+                                  and f"Version: {candidate_version}" in text(s),
+                                  "independent About page")
+            about_text = " ".join(" ".join(left_rows(about)).split())
+            check("License: MIT" in about_text
+                  and "Project: https://github.com/LIghtJUNction/ssmcp" in about_text
+                  and "Connect local tools and remote terminals" in about_text
+                  and "authenticated MCP sessions" in about_text
+                  and "/help" in about_text
+                  and "Write and send" not in about_text,
+                  "/about displays project information and the candidate version, independently of help")
+            save_shot(args.out, "slash-about", about)
+            preview.send(b"\x1b")
+            preview.until(lambda s: "About ssmcp" not in text(s) and empty_composer_ready(s),
+                          "Escape closing About without changing the composer")
+            check(True, "Escape closes the About page and restores the empty composer")
+            preview.send(b"\x1bOP")
+            about_help = preview.until(lambda s: "ssmcp help" in text(s)
+                                      and "Write and send" in text(s)
+                                      and "About ssmcp" not in text(s),
+                                      "normal help after closing About")
+            save_shot(args.out, "about-return-help", about_help)
+            check(True, "F1 after About opens the complete command help rather than the About page")
+            preview.send(b"\x1b")
+            preview.until(lambda s: "ssmcp help" not in text(s) and empty_composer_ready(s),
+                          "command help closed after About")
+
+            slash(preview, "/plugin help")
+            plugin_help = preview.until(
+                lambda s: "Native plugins" in text(s)
+                and all(command in " ".join(" ".join(left_rows(s)).split()) for command in (
+                    "/plugin list", "/plugin load NAME PATH", "/plugin unload NAME", "/plugin help",
+                )),
+                "native plugin help commands",
+            )
+            save_shot(args.out, "plugin-help-start", plugin_help)
+            preview.send(b"\x1b[F")
+            plugin_end = preview.until(
+                lambda s: "ssmcp tools" in text(s)
+                and "process exits" in " ".join(" ".join(left_rows(s)).split()),
+                "native plugin help safety and lifetime details",
+            )
+            plugin_text = " ".join(" ".join(left_rows(plugin_help) + left_rows(plugin_end)).split())
+            check(all(part in plugin_text for part in (
+                "List plugins in this client",
+                "List plugins and their current state",
+                "Load one trusted local shared library",
+                "Disable its tools and request its worker to stop",
+                "Show this help",
+                "Quote a path containing spaces",
+                "Backslashes remain literal",
+                "environment-variable or home-directory expansion",
+                "Relative paths use this client's workspace",
+                "Loading runs native code with this client's privileges",
+                "No package is downloaded or installed",
+                "Unload does not delete the file or forcibly stop a native call",
+                "loaded library images remain resident until this client process exits",
+                "not the JavaScript sources managed by ssmcp tools",
+            )), "/plugin help exposes all local operations, literal path rules, trust and unload limits")
+            save_shot(args.out, "plugin-help-end", plugin_end)
+            preview.send(b"\x1bOP")
+            preview.until(lambda s: "Native plugins" not in text(s) and empty_composer_ready(s),
+                          "F1 closing plugin help")
+            check(True, "F1 closes plugin help and restores the empty composer")
+
+            slash(preview, "/plugin list")
+            plugin_rejected = preview.until(
+                lambda s: "Preview does not manage native plugins; use /plugin help" in text(s)
+                and "/plugin list" in prompt_text(s),
+                "preview rejecting native plugin management without consuming its draft",
+            )
+            check(preview.process.poll() is None and not plugin_rejected["hide_cursor"]
+                  and column(plugin_rejected) == ("conversation", 2, 8)
+                  and "To Builder" in text(plugin_rejected)
+                  and "❯ /plugin list" in prompt_text(plugin_rejected)
+                  and "Native plugins" not in body_text(plugin_rejected),
+                  "preview /plugin list stays local, retains its full draft and recipient, and never opens a plugin result")
+            save_shot(args.out, "plugin-preview-rejected", plugin_rejected)
+            clear_draft(preview)
             preview.send(b"\x1bOS\x1b[19~")
             preview.until(lambda s: "Appearance saved" in text(s), "saved appearance")
             check('theme = "codex-dark"' in config.read_text(encoding="utf-8"), "F4 cycles Dark to Codex Dark and F8 persists it")

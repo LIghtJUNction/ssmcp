@@ -195,6 +195,7 @@ pub(super) struct Conversation {
     question_fixture: Option<Vec<crate::client::interface::questions::QuestionView>>,
     help_scroll: usize,
     about: bool,
+    plugin_help: bool,
     openai_panel: Option<openai::Panel>,
     sessions: Vec<crate::client::interface::history::SessionSummary>,
     pub(super) history_list_stale: bool,
@@ -730,6 +731,24 @@ impl State {
             "/openai" | "/openai-session" | "/openai-subject" | "/chatgpt" | "/plugin-docs" => {
                 self.chat_openai_command(command, rest)?;
                 self.conversation.about = false;
+                self.conversation.plugin_help = false;
+            }
+            "/plugin" => {
+                if matches!(rest, "help" | "-h" | "--help") {
+                    self.conversation.openai_panel = None;
+                    self.conversation.about = false;
+                    self.conversation.plugin_help = true;
+                    self.conversation.help_scroll = 0;
+                    self.help = true;
+                    self.conversation.content_focus = true;
+                    self.notice = None;
+                } else {
+                    if self.preview {
+                        return Err("Preview does not manage native plugins; use /plugin help".into());
+                    }
+                    crate::client::interface::plugins::submit(rest)?;
+                    self.notice = Some("Plugin command started · results appear here".into());
+                }
             }
             "/version" => {
                 if !rest.is_empty() {
@@ -747,6 +766,7 @@ impl State {
                 }
                 self.conversation.openai_panel = None;
                 self.conversation.about = true;
+                self.conversation.plugin_help = false;
                 self.conversation.help_scroll = 0;
                 self.help = true;
                 self.conversation.content_focus = true;
@@ -754,6 +774,7 @@ impl State {
             }
             "/help" => {
                 self.conversation.about = false;
+                self.conversation.plugin_help = false;
                 self.conversation.openai_panel = None;
                 self.conversation.help_scroll = 0;
                 self.help = true;
@@ -1714,6 +1735,7 @@ impl State {
         match key {
             Key::Help => {
                 self.conversation.about = false;
+                self.conversation.plugin_help = false;
                 self.conversation.openai_panel = None;
                 self.conversation.help_scroll = 0;
                 self.help = !self.help;
@@ -1984,6 +2006,7 @@ impl State {
         if self.help {
             self.help = false;
             self.conversation.about = false;
+            self.conversation.plugin_help = false;
             self.conversation.openai_panel = None;
             self.conversation.content_focus = false;
             self.notice = None;
@@ -2241,6 +2264,7 @@ impl State {
             }
             '?' if self.conversation.composer.is_empty() && !self.conversation.content_focus => {
                 self.conversation.about = false;
+                self.conversation.plugin_help = false;
                 self.conversation.openai_panel = None;
                 self.help = !self.help;
             }
@@ -3024,6 +3048,7 @@ impl State {
             body = self.chat_help_rows(height);
         } else {
             self.conversation.about = false;
+            self.conversation.plugin_help = false;
             self.conversation.openai_panel = None;
         }
         body.resize_with(usize::from(height), || {
@@ -5314,7 +5339,7 @@ mod tests {
 
     #[test]
     fn information_commands_remain_literal_while_editing_a_queued_request() {
-        for command in ["/version", "/about"] {
+        for command in ["/version", "/about", "/plugin unload demo"] {
             let mut state = preview(36, 120);
             state.conversation.composer.set_text(command);
             state.conversation.editing = Some("request-being-edited".into());

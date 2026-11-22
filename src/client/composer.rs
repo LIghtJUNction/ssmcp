@@ -108,6 +108,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Saved ChatGPT conversation URL: set <URL>, open, copy, clear",
     },
     SlashCommand {
+        name: "/plugin",
+        description: "Manage local native plugins: list, load, unload or help",
+    },
+    SlashCommand {
         name: "/plugin-docs",
         description: "Open the official OpenAI Plugins reference in your browser",
     },
@@ -1290,6 +1294,8 @@ mod tests {
         assert_eq!(rendered.lines.len(), 4);
         assert!(rendered.lines[1].contains("/reload"));
         assert_eq!(rendered.cursor_col, 5);
+        draft.set_text("/plugin");
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/plugin");
         for (prefix, command) in [("/ver", "/version"), ("/abo", "/about")] {
             draft.set_text(prefix);
             let suggestions = draft.suggestions();
