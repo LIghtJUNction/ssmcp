@@ -389,7 +389,7 @@ async fn bundle_owned(workspace: &Path) -> Result<Value, String> {
 }
 
 /// Explicit read-only official default: fixed Git objects, never the relay's RC.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 pub(crate) async fn official_seed() -> Result<Bundle, String> {
     static SOURCE: tokio::sync::OnceCell<Source> = tokio::sync::OnceCell::const_new();
     let source = SOURCE
