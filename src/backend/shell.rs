@@ -1,4 +1,9 @@
 //! Independent command jobs with bounded live output retained only in memory.
+#[cfg(all(test, target_os = "linux"))]
+mod artifact_tests;
+#[cfg(target_os = "linux")]
+mod artifacts;
+
 use super::{events::EventLog, process::Managed};
 use crate::output::{Capture, OutputStore};
 use crate::runtime::time::ExecutionTiming;
@@ -159,6 +164,8 @@ struct Job {
     observation: Mutex<Option<crate::observer::Lease>>,
     output_mode: &'static str,
     tty_slot: Option<usize>,
+    #[cfg(target_os = "linux")]
+    artifacts: Option<Mutex<artifacts::Artifacts>>,
 }
 impl Job {
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -181,6 +188,37 @@ impl Job {
     fn snapshot(&self) -> Value {
         self.snapshot_locked(&self.state())
     }
+    fn add_artifact_result(&self, result: &mut Value, caller: &crate::runtime::call_scope::Source) {
+        #[cfg(target_os = "linux")]
+        if let Some(artifacts) = &self.artifacts
+            && same_artifact_owner(&self.creator, caller)
+        {
+            result["artifacts"] = artifacts.lock().unwrap_or_else(|e| e.into_inner()).sample();
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (result, caller);
+    }
+
+    async fn result_snapshot(
+        self: &Arc<Self>,
+        caller: crate::runtime::call_scope::Source,
+    ) -> Result<Value, String> {
+        #[cfg(target_os = "linux")]
+        if self.artifacts.is_some() && same_artifact_owner(&self.creator, &caller) {
+            let job = self.clone();
+            return tokio::task::spawn_blocking(move || {
+                let mut result = job.snapshot();
+                job.add_artifact_result(&mut result, &caller);
+                result
+            })
+            .await
+            .map_err(|err| format!("could not sample task artifacts: {err}"));
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = caller;
+        Ok(self.snapshot())
+    }
+
     fn input_snapshot(&self, state: &State) -> Value {
         json!({"mode":self.input_mode.label(),"open":state.stdin_open,
             "bytes_written":state.stdin_written})
@@ -203,6 +241,21 @@ impl Job {
             "closed":!state.stdin_open,"stdin":self.input_snapshot(&state)})
     }
 }
+#[cfg(target_os = "linux")]
+fn same_artifact_owner(
+    owner: &crate::runtime::call_scope::Source,
+    caller: &crate::runtime::call_scope::Source,
+) -> bool {
+    let (Some(owner), Some(caller)) = (&owner.call, &caller.call) else {
+        return false;
+    };
+    owner.thread().is_some()
+        && owner.thread() == caller.thread()
+        && owner.connection() == caller.connection()
+        && matches!((owner.attribution(), caller.attribution()), (Some(a), Some(b))
+            if a.account.subject == b.account.subject && a.account.provider == b.account.provider)
+}
+
 #[derive(Default)]
 struct Registry {
     jobs: HashMap<String, Arc<Job>>,
@@ -271,6 +324,7 @@ impl Shell {
                     "title":{"type":"string","minLength":1,"maxLength":MAX_TITLE_CHARS,"description":"Optional display-only purpose, such as Check deployment status. At most 160 Unicode characters; surrounding whitespace is trimmed, blank titles and control or line-separator characters are rejected. Does not change argv, cwd, permissions or job identity."},
                     "cwd":{"type":"string","description":"Existing directory inside the authorized workspace; relative paths and the default resolve from that workspace."},
                     "env":{"type":"object","additionalProperties":{"type":"string"}},
+                    "artifact_budget_bytes":{"type":"integer","minimum":1,"description":"Linux opt-in for a verified Agent. Create a private job artifact directory and point this command's TMPDIR and SSMCP_ARTIFACT_DIR at it. The logical-byte budget is advisory."},
                     "stdin":{"enum":["null","pipe"],"type":"string","default":"null","description":"null delivers EOF immediately; pipe enables bounded exec.write input and explicit close_stdin."},
                     "timeout_ms":{"type":"integer","minimum":0,"maximum":MAX_TIMEOUT,"default":0,"description":"0 means no execution deadline. A nonzero deadline terminates the command."}}),
                 &["command"],
@@ -365,7 +419,7 @@ impl Shell {
             }
             "ssmcp.exec.status" => {
                 let args: Id = parse(args)?;
-                Ok(self.job(&args.job_id)?.snapshot())
+                self.job(&args.job_id)?.result_snapshot(creator).await
             }
             "ssmcp.exec.wait" => {
                 let args: Wait = parse(args)?;
@@ -390,13 +444,14 @@ impl Shell {
                     let state = job.state();
                     let (out, on, ot) = state.stdout.read(args.stdout_cursor, args.max_bytes)?;
                     let (err, en, et) = state.stderr.read(args.stderr_cursor, args.max_bytes)?;
-                    Ok(
-                        json!({"job_id":job.id,"snapshot":job.snapshot_locked(&state),"running":state.running,
+                    let mut result = json!({"job_id":job.id,"snapshot":job.snapshot_locked(&state),"running":state.running,
                         "exit_code":state.exit_code,"stdout":String::from_utf8_lossy(&out),"stderr":String::from_utf8_lossy(&err),
                         "stdout_base64":STANDARD.encode(&out),"stderr_base64":STANDARD.encode(&err),
                         "stdout_cursor":on,"stderr_cursor":en,"stdout_truncated":ot,"stderr_truncated":et,
-                        "stdout_eof":state.stdout.eof && on==state.stdout.end,"stderr_eof":state.stderr.eof && en==state.stderr.end}),
-                    )
+                        "stdout_eof":state.stdout.eof && on==state.stdout.end,"stderr_eof":state.stderr.eof && en==state.stderr.end});
+                    drop(state);
+                    job.add_artifact_result(&mut result["snapshot"], &creator);
+                    Ok(result)
                 })
                 .await
                 .map_err(|error| format!("could not read command output: {error}"))?
@@ -548,6 +603,7 @@ impl Shell {
             title: Option<String>,
             cwd: Option<PathBuf>,
             env: Option<HashMap<String, String>>,
+            artifact_budget_bytes: Option<u64>,
             #[serde(default)]
             stdin: InputMode,
             #[serde(default)]
@@ -555,6 +611,22 @@ impl Shell {
         }
         let args: Start = parse(args)?;
         let title = job_title(args.title)?;
+        if let Some(budget) = args.artifact_budget_bytes {
+            if budget == 0 {
+                return Err("artifact_budget_bytes must be positive".into());
+            }
+            if !cfg!(target_os = "linux") {
+                return Err("task artifact budgets are available on Linux".into());
+            }
+            if creator
+                .call
+                .as_ref()
+                .and_then(|scope| scope.thread())
+                .is_none()
+            {
+                return Err("task artifact budgets require a verified Agent thread".into());
+            }
+        }
         if args.command.is_empty()
             || args.command.len() > MAX_COMMAND_ARGS
             || args.command[0].is_empty()
@@ -657,6 +729,18 @@ impl Shell {
         if let Some(env) = args.env {
             command.envs(env);
         }
+        #[cfg(target_os = "linux")]
+        let artifacts = args
+            .artifact_budget_bytes
+            .map(|limit| artifacts::Artifacts::new(&self.root, &id, limit))
+            .transpose()
+            .map_err(|err| format!("could not prepare task artifact directory: {err}"))?;
+        #[cfg(target_os = "linux")]
+        if let Some(artifacts) = &artifacts {
+            command
+                .env("TMPDIR", &artifacts.path)
+                .env("SSMCP_ARTIFACT_DIR", &artifacts.path);
+        }
         let mut process =
             Managed::spawn(&mut command).map_err(|e| format!("could not start command: {e}"))?;
         let pid = process.child.id().ok_or("command has no process ID")?;
@@ -712,6 +796,8 @@ impl Shell {
             observation: Mutex::new(observation),
             output_mode,
             tty_slot,
+            #[cfg(target_os = "linux")]
+            artifacts: artifacts.map(Mutex::new),
         });
         // A failed spawn must leave the retained history untouched.
         if let Some(id) = &evicted {
@@ -795,6 +881,13 @@ impl Shell {
             events.push_scoped(snapshot, worker.creator.clone());
         });
         let mut result = job.snapshot();
+        #[cfg(target_os = "linux")]
+        if let Some(artifacts) = &job.artifacts {
+            result["artifacts"] = artifacts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .description();
+        }
         result["evicted_job_id"] = json!(evicted);
         Ok(result)
     }
@@ -1087,6 +1180,8 @@ mod tests {
             observation: Mutex::new(None),
             output_mode: "pipes",
             tty_slot: None,
+            #[cfg(target_os = "linux")]
+            artifacts: None,
         })
     }
 

@@ -57,6 +57,31 @@ return await fs.write(workspaceId, {
 
 原生 UTF-8 文件读写、技能摘要和 AGENTS.md 视图参见 [上下文与文本接口](context.md)。
 
+## 命令任务产物与软额度
+
+Linux 客户端上的已验证 Agent 可以给一次原生命令任务设置正整数 `artifact_budget_bytes`。一个 `exec.start` 对应一个独占目录。跨多条命令共享的构建缓存仍属于调用者管理的共享路径。
+
+```js
+const job = await exec.start(clientId, {
+  command: ["sh", "-c", 'cargo build --target-dir "$SSMCP_ARTIFACT_DIR/target"'],
+  artifact_budget_bytes: 512 * 1024 * 1024,
+});
+return { job_id: job.job_id, directory: job.artifacts.directory };
+```
+
+启动结果中的 `artifacts.directory` 相对于所选客户端的工作区。harness 可以用原有授权下的 `fs.writeText`、`fs.write` 等工具写入该目录。命令及其子进程得到指向同一目录的 `TMPDIR` 和 `SSMCP_ARTIFACT_DIR`，本次显式启用时这两个变量优先于 `env` 中的同名值。示例通过本次命令的 `--target-dir` 指定 Cargo 产物位置。省略额度时继续使用原有环境和启动行为。
+
+```js
+const status = await exec.status(clientId, jobId);
+return status.artifacts;
+```
+
+同一已验证 Agent 在原连接上调用 `exec.status` 或 `exec.read` 时，harness 合并短时间内的目录事件，并返回当前 `logical_bytes`、`soft_limit_bytes` 和 `incomplete`。在 `exec.read` 里这些字段位于 `snapshot.artifacts`，当前官方 `exec.run` 也会带回该读取结果。首次观察到用量超过额度时，该次结果携带一个 `notice`，列出至多三个最大的已计量文件，并提示只检查已经确认可重建的产物。文件名只是展示数据。观察到用量降至额度的 80% 或以下后，下一次超额可再次提醒。提醒随读取响应返回一次，传输中断时没有单独的确认或重发。其他 Agent 和共享任务列表不会收到这条提醒。
+
+- 额度是软提醒。命令继续运行，harness 不清理文件。目录可在命令退出后继续计量，直到任务被遗忘、从保留列表淘汰或连接关闭。目录仍留在磁盘上。
+- 计量的是专用目录中可确认的单链接普通文件的逻辑长度。稀疏文件、压缩、写时复制、reflink 和快照使它与 Btrfs 实际占用不同。目录项、符号链接、已知硬链接和跨挂载路径不计入。共享路径、外部服务以及不遵守目录变量的程序需要单独管理。这个目录基于现有工作区权限，具备相同系统账号权限的程序也能写入，归属按落盘位置判断。
+- Linux 需要 `openat2`、`inotify`、可用的 `/proc/self/fd` 和工作区写权限。每次采样最多读取 256 KiB 的事件，正常增量只复核变化路径。队列溢出或超过界限时将 `incomplete` 标为 `true`，仅对该任务目录重建账本，每次最多检查 8,192 个条目、深度 24。成功重建会恢复当前计量，历史缺口仍标记为 incomplete；无法重建时 `logical_bytes` 为 `null`。通知只反映读取时观察到的水位。两次采样间出现并消失的增量、Linux 不报告的修改（例如部分 mmap 写入或目录外硬链接别名的变化）可能不会被观测。
+
 ## 目录同步
 
 两端需要通过系统包管理器安装 `rsync`。ssmcp 使用系统 rsync 的协议和增量传输；协议字节沿现有客户端连接转发，不经过模型文本。
