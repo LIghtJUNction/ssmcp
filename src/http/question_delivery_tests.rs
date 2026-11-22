@@ -554,6 +554,7 @@ impl Fixture {
             run,
             None,
             "delivery fixture".into(),
+            Default::default(),
         );
         host(HostRequest::Call {
             client_id: self.session.client_id().into(),

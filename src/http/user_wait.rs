@@ -697,6 +697,7 @@ mod tests {
                 run,
                 None,
                 "user-wait-fixture".into(),
+                Default::default(),
             )
         }
 

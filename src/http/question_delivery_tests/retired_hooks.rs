@@ -59,6 +59,7 @@ async fn retired_finish_wait_never_starts_a_native_observation() {
         fixture.run(),
         None,
         "retired wait".into(),
+        Default::default(),
     );
     let error = host(HostRequest::Builtin {
         name: "await".into(),
