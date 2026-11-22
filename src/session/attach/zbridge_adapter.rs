@@ -297,10 +297,10 @@ impl Host for BoundHost<'_> {
                         .map(|runtime| runtime.local_registry().capabilities())
                         .transpose()
                         .map_err(native)?;
-                    if let Some(value) = capabilities.as_mut() {
-                        if let Some(generation) = value.get("generation").and_then(Value::as_u64) {
-                            value["generation"] = json!(Counter(generation));
-                        }
+                    if let Some(value) = capabilities.as_mut()
+                        && let Some(generation) = value.get("generation").and_then(Value::as_u64)
+                    {
+                        value["generation"] = json!(Counter(generation));
                     }
                     let cursor = self
                         .capture

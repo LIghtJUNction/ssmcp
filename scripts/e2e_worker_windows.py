@@ -432,12 +432,13 @@ class ChildView:
         return self.control("keys", hex=data.hex())
 
     def resize(self, rows, cols):
-        self.control("resize", size=[rows, cols])
+        receipt = self.control("resize", size=[rows, cols])
         wait_for(lambda: self.harness.bound(self.worker["id"], self.participant, "ssmcp.ui.get",
                  {"path": "/display/rows"})["value"] == rows,
                  timeout=15, description="worker accepts the actual PTY height")
         self.panel(lambda panel: panel["cols"] == cols and panel["rows"] <= rows,
                    "worker compositor observes the real PTY resize")
+        return receipt
 
     def find_text(self, marker):
         for _ in range(96):
@@ -998,14 +999,26 @@ class WorkerWindows(Harness):
                 view.keys(b"\x1b[F")
                 end = view.until(lambda frame: "TASK_END" in region_text(frame, body),
                                  f"{label}: task final line in physical cells")
-                observed = view.offset
-                incoming_progress = f"{label}: TASK_END was observed in actual private child cells."
+                incoming_progress = f"INCOMING_WHILE_READING_{label}: the real task viewport remains open."
                 incoming = self.bound(worker["id"], executor, "ssmcp.worker.report", {
                     "claim": claim, "request_id": f"{label}-incoming-while-reading",
                     "event": "progress", "progress": incoming_progress})
                 self.check(incoming["status"] == "recorded", f"{label}: incoming task progress is actually recorded")
-                end = view.until(lambda frame: view.offset > observed and "TASK_END" in region_text(frame, body),
-                                 f"{label}: incoming logs preserve the independently scrolled full task")
+                current = self.bound(worker["id"], executor, "ssmcp.worker.status")["worker"]
+                current_slot = next(slot for slot in current["slots"] if slot["slot"] == claim["slot"])
+                self.check(current_slot["progress"] == incoming_progress
+                           and any(incoming_progress in entry["text"] for entry in current_slot["logs"]),
+                           f"{label}: the original claimed station actually retains the incoming log")
+                # Hidden log changes can legitimately produce no terminal diff.
+                # Repaint through actual, reversible geometry changes instead.
+                for height in (rows + 1, rows):
+                    resized = view.resize(height, cols)
+                    body = view.panel(lambda panel: panel["logs"]["task_view"])["logs"]
+                    end = view.until(
+                        lambda frame: view.offset > resized["stream_offset"]
+                        and "Full task" in "\n".join(frame["rows"])
+                        and "TASK_END" in region_text(frame, body),
+                        f"{label}: real resize repaint preserves the full task after incoming logs")
                 view.save(f"{label}-task-end-incoming", end)
                 view.keys(b"t")
                 view.until(lambda frame: "Full task" not in "\n".join(frame["rows"]),
