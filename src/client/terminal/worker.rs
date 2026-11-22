@@ -1822,7 +1822,10 @@ mod tests {
             for split in 0..=bytes.len() {
                 let mut state = state(20, 100, false);
                 state.preview = false;
-                state.conversation.composer.set_text("preserved worker draft");
+                state
+                    .conversation
+                    .composer
+                    .set_text("preserved worker draft");
                 let before = state.conversation.composer.text().to_owned();
                 let now = Instant::now();
                 assert!(state.keyboard(&bytes[..split], now, false).is_empty());

@@ -67,8 +67,10 @@ impl ParentState {
         }
         match update {
             ChildUpdate::Snapshot(snapshot) => {
-                *self.snapshot.lock().unwrap_or_else(|error| error.into_inner()) =
-                    Some((snapshot, Instant::now()));
+                *self
+                    .snapshot
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = Some((snapshot, Instant::now()));
                 true
             }
             ChildUpdate::Reload => {
@@ -89,7 +91,10 @@ impl ParentState {
             }
         }
         self.closed.store(true, Ordering::Release);
-        *self.snapshot.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        *self
+            .snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
     }
 }
 
@@ -307,7 +312,10 @@ impl WindowChild {
         // the authenticated reader drain that final message before classifying
         // the exit; PID liveness alone would lose the request.
         if self.state.closed.load(Ordering::Acquire)
-            || self.watcher.as_ref().is_some_and(thread::JoinHandle::is_finished)
+            || self
+                .watcher
+                .as_ref()
+                .is_some_and(thread::JoinHandle::is_finished)
         {
             self.state.closed.store(true, Ordering::Release);
             return Ok(!self.reported_closed.swap(true, Ordering::AcqRel));
@@ -573,12 +581,18 @@ pub(super) fn child_request_reload() -> Result<(), String> {
 
 impl ChildState {
     fn prepare_reload(&self) {
-        let _stream = self.stream.lock().unwrap_or_else(|error| error.into_inner());
+        let _stream = self
+            .stream
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         self.ready.store(false, Ordering::Release);
     }
 
     fn request_reload(&self) -> io::Result<()> {
-        let mut stream = self.stream.lock().unwrap_or_else(|error| error.into_inner());
+        let mut stream = self
+            .stream
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         if self.stop.load(Ordering::Acquire) {
             return Err(io::Error::other("parent has stopped"));
         }
@@ -1226,13 +1240,22 @@ mod tests {
         session.state.prepare_reload();
         // No live worker display is installed in this fixture. A prepared
         // reload must stop sampling it while the old runtime is being removed.
-        session.state.send_current_snapshot("fixture-client", false).unwrap();
+        session
+            .state
+            .send_current_snapshot("fixture-client", false)
+            .unwrap();
         session.state.request_reload().unwrap();
         session.state.request_reload().unwrap();
-        assert!(matches!(read_child_update(&mut parent, std::process::id()).unwrap(), ChildUpdate::Reload));
+        assert!(matches!(
+            read_child_update(&mut parent, std::process::id()).unwrap(),
+            ChildUpdate::Reload
+        ));
         parent.set_nonblocking(true).unwrap();
         let mut extra = [0];
-        assert_eq!(parent.read(&mut extra).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            parent.read(&mut extra).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
         drop(parent);
         let deadline = Instant::now() + Duration::from_secs(2);
         while !session.state.stop.load(Ordering::Acquire) && Instant::now() < deadline {
