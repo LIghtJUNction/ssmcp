@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: session-service-${{ github.event.pull_request.number || github.ref }}
+  group: session-service-${{ inputs.ref || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -70,10 +70,29 @@ jobs:
           toolchain: 1.100.0
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Run unchanged Clippy gate with compiler annotations
+        shell: bash
+        run: |
+          set +e
+          cargo clippy --locked --all-targets -- -D warnings > "$RUNNER_TEMP/ssmcp-lint.txt" 2>&1
+          result=$?
+          cat "$RUNNER_TEMP/ssmcp-lint.txt"
+          if [ "$result" -ne 0 ]; then
+            python -c 'import pathlib,re,sys; lines=pathlib.Path(sys.argv[1]).read_text(errors="replace").splitlines(); rows=[line.strip() for line in lines if re.match(r"error(?:\[|:)|\s*-->",line)]; print("::error::" + "%0A".join(x.replace("%","%25") for x in rows[:24]))' "$RUNNER_TEMP/ssmcp-lint.txt"
+          fi
+          exit "$result"
       - name: Verify workspace unit tests on Linux
         if: runner.os == 'Linux'
-        run: cargo test --workspace --locked --lib -- --test-threads=4
+        shell: bash
+        run: |
+          set +e
+          cargo test --workspace --locked --lib -- --test-threads=4 > "$RUNNER_TEMP/ssmcp-lib.txt" 2>&1
+          result=$?
+          cat "$RUNNER_TEMP/ssmcp-lib.txt"
+          if [ "$result" -ne 0 ]; then
+            python -c 'import pathlib,re,sys; lines=pathlib.Path(sys.argv[1]).read_text(errors="replace").splitlines(); rows=[line.strip() for line in lines if re.search(r"FAILED|panicked at|^error:|^test result:",line)]; print("::error::" + "%0A".join(x.replace("%","%25") for x in rows[:24]))' "$RUNNER_TEMP/ssmcp-lib.txt"
+          fi
+          exit "$result"
       - run: "cargo test --locked --lib session:: -- --test-threads=4"
         if: runner.os != 'Linux'
       - run: "cargo test --locked --lib client::protocol_tests -- --test-threads=4"
