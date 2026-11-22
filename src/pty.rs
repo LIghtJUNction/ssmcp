@@ -979,7 +979,9 @@ child.wait(timeout=2)
     #[tokio::test]
     async fn long_terminal_output_keeps_full_prefix_beyond_ring_capacity() {
         use sha2::{Digest, Sha256};
-        let terminal = Terminal::spawn(Path::new("/bin/sh")).unwrap();
+        let output = OutputStore::new_connection().unwrap();
+        let terminal =
+            Terminal::spawn_with_logging(Path::new("/bin/sh"), false, output.clone()).unwrap();
         terminal.perform(Operation::Write {
             data: "stty -echo; head -c 1100000 /dev/zero | tr '\\0' x; printf '\\nLONG_DONE\\n'; exit\n".into(),
         }).await.unwrap();
@@ -1007,7 +1009,52 @@ child.wait(timeout=2)
         assert_eq!(result["artifact"]["scope"], "terminal_session");
         assert_eq!(result["artifact"]["complete"], true);
         assert_eq!(result["range"]["start"], 0);
-        let bytes = std::fs::read(result["artifact"]["path"].as_str().unwrap()).unwrap();
+        assert_eq!(result["artifact"]["storage"], "memory");
+        assert!(result["artifact"]["path"].is_null());
+        assert_eq!(result["output_eof"], true);
+        assert!(terminal.output.lock().unwrap().start > 0);
+        let id = result["artifact"]["id"].as_str().unwrap();
+        let stat = output
+            .perform("ssmcp.output.stat", json!({"id":id}))
+            .await
+            .unwrap();
+        assert_eq!(stat, result["artifact"]);
+        let size = stat["bytes"].as_u64().unwrap();
+        assert_eq!(stat["observed_bytes"], size);
+        let other_output = OutputStore::new_connection().unwrap();
+        for name in ["ssmcp.output.read", "ssmcp.output.stat"] {
+            assert!(other_output.perform(name, json!({"id":id})).await.is_err());
+        }
+        let mut bytes = Vec::new();
+        let mut offset = 0;
+        while offset < size {
+            let page = output
+                .perform(
+                    "ssmcp.output.read",
+                    json!({"id":id,"offset":offset,"max_bytes":crate::output::READ_BYTES}),
+                )
+                .await
+                .unwrap();
+            let data = STANDARD
+                .decode(page["data_base64"].as_str().unwrap())
+                .unwrap();
+            let next = page["next_offset"].as_u64().unwrap();
+            assert_eq!(page["id"], id);
+            assert_eq!(page["storage"], "memory");
+            assert!(page["path"].is_null());
+            assert_eq!(page["offset"], offset);
+            assert_eq!(page["bytes"], data.len());
+            assert_eq!(page["size"], size);
+            assert_eq!(page["observed_bytes"], size);
+            assert_eq!(page["complete"], true);
+            assert_eq!(page["truncated"], false);
+            assert!(data.len() <= crate::output::READ_BYTES);
+            assert_eq!(next, offset + data.len() as u64);
+            assert!(next > offset && next <= size);
+            assert_eq!(page["eof"], next == size);
+            bytes.extend_from_slice(&data);
+            offset = next;
+        }
         assert!(
             bytes
                 .windows(1100000)
@@ -1020,6 +1067,26 @@ child.wait(timeout=2)
             crate::hex::encode(Sha256::digest(&bytes))
         );
         assert_eq!(result["next_cursor"], bytes.len());
+        assert_eq!(result["range"]["end"], bytes.len());
+        assert_eq!(result["range"]["stored_end"], bytes.len());
+        let tail_start = bytes.len().saturating_sub(32);
+        let tail = terminal
+            .perform(Operation::Read {
+                cursor: tail_start as u64,
+                max_bytes: 16384,
+                wait_ms: 0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            STANDARD
+                .decode(tail["data_base64"].as_str().unwrap())
+                .unwrap(),
+            bytes[tail_start..]
+        );
+        assert_eq!(tail["next_cursor"], bytes.len());
+        assert_eq!(tail["truncated"], false);
+        assert_eq!(tail["output_eof"], true);
         let empty = terminal
             .perform(Operation::Read {
                 cursor: bytes.len() as u64,
@@ -1030,6 +1097,7 @@ child.wait(timeout=2)
             .unwrap();
         assert_eq!(empty["text"], "");
         assert_eq!(empty["next_cursor"], bytes.len());
+        assert_eq!(empty["output_eof"], true);
         terminal.shutdown().await;
     }
 }

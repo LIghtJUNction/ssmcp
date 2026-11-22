@@ -658,13 +658,16 @@ async fn dashboard_http_uses_sessions_enforces_admin_and_bounds_failure_audits()
     portal_broker
         .portal
         .configure_management(temporary.0.join("management.sock"));
-    portal_broker
+    let accounts = portal_broker
         .portal
         .storage(|store| {
-            store.login(&identity("123", "alice"))?;
-            store.login(&identity("456", "bob"))?;
+            let accounts = [
+                store.login(&identity("123", "alice"))?,
+                store.login(&identity("456", "bob"))?,
+            ];
             store.login(&identity("789", "reader"))?;
-            store.add("456", parse_key(&key(), "admin private metadata")?)
+            store.add("456", parse_key(&key(), "admin private metadata")?)?;
+            Ok(accounts)
         })
         .await
         .unwrap();
@@ -750,7 +753,21 @@ async fn dashboard_http_uses_sessions_enforces_admin_and_bounds_failure_audits()
         .unwrap();
     assert_eq!(administrator.status(), 200);
     let body = administrator.text().await.unwrap();
-    assert!(body.contains("alice") && body.contains("bob"));
+    for (account, subject) in accounts.iter().zip(["123", "456"]) {
+        assert_eq!(account.subject, subject);
+        let handle = account.handle.as_deref().unwrap();
+        let heading = format!(r#"<th scope="row"><code>{handle}@ssmcp.test</code>"#);
+        let row = body
+            .split("<tr>")
+            .find(|row| row.starts_with(&heading))
+            .unwrap()
+            .split_once("</tr>")
+            .unwrap()
+            .0;
+        assert!(row.contains(&format!(
+            r#"<input type="hidden" name="subject" value="{subject}">"#
+        )));
+    }
     assert!(!body.contains(&key()));
     assert!(!body.contains("admin private metadata"));
 

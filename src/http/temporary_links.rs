@@ -1244,7 +1244,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let client = reqwest::Client::builder()
+        let client = crate::http_client::builder()
             .timeout(Duration::from_secs(5))
             .build()
             .unwrap();

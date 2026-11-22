@@ -1643,12 +1643,11 @@ mod tests {
         use crate::{client::interface::history, runtime::call_scope::CallScope};
         use tokio_tungstenite::tungstenite::Message;
 
-        let b_history = history::with_test_history(directory.clone(), async {
-            history::record("user", "Conversation B").unwrap();
-            history::current().unwrap().unwrap().metadata.id
-        })
-        .await;
         history::with_test_history(directory, async {
+            // Both conversations must outlive the in-flight calls in one live store.
+            history::record("user", "Conversation B").unwrap();
+            let b_history = history::current().unwrap().unwrap().metadata.id;
+            history::release_current().unwrap();
             history::record("user", "Conversation A").unwrap();
             let a_owner = history::current_owner().unwrap();
             let client = crate::http_client::builder().no_proxy().build().unwrap();
@@ -1722,6 +1721,7 @@ mod tests {
             let b_owner = history::current_owner().unwrap();
             assert_eq!(b_owner.id(), b_history);
             assert_ne!(a_owner.id(), b_owner.id());
+            assert_ne!(a_owner, b_owner);
 
             // Both native calls are now in flight. Complete B first, then A
             // while B is still selected, using only the already-captured owners.
