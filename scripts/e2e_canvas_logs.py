@@ -198,7 +198,7 @@ def run(binary, decoder, output, checks):
             preview.send(mouse(2, y=builder_row + 1))
             history_unavailable = preview.until(
                 lambda shot: view(shot, "recipients") and not logs_open(shot)
-                and "Thread history unavailable" in text(shot),
+                and "Live thread logs unavailable" in text(shot),
                 "right-click routing to the selected preview thread's history",
             )
             check(body(history_unavailable) == selected_body
