@@ -1075,6 +1075,61 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "run by the two-UID CI harness with coordinated process input"]
+    fn per_user_output_fixture() {
+        use std::io::{BufRead, Write};
+
+        let location = std::env::var_os("SSMCP_TEST_OUTPUT_BASE").unwrap();
+        let store = OutputStore::at_for_test(location.into()).unwrap();
+        let contents = b"private fixture output";
+        let mut capture = store.capture("multi-user");
+        capture.spill().unwrap();
+        capture.push(contents).unwrap();
+        capture.finish().unwrap();
+        let artifact = capture.metadata().unwrap();
+        assert!(artifact.path.is_none());
+        let own = store
+            .perform_sync("ssmcp.output.read", json!({"id":artifact.id}))
+            .unwrap();
+        assert_eq!(own["storage"], "memory");
+        assert!(own["path"].is_null());
+        assert_eq!(own["complete"], true);
+        assert_eq!(
+            STANDARD
+                .decode(own["data_base64"].as_str().unwrap())
+                .unwrap(),
+            contents
+        );
+        println!("SSMCP_MULTI_USER_OUTPUT_ID={}", artifact.id);
+        std::io::stdout().flush().unwrap();
+
+        let mut lines = std::io::stdin().lock().lines();
+        let foreign = lines.next().unwrap().unwrap();
+        assert_ne!(foreign, artifact.id);
+        validate_id(&foreign).unwrap();
+        assert!(
+            store
+                .perform_sync("ssmcp.output.read", json!({"id":foreign}))
+                .is_err()
+        );
+        assert!(
+            store
+                .perform_sync("ssmcp.output.stat", json!({"id":foreign}))
+                .is_err()
+        );
+        assert!(
+            store
+                .perform_sync("ssmcp.output.read", json!({"id":artifact.id}))
+                .is_ok()
+        );
+        println!("SSMCP_MULTI_USER_FOREIGN_DENIED");
+        std::io::stdout().flush().unwrap();
+        // Wait for the cross-process barrier before dropping the memory store.
+        assert_eq!(lines.next().unwrap().unwrap(), "done");
+    }
+
     #[test]
     fn output_store_never_creates_a_supplied_filesystem_location() {
         let location =

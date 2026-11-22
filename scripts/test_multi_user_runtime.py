@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
+import select
 import shutil
 import signal
 import stat
@@ -65,13 +67,57 @@ def finish(process):
     return output
 
 
-def output_case(binary, root, temporary, uid, **extra):
-    env = environment(root, uid, {"SSMCP_TEST_OUTPUT_BASE": str(temporary), **extra})
-    process = subprocess.Popen(
+def output_case(binary, root, temporary, uid):
+    env = environment(root, uid, {"SSMCP_TEST_OUTPUT_BASE": str(temporary)})
+    return subprocess.Popen(
         [str(binary), "--exact", OUTPUT_TEST, "--ignored", "--nocapture"],
         cwd=root, env=env, user=uid, group=uid, extra_groups=(),
-        start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    return finish(process)
+        start_new_session=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True)
+
+
+def fixture_record(process, pattern):
+    deadline = time.monotonic() + 15
+    output = bytearray()
+    while len(output) < 65536:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([process.stdout], [], [], remaining)[0]:
+            break
+        block = os.read(process.stdout.fileno(), 4096)
+        if not block:
+            break
+        output.extend(block)
+        found = re.search(pattern, output)
+        if found:
+            return found
+    raise AssertionError(f"multi-user fixture record missing: {output[-8192:].decode(errors='replace')}")
+
+
+def verify_output_isolation(binary, root, temporary, results):
+    processes = []
+    try:
+        for uid in (UID_A, UID_B):
+            processes.append(output_case(binary, root, temporary, uid))
+        first, second = processes
+        ids = [fixture_record(process, rb"SSMCP_MULTI_USER_OUTPUT_ID=([0-9a-f]{32})\r?\n")
+               .group(1).decode() for process in processes]
+        check(results, "both UIDs retain retrievable private output in memory", ids[0] != ids[1])
+        for process, foreign_id in ((first, ids[1]), (second, ids[0])):
+            process.stdin.write(f"{foreign_id}\n")
+            process.stdin.flush()
+        for process in processes:
+            fixture_record(process, rb"SSMCP_MULTI_USER_FOREIGN_DENIED\r?\n")
+        check(results, "neither live UID can read or stat the other process's private output",
+              all(process.poll() is None for process in processes))
+        for process in processes:
+            process.stdin.write("done\n")
+            process.stdin.flush()
+            finish(process)
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.communicate()
 
 
 def display_case(binary, root, different, results):
@@ -149,32 +195,17 @@ def exercise(source, results):
         sentinel.chmod(0o600)
         before = identity(legacy), identity(sentinel), digest(sentinel)
 
-        output_case(binary, root, temporary, UID_A)
-        first = list((temporary / f"ssmcp-{UID_A}").glob("output-*.log"))
-        check(results, "first UID creates a private output artifact", len(first) == 1)
-        output_case(binary, root, temporary, UID_B, SSMCP_TEST_OUTPUT_FORBIDDEN=str(first[0]))
-        second = list((temporary / f"ssmcp-{UID_B}").glob("output-*.log"))
-        check(results, "second UID starts despite the first user's shared legacy root", len(second) == 1)
-        output_case(binary, root, temporary, UID_A, SSMCP_TEST_OUTPUT_FORBIDDEN=str(second[0]))
-        check(results, "neither UID can read the other's private output", True)
-        for uid, artifact in ((UID_A, first[0]), (UID_B, second[0])):
-            check(results, f"UID {uid} directory and artifact retain private ownership",
-                  identity(artifact.parent)[2:] == (uid, 0o700)
-                  and identity(artifact)[2:] == (uid, 0o600))
-        check(results, "legacy parent and existing user data are unchanged",
-              (identity(legacy), identity(sentinel), digest(sentinel)) == before)
-
-        blocked = root / "blocked"
-        blocked.mkdir()
-        blocked.chmod(0o1777)
-        foreign = blocked / f"ssmcp-{UID_A}"
+        foreign = temporary / f"ssmcp-{UID_A}"
         foreign.mkdir()
         os.chown(foreign, UID_B, UID_B)
         foreign.chmod(0o700)
-        before = identity(foreign)
-        output_case(binary, root, blocked, UID_A, SSMCP_TEST_OUTPUT_REJECT="1")
-        check(results, "precreated foreign-owned private root is rejected without permission changes",
-              identity(foreign) == before and not list(foreign.iterdir()))
+        foreign_before = identity(foreign)
+        verify_output_isolation(binary, root, temporary, results)
+        check(results, "legacy parent and existing user data are unchanged",
+              (identity(legacy), identity(sentinel), digest(sentinel)) == before)
+        check(results, "foreign-owned output path is untouched and memory creates no files",
+              identity(foreign) == foreign_before and not list(foreign.iterdir())
+              and {path.name for path in temporary.iterdir()} == {legacy.name, foreign.name})
 
         display_case(binary, root, False, results)
         display_case(binary, root, True, results)
