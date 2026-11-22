@@ -1244,6 +1244,121 @@ class ReleaseTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "source, gitlink and locked dependency version/commit differ"):
                     release.development_dependencies(self.root, modules=modules)
 
+    def add_zbridge_dependency(self):
+        self.stub_gitlinks("zbridge")
+        member = self.root / "crates/zbridge/Cargo.toml"
+        member.parent.mkdir(parents=True)
+        member.write_text('[package]\nname = "zbridge"\nversion = "0.1.0"\n'
+                          '\n[features]\nstd = []\n')
+        with (self.root / "Cargo.toml").open("a") as stream:
+            stream.write('\n[dependencies]\n'
+                         'zbridge = { git = "https://github.com/LIghtJUNction/zbridge.git", '
+                         'optional = true, default-features = false, features = ["std"] }\n')
+        with (self.root / "Cargo.lock").open("a") as stream:
+            stream.write('\n[[package]]\nname = "zbridge"\nversion = "0.1.0"\n'
+                         f'source = "git+https://github.com/LIghtJUNction/zbridge.git#{"1"*40}"\n')
+        return member
+
+    def test_zbridge_gitlink_lock_and_export_preserve_version_and_features(self):
+        self.add_zbridge_dependency()
+        paths = [self.root / "Cargo.toml", self.root / "Cargo.lock"]
+        before = [path.read_bytes() for path in paths]
+        self.assertEqual(release.project_z_url("zbridge"),
+                         "https://github.com/LIghtJUNction/zbridge.git")
+        self.assertEqual(release.development_dependencies(self.root), [("zbridge", "0.1.0")])
+        self.assertEqual(release.validate_package("v0.5.0", self.root), "0.5.0")
+        self.assertEqual(release.publication_packages(self.root), [("ssmcp", "0.5.0")])
+        expected = release.read_toml(paths[0])
+        expected["dependencies"]["zbridge"].pop("git")
+        expected["dependencies"]["zbridge"]["version"] = "=0.1.0"
+        self.assertEqual(tomllib.loads(release.registry_export_manifest(self.root).decode()), expected)
+        checksum = "2" * 64
+        frozen = before[1].replace(
+            f'git+{release.project_z_url("zbridge")}#{"1"*40}'.encode(), release.CRATES_IO.encode()
+        ) + f'checksum = "{checksum}"\n'.encode()
+        normalized = {"packages": release.registry_lock(frozen, "0.5.0", {"zbridge": "0.1.0"})}
+        for published in (checksum, "3" * 64, None):
+            with self.subTest(checksum=published), \
+                 mock.patch.object(release, "registry_checksum", return_value=published) as registry:
+                if published == checksum:
+                    release.check_registry_project_z(normalized)
+                else:
+                    with self.assertRaisesRegex(ValueError, "unpublished or changed: zbridge 0.1.0"):
+                        release.check_registry_project_z(normalized)
+            registry.assert_called_once_with("0.1.0", "zbridge")
+        self.assertEqual(before, [path.read_bytes() for path in paths])
+
+    def test_invalid_zbridge_identity_prevents_both_bump_writes(self):
+        member = self.add_zbridge_dependency()
+        manifest, lock = self.root / "Cargo.toml", self.root / "Cargo.lock"
+        original_manifest, original_lock = manifest.read_text(), lock.read_text()
+        original_member = member.read_text()
+        modules = [{"path": "crates/zbridge", "commit": "1" * 40, "tree": "2" * 40}]
+        cases = (
+            ("missing mirror", original_manifest, original_lock, None, modules),
+            ("missing gitlink", original_manifest, original_lock, original_member, []),
+            ("wrong gitlink", original_manifest, original_lock, original_member,
+             [{**modules[0], "commit": "3" * 40}]),
+            ("wrong lock commit", original_manifest,
+             original_lock.replace("#" + "1" * 40, "#" + "3" * 40), original_member, modules),
+            ("wrong lock version", original_manifest,
+             original_lock.replace('version = "0.1.0"', 'version = "0.1.1"'), original_member, modules),
+            ("wrong mirror version", original_manifest, original_lock,
+             original_member.replace('version = "0.1.0"', 'version = "0.1.1"'), modules),
+            ("wrong URL", original_manifest.replace("LIghtJUNction/zbridge", "other/zbridge"),
+             original_lock, original_member, modules),
+        )
+        for label, source, locked, checked_out, gitlinks in cases:
+            with self.subTest(identity=label):
+                manifest.write_text(source)
+                lock.write_text(locked)
+                if checked_out is None:
+                    member.unlink()
+                else:
+                    member.write_text(checked_out)
+                before = [path.read_bytes() for path in (manifest, lock)]
+                with mock.patch.object(release, "source_submodules", return_value=gitlinks), \
+                     self.assertRaisesRegex(ValueError, "zbridge"):
+                    release.bump("patch", self.root)
+                self.assertEqual(before, [path.read_bytes() for path in (manifest, lock)])
+
+    def test_zbridge_cannot_enter_the_project_z_patch_allowlist(self):
+        self.add_zbridge_dependency()
+        self.assertNotIn("zbridge", release.PROJECT_Z_PATCHES)
+        manifest = self.root / "Cargo.toml"
+        original = manifest.read_text()
+        canonical = 'git = "https://github.com/LIghtJUNction/zbridge.git"'
+        for direct in (original, original.replace(canonical, 'version = "=0.1.0"')):
+            for patch in (
+                f'[patch.crates-io]\nzbridge = {{ {canonical} }}\n',
+                f'[patch.crates-io]\nbridge = {{ package = "zbridge", {canonical} }}\n',
+            ):
+                with self.subTest(direct=direct, patch=patch):
+                    manifest.write_text(direct + "\n" + patch)
+                    before = [path.read_bytes() for path in (manifest, self.root / "Cargo.lock")]
+                    with self.assertRaisesRegex(ValueError, "unexpected Project Z patch"):
+                        release.bump("patch", self.root)
+                    self.assertEqual(before, [path.read_bytes()
+                                             for path in (manifest, self.root / "Cargo.lock")])
+
+    def test_unpublished_zbridge_stops_verification_and_publication_before_cargo(self):
+        self.add_zbridge_dependency()
+        for operation in (release.verify_crate, release.publish):
+            with self.subTest(operation=operation.__name__), \
+                 mock.patch.object(release, "registry_checksum", return_value=None) as registry, \
+                 mock.patch.object(release, "release_source",
+                                   side_effect=AssertionError("source verification must not start")) as source, \
+                 mock.patch.object(release, "verified_crate_receipt",
+                                   side_effect=AssertionError("crate verification must not start")) as receipt, \
+                 mock.patch.object(release.subprocess, "run",
+                                   side_effect=AssertionError("Cargo must not run")) as upload, \
+                 self.assertRaisesRegex(ValueError, "publish zbridge 0.1.0 from its independent repository"):
+                operation(self.root)
+            registry.assert_called_once_with("0.1.0", "zbridge")
+            source.assert_not_called()
+            receipt.assert_not_called()
+            upload.assert_not_called()
+
     def submodule_fixture(self, nested=False):
         temporary = tempfile.TemporaryDirectory(prefix="ssmcp-source-module-")
         self.addCleanup(temporary.cleanup)

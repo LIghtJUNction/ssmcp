@@ -190,7 +190,7 @@ include = [
 
 [workspace]
 members = []
-exclude = ["crates/zharness", "crates/zplugin", "crates/ztuio"]
+exclude = ["crates/zharness", "crates/zplugin", "crates/ztuio", "crates/zbridge"]
 resolver = "3"
 
 [dependencies]

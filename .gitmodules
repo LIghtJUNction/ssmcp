@@ -7,3 +7,6 @@
 [submodule "ztuio"]
 	path = crates/ztuio
 	url = https://github.com/LIghtJUNction/ztuio.git
+[submodule "zbridge"]
+	path = crates/zbridge
+	url = https://github.com/LIghtJUNction/zbridge.git
