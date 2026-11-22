@@ -34,6 +34,7 @@ import termios
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+from e2e_account_gateway import has_platform_consent
 from e2e_account_relay import IDENTITY, wait_for
 from e2e_composer import Composer, ENTER, LEFT, UP, editing_queue, input_text, visible_record
 from e2e_client_ui import empty_composer_ready
@@ -388,8 +389,7 @@ class RelayComposer(Composer):
             raise AssertionError("provider callback differs from the real router's issuer")
         self.sensitive.extend(value for values in parse_qs(parsed.query).values() for value in values)
         status, consent, _ = self.oauth_request(parsed.path + "?" + parsed.query, cookie=cookie)
-        self.check(status == 200 and isinstance(consent, str)
-                   and "name=decision value=allow" in consent and "fixture@github" in consent,
+        self.check(status == 200 and has_platform_consent(consent, self.origin, self.identity),
                    "the real identity exchange validates synthetic GitHub PKCE and requires explicit consent")
         status, _, headers = self.oauth_request("/oauth/authorize", "POST",
             {"transaction_id": transaction, "decision": "allow"}, cookie=cookie,

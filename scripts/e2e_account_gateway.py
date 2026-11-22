@@ -27,6 +27,16 @@ IDENTITY = {"provider": "github", "subject": "123", "login": "fixture",
             "principal": "fixture@github", "username": "relayfixture"}
 
 
+def has_platform_consent(page, origin, identity):
+    # The test router's public origin is literal loopback HTTP. Its canonical
+    # account address retains that scheme, unlike an HTTPS relay address.
+    platform_address = f"{identity['username']}@{origin}"
+    return (isinstance(page, str) and f"<strong>{platform_address}</strong>" in page
+            and "@github" not in page
+            and "name=decision value=allow" in page
+            and "name=decision value=deny" in page)
+
+
 def direct_loopback(environment):
     result = {key: value for key, value in environment.items()
               if key.lower() not in PROXY_VARIABLES}
@@ -300,8 +310,7 @@ class AccountGateway:
             raise AssertionError("the provider callback differs from the real router issuer")
         h.sensitive.extend(value for values in parse_qs(parsed.query).values() for value in values)
         status, consent, _ = h.oauth_request(parsed.path + "?" + parsed.query, cookie=cookie)
-        h.check(status == 200 and isinstance(consent, str)
-                and "name=decision value=allow" in consent and "fixture@github" in consent,
+        h.check(status == 200 and has_platform_consent(consent, h.origin, h.identity),
                 "real identity exchange validates provider PKCE and requires explicit consent")
         status, _, headers = h.oauth_request(authorize, "POST",
             {"transaction_id": transaction, "decision": "allow"}, cookie=cookie, headers=origin, form=True)
