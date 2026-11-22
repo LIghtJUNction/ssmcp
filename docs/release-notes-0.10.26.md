@@ -69,3 +69,33 @@ Bump 工作流支持 `none`、`patch`、`minor`、`major` 和 `custom`，默认 
 ## 发布状态
 
 本次准备六个平台的 GitHub 发布包和安装器。发布策略显式将 0.10.26 的 crates.io 发布延期，等待独立的 registry 包验证；生产 relay 部署也延期，以保留现有会话。最终构建、运行验收、发布与安装以实际工作流和发布清单为准。远端 `--input none` 的确认以实际中继 ACK 为准，本机 socket 使用记录不能代替这一证据。[发布流程](releases.md)
+
+## Worker 本地执行池
+
+用 `ssmcp alice@relay.example --worker 4 --agent codex` 启动执行池，终端显示空闲、工作、离线和排队状态。已认证调用者通过 `ssmcp.worker.submit/status/result/cancel` 提交、观察和取消自己的任务；空闲槽位按 FIFO 原子领取，运行中的任务要等自有进程清理确认后才重新空闲。未配置执行器时槽位保持离线；结果未知的任务保留当前状态，等待明确处置。[Worker 用法](workers.md)
+
+执行要求 Linux、具备 CPU 与内存控制的 cgroup v2，以及可用的用户 systemd 管理器；缺少条件时槽位离线。每槽资源上限按有效系统容量、同一系统用户及共享登记空间内的已注册槽位总数和 `--worker-k` 计算。资源按需使用，限制覆盖池拥有的进程树；其他用户、独立 Shell 和外部程序各自保留原有系统权限与资源范围。
+
+## 文件登记与清理
+
+受支持的写入入口登记新建文件；只有明确标记的已登记临时文件进入清理范围。普通用户文件、粘贴输入引用、未登记文件和持有效活动租约的对象保留。默认临时保留时间为 24 小时、容量阈值为 512 MiB；客户端启动、每 5 分钟及 reload 时按规则检查，删除前核对文件身份。[文件用途与保护规则](managed-files.md)
+
+在工作区运行 `ssmcp cleanup --dry-run` 预览，`ssmcp cleanup` 实际清理；用 `ssmcp cleanup --set-config cleanup-policy.json` 设置自定义前缀和保留时间规则，设置本身不执行清理。原生 `ssmcp.files.cleanup` 省略参数时默认预览，其他登记与配置操作见文档。
+
+## 可独立迭代的工具仓库
+
+code_mode 的预写 JavaScript 助手保存在普通 [ssmcp-tools Git 仓库](https://github.com/LIghtJUNction/ssmcp-tools)，通过 `$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml`（默认 `~/.config/ssmcp/ssmcprc.toml`）选择本地工具来源。先加载官方助手，再按 RC 列表加载用户覆盖；后加载的同名助手替换前者，便于用户与 Agent 在本地单独迭代。底层 `call` 等宿主入口与身份、授权检查仍保留，覆盖助手不增加权限。[加载与覆盖规则](../src/tool_repository.rs) · [宿主边界](../src/code_mode.js)
+
+`ssmcp tools status` 显示实际来源和 Git 状态，`ssmcp tools check` 检查更新，`ssmcp tools update` 只快进清洁的官方工作树。程序更新也会检查工具仓库；本地修改、分叉和用户覆盖目录会保留，不强制重置。修改在新的 code_mode 调用中生效。[更新入口](../src/client/update.rs)
+
+## 随消息申请结束
+
+`ssmcp.ui.message` 增加可选的 `finish_task: true`：先提交消息，再进入一次有界的真实用户结束决定等待。省略该参数或设置为 `false` 保持普通消息行为；消息回执确认接收或显示，结束许可由后续 Human 决定单独给出。[消息参数](../src/client/interface/messages.rs)
+
+仅最终外层回执中匹配且已消费的 Human Yes 与 `may_finish: true` 允许本轮结束。未获批准时，返回结果要求 Agent 保持任务活动，在新的工具调用中继续 `ui.wait(intent: "finish")`；每次等待有独立超时，后续调用继续沿用真实用户批准规则。[结束决定与续等](finish-and-questions.md)
+
+## 门户、双语指南与付款体验
+
+首页采用更克制的留白、少量主要操作和“安装客户端、连接项目、接入 AI 应用”三步引导。中英文指南按入门、日常使用与技术参考分层，补充消息引用、Worker、工具扩展、真实等待及权限边界。[首页实现](../src/portal/view.rs) · [中文指南](../src/portal/guide/zh.html) · [English guide](../src/portal/guide/en.html)
+
+流量页面分开呈现当前额度、服务端配置的价格与可选金额、适用月份和到期时间；创建订单后先核对信息，再前往真实收银台。订单页区分等待确认、取消、付款与入账状态，税费按页面及收银台实际信息展示。付款与入账状态以服务端保存的订单和已验证支付通知为准；支付跨过适用月份时，订单显示已付款但已过期，并提示联系管理员处理退款。[付款与订单](commerce.md) · [页面实现](../src/portal/commerce.rs)
