@@ -30,6 +30,7 @@ pub(crate) mod messaging;
 pub mod oauth;
 pub(crate) mod observer;
 pub mod output;
+pub(crate) mod peer_port;
 pub mod platform;
 #[cfg(target_os = "linux")]
 pub mod portal;

@@ -1,0 +1,216 @@
+{
+  "schema": "ssmcp-auto-peer-validation-v1",
+  "source_commit": "02e58fb6ce99e6c0987bb31e82de81ee49800504",
+  "source_tree": "460435caeda63d323eed5297476cb4128b4814e4",
+  "baseline_commit": "cdcc9ecf240a98436f7d9d750acadefd9f9977a7",
+  "pre_pr_commit": "add39e18ff92680ff3ac0c3e911407956e20b228",
+  "checks": [
+    {
+      "check": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "log": "/var/tmp/ssmcp-auto-peer-20261122/fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "check": "peer-complete",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "peer_port",
+        "--",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "log": "/var/tmp/ssmcp-auto-peer-20261122/peer-complete.log",
+      "log_sha256": "f1634f772696f069212d535630e314a965b9cee992ed8d466ed752a7b6aa1dce",
+      "summaries": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 43.35s",
+        "test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 1999 filtered out; finished in 35.90s"
+      ]
+    },
+    {
+      "check": "relay",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "client::relay::tests"
+      ],
+      "exit_code": 0,
+      "log": "/var/tmp/ssmcp-auto-peer-20261122/relay.log",
+      "log_sha256": "19529dfcb41a11dee2d9737c81cbd1666986c0cb27587c092dd2bda3aebb985b",
+      "summaries": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 2024 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "check": "bridge",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "bridge::tests"
+      ],
+      "exit_code": 0,
+      "log": "/var/tmp/ssmcp-auto-peer-20261122/bridge.log",
+      "log_sha256": "da31b5e67faf3e283efade48c19169227b3c5737a3098781f7a460f9de2f6e1e",
+      "summaries": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 2027 filtered out; finished in 6.01s"
+      ]
+    },
+    {
+      "check": "workspace",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "workspace::tests"
+      ],
+      "exit_code": 0,
+      "log": "/var/tmp/ssmcp-auto-peer-20261122/workspace.log",
+      "log_sha256": "21da19dae7dd7215fce5cd279130f2aa875ae4f24291f98008843d0fb043a407",
+      "summaries": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s",
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 2020 filtered out; finished in 1.27s"
+      ]
+    },
+    {
+      "check": "runtime-hooks",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "runtime::hooks::tests"
+      ],
+      "exit_code": 0,
+      "log": "/var/tmp/ssmcp-auto-peer-20261122/runtime-hooks.log",
+      "log_sha256": "885ed3b315c0f5184518084831a617661661d5b1d8410f12a27430323d42d495",
+      "summaries": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2030 filtered out; finished in 1.96s"
+      ]
+    },
+    {
+      "check": "broker-allow",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "broker::allow"
+      ],
+      "exit_code": 0,
+      "log": "/var/tmp/ssmcp-auto-peer-20261122/broker-allow.log",
+      "log_sha256": "b447b24eae56996d83854d4413ca21af257616a6a7c7e5230734582c87fccd2e",
+      "summaries": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s",
+        "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 2000 filtered out; finished in 0.43s"
+      ]
+    },
+    {
+      "check": "wire",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "wire::tests"
+      ],
+      "exit_code": 0,
+      "log": "/var/tmp/ssmcp-auto-peer-20261122/wire.log",
+      "log_sha256": "67efcb06f116aac55bbcb12ee56df239f1370d4fa29bd8b71d389321f293b607",
+      "summaries": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s",
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 2018 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "check": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--offline",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "log": "/var/tmp/ssmcp-auto-peer-20261122/clippy.log",
+      "log_sha256": "d8895d88257096ccd1aea5ba36117e8f0ed4e552cfe7acb33ef0b2ed10d8ec8c",
+      "summaries": [
+        "warning: unused dependency `qrcodegen`",
+        "warning: `ssmcp` (manifest) generated 1 warning",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 27s"
+      ]
+    }
+  ],
+  "platform": "Linux-7.3.5-arch1-1-x86_64-with-glibc2.44",
+  "artifacts_root": "/var/tmp/ssmcp-auto-peer-20261122",
+  "scenario_receipts": [
+    "test peer_port::tests::automatic::failed_candidate_selects_a_later_authenticated_host_and_shutdown_closes_all_listeners ... automatic selection: first candidate refused, 2 authenticated host candidates, up=131101 down=196619; control shutdown closed every listener",
+    "cli left=auto-listen right=auto-target requested=direct_only transport=direct up=131101 down=196619 relay_payload_bytes=0",
+    "cli left=auto-listen right=auto-target requested=prefer_direct transport=direct up=131101 down=196619 relay_payload_bytes=0",
+    "cli left=auto-listen right=auto-target requested=relay transport=relay up=131101 down=196619 relay_payload_bytes=327720",
+    "cli left=auto-listen right=static-target requested=prefer_direct transport=relay up=131101 down=196619 relay_payload_bytes=327720",
+    "cli left=static-listen right=auto-target requested=prefer_direct transport=relay up=131101 down=196619 relay_payload_bytes=327720",
+    "cli left=static-listen right=static-target requested=direct_only transport=direct up=131101 down=196619 relay_payload_bytes=0",
+    "cli left=auto-listen right=pr179-target requested=prefer_direct transport=relay up=131101 down=196619 relay_payload_bytes=327720",
+    "cli left=static-listen right=pr179-target requested=direct_only transport=direct up=131101 down=196619 relay_payload_bytes=0",
+    "cli left=auto-listen right=legacy-target requested=prefer_direct transport=relay up=131101 down=196619 relay_payload_bytes=327720",
+    "cli left=static-listen right=legacy-target requested=prefer_direct transport=relay up=131101 down=196619 relay_payload_bytes=327720",
+    "private_netns=2 network=ssmcp-peer-test-affb0d5b68b40a2e89b4756e27e04993 discovery=actual_interfaces subnet=172.20.0.0/16 reachable=true transport=direct up=131101 down=196619 relay_payload_bytes=0",
+    "private_netns=2 network=ssmcp-peer-test-affb0d5b68b40a2e89b4756e27e04993 discovery=actual_interfaces subnet=172.20.0.0/16 reachable=true transport=relay up=131101 down=196619 relay_payload_bytes=327720",
+    "private_netns=2 network=ssmcp-peer-test-affb0d5b68b40a2e89b4756e27e04993 discovery=actual_interfaces subnet=172.20.0.0/16 reachable=false transport=relay up=131101 down=196619 relay_payload_bytes=327720"
+  ],
+  "binaries": {
+    "ssmcp-auto": "2807cd0ce560063d203c1d6b6c867d093f06b93f32901063268bdc50d23a6dcc",
+    "ssmcp-pr179": "cb392998119ac1273dede6dd9ffdcf4b3243f62b3a60807ce3e2d8068e61b2fd",
+    "ssmcp-pre179": "065ca6e26fde23f8757e9c6863e05922f3d18c8736498030a3625d67a0a8fa6e"
+  },
+  "cleanup": {
+    "containers": [],
+    "networks": []
+  },
+  "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+  "cargo": "cargo 1.100.0 (3acc79c0c 2026-11-05)",
+  "validation_date": "2026-11-22",
+  "timezone": "Asia/Taipei",
+  "targeted_test_count": 99,
+  "full_repository_test_suite_run": false,
+  "public_dual_nat_test_run": false,
+  "nat_traversal_implemented": false,
+  "scope_notes": [
+    "Target-side host discovery and bounded TCP/mTLS candidate selection only; no STUN, ICE, simultaneous-open, UPnP, reverse dialing or connection migration.",
+    "The two Linux network namespaces share a routable internal IPv4 network; the listener has a separate primary internal network so its shared secondary interface can be disconnected.",
+    "Ten actual CLI scenarios include original PR179 and pre-PR clients against the new test broker; no old-broker binary end-to-end run.",
+    "The multi-candidate fixture gathered two real loopback candidates under a policy permitting only 127.0.0.1/32 and ::1/128; selected application-stream address family is not separately asserted.",
+    "macOS and Windows runtime validation, four-interface capacity and independent concurrent-probe peak measurement are absent."
+  ]
+}
