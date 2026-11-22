@@ -851,17 +851,6 @@ pub(crate) fn follow_attach_history(selection: crate::runtime::call_scope::Displ
     }
 }
 
-pub(crate) fn refresh_history_owner() {
-    if let Some(shared) = shared() {
-        let mut state = shared
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        state.sync_history_owner();
-        state.dirty = true;
-    }
-}
-
 pub(crate) fn clear_logs() {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());

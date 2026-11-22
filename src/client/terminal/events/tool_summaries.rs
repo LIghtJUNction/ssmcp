@@ -60,22 +60,6 @@ impl Display {
     pub(super) fn needs_summary(&self) -> bool {
         self.call_count.saturating_sub(self.covered_call_count) > THRESHOLD
     }
-
-    pub(super) fn valid(&mut self) -> bool {
-        if !valid_id(&self.group_id)
-            || self.call_count == 0
-            || self.covered_call_count > self.call_count
-        {
-            return false;
-        }
-        if let Some(summary) = &self.summary {
-            let Ok(summary) = clean_summary(summary) else {
-                return false;
-            };
-            self.summary = Some(summary);
-        }
-        true
-    }
 }
 
 pub(super) struct Group {
@@ -104,26 +88,12 @@ impl Group {
     pub(super) fn editable(&self) -> bool {
         self.scope.is_some()
     }
-
-    pub(super) fn restored(display: Display) -> Self {
-        Self {
-            display,
-            scope: None,
-            reminded: None,
-        }
-    }
 }
 
 pub(super) struct Call {
     connection: u64,
     request_id: u64,
     pub(super) event_id: u64,
-}
-
-fn valid_id(id: &str) -> bool {
-    id.strip_prefix("tool_group_").is_some_and(|suffix| {
-        suffix.len() == 32 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
-    })
 }
 
 fn new_id() -> Option<String> {
