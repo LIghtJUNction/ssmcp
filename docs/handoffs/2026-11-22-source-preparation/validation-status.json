@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "kind": "source_preparation_handoff",
+  "checked_at_utc": "2026-11-22T21:11:04Z",
+  "overall": "final_acceptance_incomplete",
+  "final_acceptance_passed": false,
+  "version": "0.10.28 unpublished",
+  "main": {
+    "sha": "6759712e1b51f83690580897aee7efb01ac32f86",
+    "tree": "2696cc0a382add97127f743b6cbb86f9cacfef23",
+    "url": "https://github.com/LIghtJUNction/ssmcp/commit/6759712e1b51f83690580897aee7efb01ac32f86"
+  },
+  "latest_ci": {
+    "run_id": 45062356182,
+    "run_attempt": 1,
+    "status": "completed",
+    "conclusion": "failure",
+    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/45062356182",
+    "linux_x64_job_id": 137330879044,
+    "workspace_cargo_step": "success",
+    "failed_step": "Verify output and terminals across Unix users"
+  },
+  "candidates": [
+    {
+      "sha": "35b13571a14fa1cf1e1a7340f18ff64a7738dc08",
+      "base": "6759712e1b51f83690580897aee7efb01ac32f86",
+      "scope": [
+        "src/output.rs",
+        "scripts/test_multi_user_runtime.py"
+      ],
+      "source_preparation": "completed",
+      "independent_source_review": "completed; no blocking source findings",
+      "product_runtime": "not_run",
+      "integration": "pending"
+    },
+    {
+      "sha": "bb7631b48bdfc9fea94a0b093d7a5b4ee85b7416",
+      "base": "6759712e1b51f83690580897aee7efb01ac32f86",
+      "files": [
+        {
+          "bytes": 19470,
+          "path": "scripts/e2e_session_features.py",
+          "sha256": "2509b1fc070424e2077722c28a9a67027874a07621df122364a55a0c5bef7ff2"
+        },
+        {
+          "bytes": 55592,
+          "path": "scripts/e2e_unified.py",
+          "sha256": "ab4683325c07246f04f3ea929c58a29926a8070ddcf2965ca1a0a8c91c96f79d"
+        }
+      ],
+      "source_preparation": "completed",
+      "independent_source_review": "completed; no blocking source findings for source preparation only",
+      "product_runtime": "not_run",
+      "integration": "pending",
+      "gate": {
+        "automatic_expiration": "not_exercised",
+        "overall": "incomplete",
+        "coverage_complete": false,
+        "exit_code": 1
+      }
+    }
+  ],
+  "expiry_design": {
+    "status": "source feasibility reviewed; not implemented or run",
+    "production_ttl_seconds": 900,
+    "real_janitor_sleep_seconds": 60,
+    "original_observation_seconds": 5,
+    "original_overall_seconds": 240,
+    "decision_pending": "explicit70-75s scenario or additional phase alignment preserving5s; no waiver"
+  },
+  "final_kit": null,
+  "native_consumer_activation": false,
+  "final_product_results": null,
+  "prior_log_inventory": {
+    "source": "6759712e1b51f83690580897aee7efb01ac32f86",
+    "run_id": 45062356182,
+    "scope": "failed candidate only; do not transfer results",
+    "reload_filters": {
+      "worker_window_ok": 16,
+      "projection_ok": 3,
+      "worker_activity_ok": 2,
+      "total_ok": 21
+    },
+    "ui_filters": {
+      "worker_ok": 21,
+      "worker_ignored": 1,
+      "worker_operations_ok": 3
+    }
+  },
+  "source_evidence": [
+    {
+      "path": "scripts/e2e_account_gateway.py",
+      "bytes": 22354,
+      "sha256": "c8fb1fc83a8e16a247c1be1bee521334df8828144497bfb9e971bbc747bd99c0",
+      "source": "6759712e1b51f83690580897aee7efb01ac32f86"
+    },
+    {
+      "path": "src/http/relay_composer_fixture.rs",
+      "bytes": 15625,
+      "sha256": "cdb76261649e24f4b849dc118e7b7e14f5c5bcb0a92b4d9f698d336a3603e797",
+      "source": "6759712e1b51f83690580897aee7efb01ac32f86"
+    },
+    {
+      "path": "src/runtime.rs",
+      "bytes": 51408,
+      "sha256": "81a3760b5eb3e860cc81e48eaf0d3baaf8f05c0dc08647fc7df3283672076f1f",
+      "source": "6759712e1b51f83690580897aee7efb01ac32f86"
+    },
+    {
+      "path": "src/runtime/native_plugins/process.rs",
+      "bytes": 29638,
+      "sha256": "e581d6bad12a34ccbf96109fe397d6338c0e23226705054b4a8b23cb1818c45b",
+      "source": "6759712e1b51f83690580897aee7efb01ac32f86"
+    },
+    {
+      "path": "src/client.rs",
+      "bytes": 216033,
+      "sha256": "3f0b2d2d1329f09d0f3cacab81a26d6a7c83bc0f6081dfddf81b78cbcea89813",
+      "source": "6759712e1b51f83690580897aee7efb01ac32f86"
+    }
+  ],
+  "outstanding": [
+    "required public-path RAM expiry and automatic cleanup coverage",
+    "integration owner actual resumption or confirmed handoff",
+    "successful same-source final CI and exact kit provenance",
+    "native2PTY plus6CLI andHELP",
+    "final UI frames and host evidence bindings"
+  ],
+  "google_doc": "https://docs.google.com/document/d/1vFu-7hJXi14AsjYB1dbldVBja3GUImEIXvau9lx-oks"
+}
