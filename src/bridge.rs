@@ -1,4 +1,5 @@
 //! Authenticated, bounded background transfers and TCP mappings between clients.
+mod peer;
 use crate::{
     broker::{Authorization, Broker, Session},
     wire::Operation,
@@ -499,14 +500,27 @@ impl Remote {
             }
             let result = tokio::time::timeout_at(
                 deadline,
-                self.session.call_cleanup(Operation::CallTool {
-                    name: format!("{}.close", self.namespace),
-                    arguments: json!({"id":self.id}),
-                }),
+                self.session
+                    .call_cleanup(if self.namespace == peer::NAMESPACE {
+                        Operation::PeerPort {
+                            command: Box::new(crate::wire::peer_port::Command::Close {
+                                id: self.id.clone(),
+                            }),
+                        }
+                    } else {
+                        Operation::CallTool {
+                            name: format!("{}.close", self.namespace),
+                            arguments: json!({"id":self.id}),
+                        }
+                    }),
             )
             .await;
             match result {
-                Ok(Ok(value)) => match unpack(value) {
+                Ok(Ok(value)) => match if self.namespace == peer::NAMESPACE {
+                    Ok(value)
+                } else {
+                    unpack(value)
+                } {
                     Ok(value) if value["closed"].is_boolean() => return Ok(()),
                     Ok(_) => last_error = "client did not acknowledge handle closure".to_owned(),
                     Err(error) => last_error = error,
@@ -571,11 +585,22 @@ fn loopback() -> String {
     "127.0.0.1".into()
 }
 
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum Transport {
+    Relay,
+    #[default]
+    PreferDirect,
+    DirectOnly,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PortOptions {
     listen: PortEnd,
     target: PortEnd,
+    #[serde(default)]
+    transport: Transport,
     #[serde(default = "port_lifetime")]
     ttl_ms: u64,
 }
@@ -844,7 +869,10 @@ pub async fn dispatch(
             let _ = timeout(Duration::from_secs(8), async {
                 loop {
                     let changed = task.changed.notified();
-                    if task.snapshot()["state"] != "starting" {
+                    if !matches!(
+                        task.snapshot()["state"].as_str(),
+                        Some("starting" | "finishing")
+                    ) {
                         break;
                     }
                     changed.await;
@@ -873,14 +901,22 @@ fn empty(arguments: &Value) -> Result<(), String> {
     }
 }
 
-async fn pump(access: &Access, source: &Remote, destination: &Remote) -> Result<u64, String> {
+async fn pump(
+    access: &Access,
+    source: &Remote,
+    destination: &Remote,
+    port: Option<&Task>,
+) -> Result<u64, String> {
+    // Older clients apply the 32 KiB output guard to the whole native MCP
+    // reply, which contains both text and structured copies of the base64.
+    let chunk = if port.is_some() { 8 * 1024 } else { CHUNK };
     let mut bytes = 0u64;
     loop {
         let data = access
             .call(
                 &source.client_id,
                 &format!("{}.read", source.namespace),
-                json!({"id":source.id,"max_bytes":CHUNK,"wait_ms":500}),
+                json!({"id":source.id,"max_bytes":chunk,"wait_ms":500}),
             )
             .await?;
         let encoded = data["data_base64"]
@@ -891,8 +927,13 @@ async fn pump(access: &Access, source: &Remote, destination: &Remote) -> Result<
                 .decode(encoded)
                 .map_err(|_| "stream returned invalid base64")?
                 .len();
-            if length > CHUNK {
+            if length > chunk {
                 return Err("stream returned more bytes than requested".into());
+            }
+            if let Some(port) = port {
+                let mut stats = port.value.lock().unwrap();
+                stats["relay_payload_bytes"] =
+                    json!(stats["relay_payload_bytes"].as_u64().unwrap_or(0) + length as u64);
             }
             let result = access
                 .call(
@@ -952,7 +993,7 @@ async fn run_sync(
                 _ = cancel.changed() => Err("cancelled".into()),
                 _ = tokio::time::sleep(Duration::from_millis(options.timeout_ms)) => Err("sync deadline exceeded".into()),
                 result = async {
-                    let (sent, received) = tokio::try_join!(pump(&access, &handles[1], &handles[0]), pump(&access, &handles[0], &handles[1]))?;
+                    let (sent, received) = tokio::try_join!(pump(&access, &handles[1], &handles[0], None), pump(&access, &handles[0], &handles[1], None))?;
                     let (sender, receiver) = tokio::try_join!(exit_status(&access, &handles[1]), exit_status(&access, &handles[0]))?;
                     if sender["exit_code"] != 0 || receiver["exit_code"] != 0 {
                         return Err(format!("system rsync failed: sender={sender}; receiver={receiver}"));
@@ -997,6 +1038,32 @@ async fn run_port(
     options: PortOptions,
     capacity: Arc<Semaphore>,
 ) {
+    let deadline = Instant::now() + Duration::from_millis(options.ttl_ms);
+    task.value.lock().unwrap()["relay_payload_bytes"] = json!(0);
+    if options.transport != Transport::Relay {
+        match peer::run(&access, &task, &mut cancel, &options, deadline).await {
+            Ok(peer::Outcome::Closed) => {
+                task.finish("closed", None, None).await;
+                return;
+            }
+            Ok(peer::Outcome::Fallback(reason)) if options.transport == Transport::PreferDirect => {
+                task.value.lock().unwrap()["fallback_reason"] = json!(reason);
+            }
+            Ok(peer::Outcome::Fallback(reason)) => {
+                task.finish("failed", None, Some(reason.into())).await;
+                return;
+            }
+            Err(error) => {
+                task.finish("failed", None, Some(error)).await;
+                return;
+            }
+        }
+    }
+    if *cancel.borrow() || Instant::now() >= deadline {
+        task.finish("closed", None, None).await;
+        return;
+    }
+    task.value.lock().unwrap()["transport"] = json!("relay");
     let listener = match access
         .open(
             &options.listen.client_id,
@@ -1015,7 +1082,6 @@ async fn run_port(
     };
     task.value.lock().unwrap()["listener"] = listener.metadata.clone();
     task.update("running", None, None);
-    let deadline = Instant::now() + Duration::from_millis(options.ttl_ms);
     let (stop, stopped) = watch::channel(false);
     let mut connections = JoinSet::new();
     let outcome: Result<(), String> = loop {
@@ -1061,7 +1127,7 @@ async fn run_port(
             let result = if *stopped.borrow() { Ok((0, 0)) } else {
                 tokio::select! {
                     _ = stopped.changed() => Ok((0, 0)),
-                    result = async { tokio::try_join!(pump(&access, &source, &destination), pump(&access, &destination, &source)) } => result,
+                    result = async { tokio::try_join!(pump(&access, &source, &destination, Some(&task)), pump(&access, &destination, &source, Some(&task))) } => result,
                 }
             };
             let _ = tokio::join!(task.close_remote(&source), task.close_remote(&destination));

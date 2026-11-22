@@ -484,6 +484,34 @@ impl Runtime {
     pub async fn wait_discovery(&self) {
         self.backend.wait_discovery().await
     }
+    pub(crate) fn validate_peer_ports(&self) -> Result<(), String> {
+        // A direct stream cannot invoke a native call hook for each payload chunk.
+        if self
+            .tool_call_hook
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+        {
+            return Err("peer ports require the unhooked workspace network provider".into());
+        }
+        for name in [
+            "ssmcp.net.listen",
+            "ssmcp.net.accept",
+            "ssmcp.net.connect",
+            "ssmcp.net.read",
+            "ssmcp.net.write",
+            "ssmcp.net.shutdown",
+            "ssmcp.net.close",
+        ] {
+            let tool = self.registry.lookup(name)?;
+            if tool.provider != Provider::Workspace {
+                return Err("workspace network provider unavailable".into());
+            }
+            self.registry.validate(&tool)?;
+        }
+        Ok(())
+    }
+
     pub fn validate_reload(&self) -> Result<(), String> {
         #[cfg(target_os = "linux")]
         if let Some(pool) = self
@@ -680,6 +708,9 @@ impl Runtime {
         operation.validate()?;
         self.registry.ensure_open()?;
         let (name, arguments) = match operation {
+            Operation::PeerPort { .. } => {
+                return Err("peer control requires a negotiated relay connection".into());
+            }
             // Continuations retain an immutable view of the one registry. Calls
             // still validate the current provider and registration generation.
             Operation::ListTools { cursor: None } => {
