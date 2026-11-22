@@ -491,6 +491,7 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
+        crate::platform::private_directory(&path).unwrap();
         history::with_test_history(path.clone(), async {
             history::record("user", "Original conversation").unwrap();
             let source = Source::capture();
@@ -501,6 +502,7 @@ mod tests {
             assert_eq!(first["accepted"], true);
             assert_eq!(first["duplicate"], false);
             assert_eq!(first["recorded"], true);
+            assert_eq!(first["storage"], "memory");
             assert!(first["finish_request_id"].is_null());
             let retry = source.clone().blocking(|| send(arguments.clone())).unwrap();
             assert_eq!(retry["duplicate"], true);
@@ -519,6 +521,7 @@ mod tests {
             )).unwrap();
             assert_eq!(panel["accepted"], true);
             assert_eq!(panel["recorded"], true);
+            assert_eq!(panel["storage"], "memory");
             assert!(panel["finish_request_id"].is_null());
             let original = history::read(&owner).unwrap();
             assert_eq!(original.messages.iter().filter(|message| message.role == "assistant").count(), 2);
@@ -536,6 +539,7 @@ mod tests {
             assert_eq!(other.messages.len(), 1);
             assert_eq!(other.messages[0].role, "user");
         }).await;
+        assert!(std::fs::read_dir(&path).unwrap().next().is_none());
         std::fs::remove_dir_all(path).unwrap();
     }
 }

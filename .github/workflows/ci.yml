@@ -233,6 +233,25 @@ jobs:
             ${{ runner.temp }}/ssmcp-multi-user-runtime-report.json
             target/acceptance/interactions-*/*.json
             target/acceptance/interactions-*/*.txt
+            target/acceptance/client-ui/ui-*.json
+            target/acceptance/canvas-logs/report.json
+            target/acceptance/canvas-logs/ui-canvas-*.json
+            target/acceptance/composer.json
+            target/acceptance/questions.json
+            target/acceptance/questions/questions-*.json
+            target/acceptance/input-history/report.json
+            target/acceptance/input-history/input-history-*.json
+            target/acceptance/input-history/input-history-*.txt
+            target/acceptance/worker-windows-*/report.json
+            target/acceptance/worker-windows-*/evidence/tall-paused-logs.json
+            target/acceptance/worker-windows-*/evidence/*-task-start.json
+            target/acceptance/worker-windows-*/evidence/*-task-middle.json
+            target/acceptance/worker-windows-*/evidence/*-task-end-incoming.json
+            target/acceptance/worker-windows-*/evidence/wide-command-summary.json
+            target/acceptance/worker-windows-*/evidence/wide-command-expanded.json
+            target/acceptance/worker-windows-*/evidence/busy-worker-reload.json
+            target/acceptance/worker-windows-*/evidence/*.txt
+            target/acceptance/worker-windows-*/evidence/*.png
           if-no-files-found: warn
           retention-days: 14
       - run: cargo build --locked --release

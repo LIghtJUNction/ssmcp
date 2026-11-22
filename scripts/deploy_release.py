@@ -16,6 +16,7 @@ import re
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tarfile
@@ -126,6 +127,7 @@ RELEASE_SOURCE_REWRITES_SHA256 = 'd9cd1a5c0bccf2d6bd495d4bcc34bc764d9b120e6baa8c
 CORE_ASSET_NAMES = {"portal.css", "portal-refresh.css", "traffic-meter.js", "client-install-copy.js", "copy-command.js"}
 LEGAL_PATHS = ("/legal/terms", "/legal/privacy", "/legal/refund")
 PROXY_CONFIG = "/etc/nginx/conf.d/ssmcp.lmm.best.conf"
+MAINTENANCE_HEADER = "X-SSMCP-Maintenance"
 SANDBOX_PROPERTIES = ("User", "Group", "NoNewPrivileges", "PrivateTmp", "PrivateDevices", "ProtectKernelTunables", "ProtectControlGroups", "ProtectHome", "ProtectSystem", "ReadWritePaths", "RestrictAddressFamilies", "PrivateNetwork", "UMask")
 
 
@@ -241,15 +243,45 @@ def backup(expected, output=None):
             archive.addfile(item, io.BytesIO(data))
 
 
-def request(base, path, payload=None, *, timeout=12, include_headers=False):
+def read_maintenance_token(path):
+    require(isinstance(path, str) and Path(path).is_absolute(), "maintenance_token_absolute_path")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            metadata = os.fstat(fd)
+            require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == 0 and
+                    stat.S_IMODE(metadata.st_mode) == 0o600, "maintenance_token_private_file")
+            data = os.read(fd, 66)
+        finally:
+            os.close(fd)
+    except OSError:
+        raise RuntimeError("maintenance_token_unavailable") from None
+    require(re.fullmatch(rb"[0-9a-f]{64}\n?", data), "maintenance_token_format")
+    return data
+
+
+def maintenance_token(base, maintenance):
+    require(re.fullmatch(r"https://[A-Za-z0-9.-]+(?::[0-9]+)?", base) and
+            base == maintenance["origin"], "maintenance_public_origin")
+    data = read_maintenance_token(maintenance["token_file"])
+    require(hashlib.sha256(data).hexdigest() == maintenance["token_sha256"], "maintenance_token_changed")
+    return data.rstrip(b"\n").decode("ascii")
+
+
+def request(base, path, payload=None, *, timeout=12, include_headers=False, maintenance=None):
+    headers = {"Content-Type": "application/json", "Cache-Control": "no-cache", "Accept-Encoding": "identity"}
+    if maintenance is not None:
+        require(payload is None and path.startswith("/") and not path.startswith("//") and
+                "\r" not in path and "\n" not in path, "maintenance_probe_path")
+        headers[MAINTENANCE_HEADER] = maintenance_token(base, maintenance)
     url = urlsplit(base)
     cls = http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection
     conn = cls(url.hostname, url.port, timeout=timeout)
     try:
         conn.request("GET" if payload is None else "POST", path,
                      body=None if payload is None else json.dumps(payload),
-                     headers={"Content-Type": "application/json", "Cache-Control": "no-cache",
-                              "Accept-Encoding": "identity"})
+                     headers=headers)
+        # http.client returns redirects as responses; never forward the private header.
         response = conn.getresponse()
         body = response.read(8_388_609)
         require(len(body) <= 8_388_608, "response_exceeds_probe_limit")
@@ -259,12 +291,12 @@ def request(base, path, payload=None, *, timeout=12, include_headers=False):
     finally:
         conn.close()
 
-def health(base, *, deadline=None):
+def health(base, *, deadline=None, maintenance=None):
     limit = time.monotonic() + 30
     deadline = limit if deadline is None else min(limit, deadline)
     while (remaining := deadline - time.monotonic()) > 0:
         try:
-            status, body = request(base, "/healthz", timeout=min(3, remaining))
+            status, body = request(base, "/healthz", timeout=min(3, remaining), maintenance=maintenance)
             if status == 200 and body.strip() == b"ok" and time.monotonic() <= deadline:
                 return
         except (OSError, http.client.HTTPException):
@@ -315,14 +347,14 @@ def proxy_fragment(html):
     return fragment
 
 
-def public_baseline(base):
+def public_baseline(base, *, maintenance=None):
     require(re.fullmatch(r"https://[A-Za-z0-9.-]+(?::[0-9]+)?", base), "baseline_public_origin")
-    status, html = request(base, "/")
+    status, html = request(base, "/", maintenance=maintenance)
     require(status == 200, "baseline_homepage")
     fragment = proxy_fragment(html)
     legal = {}
     for path in LEGAL_PATHS:
-        status, body = request(base, path)
+        status, body = request(base, path, maintenance=maintenance)
         require(status == 200, "baseline_legal_page")
         legal[path] = {"sha256": hashlib.sha256(body).hexdigest(), "bytes": len(body)}
     return {"proxy_fragment_sha256": hashlib.sha256(fragment).hexdigest(),
@@ -330,8 +362,9 @@ def public_baseline(base):
             "legal_pages": legal}
 
 def checks(base, r, *, public=False):
-    health(base)
-    status, html = request(base, "/")
+    maintenance = r.get("maintenance") if public else None
+    health(base, maintenance=maintenance)
+    status, html = request(base, "/", maintenance=maintenance)
     require(status == 200, "homepage")
     page = Page(html)
     require(not page.unversioned_resources, "unversioned_page_resource")
@@ -341,7 +374,7 @@ def checks(base, r, *, public=False):
         require(set(page.assets) == set(r["assets"]), "page_asset_set_changed_after_stage")
     asset_checks = {}
     for name, url in sorted(page.assets.items()):
-        status, body, headers = request(base, url, include_headers=True)
+        status, body, headers = request(base, url, include_headers=True, maintenance=maintenance)
         require(status == 200, "asset_status_" + name)
         if name not in r["assets"]:
             require(not public and not r.get("assets_frozen") and name not in CORE_ASSET_NAMES,
@@ -362,14 +395,14 @@ def checks(base, r, *, public=False):
         require(page.footers == 1, "single_public_footer")
         require(page.pricing == 1 and page.policy_navs == 1, "single_public_pricing_and_policy")
         for path, expected in baseline["legal_pages"].items():
-            status, body = request(base, path)
+            status, body = request(base, path, maintenance=maintenance)
             require(status == 200 and len(body) == expected["bytes"] and
                     hashlib.sha256(body).hexdigest() == expected["sha256"], "legal_page_changed")
     else:
         require(page.footers == 0 and page.pricing == 0 and page.policy_navs == 0, "direct_page_has_no_proxy_footer")
-    require(request(base, "/mcp")[0] == 401, "mcp_rejects_unauthenticated")
-    require(request(base, "/account/admin")[0] in [302, 303, 401, 403], "admin_rejects_unauthenticated")
-    status, metadata = request(base, "/.well-known/oauth-authorization-server")
+    require(request(base, "/mcp", maintenance=maintenance)[0] == 401, "mcp_rejects_unauthenticated")
+    require(request(base, "/account/admin", maintenance=maintenance)[0] in [302, 303, 401, 403], "admin_rejects_unauthenticated")
+    status, metadata = request(base, "/.well-known/oauth-authorization-server", maintenance=maintenance)
     require(status == 200 and json.loads(metadata)["issuer"] == r["public_url"], "oauth_issuer")
     return {"health": True, "homepage": True, "assets": asset_checks,
             "proxy_pricing_policy_preserved": public, "single_public_footer": public,
@@ -567,6 +600,8 @@ def apply(path):
             receipt.update(status="staged", running_sha256=live["live_sha256"],
                            configuration_unchanged=True, original_units_preserved=True, proxy_unchanged=True)
             return 0
+        if r.get("maintenance") is not None:
+            maintenance_token(r["public_url"], r["maintenance"])
         require(all(Path(p).name < dropin.name for p in r["before"]["units"]
                     if p.endswith(".conf") and p != str(dropin)), "dropin_precedence")
         dropin.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -610,9 +645,10 @@ def apply(path):
                 restore_dropin(dropin, r["managed_dropin_before"])
                 run(["systemctl", "daemon-reload"], deadline=rollback_deadline)
                 run(["systemctl", "restart", SERVICE], deadline=rollback_deadline)
-                health(r["public_url"], deadline=rollback_deadline)
+                health(r["public_url"], deadline=rollback_deadline, maintenance=r.get("maintenance"))
                 require(same_lease(r["before"], snapshot(deadline=rollback_deadline)), "rollback_lease_mismatch")
-                status, old_html = request(r["public_url"], "/", timeout=min(10, max(1, rollback_deadline - time.monotonic())))
+                status, old_html = request(r["public_url"], "/", timeout=min(10, max(1, rollback_deadline - time.monotonic())),
+                                           maintenance=r.get("maintenance"))
                 baseline = r["public_baseline"]
                 require(status == 200 and Page(old_html).footers == baseline["footer_count"] and
                         hashlib.sha256(proxy_fragment(old_html)).hexdigest() == baseline["proxy_fragment_sha256"], "rollback_public_fingerprint")
@@ -838,6 +874,9 @@ def prepare(intent, folder):
     tag, commit = intent["tag"], intent["commit"]
     version = tag[1:]
     public_url = configure_target()
+    maintenance = intent.get("maintenance")
+    if maintenance is not None:
+        maintenance_token(public_url, maintenance)
     release = json.loads(fetch("https://api.github.com/repos/" + REPOSITORY + "/releases/tags/" + tag, 1_048_576))
     manifest_url = "https://github.com/" + REPOSITORY + "/releases/download/" + tag + "/release-manifest.json"
     manifest_assets = [asset for asset in release.get("assets", []) if asset.get("name") == "release-manifest.json"]
@@ -867,6 +906,8 @@ def prepare(intent, folder):
                "before": before, "expected_live_sha256": before["live_sha256"], "expected_live_exe": before["exe"],
                "daemon_sha256": sha(folder / "candidate"), "runner_sha256": sha(folder / "runner.js"),
                "helper_sha256": sha(__file__), "assets": assets, "release": record}
+    if maintenance is not None:
+        request["maintenance"] = maintenance
     if intent.get("stage_only"):
         request["stage_only"] = True
     else:
@@ -881,7 +922,7 @@ def prepare(intent, folder):
             os.fsync(stream.fileno())
         verify_checkpoint(folder / "backup.tar", before)
         request.update(backup_sha256=sha(folder / "backup.tar"),
-                       public_baseline=public_baseline(public_url), managed_dropin_before=saved)
+                       public_baseline=public_baseline(public_url, maintenance=maintenance), managed_dropin_before=saved)
     save(folder / "request.json", request)
     return request
 
@@ -975,11 +1016,12 @@ def main():
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--stage-only", action="store_true", help="validate the candidate in isolation without switching the live service")
+    parser.add_argument("--maintenance-token-file", help="root-owned 0600 file with a temporary 64-hex public-probe token")
     args = parser.parse_args()
     os.umask(0o077)
     require(os.geteuid() == 0, "root_required")
     if args.status:
-        require(not args.worker and not args.stage_only and not any([args.tag, args.commit, args.run_id]), "status_has_no_arguments")
+        require(not args.worker and not args.stage_only and not any([args.tag, args.commit, args.run_id, args.maintenance_token_file]), "status_has_no_arguments")
         current = snapshot()
         print(json.dumps({"service_active": True, "version": run([current["exe"], "--version"]), "sha256": current["live_sha256"]}))
         return 0
@@ -990,6 +1032,10 @@ def main():
     intent = {"tag": args.tag, "commit": args.commit, "run_id": args.run_id}
     if args.stage_only:
         intent["stage_only"] = True
+    if args.maintenance_token_file is not None:
+        token_data = read_maintenance_token(args.maintenance_token_file)
+        intent["maintenance"] = {"origin": configure_target(), "token_file": args.maintenance_token_file,
+                                 "token_sha256": hashlib.sha256(token_data).hexdigest()}
     if args.worker:
         require(folder.is_dir() and not folder.is_symlink() and folder.stat().st_uid == 0 and
                 json.loads((folder / "intent.json").read_text()) == intent, "owned_worker_request")
@@ -1010,6 +1056,8 @@ def main():
              "--worker", "--tag", args.tag, "--commit", args.commit, "--run-id", args.run_id]
         if args.stage_only:
             command.append("--stage-only")
+        if args.maintenance_token_file is not None:
+            command.extend(["--maintenance-token-file", args.maintenance_token_file])
         run(command)
     deadline = time.monotonic() + 1020
     while time.monotonic() < deadline:
