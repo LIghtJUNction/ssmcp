@@ -25,6 +25,7 @@ pub(crate) enum Source {
     Copy(String),
     Web(WebAction),
     Handoff(String),
+    #[cfg(all(test, unix))]
     Context { command: String, arguments: String },
 }
 #[derive(Debug)]
@@ -43,6 +44,7 @@ pub(crate) enum Loaded {
         description: String,
         files: files::ImportedFiles,
     },
+    #[cfg(test)]
     Context(String),
     Copied,
     WebNotice(&'static str),
@@ -339,6 +341,7 @@ pub(crate) async fn load(source: Source, workspace: &Workspace) -> Result<Loaded
             )
             .await
         }
+        #[cfg(all(test, unix))]
         Source::Context { command, arguments } => tokio::task::spawn_blocking(move || {
             super::context_memory::command(&command, &arguments).map(Loaded::Context)
         })

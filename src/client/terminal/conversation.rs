@@ -2340,8 +2340,11 @@ impl State {
             return Err("A local input job is still running; your draft is preserved".into());
         }
         let copying = matches!(&source, attachments::Source::Copy(_));
+        #[cfg(all(test, unix))]
         let context = matches!(&source, attachments::Source::Context { .. });
-        let inserts = !copying && !context && !web;
+        let inserts = !copying && !web;
+        #[cfg(all(test, unix))]
+        let inserts = inserts && !context;
         if inserts
             && self.conversation.paste_recovery.is_some()
             && !self.conversation.retrying_paste
@@ -2373,18 +2376,20 @@ impl State {
         self.conversation.input_task = Some(task);
         self.conversation.input_stamp = Some(stamp);
         self.conversation.input_command = original;
-        self.notice = Some(
-            if copying {
-                "Copying text to the system clipboard…"
-            } else if web {
-                "Requesting the local browser or clipboard…"
-            } else if context {
-                "Reading local context…"
-            } else {
-                "Preparing local input… · You can keep editing; changed drafts will not be replaced"
-            }
-            .into(),
-        );
+        let notice = if copying {
+            "Copying text to the system clipboard…"
+        } else if web {
+            "Requesting the local browser or clipboard…"
+        } else {
+            "Preparing local input… · You can keep editing; changed drafts will not be replaced"
+        };
+        #[cfg(all(test, unix))]
+        let notice = if context {
+            "Reading local context…"
+        } else {
+            notice
+        };
+        self.notice = Some(notice.into());
         self.dirty = true;
         Ok(())
     }
@@ -2430,6 +2435,7 @@ impl State {
                 self.notice = Some("Text copied to the system clipboard".into());
             }
             Ok(attachments::Loaded::WebNotice(notice)) => self.notice = Some(notice.into()),
+            #[cfg(test)]
             Ok(attachments::Loaded::Context(text)) => {
                 let mut record = String::from("\n[CONTEXT]\n");
                 for line in markdown::rows(&text, self.geometry.left, &self.ui) {

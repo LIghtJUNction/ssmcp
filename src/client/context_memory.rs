@@ -1,9 +1,11 @@
 //! Retired persistent context memory. Live request ownership stays in the history module.
+#[cfg(test)]
 use super::interface::history;
 use serde_json::{Value, json};
 
 const RETIRED: &str =
     "tool_retired: context memory has been removed; only live process logs are available";
+#[cfg(test)]
 const COMMAND_RETIRED: &str =
     "command_retired: context memory has been removed; only live process logs are available";
 
@@ -13,6 +15,7 @@ pub(crate) fn initialize() -> Result<(), String> {
 }
 
 /// Retained for callers publishing live records; no second copy is kept.
+#[cfg(test)]
 pub(crate) fn record_history(
     _workspace: &str,
     _conversation_id: &str,
@@ -22,6 +25,7 @@ pub(crate) fn record_history(
 }
 
 /// Delivery ownership and acknowledgements remain with the request machinery.
+#[cfg(test)]
 pub(crate) fn record_delivered_history(
     _workspace: &str,
     _conversation_id: &str,
@@ -34,6 +38,7 @@ pub(crate) fn record_delivered_history(
 }
 
 /// Responses no longer carry remembered conversation text or checkpoints.
+#[cfg(test)]
 pub(crate) fn snapshot_for_tool() -> Option<Value> {
     None
 }
@@ -79,6 +84,7 @@ pub(crate) fn call(name: &str, _arguments: Value) -> Result<Value, String> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn command(name: &str, _arguments: &str) -> Result<String, String> {
     match name {
         "context" | "memory" | "compact" | "fork" | "switch" => Err(COMMAND_RETIRED.into()),

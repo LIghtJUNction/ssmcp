@@ -1,5 +1,6 @@
 //! Local draft editing and rendering; submission and queue ownership live outside this module.
 use super::{completion, ui::Ui};
+#[cfg(test)]
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -9,6 +10,7 @@ const MAX_HISTORY_ENTRIES: usize = 64;
 const MAX_HISTORY_BYTES: usize = 256 * 1024;
 
 /// Local input navigation only; accepted requests are never resubmitted from this state.
+#[cfg(test)]
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct InputHistory {
@@ -17,6 +19,7 @@ pub(super) struct InputHistory {
     saved_draft: Option<(String, usize)>,
 }
 
+#[cfg(test)]
 impl InputHistory {
     pub(super) fn validate(&self) -> Result<(), String> {
         if self.entries.len() > MAX_HISTORY_ENTRIES
@@ -490,6 +493,7 @@ impl Composer {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn reload_history(&self) -> InputHistory {
         InputHistory {
             entries: self.history.clone(),
@@ -498,6 +502,7 @@ impl Composer {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn restore_reload_history(&mut self, history: InputHistory) -> Result<(), String> {
         history.validate()?;
         self.history_bytes = history.entries.iter().map(String::len).sum();

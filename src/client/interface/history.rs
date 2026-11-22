@@ -1,6 +1,8 @@
 //! Bounded process-local conversation records for live display and request ownership.
 //! No history, archive or checkpoint is read from or written to disk.
+#[cfg(test)]
 pub(crate) mod archive;
+#[cfg(test)]
 pub(crate) mod descriptions;
 pub(crate) mod goals;
 mod listener;
@@ -72,6 +74,7 @@ pub(crate) struct Conversation {
     pub messages: Vec<Message>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct SessionSummary {
     pub id: String,
@@ -489,6 +492,7 @@ impl History {
         Ok(false)
     }
 
+    #[cfg(test)]
     fn summary(&self, conversation: &Conversation) -> SessionSummary {
         let title = conversation
             .messages
@@ -528,6 +532,7 @@ impl History {
         }
     }
 
+    #[cfg(test)]
     fn sessions(&self) -> Result<Vec<SessionSummary>, String> {
         Ok(self
             .conversations
@@ -536,6 +541,7 @@ impl History {
             .collect())
     }
 
+    #[cfg(test)]
     fn read(&self, id: &str) -> Result<Conversation, String> {
         self.load(id)
     }
@@ -557,6 +563,7 @@ impl History {
         Ok(conversation)
     }
 
+    #[cfg(test)]
     fn release_current(&mut self) {
         self.active = None;
         self.ownership.release();
@@ -595,6 +602,7 @@ pub(crate) fn current() -> Result<Option<Conversation>, String> {
     with(|history| history.current())
 }
 
+#[cfg(test)]
 pub(crate) fn release_current() -> Result<(), String> {
     with(|history| {
         history.release_current();
@@ -603,9 +611,11 @@ pub(crate) fn release_current() -> Result<(), String> {
     })
 }
 
+#[cfg(all(test, unix))]
 pub(crate) fn sessions() -> Result<Vec<SessionSummary>, String> {
     with(|history| history.sessions())
 }
+#[cfg(test)]
 pub(crate) fn read(id: &str) -> Result<Conversation, String> {
     with(|history| history.read(id))
 }
@@ -618,6 +628,7 @@ pub(crate) fn resume_test_history(id: &str) -> Result<Conversation, String> {
     with(|history| history.resume(id))
 }
 
+#[cfg(test)]
 pub(crate) fn resume(_id: &str) -> Result<Conversation, String> {
     Err(HISTORY_RETIRED.into())
 }

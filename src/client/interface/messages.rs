@@ -145,6 +145,7 @@ impl Cache {
             receipt,
         });
     }
+    #[cfg(test)]
     fn restore_copy(&mut self, messages: &[super::history::Message]) {
         self.last_copy = messages
             .iter()
@@ -247,6 +248,7 @@ pub(crate) fn last_text() -> Option<String> {
         .last_copy
         .clone()
 }
+#[cfg(test)]
 pub(super) fn restore_copy(messages: &[super::history::Message]) {
     cache()
         .lock()

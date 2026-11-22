@@ -152,6 +152,7 @@ impl Ownership {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn revoke(&mut self, id: &str) {
         self.issued.remove(id);
         if self
@@ -164,6 +165,7 @@ impl Ownership {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn release(&mut self) {
         self.issued.clear();
         self.current.replace(None);
