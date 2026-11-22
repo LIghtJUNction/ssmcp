@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Retry only read-only gh api EOF failures; preserve successful response bytes."""
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import time
+
+
+def read_only(arguments):
+    if not arguments or arguments[0] != "api":
+        return False
+    endpoints = []
+    index = 1
+    while index < len(arguments):
+        item = arguments[index]
+        if item == "--hostname":
+            index += 1
+            if index >= len(arguments) or arguments[index] != "github.com":
+                return False
+        elif item == "--allow-escape-sequences":
+            pass
+        elif item.startswith("-"):
+            return False
+        else:
+            endpoints.append(item)
+        index += 1
+    return len(endpoints) == 1 and endpoints[0].lstrip("/").startswith("repos/")
+
+
+def record(arguments, attempt, result, retry, elapsed, timed_out=False, request_arguments=None):
+    row = {"argv": arguments, "request_argv": request_arguments or arguments,
+           "attempt": attempt, "exit_code": result.returncode,
+           "stdout_bytes": len(result.stdout), "stdout_sha256": hashlib.sha256(result.stdout).hexdigest(),
+           "stderr_bytes": len(result.stderr), "stderr_sha256": hashlib.sha256(result.stderr).hexdigest(),
+           "retry_for_eof": retry, "elapsed_ms": round(elapsed * 1000), "timed_out": timed_out}
+    data = (json.dumps(row, separators=(",", ":")) + "\n").encode()
+    fd = os.open(os.environ["SSMCP_H2_HTTP_READ_LOG"], os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        if os.write(fd, data) != len(data):
+            raise OSError("incomplete transport observation record")
+    finally:
+        os.close(fd)
+
+
+def main():
+    real = os.environ["SSMCP_H2_REAL_GH"]
+    if not os.path.isabs(real) or os.path.realpath(real) == os.path.realpath(__file__):
+        raise ValueError("an independent absolute gh executable is required")
+    arguments = sys.argv[1:]
+    if not read_only(arguments):
+        os.execv(real, [real, *arguments])
+    deadline = time.monotonic() + 55
+    for attempt in range(1, 4):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("read-only transport retry budget expired")
+        started = time.monotonic()
+        request_arguments = list(arguments)
+        # Preserve the resource path and every original query parameter. The
+        # inert nonce only requests a fresh GET response after a transport EOF.
+        if attempt > 1:
+            for index, value in enumerate(request_arguments):
+                if value.lstrip("/").startswith("repos/"):
+                    separator = "&" if "?" in value else "?"
+                    request_arguments[index] = value + separator + "ssmcp_transport_nonce=" + str(time.time_ns())
+        try:
+            result = subprocess.run([real, *request_arguments], stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    timeout=remaining)
+        except subprocess.TimeoutExpired as error:
+            partial = subprocess.CompletedProcess([real, *arguments], None,
+                                                  error.stdout or b"", error.stderr or b"")
+            record(arguments, attempt, partial, False, time.monotonic() - started, timed_out=True,
+                   request_arguments=request_arguments)
+            sys.stderr.buffer.write(b"Read-only GitHub request timed out; no retry\n")
+            return 124
+        eof = result.stderr.rstrip().endswith(b": EOF") or result.stderr.rstrip().endswith(b": unexpected EOF")
+        retry = result.returncode != 0 and eof and attempt < 3 and deadline - time.monotonic() > 1
+        record(arguments, attempt, result, retry, time.monotonic() - started,
+               request_arguments=request_arguments)
+        if not retry:
+            sys.stdout.buffer.write(result.stdout)
+            sys.stdout.buffer.flush()
+            sys.stderr.buffer.write(result.stderr)
+            sys.stderr.buffer.flush()
+            return result.returncode
+        time.sleep(0.25 * attempt)
+    raise AssertionError("unreachable retry state")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

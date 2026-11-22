@@ -1,0 +1,48 @@
+{
+  "source_commit": "61a4de1cf522358691998ecb724b4a8518b91c47",
+  "original_dispatch_inputs": {
+    "tag": "v0.10.27",
+    "deploy_server": false,
+    "build_only": false
+  },
+  "source_based_expected_policy": {
+    "publish": "true",
+    "deploy_server": "false",
+    "version": "0.10.27",
+    "deployment_deferred": null
+  },
+  "changes": [
+    "Three exact version-string replacements",
+    "Historical deferral reason replaced with exact None for v27 absent from reviewed map",
+    "Explanatory comment and exact-check error label updated"
+  ],
+  "preserved": [
+    "Exact policy dictionary equality",
+    "All control flow and validation functions",
+    "Original dispatch and native execution receipt checks",
+    "Registry publication deferral",
+    "Main verifier bytes",
+    "Dispatch adapter bytes"
+  ],
+  "reverse_delta_exact_bytes": true,
+  "files": {
+    "verify_published_manual_main.py": {
+      "bytes": 48829,
+      "sha256": "5f2d7443d7e110b47ea0f8f341e78942e198a8f3a8aaed46323ee311d888478c",
+      "previous_sha256": "5f2d7443d7e110b47ea0f8f341e78942e198a8f3a8aaed46323ee311d888478c",
+      "changed": false
+    },
+    "manual_main_provenance.py": {
+      "bytes": 43791,
+      "sha256": "74aaa82cea8889006aa214e4354160dc6f7974082d7206846cafd9487d36fe19",
+      "previous_sha256": "4683164cc124e4f048f6d64c8fd481f1b9970be0ff4c2364607039f6b24d9bcf",
+      "changed": true
+    },
+    "dispatch_receipt_adapter.py": {
+      "bytes": 14758,
+      "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4",
+      "previous_sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4",
+      "changed": false
+    }
+  }
+}

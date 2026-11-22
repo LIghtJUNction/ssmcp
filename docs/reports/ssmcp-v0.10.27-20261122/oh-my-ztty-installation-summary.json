@@ -1,0 +1,185 @@
+{
+  "activation_semantics": "Helper-owned lock, last observed pointer identity check, and atomic replacement; no global compare-and-swap claim",
+  "base": {
+    "archive_sha256": "ea25cb52434bbf018e5975c17ae892ed50e2a3d2c9101ab0abbf02b7740dc79e",
+    "build": {
+      "platform": "linux-x86_64",
+      "schema": 2,
+      "source_branches": {
+        "ssmcp": "main",
+        "zdot": "main",
+        "zfetch": "main",
+        "zmem": "main",
+        "zrc": "main",
+        "zshard": "main",
+        "ztty": "main"
+      },
+      "source_commits": {
+        "ssmcp": "a359d2cd48f48eb41267c8ec1e2642d9ba3bdd66",
+        "zdot": "645fa9a5504672cf7f1ffee522c9889cabb111f3",
+        "zfetch": "f0614f3b76eca222f4b3880f8dd1707d1308f098",
+        "zmem": "8f8b5be52d24339fb7cc44e2bbe1b62e07de08ae",
+        "zrc": "31f37e9bb8f5c5adcf195f68692c47ec7ea26705",
+        "zshard": "f7842f70e439c4abda2a46698f0ebe067d38b297",
+        "ztty": "c0f195d9b93065040b4efef35f3615831db11b38"
+      },
+      "sources_updated_at": "2026-11-22T08:12:55+00:00",
+      "suite_version": "0.2.10"
+    },
+    "dependencies_lock_sha256": "de16f4d3a1c228ca4e7afe089932d0648275a57449825baf908376466b291528",
+    "manifest_sha256": "c62783172a7e506be9f864552901e5ade824bc2bb46e1bd670e32caad92daab1",
+    "release_id": 454302797,
+    "release_url": "https://github.com/LIghtJUNction/oh-my-ztty/releases/tag/v0.2.10",
+    "tag_commit": "9048bc1c6a20647e38893d4e1e84727f096dab98"
+  },
+  "completion": {
+    "check_state": "current",
+    "generation": "923450ad4b4b15e0883968e9a16a687de908580b35ac1480f707901454d5251e",
+    "manifest": {
+      "bytes": 8992,
+      "sha256": "923450ad4b4b15e0883968e9a16a687de908580b35ac1480f707901454d5251e"
+    },
+    "observed_version": "ssmcp 0.10.27",
+    "refresh_state": "current"
+  },
+  "completion_source": {
+    "commit": "335e387af36bdf67fcc0b9dc67927dacb9825a72",
+    "repository": "LIghtJUNction/oh-my-ztty"
+  },
+  "current_target": "releases/0.2.10-linux-x86_64-completion-335e387a-ssmcp-77ef144f67d0",
+  "entry": "$HOME/.local/bin/omztty",
+  "installation_kind": "local-revision",
+  "observed_at": "2026-11-22T09:41:17.897688+00:00",
+  "official_oh_my_ztty_release": false,
+  "old_release_retained": true,
+  "passed": true,
+  "personal_completion": {
+    "bytes": 1919225,
+    "matches_full_refresh_fingerprint": true,
+    "mode": "0o600"
+  },
+  "preferences_match_original": true,
+  "profile_link_matches_original": true,
+  "receipts": {
+    "activation/activation-receipt.json": {
+      "bytes": 588,
+      "sha256": "1cd6cfbbcda8739839416e6efdad0a346ee826e71e054a741cb15ca73e7c9a90"
+    },
+    "config.json": {
+      "bytes": 2581,
+      "sha256": "457b2c39ebab33fcbe8aeb1a68b50e231d082eb86e087197caf5ebfca431fce8"
+    },
+    "install.py": {
+      "bytes": 14499,
+      "sha256": "2bc2269783295734c089a5a2bc02be3bd5909c7e73466156937878e6875f30b5"
+    },
+    "refresh.json": {
+      "bytes": 2281,
+      "sha256": "43d714fa88e1a364bfa7e919830322492f2bd8f0ba3eb918c7658024f3d609e2"
+    },
+    "stage/stage-receipt.json": {
+      "bytes": 424,
+      "sha256": "81918226328b04d93bed385f20daa972f969dd0561b51f0c128ab9e737b8c7a0"
+    }
+  },
+  "repository_source_lock": {
+    "commit": "c4d94d20018ece30a729239e46c8d5e7dfe34782",
+    "existing_source_sync_commit": "0fd1d49127d6d537a5ea1d0309db3dcc35be3c43",
+    "ssmcp": "61a4de1cf522358691998ecb724b4a8518b91c47"
+  },
+  "schema_version": 1,
+  "scope": "Activated oh-my-ztty local revision and completion readback",
+  "selected_files": {
+    "BUILD.json": {
+      "bytes": 3774,
+      "sha256": "54478885e277362dcd51e1345cd20da615d1bde6cddd178b9f14a368b4cc880a"
+    },
+    "MANIFEST.sha256": {
+      "bytes": 13450,
+      "sha256": "34541230b8f92165856f90522af70217dcdd0b7f5210ac1592248cd426cb112f"
+    },
+    "VERSION": {
+      "bytes": 7,
+      "sha256": "011cfdb24c667a75861adfffaabe68e66358d982f437b47270ef09d86c6c6cd7"
+    },
+    "bin/code-mode.js": {
+      "bytes": 16571,
+      "sha256": "b56da636b2ca24b7b84398e57e56d270d5ef63c8f974946071faa9d455b48b30"
+    },
+    "bin/omztty-completion": {
+      "bytes": 22442,
+      "sha256": "e0d984fc09c44e7a0bf5367a6439bab613add5b13f3cda5c8603357aa582f432"
+    },
+    "bin/ssmcp": {
+      "bytes": 16072584,
+      "sha256": "77ef144f67d066df15f8cd7fcbfb5009e4c925ba96253fcb469e5625f9a5dc74"
+    },
+    "dependencies.lock.json": {
+      "bytes": 1626,
+      "sha256": "de16f4d3a1c228ca4e7afe089932d0648275a57449825baf908376466b291528"
+    },
+    "packaging/completions/_ssmcp": {
+      "bytes": 16536,
+      "sha256": "aa0add0588048c98ea6ddb87fb0cf9101b8e21f2914c919c79de016acaa08b21"
+    }
+  },
+  "services_changed_by_helper": false,
+  "source_fix_merge": "c4d94d20018ece30a729239e46c8d5e7dfe34782",
+  "source_fix_pr": "https://github.com/LIghtJUNction/oh-my-ztty/pull/11",
+  "source_report": {
+    "bytes": 10850,
+    "sha256": "d871d9212e7d05104d2ea4170916406a3ef5cd0f1319ac0df01ab03cc6da4f7c"
+  },
+  "ssmcp_override": {
+    "archive": {
+      "bytes": 11427031,
+      "id": 778426210,
+      "sha256": "f33208908c5878326aa0401a899271272e19a43f6ed2482baa80f89a7e26c5dd",
+      "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.27/ssmcp-x86_64-unknown-linux-gnu.tar.gz"
+    },
+    "binary": {
+      "bytes": 16072584,
+      "sha256": "77ef144f67d066df15f8cd7fcbfb5009e4c925ba96253fcb469e5625f9a5dc74"
+    },
+    "h2_install_gate": "passed",
+    "h2_verification": {
+      "bytes": 427915,
+      "exit_code": 0,
+      "run_attempt": 1,
+      "sha256": "98abea32d57e75ac6a617a0c1094ef22f728ff6d753bfc0db3d4fb6536f349c5",
+      "source_commit": "61a4de1cf522358691998ecb724b4a8518b91c47",
+      "status": "passed",
+      "stderr_eof": true,
+      "stdout_eof": true,
+      "workflow_head": "61a4de1cf522358691998ecb724b4a8518b91c47",
+      "workflow_run_id": 45002392978
+    },
+    "kind": "official-release",
+    "observed_version": "ssmcp 0.10.27",
+    "release_id": 454310910,
+    "release_url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.27",
+    "runner": {
+      "also_present_in_archive": true,
+      "bytes": 16571,
+      "sha256": "b56da636b2ca24b7b84398e57e56d270d5ef63c8f974946071faa9d455b48b30",
+      "source": "git:61a4de1cf522358691998ecb724b4a8518b91c47:src/code_mode.js"
+    },
+    "source_commit": "61a4de1cf522358691998ecb724b4a8518b91c47",
+    "tag": "v0.10.27",
+    "version": "0.10.27",
+    "workflow_run_id": 45002392978
+  },
+  "suite_version": "0.2.10",
+  "versions": [
+    {
+      "entry": "omztty",
+      "exit_code": 0,
+      "stdout": "oh-my-ztty 0.2.10\n"
+    },
+    {
+      "entry": "bundled ssmcp",
+      "exit_code": 0,
+      "stdout": "ssmcp 0.10.27\n"
+    }
+  ]
+}
