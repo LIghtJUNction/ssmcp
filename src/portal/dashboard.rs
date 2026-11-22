@@ -103,7 +103,14 @@ async fn sessions(
 ) -> Result<Response, Problem> {
     let (identity, csrf) = authenticate(&broker.portal, &headers).await?;
     let snapshot = checked_snapshot(&broker.portal, &identity, Scope::Own).await?;
-    Ok(Html(dashboard_view::sessions(&snapshot, &csrf)).into_response())
+    let accounts = broker.portal.storage(|store| store.summaries()).await?;
+    Ok(Html(dashboard_view::sessions(
+        &snapshot,
+        &csrf,
+        &accounts,
+        &broker.public_url,
+    ))
+    .into_response())
 }
 
 fn before_parameter(query: Option<&str>) -> Result<Option<u64>, Problem> {
@@ -155,7 +162,13 @@ async fn history(
     RawQuery(query): RawQuery,
 ) -> Result<Response, Problem> {
     let snapshot = history_snapshot(&broker, &headers, query.as_deref(), Scope::Own).await?;
-    Ok(Html(dashboard_view::history(&snapshot)).into_response())
+    let accounts = broker.portal.storage(|store| store.summaries()).await?;
+    Ok(Html(dashboard_view::history(
+        &snapshot,
+        &accounts,
+        &broker.public_url,
+    ))
+    .into_response())
 }
 
 async fn admin(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<Response, Problem> {
@@ -187,6 +200,7 @@ async fn admin(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<
         &csrf,
         &identity.subject,
         &balances.period,
+        &broker.public_url,
     ))
     .into_response())
 }
@@ -335,7 +349,13 @@ async fn admin_history(
     RawQuery(query): RawQuery,
 ) -> Result<Response, Problem> {
     let snapshot = history_snapshot(&broker, &headers, query.as_deref(), Scope::All).await?;
-    Ok(Html(dashboard_view::history(&snapshot)).into_response())
+    let accounts = broker.portal.storage(|store| store.summaries()).await?;
+    Ok(Html(dashboard_view::history(
+        &snapshot,
+        &accounts,
+        &broker.public_url,
+    ))
+    .into_response())
 }
 
 async fn disconnect(

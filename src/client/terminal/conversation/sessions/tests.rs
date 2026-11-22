@@ -118,7 +118,7 @@ fn session_process_thread_group_frames_show_ids_and_explicit_selection() {
         state.conversation.selected_agent = Some(format!("native:agent:{own}:{builder}"));
         let frame = state.chat_frame(Instant::now());
         let contents = screen_contents(&frame);
-        assert!(contents.contains("Sessions"));
+        assert!(contents.contains("Recipients"));
         assert!(contents.contains("process"));
         assert!(contents.contains("thread"));
         assert!(contents.contains("[x]"));
@@ -498,7 +498,7 @@ fn sidebar_hits_exist_only_for_visible_rows_in_the_current_frame() {
             .notice
             .as_deref()
             .unwrap()
-            .contains("Sessions changed")
+            .contains("Recipients changed")
     );
     state.conversation.process_generation -= 1;
     state.help = true;

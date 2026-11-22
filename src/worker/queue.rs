@@ -92,6 +92,45 @@ pub(crate) struct TaskPage {
     next_cursor: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct IdleSlot {
+    slot: usize,
+    epoch: u64,
+}
+
+/// Only capacity belongs in this projection. Logs, task text, timings and
+/// progress remain on the ordinary pool revision and never change this cursor.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+struct AvailabilityProjection {
+    idle_slots: Vec<IdleSlot>,
+    total: usize,
+    idle: usize,
+    working: usize,
+    offline: usize,
+    retiring: usize,
+    registered_workers: usize,
+    desired_total: usize,
+    queued: usize,
+    accepting: bool,
+    stopping: bool,
+    closed: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct Availability {
+    pub(crate) generation: String,
+    pub(crate) revision: u64,
+    scope: &'static str,
+    #[serde(flatten)]
+    projection: AvailabilityProjection,
+}
+
+impl Availability {
+    pub(crate) fn accepting(&self) -> bool {
+        self.projection.accepting
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TaskStatus {
@@ -219,6 +258,8 @@ struct State<T> {
     remote_ready: bool,
     sequence: u64,
     revision: u64,
+    availability_revision: u64,
+    availability: AvailabilityProjection,
     closed: bool,
     stopping: bool,
     unknown_keys: BTreeSet<(Actor, String)>,
@@ -249,6 +290,13 @@ impl<T: Clone> Queue<T> {
                 remote_ready: false,
                 sequence: 0,
                 revision: 0,
+                availability_revision: 0,
+                availability: AvailabilityProjection {
+                    total: count,
+                    offline: count,
+                    desired_total: count,
+                    ..AvailabilityProjection::default()
+                },
                 closed: false,
                 stopping: false,
                 unknown_keys: BTreeSet::new(),
@@ -263,6 +311,14 @@ impl<T: Clone> Queue<T> {
     }
 
     fn changed(&self, state: &mut State<T>) {
+        // Keep one bounded projection, not an event history. A transient change
+        // followed by restoration still advances the cursor, while log-only
+        // writes continue to wake existing pool observers without advancing it.
+        let availability = availability_projection(state);
+        if state.availability != availability {
+            state.availability = availability;
+            state.availability_revision = state.availability_revision.saturating_add(1);
+        }
         state.revision = state.revision.wrapping_add(1);
         self.changed.send_replace(state.revision);
     }
@@ -289,6 +345,28 @@ impl<T: Clone> Queue<T> {
             .manager
             .as_ref()
             .is_some_and(|manager| manager.matches(actor, client_id))
+    }
+
+    /// Observation never acquires management or registers an external worker.
+    pub(crate) fn availability(
+        &self,
+        actor: &Actor,
+        client_id: &str,
+    ) -> Result<Availability, String> {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        require_manager(&state, actor, client_id)?;
+        if state.availability_revision == u64::MAX {
+            return Err(
+                "worker availability revision exhausted; reconnect to obtain a new generation"
+                    .into(),
+            );
+        }
+        Ok(Availability {
+            generation: self.generation.clone(),
+            revision: state.availability_revision,
+            scope: "coordination_slots",
+            projection: state.availability.clone(),
+        })
     }
 
     pub(crate) fn attach(
@@ -525,11 +603,7 @@ impl<T: Clone> Queue<T> {
         if state.closed || state.stopping {
             return Err("worker pool is closed or stopped; no task was admitted".into());
         }
-        if !state.slots.iter().any(|slot| {
-            slot.enabled
-                && slot.retirement.is_none()
-                && (state.remote_ready || !matches!(slot.state, SlotState::Offline(_)))
-        }) {
+        if !has_execution_capacity(&state) {
             return Err("worker pool has no ready execution backend; no task was admitted".into());
         }
         if state.fifo.len() >= MAX_QUEUED {
@@ -1042,6 +1116,60 @@ impl<T: Clone> Queue<T> {
         self.changed(&mut state);
         Ok(())
     }
+}
+
+fn has_execution_capacity<T>(state: &State<T>) -> bool {
+    state.slots.iter().any(|slot| {
+        slot.enabled
+            && slot.retirement.is_none()
+            && (state.remote_ready || !matches!(slot.state, SlotState::Offline(_)))
+    })
+}
+
+fn availability_projection<T>(state: &State<T>) -> AvailabilityProjection {
+    let accepting = !state.closed
+        && !state.stopping
+        && !state.unknown_guard_full
+        && state.sequence < u64::MAX
+        && state.fifo.len() < MAX_QUEUED
+        && has_execution_capacity(state);
+    let mut projection = AvailabilityProjection {
+        desired_total: state.desired_total,
+        queued: state.fifo.len(),
+        accepting,
+        stopping: state.stopping,
+        closed: state.closed,
+        ..AvailabilityProjection::default()
+    };
+    for (index, slot) in state
+        .slots
+        .iter()
+        .enumerate()
+        .filter(|(_, slot)| slot.enabled)
+    {
+        projection.total += 1;
+        if slot.registered.is_some() {
+            projection.registered_workers += 1;
+        }
+        match &slot.state {
+            SlotState::Offline(_) => projection.offline += 1,
+            SlotState::Working(_) => projection.working += 1,
+            SlotState::Retiring => projection.retiring += 1,
+            SlotState::Idle => {
+                projection.idle += 1;
+                if accepting
+                    && slot.retirement.is_none()
+                    && (!state.remote_ready || slot.registered.is_some())
+                {
+                    projection.idle_slots.push(IdleSlot {
+                        slot: index,
+                        epoch: slot.epoch,
+                    });
+                }
+            }
+        }
+    }
+    projection
 }
 
 fn require_manager<T>(state: &State<T>, actor: &Actor, client_id: &str) -> Result<(), String> {

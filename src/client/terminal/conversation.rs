@@ -3167,7 +3167,7 @@ impl State {
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
                     if self.conversation.view == View::Statistics {
-                        return "Statistics · ↑↓ / PgUp/PgDn scroll · Esc back · → conversation".into();
+                        return "Statistics · ↑↓ / PgUp/PgDn scroll · Esc conversation · ←/→ panels".into();
                     }
                     if self.conversation.view == View::Tasks {
                         return if self.conversation.content_focus {
@@ -4517,7 +4517,7 @@ mod tests {
                 assert_eq!(shot.screen().size(), (nonzero(rows), nonzero(cols)));
                 if rows >= 10 && cols >= 80 {
                     let visible = shot.screen().contents();
-                    assert!(visible.contains("Sessions"));
+                    assert!(visible.contains("Recipients"));
                     assert!(visible.contains("Esc back"), "{cols}×{rows}: {visible}");
                     assert!(visible.contains("h live logs"), "{cols}×{rows}: {visible}");
                     assert!(!visible.contains("collab.join"));

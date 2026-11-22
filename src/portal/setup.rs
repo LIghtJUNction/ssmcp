@@ -308,7 +308,7 @@ impl From<Problem> for ApiError {
             Problem::UsernameBound => Self::new(
                 StatusCode::CONFLICT,
                 "username_bound",
-                "This GitHub account already has a username. Connect using its registered name.",
+                "This account already has a username. Connect using its current name, or rename it on the account page.",
             ),
             Problem::Banned => Self::new(
                 StatusCode::FORBIDDEN,
@@ -585,6 +585,7 @@ async fn page_inner(
         &csrf,
         &account,
         requested_username.as_deref(),
+        &broker.public_url,
     ))
     .into_response())
 }
@@ -782,19 +783,24 @@ fn client_consent_page(
     csrf: &str,
     account: &Account,
     requested_username: Option<&str>,
+    public_url: &str,
 ) -> String {
-    let username = requested_username.or(account.handle.as_deref());
-    let username_note = username.map(|name| format!(
-        "<p>服务器用户名：<strong>{}</strong></p><p>允许后，此名称将绑定当前 GitHub 账户。</p>",
-        escape(name),
-    )).unwrap_or_default();
+    let username_note = requested_username
+        .filter(|name| account.handle.as_deref() != Some(*name))
+        .map(|name| format!(
+            "<p>客户端请求使用用户名：<strong>{}</strong>。首次选择用户名时会保存此名称；之后可在账户页修改。</p>",
+            escape(name),
+        )).unwrap_or_default();
     view::page(
         "登录 ssmcp 客户端",
         &format!(
-            "<section class=card><p class=eyebrow>SSMCP · CLIENT LOGIN</p><h1>登录客户端</h1>        <p>设备：<strong>{}</strong></p><p>请核对终端中的代码：</p><pre>{}</pre>        <p>GitHub 账户：<strong>{}</strong></p>{}        <p>允许后，此客户端可以连接和控制你已授权的会话，并为其他设备生成临时接入命令。登录有效期为 30 天，可随时通过 ssmcp logout 撤销。</p>        <form method=post action=\"/setup/authorize\"><input type=hidden name=csrf value=\"{}\">        <input type=hidden name=code value=\"{}\">        <button class=button type=submit name=decision value=allow>允许登录</button>        <button class=secondary type=submit name=decision value=deny>拒绝</button></form></section>",
+            "<section class=card><p class=eyebrow>SSMCP · CLIENT LOGIN</p><h1>登录客户端</h1>        <p>设备：<strong>{}</strong></p><p>请核对终端中的代码：</p><pre>{}</pre>        <p>平台账户：<strong>{}</strong></p>{}        <p>允许后，此客户端可以连接和控制你已授权的会话，并为其他设备生成临时接入命令。登录有效期为 30 天，可随时通过 ssmcp logout 撤销。</p>        <form method=post action=\"/setup/authorize\"><input type=hidden name=csrf value=\"{}\">        <input type=hidden name=code value=\"{}\">        <button class=button type=submit name=decision value=allow>允许登录</button>        <button class=secondary type=submit name=decision value=deny>拒绝</button></form></section>",
             escape(name),
             escape(code),
-            escape(&account.github_login),
+            escape(&view::account_address(
+                account.handle.as_deref(),
+                public_url
+            )),
             username_note,
             escape(csrf),
             escape(code)

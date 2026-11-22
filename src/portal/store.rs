@@ -15,6 +15,7 @@ use std::{
 
 pub(super) const MAX_KEYS: usize = 20;
 const MAX_ACCOUNTS: usize = 4096;
+const MAX_HANDLE_ALIASES: usize = 128;
 const MAX_DATABASE: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -34,6 +35,12 @@ pub(crate) struct Account {
     pub keys: Vec<PublicKey>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handle: Option<String>,
+    /// Only an automatically assigned name may be replaced by the initial CLI claim.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub generated_handle: bool,
+    /// Previous names stay bound to the same subject; they can never be reclaimed.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub handle_aliases: BTreeSet<String>,
     #[serde(default)]
     pub banned: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -170,14 +177,21 @@ impl Store {
         };
         validate(&database)?;
         let traffic = super::traffic::TrafficLedger::open(&directory)?;
-        Ok(Self {
+        let mut store = Self {
             directory,
             _lock: lock,
             database,
             failed: false,
             traffic,
             monthly_allowances: Default::default(),
-        })
+        };
+        let mut next = store.database.clone();
+        if initialize_handles(&mut next).map_err(|_| "could not initialize platform usernames")? {
+            store
+                .save(next)
+                .map_err(|_| "could not save platform usernames")?;
+        }
+        Ok(store)
     }
 
     /// Authentication rejects a ban even when an existing token remains valid.
@@ -255,12 +269,19 @@ impl Store {
                 github_login: identity.login.clone(),
                 keys: Vec::new(),
                 handle: None,
+                generated_handle: false,
+                handle_aliases: BTreeSet::new(),
                 banned: false,
                 rate_limit_bps: None,
                 has_recharged: false,
             });
         account.github_login.clone_from(&identity.login);
-        let account = account.clone();
+        initialize_handles(&mut next)?;
+        let account = next
+            .accounts
+            .get(&identity.subject)
+            .ok_or(Problem::Storage)?
+            .clone();
         self.save(next)?;
         Ok(account)
     }
@@ -278,31 +299,66 @@ impl Store {
             .database
             .accounts
             .values()
-            .find(|account| account.handle.as_deref() == Some(handle.as_str()))
+            .find(|account| {
+                account.handle.as_deref() == Some(handle.as_str())
+                    || account.handle_aliases.contains(&handle)
+            })
             .cloned())
     }
 
-    /// Check and claim share the portal mutex and Store's exclusive writer lease.
-    /// A numeric GitHub subject retains its handle through GitHub login renames.
+    /// A CLI login can choose the first explicit name, but never rename one.
+    /// An old name still logs in to its owner without replacing the current name.
     pub fn claim_handle(&mut self, subject: &str, handle: &str) -> Result<Account, Problem> {
         let handle = normalize_handle(handle)?;
         let account = self.account(subject)?;
-        if let Some(current) = &account.handle {
-            return if current == &handle {
-                Ok(account)
+        if account.handle.as_deref() == Some(handle.as_str()) {
+            return if account.generated_handle {
+                self.rename_handle(subject, &handle)
             } else {
-                Err(Problem::UsernameBound)
+                Ok(account)
             };
         }
-        if !self.handle_available(&handle)? {
+        if account.handle_aliases.contains(&handle) {
+            return Ok(account);
+        }
+        if account.handle.is_some() && !account.generated_handle {
+            return Err(Problem::UsernameBound);
+        }
+        self.rename_handle(subject, &handle)
+    }
+
+    /// The authenticated browser profile is the only explicit rename flow.
+    /// Validation, namespace reservation and persistence share the Store writer lease.
+    pub fn rename_handle(&mut self, subject: &str, handle: &str) -> Result<Account, Problem> {
+        let handle = normalize_handle(handle)?;
+        let account = self.account(subject)?;
+        if account.handle.as_deref() == Some(handle.as_str()) && !account.generated_handle {
+            return Ok(account);
+        }
+        if self
+            .account_by_handle(&handle)?
+            .is_some_and(|owner| owner.subject != subject)
+        {
             return Err(Problem::UsernameTaken);
+        }
+        if account.handle.as_deref() != Some(handle.as_str())
+            && account.handle_aliases.len() >= MAX_HANDLE_ALIASES
+            && !account.handle_aliases.contains(&handle)
+        {
+            return Err(Problem::Limit);
         }
         let mut next = self.database.clone();
         let account = next
             .accounts
             .get_mut(subject)
             .ok_or(Problem::Unauthorized)?;
-        account.handle = Some(handle);
+        account.handle_aliases.remove(&handle);
+        if let Some(previous) = account.handle.replace(handle.clone())
+            && previous != handle
+        {
+            account.handle_aliases.insert(previous);
+        }
+        account.generated_handle = false;
         let account = account.clone();
         self.save(next)?;
         Ok(account)
@@ -556,6 +612,37 @@ pub(crate) fn stable_username(subject: &str) -> Option<String> {
     (id > 0 && id.to_string() == subject).then(|| format!("gh-{id}"))
 }
 
+/// Allocate names independently of mutable upstream login names and SSH identities.
+/// Callers hold the sole writer lease and persist the complete update atomically.
+fn initialize_handles(database: &mut Database) -> Result<bool, Problem> {
+    let missing: Vec<_> = database
+        .accounts
+        .values()
+        .filter(|account| account.handle.is_none())
+        .map(|account| account.subject.clone())
+        .collect();
+    for subject in &missing {
+        let mut chosen = None;
+        for _ in 0..16 {
+            let mut bytes = [0u8; 8];
+            getrandom::fill(&mut bytes).map_err(|_| Problem::Storage)?;
+            let handle = format!("member-{:016x}", u64::from_be_bytes(bytes));
+            if database.accounts.values().all(|account| {
+                account.handle.as_deref() != Some(handle.as_str())
+                    && !account.handle_aliases.contains(&handle)
+            }) {
+                chosen = Some(handle);
+                break;
+            }
+        }
+        let handle = chosen.ok_or(Problem::Busy)?;
+        let account = database.accounts.get_mut(subject).ok_or(Problem::Storage)?;
+        account.handle = Some(handle);
+        account.generated_handle = true;
+    }
+    Ok(!missing.is_empty())
+}
+
 fn validate(database: &Database) -> crate::Result<()> {
     if database.accounts.len() > MAX_ACCOUNTS {
         return Err("too many portal accounts".into());
@@ -576,12 +663,19 @@ fn validate(database: &Database) -> crate::Result<()> {
         {
             return Err("invalid account rate limit".into());
         }
-        if let Some(handle) = &account.handle
-            && (normalize_handle(handle).ok().as_ref() != Some(handle) || !handles.insert(handle))
+        if account.handle_aliases.len() > MAX_HANDLE_ALIASES
+            || (account.handle.is_none()
+                && (account.generated_handle || !account.handle_aliases.is_empty()))
         {
-            return Err(
-                "invalid or duplicate account username; refusing to discard account data".into(),
-            );
+            return Err("invalid account username aliases".into());
+        }
+        for handle in account.handle.iter().chain(account.handle_aliases.iter()) {
+            if normalize_handle(handle).ok().as_ref() != Some(handle) || !handles.insert(handle) {
+                return Err(
+                    "invalid or duplicate account username; refusing to discard account data"
+                        .into(),
+                );
+            }
         }
         let mut seen = std::collections::HashSet::new();
         for key in &account.keys {
@@ -685,6 +779,169 @@ mod tests {
     }
 
     #[test]
+    fn default_username_is_persistent_and_an_explicit_claim_locks_cli_renames() {
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        let initial = store.login(&identity("123", "alice")).unwrap();
+        let name = initial.handle.clone().unwrap();
+        assert!(name.starts_with("member-"));
+        assert_eq!(normalize_handle(&name).unwrap(), name);
+        assert!(initial.generated_handle);
+        assert_eq!(initial.username, "gh-123");
+        assert_eq!(
+            store.login(&identity("123", "renamed")).unwrap().handle,
+            initial.handle
+        );
+        let confirmed = store.claim_handle("123", &name).unwrap();
+        assert!(!confirmed.generated_handle);
+        assert!(matches!(
+            store.claim_handle("123", "another-name"),
+            Err(Problem::UsernameBound)
+        ));
+        drop(store);
+        let reopened = Store::open(&directory.0).unwrap();
+        let saved = reopened.account("123").unwrap();
+        assert_eq!(saved.handle.as_deref(), Some(name.as_str()));
+        assert!(!saved.generated_handle);
+        assert_eq!(saved.github_login, "renamed");
+    }
+
+    #[test]
+    fn browser_rename_retains_names_ownership_policy_and_durable_aliases() {
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        let initial = store
+            .login(&identity("123", "alice"))
+            .unwrap()
+            .handle
+            .unwrap();
+        store.login(&identity("456", "bob")).unwrap();
+        store.claim_handle("123", "alice-home").unwrap();
+        store.set_policy("123", None, Some(Some(8192))).unwrap();
+        store.record_recharge("123").unwrap();
+        let renamed = store.rename_handle("123", "ALice-work").unwrap();
+        assert_eq!(renamed.handle.as_deref(), Some("alice-work"));
+        assert_eq!(renamed.subject, "123");
+        assert_eq!(renamed.username, "gh-123");
+        assert_eq!(renamed.rate_limit_bps, Some(8192));
+        assert!(renamed.has_recharged);
+        assert!(renamed.handle_aliases.contains(&initial));
+        assert!(renamed.handle_aliases.contains("alice-home"));
+        for name in [&initial, "alice-home", "alice-work"] {
+            assert_eq!(
+                store.account_by_handle(name).unwrap().unwrap().subject,
+                "123"
+            );
+            assert!(!store.handle_available(name).unwrap());
+            assert!(matches!(
+                store.rename_handle("456", name),
+                Err(Problem::UsernameTaken)
+            ));
+        }
+        let before = serde_json::to_value(&store.database).unwrap();
+        assert!(matches!(
+            store.rename_handle("123", "gh-456"),
+            Err(Problem::UsernameInvalid)
+        ));
+        assert_eq!(serde_json::to_value(&store.database).unwrap(), before);
+        let login = store.claim_handle("123", "alice-home").unwrap();
+        assert_eq!(login.handle.as_deref(), Some("alice-work"));
+        let returned = store.rename_handle("123", "alice-home").unwrap();
+        assert_eq!(returned.handle.as_deref(), Some("alice-home"));
+        assert!(!returned.handle_aliases.contains("alice-home"));
+        assert!(returned.handle_aliases.contains("alice-work"));
+        drop(store);
+        let mut reopened = Store::open(&directory.0).unwrap();
+        assert_eq!(
+            reopened
+                .account_by_handle("alice-work")
+                .unwrap()
+                .unwrap()
+                .subject,
+            "123"
+        );
+        reopened.set_policy("123", Some(true), None).unwrap();
+        assert!(matches!(
+            reopened.rename_handle("123", "alice-next"),
+            Err(Problem::Banned)
+        ));
+        assert!(!reopened.handle_available("alice-work").unwrap());
+    }
+
+    #[test]
+    fn legacy_missing_names_are_backfilled_without_unlocking_explicit_names() {
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        let raw = r#"{"accounts":{"123":{"subject":"123","username":"gh-123","github_login":"alice","keys":[],"banned":true,"rate_limit_bps":8192,"has_recharged":true},"456":{"subject":"456","username":"gh-456","github_login":"bob","keys":[],"handle":"bob-home"}}}"#;
+        store.save(serde_json::from_str(raw).unwrap()).unwrap();
+        drop(store);
+        let mut reopened = Store::open(&directory.0).unwrap();
+        let migrated = reopened.account_record("123").unwrap();
+        let name = migrated.handle.clone().unwrap();
+        assert!(migrated.generated_handle);
+        assert!(migrated.banned);
+        assert!(migrated.has_recharged);
+        assert_eq!(migrated.username, "gh-123");
+        assert_eq!(migrated.rate_limit_bps, Some(8192));
+        assert!(!reopened.account("456").unwrap().generated_handle);
+        assert!(matches!(
+            reopened.claim_handle("456", "bob-work"),
+            Err(Problem::UsernameBound)
+        ));
+        drop(reopened);
+        assert_eq!(
+            Store::open(&directory.0)
+                .unwrap()
+                .account_record("123")
+                .unwrap()
+                .handle
+                .as_deref(),
+            Some(name.as_str())
+        );
+    }
+
+    #[test]
+    fn alias_namespace_validation_and_capacity_fail_without_reassigning_names() {
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        store.login(&identity("123", "alice")).unwrap();
+        store.login(&identity("456", "bob")).unwrap();
+        store.claim_handle("123", "alice-home").unwrap();
+        store.claim_handle("456", "bob-home").unwrap();
+        let mut next = store.database.clone();
+        let account = next.accounts.get_mut("123").unwrap();
+        account.handle_aliases = (0..MAX_HANDLE_ALIASES)
+            .map(|n| format!("old-name-{n}"))
+            .collect();
+        validate(&next).unwrap();
+        store.save(next).unwrap();
+        let before = serde_json::to_value(&store.database).unwrap();
+        assert!(matches!(
+            store.rename_handle("123", "fresh-name"),
+            Err(Problem::Limit)
+        ));
+        assert_eq!(serde_json::to_value(&store.database).unwrap(), before);
+        store.rename_handle("123", "old-name-0").unwrap();
+        assert_eq!(
+            store.account("123").unwrap().handle_aliases.len(),
+            MAX_HANDLE_ALIASES
+        );
+        let mut duplicate = store.database.clone();
+        duplicate
+            .accounts
+            .get_mut("456")
+            .unwrap()
+            .handle_aliases
+            .insert("alice-home".into());
+        assert!(validate(&duplicate).is_err());
+        store.failed = true;
+        assert!(matches!(
+            store.rename_handle("123", "old-name-1"),
+            Err(Problem::Storage)
+        ));
+    }
+
+    #[test]
     fn policy_updates_are_partial_durable_and_block_authentication() {
         let directory = AccountDirectory::new();
         let mut store = Store::open(&directory.0).unwrap();
@@ -745,6 +1002,8 @@ mod tests {
                     github_login: login.into(),
                     keys: Vec::new(),
                     handle: Some("shared-name".into()),
+                    generated_handle: false,
+                    handle_aliases: BTreeSet::new(),
                     banned: false,
                     rate_limit_bps: None,
                     has_recharged: false,

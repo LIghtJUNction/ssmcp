@@ -901,6 +901,89 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn platform_rename_preserves_existing_login_and_device_credentials_and_bans() {
+        let directory = Temporary::new();
+        let mut broker = Broker::with_identity_config(
+            "https://ssmcp.test".into(),
+            crate::oauth::OAuthConfig::default(),
+            Some(crate::identity::GitHubConfig {
+                client_id: "fixture".into(),
+                client_secret: "fixture".into(),
+            }),
+        )
+        .unwrap();
+        broker.portal = crate::portal::Portal::open(&directory.0).unwrap();
+        broker
+            .portal
+            .storage(|store| {
+                store.login(&Identity {
+                    provider: "github".into(),
+                    subject: "123".into(),
+                    login: "upstream".into(),
+                })?;
+                store.claim_handle("123", "alice-home")
+            })
+            .await
+            .unwrap();
+        let (login, device) = broker
+            .portal
+            .client_storage(|store| {
+                let (login, _) = store.login("123".into())?;
+                let (invite, _) = store.invite(&login, 600, 3600)?;
+                let (device, _, _) = store.enroll(&invite)?;
+                Ok((login, device))
+            })
+            .await
+            .unwrap();
+        let mut login_headers = HeaderMap::new();
+        login_headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {login}").parse().unwrap(),
+        );
+        let mut device_headers = HeaderMap::new();
+        device_headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {device}").parse().unwrap(),
+        );
+        let held_login = authenticate(&broker, &login_headers, true).await.unwrap();
+        let held_device = authenticate(&broker, &device_headers, false).await.unwrap();
+        broker
+            .portal
+            .storage(|store| store.rename_handle("123", "alice-work"))
+            .await
+            .unwrap();
+        assert!(held_login.is_live(&broker).await);
+        assert!(held_device.is_live(&broker).await);
+        for registration in [
+            authenticate(&broker, &login_headers, true).await.unwrap(),
+            authenticate(&broker, &device_headers, false).await.unwrap(),
+        ] {
+            assert_eq!(registration.identity.provider, "github");
+            assert_eq!(registration.identity.subject, "123");
+            assert_eq!(registration.username, "gh-123");
+        }
+        broker
+            .portal
+            .storage(|store| {
+                assert_eq!(
+                    store.account_by_handle("alice-home")?.unwrap().subject,
+                    "123"
+                );
+                assert_eq!(
+                    store.account_by_handle("alice-work")?.unwrap().subject,
+                    "123"
+                );
+                store.set_policy("123", Some(true), None)
+            })
+            .await
+            .unwrap();
+        assert!(!held_login.is_live(&broker).await);
+        assert!(!held_device.is_live(&broker).await);
+        assert!(authenticate(&broker, &login_headers, true).await.is_err());
+        assert!(authenticate(&broker, &device_headers, false).await.is_err());
+    }
+
     #[test]
     fn credentials_persist_as_hashes_and_enrollment_is_single_use_and_device_only() {
         let directory = Temporary::new();

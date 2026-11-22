@@ -1962,6 +1962,32 @@ fn page_with_head(view: ViewContext, title: &str, content: &str, extra_head: &st
     )
 }
 
+/// Only the verified caller is registered here. Never manufacture an account
+/// for a third party merely because its subject appears in an access list.
+async fn platform_account_address(
+    broker: &Broker,
+    identity: &Identity,
+) -> Result<Option<String>, OAuthError> {
+    if !broker.portal.has_storage() || identity.provider != "github" {
+        return Ok(None);
+    }
+    let identity = identity.clone();
+    let account = broker
+        .portal
+        .storage(move |store| store.login(&identity))
+        .await
+        .map_err(|problem| match problem {
+            crate::portal::Problem::Banned | crate::portal::Problem::Unauthorized => {
+                OAuthError::grant()
+            }
+            _ => OAuthError::internal(),
+        })?;
+    let handle = account.handle.as_deref().ok_or_else(OAuthError::internal)?;
+    crate::server_endpoint::allow_principal(handle, &broker.public_url)
+        .map(Some)
+        .map_err(|_| OAuthError::internal())
+}
+
 fn consent_response(
     id: &str,
     transaction: &Transaction,
@@ -1969,10 +1995,18 @@ fn consent_response(
     status: StatusCode,
     providers: &[&str],
     count: Option<usize>,
+    account_address: Option<&str>,
 ) -> Response {
     let mut response = (
         status,
-        Html(consent_page(id, transaction, error, providers, count)),
+        Html(consent_page(
+            id,
+            transaction,
+            error,
+            providers,
+            count,
+            account_address,
+        )),
     )
         .into_response();
     // no-referrer makes browsers send Origin: null on form POSTs. Keep the
@@ -1992,6 +2026,7 @@ fn consent_page(
     error: Option<&str>,
     providers: &[&str],
     count: Option<usize>,
+    account_address: Option<&str>,
 ) -> String {
     let callback = Url::parse(&transaction.redirect.uri)
         .unwrap()
@@ -2010,15 +2045,14 @@ fn consent_page(
         "<input type=hidden name=transaction_id value=\"{}\">",
         escape(id)
     );
-    if let Some(identity) = &transaction.identity {
+    if transaction.identity.is_some() {
         let count = count.map_or_else(String::new, |count| format!("<p>当前可用会话：{count}</p>"));
         return page(
             transaction.view,
             "允许客户端连接？",
             &format!(
-                "<p>已登录 <strong>{}@{}</strong>。</p>{details}{error}{count}<p>授权后，此客户端可以调用当前及今后明确允许此账号访问的会话工具，包括执行命令和读写文件。每次调用仍受会话权限及本机工具权限约束。</p><form class=consent-actions method=post action=/oauth/authorize>{hidden}<button type=submit name=decision value=allow>允许连接</button><button type=submit name=decision value=deny>取消</button></form><p class=muted>只登录 GitHub 不会自动授权这个 MCP 客户端。</p>",
-                escape(&identity.login),
-                escape(&identity.provider)
+                "<p>已登录 <strong>{}</strong>。</p>{details}{error}{count}<p>授权后，此客户端可以调用当前及今后明确允许此账号访问的会话工具，包括执行命令和读写文件。每次调用仍受会话权限及本机工具权限约束。</p><form class=consent-actions method=post action=/oauth/authorize>{hidden}<button type=submit name=decision value=allow>允许连接</button><button type=submit name=decision value=deny>取消</button></form><p class=muted>只登录 GitHub 不会自动授权这个 MCP 客户端。</p>",
+                escape(account_address.unwrap_or("已验证账户"))
             ),
         );
     }
@@ -2197,6 +2231,7 @@ async fn authorize(
                 StatusCode::OK,
                 &broker.identities.names(),
                 None,
+                None,
             );
             response.headers_mut().insert(
                 header::SET_COOKIE,
@@ -2281,6 +2316,7 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
                 StatusCode::BAD_REQUEST,
                 &broker.identities.names(),
                 None,
+                None,
             ));
         }
         let _policy_update = broker.user_policy_updates.lock().await;
@@ -2291,6 +2327,7 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
                 Some("登录码无效、已使用或已过期。请检查终端，必要时重新运行 ssmcp。"),
                 StatusCode::BAD_REQUEST,
                 &broker.identities.names(),
+                None,
                 None,
             ));
         };
@@ -2341,16 +2378,17 @@ async fn provider_callback(
                 let (id, transaction) = resumed.ok_or(error)?;
                 let identity = transaction.identity.clone().ok_or_else(OAuthError::grant)?;
                 let _policy_update = broker.user_policy_updates.lock().await;
+                let address = platform_account_address(&broker, &identity).await?;
                 let allowed = broker.clients(&transaction.user, &Authorization::Identity(identity)).await
                     .map_err(|_| OAuthError::grant())?.len();
                 return Ok(consent_response(&id, &transaction, None, StatusCode::OK,
-                    &broker.identities.names(), Some(allowed)));
+                    &broker.identities.names(), Some(allowed), address.as_deref()));
             }
         };
         if parameters.get("error").is_some() {
             return Ok(consent_response(&attempt.login.transaction_id, &attempt.transaction,
                 Some("第三方登录已取消或未成功。你可以重新登录。"), StatusCode::BAD_REQUEST,
-                &broker.identities.names(), None));
+                &broker.identities.names(), None, None));
         }
         let code = parameters.required("code")?;
         if code.is_empty() || code.len() > 2048 {
@@ -2363,15 +2401,16 @@ async fn provider_callback(
                 Ok(identity) => identity,
                 Err(_) => return Ok(consent_response(&attempt.login.transaction_id, &attempt.transaction,
                     Some("未能验证第三方身份。请重试；若仍然失败，请让管理员检查应用配置与服务器网络。"),
-                    StatusCode::BAD_GATEWAY, &broker.identities.names(), None)),
+                    StatusCode::BAD_GATEWAY, &broker.identities.names(), None, None)),
             };
             // A ban can occur during the upstream exchange. Validate and save the
             // identity under the policy lock so its consent cannot outlive revocation.
             let _policy_update = broker.user_policy_updates.lock().await;
             let allowed = broker.clients(&attempt.transaction.user, &Authorization::Identity(identity.clone())).await
                 .map_err(|_| OAuthError::grant())?.len();
+            let address = platform_account_address(&broker, &identity).await?;
             let (id, transaction) = broker.oauth.finish_provider_login(attempt, identity)?;
-            Ok(consent_response(&id, &transaction, None, StatusCode::OK, &broker.identities.names(), Some(allowed)))
+            Ok(consent_response(&id, &transaction, None, StatusCode::OK, &broker.identities.names(), Some(allowed), address.as_deref()))
         })
         .await
         .map_err(|_| OAuthError::internal())?
@@ -2553,7 +2592,7 @@ mod tests {
             ));
             assert!(form.transaction.view == ViewContext::Local);
             for error in [None, Some("Synthetic retry")] {
-                let html = consent_page(&form.id, &form.transaction, error, &[], None);
+                let html = consent_page(&form.id, &form.transaction, error, &[], None, None);
                 assert!(html.contains("连接本地会话"));
                 assert!(html.contains("/logs"));
                 assert!(html.contains("name=login_code"));
@@ -2568,7 +2607,7 @@ mod tests {
         let remote = OAuth::new(ISSUER.into());
         let registered = ok(remote.register(registration(true)));
         let form = consent(&remote, registered["client_id"].as_str().unwrap());
-        let html = consent_page(&form.id, &form.transaction, None, &["github"], None);
+        let html = consent_page(&form.id, &form.transaction, None, &["github"], None, None);
         assert!(html.contains("使用会话允许的账号登录"));
         assert!(html.contains("--allow"));
         assert!(html.contains("返回账户门户"));
@@ -3407,6 +3446,28 @@ mod tests {
     }
 
     #[test]
+    fn identity_consent_uses_the_platform_address_without_exposing_upstream_login() {
+        let oauth = OAuth::new(ISSUER.into());
+        let registered = ok(oauth.register(registration(true)));
+        let mut form = consent(&oauth, registered["client_id"].as_str().unwrap());
+        form.transaction.identity = Some(github_identity("42", "upstream-login"));
+        let html = consent_page(
+            &form.id,
+            &form.transaction,
+            None,
+            &[],
+            Some(1),
+            Some("developer@ssmcp.example"),
+        );
+        assert!(html.contains("<strong>developer@ssmcp.example</strong>"));
+        assert!(!html.contains("upstream-login"));
+        assert!(!html.contains("@github"));
+        let unavailable = consent_page(&form.id, &form.transaction, None, &[], None, None);
+        assert!(unavailable.contains("<strong>已验证账户</strong>"));
+        assert!(!unavailable.contains("upstream-login"));
+    }
+
+    #[test]
     fn metadata_is_configuration_and_html_escapes_untrusted_client_name() {
         let oauth = OAuth::new(ISSUER.into());
         let metadata = ok(oauth.protected_metadata("never_connected"));
@@ -3421,7 +3482,7 @@ mod tests {
         );
         let registered = ok(oauth.register(registration(true)));
         let form = consent(&oauth, registered["client_id"].as_str().unwrap());
-        let html = consent_page(&form.id, &form.transaction, None, &[], None);
+        let html = consent_page(&form.id, &form.transaction, None, &[], None, None);
         assert!(html.contains("A &lt;testing&gt; client"));
         assert!(!html.contains("A <testing> client"));
         assert!(html.contains("https://client.example"));
@@ -3460,6 +3521,7 @@ mod tests {
                 error,
                 StatusCode::OK,
                 &[],
+                None,
                 None,
             ))
             .await;

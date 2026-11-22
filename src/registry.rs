@@ -412,6 +412,7 @@ fn prepare(
                 "ssmcp.worker.status"
                     | "ssmcp.worker.attach"
                     | "ssmcp.worker.tasks"
+                    | "ssmcp.worker.wait_available"
                     | "ssmcp.worker.stop"
                     | "ssmcp.worker.resize"
                     | "ssmcp.worker.submit"
@@ -600,6 +601,7 @@ mod tests {
     fn worker_pool_catalog_installs_all_native_routes() {
         let registry = Registry::new();
         let catalog = crate::worker::Pool::tools();
+        assert_eq!(catalog.len(), 14);
         registry.replace(Provider::Worker, catalog.clone()).unwrap();
         for descriptor in catalog {
             let name = descriptor["name"].as_str().unwrap();
@@ -608,6 +610,11 @@ mod tests {
             assert_eq!(registered.native_name, name);
             assert_eq!(registered.descriptor, descriptor);
         }
+        assert!(
+            registry
+                .replace(Provider::Worker, vec![tool("ssmcp.worker.unrecognized")])
+                .is_err()
+        );
     }
 
     #[test]

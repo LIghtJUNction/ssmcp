@@ -598,31 +598,30 @@ impl State {
                 )],
             ));
             let identity = identity_lines(snapshot, g.cols);
-            if identity.len() + 6 <= height.saturating_sub(rows.len() + 1) {
-                rows.extend(
-                    identity
-                        .iter()
-                        .map(|text| line(self, &[(PanelTone::Muted, text.clone())])),
-                );
+            let space = height.saturating_sub(rows.len() + 2);
+            // Preserve the existing task, resource and log viewport before
+            // spending spare rows on full IDs. Small monitors keep their work.
+            let panel_reserve = if g.cols >= 80 { 20 } else { 10 };
+            let identity = if identity.len() + panel_reserve <= space {
+                identity
             } else {
-                // Never show a truncated identifier as if it were complete.
-                rows.push(line(
-                    self,
-                    &[(PanelTone::Muted, format!("OS PID {}", snapshot.process_id))],
-                ));
-                rows.push(line(
-                    self,
-                    &[(
-                        PanelTone::Muted,
-                        if snapshot.manager.is_some() {
-                            "Manager attached · enlarge for IDs"
-                        } else {
-                            "Manager unbound"
-                        }
-                        .into(),
-                    )],
-                ));
-            }
+                [
+                    format!("OS PID {}", snapshot.process_id),
+                    if snapshot.manager.is_some() {
+                        "Manager attached · enlarge for IDs".into()
+                    } else {
+                        "Manager unbound".into()
+                    },
+                ]
+                .into_iter()
+                .take(space.saturating_sub(panel_reserve).min(2))
+                .collect()
+            };
+            rows.extend(
+                identity
+                    .into_iter()
+                    .map(|text| line(self, &[(PanelTone::Muted, text)])),
+            );
             rows.push(String::new());
             let available = height.saturating_sub(rows.len() + 1);
             let panel_rows = self
@@ -1326,7 +1325,7 @@ mod tests {
                     .all(|line| line.width() <= usize::from(width))
             );
         }
-        let mut wide = state(30, 100, false);
+        let mut wide = state(44, 100, false);
         let text = screen(&wide.worker_frame(Some(&snapshot)))
             .screen()
             .contents();
@@ -1338,13 +1337,35 @@ mod tests {
             .contents();
         assert!(text.contains("Working 1"));
         assert!(text.contains("waiting for worker confirmation"));
-        let mut narrow = state(18, 18, false);
+        let mut narrow = state(26, 18, false);
         let text = screen(&narrow.worker_frame(Some(&snapshot)))
             .screen()
             .contents();
         assert!(!text.contains(&client[..16]));
         assert!(text.contains("Manager attached"));
         assert!(text.contains("Working 1"));
+
+        let mut compact = state(30, 100, false);
+        let text = screen(&compact.worker_frame(Some(&snapshot)))
+            .screen()
+            .contents();
+        assert!(text.contains("Manager attached"));
+        assert!(text.contains("Task and metrics"));
+        assert!(text.contains("CPU trend"));
+        let panels = compact.worker_snapshot(true);
+        assert_eq!(panels["worker_panels"][0]["details"]["visible"], true);
+        assert_eq!(panels["worker_panels"][0]["logs"]["visible"], true);
+
+        let mut tiny = state(18, 18, false);
+        let text = screen(&tiny.worker_frame(Some(&snapshot)))
+            .screen()
+            .contents();
+        assert!(!text.contains(&client[..16]));
+        assert!(text.contains("Working 1"));
+        assert_eq!(
+            tiny.worker_snapshot(true)["worker_panels"][0]["logs"]["visible"],
+            true
+        );
     }
 
     #[test]

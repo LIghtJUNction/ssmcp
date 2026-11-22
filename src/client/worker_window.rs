@@ -22,9 +22,18 @@ static LINKED: OnceLock<Mutex<Weak<ParentState>>> = OnceLock::new();
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+struct LinkedManager {
+    client_id: String,
+    thread_id: String,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LinkedSnapshot {
     client_id: String,
     process_id: u32,
+    #[serde(default)]
+    manager: Option<LinkedManager>,
     total: usize,
     desired_total: usize,
     retiring: usize,
@@ -687,6 +696,10 @@ fn local_snapshot(client_id: &str) -> Option<LinkedSnapshot> {
     Some(LinkedSnapshot {
         client_id: client_id.to_owned(),
         process_id: std::process::id(),
+        manager: snapshot.manager.as_ref().map(|manager| LinkedManager {
+            client_id: manager.client_id.clone(),
+            thread_id: manager.thread_id.clone(),
+        }),
         total: snapshot.total,
         desired_total: snapshot.desired_total,
         retiring: snapshot.retiring,
@@ -719,6 +732,12 @@ fn read_snapshot(reader: &mut impl Read, pid: u32) -> io::Result<LinkedSnapshot>
                 || snapshot.client_id.is_empty()
                 || snapshot.client_id.len() > 128
                 || snapshot.client_id.chars().any(char::is_control)
+                || snapshot.manager.as_ref().is_some_and(|manager| {
+                    manager.client_id != snapshot.client_id
+                        || manager.thread_id.is_empty()
+                        || manager.thread_id.len() > 128
+                        || manager.thread_id.chars().any(char::is_control)
+                })
                 || snapshot.total > 128
                 || snapshot.desired_total > 128
                 || counts != Some(snapshot.total)
@@ -1147,6 +1166,7 @@ mod tests {
         LinkedSnapshot {
             client_id: "fixture-client".into(),
             process_id: std::process::id(),
+            manager: None,
             total: 3,
             desired_total: 3,
             retiring: 0,
@@ -1203,6 +1223,39 @@ mod tests {
         let decoded = read_snapshot(&mut &bytes[..], std::process::id()).unwrap();
         assert_eq!(decoded.desired_total, 1);
         assert_eq!(decoded.retiring, 2);
+    }
+
+    #[test]
+    fn linked_status_exposes_only_the_verified_pool_manager_identity() {
+        let mut status = fixture_snapshot();
+        status.manager = Some(LinkedManager {
+            client_id: status.client_id.clone(),
+            thread_id: "agent_verified_manager".into(),
+        });
+        let mut bytes = serde_json::to_vec(&status).unwrap();
+        bytes.push(b'\n');
+        let decoded = read_snapshot(&mut &bytes[..], std::process::id()).unwrap();
+        let value = serde_json::to_value(decoded).unwrap();
+        assert_eq!(value["manager"]["client_id"], "fixture-client");
+        assert_eq!(value["manager"]["thread_id"], "agent_verified_manager");
+        assert_eq!(value["manager"].as_object().unwrap().len(), 2);
+        for (client, thread) in [
+            (
+                "another-pool".to_owned(),
+                "agent_verified_manager".to_owned(),
+            ),
+            ("fixture-client".to_owned(), String::new()),
+            ("fixture-client".to_owned(), "x".repeat(129)),
+            ("fixture-client".to_owned(), "agent\nforged".to_owned()),
+        ] {
+            status.manager = Some(LinkedManager {
+                client_id: client,
+                thread_id: thread,
+            });
+            let mut bytes = serde_json::to_vec(&status).unwrap();
+            bytes.push(b'\n');
+            assert!(read_snapshot(&mut &bytes[..], std::process::id()).is_err());
+        }
     }
 
     #[test]

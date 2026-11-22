@@ -217,6 +217,8 @@ fn view_escapes_untrusted_text_and_includes_complete_tutorial() {
         github_login: "<script>".into(),
         keys: vec![],
         handle: None,
+        generated_handle: false,
+        handle_aliases: Default::default(),
         banned: false,
         rate_limit_bps: None,
         has_recharged: false,
@@ -389,11 +391,18 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
         .text()
         .await
         .unwrap();
-    assert!(html.contains("<dt>GitHub 账户</dt><dd>alice</dd>"));
-    assert!(html.contains("尚未注册"));
+    let default_username = broker
+        .portal
+        .storage(|store| Ok(store.account("123")?.handle.unwrap()))
+        .await
+        .unwrap();
+    assert!(default_username.starts_with("member-"));
+    assert!(html.contains(&format!("{default_username}@ssmcp.test")));
+    assert!(html.contains("修改用户名"));
+    assert!(!html.contains("<dt>GitHub 账户</dt>"));
     assert!(html.contains("action=\"/account/username\""));
     assert!(html.contains("复制命令"));
-    assert!(html.contains("ssmcp myname@ssmcp.test"));
+    assert!(html.contains(&format!("ssmcp {default_username}@ssmcp.test")));
     assert!(!html.contains("bob key"));
     let csrf = html
         .split("name=\"csrf\" value=\"")
@@ -431,8 +440,91 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
         .await
         .unwrap();
     assert!(registered_home.contains("ssmcp alice-dev@ssmcp.test"));
-    assert!(!registered_home.contains("注册用户名"));
+    assert!(registered_home.contains("修改用户名"));
+    assert!(registered_home.contains(r#"name="username" value="alice-dev""#));
     assert!(!registered_home.contains("旧版 SSH 公钥管理"));
+    let bob_username = broker
+        .portal
+        .storage(|store| Ok(store.account("456")?.handle.unwrap()))
+        .await
+        .unwrap();
+    for (values, expected) in [
+        (vec![("csrf", "invalid"), ("username", "alice-work")], 403),
+        (
+            vec![
+                ("csrf", csrf),
+                ("username", "alice-work"),
+                ("subject", "456"),
+            ],
+            400,
+        ),
+        (
+            vec![("csrf", csrf), ("username", bob_username.as_str())],
+            409,
+        ),
+        (vec![("csrf", csrf), ("username", "gh-456")], 400),
+    ] {
+        let rejected = client
+            .post(&register)
+            .header("cookie", &new_cookie)
+            .header("origin", "https://ssmcp.test")
+            .form(&values)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), expected);
+        assert_eq!(
+            broker
+                .portal
+                .storage(|store| Ok(store.account("123")?.handle))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("alice-dev")
+        );
+    }
+    for name in ["alice-work", "alice-dev"] {
+        let renamed = client
+            .post(&register)
+            .header("cookie", &new_cookie)
+            .header("origin", "https://ssmcp.test")
+            .form(&[("csrf", csrf), ("username", name)])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(renamed.status(), 303);
+        let home = client
+            .get(&base)
+            .header("cookie", &new_cookie)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(home.contains(&format!("{name}@ssmcp.test")));
+    }
+    broker
+        .portal
+        .storage(move |store| {
+            assert_eq!(store.account("123")?.username, "gh-123");
+            assert_eq!(store.account("123")?.handle.as_deref(), Some("alice-dev"));
+            assert_eq!(
+                store.account_by_handle(&default_username)?.unwrap().subject,
+                "123"
+            );
+            assert_eq!(
+                store.account_by_handle("alice-work")?.unwrap().subject,
+                "123"
+            );
+            assert_eq!(
+                store.account("456")?.handle.as_deref(),
+                Some(bob_username.as_str())
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
     for route in ["/account/keys", "/account/keys/delete"] {
         let response = client
             .post(format!("{base}{route}"))

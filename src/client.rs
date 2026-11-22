@@ -107,7 +107,7 @@ Options
 Use ssmcp COMMAND --help for command options; --help-full lists advanced connection and executor flags.
 Foreground --worker keeps chat here and opens a separate worker window.
 Workers use remote agents by default; no local model starts.
-In a connected chat: /help, @file, $skill, !command; Left opens Statistics.
+In a connected chat: /help, @file, $skill, !command. From the initial conversation, Left at draft start opens Statistics; /sessions chooses recipients.
 "#;
 
 const HELP_FULL: &str = r#"ssmcp — connect your devices and control authorized sessions
@@ -287,10 +287,6 @@ Managed installs do not replace an external executable or change PATH.
 Background logs use JSONL without terminal colors; foreground display options
 do not change service logging. Stopping a session suppresses its watchdog.
 Reconnection starts a fresh client; jobs from the disconnected client are cleaned up.
-Use `ssmcp resume` to start the foreground client at this workspace's saved
-conversation picker (the same as /resume). Select a conversation and press Enter.
-Only saved text is restored: models, credentials, terminals and queued requests
-are not resumed or replayed. An empty history exits without connecting.
 "#;
 
 // A single reader owns every partial frame after Ready, including while a native

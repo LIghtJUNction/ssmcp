@@ -146,7 +146,7 @@ ssmcp context use here
 
 | 操作 | 用法 |
 | --- | --- |
-| 查看会话统计 | 向左进入统计页，查看会话进程 ID、主 Agent 线程 ID 与实际计数 |
+| 查看会话统计 | 在初始对话的草稿开头按 ←，分别查看主会话与 worker 池的连接 ID、OS PID、已登记线程和实际计数 |
 | 发给指定 Agent | `/sessions` 或 `/message` 打开收件人选择器，选定后返回输入框发送 |
 | 引用文件、图片 | 输入 `@` 枚举工作区；支持中文、带空格路径和目录续补 |
 | 粘贴图片 | **Ctrl + V** 或 `/paste`；`/attach PATH` 导入本地图片 |
@@ -179,6 +179,8 @@ Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重
 在交互终端运行 `ssmcp --worker 3`，主窗口保留普通聊天输入，并打开一个关联的 worker 监控窗口。三个席位初始为离线；外部 Agent 在对应的 worker 连接登记 `role: "worker"`，调用 `ssmcp.worker.wait` 等待任务，完成后提交回执并继续等待。启动席位不会自动启动模型。
 
 在主窗口输入 `/invite` 获取主 Agent 的协作说明，输入 `/invite worker` 获取指向关联任务池的 worker 说明。说明可在本地面板阅读，并尝试复制到剪贴板；已登记人数达到席位数时，worker 邀请会提示满员。用 `/worker ls` 查看实际状态，或用 `/worker +N`、`/worker -N` 调整席位数。退出或重载主窗口会清理它启动的 worker 窗口；单独关闭监控窗口后，主聊天仍可使用。[Worker 接入、任务回执与窗口生命周期](docs/workers.md)
+
+已绑定的协调 Agent 可用 `ssmcp.worker.wait_available` 读取容量，或等待最多 5 秒观察容量变化。返回值区分实际空闲 worker、离线席位和等待退役的席位；可接收排队任务不代表已有空闲 worker。该接口只观察任务池，不领取人的输入或启动模型。[容量观察与游标](docs/workers.md#observe-capacity-changes)
 
 ### 从命令行连接对话与传递结果
 

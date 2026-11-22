@@ -1,7 +1,7 @@
 //! Server-rendered account and administrator consoles; never trusts UI roles.
 use super::{
     store::AccountSummary,
-    view::{escape, page, traffic_panel},
+    view::{account_address, escape, page, traffic_panel},
 };
 use crate::{
     history::{AuditAction, AuditEvent, AuditOutcome},
@@ -76,6 +76,7 @@ fn session_cards(
     csrf: &str,
     return_to: &str,
     accounts: &[AccountSummary],
+    public_url: &str,
 ) -> String {
     if snapshot.sessions.is_empty() {
         return String::from(
@@ -85,16 +86,7 @@ fn session_cards(
     let owners: BTreeMap<_, _> = accounts.iter().map(|a| (a.subject.as_str(), a)).collect();
     let mut html = String::from(r#"<div class="session-list">"#);
     for session in &snapshot.sessions {
-        html.push_str(&session_card(
-            session,
-            csrf,
-            return_to,
-            snapshot.scope == Scope::All,
-            session
-                .owner_subject
-                .as_deref()
-                .and_then(|id| owners.get(id).copied()),
-        ));
+        html.push_str(&session_card(session, csrf, return_to, &owners, public_url));
     }
     html.push_str("</div>");
     html
@@ -104,55 +96,40 @@ fn session_card(
     session: &SessionSnapshot,
     csrf: &str,
     return_to: &str,
-    admin: bool,
-    account: Option<&AccountSummary>,
+    accounts: &BTreeMap<&str, &AccountSummary>,
+    public_url: &str,
 ) -> String {
-    let username = account
-        .map(|a| a.handle.as_deref().unwrap_or(&a.username))
-        .unwrap_or(&session.ssh_user);
+    let username = subject_address(session.owner_subject.as_deref(), accounts, public_url);
     let mut html = format!(
         r#"<article class="session-card" id="session-{}"><header class="session-heading"><div><h3>{}</h3><p class="muted">连接于 {}</p></div><span class="status signed-in">在线 · {}</span></header>
-<dl class="session-facts"><div class="session-id"><dt>会话 ID</dt><dd><code>{}</code></dd></div><div><dt>主机</dt><dd><code>{}</code></dd></div><div><dt>服务器用户</dt><dd><code>{}</code></dd></div><div class="session-path"><dt>工作目录</dt><dd><code>{}</code></dd></div>"#,
+<dl class="session-facts"><div class="session-id"><dt>会话 ID</dt><dd><code>{}</code></dd></div><div><dt>主机</dt><dd><code>{}</code></dd></div><div><dt>平台账户</dt><dd><code>{}</code></dd></div><div class="session-path"><dt>工作目录</dt><dd><code>{}</code></dd></div>"#,
         escape(&session.id),
         escape(&session.name),
         timestamp(session.connected_at),
         escape(&session.mode),
         escape(&session.id),
         escape(&session.hostname),
-        escape(username),
+        escape(&username),
         escape(&session.cwd),
     );
-    if admin {
-        let owner = account
-            .map(|a| {
-                format!(
-                    "{} · GitHub #{}",
-                    escape(&a.github_login),
-                    escape(&a.subject)
-                )
-            })
-            .or_else(|| {
-                session
-                    .owner_subject
-                    .as_ref()
-                    .map(|id| format!("GitHub #{}", escape(id)))
-            })
-            .unwrap_or_else(|| "尚未绑定账户".into());
-        html.push_str(&format!(r#"<div><dt>归属</dt><dd>{owner}</dd></div>"#));
-    }
     html.push_str("</dl>");
-    html.push_str(
-        r#"<details class="session-access"><summary>获准使用工具的 GitHub 账户</summary>"#,
-    );
+    html.push_str(r#"<details class="session-access"><summary>获准使用工具的平台账户</summary>"#);
     if session.allowed_github.is_empty() {
         html.push_str("<p>此会话使用登录码授权；访问权与会话管理权分别校验。</p>");
     } else {
         html.push_str(r#"<ul class="principal-list">"#);
         for identity in &session.allowed_github {
+            // The management snapshot already separates GitHub identities by provider.
+            let account = accounts.get(identity.subject.as_str()).copied();
+            let address = account_address(account.and_then(|a| a.handle.as_deref()), public_url);
+            let note = if account.is_some_and(|a| a.handle.is_some()) {
+                ""
+            } else {
+                "<span>完成平台登录后显示用户名</span>"
+            };
             html.push_str(&format!(
-                r#"<li><code>{}</code><span>GitHub #{}</span></li>"#,
-                escape(&identity.login),
-                escape(&identity.subject)
+                r#"<li><code>{}</code>{note}</li>"#,
+                escape(&address)
             ));
         }
         html.push_str("</ul><p>此名单授予工具访问权；会话管理权由服务器验证的账户归属决定。</p>");
@@ -164,7 +141,28 @@ fn session_card(
     html
 }
 
-pub(super) fn sessions(snapshot: &DashboardSnapshot, csrf: &str) -> String {
+fn subject_address(
+    subject: Option<&str>,
+    accounts: &BTreeMap<&str, &AccountSummary>,
+    public_url: &str,
+) -> String {
+    match subject {
+        Some(subject) => account_address(
+            accounts
+                .get(subject)
+                .and_then(|account| account.handle.as_deref()),
+            public_url,
+        ),
+        None => "本地账户".into(),
+    }
+}
+
+pub(super) fn sessions(
+    snapshot: &DashboardSnapshot,
+    csrf: &str,
+    accounts: &[AccountSummary],
+    public_url: &str,
+) -> String {
     let mut body = navigation("/account/sessions", snapshot.is_admin);
     body.push_str(&heading(
         snapshot,
@@ -183,7 +181,13 @@ pub(super) fn sessions(snapshot: &DashboardSnapshot, csrf: &str) -> String {
         body.push_str("</section>");
     }
     body.push_str(r#"<section class="dashboard-section"><div class="dashboard-section-heading"><h2>在线连接</h2><a class="text-link" href="/account/history">查看连接历史 ↗</a></div><p class="dashboard-note">名称、主机和工作目录由客户端报告；会话归属按服务器验证的账户确认。</p>"#);
-    body.push_str(&session_cards(snapshot, csrf, "/account/sessions", &[]));
+    body.push_str(&session_cards(
+        snapshot,
+        csrf,
+        "/account/sessions",
+        accounts,
+        public_url,
+    ));
     body.push_str("</section>");
     page("我的会话", &body)
 }
@@ -205,7 +209,13 @@ fn action_label(action: AuditAction) -> &'static str {
     }
 }
 
-fn audit_rows(events: &[AuditEvent], admin: bool) -> String {
+fn audit_rows(
+    events: &[AuditEvent],
+    admin: bool,
+    accounts: &[AccountSummary],
+    public_url: &str,
+) -> String {
+    let accounts: BTreeMap<_, _> = accounts.iter().map(|a| (a.subject.as_str(), a)).collect();
     if events.is_empty() {
         return String::from(
             r#"<div class="console-empty"><h3>保留期内还没有记录</h3><p>新的登录、公钥变更和连接活动会出现在这里。</p></div>"#,
@@ -246,11 +256,14 @@ fn audit_rows(events: &[AuditEvent], admin: bool) -> String {
             let actor = event
                 .actor_subject
                 .as_deref()
-                .map(escape)
-                .unwrap_or_else(|| "未记录 GitHub 操作者".into());
+                .map(|id| escape(&subject_address(Some(id), &accounts, public_url)))
+                .unwrap_or_else(|| "未记录操作者".into());
             html.push_str(&format!(r#"<small>操作者：{actor}</small>"#));
             if let Some(owner) = &event.owner_subject {
-                html.push_str(&format!("<small>归属：GitHub #{}</small>", escape(owner)));
+                html.push_str(&format!(
+                    "<small>归属：{}</small>",
+                    escape(&subject_address(Some(owner), &accounts, public_url))
+                ));
             }
         }
         html.push_str("</div></li>");
@@ -259,7 +272,11 @@ fn audit_rows(events: &[AuditEvent], admin: bool) -> String {
     html
 }
 
-pub(super) fn history(snapshot: &DashboardSnapshot) -> String {
+pub(super) fn history(
+    snapshot: &DashboardSnapshot,
+    accounts: &[AccountSummary],
+    public_url: &str,
+) -> String {
     let all = snapshot.scope == Scope::All;
     let path = if all {
         "/account/admin/history"
@@ -279,7 +296,7 @@ pub(super) fn history(snapshot: &DashboardSnapshot) -> String {
         r#"<div class="retention-notice"><span class="retention-symbol" aria-hidden="true">◷</span><p>最多保留 <strong>{} 天</strong>，并按数量与空间上限提前轮转。自动清理；不记录命令正文、工具参数、执行结果或凭据。</p></div><section class="dashboard-section"><div class="dashboard-section-heading"><h2>最近活动</h2><span class="muted">当前页 {} 条 · UTC 时间</span></div>"#,
         snapshot.retention_days, snapshot.audit.len()
     ));
-    body.push_str(&audit_rows(&snapshot.audit, all));
+    body.push_str(&audit_rows(&snapshot.audit, all, accounts, public_url));
     body.push_str("</section>");
     body.push_str(&format!(r#"<nav class="history-pagination" aria-label="历史分页"><a class="text-link" href="{path}">最新记录</a>"#));
     if let Some(before) = snapshot.audit_next_before {
@@ -309,13 +326,14 @@ fn user_row(
     actor_subject: &str,
     default_rate_limit_bps: u64,
     period: &str,
+    public_url: &str,
 ) -> String {
-    let username = escape(account.handle.as_deref().unwrap_or(&account.username));
+    let username = escape(&account_address(account.handle.as_deref(), public_url));
     let subject = escape(&account.subject);
     let csrf = escape(csrf);
     let own_account = account.subject == actor_subject;
     let mut html = format!(
-        r#"<tr><th scope="row"><code>{username}</code>{}</th><td data-label="GitHub"><span>{}</span><small class="user-identifier">GitHub #{subject}</small></td><td data-label="连接">"#,
+        r#"<tr><th scope="row"><code>{username}</code>{}</th><td data-label="连接">"#,
         if own_account {
             r#"<small class="user-self">你</small>"#
         } else if account.handle.is_none() {
@@ -323,7 +341,6 @@ fn user_row(
         } else {
             ""
         },
-        escape(&account.github_login),
     );
     if sessions.is_empty() {
         html.push_str(r#"<span class="muted">0</span>"#);
@@ -409,6 +426,7 @@ pub(super) fn admin(
     csrf: &str,
     actor_subject: &str,
     period: &str,
+    public_url: &str,
 ) -> String {
     let mut body = navigation("/account/admin", true);
     body.push_str(&heading(
@@ -426,7 +444,7 @@ pub(super) fn admin(
     ));
     body.push_str(&metric(snapshot.stats.hosts, "在线主机"));
     body.push_str(r##"</dl><nav class="section-links" aria-label="管理员区域"><a href="#registered-users">用户</a><a href="#all-sessions">连接</a><a href="/account/admin/history">安全审计 ↗</a></nav>"##);
-    body.push_str(r#"<section class="dashboard-section" id="registered-users"><div class="dashboard-section-heading"><h2>用户</h2><span class="muted">账号绑定 GitHub 身份</span></div>"#);
+    body.push_str(r#"<section class="dashboard-section" id="registered-users"><div class="dashboard-section-heading"><h2>用户</h2><span class="muted">以平台账户管理连接与权限</span></div>"#);
     body.push_str(&format!(
         r#"<p class="dashboard-note" id="rate-help">网络限速按每位用户的全部连接合计，上传、下载分别计量。服务器默认 <strong>{} MiB/s</strong>；留空使用默认值。1 MiB = 1,048,576 字节。</p>"#,
         mib_per_second(snapshot.default_rate_limit_bps),
@@ -440,7 +458,7 @@ pub(super) fn admin(
                 sessions.entry(subject).or_default().push(session);
             }
         }
-        body.push_str(r#"<div class="table-scroll" tabindex="0" role="region" aria-label="用户管理表"><table class="users-table user-management-table"><thead><tr><th scope="col">用户名</th><th scope="col">GitHub</th><th scope="col">连接</th><th scope="col">状态</th><th scope="col">限速 · MiB/s</th><th scope="col">当月流量余额</th><th scope="col">访问管理</th></tr></thead><tbody>"#);
+        body.push_str(r#"<div class="table-scroll" tabindex="0" role="region" aria-label="用户管理表"><table class="users-table user-management-table"><thead><tr><th scope="col">平台账户</th><th scope="col">连接</th><th scope="col">状态</th><th scope="col">限速 · MiB/s</th><th scope="col">当月流量余额</th><th scope="col">访问管理</th></tr></thead><tbody>"#);
         for account in accounts {
             body.push_str(&user_row(
                 account,
@@ -452,12 +470,19 @@ pub(super) fn admin(
                 actor_subject,
                 snapshot.default_rate_limit_bps,
                 period,
+                public_url,
             ));
         }
         body.push_str("</tbody></table></div>");
     }
     body.push_str(r#"</section><section class="dashboard-section" id="all-sessions"><div class="dashboard-section-heading"><h2>连接</h2><a class="text-link" href="/account/admin/history">查看连接历史 ↗</a></div><p class="dashboard-note">名称、主机和工作目录由客户端报告。断开只关闭当前连接；封禁用户会阻止其重新连接。</p>"#);
-    body.push_str(&session_cards(snapshot, csrf, "/account/admin", accounts));
+    body.push_str(&session_cards(
+        snapshot,
+        csrf,
+        "/account/admin",
+        accounts,
+        public_url,
+    ));
     body.push_str("</section>");
     page("服务器管理", &body)
 }
@@ -505,22 +530,54 @@ mod tests {
     #[test]
     fn user_actions_are_independent_and_hide_self_ban() {
         let mut account = sample_account();
-        let row = user_row(&account, &[], "csrf", "999", 8 * 1_048_576, "2026-11");
+        let row = user_row(
+            &account,
+            &[],
+            "csrf",
+            "999",
+            8 * 1_048_576,
+            "2026-11",
+            "https://ssmcp.test",
+        );
         assert!(row.contains(r#"value="0.5""#));
         assert!(row.contains(r#"name="action" value="rate""#));
         assert!(row.contains(r#"name="action" value="ban""#));
         assert!(!row.contains(r#"name="banned""#));
         account.banned = true;
-        let row = user_row(&account, &[], "csrf", "999", 8 * 1_048_576, "2026-11");
+        let row = user_row(
+            &account,
+            &[],
+            "csrf",
+            "999",
+            8 * 1_048_576,
+            "2026-11",
+            "https://ssmcp.test",
+        );
         assert!(row.contains("已封禁"));
         assert!(row.contains(r#"name="action" value="unban""#));
         assert!(!row.contains(r#"name="action" value="ban""#));
-        let own = user_row(&account, &[], "csrf", "123", 8 * 1_048_576, "2026-11");
+        let own = user_row(
+            &account,
+            &[],
+            "csrf",
+            "123",
+            8 * 1_048_576,
+            "2026-11",
+            "https://ssmcp.test",
+        );
         assert!(own.contains("当前账户"));
         assert!(!own.contains(r#"name="action" value="unban""#));
         assert!(!own.contains(r#"name="action" value="ban""#));
         account.rate_limit_bps = None;
-        let row = user_row(&account, &[], "csrf", "999", 4 * 1_048_576, "2026-11");
+        let row = user_row(
+            &account,
+            &[],
+            "csrf",
+            "999",
+            4 * 1_048_576,
+            "2026-11",
+            "https://ssmcp.test",
+        );
         assert!(row.contains(r#"value="" placeholder="默认 4""#));
     }
 
@@ -538,20 +595,61 @@ mod tests {
             "999",
             8 * 1_048_576,
             "2026-11",
+            "https://ssmcp.test",
         );
         for raw in ["<script>", "<img", "<svg", r#"value="csrf" injected="#] {
             assert!(!row.contains(raw), "{raw}");
         }
-        assert!(row.contains("&lt;script&gt;"));
-        assert!(row.contains("&lt;img"));
+        assert!(row.contains("尚未注册的平台账户"));
         assert!(row.contains("&lt;svg"));
         assert!(row.contains(&format!(r##"href="#session-{}""##, session.id)));
-        let card = session_card(&session, "csrf", "/account/admin", true, Some(&account));
+        let card = session_card(
+            &session,
+            "csrf",
+            "/account/admin",
+            &BTreeMap::from([("123", &account)]),
+            "https://ssmcp.test",
+        );
         assert!(card.contains(&format!(r#"id="session-{}""#, session.id)));
-        assert!(card.contains("<dt>服务器用户</dt><dd><code>&lt;script&gt;</code>"));
+        assert!(card.contains("<dt>平台账户</dt><dd><code>尚未注册的平台账户</code>"));
         assert!(!card.contains("<svg"));
         assert!(!card.contains("<img"));
         assert!(!card.contains("<script>"));
+    }
+
+    #[test]
+    fn access_list_resolves_platform_addresses_only_by_verified_subject() {
+        let account = sample_account();
+        let mut session = sample_session();
+        session.allowed_github = vec![
+            crate::management::AllowedIdentity {
+                subject: "123".into(),
+                login: "renamed-upstream".into(),
+            },
+            crate::management::AllowedIdentity {
+                subject: "456".into(),
+                login: "developer".into(),
+            },
+        ];
+        let html = session_card(
+            &session,
+            "csrf",
+            "/account/sessions",
+            &BTreeMap::from([("123", &account)]),
+            "https://SSMCP.test:8443",
+        );
+        assert!(html.contains("获准使用工具的平台账户"));
+        assert_eq!(html.matches("developer@ssmcp.test:8443").count(), 2);
+        assert_eq!(html.matches("尚未注册的平台账户").count(), 1);
+        for old in [
+            "GitHub #",
+            "renamed-upstream",
+            "forged-provider",
+            "gh-123",
+            "developer@github",
+        ] {
+            assert!(!html.contains(old), "{old}");
+        }
     }
 
     #[test]
@@ -578,11 +676,18 @@ mod tests {
             default_rate_limit_bps: 3 * 1_048_576,
             traffic: None,
         };
-        let html = admin(&snapshot, &[account], "csrf", "999", "2026-11");
+        let html = admin(
+            &snapshot,
+            &[account],
+            "csrf",
+            "999",
+            "2026-11",
+            "https://ssmcp.test",
+        );
         assert!(html.contains("服务器默认 <strong>3 MiB/s</strong>"));
         assert!(html.contains("<summary>1 在线</summary>"));
         assert!(!html.contains("<summary>2 在线</summary>"));
-        assert!(html.contains("<dt>服务器用户</dt><dd><code>developer</code>"));
+        assert!(html.contains("<dt>平台账户</dt><dd><code>developer@ssmcp.test</code>"));
     }
 
     fn quota_snapshot(traffic: Option<crate::user_policy::TrafficQuota>) -> DashboardSnapshot {
@@ -623,7 +728,7 @@ mod tests {
     #[test]
     fn sessions_show_account_monthly_remaining_and_used_traffic() {
         let snapshot = quota_snapshot(Some(monthly_traffic(950_000_000)));
-        let html = sessions(&snapshot, "csrf");
+        let html = sessions(&snapshot, "csrf", &[], "https://ssmcp.test");
         assert!(html.contains("<h2>账户流量</h2>"));
         assert!(html.contains(r#"title="50000000 字节">50 MB</dd>"#));
         assert!(html.contains(r#"title="950000000 字节">950 MB</dd>"#));
@@ -639,7 +744,7 @@ mod tests {
         traffic.remaining_bytes = None;
         let mut snapshot = quota_snapshot(Some(traffic));
         snapshot.is_admin = true;
-        let html = sessions(&snapshot, "csrf");
+        let html = sessions(&snapshot, "csrf", &[], "https://ssmcp.test");
         assert!(html.contains(r#"<dt>流量额度</dt><dd aria-label="无限">∞</dd>"#));
         assert!(html.contains(r#"title="2000000000 字节">2 GB</dd>"#));
         assert!(!html.contains("购买流量包"));
@@ -651,10 +756,12 @@ mod tests {
         let exhausted = sessions(
             &quota_snapshot(Some(monthly_traffic(1_000_000_000))),
             "csrf",
+            &[],
+            "https://ssmcp.test",
         );
         assert!(exhausted.contains("本月流量已用完。"));
         assert!(exhausted.contains(r#"title="0 字节">0 字节</dd>"#));
-        let unavailable = sessions(&quota_snapshot(None), "csrf");
+        let unavailable = sessions(&quota_snapshot(None), "csrf", &[], "https://ssmcp.test");
         assert!(!unavailable.contains("<h2>账户流量</h2>"));
         assert!(!unavailable.contains("无限"));
         assert!(!unavailable.contains('∞'));

@@ -3,6 +3,318 @@ use super::*;
 const MANAGER_CLIENT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[test]
+fn availability_requires_the_exact_manager_and_real_remote_registration() {
+    let pool = queue(2);
+    let owner = actor("manager");
+    assert!(pool.availability(&owner, MANAGER_CLIENT).is_err());
+    assert!(pool.snapshot().manager.is_none());
+    pool.attach(&owner, MANAGER_CLIENT, 1).unwrap();
+    assert!(
+        !pool
+            .availability(&owner, MANAGER_CLIENT)
+            .unwrap()
+            .accepting()
+    );
+    pool.remote_ready().unwrap();
+    let initial = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert!(initial.accepting());
+    assert_eq!(initial.projection.total, 2);
+    assert_eq!(initial.projection.offline, 2);
+    assert_eq!(initial.projection.registered_workers, 0);
+    assert!(initial.projection.idle_slots.is_empty());
+    assert!(pool.claim_remote(&actor("executor"), 2).unwrap().is_none());
+    let registered = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert!(registered.revision > initial.revision);
+    assert_eq!(registered.projection.idle, 1);
+    assert_eq!(registered.projection.offline, 1);
+    assert_eq!(registered.projection.registered_workers, 1);
+    assert_eq!(registered.projection.idle_slots.len(), 1);
+    assert_eq!(registered.projection.idle_slots[0].slot, 0);
+    assert_eq!(
+        registered.projection.idle_slots[0].epoch,
+        pool.snapshot().slots[0].epoch
+    );
+    for foreign in [
+        actor("observer"),
+        Actor {
+            provider: "other-provider".into(),
+            ..owner.clone()
+        },
+        Actor {
+            subject: "other-account".into(),
+            ..owner.clone()
+        },
+        Actor {
+            connection: owner.connection + 1,
+            ..owner.clone()
+        },
+    ] {
+        assert!(pool.availability(&foreign, MANAGER_CLIENT).is_err());
+    }
+    assert!(pool.availability(&owner, &"b".repeat(64)).is_err());
+    pool.attach(&owner, MANAGER_CLIENT, 3).unwrap();
+    pool.claim_remote(&actor("executor"), 4).unwrap();
+    assert_eq!(
+        pool.availability(&owner, MANAGER_CLIENT).unwrap().revision,
+        registered.revision
+    );
+    assert_eq!(pool.snapshot().manager.unwrap().thread_id, "manager");
+
+    let local = queue(1);
+    local.attach(&owner, MANAGER_CLIENT, 1).unwrap();
+    let epoch = local.online(0).unwrap();
+    let available = local.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert!(available.accepting());
+    assert_eq!(available.projection.registered_workers, 0);
+    assert_eq!(
+        available.projection.idle_slots,
+        vec![IdleSlot { slot: 0, epoch }]
+    );
+}
+
+#[test]
+fn availability_ignores_retired_tombstones_and_keeps_higher_claim_ids() {
+    let pool = queue(3);
+    let owner = actor("manager");
+    let idle = actor("idle");
+    pool.remote_ready().unwrap();
+    pool.attach(&owner, MANAGER_CLIENT, 1).unwrap();
+    pool.claim_remote(&idle, 2).unwrap();
+    for key in ["one", "two"] {
+        pool.submit_managed(
+            owner.clone(),
+            MANAGER_CLIENT,
+            key,
+            "real work",
+            "context",
+            3,
+        )
+        .unwrap();
+    }
+    let first = pool.claim_remote(&actor("first"), 4).unwrap().unwrap();
+    let second = pool.claim_remote(&actor("second"), 4).unwrap().unwrap();
+    assert_eq!((first.slot, second.slot), (1, 2));
+    pool.resize(2).unwrap();
+    let retiring = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert_eq!(retiring.projection.total, 3);
+    assert_eq!(retiring.projection.desired_total, 2);
+    assert_eq!(retiring.projection.working, 2);
+    assert_eq!(retiring.projection.retiring, 1);
+    assert!(retiring.projection.idle_slots.is_empty());
+    let receipt = pool.retirement(&idle).unwrap();
+    pool.release_remote(&idle, &receipt, 5).unwrap();
+    let released = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert!(released.revision > retiring.revision);
+    assert_eq!(released.projection.total, 2);
+    assert_eq!(released.projection.working, 2);
+    assert_eq!(released.projection.registered_workers, 2);
+    assert_eq!(released.projection.offline, 0);
+    assert_eq!(released.projection.retiring, 0);
+    assert_eq!(
+        pool.state.lock().unwrap().slots.len(),
+        3,
+        "slot storage remains stable"
+    );
+    for lease in [&first, &second] {
+        let result = pool
+            .finish_remote(lease, Outcome::Completed("real result".into()), true, 6)
+            .unwrap();
+        assert_eq!(result.slot, Some(lease.slot));
+        assert_eq!(result.status, TaskStatus::Completed);
+    }
+    let available = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert_eq!(
+        available.projection.idle_slots,
+        vec![
+            IdleSlot {
+                slot: first.slot,
+                epoch: first.epoch
+            },
+            IdleSlot {
+                slot: second.slot,
+                epoch: second.epoch
+            },
+        ]
+    );
+    assert_eq!(
+        available.projection.total,
+        available.projection.idle
+            + available.projection.working
+            + available.projection.offline
+            + available.projection.retiring
+    );
+}
+
+#[test]
+fn availability_stops_admission_until_retirement_and_zero_capacity_are_resolved() {
+    let pool = queue(1);
+    let owner = actor("manager");
+    let worker = actor("executor");
+    pool.remote_ready().unwrap();
+    pool.attach(&owner, MANAGER_CLIENT, 1).unwrap();
+    pool.claim_remote(&worker, 2).unwrap();
+    pool.submit_managed(
+        owner.clone(),
+        MANAGER_CLIENT,
+        "active",
+        "real work",
+        "context",
+        3,
+    )
+    .unwrap();
+    let claim = pool.claim_remote(&worker, 4).unwrap().unwrap();
+    pool.resize(0).unwrap();
+    let stopping = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert!(!stopping.accepting());
+    assert_eq!(stopping.projection.total, 1);
+    assert_eq!(stopping.projection.desired_total, 0);
+    assert_eq!(stopping.projection.working, 1);
+    assert_eq!(stopping.projection.retiring, 0);
+    assert!(
+        pool.submit_managed(
+            owner.clone(),
+            MANAGER_CLIENT,
+            "rejected",
+            "work",
+            "context",
+            5
+        )
+        .is_err()
+    );
+    pool.finish_remote(&claim, Outcome::Completed("real result".into()), true, 6)
+        .unwrap();
+    let waiting = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert!(!waiting.accepting());
+    assert_eq!(waiting.projection.retiring, 1);
+    assert_eq!(waiting.projection.working, 0);
+    assert!(waiting.projection.idle_slots.is_empty());
+    pool.release_remote(&worker, &pool.retirement(&worker).unwrap(), 7)
+        .unwrap();
+    let empty = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert!(!empty.accepting());
+    assert_eq!(empty.projection.total, 0);
+    assert_eq!(empty.projection.offline, 0);
+    assert_eq!(empty.projection.registered_workers, 0);
+    pool.resize(1).unwrap();
+    let grown = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert!(grown.accepting());
+    assert!(grown.revision > empty.revision);
+    assert_eq!(grown.projection.total, 1);
+    assert_eq!(grown.projection.offline, 1);
+    assert!(grown.projection.idle_slots.is_empty());
+    assert!(pool.is_manager(&owner, MANAGER_CLIENT));
+}
+
+#[test]
+fn availability_revision_excludes_progress_and_native_command_log_updates() {
+    let pool = queue(1);
+    let owner = actor("manager");
+    pool.remote_ready().unwrap();
+    pool.submit_managed(
+        owner.clone(),
+        MANAGER_CLIENT,
+        "work",
+        "real work",
+        "context",
+        1,
+    )
+    .unwrap();
+    let lease = pool.claim_remote(&actor("executor"), 2).unwrap().unwrap();
+    let before = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    let mut pool_updates = pool.subscribe();
+    for update in [
+        ReportUpdate {
+            event: ReportEvent::Progress,
+            command: None,
+            progress: Some("checked parser".into()),
+            detail: None,
+        },
+        ReportUpdate {
+            event: ReportEvent::CommandStart,
+            command: Some("cargo check".into()),
+            progress: None,
+            detail: None,
+        },
+        ReportUpdate {
+            event: ReportEvent::CommandEnd,
+            command: Some("cargo check".into()),
+            progress: None,
+            detail: Some("exit 0".into()),
+        },
+    ] {
+        pool.report(&lease, &update, 3).unwrap();
+        assert!(pool_updates.has_changed().unwrap());
+        drop(pool_updates.borrow_and_update());
+        let after = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+        assert_eq!(after.revision, before.revision);
+        assert_eq!(after.projection, before.projection);
+    }
+    pool.finish_remote(&lease, Outcome::Completed("done".into()), true, 4)
+        .unwrap();
+    let completed = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert!(completed.revision > before.revision);
+    pool.command_end_after_completion(
+        &crate::worker::remote::Claim {
+            id: "native-receipt".into(),
+            generation: lease.generation.clone(),
+            slot: lease.slot,
+            epoch: lease.epoch,
+            task_id: lease.task_id.clone(),
+            attempt: lease.attempt,
+        },
+        &ReportUpdate {
+            event: ReportEvent::CommandEnd,
+            command: Some("cargo check".into()),
+            progress: None,
+            detail: Some("observed late exit 0".into()),
+        },
+        5,
+    )
+    .unwrap();
+    assert_eq!(
+        pool.availability(&owner, MANAGER_CLIENT).unwrap().revision,
+        completed.revision
+    );
+    assert_eq!(
+        pool.snapshot().slots[0]
+            .logs
+            .last()
+            .unwrap()
+            .task_id
+            .as_deref(),
+        Some(lease.task_id.as_str())
+    );
+}
+
+#[test]
+fn availability_reports_a_full_queue_as_not_accepting_until_a_real_claim() {
+    let pool = queue(1);
+    let owner = actor("manager");
+    pool.remote_ready().unwrap();
+    for index in 0..MAX_QUEUED {
+        pool.submit_managed(
+            owner.clone(),
+            MANAGER_CLIENT,
+            &format!("task-{index}"),
+            "work",
+            "context",
+            1,
+        )
+        .unwrap();
+    }
+    let full = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert!(!full.accepting());
+    assert_eq!(full.projection.queued, MAX_QUEUED);
+    assert_eq!(full.projection.offline, 1);
+    assert!(full.projection.idle_slots.is_empty());
+    assert!(pool.claim_remote(&actor("executor"), 2).unwrap().is_some());
+    let accepting = pool.availability(&owner, MANAGER_CLIENT).unwrap();
+    assert!(accepting.accepting());
+    assert!(accepting.revision > full.revision);
+    assert_eq!(accepting.projection.queued, MAX_QUEUED - 1);
+}
+
+#[test]
 fn management_observation_and_rejected_work_never_acquire_ownership() {
     let pool = queue(1);
     let owner = actor("manager");

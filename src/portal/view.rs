@@ -14,6 +14,13 @@ pub(super) fn escape(s: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+/// Use the configured server origin and the same address rules as --allow.
+pub(super) fn account_address(handle: Option<&str>, public_url: &str) -> String {
+    handle
+        .and_then(|handle| crate::server_endpoint::allow_principal(handle, public_url).ok())
+        .unwrap_or_else(|| "尚未注册的平台账户".into())
+}
+
 pub(super) fn page(title: &str, body: &str) -> String {
     let favicon_url = super::assets::url("brand-mark.png");
     let base_css_url = super::assets::url("portal.css");
@@ -125,6 +132,7 @@ fn account_panel(
     enabled: bool,
     management_enabled: bool,
     traffic: Option<&TrafficQuota>,
+    public_url: &str,
 ) -> String {
     let (status_class, status) = if account.is_some() {
         ("status signed-in", "已登录")
@@ -138,13 +146,10 @@ fn account_panel(
 <div class="panel-bar"><span class="eyebrow">你的账户</span><span class="{status_class}">{status}</span></div><div class="account-body">"#
     );
     if let Some(a) = account {
-        let username_form = if a.handle.is_none() {
-            format!(
-                r#"<form class="key-form" method="post" action="/account/username"><input type="hidden" name="csrf" value="{csrf}"><label for="account-username">服务器用户名<input id="account-username" name="username" required minlength="3" maxlength="32" autocapitalize="none" spellcheck="false" aria-describedby="username-help"></label><small id="username-help">3–32 个英文字母、数字、下划线或连字符。以字母开头，以字母或数字结尾。登记后绑定当前 GitHub 账号。</small><button type="submit">注册用户名</button></form>"#
-            )
-        } else {
-            String::new()
-        };
+        let username_form = format!(
+            r#"<details class="traffic-details"><summary>修改用户名</summary><form class="key-form" method="post" action="/account/username"><input type="hidden" name="csrf" value="{csrf}"><label for="account-username">平台用户名<input id="account-username" name="username" value="{}" required minlength="3" maxlength="32" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="username-help"></label><small id="username-help">登录后自动分配用户名，可在这里修改。3–32 个英文字母、数字、下划线或连字符，以字母开头，以字母或数字结尾。修改后，已有登录和授权继续有效。</small><button type="submit">保存用户名</button></form></details>"#,
+            escape(a.handle.as_deref().unwrap_or_default()),
+        );
         let primary_action = if management_enabled {
             r#"<a class="button secondary" href="/account/sessions">查看我的会话 <span class="arrow" aria-hidden="true">↗</span></a>"#
         } else {
@@ -157,10 +162,9 @@ fn account_panel(
         };
         html.push_str(&format!(
             r#"<h2 id="account-title">账户信息</h2>
-<dl class="account-facts identity-facts"><div><dt>服务器用户名</dt><dd class="mono">{}</dd></div><div><dt>GitHub 账户</dt><dd>{}</dd></div></dl>
+<dl class="account-facts identity-facts"><div><dt>平台账户</dt><dd class="mono">{}</dd></div></dl>
 {username_form}<div class="account-actions">{primary_action}{traffic_action}</div>"#,
-            escape(a.handle.as_deref().unwrap_or("尚未注册")),
-            escape(&a.github_login),
+            escape(&account_address(a.handle.as_deref(), public_url)),
         ));
         if management_enabled {
             html.push_str(r#"<div class="account-shortcuts"><a class="text-link" href="/account/history">历史记录 <span aria-hidden="true">↗</span></a>"#);
@@ -170,7 +174,7 @@ fn account_panel(
             html.push_str("</div>");
         }
         html.push_str(&format!(
-            r#"<div class="account-footer"><small class="account-note">GitHub 身份已绑定</small><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="quiet" type="submit">退出登录</button></form></div>"#
+            r#"<div class="account-footer"><small class="account-note">使用 GitHub 登录</small><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="quiet" type="submit">退出登录</button></form></div>"#
         ));
     } else if enabled {
         html.push_str(&format!(
@@ -266,6 +270,7 @@ pub(super) fn home(
         enabled,
         management_enabled,
         traffic,
+        public_url,
     ));
     if account.is_some() {
         body.push_str("</div></section>");
@@ -301,6 +306,8 @@ mod tests {
             github_login: "octocat".into(),
             keys: vec![],
             handle: Some("developer".into()),
+            generated_handle: false,
+            handle_aliases: Default::default(),
             banned: false,
             rate_limit_bps: None,
             has_recharged: false,
@@ -335,6 +342,35 @@ mod tests {
     }
 
     #[test]
+    fn account_identity_uses_canonical_origin_and_keeps_the_rename_form_available() {
+        let html = home(
+            Some(&sample_account()),
+            Some("csrf"),
+            true,
+            true,
+            "https://EXAMPLE.test:443",
+            None,
+        );
+        assert!(html.contains("developer@example.test"));
+        assert!(html.contains("修改用户名"));
+        assert!(html.contains(r#"name="username" value="developer""#));
+        assert!(!html.contains("octocat"));
+        assert!(!html.contains("gh-123"));
+        assert_eq!(
+            account_address(Some("developer"), "https://example.test:8443"),
+            "developer@example.test:8443"
+        );
+        assert_eq!(
+            account_address(Some("developer"), "https://[::1]:8443"),
+            "developer@[::1]:8443"
+        );
+        assert_eq!(
+            account_address(None, "https://example.test"),
+            "尚未注册的平台账户"
+        );
+    }
+
+    #[test]
     fn home_shows_monthly_quota_after_login() {
         let html = logged_in_home(&monthly_quota(250_000_000));
         assert!(html.contains(r#"title="750000000 字节">750 MB</dd>"#));
@@ -358,8 +394,14 @@ mod tests {
         let quota = monthly_quota(0);
         let orders_link = r#"href="/account/traffic""#;
         for management_enabled in [false, true] {
-            let without_quota =
-                account_panel(Some(&account), "csrf", true, management_enabled, None);
+            let without_quota = account_panel(
+                Some(&account),
+                "csrf",
+                true,
+                management_enabled,
+                None,
+                "https://example.test",
+            );
             assert_eq!(without_quota.matches(orders_link).count(), 1);
             let with_quota = account_panel(
                 Some(&account),
@@ -367,10 +409,14 @@ mod tests {
                 true,
                 management_enabled,
                 Some(&quota),
+                "https://example.test",
             );
             assert!(!with_quota.contains(orders_link));
         }
-        assert!(!account_panel(None, "csrf", true, true, None).contains(orders_link));
+        assert!(
+            !account_panel(None, "csrf", true, true, None, "https://example.test")
+                .contains(orders_link)
+        );
     }
 
     #[test]

@@ -191,7 +191,7 @@ impl Problem {
             Self::Csrf => "页面验证未通过，请回到首页刷新后重试。",
             Self::Busy => "操作过于频繁或服务繁忙，请稍后重试。",
             Self::Storage => "账户存储暂不可用，本次操作未确认完成，请稍后重新查看。",
-            Self::Limit => "已达到存储上限；每个账户最多保存 20 把公钥。",
+            Self::Limit => "已达到账户存储上限，请联系服务器管理员。",
             #[cfg(test)]
             Self::Duplicate => "你的账户中已存在这把公钥。",
             #[cfg(test)]
@@ -208,10 +208,10 @@ impl Problem {
             Self::UsernameInvalid => {
                 "用户名须为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾，且不能使用保留名称。"
             }
-            Self::UsernameTaken => {
-                "该用户名已绑定其他 GitHub 账户，请换一个名称，或使用原绑定账户登录。"
+            Self::UsernameTaken => "该用户名已归属其他平台账户，请换一个名称，或使用原账户登录。",
+            Self::UsernameBound => {
+                "此账户已有用户名，请使用现有名称连接；如需改名，请在账户页修改。"
             }
-            Self::UsernameBound => "此 GitHub 账户已有用户名，请使用已绑定的名称连接。",
             Self::Banned => "此账户已被服务器管理员封禁。",
             Self::TrafficQuotaExceeded => {
                 "本月流量额度不足。服务器流量有限，经常使用请购买流量包。"
@@ -523,7 +523,7 @@ pub fn routes() -> Router<Arc<Broker>> {
         .merge(assets::routes())
         .route("/account/login", post(login))
         .route("/account/logout", post(logout))
-        .route("/account/username", post(register_username))
+        .route("/account/username", post(update_username))
         .merge(guide::routes())
         .merge(setup::routes())
         .merge(dashboard::routes())
@@ -987,7 +987,7 @@ async fn logout_inner(
     set_cookie(&mut response, "", 0);
     Ok(response)
 }
-async fn register_username(
+async fn update_username(
     State(broker): State<Arc<Broker>>,
     request: Request,
 ) -> Result<Response, Problem> {
@@ -1006,7 +1006,7 @@ async fn register_username(
     let username = values["username"].clone();
     broker
         .portal
-        .storage(move |store| store.claim_handle(&subject, &username))
+        .storage(move |store| store.rename_handle(&subject, &username))
         .await?;
     Ok(Redirect::to("/#account").into_response())
 }

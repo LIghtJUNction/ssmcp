@@ -47,6 +47,15 @@ fn wrapped(text: &str, width: u16) -> Vec<String> {
     rows
 }
 
+fn linked_manager_thread(linked: &Value) -> Option<&str> {
+    let client_id = linked["client_id"].as_str().filter(|id| !id.is_empty())?;
+    let manager = linked.get("manager")?.as_object()?;
+    (manager.get("client_id")?.as_str()? == client_id)
+        .then(|| manager.get("thread_id")?.as_str())
+        .flatten()
+        .filter(|id| !id.is_empty())
+}
+
 fn rows(
     data: &Value,
     audit: &Value,
@@ -63,6 +72,7 @@ fn rows(
         .then(|| data["session_id"].as_str())
         .flatten()
         .filter(|id| !id.is_empty());
+    let linked = linked.filter(|linked| linked["connected"] == true);
     // A recipient highlight and a recent caller are not a management binding.
     let thread_id = workers
         .and_then(|workers| workers.manager.as_ref())
@@ -91,13 +101,13 @@ fn rows(
     if threads.is_empty() {
         push("none", PanelTone::Normal);
     } else {
-        for thread in threads {
+        for thread in &threads {
             push(thread, PanelTone::Normal);
         }
     }
     push("", PanelTone::Normal);
     push(
-        &format!("Registered members {}", items(data, "agents").len()),
+        &format!("Registered members {}", threads.len()),
         PanelTone::Normal,
     );
     let pending = items(data, "queue")
@@ -164,6 +174,17 @@ fn rows(
         push(
             &format!("Worker OS PID {}", count("process_id")),
             PanelTone::Muted,
+        );
+        push("Worker manager thread ID", PanelTone::Muted);
+        push(
+            linked_manager_thread(linked).unwrap_or_else(|| {
+                if linked.get("manager") == Some(&Value::Null) {
+                    "unbound"
+                } else {
+                    "unavailable"
+                }
+            }),
+            PanelTone::Normal,
         );
         push(
             &format!(
@@ -302,6 +323,7 @@ mod tests {
         assert!(text.contains(&format!("Session process ID\n{client}")));
         assert!(text.contains("Manager thread ID\nunbound"));
         assert!(text.contains(&format!("Registered session threads\n{first}\n{second}")));
+        assert!(text.contains("Registered members 2"));
         data["connected"] = json!(false);
         let text = rows(&data, &json!({}), None, None, 31415, 120)
             .into_iter()
@@ -309,6 +331,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("Registered session threads\nnone"));
+        assert!(text.contains("Registered members 0"));
         assert!(!text.contains(&first) && !text.contains(&second));
     }
 
@@ -317,7 +340,7 @@ mod tests {
         let main_client = "main-client";
         let data = json!({"connected":true,"session_id":main_client,
             "agents":[{"agent_id":"selected-recipient"}],"target":"selected-recipient"});
-        let linked = json!({"client_id":"linked-worker-client","process_id":27182,
+        let linked = json!({"client_id":"linked-worker-client","process_id":27182,"connected":true,
             "total":4,"desired_total":3,"registered_workers":3,"retiring":1,
             "idle":1,"working":1,"offline":1,"queued":5,"stopping":true});
         let text = rows(&data, &json!({}), None, Some(&linked), 31415, 120)
@@ -343,6 +366,41 @@ mod tests {
         assert!(text.contains("Manager thread ID\nverified-manager"));
         assert!(text.contains("Workers 2 · Idle 1 · Working 1 · Offline 0"));
         assert!(!text.contains("linked-worker-client"));
+    }
+
+    #[test]
+    fn linked_worker_manager_requires_the_same_live_pool_and_never_borrows_main_identity() {
+        let data = json!({"connected":true,"session_id":"main-client",
+            "agents":[{"agent_id":"selected-recipient"}],"target":"selected-recipient"});
+        let mut linked = json!({"client_id":"worker-client","process_id":27182,"connected":true,
+            "manager":{"client_id":"worker-client","thread_id":"verified-pool-manager"}});
+        let render = |linked: &Value| {
+            rows(&data, &json!({}), None, Some(linked), 31415, 120)
+                .into_iter()
+                .map(|(text, _)| text)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let text = render(&linked);
+        assert!(text.contains("Session process ID\nmain-client"));
+        assert!(text.contains("Manager thread ID\nunbound"));
+        assert!(text.contains("OS PID 31415"));
+        assert!(text.contains("Worker session ID\nworker-client"));
+        assert!(text.contains("Worker OS PID 27182"));
+        assert!(text.contains("Worker manager thread ID\nverified-pool-manager"));
+        linked["manager"]["client_id"] = json!("main-client");
+        let text = render(&linked);
+        assert!(text.contains("Worker manager thread ID\nunavailable"));
+        assert!(!text.contains("verified-pool-manager"));
+        linked["manager"] = Value::Null;
+        assert!(render(&linked).contains("Worker manager thread ID\nunbound"));
+        linked.as_object_mut().unwrap().remove("manager");
+        assert!(render(&linked).contains("Worker manager thread ID\nunavailable"));
+        linked["connected"] = json!(false);
+        let text = render(&linked);
+        assert!(!text.contains("worker-client"));
+        assert!(!text.contains("Worker OS PID 27182"));
+        assert!(text.contains("No worker pool connected"));
     }
 
     #[test]
@@ -373,7 +431,32 @@ mod tests {
     #[test]
     fn statistics_navigation_keeps_the_draft_recipient_and_group_unchanged() {
         let mut state = crate::client::terminal::preview_state(28, 100, &Ui::default());
+        assert_eq!(
+            state.conversation.canvas.snapshot()["columns"],
+            json!([
+                "statistics",
+                "conversation",
+                "code audit",
+                "queue",
+                "questions",
+                "Logs",
+                "Tasks"
+            ])
+        );
         state.chat_command("/sessions").unwrap();
+        assert_eq!(
+            state.conversation.canvas.snapshot()["columns"],
+            json!([
+                "statistics",
+                "conversation",
+                "recipients",
+                "code audit",
+                "queue",
+                "questions",
+                "Logs",
+                "Tasks"
+            ])
+        );
         state.chat_move(1);
         state.chat_group_toggle();
         state.chat_change_view(View::Activity);
@@ -393,8 +476,58 @@ mod tests {
         assert_eq!(state.conversation.snapshot()["group_selected"], groups);
         assert!(state.conversation.submitting.is_none());
         assert!(state.chat_command("/new agents").is_err());
+        assert!(state.chat_command("/new history").is_err());
         state.chat_command("/new statistics").unwrap();
         assert_eq!(state.conversation.view, View::Statistics);
+        // The inserted Statistics column is followed by Recipients here.
+        state.chat_key(Key::Open);
+        assert_eq!(state.conversation.view, View::Agents);
+        assert_eq!(state.chat_saved_draft(), before);
+        assert_eq!(state.conversation.snapshot()["group_selected"], groups);
+    }
+
+    #[test]
+    fn statistics_counts_real_retained_call_updates_without_counting_retries() {
+        let mut audit = crate::client::audit_view::AuditView::default();
+        for request_id in 1..=4 {
+            assert!(
+                audit.ingest(&json!({"type":"ssmcp.code_mode","run_id":"stats-run",
+                "phase":"call-started","request_id":request_id,"tool":"ssmcp.exec.status"}))
+            );
+        }
+        for (request_id, success) in [
+            (2, Some(true)),
+            (3, Some(false)),
+            (4, None),
+            (2, Some(true)),
+        ] {
+            assert!(
+                audit.ingest(&json!({"type":"ssmcp.code_mode","run_id":"stats-run",
+                "phase":"call-finished","request_id":request_id,"success":success}))
+            );
+        }
+        assert_eq!(
+            ToolCounts::from_audit(&audit.snapshot()),
+            ToolCounts {
+                running: 1,
+                succeeded: 1,
+                failed: 1,
+                unknown: 1,
+            }
+        );
+        assert!(
+            audit.ingest(&json!({"type":"ssmcp.code_mode","run_id":"stats-run",
+            "phase":"call-finished","request_id":1,"success":true}))
+        );
+        assert_eq!(
+            ToolCounts::from_audit(&audit.snapshot()),
+            ToolCounts {
+                running: 0,
+                succeeded: 2,
+                failed: 1,
+                unknown: 1,
+            }
+        );
     }
 
     #[test]

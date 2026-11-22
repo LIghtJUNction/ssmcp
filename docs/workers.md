@@ -103,9 +103,11 @@ Each station retains up to 64 log entries within a 16 KiB budget; an entry's tex
 
 The status column shows current and accumulated work time and the last three completed task durations when those observations are available. Resource readings identify the process they measure. An external model has no implied local PID, so its CPU and memory use cannot be inferred from the worker window. Local client measurements, their bounded line chart, and the CPU heat value refer to the worker client process and are labelled accordingly; unavailable samples remain unavailable.
 
+The monitor shows the worker process's OS PID and its bound manager identity when space permits. Full client and thread IDs wrap across rows on larger screens. Smaller screens use a compact binding status or omit these rows to preserve the task, log and measurement areas. The main window's Statistics page provides a scrollable view of both windows' IDs and the linked pool's counts. These displays observe identity without choosing a message recipient or acquiring management rights.
+
 ## Bind the main agent and manage tasks
 
-Read the main chat's `ssmcp.ui.get` projection at `/worker_pool` to identify its linked pool. It returns the actual worker `client_id` and `process_id`, connection state, station counts, queue length and registered-worker count. Confirm that client through `list` before binding a participant. The main chat and worker pool have distinct client IDs; the worker advertises `chat_enabled: false` and exposes `ssmcp.worker.status`. A display name alone does not select a connection.
+Read the main chat's `ssmcp.ui.get` projection at `/worker_pool` to identify its linked pool. It returns the actual worker `client_id` and `process_id`, connection state, station counts, queue length and registered-worker count. Its `manager` projection contains only the bound manager's `client_id` and `thread_id`, or `null` when unbound. Confirm that client through `list` before binding a participant. The main chat and worker pool have distinct client IDs; the worker advertises `chat_enabled: false` and exposes `ssmcp.worker.status`. A display name alone does not select a connection.
 
 ```js
 const projection = await call(mainClientId, "ssmcp.ui.get", {path: "/worker_pool"});
@@ -145,6 +147,7 @@ Keep that participant's credentials private and reuse the same binding for subse
 | `ssmcp.worker.attach` | `{}` | Bind the authenticated main agent; return its verified identity, `caller_is_manager`, and the worker snapshot. |
 | `ssmcp.worker.status` | `{}` | The typed monitor snapshot, main agent identity, `caller_is_manager`, execution mode, resource status, and any cleanup error. Reading it does not change the main agent. |
 | `ssmcp.worker.tasks` | `{cursor?, limit?: 1..128}` | Main agent only: a bounded page of task IDs and lifecycle metadata, with `next_cursor`; default limit 32. It excludes task text, output, and error bodies. |
+| `ssmcp.worker.wait_available` | `{after?: {generation, revision}, wait_ms?: 0..5000}` | Attached main agent only: observe capacity or wait for its revision to change; omit `after` for an immediate snapshot. |
 | `ssmcp.worker.submit` | `{request_id, text}` | One task receipt, reference warnings, and the current worker snapshot. |
 | `ssmcp.worker.result` | `{task_id, wait_ms?: 0..5000}` | That caller's task state and any confirmed output. |
 | `ssmcp.worker.cancel` | `{task_id}` | A cancellation request; a running task remains occupied until completion or confirmed cleanup. |
@@ -163,6 +166,32 @@ Tasks keep the authenticated caller and original live-thread owner captured at s
 The snapshot exposes `manager` and `stopping`. An unbound pool has `manager: null`. A bound manager includes the actual `client_id`, verified `thread_id` and participant identity, connection, and binding time. The snapshot's `process_id` is the local operating-system PID; it is separate from the session's client ID and the main agent's logical thread ID.
 
 `stop` returns `stop_requested: true` and whether this call changed the state. Repeating it is safe. Its `external_execution_stopped: false` explicitly means that requesting a stop does not prove an external model or process has stopped. Running remote tasks remain occupied with cancellation requested until their original claimant acknowledges completion; their slots then go offline. A real connection loss continues to use the existing `unknown` outcome and must not trigger automatic replay.
+
+## Observe capacity changes
+
+`ssmcp.worker.wait_available` observes the pool under its existing manager binding. It does not attach a new manager, register a worker, start a model, reserve a station or consume human input. Successful worker-tool replies to that manager can also include the same `availability` projection alongside their original result.
+
+The projection separates usable idle capacity from offline and retiring stations. It includes `total`, `desired_total`, `registered_workers`, `idle`, `working`, `offline`, `retiring` and `queued`. In remote mode, idle stations require actual worker registration; an empty station is offline. A busy station selected for removal remains working until completion, then remains retiring until release. Released stations are excluded from `total`, and surviving `slot` IDs and `epoch` values are not renumbered. Counts describe the pool's recorded state, not a heartbeat from an external model.
+
+`accepting` reports whether a new valid task can enter the queue. A ready remote pool may accept queued work while all stations are offline; this does not make any worker available. Zero capacity, all-retiring stations, a full queue, stopping, closure or a guard that blocks new submissions makes it false. `idle_slots` contains observed eligible `{slot, epoch}` pairs only while the pool is accepting. These pairs are observations, so another task can take an idle station before the manager submits its next task.
+
+A cursor waits for a capacity revision, not for a log entry or progress update. Omit `after` to read immediately; otherwise pass the returned `generation` and `revision` with `wait_ms` from 0 to 5000, default 5000. The result status is `current`, `changed`, `unchanged` or `not_accepting`; `not_accepting` takes precedence when the pool cannot admit work. The separate `changed` flag compares the supplied revision with the current one. A cursor from another generation or ahead of the current revision is rejected. Discover the new pool and read a fresh cursor after reconnecting.
+
+Use the same verified manager binding for both calls:
+
+```js
+const first = await call(id, "ssmcp.worker.wait_available", {wait_ms: 0});
+if (first.isError) throw new Error(JSON.stringify(first));
+const {generation, revision} = first.structuredContent.availability;
+const next = await call(id, "ssmcp.worker.wait_available", {
+  after: {generation, revision},
+  wait_ms: 5000
+});
+if (next.isError) throw new Error(JSON.stringify(next));
+return next.structuredContent;
+```
+
+The returned `scope: "coordination_slots"`, `execution` and `claim_required` identify what the observation covers. They do not establish an external agent's readiness to generate text or replace the worker's `wait` / `complete` loop. The existing passive reminders remain separate from this explicit manager wait. [Manager tool contract](../src/worker/pool.rs) · [Capacity and revision calculation](../src/worker/queue.rs)
 
 ## Remote claim and completion
 

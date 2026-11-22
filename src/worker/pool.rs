@@ -1,6 +1,6 @@
 use super::{
     Config, now_ms,
-    queue::{Actor, Queue, Retirement, TaskStatus},
+    queue::{Actor, Availability, Queue, Retirement, TaskStatus},
     remote::{self, Claimed, CommandLog, Completion, Remote, Report},
 };
 #[cfg(target_os = "linux")]
@@ -64,6 +64,26 @@ struct Task {
     task_id: String,
     #[serde(default)]
     wait_ms: u64,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AvailabilityCursor {
+    generation: String,
+    revision: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WaitAvailable {
+    #[serde(default)]
+    after: Option<AvailabilityCursor>,
+    #[serde(default = "default_availability_wait")]
+    wait_ms: u64,
+}
+
+fn default_availability_wait() -> u64 {
+    5000
 }
 
 impl Pool {
@@ -287,6 +307,13 @@ impl Pool {
                 true,
             ),
             tool(
+                "wait_available",
+                "The verified manager observes capacity or waits up to 5 seconds for it to change. Omit after for an immediate snapshot; otherwise reuse its generation and revision. Remote idle slots require real worker registration; offline capacity is not a standby agent. Counts include retiring stations until release, and desired_total shows pending resize. accepting describes new valid task admission; zero capacity, all-retiring stations, a full queue, stop or closure disable it. Revisions ignore command logs and progress. Idle slot IDs and epochs are observations, never reservations. Reconnect requires a new cursor. This wait does not consume human input or start a model.",
+                json!({"after":{"type":"object","properties":{"generation":{"type":"string"},"revision":{"type":"integer","minimum":0}},"required":["generation","revision"],"additionalProperties":false},"wait_ms":{"type":"integer","minimum":0,"maximum":5000,"default":5000}}),
+                json!([]),
+                true,
+            ),
+            tool(
                 "stop",
                 "The authenticated manager stops this pool from accepting new tasks, cancels queued work and requests cancellation of running work. Running remote slots remain occupied until the exact claimant acknowledges; this does not kill an external agent. A later connection loss makes unconfirmed effects unknown, never replay-safe. This operation cannot restart or resize the pool.",
                 json!({}),
@@ -345,6 +372,76 @@ impl Pool {
                 json!({"retirement":retirement_schema}), json!(["retirement"]), false),
         ]);
         tools
+    }
+
+    fn availability_value(&self, availability: Availability) -> Value {
+        let mut value = json!(availability);
+        value["execution"] = json!(self.execution_name());
+        value["claim_required"] = json!(matches!(&self.execution, Execution::Remote(_)));
+        value
+    }
+
+    fn decorate_availability(&self, actor: &Actor, client_id: &str, mut result: Value) -> Value {
+        // This uses the exact existing manager binding and never acquires one.
+        // A failed convenience observation must not erase a committed result.
+        if let Ok(availability) = self.queue.availability(actor, client_id) {
+            result["availability"] = self.availability_value(availability);
+        }
+        result
+    }
+
+    async fn wait_available(
+        &self,
+        actor: &Actor,
+        client_id: &str,
+        request: WaitAvailable,
+    ) -> Result<Value, String> {
+        if request.wait_ms > 5000 {
+            return Err("worker availability wait_ms must be at most 5000".into());
+        }
+        // Subscribe before the authenticated snapshot to avoid missing a change
+        // between observing its revision and beginning the wait.
+        let mut wake = self.queue.subscribe();
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(request.wait_ms);
+        loop {
+            let availability = self.queue.availability(actor, client_id)?;
+            let changed = if let Some(after) = &request.after {
+                if after.generation != availability.generation {
+                    return Err(
+                        "worker availability cursor belongs to another pool generation".into(),
+                    );
+                }
+                if after.revision > availability.revision {
+                    return Err(
+                        "worker availability cursor is ahead of the current pool revision".into(),
+                    );
+                }
+                after.revision != availability.revision
+            } else {
+                false
+            };
+            let status = if !availability.accepting() {
+                Some("not_accepting")
+            } else if request.after.is_none() {
+                Some("current")
+            } else if changed {
+                Some("changed")
+            } else if request.wait_ms == 0 || tokio::time::Instant::now() >= deadline {
+                Some("unchanged")
+            } else {
+                None
+            };
+            if let Some(status) = status {
+                return Ok(json!({"status":status,"changed":changed,
+                    "availability":self.availability_value(availability)}));
+            }
+            if matches!(
+                tokio::time::timeout_at(deadline, wake.changed()).await,
+                Ok(Err(_))
+            ) {
+                return Err("worker availability observation ended".into());
+            }
+        }
     }
 
     async fn wait_remote(
@@ -419,7 +516,7 @@ impl Pool {
             .and_then(|call| call.client_id())
             .ok_or("worker tools require the verified native client identity")?
             .to_owned();
-        match name {
+        let result = match name {
             "ssmcp.worker.status" => {
                 if arguments.as_object().is_none_or(|map| !map.is_empty()) {
                     return Err("worker status accepts an empty object".into());
@@ -480,6 +577,11 @@ impl Pool {
                 )?;
                 Ok(json!({"page":page,"worker":self.queue.snapshot()}))
             }
+            "ssmcp.worker.wait_available" => {
+                let request: WaitAvailable = serde_json::from_value(arguments)
+                    .map_err(|error| format!("invalid worker availability wait: {error}"))?;
+                return self.wait_available(&actor, &client_id, request).await;
+            }
             "ssmcp.worker.resize" => {
                 #[derive(Deserialize)]
                 #[serde(deny_unknown_fields)]
@@ -515,7 +617,7 @@ impl Pool {
                 #[cfg(target_os = "linux")]
                 let actor_key = actor_context_key(&actor)?;
                 let task = self.queue.submit_managed(
-                    actor,
+                    actor.clone(),
                     &client_id,
                     &request.request_id,
                     &request.text,
@@ -549,7 +651,7 @@ impl Pool {
                     ) || request.wait_ms == 0
                         || tokio::time::Instant::now() >= deadline
                     {
-                        return Ok(json!({"task":task,"worker":self.queue.snapshot()}));
+                        break Ok(json!({"task":task,"worker":self.queue.snapshot()}));
                     }
                     let _ = tokio::time::timeout_at(deadline, wake.changed()).await;
                 }
@@ -632,7 +734,8 @@ impl Pool {
                 )
             }
             _ => Err("unknown worker tool".into()),
-        }
+        }?;
+        Ok(self.decorate_availability(&actor, &client_id, result))
     }
 }
 
@@ -691,6 +794,384 @@ mod command_logs_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const AVAILABILITY_CLIENT: &str =
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn availability_pool(count: usize) -> (Arc<Pool>, Actor) {
+        let pool = Pool::new(
+            Config { count, factor: 1.0 },
+            &Agent::Remote,
+            PathBuf::new(),
+        )
+        .unwrap();
+        pool.start();
+        let owner = Actor {
+            provider: "fixture".into(),
+            subject: "account".into(),
+            participant: Some("manager".into()),
+            connection: 1,
+        };
+        pool.queue.attach(&owner, AVAILABILITY_CLIENT, 1).unwrap();
+        (pool, owner)
+    }
+
+    fn availability_cursor(value: &Value) -> AvailabilityCursor {
+        AvailabilityCursor {
+            generation: value["generation"].as_str().unwrap().into(),
+            revision: value["revision"].as_u64().unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn manager_wait_observes_registered_idle_release_without_log_or_duplicate_notifications()
+    {
+        let (pool, owner) = availability_pool(2);
+        let initial = pool
+            .wait_available(
+                &owner,
+                AVAILABILITY_CLIENT,
+                WaitAvailable {
+                    after: None,
+                    wait_ms: 5000,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(initial["status"], "current");
+        assert_eq!(initial["availability"]["scope"], "coordination_slots");
+        assert_eq!(initial["availability"]["execution"], "remote");
+        assert_eq!(initial["availability"]["claim_required"], true);
+        assert_eq!(initial["availability"]["idle_slots"], json!([]));
+        assert_eq!(initial["availability"]["offline"], 2);
+        assert_eq!(initial["availability"]["registered_workers"], 0);
+        let executor = Actor {
+            participant: Some("executor".into()),
+            ..owner.clone()
+        };
+        assert_eq!(
+            pool.wait_remote(&executor, "standby", 0).await.unwrap()["status"],
+            "waiting"
+        );
+        let registered = pool
+            .wait_available(
+                &owner,
+                AVAILABILITY_CLIENT,
+                WaitAvailable {
+                    after: Some(availability_cursor(&initial["availability"])),
+                    wait_ms: 0,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(registered["status"], "changed");
+        assert_eq!(registered["availability"]["idle"], 1);
+        assert_eq!(registered["availability"]["offline"], 1);
+        assert_eq!(registered["availability"]["registered_workers"], 1);
+        let task = pool
+            .queue
+            .submit_managed(
+                owner.clone(),
+                AVAILABILITY_CLIENT,
+                "availability-task",
+                "literal task",
+                TaskContext {
+                    #[cfg(target_os = "linux")]
+                    source: Source::default(),
+                    #[cfg(target_os = "linux")]
+                    actor_key: actor_context_key(&owner).unwrap(),
+                    prepared: "prepared task".into(),
+                },
+                2,
+            )
+            .unwrap();
+        let assigned = pool
+            .wait_remote(&executor, "availability-claim", 0)
+            .await
+            .unwrap();
+        assert_eq!(assigned["claim"]["task_id"], task.task_id);
+        let busy = pool.availability_value(
+            pool.queue
+                .availability(&owner, AVAILABILITY_CLIENT)
+                .unwrap(),
+        );
+        assert_eq!(busy["working"], 1);
+        assert_eq!(busy["idle"], 0);
+        assert_eq!(busy["offline"], 1);
+        let pending = pool.wait_available(
+            &owner,
+            AVAILABILITY_CLIENT,
+            WaitAvailable {
+                after: Some(availability_cursor(&busy)),
+                wait_ms: 5000,
+            },
+        );
+        tokio::pin!(pending);
+        tokio::select! {
+            biased;
+            result = &mut pending => panic!("unchanged availability returned early: {result:?}"),
+            _ = tokio::task::yield_now() => {},
+        }
+        let progress: Report = serde_json::from_value(json!({
+            "claim":assigned["claim"], "request_id":"observed-progress",
+            "event":"progress", "progress":"Checked the parser",
+        }))
+        .unwrap();
+        pool.remote()
+            .unwrap()
+            .report(&pool.queue, &executor, progress, 3)
+            .unwrap();
+        tokio::select! {
+            biased;
+            result = &mut pending => panic!("progress was reported as capacity change: {result:?}"),
+            _ = tokio::task::yield_now() => {},
+        }
+        let completion: Completion = serde_json::from_value(json!({
+            "claim":assigned["claim"], "status":"completed", "output":"done",
+        }))
+        .unwrap();
+        assert!(
+            !pool
+                .remote()
+                .unwrap()
+                .complete(&pool.queue, &executor, completion.clone(), 4)
+                .unwrap()
+                .1
+        );
+        let released = pending.await.unwrap();
+        assert_eq!(released["status"], "changed");
+        assert_eq!(released["changed"], true);
+        assert_eq!(released["availability"]["working"], 0);
+        assert_eq!(released["availability"]["idle"], 1);
+        assert_eq!(released["availability"]["offline"], 1);
+        assert_eq!(
+            released["availability"]["idle_slots"],
+            json!([{
+                "slot":assigned["claim"]["slot"], "epoch":assigned["claim"]["epoch"],
+            }])
+        );
+        assert!(
+            pool.remote()
+                .unwrap()
+                .complete(&pool.queue, &executor, completion, 5)
+                .unwrap()
+                .1
+        );
+        let unchanged = pool
+            .wait_available(
+                &owner,
+                AVAILABILITY_CLIENT,
+                WaitAvailable {
+                    after: Some(availability_cursor(&released["availability"])),
+                    wait_ms: 1,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(unchanged["status"], "unchanged");
+        assert_eq!(unchanged["changed"], false);
+        assert_eq!(unchanged["availability"], released["availability"]);
+        pool.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn manager_availability_stop_and_disconnect_withdraw_registered_idle_slots() {
+        for close in [false, true] {
+            let (pool, owner) = availability_pool(1);
+            let executor = Actor {
+                participant: Some("executor".into()),
+                ..owner.clone()
+            };
+            pool.wait_remote(&executor, "standby", 0).await.unwrap();
+            let initial = pool.availability_value(
+                pool.queue
+                    .availability(&owner, AVAILABILITY_CLIENT)
+                    .unwrap(),
+            );
+            assert_eq!(initial["idle"], 1);
+            let pending = pool.wait_available(
+                &owner,
+                AVAILABILITY_CLIENT,
+                WaitAvailable {
+                    after: Some(availability_cursor(&initial)),
+                    wait_ms: 5000,
+                },
+            );
+            tokio::pin!(pending);
+            tokio::select! {
+                biased;
+                result = &mut pending => panic!("unchanged availability returned early: {result:?}"),
+                _ = tokio::task::yield_now() => {},
+            }
+            if close {
+                pool.queue.close(2);
+            } else {
+                assert!(pool.queue.stop(&owner, AVAILABILITY_CLIENT, 2).unwrap());
+            }
+            let stopped = pending.await.unwrap();
+            assert_eq!(stopped["status"], "not_accepting");
+            assert_eq!(stopped["changed"], true);
+            assert_eq!(stopped["availability"]["accepting"], false);
+            assert_eq!(stopped["availability"]["closed"], close);
+            assert_eq!(stopped["availability"]["idle_slots"], json!([]));
+            assert!(!pool.queue.stop(&owner, AVAILABILITY_CLIENT, 3).unwrap());
+            let repeated = pool
+                .wait_available(
+                    &owner,
+                    AVAILABILITY_CLIENT,
+                    WaitAvailable {
+                        after: Some(availability_cursor(&stopped["availability"])),
+                        wait_ms: 5000,
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(repeated["status"], "not_accepting");
+            assert_eq!(repeated["changed"], false);
+            pool.shutdown().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn manager_availability_rejects_foreign_identity_stale_generation_and_invalid_waits() {
+        let (pool, owner) = availability_pool(1);
+        let current = pool.availability_value(
+            pool.queue
+                .availability(&owner, AVAILABILITY_CLIENT)
+                .unwrap(),
+        );
+        let observer = Actor {
+            participant: Some("observer".into()),
+            ..owner.clone()
+        };
+        assert!(
+            pool.wait_available(
+                &observer,
+                AVAILABILITY_CLIENT,
+                WaitAvailable {
+                    after: None,
+                    wait_ms: 5000
+                }
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            pool.wait_available(
+                &owner,
+                AVAILABILITY_CLIENT,
+                WaitAvailable {
+                    after: None,
+                    wait_ms: 5001
+                }
+            )
+            .await
+            .is_err()
+        );
+        let mut future = availability_cursor(&current);
+        future.revision += 1;
+        assert!(
+            pool.wait_available(
+                &owner,
+                AVAILABILITY_CLIENT,
+                WaitAvailable {
+                    after: Some(future),
+                    wait_ms: 0
+                }
+            )
+            .await
+            .is_err()
+        );
+        for value in [
+            json!({"wait_ms":-1}),
+            json!({"after":{"generation":pool.generation,"revision":-1}}),
+            json!({"after":{"generation":pool.generation,"revision":0,"owner":"forged"}}),
+            json!({"owner":"forged"}),
+        ] {
+            assert!(serde_json::from_value::<WaitAvailable>(value).is_err());
+        }
+        let fresh = Pool::new(
+            Config {
+                count: 1,
+                factor: 1.0,
+            },
+            &Agent::Remote,
+            PathBuf::new(),
+        )
+        .unwrap();
+        fresh.start();
+        assert!(
+            fresh
+                .wait_available(
+                    &owner,
+                    AVAILABILITY_CLIENT,
+                    WaitAvailable {
+                        after: None,
+                        wait_ms: 5000
+                    }
+                )
+                .await
+                .is_err()
+        );
+        assert!(fresh.queue.snapshot().manager.is_none());
+        let next = Actor {
+            connection: owner.connection + 1,
+            ..owner.clone()
+        };
+        fresh.queue.attach(&next, AVAILABILITY_CLIENT, 4).unwrap();
+        assert!(
+            fresh
+                .wait_available(
+                    &next,
+                    AVAILABILITY_CLIENT,
+                    WaitAvailable {
+                        after: Some(availability_cursor(&current)),
+                        wait_ms: 5000,
+                    }
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            fresh
+                .wait_available(
+                    &owner,
+                    AVAILABILITY_CLIENT,
+                    WaitAvailable {
+                        after: None,
+                        wait_ms: 5000
+                    }
+                )
+                .await
+                .is_err()
+        );
+        pool.shutdown().await.unwrap();
+        fresh.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn availability_decoration_preserves_the_result_and_requires_the_exact_manager() {
+        let (pool, owner) = availability_pool(1);
+        let result = json!({"task":{"task_id":"retained","output":"original result"},"warnings":["original warning"]});
+        let observer = Actor {
+            participant: Some("observer".into()),
+            ..owner.clone()
+        };
+        assert_eq!(
+            pool.decorate_availability(&observer, AVAILABILITY_CLIENT, result.clone()),
+            result
+        );
+        assert_eq!(
+            pool.decorate_availability(&owner, &"b".repeat(64), result.clone()),
+            result
+        );
+        let mut decorated = pool.decorate_availability(&owner, AVAILABILITY_CLIENT, result.clone());
+        assert_eq!(decorated["availability"]["offline"], 1);
+        assert_eq!(decorated["availability"]["idle_slots"], json!([]));
+        decorated.as_object_mut().unwrap().remove("availability");
+        assert_eq!(decorated, result);
+        pool.shutdown().await.unwrap();
+    }
 
     #[tokio::test]
     async fn remote_wait_parks_until_a_real_task_without_starting_a_local_executor() {
@@ -780,10 +1261,22 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names.len(), 13);
+        assert_eq!(names.len(), 14);
         for name in [
-            "status", "attach", "tasks", "stop", "submit", "result", "cancel", "wait", "claim",
-            "complete", "resize", "release", "report",
+            "status",
+            "attach",
+            "tasks",
+            "stop",
+            "submit",
+            "result",
+            "cancel",
+            "wait",
+            "claim",
+            "complete",
+            "resize",
+            "release",
+            "report",
+            "wait_available",
         ] {
             assert!(names.contains(format!("ssmcp.worker.{name}").as_str()));
         }

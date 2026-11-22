@@ -44,6 +44,8 @@ ssmcp tools status
 
 连接诊断按实际路径显示 `Relay transport` 或 `Local transport`，对应日志来源为 `relay` 或 `local`。注册超时、连接拒绝和底层 I/O 错误保留实际原因。结果回传超时只说明回传未及时完成；相关操作可能已经执行，应先核对原生任务状态，再决定是否重试。
 
+非交互的 pretty 日志保留 Error 与 Timeout 事件的完整诊断文字，交互终端仍使用有界摘要。输出会清理终端控制字符。[日志渲染](../src/client/render.rs)
+
 ## 查询本地路径
 
 `ssmcp paths` 枚举实际配置、凭据目录、工具仓库和本地状态的位置。它在连接与配置加载之前返回，不读取文件内容、不创建目录。可组合选择名称，按给定顺序输出；不指定名称时列出全部可查询项。
@@ -107,11 +109,13 @@ ssmcp --worker 2 --daemon
 
 外部执行者用 `collab.join` 登记 `role: "worker"`，绑定返回的真实成员身份，然后持续调用 `ssmcp.worker.wait`。领取任务后用原 claim 提交 `complete`，再开始下一次等待；等待期间不必占用本机聊天输入。主 Agent 通过 `ssmcp.worker.attach` 绑定任务池，使用 `submit`、`tasks`、`result`、`cancel` 管理任务，并通过 `stop` 停止接单。管理权来自经过认证的会话线程，停止中的在途任务仍占槽，直到原执行者确认。
 
+已绑定的主 Agent 可用 `ssmcp.worker.wait_available` 读取容量，或带上返回的 `generation`、`revision` 等待最多 5 秒观察变化。返回值区分真实空闲席位、离线席位、退役中席位和目标容量；`accepting` 表示能否接收新的有效任务，不等于已经有空闲执行者。该观察不会改变管理权或领取人的输入。[参数与游标](workers.md#observe-capacity-changes)
+
 主窗口通过 `ssmcp.ui.get` 的 `/worker_pool` 字段提供关联任务池的实际连接 ID、进程 ID、席位与成员计数。退出或重载主窗口会清理它启动的 worker 窗口；单独关闭监控窗口后，主聊天仍可使用。`--daemon` 沿用后台服务路径，不打开交互窗口。[Worker 接入、任务回执与生命周期](workers.md)
 
 ## 前台观察与终端输入
 
-前台默认使用 `dark` 主题和 `chat` 布局，连续显示执行记录，底部输入框用于追加用户要求。最左侧是统计页，展示会话进程 ID、本连接已登记的会话线程 ID、worker 管理者线程、OS PID 和实际计数。Enter 提交到队列；`/queue` 管理待交付项，`/sessions` 或 `/message` 显式选择收件人，`/audit` 打开源码审计。`/agents` 与旧的默认 Agent 页已移除。Tab 切换输入与内容焦点，滚轮或 PgUp/PgDn 直接浏览当前内容；`/filter 文本` 搜索日志，F9 切换类别。[客户端 UI 与队列原子接口](client-ui.md)
+前台默认使用 `dark` 主题和 `chat` 布局，连续显示执行记录，底部输入框用于追加用户要求。默认七列中的最左侧是统计页，展示会话进程 ID、本连接已登记的会话线程 ID、worker 管理者线程、OS PID 和实际计数；关联池的身份与计数单列显示。Enter 提交到队列；`/queue` 管理待交付项，`/sessions` 或 `/message` 显式选择收件人，`/audit` 打开源码审计。`/agents` 与旧的默认 Agent 页已移除。Tab 切换输入与内容焦点，滚轮或 PgUp/PgDn 直接浏览当前内容；`/filter 文本` 搜索日志，F9 切换类别。[客户端 UI 与队列原子接口](client-ui.md)
 
 输入框要求通过支持协议 v7 的连接附加到下一次符合目标的 `code_mode` 响应，已交付不代表模型已阅读或执行。需要直接终端输入时，在另一个终端运行 `ssmcp -i`；自定义前端使用 `terminal.read/write/resize`。`ssmcp attach NAME` 用于观察本地后台会话，目前不转发 attach 输入框的要求队列；后台连接可通过 `ssmcp.ui.queue` 管理要求。独立命令继续使用下方的 `exec.*`。
 

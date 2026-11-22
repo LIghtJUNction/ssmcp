@@ -118,7 +118,7 @@ impl State {
         if self.audit.open_run(run_id) {
             self.conversation.detail = true;
             self.conversation.content_focus = true;
-            self.notice = Some("Observed call · Esc returns to Sessions".into());
+            self.notice = Some("Observed call · Esc returns to Recipients".into());
         } else {
             self.notice = Some("This call is no longer in the retained audit history".into());
         }
@@ -175,7 +175,8 @@ impl State {
             || hit.process_generation != self.conversation.process_generation
         {
             self.notice = Some(
-                "Sessions changed · choose a newly displayed row; draft and recipient kept".into(),
+                "Recipients changed · choose a newly displayed row; draft and recipient kept"
+                    .into(),
             );
             self.dirty = true;
             return true;
@@ -330,7 +331,7 @@ impl State {
         if let Some(id) = group_id(&entry) {
             let _ = write!(text, "\nExact recipient: {}", panel::safe_text(id));
         }
-        let event = json!({"type":"ssmcp.message","role":"system","author":"Sessions",
+        let event = json!({"type":"ssmcp.message","role":"system","author":"Recipients",
             "format":"plain","text":text});
         self.log_event("session", &event, format!("{text}\n").as_bytes());
         self.chat_follow_latest();
@@ -369,7 +370,7 @@ impl State {
             .filter(|entry| field(entry, "session_role") == "thread")
             .count();
         let mut rows = vec![self.chat_line(
-            &format!("  Sessions · {processes} processes · {threads} threads"),
+            &format!("  Recipients · {processes} processes · {threads} threads"),
             PanelTone::Heading,
             list_width,
         )];

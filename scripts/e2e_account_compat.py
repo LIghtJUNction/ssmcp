@@ -54,6 +54,25 @@ def private(path, value):
     path.chmod(0o600)
 
 
+def compatible_account_startup(before, after):
+    """Permit only assigning a generated name to a legacy unnamed account."""
+    if set(before) != set(after) or set(before["accounts"]) != set(after["accounts"]):
+        return False
+    normalized = dict(after)
+    normalized["accounts"] = {subject: dict(account) for subject, account in after["accounts"].items()}
+    for subject, old in before["accounts"].items():
+        account = normalized["accounts"][subject]
+        name = account.get("handle")
+        if old.get("handle") is None and name is not None:
+            if (not isinstance(name, str) or len(name) != 23 or not name.startswith("member-")
+                    or any(c not in "0123456789abcdef" for c in name[7:])
+                    or account.get("generated_handle") is not True):
+                return False
+            account["handle"] = None
+            account.pop("generated_handle")
+    return normalized == before
+
+
 def wait_for(predicate, description, timeout=20):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -211,6 +230,11 @@ class Fixture:
         self.check("real_daemon_verifies_synthetic_subject_and_handle",
                    status == 200 and body["identity"]["subject"] == "123"
                    and body["identity"]["username"] == "self-fixture")
+        after_startup = (portal / "accounts.json").read_bytes()
+        self.check("startup_preserves_accounts_except_generated_default_names",
+                   compatible_account_startup(json.loads(self.accounts_before), json.loads(after_startup)))
+        # Future compatibility requests must remain read-only, after any startup migration.
+        self.accounts_before = after_startup
 
     def api(self, method, path, subject=None, body=None, *, capture_invalid_json=False):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=20)
