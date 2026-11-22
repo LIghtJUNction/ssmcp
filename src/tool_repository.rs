@@ -167,6 +167,12 @@ struct Paths {
     directory: PathBuf,
 }
 
+/// Return the configured locations without reading the RC or initializing repositories.
+pub(crate) fn configured_paths(workspace: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let paths = Paths::current(workspace)?;
+    Ok((paths.rc, paths.directory))
+}
+
 impl Paths {
     fn current(workspace: &Path) -> Result<Self, String> {
         let home = std::env::var_os("HOME")
@@ -389,7 +395,7 @@ async fn bundle_owned(workspace: &Path) -> Result<Value, String> {
 }
 
 /// Explicit read-only official default: fixed Git objects, never the relay's RC.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 pub(crate) async fn official_seed() -> Result<Bundle, String> {
     static SOURCE: tokio::sync::OnceCell<Source> = tokio::sync::OnceCell::const_new();
     let source = SOURCE

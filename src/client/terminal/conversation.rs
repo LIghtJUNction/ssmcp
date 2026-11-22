@@ -744,7 +744,9 @@ impl State {
                     self.notice = None;
                 } else {
                     if self.preview {
-                        return Err("Preview does not manage native plugins; use /plugin help".into());
+                        return Err(
+                            "Preview does not manage native plugins; use /plugin help".into()
+                        );
                     }
                     crate::client::interface::plugins::submit(rest)?;
                     self.notice = Some("Plugin command started · results appear here".into());
@@ -5401,12 +5403,22 @@ mod tests {
         state.chat_key(Key::Help);
         assert!(state.help);
         assert!(!state.conversation.about);
-        assert!(state.chat_help_rows(1000).join("\n").contains("Write and send"));
+        assert!(
+            state
+                .chat_help_rows(1000)
+                .join("\n")
+                .contains("Write and send")
+        );
 
         assert!(state.chat_command("/about").unwrap());
         assert!(state.chat_command("/help existing-arguments").unwrap());
         assert!(!state.conversation.about);
-        assert!(state.chat_help_rows(1000).join("\n").contains("Write and send"));
+        assert!(
+            state
+                .chat_help_rows(1000)
+                .join("\n")
+                .contains("Write and send")
+        );
 
         assert!(state.chat_command("/about").unwrap());
         assert!(state.chat_command("/openai").unwrap());
@@ -5420,7 +5432,12 @@ mod tests {
         );
         assert!(state.chat_command("/about").unwrap());
         assert!(state.conversation.openai_panel.is_none());
-        assert!(state.chat_help_rows(1000).join("\n").contains("About ssmcp"));
+        assert!(
+            state
+                .chat_help_rows(1000)
+                .join("\n")
+                .contains("About ssmcp")
+        );
         assert_eq!(state.chat_composer_stamp(), draft);
         assert!(state.actions.is_empty());
         assert!(state.conversation.submitting.is_none());

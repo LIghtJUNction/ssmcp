@@ -31,6 +31,18 @@ ssmcp -i --server https://relay.example --client SESSION_ID
 
 看门狗默认开启，`--no-watchdog` 可禁用；显式停止后不会继续恢复。CLI 的 `invite` / `join` 与 MCP 的 `invite` 已移除，设备授权使用 `--allow 用户名@服务器`；会话内 agent 登记继续使用 `collab.join`。[首次连接](onboarding.md)
 
+## 查询本地路径
+
+`ssmcp paths` 枚举实际配置、凭据目录、工具仓库和本地状态的位置。它在连接与配置加载之前返回，不读取文件内容、不创建目录。可组合选择名称，按给定顺序输出；不指定名称时列出全部十项。
+
+~~~sh
+ssmcp paths --list
+ssmcp paths config history --plain
+ssmcp paths history config --json
+~~~
+
+默认每行输出 `名称<TAB>路径`，`--plain` 只输出路径，`--json` 输出名称到路径的对象。`--list` 只枚举名称与说明，不解析环境；`--help` 显示用法。[名称、环境优先级与组合示例](paths.md)
+
 ## 更新客户端
 
 `ssmcp update` 将手动安装的客户端更新到官方 GitHub Release 中的最新稳定版。它是独立本地命令，不建立服务器会话，也不加载 harness。
@@ -60,6 +72,17 @@ Linux、macOS 使用系统 Shell、curl、tar 和校验工具；Windows 使用 W
 不指定下载版本时选择最新稳定版；显式版本接受 `MAJOR.MINOR.PATCH` 或带 `v` 的同一格式。使用前一次结果中的真实 ID。`--json` 输出完整原生 MCP 结果；默认输出其结构化正文。安装不修改 PATH，也不覆盖或卸载外部 Zuse。[真实参数解析](../src/client/computer_control.rs)
 
 实际桌面与浏览器程序直接交给所选 Zuse CLI，经下方 exec 接口运行。[完整管理边界与示例](computer-use.md)
+
+## 远程任务池
+
+只接收远程 agent 分配的任务时，运行 `ssmcp --worker N`。默认远程模式不启动本地模型或 harness，也不要求设置 `--agent`、`--input`。终端显示每个 worker 的空闲／工作／离线状态与可滚动日志，没有聊天输入框。
+
+~~~sh
+ssmcp --worker 2
+ssmcp --worker 2 --daemon
+~~~
+
+已授权的远程 agent 通过 worker 工具提交、领取和完成任务；忙满时进入有界队列。后台模式自动禁用聊天输入。显式本地执行器和其 Linux 资源限额属于高级选项，见[Worker 模式、领取回执和资源边界](workers.md)。普通 `ssmcp` 继续提供聊天界面。
 
 ## 前台观察与终端输入
 

@@ -1,6 +1,6 @@
 //! One native worker pool owns a bounded FIFO. A lease is internal authority;
 //! display labels and request JSON never select or complete an execution slot.
-use super::{SlotView, Snapshot};
+use super::{SlotLog, SlotView, Snapshot};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;
@@ -11,6 +11,9 @@ const MAX_FINISHED: usize = 128;
 const MAX_UNKNOWN_KEYS: usize = 128;
 const MAX_TASK_BYTES: usize = 16 * 1024;
 const MAX_RESULT_BYTES: usize = 64 * 1024;
+const MAX_LOGS: usize = 64;
+const MAX_LOG_BYTES: usize = 16 * 1024;
+const MAX_LOG_TEXT: usize = 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Actor {
@@ -54,6 +57,7 @@ pub(crate) struct TaskView {
     pub(crate) replay_safe: bool,
 }
 
+#[derive(Clone)]
 pub(crate) struct Lease<T> {
     pub(crate) generation: String,
     pub(crate) slot: usize,
@@ -66,6 +70,7 @@ pub(crate) struct Lease<T> {
 
 pub(crate) enum Outcome {
     Completed(String),
+    #[cfg(any(target_os = "linux", test))]
     CompletedWithWarning(String, String),
     Failed(String),
     Cancelled,
@@ -89,6 +94,8 @@ enum SlotState {
 struct Slot {
     epoch: u64,
     state: SlotState,
+    logs: VecDeque<SlotLog>,
+    next_log_sequence: u64,
 }
 
 struct State<T> {
@@ -125,6 +132,8 @@ impl<T: Clone> Queue<T> {
                     .map(|_| Slot {
                         epoch: 0,
                         state: SlotState::Offline("executor not connected".into()),
+                        logs: VecDeque::new(),
+                        next_log_sequence: 1,
                     })
                     .collect(),
                 sequence: 0,
@@ -146,8 +155,9 @@ impl<T: Clone> Queue<T> {
         self.changed.send_replace(state.revision);
     }
 
-    /// Only the executor supervisor calls this, after the limited child has
-    /// completed its handshake. Configuring a slot alone never makes it idle.
+    /// Only the owner calls this after its execution backend is ready. For a
+    /// local executor that requires the limited-child handshake; for remote
+    /// mode it means the in-process claim service is ready, not a model process.
     pub(crate) fn online(&self, slot: usize) -> Result<u64, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.closed {
@@ -163,6 +173,13 @@ impl<T: Clone> Queue<T> {
             .ok_or("worker epoch exhausted")?;
         worker.state = SlotState::Idle;
         let epoch = worker.epoch;
+        log(
+            worker,
+            super::now_ms(),
+            "info",
+            "Slot ready; waiting for a task",
+            None,
+        );
         self.changed(&mut state);
         Ok(epoch)
     }
@@ -177,6 +194,13 @@ impl<T: Clone> Queue<T> {
             return Err("working slot stays busy until its owned execution is cleaned up".into());
         }
         worker.state = SlotState::Offline(bounded(reason, 1024));
+        log(
+            worker,
+            super::now_ms(),
+            "warning",
+            "Slot went offline",
+            None,
+        );
         self.changed(&mut state);
         Ok(())
     }
@@ -226,10 +250,7 @@ impl<T: Clone> Queue<T> {
             .iter()
             .all(|slot| matches!(slot.state, SlotState::Offline(_)))
         {
-            return Err(
-                "worker pool has no connected, resource-limited executor; no task was admitted"
-                    .into(),
-            );
+            return Err("worker pool has no ready execution backend; no task was admitted".into());
         }
         if state.fifo.len() >= MAX_QUEUED {
             return Err("worker FIFO is full; no task was admitted".into());
@@ -267,6 +288,7 @@ impl<T: Clone> Queue<T> {
 
     /// Taking the first task and occupying the slot share one critical section.
     /// There is no broadcast or speculative fanout to other idle slots.
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn claim(
         &self,
         slot: usize,
@@ -287,6 +309,46 @@ impl<T: Clone> Queue<T> {
         let Some(id) = state.fifo.pop_front() else {
             return Ok(None);
         };
+        self.begin_claim(&mut state, slot, epoch, id, now_ms)
+    }
+
+    /// Remote agents may take tasks delegated by the same authenticated account
+    /// in this connection. A display name or a supplied JSON actor is never used.
+    pub(crate) fn claim_remote(
+        &self,
+        actor: &Actor,
+        now_ms: u64,
+    ) -> Result<Option<Lease<T>>, String> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.closed {
+            return Ok(None);
+        }
+        let Some((slot, epoch)) = state.slots.iter().enumerate().find_map(|(index, slot)| {
+            matches!(slot.state, SlotState::Idle).then_some((index, slot.epoch))
+        }) else {
+            return Ok(None);
+        };
+        let Some(position) = state.fifo.iter().position(|id| {
+            state.tasks.get(id).is_some_and(|task| {
+                task.actor.provider == actor.provider
+                    && task.actor.subject == actor.subject
+                    && task.actor.connection == actor.connection
+            })
+        }) else {
+            return Ok(None);
+        };
+        let id = state.fifo.remove(position).expect("checked FIFO position");
+        self.begin_claim(&mut state, slot, epoch, id, now_ms)
+    }
+
+    fn begin_claim(
+        &self,
+        state: &mut State<T>,
+        slot: usize,
+        epoch: u64,
+        id: String,
+        now_ms: u64,
+    ) -> Result<Option<Lease<T>>, String> {
         let task = state
             .tasks
             .get_mut(&id)
@@ -308,8 +370,15 @@ impl<T: Clone> Queue<T> {
             text: task.text.clone(),
             context: task.context.clone(),
         };
-        state.slots[slot].state = SlotState::Working(id);
-        self.changed(&mut state);
+        state.slots[slot].state = SlotState::Working(id.clone());
+        log(
+            &mut state.slots[slot],
+            now_ms,
+            "info",
+            "Task assigned",
+            Some(&id),
+        );
+        self.changed(state);
         Ok(Some(lease))
     }
 
@@ -331,6 +400,9 @@ impl<T: Clone> Queue<T> {
             .filter(|task| &task.actor == actor)
             .ok_or("worker task is not retained for this authenticated caller")?;
         let queued = task.view.status == TaskStatus::Queued;
+        let cancelling_slot = (task.view.status == TaskStatus::Working)
+            .then_some(task.view.slot)
+            .flatten();
         if queued {
             task.view.status = TaskStatus::Cancelled;
         } else if task.view.status == TaskStatus::Working {
@@ -338,6 +410,15 @@ impl<T: Clone> Queue<T> {
         }
         task.view.updated_ms = now_ms;
         let view = task.view.clone();
+        if let Some(slot) = cancelling_slot {
+            log(
+                &mut state.slots[slot],
+                now_ms,
+                "warning",
+                "Cancellation requested; awaiting completion acknowledgement",
+                Some(id),
+            );
+        }
         if queued {
             state.fifo.retain(|queued| queued != id);
             state.finished.push_back(id.into());
@@ -359,6 +440,7 @@ impl<T: Clone> Queue<T> {
 
     /// Call only after the owned process tree's actual completion/cleanup.
     /// A failed cleanup cannot make a slot idle or make the task replay-safe.
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn finish(
         &self,
         lease: &Lease<T>,
@@ -374,6 +456,48 @@ impl<T: Clone> Queue<T> {
         if !cleanup_complete {
             return Err("owned worker cleanup is incomplete; the slot remains busy".into());
         }
+        self.finish_locked(
+            &mut state,
+            lease,
+            outcome,
+            reusable,
+            now_ms,
+            "Owned executor",
+        )
+    }
+
+    /// Complete only the remote coordination lease. There is no owned model or
+    /// OS process to reap, and the result is explicitly a remote agent report.
+    pub(crate) fn finish_remote(
+        &self,
+        lease: &Lease<T>,
+        outcome: Outcome,
+        reusable: bool,
+        now_ms: u64,
+    ) -> Result<TaskView, String> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if !valid(&state, &self.generation, lease) {
+            return Err("stale or already consumed worker lease".into());
+        }
+        self.finish_locked(
+            &mut state,
+            lease,
+            outcome,
+            reusable,
+            now_ms,
+            "Remote agent report",
+        )
+    }
+
+    fn finish_locked(
+        &self,
+        state: &mut State<T>,
+        lease: &Lease<T>,
+        outcome: Outcome,
+        reusable: bool,
+        now_ms: u64,
+        source: &str,
+    ) -> Result<TaskView, String> {
         let closed = state.closed;
         let task = state
             .tasks
@@ -385,6 +509,7 @@ impl<T: Clone> Queue<T> {
                 Some(bounded(&output, MAX_RESULT_BYTES)),
                 None,
             ),
+            #[cfg(any(target_os = "linux", test))]
             Outcome::CompletedWithWarning(output, warning) => (
                 TaskStatus::Completed,
                 Some(bounded(&output, MAX_RESULT_BYTES)),
@@ -404,12 +529,35 @@ impl<T: Clone> Queue<T> {
         let view = task.view.clone();
         state.slots[lease.slot].state = if reusable && !closed {
             SlotState::Idle
+        } else if source == "Remote agent report" {
+            SlotState::Offline("remote coordination closed; external effects may remain".into())
         } else {
             SlotState::Offline("owned executor stopped; reconnect required".into())
         };
+        let outcome = match status {
+            TaskStatus::Completed => "completed",
+            TaskStatus::Failed => "failed",
+            TaskStatus::Cancelled => "cancelled",
+            TaskStatus::Unknown => "unknown",
+            _ => unreachable!("finish creates a terminal result"),
+        };
+        // Status is readable by authorized participants. Keep task bodies and
+        // results behind the existing exact-actor result API, not in shared logs.
+        let output_bytes = view.output.as_ref().map_or(0, String::len);
+        log(
+            &mut state.slots[lease.slot],
+            now_ms,
+            if status == TaskStatus::Completed {
+                "info"
+            } else {
+                "warning"
+            },
+            &format!("{source}: {outcome}; output {output_bytes} bytes"),
+            Some(&lease.task_id),
+        );
         state.finished.push_back(lease.task_id.clone());
-        trim(&mut state);
-        self.changed(&mut state);
+        trim(state);
+        self.changed(state);
         Ok(view)
     }
 
@@ -435,6 +583,7 @@ impl<T: Clone> Queue<T> {
             if matches!(slot.state, SlotState::Idle) {
                 slot.state = SlotState::Offline("connection closed".into());
             }
+            log(slot, now_ms, "warning", "Worker connection closed", None);
         }
         trim(&mut state);
         self.changed(&mut state);
@@ -458,6 +607,8 @@ impl<T: Clone> Queue<T> {
                     state: name,
                     task_id,
                     reason,
+                    logs: slot.logs.iter().cloned().collect(),
+                    next_log_sequence: slot.next_log_sequence,
                 }
             })
             .collect();
@@ -476,6 +627,7 @@ impl<T: Clone> Queue<T> {
     /// Called only after the entire closed pool's owned scopes have actually
     /// been observed empty. It resolves cleanup-unknown slots after a failed
     /// individual shutdown without inventing a successful task result.
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn cleaned_closed_pool(&self, now_ms: u64) -> Result<(), String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if !state.closed {
@@ -497,6 +649,13 @@ impl<T: Clone> Queue<T> {
         state.finished.extend(finished);
         for slot in &mut state.slots {
             slot.state = SlotState::Offline("connection closed; owned cleanup complete".into());
+            log(
+                slot,
+                now_ms,
+                "info",
+                "Owned execution cleanup confirmed",
+                None,
+            );
         }
         trim(&mut state);
         self.changed(&mut state);
@@ -538,6 +697,26 @@ fn trim<T>(state: &mut State<T>) {
                 state.unknown_guard_full = true;
             }
         }
+    }
+}
+
+fn log(slot: &mut Slot, at_ms: u64, level: &str, text: &str, task_id: Option<&str>) {
+    let Some(next) = slot.next_log_sequence.checked_add(1) else {
+        return;
+    };
+    slot.logs.push_back(SlotLog {
+        sequence: slot.next_log_sequence,
+        at_ms,
+        level: level.into(),
+        text: bounded(text, MAX_LOG_TEXT),
+        task_id: task_id.map(str::to_owned),
+    });
+    slot.next_log_sequence = next;
+    let size = |entry: &SlotLog| {
+        entry.text.len() + entry.level.len() + entry.task_id.as_ref().map_or(0, String::len) + 64
+    };
+    while slot.logs.len() > MAX_LOGS || slot.logs.iter().map(size).sum::<usize>() > MAX_LOG_BYTES {
+        slot.logs.pop_front();
     }
 }
 

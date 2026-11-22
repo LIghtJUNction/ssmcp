@@ -99,7 +99,7 @@ jobs:
           crate = os.environ["CRATE_PUBLICATION"]
           if contract == "git-source-v1":
               expected = ("not_requested" if build_only == "true"
-                          else "deferred" if version in {"0.10.25", "0.10.26"} else "registry")
+                          else "deferred" if version in {"0.10.25", "0.10.26", "0.10.27"} else "registry")
               if crate != expected:
                   raise ValueError("validated crate policy does not match the Git source contract")
           elif (not contract and not crate and publish == "true"

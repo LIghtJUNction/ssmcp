@@ -51,9 +51,7 @@ impl Action {
                 "ssmcp.plugins.load",
                 json!({"namespace":namespace,"path":path}),
             ),
-            Self::Unload { namespace } => {
-                ("ssmcp.plugins.unload", json!({"namespace":namespace}))
-            }
+            Self::Unload { namespace } => ("ssmcp.plugins.unload", json!({"namespace":namespace})),
         };
         Some(Operation::CallTool {
             name: name.into(),
@@ -77,8 +75,7 @@ fn namespace(value: &str) -> Result<String, String> {
 fn path_argument(raw: &str) -> Result<String, String> {
     let raw = raw.trim();
     let path = if let Some(quote) = raw.chars().next().filter(|ch| matches!(*ch, '\'' | '"')) {
-        raw
-            .strip_prefix(quote)
+        raw.strip_prefix(quote)
             .and_then(|rest| rest.strip_suffix(quote))
             .filter(|inner| !inner.contains(quote))
             .ok_or("Use one complete quoted path after /plugin load NAME")?
@@ -87,12 +84,16 @@ fn path_argument(raw: &str) -> Result<String, String> {
             .chars()
             .any(|ch| ch.is_whitespace() || matches!(ch, '\'' | '"'))
         {
-            return Err("Use one path after /plugin load NAME; quote paths containing spaces".into());
+            return Err(
+                "Use one path after /plugin load NAME; quote paths containing spaces".into(),
+            );
         }
         raw
     };
     if path.is_empty() || path.len() > MAX_PATH || path.chars().any(char::is_control) {
-        return Err("Plugin PATH must contain 1–4096 UTF-8 bytes without control characters".into());
+        return Err(
+            "Plugin PATH must contain 1–4096 UTF-8 bytes without control characters".into(),
+        );
     }
     // Do not interpret ~, $, backticks, backslashes or command substitutions.
     // Filesystem resolution and the trusted-code decision stay with Plugins::load.
@@ -191,7 +192,9 @@ fn result_message(action: &Action, request: u64, value: &Value) -> Result<String
         && data["plugins"].as_array().is_some_and(Vec::is_empty)
         && value["isError"] != true
     {
-        message.push_str("\n\nNo native plugins are registered in this client. Use /plugin help for commands.");
+        message.push_str(
+            "\n\nNo native plugins are registered in this client. Use /plugin help for commands.",
+        );
     }
     if matches!(action, Action::Unload { .. }) && value["isError"] != true {
         message.push_str("\n\nThis is a stop request, not forced cancellation or file removal. Check /plugin list for worker_running; native library images remain resident until process exit.");
@@ -288,9 +291,15 @@ mod tests {
     fn paths_are_one_literal_argument_on_every_platform() {
         for (raw, expected) in [
             (r#"load demo './插件 library.so'"#, "./插件 library.so"),
-            (r#"load demo "C:\Program Files\demo.dll""#, r"C:\Program Files\demo.dll"),
+            (
+                r#"load demo "C:\Program Files\demo.dll""#,
+                r"C:\Program Files\demo.dll",
+            ),
             (r"load demo C:\plugins\demo.dll", r"C:\plugins\demo.dll"),
-            (r#"load demo '$HOME/$(echo nope)/`literal`.so'"#, "$HOME/$(echo nope)/`literal`.so"),
+            (
+                r#"load demo '$HOME/$(echo nope)/`literal`.so'"#,
+                "$HOME/$(echo nope)/`literal`.so",
+            ),
             ("load demo ~/demo.so", "~/demo.so"),
         ] {
             assert_eq!(call(raw).1["path"], expected);

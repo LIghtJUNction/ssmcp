@@ -214,11 +214,14 @@ class PublicationContractTests(unittest.TestCase):
     def test_deferred_binary_releases_and_build_only_select_distinct_crate_modes(self):
         for flags, status in (({}, "deferred"),
                               ({"version": "0.10.26"}, "deferred"),
+                              ({"version": "0.10.27"}, "deferred"),
                               ({"publish": "false", "build_only": "true", "crate": "not_requested"},
                                "not_requested"),
                               ({"version": "0.10.26", "publish": "false", "build_only": "true",
                                 "crate": "not_requested"}, "not_requested"),
-                              ({"version": "0.10.27", "crate": "registry"}, "registry")):
+                              ({"version": "0.10.27", "publish": "false", "build_only": "true",
+                                "crate": "not_requested"}, "not_requested"),
+                              ({"version": "0.10.28", "crate": "registry"}, "registry")):
             with self.subTest(flags=flags):
                 policy = release.crate_publication(
                     flags.get("version", "0.10.25"), build_only=flags.get("build_only") == "true")
@@ -242,7 +245,8 @@ class PublicationContractTests(unittest.TestCase):
 
     def test_missing_or_mismatched_new_policy_cannot_fall_back_to_legacy(self):
         for flags in ({"crate": "registry"}, {"crate": ""}, {"contract": ""},
-                      {"version": "0.10.26", "crate": "registry"}, {"version": "0.10.27"},
+                      {"version": "0.10.26", "crate": "registry"},
+                      {"version": "0.10.27", "crate": "registry"}, {"version": "0.10.28"},
                       {"contract": "unsupported"}, {"version": "0.10.25-01"}):
             with self.subTest(flags=flags):
                 result, output = self.route(**flags)

@@ -107,6 +107,8 @@ fn zip_members_version(version: &str, target: &str, entries: &[(&str, &[u8], u32
     for (name, bytes, mode) in entries {
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
+            // Preserve the fixture's POSIX mode even when the writer runs on Windows.
+            .system(zip::System::Unix)
             .unix_permissions(*mode);
         archive
             .start_file(format!("zuse-v{version}-{target}/{name}"), options)
@@ -460,6 +462,18 @@ fn zuse_06_zip_rejects_unsafe_source_paths() {
             .unwrap_err();
         assert!(error.contains("unsafe member path"), "{name}: {error}");
     }
+}
+
+#[test]
+fn zip_rejects_zip64_extensible_data() {
+    let target = "x86_64-pc-windows-msvc";
+    let (_, bytes, _) = package(target);
+    let mut archive = zip::ZipWriter::new_append(Cursor::new(bytes)).unwrap();
+    archive.set_raw_zip64_extensible_data_sector(Box::from(*b"metadata"));
+    let bytes = archive.finish().unwrap().into_inner();
+
+    let error = archive::executable(&bytes, &release(target, &bytes), target).unwrap_err();
+    assert!(error.contains("unsupported or ambiguous layout"), "{error}");
 }
 
 #[test]

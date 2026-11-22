@@ -1,4 +1,65 @@
 use super::*;
+
+#[test]
+fn slot_logs_are_bounded_real_events_without_task_bodies_or_results() {
+    let pool = queue(1);
+    let epoch = pool.online(0).unwrap();
+    let owner = actor("sender");
+    for index in 0..100 {
+        let task = pool
+            .submit(
+                owner.clone(),
+                &format!("key-{index}"),
+                "private task text",
+                "private context",
+                index,
+            )
+            .unwrap();
+        let lease = pool.claim(0, epoch, index).unwrap().unwrap();
+        assert_eq!(lease.task_id, task.task_id);
+        pool.finish(
+            &lease,
+            Outcome::Completed("private result text".into()),
+            true,
+            true,
+            index,
+        )
+        .unwrap();
+    }
+    let snapshot = pool.snapshot();
+    let slot = &snapshot.slots[0];
+    assert_eq!(slot.logs.len(), MAX_LOGS);
+    assert!(
+        slot.logs
+            .windows(2)
+            .all(|pair| pair[0].sequence < pair[1].sequence)
+    );
+    assert_eq!(
+        slot.next_log_sequence,
+        slot.logs.last().unwrap().sequence + 1
+    );
+    assert!(
+        slot.logs
+            .iter()
+            .all(|entry| entry.text.len() <= MAX_LOG_TEXT)
+    );
+    assert!(
+        slot.logs
+            .iter()
+            .map(|entry| entry.text.len()
+                + entry.level.len()
+                + entry.task_id.as_ref().map_or(0, String::len)
+                + 64)
+            .sum::<usize>()
+            <= MAX_LOG_BYTES
+    );
+    let serialized = serde_json::to_string(slot).unwrap();
+    assert!(!serialized.contains("private task text"));
+    assert!(!serialized.contains("private context"));
+    assert!(!serialized.contains("private result text"));
+    assert!(serialized.contains("Task assigned"));
+    assert!(serialized.contains("output 19 bytes"));
+}
 use std::sync::{Arc, Barrier};
 
 fn actor(participant: &str) -> Actor {

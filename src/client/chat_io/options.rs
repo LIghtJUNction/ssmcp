@@ -33,6 +33,7 @@ pub(crate) struct Http {
 pub(crate) enum Agent {
     #[default]
     NextCaller,
+    Remote,
     Codex,
     Claude,
     OpenCode,
@@ -50,6 +51,7 @@ impl Agent {
     pub(super) fn label(&self) -> Option<&'static str> {
         Some(match self {
             Self::NextCaller => return None,
+            Self::Remote => "Remote workers",
             Self::Codex => "Codex",
             Self::Claude => "Claude Code",
             Self::OpenCode => "OpenCode",
@@ -206,8 +208,14 @@ impl Flags {
             .values
             .remove("--agent")
             .as_deref()
-            .unwrap_or("next-caller")
+            .unwrap_or(if worker { "remote" } else { "next-caller" })
         {
+            "remote" | "next-caller" if worker => Agent::Remote,
+            "remote" => {
+                return Err(
+                    "--agent remote requires --worker N; ordinary ssmcp needs no --agent".into(),
+                );
+            }
             "next-caller" => Agent::NextCaller,
             "codex" => Agent::Codex,
             "claude" | "claude-code" => Agent::Claude,
@@ -240,10 +248,13 @@ impl Flags {
             }
             _ => {
                 return Err(
-                    "--agent must be next-caller, codex, claude, opencode, exec or ssmcp".into(),
+                    "--agent must be remote (with --worker), next-caller, codex, claude, opencode, exec or ssmcp; ordinary ssmcp needs no --agent".into(),
                 );
             }
         };
+        if worker && matches!(agent, Agent::Ssmcp { .. }) {
+            return Err("--worker uses its remote task queue by default; forwarding chat to an SSMCP peer is not a worker executor".into());
+        }
         if !worker && input == Input::None && agent != Agent::NextCaller {
             return Err("--input none cannot dispatch chat to an explicit agent".into());
         }
@@ -313,6 +324,7 @@ mod tests {
             ],
             &["--input", "terminal", "--input-port", "8181"],
             &["--agent", "none"],
+            &["--agent", "remote"],
             &["--watch", "terminal"],
             &["--agent", "ssmcp", "--agent-peer", "alice"],
             &["--agent", "exec", "--agent-exec", "relative"],

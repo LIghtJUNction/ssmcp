@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.10.26"
+version = "0.10.27"
 edition = "2024"
 rust-version = "1.100"
 description = "Connect local tools and remote terminals through authenticated MCP sessions"
@@ -73,6 +73,7 @@ include = [
     "/scripts/test_release.py",
     "/scripts/test_server_runtime.py",
     "/docs/commands.md",
+    "/docs/paths.md",
     "/docs/client-accounts.md",
     "/docs/client-server.md",
     "/docs/local-mode.md",
@@ -199,7 +200,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 base64 = { version = "0.23.1", default-features = false, features = ["std"] }
 flate2 = { version = "1.1.11", default-features = false, features = ["rust_backend"] }
 tar = { version = "0.4.46", default-features = false }
-zip = { version = "6.0.0", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2"] }
 qrcodegen = "1.8.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 png = "0.18"

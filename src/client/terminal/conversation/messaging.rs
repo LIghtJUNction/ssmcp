@@ -880,7 +880,10 @@ mod tests {
         state.chat_key(Key::Escape);
 
         for command in ["/version", "/about"] {
-            state.conversation.composer.set_text(&format!("{command} extra"));
+            state
+                .conversation
+                .composer
+                .set_text(&format!("{command} extra"));
             state.conversation.composer.left();
             let draft = state.chat_composer_stamp();
             state.chat_submit();
@@ -918,13 +921,24 @@ mod tests {
         state.chat_key(Key::Escape);
         assert!(!state.help);
         assert!(!state.conversation.plugin_help);
-        for command in ["/plugin", "/plugin list", "/plugin load demo ./demo.so", "/plugin unload demo"] {
+        for command in [
+            "/plugin",
+            "/plugin list",
+            "/plugin load demo ./demo.so",
+            "/plugin unload demo",
+        ] {
             state.conversation.composer.set_text(command);
             state.conversation.composer.left();
             let draft = state.chat_composer_stamp();
             state.chat_submit();
             assert_eq!(state.chat_composer_stamp(), draft);
-            assert!(state.notice.as_deref().unwrap().contains("Preview does not manage native plugins"));
+            assert!(
+                state
+                    .notice
+                    .as_deref()
+                    .unwrap()
+                    .contains("Preview does not manage native plugins")
+            );
         }
         assert!(state.conversation.native_pending.is_none());
         assert!(state.conversation.submitting.is_none());

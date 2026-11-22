@@ -903,7 +903,7 @@ fn public_connection(value: &Value) -> Value {
     crate::audit::event(Value::Object(public))
 }
 
-fn session_root(create: bool) -> Result<PathBuf> {
+pub(crate) fn state_path() -> Result<PathBuf> {
     let path = if let Some(value) = std::env::var_os("SSMCP_SESSION_HOME") {
         PathBuf::from(value)
     } else {
@@ -934,6 +934,11 @@ fn session_root(create: bool) -> Result<PathBuf> {
     if !path.is_absolute() {
         return Err("session state directory must be absolute".into());
     }
+    Ok(path)
+}
+
+fn session_root(create: bool) -> Result<PathBuf> {
+    let path = state_path()?;
     if create {
         create_private_tree(&path)?;
     }
