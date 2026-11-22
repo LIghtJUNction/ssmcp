@@ -77,8 +77,24 @@ async fn prepared(role: &str) -> (TestFixture, CodeRunReport, Vec<EligibleUserRe
             &authorization,
         ),
     );
-    let reply = fixture
-        .native_reply(json!({"isError":false,"structuredContent":{"path":".","kind":"directory"}}));
+    let reply = async {
+        // The first authenticated bound call negotiates native thread scope
+        // before dispatching fs.stat. Reply to both distinct protocol requests.
+        let capability = fixture
+            .native_reply(json!({"isError":false,"structuredContent":{"thread_scope":1}}))
+            .await;
+        assert_eq!(
+            capability,
+            serde_json::to_value(Operation::CallTool {
+                name: "ssmcp.client.capabilities".into(),
+                arguments: json!({}),
+            })
+            .unwrap()
+        );
+        fixture
+            .native_reply(json!({"isError":false,"structuredContent":{"path":".","kind":"directory"}}))
+            .await
+    };
     let (result, operation) = tokio::time::timeout(Duration::from_secs(2), async {
         tokio::join!(actual, reply)
     })
