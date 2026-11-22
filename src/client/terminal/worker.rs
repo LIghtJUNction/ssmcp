@@ -919,8 +919,10 @@ fn command_log_summary(text: &str) -> String {
                 .then(|| command.rsplit_once("; "))
                 .flatten()
                 .filter(|(_, outcome)| {
-                    outcome.starts_with("exit ")
-                        || outcome.starts_with("signal ")
+                    outcome
+                        .strip_prefix("exit ")
+                        .or_else(|| outcome.strip_prefix("signal "))
+                        .is_some_and(|code| code.parse::<i32>().is_ok())
                         || matches!(*outcome, "cancelled" | "timed out")
                 })
                 .map_or((command, None), |(command, outcome)| {
@@ -2465,6 +2467,8 @@ mod tests {
     fn worker_command_start_does_not_report_script_exit_as_an_observed_result() {
         let text = command_log_summary(r#"Command started: ["sh","-c","echo ok; exit 0"]"#);
         assert_eq!(text, "Command started: sh -c [inline script]");
+        let text = command_log_summary(r#"Command finished: ["sh","-c","echo ok; exit 0"]"#);
+        assert_eq!(text, "Command finished: sh -c [inline script]");
         let text =
             command_log_summary(r#"Command finished: ["sh","-c","echo ok; exit 0"]; exit 7"#);
         assert_eq!(text, "Command finished: sh -c [inline script]; exit 7");

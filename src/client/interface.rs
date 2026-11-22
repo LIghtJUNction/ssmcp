@@ -66,6 +66,7 @@ pub(crate) fn get() -> Value {
         "identity": client_identity(&steering),
         "steering": steering,
         "worker_pool": super::worker_window::linked_snapshot(),
+        "worker_activity": super::worker_window::linked_activity(),
         "listener": listener::snapshot(),
         "user_wait": user_wait::snapshot(),
         "time": crate::runtime::time::snapshot(),
@@ -496,6 +497,22 @@ fn queue_call(request: QueueRequest) -> Result<Value, String> {
     Ok(json!({"requested":true,"id":id,"queue":super::steering::snapshot()}))
 }
 
+fn worker_projection_snapshot(path: &str) -> Option<Value> {
+    if path == "/worker_pool" || path.starts_with("/worker_pool/") {
+        Some(json!({
+            "schema_version": 1,
+            "worker_pool": super::worker_window::linked_snapshot(),
+        }))
+    } else if path == "/worker_activity" || path.starts_with("/worker_activity/") {
+        Some(json!({
+            "schema_version": 1,
+            "worker_activity": super::worker_window::linked_activity(),
+        }))
+    } else {
+        None
+    }
+}
+
 pub(crate) async fn call(
     name: &str,
     arguments: Value,
@@ -547,16 +564,11 @@ pub(crate) async fn call(
     }
     if name == "ssmcp.ui.get" {
         let projection = parse_get(&arguments)?;
-        if projection.as_ref().is_some_and(|value| {
-            value.path == "/worker_pool" || value.path.starts_with("/worker_pool/")
-        }) {
-            return project_snapshot(
-                json!({
-                    "schema_version": 1,
-                    "worker_pool": super::worker_window::linked_snapshot(),
-                }),
-                projection,
-            );
+        if let Some(snapshot) = projection
+            .as_ref()
+            .and_then(|value| worker_projection_snapshot(&value.path))
+        {
+            return project_snapshot(snapshot, projection);
         }
         let context_requested = projection
             .as_ref()
@@ -663,7 +675,7 @@ pub(crate) fn tools() -> Vec<Value> {
 fn get_tool() -> Value {
     json!({
         "name":"ssmcp.ui.get",
-        "description":"Read versioned display configuration and sanitized client state with or without the built-in TUI. Empty arguments preserve the full snapshot. The /identity projection reports this client's actual OS process_id and current relay client_id; /steering/agents enumerates registered logical thread IDs, not kernel thread IDs. For bounded polling, use a nonempty JSON Pointer such as /display/conversation, /config, /steering/queue or /display/audit/entries. The /worker_pool projection reads the linked live worker window, including actual registration, capacity and shutdown state, without collecting the full display. Projections return {schema_version:1,path,value}; arrays and strings also return total and next_offset when more remains. Page offsets count array items or Unicode code points. Objects and scalars reject paging. Projected responses are limited to 8 KiB serialized; choose a narrower path or smaller page if rejected. Use terminal.*, ssmcp.exec.* and ssmcp.audit.events for independent I/O and events.",
+        "description":"Read versioned display configuration and sanitized client state with or without the built-in TUI. Empty arguments preserve the full snapshot. The /identity projection reports this client's actual OS process_id and current relay client_id; /steering/agents enumerates registered logical thread IDs, not kernel thread IDs. For bounded polling, use a nonempty JSON Pointer such as /display/conversation, /config, /steering/queue or /display/audit/entries. The /worker_pool projection reads the linked live worker window, including actual registration, capacity and shutdown state, without collecting the full display. The independent /worker_activity projection reads bounded task summaries, original claim identities and reported progress; unavailable or stale links return null. Projections return {schema_version:1,path,value}; arrays and strings also return total and next_offset when more remains. Page offsets count array items or Unicode code points. Objects and scalars reject paging. Projected responses are limited to 8 KiB serialized; choose a narrower path or smaller page if rejected. Use terminal.*, ssmcp.exec.* and ssmcp.audit.events for independent I/O and events.",
         "inputSchema":{
             "type":"object",
             "additionalProperties":false,
@@ -743,6 +755,66 @@ mod tests {
 
     fn read_projection(snapshot: &Value, arguments: Value) -> Result<Value, String> {
         project_snapshot(snapshot.clone(), parse_get(&arguments)?)
+    }
+
+    #[test]
+    fn worker_activity_uses_an_independent_projection_and_preserves_an_absent_link() {
+        // This unit fixture has no authenticated parent/worker window link.
+        let snapshot = worker_projection_snapshot("/worker_activity").unwrap();
+        assert_eq!(snapshot, json!({"schema_version":1,"worker_activity":null}));
+        assert_eq!(
+            read_projection(&snapshot, json!({"path":"/worker_activity"})).unwrap(),
+            json!({"schema_version":1,"path":"/worker_activity","value":null})
+        );
+        assert!(read_projection(&snapshot, json!({"path":"/worker_activity/tasks"})).is_err());
+        assert!(worker_projection_snapshot("/worker_activity/tasks/0").is_some());
+        let pool = worker_projection_snapshot("/worker_pool").unwrap();
+        assert!(pool.get("worker_pool").is_some());
+        assert!(pool.get("worker_activity").is_none());
+        assert!(worker_projection_snapshot("/worker_activity_extra").is_none());
+        assert!(worker_projection_snapshot("/display").is_none());
+    }
+
+    #[test]
+    fn worker_activity_pages_preserve_claim_identity_and_enforce_encoded_byte_limits() {
+        let task = json!({
+            "task_id":"worker_task_fixture_1","status":"unknown","slot":5,"epoch":3,
+            "attempt":1,"owner_thread_id":"original-owner","worker_thread_id":"original-worker",
+            "summary":"Observed task 中文","progress":null,"last_command":null,
+            "last_log_sequence":17,"replay_safe":false
+        });
+        let mut snapshot = json!({
+            "worker_activity":{"generation":"fixture","tasks":[task.clone()],"omitted":2,"truncated":true},
+            "worker_pool":{"working":0},
+            "display":{"audit":{"entries":["unrelated".repeat(10_000)]}}
+        });
+        let root = read_projection(&snapshot, json!({"path":"/worker_activity"})).unwrap();
+        assert_eq!(root["value"], snapshot["worker_activity"]);
+        assert!(serde_json::to_vec(&root).unwrap().len() < MAX_PROJECTION_BYTES);
+        let page = read_projection(
+            &snapshot,
+            json!({"path":"/worker_activity/tasks","limit":1}),
+        )
+        .unwrap();
+        assert_eq!(page["value"], json!([task]));
+        assert_eq!(page["total"], 1);
+        assert!(page.get("next_offset").is_none());
+        snapshot["worker_activity"]["tasks"][0]["summary"] = json!("\\\"".repeat(3000));
+        assert!(
+            read_projection(&snapshot, json!({"path":"/worker_activity"}))
+                .unwrap_err()
+                .contains("8 KiB")
+        );
+        let identity = read_projection(
+            &snapshot,
+            json!({"path":"/worker_activity/tasks/0/worker_thread_id"}),
+        )
+        .unwrap();
+        assert_eq!(identity["value"], "original-worker");
+        snapshot["worker_activity"]["tasks"] = json!([]);
+        let empty = read_projection(&snapshot, json!({"path":"/worker_activity/tasks"})).unwrap();
+        assert_eq!(empty["value"], json!([]));
+        assert_eq!(empty["total"], 0);
     }
 
     #[test]
