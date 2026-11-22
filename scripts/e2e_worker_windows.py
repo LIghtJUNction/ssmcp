@@ -14,12 +14,14 @@ Example:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import errno
 import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import selectors
 import signal
 import struct
@@ -819,6 +821,13 @@ class WorkerWindows(Harness):
         self.check(result["task"]["status"] == "cancelled" and result["worker"]["working"] == 0
                    and result["worker"]["retiring"] == 1 and result["worker"]["idle"] == 0,
                    "completion preserves the result while the final station awaits its worker's release")
+        finished = self.condition_wait(worker, manager, claim["generation"],
+                                       [{"type": "task_finished", "task_id": task_id}])
+        retiring = self.condition_wait(worker, manager, claim["generation"],
+                                       [{"type": "worker_idle", "slot": claim["slot"], "epoch": claim["epoch"]}])
+        self.check(finished["status"] == "satisfied" and retiring["status"] == "unavailable"
+                   and retiring["conditions"][0]["state"] == "unavailable",
+                   "acknowledged cancellation is finished but its retiring station is never reported idle")
         completed_retry = self.bound(worker["id"], executor, "ssmcp.worker.wait", {
             "request_id": "worker-windows-cancel-claim", "wait_ms": 0,
         })
@@ -857,6 +866,17 @@ class WorkerWindows(Harness):
         )
         self.check(regrown["idle"] == 0 and regrown["working"] == 0 and regrown["retiring"] == 0,
                    "old collaboration memberships are not counted as newly waiting workers")
+        obsolete = self.bound(worker["id"], manager, "ssmcp.worker.wait_for", {
+            "generation": claim["generation"], "mode": "all",
+            "conditions": [{"type": "worker_idle", "slot": claim["slot"], "epoch": claim["epoch"]}],
+            "wait_ms": 0,
+        }, allow_error=True)
+        unavailable = obsolete.get("structuredContent", {})
+        obsolete_error = "\n".join(item.get("text", "") for item in obsolete.get("content", []))
+        self.check((obsolete.get("isError") is True and "slot and epoch" in obsolete_error)
+                   or (unavailable.get("status") == "unavailable"
+                       and unavailable.get("conditions", [{}])[0].get("state") == "unavailable"),
+                   "an old retired station is rejected or unavailable, never idle after unstaffed regrowth")
         retained = self.bound(worker["id"], manager, "ssmcp.worker.result", {"task_id": task_id})
         self.check(retained["task"]["status"] == "cancelled",
                    "retiring and replacing a station preserves the original task's confirmed result")
@@ -1043,6 +1063,10 @@ class WorkerWindows(Harness):
         })
         task = submitted.get("task", submitted)
         task_id = task["task_id"]
+        self.check(task["status"] == "queued" and task["slot"] is None
+                   and submitted["worker"]["queued"] == 1 and submitted["worker"]["working"] == 0,
+                   "submit is a real queued task and does not pretend an executor has claimed it")
+        self.assert_dispatch_display(directory, worker, manager, task_id)
         assignment = self.bound(worker["id"], executor, "ssmcp.worker.wait", {
             "request_id": executor["wait_request_id"], "wait_ms": 1000,
         })
@@ -1052,6 +1076,7 @@ class WorkerWindows(Harness):
             "request_id": executor["wait_request_id"],
         })
         self.check(duplicate["claim"] == assignment["claim"], "claim retry retains the exact assigned lease")
+        self.assert_dispatch_display(directory, worker, manager, task_id, claim=assignment["claim"])
         self.execute_fixture_command(worker["id"], executor)
         command_state = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
         command_slot = next(slot for slot in command_state["slots"]
@@ -1089,9 +1114,7 @@ class WorkerWindows(Harness):
                    "current work time is present while the real task is active")
         self.assert_worker_reading(directory, worker, executor, assignment["claim"], task_text)
         self.assert_busy_reload(directory, worker, manager, task_id)
-        self.bound(worker["id"], executor, "ssmcp.worker.complete", {
-            "claim": assignment["claim"], "status": "completed", "output": "WINDOW_TASK_OK",
-        })
+        self.paired_condition_waits(frontend, directory, worker, manager, executor, assignment["claim"])
         result = self.bound(worker["id"], manager, "ssmcp.worker.result", {"task_id": task_id})
         task = result.get("task", result)
         self.check(task["status"] == "completed" and task["output"] == "WINDOW_TASK_OK",
@@ -1116,10 +1139,15 @@ class WorkerWindows(Harness):
         next_slot = next(slot for slot in next_task["slots"] if slot["slot"] == pending["claim"]["slot"])
         self.check(next_slot.get("last_command") is None and next_slot.get("progress") is None,
                    "a new task clears the previous task's command and progress fields")
+        self.timed_condition_waits(frontend, directory, worker, manager, pending["claim"])
         cancellation = self.bound(worker["id"], manager, "ssmcp.worker.cancel", {"task_id": cancelled})
         self.check(cancellation["task"]["status"] == "cancelling"
                    and cancellation["worker"]["working"] == 1,
                    "cancellation keeps a remote task occupied until its executor acknowledges")
+        cancelling = self.condition_wait(worker, manager, pending["claim"]["generation"],
+                                         [{"type": "task_finished", "task_id": cancelled}])
+        self.check(cancelling["status"] == "timed_out" and cancelling["conditions"][0]["state"] == "pending",
+                   "requesting cancellation does not falsely satisfy task_finished before the claimant acknowledges")
         waiting = self.bound(worker["id"], executor, "ssmcp.worker.wait", {
             "request_id": "worker-windows-cancel-claim", "wait_ms": 0,
         })
@@ -1134,6 +1162,274 @@ class WorkerWindows(Harness):
                        "worker result displayed in the parent conversation")
         self.check(True, "the parent conversation receives the independently completed worker result")
         self.check_composer(frontend, "parent remains editable during coordination")
+
+    @staticmethod
+    def visible_monitor_frame(frame, labels):
+        shot = frame()
+        text = "\n".join(shot["rows"])
+        return shot if all(label in text for label in labels) else None
+
+    def condition_wait(self, worker, manager, generation, conditions, *, mode="all", wait_ms=0):
+        return self.bound(worker["id"], manager, "ssmcp.worker.wait_for", {
+            "generation": generation, "mode": mode, "conditions": conditions, "wait_ms": wait_ms,
+        })
+
+    def assert_dispatch_display(self, directory, worker, manager, task_id, *, claim=None):
+        status = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
+        kind, state = ("claim", "assigned") if claim else ("submit", "submitted")
+        matching = [operation for operation in status["manager_operations"]
+                    if operation["kind"] == kind and operation["task_id"] == task_id]
+        self.check(len(matching) == 1 and matching[0]["state"] == state,
+                   f"one real {kind} operation identifies the exact task, including after retries")
+        operation = matching[0]
+        evidence = {"operation": operation}
+        self.cases.setdefault("manager-dispatch", {})[kind] = evidence
+        if claim:
+            self.check(operation["slot"] == claim["slot"] and operation["epoch"] == claim["epoch"],
+                       "assignment display identifies the actual zero-based slot and epoch")
+            label = (f"Assigned · Task {task_id} · Worker #{claim['slot'] + 1:02}"
+                     f" (slot {claim['slot']}, epoch {claim['epoch']})")
+        else:
+            self.check(operation["slot"] is None and operation["epoch"] is None
+                       and not any(item["kind"] == "claim" and item["task_id"] == task_id
+                                   for item in status["manager_operations"]),
+                       "submission does not fabricate an assigned worker or claim")
+            label = f"Submitted · Task {task_id} · queued"
+        view = ChildView(self, directory, worker, manager)
+        try:
+            shot = wait_for(lambda: self.visible_monitor_frame(view.frame, [label]),
+                            timeout=5, description=f"visible {kind} operation in the worker monitor")
+        finally:
+            view.close()
+        evidence["frame"] = shot
+
+    def paired_condition_waits(self, frontend, directory, worker, manager, executor, claim):
+        generation, task_id = claim["generation"], claim["task_id"]
+        idle_condition = {"type": "worker_idle", "slot": claim["slot"], "epoch": claim["epoch"]}
+        busy = self.condition_wait(worker, manager, generation, [idle_condition])
+        self.check(busy["status"] == "timed_out" and busy["conditions"][0]["state"] == "pending"
+                   and busy["worker"]["idle"] == 2,
+                   "another idle worker cannot satisfy the exact busy slot and epoch")
+        denied = self.bound(worker["id"], executor, "ssmcp.worker.wait_for", {
+            "generation": generation, "mode": "all", "conditions": [idle_condition], "wait_ms": 0,
+        }, allow_error=True)
+        self.check(denied.get("isError") is True, "only the authenticated pool manager can wait for conditions")
+
+        paired = self.bound(worker["id"], manager, "ssmcp.worker.submit", {
+            "request_id": "worker-windows-task-pair", "text": "Return WINDOW_PAIR_OK in this private fixture.",
+        })["task"]
+        second = self.worker_agents[worker["id"]][1]
+        assigned = self.bound(worker["id"], second, "ssmcp.worker.wait", {
+            "request_id": second["wait_request_id"], "wait_ms": 1000,
+        })
+        second_claim = assigned["claim"]
+        self.check(assigned["status"] == "assigned" and second_claim["task_id"] == paired["task_id"]
+                   and second_claim["slot"] != claim["slot"] and second_claim["generation"] == generation,
+                   "the second existing executor holds a distinct real station for the paired task")
+        conditions = [{"type": "task_finished", "task_id": value}
+                      for value in (task_id, paired["task_id"])]
+        targets = [{"kind": "task_finished", "task_id": value}
+                   for value in (task_id, paired["task_id"])]
+        case = self.cases["manager-any-all"] = {"targets": targets, "busy_slot": busy}
+        draft = "COORDINATION_DRAFT_STAYS_LOCAL"
+        frontend.send(b"\x1b[200~" + draft.encode() + b"\x1b[201~")
+        frontend.until(lambda shot: draft in input_text(shot), "draft before coordinator waits")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            waits = {mode: pool.submit(self.condition_wait, worker, manager, generation, conditions,
+                                       mode=mode, wait_ms=5000) for mode in ("any", "all")}
+
+            def both_waiting():
+                frontend.pump()
+                current = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
+                pending = {item["mode"]: item for item in current["manager_operations"]
+                           if item["kind"] == "wait_for" and item["state"] == "waiting"
+                           and item["targets"] == targets}
+                return pending if set(pending) == {"any", "all"} else None
+
+            operations = wait_for(both_waiting, timeout=2, description="both actual Any and All waits")
+            case["waiting"] = operations
+            self.bound(worker["id"], executor, "ssmcp.worker.complete", {
+                "claim": claim, "status": "completed", "output": "WINDOW_TASK_OK",
+            })
+            any_result = waits["any"].result(timeout=7)
+            case["any"] = any_result
+            self.check(any_result["status"] == "satisfied"
+                       and any_result["generation"] == generation and any_result["mode"] == "any"
+                       and any_result["operation_id"] == operations["any"]["operation_id"]
+                       and [(item["type"], item["task_id"], item["state"])
+                            for item in any_result["conditions"]]
+                       == [("task_finished", task_id, "satisfied"),
+                           ("task_finished", paired["task_id"], "pending")],
+                       "Any returns after exactly the first task finishes")
+            active = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
+            remaining = next(item for item in active["manager_operations"]
+                             if item["operation_id"] == operations["all"]["operation_id"])
+            self.check(remaining["state"] == "waiting" and not waits["all"].done(),
+                       "All remains genuinely pending while the second task is still claimed")
+            self.bound(worker["id"], second, "ssmcp.worker.complete", {
+                "claim": second_claim, "status": "completed", "output": "WINDOW_PAIR_OK",
+            })
+            all_result = waits["all"].result(timeout=7)
+            case["all"] = all_result
+            self.check(all_result["status"] == "satisfied"
+                       and all_result["generation"] == generation and all_result["mode"] == "all"
+                       and all_result["operation_id"] == operations["all"]["operation_id"]
+                       and [(item["type"], item["task_id"], item["state"])
+                            for item in all_result["conditions"]]
+                       == [("task_finished", task_id, "satisfied"),
+                           ("task_finished", paired["task_id"], "satisfied")],
+                       "All returns only when both exact tasks are finished")
+        parent_frame = frontend.frame()
+        self.check(draft in input_text(parent_frame) and not parent_frame["hide_cursor"],
+                   "coordinator waits preserve the parent's editable draft through completion")
+        case["parent_frame_after_completion"] = parent_frame
+        # The original retirement scenario must use a new wait identity;
+        # replaying the paired assignment would correctly return its receipt.
+        second["wait_request_id"] = "worker-windows-pair-ready-again"
+        ready = self.bound(worker["id"], second, "ssmcp.worker.wait", {
+            "request_id": second["wait_request_id"], "wait_ms": 0,
+        })
+        self.check(ready["status"] == "waiting", "the paired executor returns to its real idle wait")
+        idle = self.condition_wait(worker, manager, generation, [idle_condition])
+        self.check(idle["status"] == "satisfied" and idle["conditions"][0]["state"] == "satisfied",
+                   "completion makes the original exact registered slot and epoch idle")
+        current = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
+        ids = {item["operation_id"] for item in operations.values()}
+        ended = [item for item in current["manager_operations"] if item["operation_id"] in ids]
+        self.check(len(ended) == 2 and all(item["state"] == "satisfied" for item in ended)
+                   and not any(item["state"] == "waiting" for item in current["manager_operations"]),
+                   "satisfied Any and All waits leave no active coordinator operation")
+        case["idle_slot"] = idle
+        frontend.send(b"\x01\x0b")
+        frontend.until(empty_composer_ready, "parent composer after the paired condition waits")
+
+    def timed_condition_waits(self, frontend, directory, worker, manager, claim):
+        generation, task_id = claim["generation"], claim["task_id"]
+        conditions = [{"type": "task_finished", "task_id": task_id},
+                      {"type": "worker_idle", "slot": claim["slot"], "epoch": claim["epoch"]}]
+        targets = [{"kind": "task_finished", "task_id": task_id},
+                   {"kind": "worker_idle", "slot": claim["slot"], "epoch": claim["epoch"]}]
+        draft = "COORDINATION_WAIT_DRAFT_STAYS_LOCAL"
+        frontend.send(b"\x1b[200~" + draft.encode() + b"\x1b[201~")
+        frontend.until(lambda shot: draft in input_text(shot), "draft before the visible bounded wait")
+        view = ChildView(self, directory, worker, manager)
+        case = self.cases["manager-wait-deadlines"] = {}
+        try:
+            view.frame()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                for outer_timeout in (False, True):
+                    previous = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
+                    known = {item["operation_id"] for item in previous["manager_operations"]}
+                    issued_at = time.monotonic()
+                    observation_deadline = issued_at + 4
+                    if outer_timeout:
+                        # An outer timeout does not cancel an already-dispatched
+                        # native operation. Observe its own bounded completion.
+                        arguments = {"generation": generation, "mode": "all",
+                                     "conditions": conditions, "wait_ms": 5000}
+                        code = "return await call(%s, %s, %s);" % (
+                            json.dumps(worker["id"]), json.dumps("ssmcp.worker.wait_for"), json.dumps(arguments))
+                        future = pool.submit(self.rpc, "tools/call", {"name": "code_mode", "arguments": {
+                            "agent": {"client_id": worker["id"], "id": manager["agent_id"], "token": manager["token"]},
+                            "code": code, "timeout_ms": 2000,
+                        }}, modern=True)
+                    else:
+                        future = pool.submit(self.condition_wait, worker, manager, generation, conditions,
+                                             wait_ms=5000)
+
+                    def pending_operation():
+                        frontend.pump()
+                        current = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
+                        return next((item for item in current["manager_operations"]
+                                     if item["operation_id"] not in known and item["kind"] == "wait_for"
+                                     and item["state"] == "waiting" and item["targets"] == targets), None)
+
+                    operation = wait_for(pending_operation, timeout=max(0, observation_deadline - time.monotonic()),
+                                         description="registering the actual native wait within its observation window")
+                    operation_id = operation["operation_id"]
+                    evidence = {"waiting": operation}
+                    case["outer_timeout" if outer_timeout else "native_timeout"] = evidence
+                    if not outer_timeout:
+                        pattern = re.compile(rf"Wait #{operation_id} · ALL · Waiting · (\d+\.\d)s / 5\.0s")
+                        samples = {}
+
+                        def visible_progress():
+                            # Both displays share the same observation deadline;
+                            # no serial VT timeout can outlive the native wait.
+                            shot = view.frame()
+                            parent_shot = frontend.frame()
+                            text = "\n".join(shot["rows"])
+                            match = pattern.search(text)
+                            if match:
+                                elapsed = float(match[1])
+                                samples.setdefault("first", (shot, elapsed))
+                                if elapsed > samples["first"][1]:
+                                    samples["later"] = (shot, elapsed)
+                                if (f"Task {task_id} finished" in text
+                                        and f"Worker #{claim['slot'] + 1:02} idle" in text):
+                                    samples["targets_frame"] = shot
+                            if (f"Wait #{operation_id}" in "\n".join(parent_shot["rows"])
+                                    and draft in input_text(parent_shot) and not parent_shot["hide_cursor"]):
+                                samples["parent_frame"] = parent_shot
+                            return samples if all(key in samples for key in (
+                                "first", "later", "targets_frame", "parent_frame")) else None
+
+                        visible = wait_for(visible_progress,
+                                           timeout=max(0, observation_deadline - time.monotonic()),
+                                           description="same-operation elapsed, targets and both visible panels in one window")
+                        first, elapsed = visible["first"]
+                        second, later = visible["later"]
+                        self.check(later > elapsed, "one real native wait has an increasing visible elapsed time")
+                        self.check(f"Task {task_id} finished" in "\n".join(visible["targets_frame"]["rows"])
+                                   and f"Worker #{claim['slot'] + 1:02} idle" in "\n".join(visible["targets_frame"]["rows"]),
+                                   "the pending wait visibly identifies its task and specific worker")
+                        self.check(draft in input_text(visible["parent_frame"])
+                                   and not visible["parent_frame"]["hide_cursor"],
+                                   "visible coordinator waits preserve the parent's editable draft")
+                        evidence.update(first_frame=first, later_frame=second,
+                                        parent_frame=visible["parent_frame"], targets_frame=visible["targets_frame"],
+                                        observation_seconds=round(time.monotonic() - issued_at, 3))
+                    result = future.result(timeout=7)
+                    if outer_timeout:
+                        http_status, response, _ = result
+                        native = response.get("result", {})
+                        error = "\n".join(item.get("text", "") for item in native.get("content", []))
+                        self.check(http_status == 200 and native.get("isError") is True and "timed out" in error,
+                                   "the outer caller reports its real timeout without claiming task cancellation")
+                        evidence["outer_error"] = error
+                    else:
+                        self.check(result["operation_id"] == operation_id and result["status"] == "timed_out"
+                                   and result["generation"] == generation and result["mode"] == "all"
+                                   and len(result["conditions"]) == len(conditions)
+                                   and all(item["state"] == "pending"
+                                           and expected.items() <= item.items()
+                                           for expected, item in zip(conditions, result["conditions"])),
+                                   "the native condition deadline returns timed_out with both conditions still pending")
+                        evidence["response"] = result
+
+                    def finished_operation():
+                        current = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
+                        item = next(item for item in current["manager_operations"]
+                                    if item["operation_id"] == operation_id)
+                        return (current, item) if item["state"] != "waiting" else None
+
+                    current, ended = wait_for(finished_operation, timeout=6,
+                                              description="the original native observation reaches its own terminal state")
+                    self.check(ended["state"] in (("timed_out", "cancelled") if outer_timeout else ("timed_out",))
+                               and not any(item["state"] == "waiting" for item in current["manager_operations"])
+                               and current["working"] == 1
+                               and any(slot["task_id"] == task_id and slot["state"] == "working"
+                                       for slot in current["slots"]),
+                               "ended observation leaves no active wait and does not release the task's occupied slot")
+                    terminal = "Timed out" if ended["state"] == "timed_out" else "Cancelled"
+                    final_frame = wait_for(
+                        lambda: self.visible_monitor_frame(view.frame, [f"Wait #{operation_id} · ALL · {terminal}"]),
+                        timeout=3, description="terminal wait state replaces the waiting title")
+                    evidence.update(ended=ended, terminal_frame=final_frame)
+        finally:
+            view.close()
+        frontend.send(b"\x01\x0b")
+        frontend.until(empty_composer_ready, "parent composer after the visible wait deadlines")
 
     def check_composer(self, frontend, label):
         marker = "WINDOW_CHAT_中文_$literal"

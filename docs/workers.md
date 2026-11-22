@@ -154,6 +154,7 @@ Keep that participant's credentials private and reuse the same binding for subse
 | `ssmcp.worker.status` | `{}` | The typed monitor snapshot, main agent identity, `caller_is_manager`, execution mode, resource status, and any cleanup error. Reading it does not change the main agent. |
 | `ssmcp.worker.tasks` | `{cursor?, limit?: 1..128}` | Main agent only: a bounded page of task IDs and lifecycle metadata, with `next_cursor`; default limit 32. It excludes task text, output, and error bodies. |
 | `ssmcp.worker.wait_available` | `{after?: {generation, revision}, wait_ms?: 0..5000}` | Attached main agent only: observe capacity or wait for its revision to change; omit `after` for an immediate snapshot. |
+| `ssmcp.worker.wait_for` | `{generation, mode, conditions, wait_ms?: 0..5000}` | Attached main agent only: wait for `any` or `all` specified task-finished or worker-idle conditions in that exact pool generation. |
 | `ssmcp.worker.submit` | `{request_id, text}` | One task receipt, reference warnings, and the current worker snapshot. |
 | `ssmcp.worker.result` | `{task_id, wait_ms?: 0..5000}` | That caller's task state and any confirmed output. |
 | `ssmcp.worker.cancel` | `{task_id}` | A cancellation request; a running task remains occupied until completion or confirmed cleanup. |
@@ -198,6 +199,48 @@ return next.structuredContent;
 ```
 
 The returned `scope: "coordination_slots"`, `execution` and `claim_required` identify what the observation covers. They do not establish an external agent's readiness to generate text or replace the worker's `wait` / `complete` loop. The existing passive reminders remain separate from this explicit manager wait. [Manager tool contract](../src/worker/pool.rs) · [Capacity and revision calculation](../src/worker/queue.rs)
+
+## Wait for explicit conditions
+
+`ssmcp.worker.wait_for` lets the bound main agent state exactly what it is waiting for. Read `worker.generation` from the current pool's `status` reply and provide `mode: "any"` or `mode: "all"`, one to 128 distinct conditions, and an optional `wait_ms` from 0 to 5000, default 5000. The manager identity still comes from the authenticated call; the request cannot choose another owner. A stale generation, unretained or foreign task ID, or stale station epoch is rejected.
+
+| Condition | Meaning |
+| --- | --- |
+| `{type: "task_finished", task_id}` | The manager's retained task has a confirmed `completed`, `failed`, or `cancelled` state. This does not mean the task succeeded. An `unknown` outcome remains indeterminate. |
+| `{type: "worker_idle", slot, epoch}` | That exact station is currently idle and eligible to receive work while the pool is accepting. Remote stations also require actual worker registration. `slot` is zero-based; the monitor's `#01` means slot `0`. Use the actual epoch from the pool snapshot. Offline, retiring or replaced stations do not satisfy this condition. |
+
+All conditions are evaluated together under one queue-state lock. `any` needs at least one satisfied condition; `all` needs every condition satisfied in the same observation. Two workers becoming idle at different times do not satisfy `all` unless they are idle together when checked. These are current-state conditions, not subscriptions to arbitrary log events. Observing an idle station does not reserve it.
+
+For example, under the same manager binding, use a `taskId` from a prior submit receipt and the `slot` and `epoch` from the current pool's slot record:
+
+```js
+const observed = await call(id, "ssmcp.worker.status", {});
+if (observed.isError) throw new Error(JSON.stringify(observed));
+const generation = observed.structuredContent.worker.generation;
+const reply = await call(id, "ssmcp.worker.wait_for", {
+  generation,
+  mode: "all",
+  conditions: [
+    {type: "task_finished", task_id: taskId},
+    {type: "worker_idle", slot, epoch}
+  ],
+  wait_ms: 5000
+});
+if (reply.isError) throw new Error(JSON.stringify(reply));
+return reply.structuredContent;
+```
+
+The reply identifies the operation, pool generation, mode, each condition's state and the measured elapsed time. Its status can be `satisfied`, `timed_out`, `indeterminate` or `unavailable`; inspect that status before proceeding. An uncertain task or a station that disappears cannot be silently treated as completion. This tool does not replace `worker.wait` for claiming work, `worker.result` for retrieving one task's result, or `worker.wait_available` for observing capacity revisions.
+
+## See dispatch and waiting state
+
+The default Activity view shows a compact summary of real submissions, assignments and current waits. A **submitted** receipt means the task entered the queue; it does not identify a worker. An **assigned** observation names the task and its actual slot and epoch after a successful claim. The worker monitor shows the waiting mode, condition type, targets and elapsed time while preserving the selected station's log viewport. Statistics provides the scrollable, complete target list for each retained manager operation.
+
+The pool records these observations in `manager_operations`. Each real call has an `operation_id` within its pool generation. `wait_for` is labelled `any` or `all`; a one-task `result` wait is `single`; a capacity-revision wait is `change`. Only `state: "waiting"` is active. Completed observations move to bounded history with their actual outcome, such as `satisfied`, `timed_out`, `indeterminate`, `unavailable`, `cancelled` or `error`. Existing availability outcomes retain their own names. At most 16 active observations and 64 terminal observations are retained; the active target total is bounded at 128. Targets are not silently dropped to make an accepted wait appear complete.
+
+`elapsed_ms` comes from a backend monotonic `Instant` for that call. Repeated polling creates distinct operations; it does not count the gaps between calls as time spent waiting. `wait_ms` is a native waiting budget of at most five seconds, rather than a promise about transport or scheduling latency. An outer `code_mode` timeout alone does not prove that the native wait future was dropped. Cancelling or dropping an observation ends that observation, not its tasks; task cancellation still requires the existing `worker.cancel` and acknowledgement flow.
+
+The main window reads the owned child's fresh projection. A disconnected or closed child connection, or a snapshot older than three seconds, is not shown as a live observation. The frequent `/worker_pool` projection stays limited to counts and identity; the internal monitor projection carries complete retained operation targets. The separate task-activity overview keeps its existing bounded summaries and explicit omitted count. Operation metadata and the linked activity overview omit full task input, result bodies and participant credentials; the local worker full-task view remains separate. [Operation lifecycle and conditions](../src/worker/queue/operations.rs) · [Native tool contract](../src/worker/pool.rs) · [Owned-window projection](../src/client/worker_window.rs)
 
 ## Remote claim and completion
 
