@@ -71,6 +71,7 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
       - name: Run unchanged Clippy gate with compiler annotations
+        id: lint_gate
         shell: bash
         run: |
           set +e
@@ -78,10 +79,18 @@ jobs:
           result=$?
           cat "$RUNNER_TEMP/ssmcp-lint.txt"
           if [ "$result" -ne 0 ]; then
-            python -c 'import pathlib,re,sys; lines=pathlib.Path(sys.argv[1]).read_text(errors="replace").splitlines(); rows=[line.strip() for line in lines if re.match(r"error(?:\[|:)|\s*-->",line)]; print("::error::" + "%0A".join(x.replace("%","%25") for x in rows[:24]))' "$RUNNER_TEMP/ssmcp-lint.txt"
+            reason=$(sed -E 's/\x1b\[[0-9;]*[mK]//g' "$RUNNER_TEMP/ssmcp-lint.txt" | grep -E 'error| -->' | head -n 9 | tr '\r\n' '  ' | cut -c 1-480)
+            reason="${reason:-diagnostic output had no matching error lines}"
+            printf 'reason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
+            printf '::error::%s\n' "$reason"
           fi
           exit "$result"
+      - name: "Diagnostic ${{ steps.lint_gate.outputs.reason }}"
+        if: failure() && steps.lint_gate.outcome == 'failure'
+        shell: bash
+        run: 'true'
       - name: Verify workspace unit tests on Linux
+        id: lib_gate
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -90,9 +99,16 @@ jobs:
           result=$?
           cat "$RUNNER_TEMP/ssmcp-lib.txt"
           if [ "$result" -ne 0 ]; then
-            python -c 'import pathlib,re,sys; lines=pathlib.Path(sys.argv[1]).read_text(errors="replace").splitlines(); rows=[line.strip() for line in lines if re.search(r"FAILED|panicked at|^error:|^test result:",line)]; print("::error::" + "%0A".join(x.replace("%","%25") for x in rows[:24]))' "$RUNNER_TEMP/ssmcp-lib.txt"
+            reason=$(sed -E 's/\x1b\[[0-9;]*[mK]//g' "$RUNNER_TEMP/ssmcp-lib.txt" | grep -E 'FAILED|panicked at|error:|test result:' | head -n 9 | tr '\r\n' '  ' | cut -c 1-480)
+            reason="${reason:-diagnostic output had no matching error lines}"
+            printf 'reason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
+            printf '::error::%s\n' "$reason"
           fi
           exit "$result"
+      - name: "Diagnostic ${{ steps.lib_gate.outputs.reason }}"
+        if: failure() && steps.lib_gate.outcome == 'failure'
+        shell: bash
+        run: 'true'
       - run: "cargo test --locked --lib session:: -- --test-threads=4"
         if: runner.os != 'Linux'
       - run: "cargo test --locked --lib client::protocol_tests -- --test-threads=4"
