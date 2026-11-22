@@ -1,6 +1,6 @@
 use super::{
-    Config, now_ms,
-    queue::{Actor, Availability, Queue, Retirement, TaskStatus},
+    Config, ManagerTargetView, now_ms,
+    queue::{Actor, Availability, Queue, Retirement, TaskStatus, WaitRequest, WaitSpec},
     remote::{self, Claimed, CommandLog, Completion, Remote, Report},
 };
 #[cfg(target_os = "linux")]
@@ -314,6 +314,13 @@ impl Pool {
                 true,
             ),
             tool(
+                "wait_for",
+                "The verified manager waits up to 5 seconds for any or all explicit conditions in this pool generation. task_finished means a confirmed completed, failed or cancelled result; unknown is indeterminate. worker_idle identifies the exact slot and epoch and means currently allocatable, not merely offline. Conditions are evaluated together, never accumulated across time. This observes state, reserves no slot, consumes no human input and starts no model. Cancelling this call ends only the wait. Each call gets a separate operation_id and elapsed time.",
+                json!({"generation":{"type":"string","minLength":1,"maxLength":128},"mode":{"type":"string","enum":["any","all"]},"conditions":{"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"oneOf":[{"type":"object","properties":{"type":{"const":"task_finished"},"task_id":{"type":"string","minLength":1,"maxLength":256}},"required":["type","task_id"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"worker_idle"},"slot":{"type":"integer","minimum":0,"maximum":127},"epoch":{"type":"integer","minimum":1}},"required":["type","slot","epoch"],"additionalProperties":false}]}},"wait_ms":{"type":"integer","minimum":0,"maximum":5000,"default":5000}}),
+                json!(["generation", "mode", "conditions"]),
+                true,
+            ),
+            tool(
                 "stop",
                 "The authenticated manager stops this pool from accepting new tasks, cancels queued work and requests cancellation of running work. Running remote slots remain occupied until the exact claimant acknowledges; this does not kill an external agent. A later connection loss makes unconfirmed effects unknown, never replay-safe. This operation cannot restart or resize the pool.",
                 json!({}),
@@ -382,6 +389,13 @@ impl Pool {
     }
 
     fn decorate_availability(&self, actor: &Actor, client_id: &str, mut result: Value) -> Value {
+        // The local UI may show manager intent. An observing executor must not
+        // gain the manager's private task listing through a status response.
+        if !self.queue.is_manager(actor, client_id)
+            && let Some(worker) = result.get_mut("worker").and_then(Value::as_object_mut)
+        {
+            worker.remove("manager_operations");
+        }
         // This uses the exact existing manager binding and never acquires one.
         // A failed convenience observation must not erase a committed result.
         if let Ok(availability) = self.queue.availability(actor, client_id) {
@@ -402,24 +416,49 @@ impl Pool {
         // Subscribe before the authenticated snapshot to avoid missing a change
         // between observing its revision and beginning the wait.
         let mut wake = self.queue.subscribe();
+        let initial = self.queue.availability(actor, client_id)?;
+        if let Some(after) = &request.after {
+            if after.generation != initial.generation {
+                return Err("worker availability cursor belongs to another pool generation".into());
+            }
+            if after.revision > initial.revision {
+                return Err(
+                    "worker availability cursor is ahead of the current pool revision".into(),
+                );
+            }
+        }
+        let guard = self.queue.begin_wait(
+            actor,
+            client_id,
+            WaitSpec {
+                kind: "wait_available",
+                mode: "change",
+                wait_ms: request.wait_ms,
+                targets: vec![ManagerTargetView {
+                    kind: "availability_change",
+                    task_id: None,
+                    slot: None,
+                    epoch: None,
+                    revision: request.after.as_ref().map(|after| after.revision),
+                }],
+            },
+            now_ms(),
+        )?;
         let deadline = tokio::time::Instant::now() + Duration::from_millis(request.wait_ms);
         loop {
-            let availability = self.queue.availability(actor, client_id)?;
-            let changed = if let Some(after) = &request.after {
-                if after.generation != availability.generation {
-                    return Err(
-                        "worker availability cursor belongs to another pool generation".into(),
-                    );
+            let availability = match self.queue.availability(actor, client_id) {
+                Ok(value) => value,
+                Err(error) => {
+                    guard.finish("error");
+                    return Err(error);
                 }
-                if after.revision > availability.revision {
-                    return Err(
-                        "worker availability cursor is ahead of the current pool revision".into(),
-                    );
-                }
-                after.revision != availability.revision
-            } else {
-                false
             };
+            // Generation is immutable and the checked capacity cursor never
+            // moves backwards; exhaustion is rejected by availability().
+            let changed = request
+                .after
+                .as_ref()
+                .is_some_and(|after| after.revision != availability.revision);
             let status = if !availability.accepting() {
                 Some("not_accepting")
             } else if request.after.is_none() {
@@ -432,15 +471,127 @@ impl Pool {
                 None
             };
             if let Some(status) = status {
+                let operation = guard.finish(status);
                 return Ok(json!({"status":status,"changed":changed,
+                    "operation_id":operation.operation_id,"elapsed_ms":operation.elapsed_ms,
                     "availability":self.availability_value(availability)}));
             }
             if matches!(
                 tokio::time::timeout_at(deadline, wake.changed()).await,
                 Ok(Err(_))
             ) {
+                guard.finish("error");
                 return Err("worker availability observation ended".into());
             }
+        }
+    }
+
+    async fn wait_for(
+        &self,
+        actor: &Actor,
+        client_id: &str,
+        request: WaitRequest,
+    ) -> Result<Value, String> {
+        // Subscribe before registration and the first checked state. Display
+        // registration itself does not publish a capacity or queue revision.
+        let mut wake = self.queue.subscribe();
+        let guard = self
+            .queue
+            .begin_conditions(actor, client_id, &request, now_ms())?;
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(request.wait_ms);
+        loop {
+            let conditions = match self.queue.conditions(actor, client_id, &request) {
+                Ok(conditions) => conditions,
+                Err(error) => {
+                    guard.finish("error");
+                    return Err(error);
+                }
+            };
+            let status = request.outcome(&conditions).or_else(|| {
+                (request.wait_ms == 0 || tokio::time::Instant::now() >= deadline)
+                    .then_some("timed_out")
+            });
+            if let Some(status) = status {
+                let operation = guard.finish(status);
+                return Ok(
+                    json!({"status":status,"operation_id":operation.operation_id,
+                    "generation":self.generation,"mode":request.mode,
+                    "elapsed_ms":operation.elapsed_ms,"conditions":conditions,
+                    "worker":self.queue.snapshot()}),
+                );
+            }
+            if matches!(
+                tokio::time::timeout_at(deadline, wake.changed()).await,
+                Ok(Err(_))
+            ) {
+                guard.finish("error");
+                return Err("worker condition observation ended".into());
+            }
+        }
+    }
+
+    async fn wait_result(
+        &self,
+        actor: &Actor,
+        client_id: &str,
+        request: Task,
+    ) -> Result<Value, String> {
+        if request.wait_ms > 5000 {
+            return Err("worker result wait_ms must be at most 5000".into());
+        }
+        let mut wake = self.queue.subscribe();
+        self.queue.result(actor, &request.task_id)?;
+        // Preserve the original task-owner permission even for internal tasks
+        // that were not admitted through the manager API.
+        let guard = if self.queue.is_manager(actor, client_id) {
+            Some(self.queue.begin_wait(
+                actor,
+                client_id,
+                WaitSpec {
+                    kind: "result",
+                    mode: "single",
+                    wait_ms: request.wait_ms,
+                    targets: vec![ManagerTargetView {
+                        kind: "task_result",
+                        task_id: Some(request.task_id.clone()),
+                        slot: None,
+                        epoch: None,
+                        revision: None,
+                    }],
+                },
+                now_ms(),
+            )?)
+        } else {
+            None
+        };
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(request.wait_ms);
+        loop {
+            let task = match self.queue.result(actor, &request.task_id) {
+                Ok(task) => task,
+                Err(error) => {
+                    if let Some(guard) = guard {
+                        guard.finish("error");
+                    }
+                    return Err(error);
+                }
+            };
+            let pending = matches!(
+                task.status,
+                TaskStatus::Queued | TaskStatus::Working | TaskStatus::Cancelling
+            );
+            if !pending || request.wait_ms == 0 || tokio::time::Instant::now() >= deadline {
+                if let Some(guard) = guard {
+                    guard.finish(if pending {
+                        "timed_out"
+                    } else if task.status == TaskStatus::Unknown {
+                        "indeterminate"
+                    } else {
+                        "satisfied"
+                    });
+                }
+                return Ok(json!({"task":task,"worker":self.queue.snapshot()}));
+            }
+            let _ = tokio::time::timeout_at(deadline, wake.changed()).await;
         }
     }
 
@@ -582,6 +733,11 @@ impl Pool {
                     .map_err(|error| format!("invalid worker availability wait: {error}"))?;
                 return self.wait_available(&actor, &client_id, request).await;
             }
+            "ssmcp.worker.wait_for" => {
+                let request: WaitRequest = serde_json::from_value(arguments)
+                    .map_err(|error| format!("invalid worker condition wait: {error}"))?;
+                return self.wait_for(&actor, &client_id, request).await;
+            }
             "ssmcp.worker.resize" => {
                 #[derive(Deserialize)]
                 #[serde(deny_unknown_fields)]
@@ -638,23 +794,7 @@ impl Pool {
             "ssmcp.worker.result" => {
                 let request: Task = serde_json::from_value(arguments)
                     .map_err(|e| format!("invalid worker result request: {e}"))?;
-                if request.wait_ms > 5000 {
-                    return Err("worker result wait_ms must be at most 5000".into());
-                }
-                let mut wake = self.queue.subscribe();
-                let deadline = tokio::time::Instant::now() + Duration::from_millis(request.wait_ms);
-                loop {
-                    let task = self.queue.result(&actor, &request.task_id)?;
-                    if !matches!(
-                        task.status,
-                        TaskStatus::Queued | TaskStatus::Working | TaskStatus::Cancelling
-                    ) || request.wait_ms == 0
-                        || tokio::time::Instant::now() >= deadline
-                    {
-                        break Ok(json!({"task":task,"worker":self.queue.snapshot()}));
-                    }
-                    let _ = tokio::time::timeout_at(deadline, wake.changed()).await;
-                }
+                self.wait_result(&actor, &client_id, request).await
             }
             "ssmcp.worker.cancel" => {
                 #[derive(Deserialize)]
@@ -821,6 +961,210 @@ mod tests {
             generation: value["generation"].as_str().unwrap().into(),
             revision: value["revision"].as_u64().unwrap(),
         }
+    }
+
+    fn submit_observed(pool: &Pool, owner: &Actor, key: &str) -> super::super::queue::TaskView {
+        pool.queue
+            .submit_managed(
+                owner.clone(),
+                AVAILABILITY_CLIENT,
+                key,
+                "real queued task",
+                TaskContext {
+                    #[cfg(target_os = "linux")]
+                    source: Source::default(),
+                    #[cfg(target_os = "linux")]
+                    actor_key: actor_context_key(owner).unwrap(),
+                    prepared: "prepared task".into(),
+                },
+                2,
+            )
+            .unwrap()
+    }
+
+    fn condition_request(pool: &Pool, mode: &str, task_ids: &[&str], wait_ms: u64) -> WaitRequest {
+        serde_json::from_value(json!({
+            "generation":pool.generation,"mode":mode,"wait_ms":wait_ms,
+            "conditions":task_ids.iter().map(|task_id| json!({"type":"task_finished","task_id":task_id})).collect::<Vec<_>>()
+        })).unwrap()
+    }
+
+    #[tokio::test]
+    async fn manager_any_and_all_waits_are_visible_until_their_own_real_completions() {
+        let (pool, owner) = availability_pool(2);
+        let a = Actor {
+            participant: Some("executor-a".into()),
+            ..owner.clone()
+        };
+        let b = Actor {
+            participant: Some("executor-b".into()),
+            ..owner.clone()
+        };
+        pool.wait_remote(&a, "register-a", 0).await.unwrap();
+        pool.wait_remote(&b, "register-b", 0).await.unwrap();
+        let first = submit_observed(&pool, &owner, "first");
+        let second = submit_observed(&pool, &owner, "second");
+        let claim_a = pool.wait_remote(&a, "claim-a", 0).await.unwrap();
+        let claim_b = pool.wait_remote(&b, "claim-b", 0).await.unwrap();
+        let ids = [first.task_id.as_str(), second.task_id.as_str()];
+        let mut any = Box::pin(pool.wait_for(
+            &owner,
+            AVAILABILITY_CLIENT,
+            condition_request(&pool, "any", &ids, 5000),
+        ));
+        let mut all = Box::pin(pool.wait_for(
+            &owner,
+            AVAILABILITY_CLIENT,
+            condition_request(&pool, "all", &ids, 5000),
+        ));
+        tokio::select! {
+            biased;
+            result = &mut any => panic!("Any returned before completion: {result:?}"),
+            result = &mut all => panic!("All returned before completion: {result:?}"),
+            _ = tokio::task::yield_now() => {},
+        }
+        assert_eq!(
+            pool.queue
+                .snapshot()
+                .manager_operations
+                .iter()
+                .filter(|row| row.state == "waiting")
+                .count(),
+            2
+        );
+        let completion = serde_json::from_value(
+            json!({"claim":claim_a["claim"],"status":"completed","output":"A done"}),
+        )
+        .unwrap();
+        pool.remote()
+            .unwrap()
+            .complete(&pool.queue, &a, completion, 3)
+            .unwrap();
+        let any = any.await.unwrap();
+        assert_eq!(any["status"], "satisfied");
+        assert_eq!(any["mode"], "any");
+        assert_eq!(any["conditions"][0]["state"], "satisfied");
+        assert_eq!(any["conditions"][1]["state"], "pending");
+        tokio::select! {
+            biased;
+            result = &mut all => panic!("All accepted only one completion: {result:?}"),
+            _ = tokio::task::yield_now() => {},
+        }
+        let completion = serde_json::from_value(
+            json!({"claim":claim_b["claim"],"status":"completed","output":"B done"}),
+        )
+        .unwrap();
+        pool.remote()
+            .unwrap()
+            .complete(&pool.queue, &b, completion, 4)
+            .unwrap();
+        let all = all.await.unwrap();
+        assert_eq!(all["status"], "satisfied");
+        assert_ne!(all["operation_id"], any["operation_id"]);
+        assert!(
+            pool.queue
+                .snapshot()
+                .manager_operations
+                .iter()
+                .all(|row| row.state != "waiting")
+        );
+        pool.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn manager_wait_drop_timeout_and_legacy_observers_do_not_release_work_or_publish_capacity()
+     {
+        let (pool, owner) = availability_pool(1);
+        let executor = Actor {
+            participant: Some("executor".into()),
+            ..owner.clone()
+        };
+        pool.wait_remote(&executor, "register", 0).await.unwrap();
+        let task = submit_observed(&pool, &owner, "pending");
+        pool.wait_remote(&executor, "claim", 0).await.unwrap();
+        let capacity = pool.availability_value(
+            pool.queue
+                .availability(&owner, AVAILABILITY_CLIENT)
+                .unwrap(),
+        );
+        let mut result = Box::pin(pool.wait_result(
+            &owner,
+            AVAILABILITY_CLIENT,
+            Task {
+                task_id: task.task_id.clone(),
+                wait_ms: 5000,
+            },
+        ));
+        tokio::select! {
+            biased;
+            result = &mut result => panic!("pending task result returned early: {result:?}"),
+            _ = tokio::task::yield_now() => {},
+        }
+        let result_id = pool
+            .queue
+            .snapshot()
+            .manager_operations
+            .iter()
+            .find(|row| row.state == "waiting")
+            .unwrap()
+            .operation_id;
+        drop(result);
+        let mut change = Box::pin(pool.wait_available(
+            &owner,
+            AVAILABILITY_CLIENT,
+            WaitAvailable {
+                after: Some(availability_cursor(&capacity)),
+                wait_ms: 5000,
+            },
+        ));
+        tokio::select! {
+            biased;
+            result = &mut change => panic!("display registration changed capacity: {result:?}"),
+            _ = tokio::task::yield_now() => {},
+        }
+        drop(change);
+        let timed_out = pool
+            .wait_for(
+                &owner,
+                AVAILABILITY_CLIENT,
+                condition_request(&pool, "all", &[&task.task_id], 0),
+            )
+            .await
+            .unwrap();
+        assert_eq!(timed_out["status"], "timed_out");
+        let snapshot = pool.queue.snapshot();
+        assert_eq!(snapshot.working, 1);
+        assert!(
+            snapshot
+                .manager_operations
+                .iter()
+                .all(|row| row.state != "waiting")
+        );
+        assert_eq!(
+            snapshot
+                .manager_operations
+                .iter()
+                .find(|row| row.operation_id == result_id)
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        assert_eq!(
+            pool.availability_value(
+                pool.queue
+                    .availability(&owner, AVAILABILITY_CLIENT)
+                    .unwrap()
+            ),
+            capacity
+        );
+        let response = json!({"worker":snapshot});
+        assert!(
+            pool.decorate_availability(&executor, AVAILABILITY_CLIENT, response.clone())["worker"]
+                .get("manager_operations")
+                .is_none()
+        );
+        assert!(pool.decorate_availability(&owner, AVAILABILITY_CLIENT, response)["worker"]["manager_operations"].as_array().unwrap().len() >= 5);
+        pool.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -1261,7 +1605,7 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names.len(), 14);
+        assert_eq!(names.len(), 15);
         for name in [
             "status",
             "attach",
@@ -1277,6 +1621,7 @@ mod tests {
             "release",
             "report",
             "wait_available",
+            "wait_for",
         ] {
             assert!(names.contains(format!("ssmcp.worker.{name}").as_str()));
         }

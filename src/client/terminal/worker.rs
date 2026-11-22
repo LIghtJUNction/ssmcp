@@ -82,6 +82,8 @@ pub(super) struct Monitor {
     pending_scroll: BTreeMap<usize, PendingScroll>,
     panels: Vec<WorkerPanel>,
     tabs: Vec<WorkerTab>,
+    coordination_row: usize,
+    coordination_rows: usize,
     resources: metrics::Sampler,
 }
 
@@ -627,6 +629,9 @@ impl State {
             "panes":{
                 "workers":{"row":0,"col":0,"rows":self.geometry.rows,
                     "cols":self.geometry.cols,"visible":true},
+                "worker_activity":{"row":monitor.map_or(0, |monitor| monitor.coordination_row),"col":0,
+                    "rows":monitor.map_or(0, |monitor| monitor.coordination_rows),"cols":self.geometry.cols,
+                    "visible":monitor.is_some_and(|monitor| monitor.coordination_rows>0)},
                 "input":{"visible":false}, "logs":{"visible":false},
                 "audit":{"visible":false}, "tasks":{"visible":false}
             },
@@ -642,6 +647,10 @@ impl State {
     pub(super) fn worker_frame(&mut self, snapshot: Option<&Snapshot>) -> Frame {
         let g = self.geometry;
         let height = usize::from(g.rows);
+        if let Some(monitor) = self.worker.as_mut() {
+            monitor.coordination_row = 0;
+            monitor.coordination_rows = 0;
+        }
         let mut rows = vec![
             line(
                 self,
@@ -715,6 +724,25 @@ impl State {
                     format!("Queued {} · {status}", snapshot.queued),
                 )],
             ));
+            let coordination = serde_json::to_value(snapshot)
+                .ok()
+                .map(|pool| {
+                    super::worker_operations::compact(
+                        &pool,
+                        g.cols,
+                        height.saturating_sub(rows.len() + 10).min(3),
+                    )
+                })
+                .unwrap_or_default();
+            if let Some(monitor) = self.worker.as_mut() {
+                monitor.coordination_row = rows.len();
+                monitor.coordination_rows = coordination.len();
+            }
+            rows.extend(
+                coordination
+                    .into_iter()
+                    .map(|(text, tone)| line(self, &[(tone, text)])),
+            );
             let identity = identity_lines(snapshot, g.cols);
             let space = height.saturating_sub(rows.len() + 2);
             // Preserve the existing task, resource and log viewport before
@@ -1445,6 +1473,7 @@ mod tests {
             process_id: std::process::id(),
             generation: "fixture".into(),
             manager: None,
+            manager_operations: Vec::new(),
             total: 3,
             desired_total: 3,
             registered_workers: 2,

@@ -117,6 +117,9 @@ type SidebarAgentRow = (String, PanelTone, Option<SidebarAgentIdentity>);
 #[derive(Default)]
 pub(super) struct Conversation {
     pub(super) composer: Composer,
+    pub(super) worker_activity_rows: u16,
+    #[cfg(test)]
+    worker_activity_fixture: Option<Value>,
     pub(super) preferred_input_rows: Option<u16>,
     pub(super) view: View,
     pub(super) content_focus: bool,
@@ -1910,14 +1913,13 @@ impl State {
                 if button & 64 != 0 {
                     let delta = if button & 1 == 0 { -3 } else { 3 };
                     if y >= body_top(self.geometry.rows) && y < prompt_top(self.geometry) {
+                        let event_row = y.checked_sub(self.chat_activity_top());
                         // Keep the right half available for the conversation even
                         // when a command window occupies the entire visible body.
                         let inside_panel = x < self.geometry.left / 2
                             && self.conversation.view == View::Activity
                             && !self.raw_logs
-                            && self
-                                .events
-                                .scroll_panel_at(y - body_top(self.geometry.rows), delta);
+                            && event_row.is_some_and(|row| self.events.scroll_panel_at(row, delta));
                         if !inside_panel {
                             self.chat_move(delta);
                         }
@@ -1940,7 +1942,7 @@ impl State {
                         && !self.raw_logs
                         && !self.events.is_empty()
                     {
-                        if let Some(row) = y.checked_sub(body_top(self.geometry.rows))
+                        if let Some(row) = y.checked_sub(self.chat_activity_top())
                             && self.events.mouse_select(row)
                         {
                             if button == 0 {
@@ -2996,8 +2998,25 @@ impl State {
         self.update_notice.clone()
     }
 
+    fn chat_worker_operations(&self) -> Option<Value> {
+        #[cfg(test)]
+        if let Some(fixture) = &self.conversation.worker_activity_fixture {
+            return Some(fixture.clone());
+        }
+        worker_operations::current(self.preview)
+    }
+
+    pub(super) fn chat_activity_top(&self) -> u16 {
+        body_top(self.geometry.rows).saturating_add(
+            self.conversation
+                .worker_activity_rows
+                .min(self.geometry.log_rows),
+        )
+    }
+
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
         self.conversation.sidebar_agents.clear();
+        self.conversation.worker_activity_rows = 0;
         self.rendered_update_notice = None;
         self.events.set_scope(events::EventScope::Conversation);
         self.conversation.logs_open = self.conversation.view == View::Logs;
@@ -3023,8 +3042,31 @@ impl State {
         let mut body = match self.conversation.view {
             View::Activity => {
                 self.events.filter("", 0);
-                self.events
-                    .render(g.left, height, &self.ui, self.conversation.content_focus)
+                let coordination = if self.help || self.raw_logs {
+                    Vec::new()
+                } else {
+                    self.chat_worker_operations()
+                        .map(|pool| {
+                            worker_operations::compact(
+                                &pool,
+                                g.left,
+                                usize::from(height.saturating_sub(4).min(2)),
+                            )
+                        })
+                        .unwrap_or_default()
+                };
+                self.conversation.worker_activity_rows = coordination.len() as u16;
+                let mut rows: Vec<_> = coordination
+                    .into_iter()
+                    .map(|(text, tone)| self.chat_line(&text, tone, g.left))
+                    .collect();
+                rows.extend(self.events.render(
+                    g.left,
+                    height.saturating_sub(self.conversation.worker_activity_rows),
+                    &self.ui,
+                    self.conversation.content_focus,
+                ));
+                rows
             }
             View::Statistics => self.chat_statistics_rows(&data, height),
             View::History => self.chat_history_rows(height),
@@ -3709,6 +3751,64 @@ mod tests {
                 state.chat_frame(Instant::now()).diff(None),
             )
             .unwrap();
+        }
+    }
+
+    #[test]
+    fn worker_wait_summary_keeps_command_mouse_targets_and_draft_aligned() {
+        for cols in [120, 48] {
+            let mut state = command_panel_fixture(32, cols);
+            state.conversation.worker_activity_fixture = Some(json!({
+                "generation":"test-pool","manager_operations":[{
+                    "operation_id":7,"kind":"wait_for","state":"waiting","mode":"any",
+                    "elapsed_ms":500,"wait_ms":5000,
+                    "targets":[{"kind":"worker_idle","slot":1,"epoch":41}]
+                }]
+            }));
+            let screen = display(&mut state).screen().contents();
+            assert!(screen.contains("Wait #7 · ANY · Waiting"), "{screen}");
+            assert_eq!(state.conversation.worker_activity_rows, 2);
+            let first_y = screen
+                .lines()
+                .position(|row| row.contains("build step 37"))
+                .unwrap() as u16;
+            let before = state.events.snapshot();
+            state.chat_key(Key::Mouse {
+                button: 0,
+                x: 8,
+                y: body_top(state.geometry.rows),
+                release: false,
+            });
+            assert_eq!(
+                state.events.snapshot(),
+                before,
+                "the coordination row is not a command target"
+            );
+            state.chat_key(Key::Mouse {
+                button: 64,
+                x: 8,
+                y: first_y,
+                release: false,
+            });
+            display(&mut state);
+            let scrolled = state.events.snapshot();
+            assert_eq!(scrolled["events"][1]["panel"]["scroll"], 34);
+            assert_eq!(scrolled["events"][3]["panel"]["scroll"], 37);
+            state.chat_key(Key::Mouse {
+                button: 0,
+                x: 8,
+                y: first_y,
+                release: false,
+            });
+            display(&mut state);
+            assert_eq!(state.events.snapshot()["events"][1]["expanded"], true);
+            assert_eq!(state.conversation.composer.text(), "Keep this draft");
+            assert!(state.conversation.target.is_none());
+            state.conversation.worker_activity_fixture = None;
+            display(&mut state);
+            assert_eq!(state.conversation.worker_activity_rows, 0);
+            assert_eq!(state.chat_activity_top(), body_top(state.geometry.rows));
+            assert_eq!(state.conversation.composer.text(), "Keep this draft");
         }
     }
 

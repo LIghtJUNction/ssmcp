@@ -8,8 +8,10 @@ use std::time::Instant;
 use tokio::sync::watch;
 
 mod lifecycle;
+mod operations;
 mod projection;
 mod telemetry;
+pub(super) use operations::{WaitRequest, WaitSpec};
 pub(super) use telemetry::{ReportEvent, ReportUpdate, display_text};
 
 const MAX_QUEUED: usize = 128;
@@ -257,6 +259,7 @@ impl Slot {
 
 struct State<T> {
     manager: Option<Manager>,
+    operations: operations::Operations,
     tasks: BTreeMap<String, Task<T>>,
     fifo: VecDeque<String>,
     finished: VecDeque<String>,
@@ -289,6 +292,7 @@ impl<T: Clone> Queue<T> {
             generation,
             state: Mutex::new(State {
                 manager: None,
+                operations: operations::Operations::default(),
                 tasks: BTreeMap::new(),
                 fifo: VecDeque::new(),
                 finished: VecDeque::new(),
@@ -651,6 +655,11 @@ impl<T: Clone> Queue<T> {
             },
         );
         state.fifo.push_back(id);
+        if state.manager.is_some() {
+            state
+                .operations
+                .dispatch("submit", &view, None, text, now_ms);
+        }
         self.changed(&mut state);
         Ok(view)
     }
@@ -792,6 +801,7 @@ impl<T: Clone> Queue<T> {
             text: task.text.clone(),
             context: task.context.clone(),
         };
+        let assigned = task.view.clone();
         state.slots[slot].state = SlotState::Working(id.clone());
         let worker = &mut state.slots[slot];
         worker.task_summary = Some(telemetry::display_text(&lease.text, 256));
@@ -807,6 +817,11 @@ impl<T: Clone> Queue<T> {
             "Task assigned",
             Some(&id),
         );
+        if state.manager.is_some() {
+            state
+                .operations
+                .dispatch("claim", &assigned, Some(epoch), &lease.text, now_ms);
+        }
         self.changed(state);
         Ok(Some(lease))
     }
@@ -1102,6 +1117,7 @@ impl<T: Clone> Queue<T> {
             closed: state.closed,
             stopping: state.stopping,
             slots,
+            manager_operations: state.operations.views(),
         }
     }
 

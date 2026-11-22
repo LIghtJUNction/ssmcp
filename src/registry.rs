@@ -413,6 +413,7 @@ fn prepare(
                     | "ssmcp.worker.attach"
                     | "ssmcp.worker.tasks"
                     | "ssmcp.worker.wait_available"
+                    | "ssmcp.worker.wait_for"
                     | "ssmcp.worker.stop"
                     | "ssmcp.worker.resize"
                     | "ssmcp.worker.submit"
@@ -601,7 +602,7 @@ mod tests {
     fn worker_pool_catalog_installs_all_native_routes() {
         let registry = Registry::new();
         let catalog = crate::worker::Pool::tools();
-        assert_eq!(catalog.len(), 14);
+        assert_eq!(catalog.len(), 15);
         registry.replace(Provider::Worker, catalog.clone()).unwrap();
         for descriptor in catalog {
             let name = descriptor["name"].as_str().unwrap();

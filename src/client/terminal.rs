@@ -31,6 +31,7 @@ mod retired_keys;
 mod sleep;
 mod update_notice;
 mod worker;
+mod worker_operations;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
@@ -880,6 +881,8 @@ pub(crate) fn snapshot() -> serde_json::Value {
     serde_json::json!({
         "active": shared.alive.load(Ordering::Acquire), "rows":g.rows, "cols":g.cols,
         "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":g.log_rows,"cols":g.left,"visible":!chat || state.conversation.logs_open},
+            "activity":{"row":state.chat_activity_top(),"col":0,"rows":g.log_rows.saturating_sub(state.conversation.worker_activity_rows),"cols":g.left,"visible":chat && !state.help && state.conversation.view == conversation::View::Activity},
+            "worker_activity":{"row":conversation::body_top(g.rows),"col":0,"rows":state.conversation.worker_activity_rows.min(g.log_rows),"cols":g.left,"visible":chat && !state.help && state.conversation.view == conversation::View::Activity && state.conversation.worker_activity_rows>0},
             "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":if chat {g.log_rows} else {g.pty_rows},"cols":g.left,"visible":if chat {!state.conversation.logs_open && state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
             "tasks":{"row":conversation::body_top(g.rows),"col":0,"rows":g.log_rows,"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
             "input":{"row":conversation::prompt_top(g)+1,"col":0,"rows":g.input_rows,"cols":g.left,"visible":chat && g.input_rows>0}},
@@ -2324,10 +2327,8 @@ impl State {
                 && self.conversation.view == conversation::View::Activity
                 && !self.raw_logs
             {
-                self.media.extend(
-                    self.events
-                        .image_placements(conversation::body_top(self.geometry.rows)),
-                );
+                self.media
+                    .extend(self.events.image_placements(self.chat_activity_top()));
             }
             return frame;
         }

@@ -217,6 +217,12 @@ fn rows(
     } else {
         push("No worker pool connected", PanelTone::Muted);
     }
+    let local_operations = workers.and_then(|workers| serde_json::to_value(workers).ok());
+    if let Some(pool) = local_operations.as_ref().or(linked) {
+        for (text, tone) in worker_operations::full(pool) {
+            push(&text, tone);
+        }
+    }
     output
 }
 
@@ -224,7 +230,7 @@ impl State {
     pub(super) fn chat_statistics_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
         let workers = (!self.preview).then(crate::worker::display).flatten();
         let linked = (!self.preview && workers.is_none())
-            .then(crate::client::worker_window::linked_snapshot)
+            .then(crate::client::worker_window::linked_monitor_snapshot)
             .flatten();
         let rows = rows(
             data,
@@ -259,6 +265,7 @@ mod tests {
                 connection: 1,
                 attached_at_ms: 1,
             }),
+            manager_operations: Vec::new(),
             stopping: false,
             total: 2,
             idle: 1,

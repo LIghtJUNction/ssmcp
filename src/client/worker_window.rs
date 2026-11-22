@@ -17,7 +17,15 @@ const ADDRESS_ENV: &str = "SSMCP_WORKER_WINDOW_ADDRESS";
 const TOKEN_ENV: &str = "SSMCP_WORKER_WINDOW_TOKEN";
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+// Keep the task overview bounded separately from complete manager conditions.
 const MAX_STATUS_BYTES: usize = 4096;
+const MAX_STATUS_FRAME_BYTES: usize = 64 * 1024;
+const MAX_MANAGER_METADATA_BYTES: usize = 48 * 1024;
+const MAX_ACTIVE_METADATA_BYTES: usize = 32 * 1024;
+const MAX_HISTORY_METADATA_BYTES: usize = 16 * 1024;
+const MAX_ACTIVE_OPERATIONS: usize = 16;
+const MAX_HISTORY_OPERATIONS: usize = 64;
+const MAX_OPERATION_TARGETS: usize = 128;
 static CHILD_SESSION: OnceLock<Weak<ChildState>> = OnceLock::new();
 static LINKED: OnceLock<Mutex<Weak<ParentState>>> = OnceLock::new();
 
@@ -28,11 +36,74 @@ struct LinkedManager {
     thread_id: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LinkedManagerTarget {
+    kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slot: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    epoch: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<u64>,
+}
+
+impl From<&crate::worker::ManagerTargetView> for LinkedManagerTarget {
+    fn from(target: &crate::worker::ManagerTargetView) -> Self {
+        Self {
+            kind: target.kind.into(),
+            task_id: target.task_id.clone(),
+            slot: target.slot,
+            epoch: target.epoch,
+            revision: target.revision,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LinkedManagerOperation {
+    operation_id: u64,
+    kind: String,
+    state: String,
+    mode: Option<String>,
+    targets: Vec<LinkedManagerTarget>,
+    task_id: Option<String>,
+    slot: Option<usize>,
+    epoch: Option<u64>,
+    summary: Option<String>,
+    started_at_ms: u64,
+    elapsed_ms: u64,
+    wait_ms: Option<u64>,
+}
+
+impl From<&crate::worker::ManagerOperationView> for LinkedManagerOperation {
+    fn from(operation: &crate::worker::ManagerOperationView) -> Self {
+        Self {
+            operation_id: operation.operation_id,
+            kind: operation.kind.into(),
+            state: operation.state.into(),
+            mode: operation.mode.map(str::to_owned),
+            targets: operation.targets.iter().map(Into::into).collect(),
+            task_id: operation.task_id.clone(),
+            slot: operation.slot,
+            epoch: operation.epoch,
+            summary: operation.summary.clone(),
+            started_at_ms: operation.started_at_ms,
+            elapsed_ms: operation.elapsed_ms,
+            wait_ms: operation.wait_ms,
+        }
+    }
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LinkedSnapshot {
     client_id: String,
     process_id: u32,
+    generation: String,
     #[serde(default)]
     manager: Option<LinkedManager>,
     total: usize,
@@ -46,6 +117,7 @@ struct LinkedSnapshot {
     connected: bool,
     closed: bool,
     stopping: bool,
+    manager_operations: Vec<LinkedManagerOperation>,
     #[serde(default)]
     last_resize: Option<ResizeReceipt>,
     #[serde(default)]
@@ -59,7 +131,7 @@ struct ParentState {
 }
 
 enum ChildUpdate {
-    Snapshot(LinkedSnapshot),
+    Snapshot(Box<LinkedSnapshot>),
     Reload,
 }
 
@@ -73,7 +145,7 @@ impl ParentState {
                 *self
                     .snapshot
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner()) = Some((snapshot, Instant::now()));
+                    .unwrap_or_else(|error| error.into_inner()) = Some((*snapshot, Instant::now()));
                 true
             }
             ChildUpdate::Reload => {
@@ -85,6 +157,33 @@ impl ParentState {
 
     fn take_reload_request(&self) -> bool {
         self.reload_requested.swap(false, Ordering::AcqRel)
+    }
+
+    fn project_snapshot(&self, include_operations: bool) -> Option<serde_json::Value> {
+        if self.closed.load(Ordering::Acquire) {
+            return None;
+        }
+        let snapshot = self
+            .snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let (snapshot, received) = snapshot.as_ref()?;
+        if !snapshot.connected || received.elapsed() > Duration::from_secs(3) {
+            return None;
+        }
+        let value = if include_operations {
+            serde_json::to_value(snapshot).ok()?
+        } else {
+            // Existing /worker_pool probes have an 8 KiB projection limit.
+            // UI details use the same fresh state without this lightweight cut.
+            summary_value(snapshot)?
+        };
+        // Serialization must not turn a just-closed or expired observation live.
+        if self.closed.load(Ordering::Acquire) || received.elapsed() > Duration::from_secs(3) {
+            None
+        } else {
+            Some(value)
+        }
     }
 
     fn watch(&self, reader: &mut impl Read, pid: u32) {
@@ -102,7 +201,19 @@ impl ParentState {
 }
 
 pub(super) fn linked_snapshot() -> Option<serde_json::Value> {
-    summary_value(&current_snapshot()?)
+    linked_state()?.project_snapshot(false)
+}
+
+pub(super) fn linked_monitor_snapshot() -> Option<serde_json::Value> {
+    linked_state()?.project_snapshot(true)
+}
+
+fn linked_state() -> Option<Arc<ParentState>> {
+    LINKED
+        .get()?
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .upgrade()
 }
 
 /// Consumers opt into task activity without expanding frequent count-only
@@ -114,6 +225,7 @@ pub(super) fn linked_activity() -> Option<serde_json::Value> {
 fn summary_value(snapshot: &LinkedSnapshot) -> Option<serde_json::Value> {
     let mut value = serde_json::to_value(snapshot).ok()?;
     value.as_object_mut()?.remove("activity");
+    value.as_object_mut()?.remove("manager_operations");
     Some(value)
 }
 
@@ -122,12 +234,7 @@ pub(super) fn linked_overview() -> Option<String> {
 }
 
 fn current_snapshot() -> Option<LinkedSnapshot> {
-    let state = LINKED
-        .get()?
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .upgrade()?;
-    fresh_snapshot(&state)
+    fresh_snapshot(&linked_state()?)
 }
 
 fn fresh_snapshot(state: &ParentState) -> Option<LinkedSnapshot> {
@@ -142,7 +249,12 @@ fn fresh_snapshot(state: &ParentState) -> Option<LinkedSnapshot> {
     if !snapshot.connected || received.elapsed() > Duration::from_secs(3) {
         return None;
     }
-    Some(snapshot.clone())
+    let value = snapshot.clone();
+    if state.closed.load(Ordering::Acquire) || received.elapsed() > Duration::from_secs(3) {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn format_overview(snapshot: &LinkedSnapshot) -> String {
@@ -800,11 +912,9 @@ impl ChildState {
         snapshot: &LinkedSnapshot,
         first: bool,
     ) -> io::Result<()> {
-        let bytes = encode_snapshot(snapshot)?;
-        if first && !self.ready.load(Ordering::Acquire) {
-            stream.write_all(b"R")?;
-        }
-        stream.write_all(&bytes)?;
+        let first = first && !self.ready.load(Ordering::Acquire);
+        let frame = status_frame(snapshot, first)?;
+        stream.write_all(&frame)?;
         self.ready.store(true, Ordering::Release);
         Ok(())
     }
@@ -871,6 +981,7 @@ fn local_snapshot(client_id: &str) -> Option<LinkedSnapshot> {
     Some(LinkedSnapshot {
         client_id: client_id.to_owned(),
         process_id: std::process::id(),
+        generation: snapshot.generation.clone(),
         manager: snapshot.manager.as_ref().map(|manager| LinkedManager {
             client_id: manager.client_id.clone(),
             thread_id: manager.thread_id.clone(),
@@ -886,6 +997,7 @@ fn local_snapshot(client_id: &str) -> Option<LinkedSnapshot> {
         connected: steering["connected"].as_bool().unwrap_or(false),
         closed: snapshot.closed,
         stopping: snapshot.stopping,
+        manager_operations: snapshot.manager_operations.iter().map(Into::into).collect(),
         last_resize: None,
         activity,
     })
@@ -893,11 +1005,13 @@ fn local_snapshot(client_id: &str) -> Option<LinkedSnapshot> {
 
 fn encode_snapshot(snapshot: &LinkedSnapshot) -> io::Result<Vec<u8>> {
     let mut snapshot = snapshot.clone();
+    // Preserve the existing task-overview budget and explicit omitted count.
+    // Manager conditions are restored whole after bounding only the overview.
+    let operations = std::mem::take(&mut snapshot.manager_operations);
     loop {
-        let mut bytes = serde_json::to_vec(&snapshot).map_err(io::Error::other)?;
+        let bytes = serde_json::to_vec(&snapshot).map_err(io::Error::other)?;
         if bytes.len() < MAX_STATUS_BYTES {
-            bytes.push(b'\n');
-            return Ok(bytes);
+            break;
         }
         if snapshot.activity.tasks.pop().is_none() {
             return Err(io::Error::other(
@@ -907,18 +1021,246 @@ fn encode_snapshot(snapshot: &LinkedSnapshot) -> io::Result<Vec<u8>> {
         snapshot.activity.omitted += 1;
         snapshot.activity.truncated = true;
     }
+    snapshot.manager_operations = operations;
+    let mut bytes = serde_json::to_vec(&snapshot).map_err(io::Error::other)?;
+    if bytes.len() >= MAX_STATUS_FRAME_BYTES {
+        return Err(io::Error::other(
+            "worker window status exceeded its size limit",
+        ));
+    }
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn bounded_display_text(text: &str, maximum: usize) -> bool {
+    text.len() <= maximum && !text.chars().any(char::is_control)
+}
+
+fn bounded_identity(text: &str, maximum: usize) -> bool {
+    !text.is_empty() && bounded_display_text(text, maximum)
+}
+
+fn valid_manager_target(target: &LinkedManagerTarget) -> bool {
+    match target.kind.as_str() {
+        "task_finished" | "task_result" => {
+            target
+                .task_id
+                .as_deref()
+                .is_some_and(|id| bounded_identity(id, 256))
+                && target.slot.is_none()
+                && target.epoch.is_none()
+                && target.revision.is_none()
+        }
+        "worker_idle" => {
+            target.task_id.is_none()
+                && target.slot.is_some_and(|slot| slot < 128)
+                && target.epoch.is_some_and(|epoch| epoch > 0)
+                && target.revision.is_none()
+        }
+        "availability_change" => {
+            target.task_id.is_none() && target.slot.is_none() && target.epoch.is_none()
+        }
+        _ => false,
+    }
+}
+
+fn valid_manager_operation(operation: &LinkedManagerOperation) -> bool {
+    if operation.operation_id == 0
+        || operation.targets.len() > MAX_OPERATION_TARGETS
+        || !operation.targets.iter().all(valid_manager_target)
+    {
+        return false;
+    }
+    if matches!(operation.kind.as_str(), "submit" | "claim") {
+        let task = operation
+            .task_id
+            .as_deref()
+            .is_some_and(|id| bounded_identity(id, 256));
+        let summary = operation
+            .summary
+            .as_deref()
+            .is_some_and(|text| bounded_display_text(text, 160));
+        return task
+            && summary
+            && operation.mode.is_none()
+            && operation.targets.is_empty()
+            && operation.wait_ms.is_none()
+            && operation.elapsed_ms == 0
+            && if operation.kind == "submit" {
+                operation.state == "submitted"
+                    && operation.slot.is_none()
+                    && operation.epoch.is_none()
+            } else {
+                operation.state == "assigned"
+                    && operation.slot.is_some_and(|slot| slot < 128)
+                    && operation.epoch.is_some_and(|epoch| epoch > 0)
+            };
+    }
+    if operation.task_id.is_some()
+        || operation.slot.is_some()
+        || operation.epoch.is_some()
+        || operation.summary.is_some()
+        || !operation.wait_ms.is_some_and(|wait| wait <= 5000)
+    {
+        return false;
+    }
+    match operation.kind.as_str() {
+        "wait_for" => {
+            matches!(operation.mode.as_deref(), Some("any" | "all"))
+                && !operation.targets.is_empty()
+                && operation
+                    .targets
+                    .iter()
+                    .all(|target| matches!(target.kind.as_str(), "task_finished" | "worker_idle"))
+                && matches!(
+                    operation.state.as_str(),
+                    "waiting"
+                        | "satisfied"
+                        | "timed_out"
+                        | "indeterminate"
+                        | "unavailable"
+                        | "cancelled"
+                        | "error"
+                )
+        }
+        "result" => {
+            operation.mode.as_deref() == Some("single")
+                && operation.targets.len() == 1
+                && operation.targets[0].kind == "task_result"
+                && matches!(
+                    operation.state.as_str(),
+                    "waiting" | "satisfied" | "timed_out" | "indeterminate" | "cancelled" | "error"
+                )
+        }
+        "wait_available" => {
+            operation.mode.as_deref() == Some("change")
+                && operation.targets.len() == 1
+                && operation.targets[0].kind == "availability_change"
+                && matches!(
+                    operation.state.as_str(),
+                    "waiting"
+                        | "current"
+                        | "changed"
+                        | "unchanged"
+                        | "not_accepting"
+                        | "cancelled"
+                        | "error"
+                )
+        }
+        _ => false,
+    }
+}
+
+fn validate_manager_operations(operations: &[LinkedManagerOperation]) -> io::Result<()> {
+    let mut previous = 0;
+    let mut active_targets = 0usize;
+    let mut active = Vec::new();
+    let mut history = Vec::new();
+    if operations.len() > MAX_ACTIVE_OPERATIONS + MAX_HISTORY_OPERATIONS {
+        return Err(io::Error::other("too many worker manager operations"));
+    }
+    for operation in operations {
+        if !valid_manager_operation(operation) || operation.operation_id <= previous {
+            return Err(io::Error::other("invalid worker manager operation"));
+        }
+        previous = operation.operation_id;
+        if operation.state == "waiting" {
+            active_targets += operation.targets.len();
+            active.push(operation);
+        } else {
+            history.push(operation);
+        }
+    }
+    if active.len() > MAX_ACTIVE_OPERATIONS
+        || history.len() > MAX_HISTORY_OPERATIONS
+        || active_targets > MAX_OPERATION_TARGETS
+    {
+        return Err(io::Error::other("worker manager operation limits exceeded"));
+    }
+    let active_bytes = serde_json::to_vec(&active).map_err(io::Error::other)?;
+    let history_bytes = serde_json::to_vec(&history).map_err(io::Error::other)?;
+    let metadata = serde_json::to_vec(operations).map_err(io::Error::other)?;
+    if active_bytes.len() > MAX_ACTIVE_METADATA_BYTES
+        || history_bytes.len() > MAX_HISTORY_METADATA_BYTES
+        || metadata.len() > MAX_MANAGER_METADATA_BYTES
+    {
+        return Err(io::Error::other(
+            "worker manager operation metadata exceeded its size limit",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_snapshot(snapshot: &LinkedSnapshot, pid: u32) -> io::Result<()> {
+    let counts = snapshot
+        .idle
+        .checked_add(snapshot.working)
+        .and_then(|n| n.checked_add(snapshot.offline))
+        .and_then(|n| n.checked_add(snapshot.retiring));
+    if snapshot.process_id != pid
+        || !bounded_identity(&snapshot.client_id, 128)
+        || !bounded_identity(&snapshot.generation, 128)
+        || snapshot.manager.as_ref().is_some_and(|manager| {
+            manager.client_id != snapshot.client_id || !bounded_identity(&manager.thread_id, 128)
+        })
+        || (snapshot.manager.is_none() && !snapshot.manager_operations.is_empty())
+        || snapshot.total > 128
+        || snapshot.desired_total > 128
+        || snapshot.registered_workers > snapshot.total
+        || snapshot.queued > 128
+        || counts != Some(snapshot.total)
+        || !snapshot.activity.valid()
+        || snapshot.last_resize.as_ref().is_some_and(|receipt| {
+            receipt.request_id == 0
+                || receipt.target > 128
+                || receipt.accepted == receipt.error.is_some()
+                || receipt
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| !bounded_display_text(error, 512))
+        })
+    {
+        return Err(io::Error::other("invalid worker window status"));
+    }
+    validate_manager_operations(&snapshot.manager_operations)
+}
+
+fn status_frame(snapshot: &LinkedSnapshot, first: bool) -> io::Result<Vec<u8>> {
+    validate_snapshot(snapshot, std::process::id())?;
+    let body = encode_snapshot(snapshot)?;
+    let overhead = usize::from(first);
+    if body.len() > MAX_STATUS_FRAME_BYTES - overhead {
+        return Err(io::Error::other(
+            "worker window status exceeded its size limit",
+        ));
+    }
+    let mut frame = Vec::with_capacity(body.len() + overhead);
+    if first {
+        frame.push(b'R');
+    }
+    frame.extend_from_slice(&body);
+    Ok(frame)
 }
 
 fn read_snapshot(reader: &mut impl Read, pid: u32) -> io::Result<LinkedSnapshot> {
-    match read_child_update(reader, pid)? {
-        ChildUpdate::Snapshot(snapshot) => Ok(snapshot),
+    // The readiness byte was consumed by the caller and counts toward the frame.
+    match read_child_update_bounded(reader, pid, MAX_STATUS_FRAME_BYTES - 1)? {
+        ChildUpdate::Snapshot(snapshot) => Ok(*snapshot),
         ChildUpdate::Reload => Err(io::Error::other("worker requested reload before readiness")),
     }
 }
 
 fn read_child_update(reader: &mut impl Read, pid: u32) -> io::Result<ChildUpdate> {
+    read_child_update_bounded(reader, pid, MAX_STATUS_FRAME_BYTES)
+}
+
+fn read_child_update_bounded(
+    reader: &mut impl Read,
+    pid: u32,
+    maximum: usize,
+) -> io::Result<ChildUpdate> {
     let mut line = Vec::with_capacity(512);
-    for _ in 0..MAX_STATUS_BYTES {
+    for _ in 0..maximum {
         let mut byte = [0];
         reader.read_exact(&mut byte)?;
         if byte == *b"\n" {
@@ -927,37 +1269,8 @@ fn read_child_update(reader: &mut impl Read, pid: u32) -> io::Result<ChildUpdate
             }
             let snapshot: LinkedSnapshot =
                 serde_json::from_slice(&line).map_err(io::Error::other)?;
-            let counts = snapshot
-                .idle
-                .checked_add(snapshot.working)
-                .and_then(|n| n.checked_add(snapshot.offline))
-                .and_then(|n| n.checked_add(snapshot.retiring));
-            if snapshot.process_id != pid
-                || snapshot.client_id.is_empty()
-                || snapshot.client_id.len() > 128
-                || snapshot.client_id.chars().any(char::is_control)
-                || snapshot.manager.as_ref().is_some_and(|manager| {
-                    manager.client_id != snapshot.client_id
-                        || manager.thread_id.is_empty()
-                        || manager.thread_id.len() > 128
-                        || manager.thread_id.chars().any(char::is_control)
-                })
-                || snapshot.total > 128
-                || snapshot.desired_total > 128
-                || counts != Some(snapshot.total)
-                || !snapshot.activity.valid()
-                || snapshot.last_resize.as_ref().is_some_and(|receipt| {
-                    receipt.request_id == 0
-                        || receipt.target > 128
-                        || receipt.accepted == receipt.error.is_some()
-                        || receipt.error.as_ref().is_some_and(|error| {
-                            error.len() > 512 || error.chars().any(char::is_control)
-                        })
-                })
-            {
-                return Err(io::Error::other("invalid worker window status"));
-            }
-            return Ok(ChildUpdate::Snapshot(snapshot));
+            validate_snapshot(&snapshot, pid)?;
+            return Ok(ChildUpdate::Snapshot(Box::new(snapshot)));
         }
         line.push(byte[0]);
     }
@@ -1333,6 +1646,16 @@ mod tests {
         );
         parent.write_all(b"A").unwrap();
         let session = child.join().unwrap();
+        let mut invalid = fixture_snapshot();
+        invalid.generation.clear();
+        assert!(session.state.send_snapshot(&invalid, true).is_err());
+        assert!(!session.state.ready.load(Ordering::Acquire));
+        parent.set_nonblocking(true).unwrap();
+        assert_eq!(
+            parent.read(&mut [0]).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        parent.set_nonblocking(false).unwrap();
         session
             .state
             .send_snapshot(&fixture_snapshot(), true)
@@ -1421,6 +1744,7 @@ mod tests {
         LinkedSnapshot {
             client_id: "fixture-client".into(),
             process_id: std::process::id(),
+            generation: "fixture-pool-generation".into(),
             manager: None,
             total: 3,
             desired_total: 3,
@@ -1433,6 +1757,7 @@ mod tests {
             connected: true,
             closed: false,
             stopping: false,
+            manager_operations: Vec::new(),
             last_resize: None,
             activity: crate::worker::Activity::default(),
         }
@@ -1446,7 +1771,9 @@ mod tests {
         assert_eq!(snapshot.client_id, "fixture-client");
         assert_eq!(snapshot.registered_workers, 2);
         assert!(read_snapshot(&mut &bytes[..], std::process::id() + 1).is_err());
-        assert!(read_snapshot(&mut &vec![b'x'; 4097][..], std::process::id()).is_err());
+        let mut oversized = io::Cursor::new(vec![b'x'; MAX_STATUS_FRAME_BYTES + 1]);
+        assert!(read_child_update(&mut oversized, std::process::id()).is_err());
+        assert_eq!(oversized.position(), MAX_STATUS_FRAME_BYTES as u64);
         let mut invalid = fixture_snapshot();
         invalid.working = 9;
         let mut invalid = serde_json::to_vec(&invalid).unwrap();
@@ -1551,6 +1878,7 @@ mod tests {
                 "generation": "fixture", "tasks": [invalid], "omitted": 0, "truncated": false
             }))
             .unwrap();
+            assert!(status_frame(&status, true).is_err());
             let bytes = encode_snapshot(&status).unwrap();
             assert!(read_snapshot(&mut &bytes[..], std::process::id()).is_err());
         }
@@ -1634,6 +1962,335 @@ mod tests {
             bytes.push(b'\n');
             assert!(read_snapshot(&mut &bytes[..], std::process::id()).is_err());
         }
+    }
+
+    fn fixture_manager_snapshot() -> LinkedSnapshot {
+        let mut snapshot = fixture_snapshot();
+        snapshot.manager = Some(LinkedManager {
+            client_id: snapshot.client_id.clone(),
+            thread_id: "agent_verified_manager".into(),
+        });
+        snapshot
+    }
+
+    fn task_target(kind: &str, task_id: String) -> LinkedManagerTarget {
+        LinkedManagerTarget {
+            kind: kind.into(),
+            task_id: Some(task_id),
+            slot: None,
+            epoch: None,
+            revision: None,
+        }
+    }
+
+    fn fixture_wait(operation_id: u64) -> LinkedManagerOperation {
+        LinkedManagerOperation {
+            operation_id,
+            kind: "wait_for".into(),
+            state: "waiting".into(),
+            mode: Some("all".into()),
+            targets: vec![LinkedManagerTarget {
+                kind: "worker_idle".into(),
+                task_id: None,
+                slot: Some(0),
+                epoch: Some(1),
+                revision: None,
+            }],
+            task_id: None,
+            slot: None,
+            epoch: None,
+            summary: None,
+            started_at_ms: 1000,
+            elapsed_ms: 1200,
+            wait_ms: Some(5000),
+        }
+    }
+
+    fn metadata_packet(snapshot: &LinkedSnapshot) -> Vec<u8> {
+        let mut bytes = serde_json::to_vec(snapshot).unwrap();
+        bytes.push(b'\n');
+        bytes
+    }
+
+    #[test]
+    fn manager_status_keeps_every_target_and_light_projection_uses_the_same_freshness() {
+        let mut snapshot = fixture_manager_snapshot();
+        let mut waiting = fixture_wait(3);
+        waiting.targets = (0..128)
+            .map(|index| {
+                task_target(
+                    "task_finished",
+                    format!("worker_task_{}_{index}", "x".repeat(144)),
+                )
+            })
+            .collect();
+        let submitted = LinkedManagerOperation {
+            operation_id: 1,
+            kind: "submit".into(),
+            state: "submitted".into(),
+            mode: None,
+            targets: Vec::new(),
+            task_id: Some("worker_task_actual".into()),
+            slot: None,
+            epoch: None,
+            summary: Some("Review the actual source".into()),
+            started_at_ms: 900,
+            elapsed_ms: 0,
+            wait_ms: None,
+        };
+        let assigned = LinkedManagerOperation {
+            operation_id: 2,
+            kind: "claim".into(),
+            state: "assigned".into(),
+            slot: Some(1),
+            epoch: Some(4),
+            ..submitted.clone()
+        };
+        snapshot.manager_operations = vec![submitted, assigned, waiting];
+        snapshot.activity = serde_json::from_value(serde_json::json!({
+            "generation": snapshot.generation,
+            "tasks": (0..8).map(|index| serde_json::json!({
+                "task_id": format!("worker_task_{}_{}", snapshot.generation, index + 1),
+                "status": "completed", "slot": 1, "epoch": 4, "attempt": 1,
+                "owner_thread_id": "agent_verified_manager", "worker_thread_id": "actual-worker",
+                "summary": "\\\"".repeat(80), "progress": "\\\"".repeat(80),
+                "last_command": "\\\"".repeat(80), "last_log_sequence": 7,
+                "replay_safe": false
+            })).collect::<Vec<_>>(),
+            "omitted": 0, "truncated": false
+        }))
+        .unwrap();
+        let frame = status_frame(&snapshot, true).unwrap();
+        assert!(frame.len() > 4096);
+        assert!(frame.len() <= MAX_STATUS_FRAME_BYTES);
+        assert_eq!(frame.first(), Some(&b'R'));
+        let decoded = read_snapshot(&mut &frame[1..], std::process::id()).unwrap();
+        assert_eq!(decoded.generation, snapshot.generation);
+        assert_eq!(decoded.manager_operations, snapshot.manager_operations);
+        assert!(!decoded.activity.tasks.is_empty());
+        assert!(decoded.activity.tasks.len() < snapshot.activity.tasks.len());
+        assert_eq!(decoded.activity.tasks.len() + decoded.activity.omitted, 8);
+        assert!(decoded.activity.truncated);
+        assert!(format_overview(&decoded).contains("actual-worker"));
+        let parent = ParentState {
+            closed: AtomicBool::new(false),
+            reload_requested: AtomicBool::new(false),
+            snapshot: Mutex::new(Some((decoded.clone(), Instant::now()))),
+        };
+        let light = parent.project_snapshot(false).unwrap();
+        assert!(light.get("manager_operations").is_none());
+        assert!(light.get("activity").is_none());
+        assert_eq!(light["generation"], snapshot.generation);
+        let projected = serde_json::json!({
+            "schema_version":1,"path":"/worker_pool","value":light,
+        });
+        assert!(serde_json::to_vec(&projected).unwrap().len() < 8 * 1024);
+        let complete = parent.project_snapshot(true).unwrap();
+        assert_eq!(
+            complete["manager_operations"][2]["targets"]
+                .as_array()
+                .unwrap()
+                .len(),
+            128
+        );
+        assert_eq!(complete["manager_operations"][2]["elapsed_ms"], 1200);
+        assert_eq!(
+            complete["activity"],
+            serde_json::to_value(&decoded.activity).unwrap()
+        );
+        *parent.snapshot.lock().unwrap() =
+            Some((decoded.clone(), Instant::now() - Duration::from_secs(4)));
+        assert!(parent.project_snapshot(false).is_none());
+        assert!(parent.project_snapshot(true).is_none());
+        *parent.snapshot.lock().unwrap() = Some((decoded, Instant::now()));
+        parent.closed.store(true, Ordering::Release);
+        assert!(parent.project_snapshot(false).is_none());
+        assert!(parent.project_snapshot(true).is_none());
+    }
+
+    #[test]
+    fn manager_status_preserves_each_wait_kind_and_its_terminal_outcomes() {
+        for (kind, mode, target, states) in [
+            (
+                "wait_for",
+                "any",
+                fixture_wait(1).targets.remove(0),
+                &[
+                    "waiting",
+                    "satisfied",
+                    "timed_out",
+                    "indeterminate",
+                    "unavailable",
+                    "cancelled",
+                    "error",
+                ][..],
+            ),
+            (
+                "result",
+                "single",
+                task_target("task_result", "worker_task_actual".into()),
+                &[
+                    "waiting",
+                    "satisfied",
+                    "timed_out",
+                    "indeterminate",
+                    "cancelled",
+                    "error",
+                ][..],
+            ),
+            (
+                "wait_available",
+                "change",
+                LinkedManagerTarget {
+                    kind: "availability_change".into(),
+                    task_id: None,
+                    slot: None,
+                    epoch: None,
+                    revision: Some(0),
+                },
+                &[
+                    "waiting",
+                    "current",
+                    "changed",
+                    "unchanged",
+                    "not_accepting",
+                    "cancelled",
+                    "error",
+                ][..],
+            ),
+        ] {
+            for state in states {
+                let mut snapshot = fixture_manager_snapshot();
+                let mut operation = fixture_wait(1);
+                operation.kind = kind.into();
+                operation.mode = Some(mode.into());
+                operation.state = (*state).into();
+                operation.targets = vec![target.clone()];
+                // Scheduling can exceed the requested wait; preserve the observation.
+                operation.elapsed_ms = 7000;
+                snapshot.manager_operations = vec![operation];
+                let frame = status_frame(&snapshot, false).unwrap();
+                let ChildUpdate::Snapshot(decoded) =
+                    read_child_update(&mut &frame[..], std::process::id()).unwrap()
+                else {
+                    panic!("a status frame must not become a reload request");
+                };
+                assert_eq!(decoded.manager_operations, snapshot.manager_operations);
+            }
+        }
+    }
+
+    #[test]
+    fn manager_status_rejects_forged_fields_conditions_and_operation_identities() {
+        let mut snapshot = fixture_manager_snapshot();
+        snapshot.manager_operations = vec![fixture_wait(1)];
+        let original = serde_json::to_value(snapshot).unwrap();
+        for (pointer, replacement) in [
+            ("/generation", serde_json::json!("")),
+            ("/generation", serde_json::json!("pool\nforged")),
+            ("/generation", serde_json::json!("x".repeat(129))),
+            ("/manager", serde_json::Value::Null),
+            ("/queued", serde_json::json!(129)),
+            ("/registered_workers", serde_json::json!(4)),
+            ("/manager_operations/0/operation_id", serde_json::json!(0)),
+            ("/manager_operations/0/kind", serde_json::json!("unknown")),
+            (
+                "/manager_operations/0/state",
+                serde_json::json!("completed"),
+            ),
+            ("/manager_operations/0/mode", serde_json::json!("first")),
+            ("/manager_operations/0/wait_ms", serde_json::json!(5001)),
+            ("/manager_operations/0/elapsed_ms", serde_json::json!(-1)),
+            ("/manager_operations/0/targets", serde_json::json!([])),
+            (
+                "/manager_operations/0/targets/0",
+                serde_json::json!({"kind":"worker_idle","slot":128,"epoch":1}),
+            ),
+            (
+                "/manager_operations/0/targets/0",
+                serde_json::json!({"kind":"worker_idle","slot":0,"epoch":0}),
+            ),
+            (
+                "/manager_operations/0/targets/0",
+                serde_json::json!({"kind":"worker_idle","slot":0,"epoch":1,"revision":2}),
+            ),
+            (
+                "/manager_operations/0/targets/0",
+                serde_json::json!({"kind":"task_finished","task_id":"task\nforged"}),
+            ),
+            (
+                "/manager_operations/0/targets/0",
+                serde_json::json!({"kind":"task_finished","task_id":"x".repeat(257)}),
+            ),
+            (
+                "/manager_operations/0/targets/0",
+                serde_json::json!({"kind":"task_result","task_id":"task_actual"}),
+            ),
+            (
+                "/manager_operations/0/targets/0",
+                serde_json::json!({"kind":"worker_idle","slot":0,"epoch":1,"unexpected":true}),
+            ),
+            (
+                "/manager_operations/0/task_id",
+                serde_json::json!("task_unrelated"),
+            ),
+            (
+                "/manager_operations/0/summary",
+                serde_json::json!("unrelated prompt"),
+            ),
+        ] {
+            let mut invalid = original.clone();
+            *invalid.pointer_mut(pointer).unwrap() = replacement;
+            let mut bytes = serde_json::to_vec(&invalid).unwrap();
+            bytes.push(b'\n');
+            assert!(
+                read_child_update(&mut &bytes[..], std::process::id()).is_err(),
+                "accepted invalid field {pointer}"
+            );
+        }
+        let mut snapshot = fixture_manager_snapshot();
+        for ids in [[1, 1], [2, 1]] {
+            snapshot.manager_operations = ids.into_iter().map(fixture_wait).collect();
+            assert!(status_frame(&snapshot, false).is_err());
+        }
+        snapshot.manager_operations = (1..=17).map(fixture_wait).collect();
+        assert!(status_frame(&snapshot, false).is_err());
+        snapshot.manager_operations = (1..=65)
+            .map(|id| LinkedManagerOperation {
+                state: "cancelled".into(),
+                ..fixture_wait(id)
+            })
+            .collect();
+        assert!(status_frame(&snapshot, false).is_err());
+        snapshot.manager_operations = vec![fixture_wait(1), fixture_wait(2)];
+        snapshot.manager_operations[0].targets = vec![fixture_wait(1).targets.remove(0); 128];
+        assert!(status_frame(&snapshot, false).is_err());
+        let bytes = metadata_packet(&snapshot);
+        assert!(read_child_update(&mut &bytes[..], std::process::id()).is_err());
+    }
+
+    #[test]
+    fn manager_metadata_budget_counts_serialized_escaping_without_truncating_targets() {
+        let mut snapshot = fixture_manager_snapshot();
+        let mut operation = fixture_wait(1);
+        operation.targets = (0..128)
+            .map(|index| task_target("task_finished", format!("{}_{index}", "x".repeat(200))))
+            .collect();
+        snapshot.manager_operations = vec![operation];
+        assert!(status_frame(&snapshot, false).is_ok());
+        for target in &mut snapshot.manager_operations[0].targets {
+            target.task_id = target.task_id.as_ref().map(|id| id.replace('x', "\""));
+        }
+        assert!(
+            serde_json::to_vec(&snapshot.manager_operations)
+                .unwrap()
+                .len()
+                > MAX_MANAGER_METADATA_BYTES
+        );
+        assert!(status_frame(&snapshot, true).is_err());
+        let bytes = metadata_packet(&snapshot);
+        assert!(read_child_update(&mut &bytes[..], std::process::id()).is_err());
+        assert_eq!(snapshot.manager_operations[0].targets.len(), 128);
     }
 
     #[test]

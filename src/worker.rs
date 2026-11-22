@@ -74,6 +74,35 @@ pub(crate) struct ManagerView {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub(crate) struct ManagerTargetView {
+    pub(crate) kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) slot: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) epoch: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) revision: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ManagerOperationView {
+    pub(crate) operation_id: u64,
+    pub(crate) kind: &'static str,
+    pub(crate) state: &'static str,
+    pub(crate) mode: Option<&'static str>,
+    pub(crate) targets: Vec<ManagerTargetView>,
+    pub(crate) task_id: Option<String>,
+    pub(crate) slot: Option<usize>,
+    pub(crate) epoch: Option<u64>,
+    pub(crate) summary: Option<String>,
+    pub(crate) started_at_ms: u64,
+    pub(crate) elapsed_ms: u64,
+    pub(crate) wait_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct Snapshot {
     pub(crate) process_id: u32,
     pub(crate) generation: String,
@@ -92,6 +121,8 @@ pub(crate) struct Snapshot {
     pub(crate) closed: bool,
     pub(crate) stopping: bool,
     pub(crate) slots: Vec<SlotView>,
+    #[serde(default)]
+    pub(crate) manager_operations: Vec<ManagerOperationView>,
 }
 
 #[derive(Default)]
@@ -123,6 +154,7 @@ pub(crate) fn prepare_display(config: Config) {
         queued: 0,
         closed: false,
         stopping: false,
+        manager_operations: Vec::new(),
         slots: (0..config.count)
             .map(|slot| SlotView {
                 slot,
