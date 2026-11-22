@@ -108,7 +108,7 @@ jobs:
           path: ${{ runner.temp }}/ssmcp-terminal.ansi
           if-no-files-found: error
           retention-days: 14
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --locked --no-fail-fast
       - name: Build the explicit native plugin fixture
         run: cargo build --example native_plugin_fixture --locked
       - name: Exercise the native plugin through Runtime
