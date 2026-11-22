@@ -624,64 +624,10 @@ class Unified(SessionFeatures):
                     and json.dumps(self.sibling_id) in row["event"].get("code", "")
                     and json.dumps(self.client_id) not in row["event"].get("code", "")
                 }
-                # This new empty workspace has exactly one startup cleanup event.
-                # Match its complete empty result; other lifecycle/data is forbidden.
-                empty_startup_cleanup = {
-                    "summary": {
-                        "busy": False,
-                        "decisions": [],
-                        "dry_run": False,
-                        "enabled": False,
-                        "errors": [],
-                        "kept_active": 0,
-                        "kept_by_rule": 0,
-                        "kept_changed": 0,
-                        "kept_protected": 0,
-                        "missing_files": 0,
-                        "recoveries": [],
-                        "registry_present": False,
-                        "removed_bytes": 0,
-                        "removed_files": 0,
-                        "retained_temporary_bytes": 0,
-                        "retention": {
-                            "active_limit_exceeded": False,
-                            "active_record_limit": 16384,
-                            "active_records": 0,
-                            "completed_records": 0,
-                            "errors": [],
-                            "invalid_records": 0,
-                            "pending_completed_records": 0,
-                            "prune_limit": 1024,
-                            "pruned_records": 0,
-                            "pruning_requested": False,
-                            "raw_scan_limit": 32768,
-                            "raw_scan_truncated": False,
-                            "recoveries": [],
-                            "retain_completed": 1024,
-                            "scanned_entries": 0,
-                            "state_changed": False
-                        },
-                        "scan_truncated": False,
-                        "scanned_records": 0,
-                        "trigger": "startup",
-                        "would_remove_bytes": 0,
-                        "would_remove_files": 0
-                    },
-                    "trigger": "startup",
-                    "type": "ssmcp.files.cleanup"
-                }
-                startup_events = [row["event"] for row in rows
-                                  if row["event"]["type"] == "ssmcp.files.cleanup"]
-                isolated = (
-                    bool(own_runs)
-                    and json.dumps(startup_events, sort_keys=True)
-                    == json.dumps([empty_startup_cleanup], sort_keys=True)
-                    and all(
-                        row["event"]["type"] == "ssmcp.files.cleanup"
-                        or (row["event"]["type"] == "ssmcp.code_mode"
-                            and row["event"].get("run_id") in own_runs)
-                        for row in rows
-                    )
+                isolated = bool(own_runs) and all(
+                    row["event"]["type"] == "ssmcp.code_mode"
+                    and row["event"].get("run_id") in own_runs
+                    for row in rows
                 )
             self.check(isolated, f"{tool} on another client does not expose the first client's audit stream")
         self.call("ssmcp.output.cleanup", client_id=self.sibling_id, secret=self.sibling_token)
