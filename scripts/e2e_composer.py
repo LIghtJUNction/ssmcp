@@ -21,11 +21,14 @@ import signal
 import subprocess
 import tempfile
 import time
+import traceback
 
 from e2e_account_relay import wait_for
 from e2e_dashboard import Dashboard, sha256, text
 from e2e_client_ui import body_text, column, empty_composer_ready, left_rows, view
 
+
+COMPOSER_TIMEOUT_SECONDS = 240
 
 ESC = b"\x1b"
 UP = b"\x1b[A"
@@ -74,6 +77,9 @@ def visible_record(snapshot, request_text, status, message_id=None, *, selected=
 
 
 class Composer(Dashboard):
+    # Keep the router available for graceful stop after the scenario deadline.
+    fixture_timeout_seconds = COMPOSER_TIMEOUT_SECONDS + 30
+
     def client_environment(self, label, **options):
         environment = super().client_environment(label, **options)
         root = (self.directory / "composer-environment").resolve()
@@ -906,10 +912,11 @@ class Composer(Dashboard):
 
 
 def main():
-    def interrupted(_signal, _frame):
-        raise TimeoutError("composer E2E interrupted; cleaning up owned processes")
+    def interrupted(signum, _frame):
+        raise TimeoutError(f"composer E2E stopped by {signal.Signals(signum).name}; cleaning up owned processes")
 
     signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGALRM, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, default=Path("target/debug"))
     parser.add_argument("--decoder", type=Path, help="defaults to BIN_DIR/examples/vt_snapshot")
@@ -931,20 +938,41 @@ def main():
                   Path(__file__).with_name("e2e_client_ui.py"))}}
     with tempfile.TemporaryDirectory(prefix="ssmcp-composer-e2e-") as directory:
         harness = Composer(Path(directory), args.bin_dir, decoder)
-        try:
-            harness.run()
-            report["status"] = "passed"
-        except Exception as error:
-            description = f"{type(error).__name__}: {error}"
+
+        def redact(description):
             for secret in [harness.secret, *harness.sensitive]:
                 if secret:
                     description = description.replace(secret, "[redacted]")
-            report["error"] = description
-            print(description, flush=True)
+            return description
+
+        try:
+            signal.setitimer(signal.ITIMER_REAL, COMPOSER_TIMEOUT_SECONDS)
+            harness.run()
+            report["status"] = "passed"
+        except Exception as error:
+            report["error"] = redact(f"{type(error).__name__}: {error}")
+            report["error_traceback"] = redact("".join(traceback.format_tb(error.__traceback__)))
+            print(report["error_traceback"] + report["error"], flush=True)
             harness.diagnostics()
         finally:
-            harness.close_frontends()
-            harness.cleanup()
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            for cleanup in (harness.close_frontends, harness.cleanup):
+                try:
+                    cleanup()
+                except Exception as error:
+                    report["status"] = "failed"
+                    message = redact(f"{cleanup.__name__}: {type(error).__name__}: {error}")
+                    report.setdefault("cleanup_errors", []).append(message)
+                    print(message, flush=True)
+            router = harness.account_gateway
+            report["router"] = {"lifetime_seconds": harness.fixture_timeout_seconds,
+                                "exit_code": router.exit_code}
+            if router.prepared and router.exit_code != 0:
+                with (harness.directory / "account-router.log").open("rb") as log:
+                    log.seek(max(0, os.fstat(log.fileno()).st_size - 4096))
+                    tail = redact(log.read().decode(errors="replace"))
+                report["router"]["log_tail"] = tail
+                print(f"Account router exit {router.exit_code}:\n{tail}", flush=True)
             report.update(checks=harness.checks, metrics=harness.metrics,
                           duration_seconds=round(time.monotonic() - started, 3))
             if args.report:
