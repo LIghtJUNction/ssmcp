@@ -31,6 +31,19 @@ ssmcp -i --server https://relay.example --client SESSION_ID
 
 看门狗默认开启，`--no-watchdog` 可禁用；显式停止后不会继续恢复。CLI 的 `invite` / `join` 与 MCP 的 `invite` 已移除，设备授权使用 `--allow 用户名@服务器`；会话内 agent 登记继续使用 `collab.join`。[首次连接](onboarding.md)
 
+## 工具仓库入口与连接诊断
+
+`ssmcp tool` 与 `ssmcp tools` 使用相同的工具仓库命令入口，支持相同的参数、子命令和专用帮助。例如：
+
+~~~sh
+ssmcp tool --help
+ssmcp tools status
+~~~
+
+连接目标使用 `ssmcp username@server` 或 `ssmcp --server https://server`。无法识别的裸命令会报告命令或目标格式错误，并给出这些入口；显式 `--ssh` 仍给出旧连接方式已移除的迁移说明。
+
+连接诊断按实际路径显示 `Relay transport` 或 `Local transport`，对应日志来源为 `relay` 或 `local`。注册超时、连接拒绝和底层 I/O 错误保留实际原因。结果回传超时只说明回传未及时完成；相关操作可能已经执行，应先核对原生任务状态，再决定是否重试。
+
 ## 查询本地路径
 
 `ssmcp paths` 枚举实际配置、凭据目录、工具仓库和本地状态的位置。它在连接与配置加载之前返回，不读取文件内容、不创建目录。可组合选择名称，按给定顺序输出；不指定名称时列出全部十项。

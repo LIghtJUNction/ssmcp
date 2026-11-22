@@ -1,4 +1,4 @@
-//! Foreground account or SSH client. Connection details are emitted once as JSON.
+//! Foreground relay or local client. Connection details are emitted once as JSON.
 mod access;
 pub(crate) mod account;
 pub(crate) mod agent;
@@ -304,37 +304,100 @@ are not resumed or replayed. An empty history exits without connecting.
 // backend starts. A separate persistent status channel records a closed bridge
 // even when its frame queue has not yet been consumed.
 // A reconnect owns its stderr reader, including early failures.
-struct SshStderr(JoinHandle<()>);
+#[derive(Clone, Copy)]
+enum TransportKind {
+    Relay,
+    #[cfg(any(target_os = "linux", test))]
+    Local,
+}
 
-impl Drop for SshStderr {
+impl TransportKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Relay => "Relay transport",
+            #[cfg(any(target_os = "linux", test))]
+            Self::Local => "Local transport",
+        }
+    }
+
+    fn event_source(self) -> &'static str {
+        match self {
+            Self::Relay => "relay",
+            #[cfg(any(target_os = "linux", test))]
+            Self::Local => "local",
+        }
+    }
+
+    fn ended(self, status: io::Result<ExitStatus>) -> String {
+        let label = self.label();
+        match status {
+            Ok(status) => format!("{label} exited before local backend readiness ({status})"),
+            Err(error) => {
+                format!("Could not wait for {label} during local backend startup: {error}")
+            }
+        }
+    }
+
+    fn registration_timeout(self) -> io::Error {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("{} registration timed out", self.label()),
+        )
+    }
+
+    fn result_write_timeout(self) -> io::Error {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "{} result write timed out; the operation may have executed. Inspect native state before retrying a mutating call.",
+                self.label()
+            ),
+        )
+    }
+}
+
+struct TransportStderr(JoinHandle<()>);
+
+impl Drop for TransportStderr {
     fn drop(&mut self) {
         self.0.abort();
     }
 }
 
 struct Incoming {
+    transport_kind: TransportKind,
     frames: mpsc::Receiver<io::Result<Option<Frame>>>,
     closed: watch::Receiver<Option<String>>,
     task: JoinHandle<()>,
 }
 
 impl Incoming {
-    fn start<R: tokio::io::AsyncRead + Unpin + Send + 'static>(mut reader: BufReader<R>) -> Self {
+    fn start<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
+        mut reader: BufReader<R>,
+        transport_kind: TransportKind,
+    ) -> Self {
         let (frames_tx, frames) = mpsc::channel(MAX_INFLIGHT);
         let (closed_tx, closed) = watch::channel(None);
         let task = tokio::spawn(async move {
             loop {
                 let frame = read_frame(&mut reader).await;
                 let error = match &frame {
-                    Ok(None) => Some("Connection closed before tools became ready".into()),
+                    Ok(None) => Some(format!(
+                        "{} closed before tools became ready",
+                        transport_kind.label()
+                    )),
                     Err(error) => Some(format!(
-                        "Connection stream failed before tools became ready: {error}"
+                        "{} stream failed before tools became ready: {error}",
+                        transport_kind.label()
                     )),
                     Ok(Some(Frame::Reject { message })) => {
                         if message == relay::AUTH_EXPIRED {
                             Some(message.clone())
                         } else {
-                            Some(format!("SSH server rejected the connection: {message}"))
+                            Some(format!(
+                                "{} server rejected the connection: {message}",
+                                transport_kind.label()
+                            ))
                         }
                     }
                     _ => None,
@@ -349,6 +412,7 @@ impl Incoming {
             }
         });
         Self {
+            transport_kind,
             frames,
             closed,
             task,
@@ -405,7 +469,7 @@ impl Incoming {
         fallback
     }
 
-    fn ensure_open(&self, ssh: &mut Child) -> Result<(), String> {
+    fn ensure_open(&self, process: &mut Child) -> Result<(), String> {
         if let Some(error) = self.closed.borrow().clone() {
             return Err(error);
         }
@@ -414,8 +478,8 @@ impl Incoming {
         }
         // The process can exit before its reader task observes EOF (or a proxy
         // child can retain stdout). Check both sources before publishing a code.
-        if let Some(status) = ssh.try_wait().map_err(|error| error.to_string())? {
-            return Err(ssh_ended(Ok(status)));
+        if let Some(status) = process.try_wait().map_err(|error| error.to_string())? {
+            return Err(self.transport_kind.ended(Ok(status)));
         }
         Ok(())
     }
@@ -429,13 +493,6 @@ impl Incoming {
 impl Drop for Incoming {
     fn drop(&mut self) {
         self.task.abort();
-    }
-}
-
-fn ssh_ended(status: io::Result<ExitStatus>) -> String {
-    match status {
-        Ok(status) => format!("SSH exited before local backend readiness ({status})"),
-        Err(error) => format!("Could not wait for SSH during local backend startup: {error}"),
     }
 }
 
@@ -1052,6 +1109,9 @@ impl Options {
             username = Some(account_name);
             server = Some(origin);
             destination = None;
+        }
+        if new_connection && !ssh && destination.is_some() {
+            return Err("unrecognized command or destination; see ssmcp --help. For tool sources use ssmcp tools [status|check|update]; for a connection use ssmcp username@server or ssmcp --server https://server".into());
         }
         if username.is_some() && (destination.is_some() || ssh) {
             return Err("a username selects HTTPS and cannot be combined with SSH options".into());
@@ -1736,6 +1796,11 @@ async fn retry_legacy_self_account(
     Ok(true)
 }
 
+fn tool_repository_arguments(args: &[OsString]) -> Option<&[OsString]> {
+    let (command, arguments) = args.split_first()?;
+    matches!(command.to_str(), Some("tool" | "tools")).then_some(arguments)
+}
+
 pub async fn run() -> crate::Result<()> {
     if let Some(result) = crate::worker::child_entry().await {
         return result;
@@ -1808,8 +1873,8 @@ pub async fn run() -> crate::Result<()> {
             return Ok(());
         }
     }
-    if args.first().is_some_and(|arg| arg == "tools") {
-        return crate::tool_repository::run(args.into_iter().skip(1).collect()).await;
+    if let Some(arguments) = tool_repository_arguments(&args) {
+        return crate::tool_repository::run(arguments.to_vec()).await;
     }
     if args.first().is_some_and(|arg| arg == "update") {
         return update::run(args.into_iter().skip(1).collect()).await;
@@ -2252,9 +2317,10 @@ impl std::fmt::Display for UnsupportedWireProtocol {
 
 impl std::error::Error for UnsupportedWireProtocol {}
 
-struct RegisteredSsh {
-    ssh: Child,
-    stderr_pump: Option<SshStderr>,
+struct RegisteredTransport {
+    process: Child,
+    transport_kind: TransportKind,
+    stderr_pump: Option<TransportStderr>,
     writer: tokio::process::ChildStdin,
     reader: BufReader<ChildStdout>,
     ready: (String, String, u64, String),
@@ -2268,10 +2334,15 @@ struct RegisteredSsh {
     version_notice: Option<crate::wire::versions::Notice>,
 }
 
-impl RegisteredSsh {
+impl RegisteredTransport {
     async fn require_allow_access(&mut self, allow: &[String]) -> crate::Result<()> {
         if !self.access_supported && !allow.is_empty() {
-            stop_registration(&mut self.ssh, &mut self.stderr_pump).await?;
+            stop_registration(
+                &mut self.process,
+                &mut self.stderr_pump,
+                self.transport_kind,
+            )
+            .await?;
             return Err(Box::new(relay::PermanentFailure(
                 "server did not acknowledge account access controls; update ssmcpd before using --allow".into()
             )));
@@ -2280,30 +2351,37 @@ impl RegisteredSsh {
     }
 }
 
-// A replacement transport must not start until the rejected SSH process and its
+// A replacement transport must not start until the rejected transport process and its
 // reader task are gone. No local backend or input binding exists at this stage.
 async fn stop_registration(
-    ssh: &mut Child,
-    stderr_pump: &mut Option<SshStderr>,
+    process: &mut Child,
+    stderr_pump: &mut Option<TransportStderr>,
+    transport_kind: TransportKind,
 ) -> crate::Result<()> {
-    let _ = ssh.start_kill();
-    let reaped = timeout(Duration::from_secs(10), ssh.wait()).await;
+    let _ = process.start_kill();
+    let reaped = timeout(Duration::from_secs(10), process.wait()).await;
     if let Some(pump) = stderr_pump {
         pump.0.abort();
         let _ = (&mut pump.0).await;
     }
-    reaped.map_err(|_| "SSH process did not terminate before registration cleanup")??;
+    reaped.map_err(|_| {
+        format!(
+            "{} process did not terminate before registration cleanup",
+            transport_kind.label()
+        )
+    })??;
     Ok(())
 }
 
-async fn register_ssh(
+async fn register_transport(
+    transport_kind: TransportKind,
     metadata: &ClientMetadata,
     account_compat: bool,
     registered: &mut bool,
     mut command: impl FnMut() -> Command,
     cancelled: impl std::future::Future<Output = ()>,
     deadline: Duration,
-) -> crate::Result<Option<RegisteredSsh>> {
+) -> crate::Result<Option<RegisteredTransport>> {
     tokio::pin!(cancelled);
     tokio::select! {
         biased;
@@ -2314,25 +2392,36 @@ async fn register_ssh(
     let timing_offer = relay::timing_offer(&transport_command);
     let peer_offer = relay::peer_ports_offer(&transport_command);
     let openai_context_offer = relay::openai_context_offer(&transport_command);
-    let mut ssh = transport_command
-        .spawn()
-        .map_err(|error| format!("could not start OpenSSH ssh: {error}"))?;
-    let mut stderr_pump = ssh.stderr.take().map(|mut stderr| {
-        SshStderr(tokio::spawn(async move {
+    let mut process = transport_command.spawn().map_err(|error| {
+        format!(
+            "could not start {} process: {error}",
+            transport_kind.label()
+        )
+    })?;
+    let mut stderr_pump = process.stderr.take().map(|mut stderr| {
+        TransportStderr(tokio::spawn(async move {
             let mut bytes = [0u8; 4096];
             while let Ok(count) = stderr.read(&mut bytes).await {
                 if count == 0 {
                     break;
                 }
                 render::event(
-                    "ssh",
+                    transport_kind.event_source(),
                     &json!({"stderr":String::from_utf8_lossy(&bytes[..count])}),
                 );
             }
         }))
     });
-    let mut writer = ssh.stdin.take().ok_or("SSH stdin unavailable")?;
-    let mut reader = BufReader::new(ssh.stdout.take().ok_or("SSH stdout unavailable")?);
+    let mut writer = process
+        .stdin
+        .take()
+        .ok_or_else(|| format!("{} stdin unavailable", transport_kind.label()))?;
+    let mut reader = BufReader::new(
+        process
+            .stdout
+            .take()
+            .ok_or_else(|| format!("{} stdout unavailable", transport_kind.label()))?,
+    );
     if let Err(error) = write_frame(
         &mut writer,
         &Frame::Hello {
@@ -2343,23 +2432,23 @@ async fn register_ssh(
     )
     .await
     {
-        stop_registration(&mut ssh, &mut stderr_pump).await?;
+        stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
         return Err(error.into());
     }
     let response = tokio::select! {
         result = timeout(deadline, read_frame(&mut reader)) => {
-            result.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "SSH authentication timed out"))
+            result.map_err(|_| transport_kind.registration_timeout())
                 .and_then(|frame| frame)
         },
         _ = &mut cancelled => {
-            stop_registration(&mut ssh, &mut stderr_pump).await?;
+            stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
             return Ok(None);
         },
     };
     let response = match response {
         Ok(frame) => frame,
         Err(error) => {
-            stop_registration(&mut ssh, &mut stderr_pump).await?;
+            stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
             return Err(error.into());
         }
     };
@@ -2404,7 +2493,7 @@ async fn register_ssh(
                 .any(|capability| capability == crate::wire::CHAT_DISABLED_CAPABILITY),
         ),
         Some(Frame::Reject { message }) => {
-            stop_registration(&mut ssh, &mut stderr_pump).await?;
+            stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
             // Only a parsed registration rejection is terminal for the protocol.
             // Stderr, EOF, timeouts and unrelated authorization errors stay distinct.
             if message == UNSUPPORTED_WIRE_PROTOCOL
@@ -2415,14 +2504,21 @@ async fn register_ssh(
             return Err(relay::failure(message));
         }
         None => {
-            stop_registration(&mut ssh, &mut stderr_pump).await?;
-            return Err(
-                "Account relay disconnected before registration; check the server connection and preceding relay error".into()
-            );
+            stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
+            return Err(format!(
+                "{} disconnected before registration; check the connection and preceding {} error",
+                transport_kind.label(),
+                transport_kind.event_source()
+            )
+            .into());
         }
         _ => {
-            stop_registration(&mut ssh, &mut stderr_pump).await?;
-            return Err("unexpected registration response".into());
+            stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
+            return Err(format!(
+                "{} received an unexpected registration response",
+                transport_kind.label()
+            )
+            .into());
         }
     };
     *registered = true;
@@ -2444,22 +2540,23 @@ async fn register_ssh(
             || ready.2 != 0
             || !self_only_capabilities)
     {
-        stop_registration(&mut ssh, &mut stderr_pump).await?;
+        stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
         return Err(Box::new(relay::PermanentFailure(
             "server did not acknowledge self-only account compatibility; no login code or access delegation is permitted".into(),
         )));
     }
     let github_auth = account_compat || !metadata.allow.is_empty();
     if github_auth && (!ready.1.is_empty() || ready.2 != 0) {
-        stop_registration(&mut ssh, &mut stderr_pump).await?;
+        stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
         return Err("server did not acknowledge the explicit account allow policy; upgrade ssmcpd before connecting".into());
     }
     if !github_auth && (ready.1.is_empty() || ready.2 == 0) {
-        stop_registration(&mut ssh, &mut stderr_pump).await?;
+        stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
         return Err("server returned no account access policy for this connection; use --allow username@relay-server".into());
     }
-    Ok(Some(RegisteredSsh {
-        ssh,
+    Ok(Some(RegisteredTransport {
+        process,
+        transport_kind,
         stderr_pump,
         writer,
         reader,
@@ -2564,6 +2661,14 @@ enum Transport<'a> {
 }
 
 impl Transport<'_> {
+    fn kind(&self) -> TransportKind {
+        match self {
+            Self::Account { .. } => TransportKind::Relay,
+            #[cfg(target_os = "linux")]
+            Self::Local(_) => TransportKind::Local,
+        }
+    }
+
     fn timing_support(&self, acknowledged: (bool, bool)) -> (bool, bool) {
         match self {
             Self::Account { .. } => acknowledged,
@@ -2740,7 +2845,8 @@ async fn connect_inner(
     };
     let mut metric_channel = None;
     let chat_enabled = options.worker.is_none() && options.chat.input != chat_io::Input::None;
-    let registration = register_ssh(
+    let registration = register_transport(
+        transport.kind(),
         &wire_metadata,
         options.account_compat,
         registered,
@@ -2771,7 +2877,12 @@ async fn connect_inner(
         .require_allow_access(&wire_metadata.allow)
         .await?;
     if chat_enabled == registration.chat_disabled_acknowledged {
-        stop_registration(&mut registration.ssh, &mut registration.stderr_pump).await?;
+        stop_registration(
+            &mut registration.process,
+            &mut registration.stderr_pump,
+            registration.transport_kind,
+        )
+        .await?;
         return Err(Box::new(relay::PermanentFailure(if chat_enabled {
             "relay disabled human chat without a matching local request".into()
         } else if options.worker.is_some() {
@@ -2780,8 +2891,9 @@ async fn connect_inner(
             "--input none requires a relay that acknowledges disabled human chat".into()
         })));
     }
-    let RegisteredSsh {
-        mut ssh,
+    let RegisteredTransport {
+        mut process,
+        transport_kind,
         stderr_pump: _stderr_pump,
         writer,
         reader,
@@ -2828,7 +2940,7 @@ async fn connect_inner(
         && options.chat.input == chat_io::Input::Terminal
         && display_session.is_none()
     {
-        let _ = ssh.kill().await;
+        let _ = process.kill().await;
         return Err(Box::new(relay::PermanentFailure(
             "worker monitor requires an interactive dashboard; use --daemon for a background pool"
                 .into(),
@@ -2836,7 +2948,7 @@ async fn connect_inner(
     }
     if options.resume_history.load(Ordering::Relaxed) {
         let Some(display) = display_session.as_ref() else {
-            let _ = ssh.kill().await;
+            let _ = process.kill().await;
             return Err(Box::new(relay::PermanentFailure(
                 "ssmcp resume could not open the interactive history picker; use a supported terminal with the dashboard enabled".into(),
             )));
@@ -2850,7 +2962,7 @@ async fn connect_inner(
         && options.chat.agent != chat_io::Agent::NextCaller
         && display_session.is_none()
     {
-        let _ = ssh.kill().await;
+        let _ = process.kill().await;
         return Err(Box::new(relay::PermanentFailure(
             "terminal agent dispatch requires a live dashboard; select another --input mode for headless use".into(),
         )));
@@ -2868,14 +2980,14 @@ async fn connect_inner(
     });
     // Explicit --allow uses the same relay transport without an account token.
     // Preserve its final authorization outcome even when the child exits first.
-    let mut incoming = Incoming::start(reader);
+    let mut incoming = Incoming::start(reader, transport_kind);
     let _link_metrics = display_session
         .as_ref()
         .and_then(|_| link_metrics::observe(metric_channel, &client_id, incoming.closed.clone()));
     if let Some(harness) = &options.harness
         && let Err(error) = harness.check_target(Some(&url))
     {
-        let _ = ssh.kill().await;
+        let _ = process.kill().await;
         incoming.stop().await;
         return Err(error.into());
     }
@@ -2890,14 +3002,14 @@ async fn connect_inner(
     );
     let backend = tokio::select! {
         biased;
-        error = incoming.disconnected() => { let _ = ssh.kill().await; return Err(relay::failure(error)); },
-        status = ssh.wait() => {
-            let mut error = ssh_ended(status);
+        error = incoming.disconnected() => { let _ = process.kill().await; return Err(relay::failure(error)); },
+        status = process.wait() => {
+            let mut error = transport_kind.ended(status);
             if matches!(&transport, Transport::Account { .. }) { error = incoming.after_relay_exit(error).await; }
             return Err(relay::failure(error));
         },
-        _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
-        _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
+        _ = interrupt.recv() => { let _ = process.kill().await; return Ok(ConnectionExit::Stopped); },
+        _ = terminate.recv() => { let _ = process.kill().await; return Ok(ConnectionExit::Stopped); },
         result = timeout(Duration::from_secs(120), Backend::start_with_harness(&options.shell, options.tty.as_deref(), options.harness.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
     };
     let backend = match Runtime::with_session_control(
@@ -2918,10 +3030,10 @@ async fn connect_inner(
     }) {
         Ok(runtime) => runtime,
         Err(error) => {
-            let _ = ssh.start_kill();
+            let _ = process.start_kill();
             backend.shutdown().await;
             incoming.stop().await;
-            let _ = ssh.wait().await;
+            let _ = process.wait().await;
             return Err(error.into());
         }
     };
@@ -2931,10 +3043,10 @@ async fn connect_inner(
     {
         Ok(binding) => binding,
         Err(error) => {
-            let _ = ssh.start_kill();
+            let _ = process.start_kill();
             backend.shutdown().await;
             incoming.stop().await;
-            let _ = ssh.wait().await;
+            let _ = process.wait().await;
             return Err(error);
         }
     };
@@ -2942,26 +3054,26 @@ async fn connect_inner(
     let discovered = tokio::select! {
         biased;
         error = incoming.disconnected() => Err(error),
-        status = ssh.wait() => {
-            let error = ssh_ended(status);
+        status = process.wait() => {
+            let error = transport_kind.ended(status);
             Err(if matches!(&transport, Transport::Account { .. }) { incoming.after_relay_exit(error).await } else { error })
         },
-        _ = interrupt.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
-        _ = terminate.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
+        _ = interrupt.recv() => { let _ = process.start_kill(); backend.shutdown().await; let _ = process.wait().await; return Ok(ConnectionExit::Stopped); },
+        _ = terminate.recv() => { let _ = process.start_kill(); backend.shutdown().await; let _ = process.wait().await; return Ok(ConnectionExit::Stopped); },
         result = timeout(Duration::from_secs(180), async {
             if let Some(harness) = &options.harness { harness.activate(&backend).await?; }
             backend.tools().await
         }) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
     };
-    let readiness = discovered.and_then(|_| incoming.ensure_open(&mut ssh));
+    let readiness = discovered.and_then(|_| incoming.ensure_open(&mut process));
     if let Err(mut error) = readiness {
-        if matches!(&transport, Transport::Account { .. }) && ssh.try_wait()?.is_some() {
+        if matches!(&transport, Transport::Account { .. }) && process.try_wait()?.is_some() {
             error = incoming.after_relay_exit(error).await;
         }
-        let _ = ssh.start_kill();
+        let _ = process.start_kill();
         backend.shutdown().await;
         incoming.stop().await;
-        let _ = ssh.wait().await;
+        let _ = process.wait().await;
         return Err(relay::failure(error));
     }
     let login_expires_in = login_expires_in.saturating_sub(login_received_at.elapsed().as_secs());
@@ -3011,10 +3123,10 @@ async fn connect_inner(
         render::connection(&output).map_err(Into::into)
     };
     if let Err(error) = published {
-        let _ = ssh.start_kill();
+        let _ = process.start_kill();
         backend.shutdown().await;
         incoming.stop().await;
-        let _ = ssh.wait().await;
+        let _ = process.wait().await;
         return Err(error);
     }
     render::status(
@@ -3055,20 +3167,20 @@ async fn connect_inner(
             input
         }
         Ok(_) => {
-            let _ = ssh.start_kill();
+            let _ = process.start_kill();
             backend.shutdown().await;
             incoming.stop().await;
-            let _ = ssh.wait().await;
+            let _ = process.wait().await;
             return Err(Box::new(relay::PermanentFailure(
                 "worker monitor input is unavailable; no hidden terminal fallback is permitted"
                     .into(),
             )));
         }
         Err(error) => {
-            let _ = ssh.start_kill();
+            let _ = process.start_kill();
             backend.shutdown().await;
             incoming.stop().await;
-            let _ = ssh.wait().await;
+            let _ = process.wait().await;
             return Err(error.into());
         }
     };
@@ -3097,10 +3209,10 @@ async fn connect_inner(
                 if let Some(input) = local_input {
                     input.shutdown().await;
                 }
-                let _ = ssh.start_kill();
+                let _ = process.start_kill();
                 backend.shutdown().await;
                 incoming.stop().await;
-                let _ = ssh.wait().await;
+                let _ = process.wait().await;
                 return Err(Box::new(relay::PermanentFailure(error)));
             }
         }
@@ -3263,10 +3375,10 @@ async fn connect_inner(
                         match sent {
                             Ok(Ok(())) => {},
                             Ok(Err(error)) => break Err(error.into()),
-                            Err(_) => break Err("SSH reload acknowledgement timed out".into()),
+                            Err(_) => break Err(format!("{} reload acknowledgement write timed out", transport_kind.label()).into()),
                         }
                         if accepted {
-                            // Flushing the pipe only hands bytes to local ssh.
+                            // Flushing the pipe only hands bytes to the local transport process.
                             // Wait for the broker's receipt before terminating
                             // that process, so the ACK cannot be lost in transit.
                             let confirmed = timeout(Duration::from_secs(10), async {
@@ -3283,7 +3395,7 @@ async fn connect_inner(
                                             write_frame(&mut *writer, &Frame::Reply { id: next_id, result: Err("client reload is already pending; call list after reconnection".into()) }).await?;
                                         }
                                         Some(Err(error)) => return Err(error.into()),
-                                        _ => return Err("SSH ended before the server confirmed reload receipt".into()),
+                                        _ => return Err(format!("{} ended before the server confirmed reload receipt", transport_kind.label()).into()),
                                     }
                                 }
                             }).await;
@@ -3324,7 +3436,7 @@ async fn connect_inner(
                             let _ = observation.record();
                         }
                         if let Some(call) = &mut code_call { call.finish(&result); }
-                        // A large native response must not corrupt/disconnect the SSH stream.
+                        // A large native response must not corrupt/disconnect the transport stream.
                         result = call_scope.scope(async {
                             bounded_native_reply(result, |reminder| {
                                 terminal::restore_tool_summary_reminder(
@@ -3345,7 +3457,7 @@ async fn connect_inner(
                         timeout(Duration::from_secs(10),async {
                             let mut writer = writer.lock().await;
                             write_frame(&mut *writer,&Frame::Reply {id,result}).await
-                        }).await.map_err(|_| io::Error::new(io::ErrorKind::TimedOut,"SSH write timed out"))??;
+                        }).await.map_err(|_| transport_kind.result_write_timeout())??;
                         crate::memory::release_unused_heap();
                         Ok(was_tool)
                     });
@@ -3363,7 +3475,7 @@ async fn connect_inner(
                 Some(Ok(Some(Frame::AccessReply { id, result }))) => access::reply(id, result),
                 Some(Ok(None)) | None => break Ok(()),
                 Some(Ok(Some(Frame::Reject {message}))) => break Err(relay::failure(message)),
-                Some(Ok(Some(_))) => break Err("unexpected SSH protocol frame".into()),
+                Some(Ok(Some(_))) => break Err(format!("{} received an unexpected protocol frame", transport_kind.label()).into()),
                 Some(Err(error)) => break Err(error.into()),
             },
             response = requests.join_next(), if !requests.is_empty() => match response {
@@ -3420,9 +3532,9 @@ async fn connect_inner(
     }
     incoming.stop().await;
     drop(writer);
-    let _ = ssh.start_kill();
+    let _ = process.start_kill();
     backend.shutdown().await;
-    let _ = ssh.wait().await;
+    let _ = process.wait().await;
     let exit_message = terminal::take_exit_message().or(pending_logout_message);
     drop(display_session);
     if let Some(message) = exit_message {
@@ -3601,6 +3713,74 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn tool_alias_dispatch_preserves_arguments_and_only_matches_the_command() {
+        for command in ["tool", "tools"] {
+            for tail in [
+                vec![],
+                vec!["status"],
+                vec!["check"],
+                vec!["update"],
+                vec!["--help"],
+                vec!["unsupported"],
+            ] {
+                let args = std::iter::once(command)
+                    .chain(tail.iter().copied())
+                    .map(OsString::from)
+                    .collect::<Vec<_>>();
+                assert_eq!(tool_repository_arguments(&args), Some(&args[1..]));
+            }
+        }
+        for args in [
+            vec![],
+            vec!["--name", "tool"],
+            vec!["resume", "tool"],
+            vec!["toolish"],
+        ] {
+            let args = args.into_iter().map(OsString::from).collect::<Vec<_>>();
+            assert!(tool_repository_arguments(&args).is_none());
+        }
+    }
+
+    #[test]
+    fn unknown_new_commands_do_not_report_a_removed_ssh_connection() {
+        for args in [
+            vec!["unknown-command"],
+            vec!["relay.example"],
+            vec!["--server", "https://relay.example", "unknown-command"],
+        ] {
+            let error = Options::parse_new(args.into_iter().map(OsString::from))
+                .err()
+                .unwrap();
+            assert_eq!(
+                error,
+                "unrecognized command or destination; see ssmcp --help. For tool sources use ssmcp tools [status|check|update]; for a connection use ssmcp username@server or ssmcp --server https://server"
+            );
+            assert!(!error.contains("SSH"));
+        }
+    }
+
+    #[test]
+    fn connection_diagnostics_preserve_relay_targets_and_explicit_legacy_ssh() {
+        let named = Options::parse_new(["alice@relay.example"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert_eq!(named.username.as_deref(), Some("alice"));
+        assert_eq!(named.server.as_deref(), Some("https://relay.example"));
+        assert!(named.destination.is_none());
+        let server = Options::parse_new(["--server", "https://relay.example"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert_eq!(server.server.as_deref(), Some("https://relay.example"));
+        assert!(server.destination.is_none());
+        let legacy = Options::parse_new(["--ssh", "alice@relay.example"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert_eq!(legacy.destination.as_deref(), Some("alice@relay.example"));
+        assert!(legacy.server.is_none());
+        assert!(legacy.username.is_none());
     }
 
     #[test]
