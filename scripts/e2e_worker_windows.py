@@ -35,6 +35,39 @@ FIXTURE_DIR_ENV = "SSMCP_E2E_WORKER_WINDOW_DIR"
 ROWS, COLS = 58, 132
 
 
+def long_task_text():
+    section = lambda label: "".join(
+        f"{label} {index:02d} 中文正文 live task text remains readable across wrapping.\n"
+        for index in range(56))
+    return ("TASK_BEGIN Return WINDOW_TASK_OK from this private fixture.\n"
+            + section("FIRST") + "TASK_MIDDLE 独立滚动 middle of the actual task.\n"
+            + section("SECOND") + "UNBROKEN_" + "中English" * 55
+            + "\nTASK_END 完整正文 reached the actual final line.\n")
+
+
+def apply_worker_control(message, identity, master, slave):
+    if (message.get("identity") != identity or type(message.get("request_id")) is not int
+            or message["request_id"] <= 0):
+        raise AssertionError("private worker control does not match its actual process")
+    if message.get("kind") == "keys":
+        data = bytes.fromhex(message["hex"])
+        if not data or len(data) > 256:
+            raise AssertionError("private key input is outside its bounded size")
+        if os.write(master, data) != len(data):
+            raise AssertionError("partial private key input; do not replay")
+        return {"control": "keys", "hex": data.hex()}
+    if message.get("kind") == "resize":
+        rows, cols = message["size"]
+        if not all(type(value) is int and 1 <= value <= 1000 for value in (rows, cols)):
+            raise AssertionError("invalid private terminal geometry")
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        actual = struct.unpack("HHHH", fcntl.ioctl(slave, termios.TIOCGWINSZ, bytes(8)))
+        if actual[:2] != (rows, cols):
+            raise AssertionError("private terminal did not accept its requested geometry")
+        return {"control": "resize", "size": list(actual[:2])}
+    raise AssertionError("unknown private worker control")
+
+
 def record(directory, kind, **fields):
     path = Path(directory) / "terminal-events.jsonl"
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -134,6 +167,22 @@ def fixture_pty(command):
                 if stopping:
                     process.terminate()
                     break
+                control = directory / "worker-control.json"
+                if control.is_file():
+                    # Keep pending output on the old side of the resize receipt.
+                    while True:
+                        try:
+                            pending = os.read(master, 65536)
+                        except BlockingIOError:
+                            break
+                        if not pending:
+                            break
+                        transcript.write(pending)
+                    message = json.loads(control.read_text())
+                    applied = apply_worker_control(message, worker_identity, master, slave)
+                    control.unlink()
+                    record(directory, "worker_control", request_id=message["request_id"],
+                           identity=worker_identity, stream_offset=transcript.tell(), **applied)
                 if (directory / "close-monitor").is_file() and not interrupted:
                     os.write(master, b"\x03")
                     interrupted = True
@@ -209,6 +258,11 @@ def empty_composer_ready(shot):
     # change that count without changing whether the parent can accept input.
     return (shot["alternate_screen"] and "Message the agent" in prompt_text(shot)
             and not shot["hide_cursor"])
+
+
+def region_text(frame, region):
+    return "\n".join("".join(cell["text"] for cell in row[region["col"]:region["col"] + region["cols"]])
+                     for row in frame["cells"][region["row"]:region["row"] + region["rows"]])
 
 
 class Frontend:
@@ -296,8 +350,138 @@ class Frontend:
         self.closed = True
 
 
+class ChildView:
+    """Observe and drive only the real PTY owned by this private worker child."""
+
+    def __init__(self, harness, directory, worker, participant):
+        self.harness, self.directory = harness, directory
+        self.worker, self.participant = worker, participant
+        self.receipt = next(entry for entry in events(directory) if entry["kind"] == "worker")
+        self.identity = self.receipt["identity"]
+        self.path = directory / f"worker-{self.receipt['supervisor'][0]}.pty"
+        self.decoder = Decoder(harness.decoder_binary)
+        self.decoder.request(op="resize", rows=ROWS, cols=COLS)
+        self.offset, self.sequence, self.resize_count = 0, 0, 0
+        self.geometry = [ROWS, COLS]
+
+    def frame(self):
+        data = self.path.read_bytes()
+        # Receipts are written before new-geometry bytes. Read them after the
+        # byte snapshot so every resize affecting those bytes is available.
+        resizes = [entry for entry in events(self.directory)
+                   if entry["kind"] == "worker_control" and entry["identity"] == self.identity
+                   and entry["control"] == "resize"]
+        for receipt in resizes[self.resize_count:]:
+            boundary = receipt["stream_offset"]
+            if boundary > len(data):
+                break
+            if boundary < self.offset:
+                raise AssertionError("late resize receipt would misdecode the child PTY")
+            self.decoder.feed(data[self.offset:boundary])
+            self.offset = boundary
+            self.geometry = receipt["size"]
+            self.decoder.request(op="resize", rows=self.geometry[0], cols=self.geometry[1])
+            self.resize_count += 1
+        self.decoder.feed(data[self.offset:])
+        self.offset = len(data)
+        return self.decoder.request(op="snapshot", cells=True)
+
+    def until(self, predicate, description):
+        def observe():
+            if process_identity(self.identity[0]) != self.identity:
+                raise AssertionError(f"{description}: original worker exited")
+            frame = self.frame()
+            return frame if predicate(frame) else None
+        return wait_for(observe, timeout=15, description=description)
+
+    def panel(self, predicate=lambda panel: True, description="worker viewport"):
+        def observe():
+            result = self.harness.bound(self.worker["id"], self.participant, "ssmcp.ui.get",
+                                        {"path": "/display/worker_panels"})["value"]
+            panel = next((value for value in result if value.get("selected")), None)
+            return panel if panel is not None and predicate(panel) else None
+        return wait_for(observe, timeout=15, description=description)
+
+    def control(self, kind, **fields):
+        self.frame()
+        self.sequence += 1
+        message = {"request_id": self.sequence, "identity": self.identity, "kind": kind, **fields}
+        path = self.directory / "worker-control.json"
+        if path.exists():
+            raise AssertionError("previous private input is unacknowledged; do not replay")
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(message) + "\n")
+        os.replace(temporary, path)
+        receipt = wait_for(lambda: next((entry for entry in events(self.directory)
+                           if entry["kind"] == "worker_control"
+                           and entry["identity"] == self.identity
+                           and entry["request_id"] == self.sequence), None),
+                           timeout=10, description="private worker input acknowledgement")
+        if kind == "resize":
+            self.frame()
+        return receipt
+
+    def keys(self, data):
+        return self.control("keys", hex=data.hex())
+
+    def resize(self, rows, cols):
+        self.control("resize", size=[rows, cols])
+        wait_for(lambda: self.harness.bound(self.worker["id"], self.participant, "ssmcp.ui.get",
+                 {"path": "/display/rows"})["value"] == rows,
+                 timeout=15, description="worker accepts the actual PTY height")
+        self.panel(lambda panel: panel["cols"] == cols and panel["rows"] <= rows,
+                   "worker compositor observes the real PTY resize")
+
+    def find_text(self, marker):
+        for _ in range(96):
+            panel = self.panel()
+            frame = self.frame()
+            previous = region_text(frame, panel["logs"])
+            if marker in "".join(line.rstrip() for line in previous.splitlines()):
+                return frame
+            first = panel["logs"]["first_line"]
+            self.keys(b"\x1b[6~")
+            changed = self.panel(lambda value: value["logs"]["first_line"] != first
+                                 or value["logs"]["following"], "next actual child page")
+            if changed["logs"]["first_line"] == first:
+                break
+            self.until(lambda shot: region_text(shot, changed["logs"]) != previous,
+                       "page movement reaches physical child cells")
+        raise AssertionError(f"{marker} was not reachable in the actual child viewport")
+
+    def save(self, label, frame=None):
+        frame = frame or self.frame()
+        destination = self.harness.evidence_directory
+        prefix = destination / label
+        transcript = destination / f"child-{self.identity[0]}.pty"
+        transcript.write_bytes(self.path.read_bytes()[:self.offset])
+        prefix.with_suffix(".json").write_text(json.dumps(frame, ensure_ascii=False) + "\n")
+        prefix.with_suffix(".txt").write_text("\n".join(frame["rows"]) + "\n")
+        controls = [entry for entry in events(self.directory)
+                    if entry["kind"] == "worker_control" and entry["identity"] == self.identity]
+        geometry = {"identity": self.identity, "supervisor": self.receipt["supervisor"],
+                    "size": frame["size"], "transcript_offset": self.offset, "controls": controls}
+        prefix.with_suffix(".geometry.json").write_text(json.dumps(geometry) + "\n")
+        png = prefix.with_suffix(".png")
+        render = subprocess.run(
+            [sys.executable, "-B", str(Path(__file__).with_name("render_ui_snapshot.py")),
+             str(prefix.with_suffix(".json")), str(png), *self.harness.font_arguments],
+            capture_output=True, text=True, timeout=30)
+        self.harness.check(render.returncode == 0 and png.is_file(),
+                           f"{label}: PNG rendered from actual child PTY cells: {render.stderr[-300:]}")
+        self.harness.child_evidence.append({
+            "label": label, **geometry, "transcript": str(transcript),
+            "transcript_prefix_sha256": digest(transcript),
+            "cells": str(prefix.with_suffix(".json")), "screenshot": str(png),
+            "screenshot_sha256": digest(png)})
+        return frame
+
+    def close(self):
+        self.decoder.close()
+
+
 class WorkerWindows(Harness):
-    def __init__(self, directory, binary_dir, decoder, fixture_binary):
+    def __init__(self, directory, binary_dir, decoder, fixture_binary, evidence_directory, font_arguments):
         super().__init__(directory, binary_dir)
         self.decoder_binary = decoder
         self.fixture_binary = fixture_binary
@@ -311,6 +495,9 @@ class WorkerWindows(Harness):
         self.coordinators = {}
         self.worker_agents = {}
         self.clipboard_expectations = {}
+        self.evidence_directory = evidence_directory
+        self.font_arguments = font_arguments
+        self.child_evidence = []
 
     def environment(self, label, directory, *, terminal=True):
         self.windows.append(directory)
@@ -720,8 +907,120 @@ class WorkerWindows(Harness):
         self.check(process_identity(child["identity"][0]) == child["identity"],
                    f"{label}: the actual worker remains live after its launcher exits")
         self.cases[label] = {"parent_pid": frontend.process.pid, "worker_pid": child["identity"][0],
-                             "launcher_pid": launcher[0], "slots": 3}
+                             "launcher_pid": launcher[0], "slots": 3,
+                             "pool_generation": state["worker"]["generation"]}
         return frontend, directory, workspace, parent, worker, manager
+
+    def assert_worker_reading(self, directory, worker, executor, claim, task_text):
+        self.check(2048 < len(task_text.encode()) <= 16 * 1024,
+                   "the real claimed task is mixed Unicode text beyond the old 256-byte summary")
+        view = ChildView(self, directory, worker, executor)
+        script = ("printf 'COMMAND_BEGIN\\n'; : '" + "retained_command_" * 22
+                  + "'; read fixture_line; printf 'COMMAND_END\\n'; exit 0")
+        started = self.bound(worker["id"], executor, "ssmcp.exec.start",
+                             {"command": ["sh", "-c", script], "stdin": "pipe", "timeout_ms": 240000,
+                              "title": "Observe a real pending private command in the worker panel"})
+        job_id = started.get("job_id", started.get("id"))
+        try:
+            for index in range(32):
+                self.bound(worker["id"], executor, "ssmcp.worker.report", {
+                    "claim": claim, "request_id": f"viewport-observation-{index}",
+                    "event": "progress", "progress": f"VIEW_LOG_{index:02d} "
+                    + "The private command is held on its owned stdin while the viewport is checked. 中文 " * 2})
+            view.resize(64, 112)
+            for _ in range(128):
+                selected = view.panel()["slot"]
+                if selected == claim["slot"]:
+                    break
+                view.keys(b"\t")
+                view.panel(lambda panel: panel["slot"] != selected, "Tab reaches the next actual station")
+            self.check(view.panel()["slot"] == claim["slot"], "real Tab input selects the claimed station")
+            view.keys(b"\x1b[H")
+            view.panel(lambda panel: not panel["logs"]["following"] and panel["logs"]["first_line"] == 0)
+            view.keys(b"\x1b[B")
+            paused = view.panel(lambda panel: not panel["logs"]["following"]
+                                and panel["logs"]["first_line"] > 0)
+            anchor = (paused["logs"]["first_line"], paused["logs"]["following"])
+            view.keys(b"\t")
+            other = view.panel(lambda panel: panel["slot"] != claim["slot"])
+            view.keys(b"\x1b[H")
+            other = view.panel(lambda panel: not panel["logs"]["following"] and panel["logs"]["first_line"] == 0)
+            other_anchor = (other["logs"]["first_line"], other["logs"]["following"])
+            view.keys(b"\x1b[Z")
+            restored = view.panel(lambda panel: panel["slot"] == claim["slot"])
+            self.check((restored["logs"]["first_line"], restored["logs"]["following"]) == anchor,
+                       "raw ShiftTab restores the original station's paused log position")
+            view.keys(b"\t")
+            restored_other = view.panel(lambda panel: panel["slot"] == other["slot"])
+            self.check((restored_other["logs"]["first_line"], restored_other["logs"]["following"]) == other_anchor,
+                       "raw Tab preserves the other station's independent position")
+            view.keys(b"\x1b[Z")
+            view.panel(lambda panel: panel["slot"] == claim["slot"])
+            view.save("tall-paused-logs")
+
+            for label, rows, cols in (("tall", 64, 112), ("narrow", 26, 60)):
+                view.resize(rows, cols)
+                original = view.panel()
+                before_anchor = (original["logs"]["first_line"], original["logs"]["following"])
+                view.keys(b"t")
+                view.until(lambda frame: "Full task" in "\n".join(frame["rows"]), "T opens the actual full task")
+                body = view.panel(lambda panel: panel["logs"]["task_view"])["logs"]
+                view.keys(b"\x1b[H")
+                first = view.until(lambda frame: "TASK_BEGIN" in region_text(frame, body),
+                                   f"{label}: task beginning in physical cells")
+                view.save(f"{label}-task-start", first)
+                view.save(f"{label}-task-middle", view.find_text("TASK_MIDDLE"))
+                view.keys(b"\x1b[F")
+                end = view.until(lambda frame: "TASK_END" in region_text(frame, body),
+                                 f"{label}: task final line in physical cells")
+                observed = view.offset
+                incoming_progress = f"{label}: TASK_END was observed in actual private child cells."
+                incoming = self.bound(worker["id"], executor, "ssmcp.worker.report", {
+                    "claim": claim, "request_id": f"{label}-incoming-while-reading",
+                    "event": "progress", "progress": incoming_progress})
+                self.check(incoming["status"] == "recorded", f"{label}: incoming task progress is actually recorded")
+                end = view.until(lambda frame: view.offset > observed and "TASK_END" in region_text(frame, body),
+                                 f"{label}: incoming logs preserve the independently scrolled full task")
+                view.save(f"{label}-task-end-incoming", end)
+                view.keys(b"t")
+                view.until(lambda frame: "Full task" not in "\n".join(frame["rows"]),
+                           f"{label}: T returns to the physical logs")
+                restored = view.panel(lambda panel: not panel["logs"]["task_view"])
+                self.check((restored["logs"]["first_line"], restored["logs"]["following"]) == before_anchor,
+                           f"{label}: closing task detail restores its original paused log anchor")
+
+            view.resize(32, 132)
+            view.keys(b"\x1b[H")
+            view.panel(lambda panel: panel["logs"]["first_line"] == 0)
+            short = view.find_text("Command started: sh -c")
+            short_text = region_text(short, view.panel()["logs"])
+            started_lines = [line for line in short_text.splitlines() if "Command started: sh -c" in line]
+            self.check(started_lines and all("exit 0" not in line for line in started_lines)
+                       and "COMMAND_END" not in short_text and "[inline script]" in short_text,
+                       "default log shows a short started-command summary without inventing its script's exit")
+            self.check(self.bound(worker["id"], executor, "ssmcp.exec.status", {"job_id": job_id})["running"],
+                       "the actual native command is still running while its started summary is inspected")
+            view.save("wide-command-summary", short)
+            view.keys(b"\r")
+            view.panel(lambda panel: panel["logs"]["commands_expanded"])
+            view.keys(b"\x1b[H")
+            view.panel(lambda panel: panel["logs"]["first_line"] == 0)
+            view.save("wide-command-expanded", view.find_text("COMMAND_END"))
+            self.check(True, "real Enter expands the retained full command through its final sentinel")
+            view.keys(b"\r")
+            view.panel(lambda panel: not panel["logs"]["commands_expanded"])
+            view.resize(ROWS, COLS)
+        finally:
+            view.close()
+            self.bound(worker["id"], executor, "ssmcp.exec.write",
+                       {"job_id": job_id, "data": "continue\n", "close_stdin": True, "wait_ms": 1000})
+            finished = self.bound(worker["id"], executor, "ssmcp.exec.wait",
+                                  {"job_id": job_id, "wait_ms": 5000})
+            self.check(finished.get("exit_code") == 0,
+                       "the private pending command really exits only after its stdin is released")
+        self.cases["worker-reading"] = {"claim": claim, "task_bytes": len(task_text.encode()),
+            "command_job_id": job_id, "child_identity": view.identity,
+            "geometry": [[64, 112], [26, 60], [32, 132]], "screenshots": len(self.child_evidence)}
 
     def protocol(self, frontend, directory, parent, worker, manager):
         attached = self.bound(worker["id"], manager, "ssmcp.worker.attach")
@@ -733,8 +1032,9 @@ class WorkerWindows(Harness):
                    "the external executor explicitly registers as a worker before waiting")
         denied = self.bound(worker["id"], executor, "ssmcp.worker.attach", allow_error=True)
         self.check(denied.get("isError") is True, "an executor cannot take over the pool manager")
+        task_text = long_task_text()
         submitted = self.bound(worker["id"], manager, "ssmcp.worker.submit", {
-            "request_id": "worker-windows-task-one", "text": "Return WINDOW_TASK_OK from this private fixture.",
+            "request_id": "worker-windows-task-one", "text": task_text,
         })
         task = submitted.get("task", submitted)
         task_id = task["task_id"]
@@ -782,6 +1082,7 @@ class WorkerWindows(Harness):
         elapsed = active_slot.get("current_task_elapsed_ms")
         self.check(isinstance(elapsed, int) and elapsed >= 0 and active_slot["total_work_ms"] >= elapsed,
                    "current work time is present while the real task is active")
+        self.assert_worker_reading(directory, worker, executor, assignment["claim"], task_text)
         self.assert_busy_reload(directory, worker, manager, task_id)
         self.bound(worker["id"], executor, "ssmcp.worker.complete", {
             "claim": assignment["claim"], "status": "completed", "output": "WINDOW_TASK_OK",
@@ -836,6 +1137,23 @@ class WorkerWindows(Harness):
         self.check(True, label)
         frontend.send(b"\x01\x0b")
 
+    def preserve_child_transcripts(self):
+        """Keep real child output even when an assertion prevents screenshots."""
+        preserved = []
+        for directory in self.windows:
+            destination = self.evidence_directory / directory.name
+            destination.mkdir(mode=0o700, exist_ok=True)
+            for path in sorted(directory.glob("worker-*.pty")):
+                copy = destination / path.name
+                copy.write_bytes(path.read_bytes())
+                preserved.append({"path": str(copy), "bytes": copy.stat().st_size, "sha256": digest(copy)})
+            event_path = directory / "terminal-events.jsonl"
+            if event_path.is_file():
+                copy = destination / event_path.name
+                copy.write_bytes(event_path.read_bytes())
+                preserved.append({"path": str(copy), "bytes": copy.stat().st_size, "sha256": digest(copy)})
+        return preserved
+
     def assert_children_gone(self, directory):
         identities = []
         workers = []
@@ -857,24 +1175,14 @@ class WorkerWindows(Harness):
 
     def assert_busy_reload(self, directory, worker, manager, task_id):
         original = next(entry for entry in events(directory) if entry["kind"] == "worker")
-        transcript = directory / f"worker-{original['supervisor'][0]}.pty"
-        decoder = Decoder(self.decoder_binary)
-        offset = 0
+        view = ChildView(self, directory, worker, manager)
         try:
-            decoder.request(op="resize", rows=ROWS, cols=COLS)
             (directory / "reload-monitor").touch()
-
-            def busy_notice():
-                nonlocal offset
-                data = transcript.read_bytes()
-                decoder.feed(data[offset:])
-                offset = len(data)
-                frame = decoder.request(op="snapshot", cells=True)
-                return frame if "finish or cancel worker tasks" in "\n".join(frame["rows"]) else None
-
-            frame = wait_for(busy_notice, timeout=15, description="busy reload rejection in the real worker panel")
+            frame = view.until(lambda shot: "finish or cancel worker tasks" in "\n".join(shot["rows"]),
+                               "busy reload rejection in the real worker panel")
+            view.save("busy-worker-reload", frame)
         finally:
-            decoder.close()
+            view.close()
         state = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
         self.check(state["working"] == 1 and any(slot.get("task_id") == task_id for slot in state["slots"])
                    and process_identity(original["identity"][0]) == original["identity"]
@@ -885,6 +1193,7 @@ class WorkerWindows(Harness):
 
     def reload_worker(self, frontend, directory, workspace, parent, worker):
         original = next(entry for entry in events(directory) if entry["kind"] == "worker")
+        old_generation = self.cases["parent-exit"]["pool_generation"]
         frontend.send(b"\x01\x0b/worker +1\r")
         self.pool_projection(frontend, parent,
                              lambda pool: pool["desired_total"] == 4 and pool["total"] == 4
@@ -911,6 +1220,8 @@ class WorkerWindows(Harness):
                    "repeated Ctrl+R keys create one replacement after the earlier busy rejection")
         new_manager = self.join(replacement["id"], "worker-reload-observer")
         state = self.bound(replacement["id"], new_manager, "ssmcp.worker.status")["worker"]
+        self.check(state["generation"] != old_generation and state["working"] == 0 and state["queued"] == 0,
+                   "worker-only reload starts a distinct pool generation without carrying queued or active claims")
         self.check(state["manager"] is None and state["total"] == 4 and state["desired_total"] == 4
                    and state["offline"] == 4 and state["registered_workers"] == 0,
                    "the replacement preserves requested capacity without inheriting the old manager or workers")
@@ -927,6 +1238,7 @@ class WorkerWindows(Harness):
         self.cases["worker-reload"] = {"parent_client_id": parent["id"],
                                       "old_worker_client_id": worker["id"], "worker_client_id": replacement["id"],
                                       "old_process_id": original["identity"][0], "process_id": current["identity"][0],
+                                      "old_generation": old_generation, "generation": state["generation"],
                                       "desired_total": state["desired_total"]}
         frontend.send(b"\x01\x0b")
 
@@ -972,6 +1284,14 @@ class WorkerWindows(Harness):
                    "reload opens exactly one replacement worker window")
         manager = self.join(new_worker["id"], "replacement-manager")
         status = self.bound(new_worker["id"], manager, "ssmcp.worker.status")
+        old_generation = self.cases["parent-reload"]["pool_generation"]
+        self.check(status["worker"]["generation"] != old_generation
+                   and status["worker"]["working"] == 0 and status["worker"]["queued"] == 0,
+                   "parent reload creates a distinct empty pool generation")
+        self.cases["parent-reload"].update(old_generation=old_generation,
+                                             generation=status["worker"]["generation"],
+                                             replacement_worker_client_id=new_worker["id"],
+                                             replacement_parent_client_id=new_parent["id"])
         self.check(status["worker"]["total"] == 3 and status["worker"]["offline"] == 3,
                    "the replacement pool starts with three unstaffed stations")
         self.coordinators[new_parent["id"]] = self.join(new_parent["id"], "replacement-coordinator")
@@ -1091,12 +1411,27 @@ def main():
                         default=os.environ.get("SSMCP_E2E_FIXTURE_BINARY"))
     parser.add_argument("--decoder", type=Path)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--evidence-dir", type=Path,
+                        help="new private directory for actual child PTY, cells, geometry and PNG evidence")
+    parser.add_argument("--font", type=Path)
+    parser.add_argument("--font-index", type=int)
+    parser.add_argument("--fallback-font", type=Path)
+    parser.add_argument("--fallback-font-index", type=int)
     parser.add_argument("--source-revision", default="unrecorded")
     args = parser.parse_args()
     binary_dir = args.bin_dir.resolve()
     decoder = (args.decoder or binary_dir / "examples" / "vt_snapshot").resolve()
+    evidence_directory = (args.evidence_dir or args.report.with_name(args.report.stem + "-evidence")).resolve()
+    font_arguments = []
+    for option in ("font", "font_index", "fallback_font", "fallback_font_index"):
+        value = getattr(args, option)
+        if value is not None:
+            font_arguments.extend(["--" + option.replace("_", "-"), str(value)])
     report = {"schema_version": 1, "suite": "worker_windows", "status": "blocked",
               "source_revision": args.source_revision, "checks": [], "cases": {},
+              "script_sha256": digest(Path(__file__)), "evidence_directory": str(evidence_directory),
+              "child_evidence": [], "font_arguments": font_arguments,
+              "limitations": ["Busy Ctrl+R refusal preserves a live claim; it does not exercise forced-disconnect unknown work or prove replay safety."],
               "scope": {"platform": "Linux private PTYs", "relay": "private production account/router fixture",
                         "terminal": "detached argv-preserving terminal fixture", "models_started": 0,
                         "desktop_input": False, "daemon": "dispatch only; full lifecycle: e2e_daemon.py"}}
@@ -1113,11 +1448,16 @@ def main():
         for path in required:
             if not path.is_file() or not os.access(path, os.X_OK):
                 raise RuntimeError(f"required executable is unavailable: {path}")
+        for font in (args.font, args.fallback_font):
+            if font is not None and not font.is_file():
+                raise RuntimeError(f"requested evidence font is unavailable: {font}")
+        evidence_directory.mkdir(mode=0o700, parents=True, exist_ok=False)
         report["executables"] = [{"path": str(path), "sha256": digest(path)} for path in required]
         with tempfile.TemporaryDirectory(prefix="ssmcp-worker-windows-") as temporary:
             directory = Path(temporary)
             os.chmod(directory, 0o700)
-            harness = WorkerWindows(directory, binary_dir, decoder, fixture_binary)
+            harness = WorkerWindows(directory, binary_dir, decoder, fixture_binary,
+                                    evidence_directory, font_arguments)
             report["status"] = "failed"
             try:
                 harness.run()
@@ -1127,6 +1467,7 @@ def main():
                 report["checks"] = harness.checks
                 report["cases"] = harness.cases
                 report["persistence"] = harness.persistence_checks
+                report["child_evidence"] = harness.child_evidence
                 if report["status"] != "passed":
                     report["diagnostics"] = {front.label: {
                         "stdout_tail": front.stdout[-4096:].decode(errors="replace"),
@@ -1134,7 +1475,10 @@ def main():
                         "exit_code": front.process.poll(),
                     } for front in harness.frontends}
                     report["terminal_events"] = {str(path.name): events(path) for path in harness.windows}
-                harness.cleanup()
+                try:
+                    harness.cleanup()
+                finally:
+                    report["child_transcripts"] = harness.preserve_child_transcripts()
                 harness.assert_no_persisted_conversation_state("after all processes exited")
                 harness.assert_clipboard_counts()
                 report["cleanup"] = {"errors": harness.cleanup_errors,
