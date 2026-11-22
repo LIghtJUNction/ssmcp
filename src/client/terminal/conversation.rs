@@ -5276,7 +5276,7 @@ mod tests {
     #[test]
     fn keyboard_views_and_arrow_selection_preserve_unsubmitted_text() {
         let mut state = preview(36, 120);
-        input(&mut state, b"\x1b[D\x1b[B\r");
+        input(&mut state, b"/sessions\r\x1b[B\r");
         assert_eq!(state.conversation.view, View::Activity);
         assert_eq!(
             state.conversation.target.as_deref(),
