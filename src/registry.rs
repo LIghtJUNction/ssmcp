@@ -413,12 +413,15 @@ fn prepare(
                     | "ssmcp.worker.attach"
                     | "ssmcp.worker.tasks"
                     | "ssmcp.worker.stop"
+                    | "ssmcp.worker.resize"
                     | "ssmcp.worker.submit"
                     | "ssmcp.worker.result"
                     | "ssmcp.worker.cancel"
                     | "ssmcp.worker.wait"
                     | "ssmcp.worker.claim"
                     | "ssmcp.worker.complete"
+                    | "ssmcp.worker.report"
+                    | "ssmcp.worker.release"
             ),
             Provider::Audit => id == "ssmcp.audit.events",
             Provider::Codex => id.starts_with("codex.") || id.starts_with("ssmcp.codex."),
@@ -591,6 +594,20 @@ mod tests {
         assert!(registry.lookup("codex.new1").is_ok());
         assert!(registry.lookup("codex.new2").is_ok());
         assert!(registry.validate(&other).is_ok());
+    }
+
+    #[test]
+    fn worker_pool_catalog_installs_all_native_routes() {
+        let registry = Registry::new();
+        let catalog = crate::worker::Pool::tools();
+        registry.replace(Provider::Worker, catalog.clone()).unwrap();
+        for descriptor in catalog {
+            let name = descriptor["name"].as_str().unwrap();
+            let registered = registry.lookup(name).unwrap();
+            assert_eq!(registered.provider, Provider::Worker);
+            assert_eq!(registered.native_name, name);
+            assert_eq!(registered.descriptor, descriptor);
+        }
     }
 
     #[test]
