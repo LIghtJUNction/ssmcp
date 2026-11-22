@@ -2,6 +2,8 @@
 //! releases an input lease; it never changes the session's desired state.
 pub(crate) mod input;
 pub(crate) mod thread_history;
+mod zbridge_adapter;
+pub use zbridge_adapter::{Frontend, RemoteFrontend};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
@@ -65,6 +67,7 @@ struct Capture {
     leases: Mutex<BTreeMap<String, Lease>>,
     runtime: Mutex<RuntimeSlot>,
     changed: Arc<Notify>,
+    bridge: zbridge_adapter::Guard,
 }
 
 impl Capture {
@@ -78,6 +81,7 @@ impl Capture {
                 generation: 0,
             }),
             changed: Arc::new(Notify::new()),
+            bridge: zbridge_adapter::Guard::default(),
         })
     }
 
@@ -93,6 +97,7 @@ impl Capture {
                 runtime: None,
                 generation: 0,
             }),
+            bridge: zbridge_adapter::Guard::default(),
         }
     }
 
@@ -326,6 +331,13 @@ pub struct Handle {
     capture: Arc<Capture>,
 }
 impl Handle {
+    /// Bind an embedded frontend to this real local attach service. A read-only
+    /// frontend never takes the exclusive input lease. No relay identity or
+    /// history owner is created by this operation.
+    pub fn frontend(&self, read_only: bool) -> Result<Frontend> {
+        Frontend::open(&self.capture, read_only)
+    }
+
     #[cfg(all(test, unix))]
     pub(crate) fn capture_for_test() -> Self {
         let capture = Arc::new(Capture::new().unwrap());
@@ -393,6 +405,7 @@ impl Drop for RuntimeBinding {
 }
 impl Drop for Handle {
     fn drop(&mut self) {
+        self.capture.bridge.close();
         if let Some(task) = self.task.take() {
             task.abort();
         }
@@ -483,6 +496,10 @@ enum Request {
     Detach {
         lease: String,
     },
+    Bridge {
+        lease: String,
+        request: zbridge::Request,
+    },
 }
 
 async fn handle_request(capture: &Capture, request: Value) -> Result<Value> {
@@ -561,6 +578,9 @@ async fn handle_request(capture: &Capture, request: Value) -> Result<Value> {
                 .is_some();
             Ok(json!({"detached":removed,"session_stopped":false}))
         }
+        Request::Bridge { lease, request } => Ok(serde_json::to_value(
+            zbridge_adapter::request(capture, &lease, request).await,
+        )?),
     }
 }
 

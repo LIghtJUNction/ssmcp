@@ -1790,6 +1790,7 @@ dependencies = [
  "vt100",
  "webpki-roots 1.0.12",
  "windows-sys 0.61.2",
+ "zbridge",
  "zharness",
  "zip",
  "zplugin",
@@ -2679,6 +2680,15 @@ dependencies = [
  "quote",
  "syn 3.0.10",
  "synstructure 0.14.0",
+]
+
+[[package]]
+name = "zbridge"
+version = "0.1.0"
+source = "git+https://github.com/LIghtJUNction/zbridge.git#1cfeb5b1f11c26c35cf7456c9b8b60d1f2d5d8de"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

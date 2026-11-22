@@ -40,6 +40,7 @@ include = [
     "/docs/reports/client-memory-2026-11-18/**",
     "/scripts/benchmark_client_memory.py",
     "/docs/session-service.md",
+    "/docs/gui-bridge.md",
     "/docs/007.md",
     "/scripts/e2e_007.py",
     "/scripts/benchmark_007.py",
@@ -193,6 +194,7 @@ exclude = ["crates/zharness", "crates/zplugin", "crates/ztuio"]
 resolver = "3"
 
 [dependencies]
+zbridge = { git = "https://github.com/LIghtJUNction/zbridge.git" }
 ztuio = { git = "https://github.com/LIghtJUNction/ztuio.git" }
 zharness = { git = "https://github.com/LIghtJUNction/zharness.git", default-features = false, features = ["std"] }
 zplugin = { git = "https://github.com/LIghtJUNction/zplugin.git", default-features = false, features = ["std", "macros"] }

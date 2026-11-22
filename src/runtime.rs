@@ -514,6 +514,50 @@ impl Runtime {
         pool.resize(total)
     }
 
+    /// Exact-runtime projection for a protected local frontend. This never uses
+    /// the process-wide display cache or binds a remote worker manager.
+    pub(crate) fn frontend_has_workers(&self) -> bool {
+        self.workers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some()
+    }
+
+    pub(crate) fn frontend_workers(&self) -> Option<crate::worker::Snapshot> {
+        let pool = self
+            .workers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()?;
+        Some(pool.queue.snapshot())
+    }
+
+    /// A local input lease is checked by the attach adapter. The pool generation
+    /// also prevents an old GUI selection from resizing a replacement pool.
+    pub(crate) fn frontend_resize_workers(
+        &self,
+        generation: &str,
+        total: usize,
+    ) -> Result<Value, String> {
+        let pool = self
+            .workers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+            .ok_or("this connection has no worker pool")?;
+        if pool.generation != generation {
+            return Err("worker pool changed; refresh worker state before resizing".into());
+        }
+        let mut result = pool.resize(total)?;
+        if let Some(worker) = result.get_mut("worker").and_then(Value::as_object_mut) {
+            // The receipt retains real counts and pending retirement. Slot logs
+            // remain in their native source and are read through bounded state.
+            worker.remove("slots");
+            worker.insert("slots_omitted".into(), Value::Bool(true));
+        }
+        Ok(result)
+    }
+
     pub(crate) fn start_workers(&self) {
         if let Some(pool) = self
             .workers
