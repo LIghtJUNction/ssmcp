@@ -365,6 +365,11 @@ class ChildView:
         self.geometry = [ROWS, COLS]
 
     def frame(self):
+        # Parent output has its own PTY. Drain it without using it as child
+        # evidence, so terminal backpressure cannot stall the live IPC link.
+        for frontend in self.harness.frontends:
+            if not frontend.closed:
+                frontend.pump(0)
         data = self.path.read_bytes()
         # Receipts are written before new-geometry bytes. Read them after the
         # byte snapshot so every resize affecting those bytes is available.
