@@ -233,7 +233,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--fixture-clipboard":
     record(Path(os.environ[FIXTURE_DIR_ENV]), "clipboard", argv=sys.argv[2:], text=sys.stdin.read())
     raise SystemExit(0)
 
-from e2e import Harness, wait_for
+from e2e import Harness, WORKER_TOOLS, wait_for
 from e2e_client_ui import prompt_text
 from e2e_composer import input_text
 from e2e_dashboard import Decoder
@@ -1061,6 +1061,12 @@ class WorkerWindows(Harness):
             "geometry": [[64, 112], [26, 60], [32, 132]], "screenshots": len(self.child_evidence)}
 
     def protocol(self, frontend, directory, parent, worker, manager):
+        tools = [tool for tool in self.native_catalog(worker["id"])
+                 if tool["name"].startswith("ssmcp.worker.")]
+        self.check({tool["name"] for tool in tools} == WORKER_TOOLS
+                   and len(tools) == len(WORKER_TOOLS)
+                   and all(isinstance(tool.get("inputSchema"), dict) for tool in tools),
+                   "the configured worker pool advertises the exact worker tool catalog and schemas")
         attached = self.bound(worker["id"], manager, "ssmcp.worker.attach")
         self.check(attached["caller_is_manager"], "the main participant attaches to the discovered worker pool")
         executor = self.invitations_and_resize(frontend, directory, parent, worker, manager)
