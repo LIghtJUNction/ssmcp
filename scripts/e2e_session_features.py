@@ -160,6 +160,24 @@ class SessionFeatures(Harness):
                    "outputs.read reconstructs the exact artifact across bounded WSS pages")
         return bytes(output), pages
 
+    def check_output_unavailable(self, artifact_id):
+        rejected = {}
+        for tool in ("ssmcp.output.stat", "ssmcp.output.read"):
+            code = """
+                try {
+                    const value = await call(%s, %s, %s);
+                    return {rejected: value.isError === true, message: value.content?.[0]?.text};
+                } catch (error) {
+                    return {rejected: true, message: String(error)};
+                }
+            """ % (json.dumps(self.client_id), json.dumps(tool), json.dumps({"id": artifact_id}))
+            result = self.public_call("code_mode", {"code": code})["result"]
+            self.check(result["rejected"] is True
+                       and "output is unavailable in this connection" in result.get("message", ""),
+                       f"{tool} rejects the previous connection's output after reload")
+            rejected[tool] = result
+        return rejected
+
     def run(self):
         self.prepare()
         workspace = self.directory / "workspace"
@@ -233,14 +251,7 @@ class SessionFeatures(Harness):
         listed = self.public_call("list")["clients"]
         self.check(all(item["id"] != old_id for item in listed),
                    "the disconnected client ID is absent after reload")
-        for tool in ("ssmcp.output.stat", "ssmcp.output.read"):
-            code = "return await call(%s, %s, %s);" % (
-                json.dumps(self.client_id), json.dumps(tool), json.dumps({"id": artifact["id"]}),
-            )
-            unavailable = self.public_call("code_mode", {"code": code})["result"]
-            self.check(unavailable["isError"] is True
-                       and "output is unavailable in this connection" in unavailable["content"][0]["text"],
-                       f"{tool} rejects the previous connection's output after reload")
+        self.check_output_unavailable(artifact["id"])
         self.metrics = {
             "large_output_bytes": artifact["bytes"], "large_output_lines": artifact["lines"],
             "large_output_sha256": artifact["sha256"], "artifact_read_pages": pages,

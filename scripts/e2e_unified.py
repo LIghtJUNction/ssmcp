@@ -759,13 +759,7 @@ class Unified(SessionFeatures):
         tools = self.tool_catalog(through_code=True)
         self.check({tool["name"]: tool for tool in tools} == self.initial_catalog,
                    "reload rebuilds the full no-Harness catalog through the new registry")
-        unavailable = {
-            tool: self.rejected(tool, {"id": self.retained_artifact["id"]})
-            for tool in ("ssmcp.output.stat", "ssmcp.output.read")
-        }
-        self.check(all("output is unavailable in this connection" in value["value"]["content"][0]["text"]
-                       for value in unavailable.values()),
-                   "acknowledged reload clears output owned by the replaced connection")
+        unavailable = self.check_output_unavailable(self.retained_artifact["id"])
         self.rejected("ssmcp.output.read", {"id": self.retained_artifact["id"]}, client_id=self.sibling_id, secret=self.sibling_token)
         self.save("reload.json", {"acknowledgement": accepted, "old_client_id": old_id,
                   "new_client_id": self.client_id, "process_pid": pid, "stopped_processes": identities,
