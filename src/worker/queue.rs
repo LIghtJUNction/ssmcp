@@ -8,6 +8,7 @@ use std::time::Instant;
 use tokio::sync::watch;
 
 mod lifecycle;
+mod projection;
 mod telemetry;
 pub(super) use telemetry::{ReportEvent, ReportUpdate, display_text};
 
@@ -131,7 +132,7 @@ impl Availability {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TaskStatus {
     Queued,
@@ -187,6 +188,10 @@ pub(crate) enum Outcome {
 
 struct Task<T> {
     actor: Actor,
+    // Public identity captured from the verified station registration at claim
+    // time. A later occupant or manager must never be credited with this work.
+    claimed_by: Option<String>,
+    claim_epoch: Option<u64>,
     key: String,
     text: String,
     context: T,
@@ -219,6 +224,7 @@ struct Slot {
     logs: VecDeque<SlotLog>,
     next_log_sequence: u64,
     task_summary: Option<String>,
+    task_text: Option<String>,
     last_command: Option<String>,
     progress: Option<String>,
     started: Option<Instant>,
@@ -238,6 +244,7 @@ impl Slot {
             logs: VecDeque::new(),
             next_log_sequence: 1,
             task_summary: None,
+            task_text: None,
             last_command: None,
             progress: None,
             started: None,
@@ -635,6 +642,8 @@ impl<T: Clone> Queue<T> {
             id.clone(),
             Task {
                 actor,
+                claimed_by: None,
+                claim_epoch: None,
                 key: key.into(),
                 text: text.into(),
                 context,
@@ -756,6 +765,10 @@ impl<T: Clone> Queue<T> {
         id: String,
         now_ms: u64,
     ) -> Result<Option<Lease<T>>, String> {
+        let claimed_by = state.slots[slot]
+            .registered
+            .as_ref()
+            .and_then(|actor| actor.participant.clone());
         let task = state
             .tasks
             .get_mut(&id)
@@ -764,6 +777,8 @@ impl<T: Clone> Queue<T> {
             return Err("worker FIFO state is inconsistent".into());
         }
         task.view.status = TaskStatus::Working;
+        task.claimed_by = claimed_by;
+        task.claim_epoch = Some(epoch);
         task.view.slot = Some(slot);
         task.view.attempt += 1;
         task.view.updated_ms = now_ms;
@@ -780,6 +795,7 @@ impl<T: Clone> Queue<T> {
         state.slots[slot].state = SlotState::Working(id.clone());
         let worker = &mut state.slots[slot];
         worker.task_summary = Some(telemetry::display_text(&lease.text, 256));
+        worker.task_text = Some(lease.text.clone());
         worker.last_command = None;
         worker.progress = None;
         worker.started = Some(Instant::now());
@@ -1017,6 +1033,18 @@ impl<T: Clone> Queue<T> {
 
     pub(crate) fn snapshot(&self) -> Snapshot {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        self.snapshot_locked(&state)
+    }
+
+    pub(crate) fn snapshot_with_activity(&self) -> (Snapshot, super::Activity) {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        (
+            self.snapshot_locked(&state),
+            projection::activity(&state, &self.generation),
+        )
+    }
+
+    fn snapshot_locked(&self, state: &State<T>) -> Snapshot {
         let slots: Vec<_> = state
             .slots
             .iter()
@@ -1045,6 +1073,7 @@ impl<T: Clone> Queue<T> {
                     registered: slot.registered.is_some(),
                     retire_requested: slot.retirement.is_some(),
                     task_summary: slot.task_summary.clone(),
+                    task_text: slot.task_text.clone(),
                     last_command: slot.last_command.clone(),
                     progress: slot.progress.clone(),
                     total_work_ms: slot.total_work_ms.saturating_add(elapsed.unwrap_or(0)),

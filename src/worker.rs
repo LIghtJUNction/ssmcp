@@ -2,6 +2,8 @@
 //! explicit local executors retain their separate owned processes and limits.
 mod config;
 pub(crate) use config::Config;
+mod activity;
+pub(crate) use activity::Activity;
 #[cfg(target_os = "linux")]
 mod child;
 #[cfg(target_os = "linux")]
@@ -45,6 +47,9 @@ pub(crate) struct SlotView {
     pub(crate) retire_requested: bool,
     #[serde(default)]
     pub(crate) task_summary: Option<String>,
+    /// Full accepted task text stays in-process for the worker detail view.
+    #[serde(skip)]
+    pub(crate) task_text: Option<String>,
     #[serde(default)]
     pub(crate) last_command: Option<String>,
     #[serde(default)]
@@ -130,6 +135,7 @@ pub(crate) fn prepare_display(config: Config) {
                 registered: false,
                 retire_requested: false,
                 task_summary: None,
+                task_text: None,
                 last_command: None,
                 progress: None,
                 total_work_ms: 0,
@@ -148,6 +154,18 @@ pub(crate) fn display() -> Option<Snapshot> {
         return Some(pool.queue.snapshot());
     }
     view.pending.clone()
+}
+
+/// Counts and task activity must describe the same queue revision. The parent
+/// window receives this bounded projection rather than copying worker logs.
+pub(crate) fn display_with_activity() -> Option<(Snapshot, Activity)> {
+    let view = view().lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(pool) = view.pool.as_ref().and_then(std::sync::Weak::upgrade) {
+        return Some(pool.queue.snapshot_with_activity());
+    }
+    view.pending
+        .clone()
+        .map(|snapshot| (snapshot, Activity::default()))
 }
 
 /// Kept by the real native job, not by a later read/wait caller. Holding the

@@ -17,6 +17,7 @@ const ADDRESS_ENV: &str = "SSMCP_WORKER_WINDOW_ADDRESS";
 const TOKEN_ENV: &str = "SSMCP_WORKER_WINDOW_TOKEN";
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_STATUS_BYTES: usize = 4096;
 static CHILD_SESSION: OnceLock<Weak<ChildState>> = OnceLock::new();
 static LINKED: OnceLock<Mutex<Weak<ParentState>>> = OnceLock::new();
 
@@ -47,6 +48,8 @@ struct LinkedSnapshot {
     stopping: bool,
     #[serde(default)]
     last_resize: Option<ResizeReceipt>,
+    #[serde(default)]
+    activity: crate::worker::Activity,
 }
 
 struct ParentState {
@@ -99,11 +102,35 @@ impl ParentState {
 }
 
 pub(super) fn linked_snapshot() -> Option<serde_json::Value> {
+    summary_value(&current_snapshot()?)
+}
+
+/// Consumers opt into task activity without expanding frequent count-only
+/// reminders or the existing worker_pool summary projection.
+pub(super) fn linked_activity() -> Option<serde_json::Value> {
+    serde_json::to_value(current_snapshot()?.activity).ok()
+}
+
+fn summary_value(snapshot: &LinkedSnapshot) -> Option<serde_json::Value> {
+    let mut value = serde_json::to_value(snapshot).ok()?;
+    value.as_object_mut()?.remove("activity");
+    Some(value)
+}
+
+pub(super) fn linked_overview() -> Option<String> {
+    Some(format_overview(&current_snapshot()?))
+}
+
+fn current_snapshot() -> Option<LinkedSnapshot> {
     let state = LINKED
         .get()?
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .upgrade()?;
+    fresh_snapshot(&state)
+}
+
+fn fresh_snapshot(state: &ParentState) -> Option<LinkedSnapshot> {
     if state.closed.load(Ordering::Acquire) {
         return None;
     }
@@ -115,7 +142,65 @@ pub(super) fn linked_snapshot() -> Option<serde_json::Value> {
     if !snapshot.connected || received.elapsed() > Duration::from_secs(3) {
         return None;
     }
-    serde_json::to_value(snapshot).ok()
+    Some(snapshot.clone())
+}
+
+fn format_overview(snapshot: &LinkedSnapshot) -> String {
+    use std::fmt::Write as _;
+    let mut text = format!(
+        "SSMCP workers · Esc closes\n\nSession: {}\nPID: {}\n\nStations: {} · target: {}\nRegistered: {}\nWorking: {} · standby: {} · offline: {} · closing: {}\nQueued: {}\n",
+        snapshot.client_id,
+        snapshot.process_id,
+        snapshot.total,
+        snapshot.desired_total,
+        snapshot.registered_workers,
+        snapshot.working,
+        snapshot.idle,
+        snapshot.offline,
+        snapshot.retiring,
+        snapshot.queued
+    );
+    if let Some(manager) = &snapshot.manager {
+        let _ = writeln!(text, "Manager: {}", manager.thread_id);
+    }
+    for task in &snapshot.activity.tasks {
+        let _ = write!(
+            text,
+            "\n{} · {}\n{}\nOwner: {}\n",
+            task.task_id,
+            task.status_label(),
+            task.summary,
+            task.owner_thread_id.as_deref().unwrap_or("unavailable")
+        );
+        if let Some(slot) = task.slot {
+            let _ = writeln!(
+                text,
+                "Claimed by: {} · station {} · attempt {}",
+                task.worker_thread_id
+                    .as_deref()
+                    .unwrap_or("participant unavailable"),
+                slot + 1,
+                task.attempt
+            );
+        } else {
+            text.push_str("Claimed: no\n");
+        }
+        if let Some(progress) = &task.progress {
+            let _ = writeln!(text, "Progress: {progress}");
+        }
+        if let Some(command) = &task.last_command {
+            let _ = writeln!(text, "Last command: {command}");
+        }
+    }
+    if snapshot.activity.omitted > 0 {
+        let _ = writeln!(
+            text,
+            "\n{} more retained tasks omitted",
+            snapshot.activity.omitted
+        );
+    }
+    text.push_str("\n/worker +N adds stations\n/worker -N retires stations after acknowledgement");
+    text
 }
 
 /// The terminal launcher can exit before the monitor. Ownership is established
@@ -715,11 +800,11 @@ impl ChildState {
         snapshot: &LinkedSnapshot,
         first: bool,
     ) -> io::Result<()> {
+        let bytes = encode_snapshot(snapshot)?;
         if first && !self.ready.load(Ordering::Acquire) {
             stream.write_all(b"R")?;
         }
-        serde_json::to_writer(&mut *stream, snapshot).map_err(io::Error::other)?;
-        stream.write_all(b"\n")?;
+        stream.write_all(&bytes)?;
         self.ready.store(true, Ordering::Release);
         Ok(())
     }
@@ -781,7 +866,7 @@ impl Drop for ChildSession {
 }
 
 fn local_snapshot(client_id: &str) -> Option<LinkedSnapshot> {
-    let snapshot = crate::worker::display()?;
+    let (snapshot, activity) = crate::worker::display_with_activity()?;
     let steering = super::steering::snapshot();
     Some(LinkedSnapshot {
         client_id: client_id.to_owned(),
@@ -802,7 +887,26 @@ fn local_snapshot(client_id: &str) -> Option<LinkedSnapshot> {
         closed: snapshot.closed,
         stopping: snapshot.stopping,
         last_resize: None,
+        activity,
     })
+}
+
+fn encode_snapshot(snapshot: &LinkedSnapshot) -> io::Result<Vec<u8>> {
+    let mut snapshot = snapshot.clone();
+    loop {
+        let mut bytes = serde_json::to_vec(&snapshot).map_err(io::Error::other)?;
+        if bytes.len() < MAX_STATUS_BYTES {
+            bytes.push(b'\n');
+            return Ok(bytes);
+        }
+        if snapshot.activity.tasks.pop().is_none() {
+            return Err(io::Error::other(
+                "worker window status exceeded its size limit",
+            ));
+        }
+        snapshot.activity.omitted += 1;
+        snapshot.activity.truncated = true;
+    }
 }
 
 fn read_snapshot(reader: &mut impl Read, pid: u32) -> io::Result<LinkedSnapshot> {
@@ -814,7 +918,7 @@ fn read_snapshot(reader: &mut impl Read, pid: u32) -> io::Result<LinkedSnapshot>
 
 fn read_child_update(reader: &mut impl Read, pid: u32) -> io::Result<ChildUpdate> {
     let mut line = Vec::with_capacity(512);
-    for _ in 0..4096 {
+    for _ in 0..MAX_STATUS_BYTES {
         let mut byte = [0];
         reader.read_exact(&mut byte)?;
         if byte == *b"\n" {
@@ -841,6 +945,7 @@ fn read_child_update(reader: &mut impl Read, pid: u32) -> io::Result<ChildUpdate
                 || snapshot.total > 128
                 || snapshot.desired_total > 128
                 || counts != Some(snapshot.total)
+                || !snapshot.activity.valid()
                 || snapshot.last_resize.as_ref().is_some_and(|receipt| {
                     receipt.request_id == 0
                         || receipt.target > 128
@@ -1329,6 +1434,7 @@ mod tests {
             closed: false,
             stopping: false,
             last_resize: None,
+            activity: crate::worker::Activity::default(),
         }
     }
 
@@ -1346,6 +1452,128 @@ mod tests {
         let mut invalid = serde_json::to_vec(&invalid).unwrap();
         invalid.push(b'\n');
         assert!(read_snapshot(&mut &invalid[..], std::process::id()).is_err());
+    }
+
+    #[test]
+    fn linked_activity_fits_the_existing_frame_even_with_json_escaping_and_resize_errors() {
+        let mut status = fixture_snapshot();
+        status.total = 128;
+        status.desired_total = 128;
+        status.working = 128;
+        status.idle = 0;
+        status.registered_workers = 128;
+        status.manager = Some(LinkedManager {
+            client_id: status.client_id.clone(),
+            thread_id: "m".repeat(128),
+        });
+        status.activity = serde_json::from_value(serde_json::json!({
+            "generation": "g".repeat(100),
+            "tasks": (0..8).map(|index| serde_json::json!({
+                "task_id": format!("worker_task_{}_{}", "g".repeat(100), index + 1),
+                "status": "working", "slot": index, "epoch": 4, "attempt": 1,
+                "owner_thread_id": "o".repeat(128),
+                "worker_thread_id": "w".repeat(128),
+                "summary": "\\\"".repeat(80),
+                "progress": "\\\"".repeat(80),
+                "last_command": "\\\"".repeat(80),
+                "replay_safe": false, "last_log_sequence": 7
+            })).collect::<Vec<_>>(),
+            "omitted": 3, "truncated": true
+        }))
+        .unwrap();
+        status.last_resize = Some(ResizeReceipt {
+            request_id: 7,
+            target: 3,
+            accepted: false,
+            error: Some("\\\"".repeat(256)),
+        });
+        let bytes = encode_snapshot(&status).unwrap();
+        assert!(bytes.len() <= MAX_STATUS_BYTES);
+        let decoded = read_snapshot(&mut &bytes[..], std::process::id()).unwrap();
+        assert!(!decoded.activity.tasks.is_empty());
+        assert!(decoded.activity.tasks.len() < status.activity.tasks.len());
+        assert_eq!(decoded.activity.tasks.len() + decoded.activity.omitted, 11);
+        assert_eq!(decoded.last_resize.as_ref().unwrap().request_id, 7);
+        assert!(decoded.activity.truncated);
+        assert_eq!(summary_value(&decoded), summary_value(&status));
+        assert!(summary_value(&decoded).unwrap().get("activity").is_none());
+        assert!(
+            serde_json::to_vec(&summary_value(&decoded).unwrap())
+                .unwrap()
+                .len()
+                < 2048
+        );
+        assert_eq!(
+            decoded.activity.tasks[0].worker_thread_id.as_deref(),
+            Some("w".repeat(128).as_str())
+        );
+        for task in &mut status.activity.tasks {
+            task.summary = "中".repeat(53);
+            task.progress = Some("中".repeat(53));
+            task.last_command = Some("中".repeat(53));
+        }
+        let unicode = encode_snapshot(&status).unwrap();
+        assert!(unicode.len() <= MAX_STATUS_BYTES);
+        let decoded = read_snapshot(&mut &unicode[..], std::process::id()).unwrap();
+        assert_eq!(summary_value(&decoded), summary_value(&status));
+        assert!(decoded.activity.valid());
+    }
+
+    #[test]
+    fn linked_activity_rejects_forged_control_text_and_unknown_replay_safety() {
+        let mut status = fixture_snapshot();
+        let task = serde_json::json!({
+            "task_id": "worker_task_fixture_1", "status": "unknown",
+            "slot": 0, "epoch": 2, "attempt": 1,
+            "owner_thread_id": "owner", "worker_thread_id": "real-worker",
+            "summary": "task", "progress": null, "last_command": null,
+            "replay_safe": false, "last_log_sequence": 3
+        });
+        status.activity = serde_json::from_value(serde_json::json!({
+            "generation": "fixture", "tasks": [task.clone()], "omitted": 2, "truncated": true
+        }))
+        .unwrap();
+        let overview = format_overview(&status);
+        assert!(overview.contains("worker_task_fixture_1 · unknown; effects unconfirmed"));
+        assert!(overview.contains("Owner: owner"));
+        assert!(overview.contains("Claimed by: real-worker · station 1 · attempt 1"));
+        assert!(overview.contains("2 more retained tasks omitted"));
+        for (field, value) in [
+            ("worker_thread_id", serde_json::json!("forged\nthread")),
+            ("summary", serde_json::json!("injected\u{1b}[2J")),
+            ("replay_safe", serde_json::json!(true)),
+            ("slot", serde_json::json!(null)),
+            ("epoch", serde_json::json!(null)),
+        ] {
+            let mut invalid = task.clone();
+            invalid[field] = value;
+            status.activity = serde_json::from_value(serde_json::json!({
+                "generation": "fixture", "tasks": [invalid], "omitted": 0, "truncated": false
+            }))
+            .unwrap();
+            let bytes = encode_snapshot(&status).unwrap();
+            assert!(read_snapshot(&mut &bytes[..], std::process::id()).is_err());
+        }
+    }
+
+    #[test]
+    fn linked_activity_and_summary_share_the_disconnect_and_three_second_stale_gate() {
+        let state = ParentState {
+            closed: AtomicBool::new(false),
+            reload_requested: AtomicBool::new(false),
+            snapshot: Mutex::new(Some((fixture_snapshot(), Instant::now()))),
+        };
+        assert!(fresh_snapshot(&state).is_some());
+        state.closed.store(true, Ordering::Release);
+        assert!(fresh_snapshot(&state).is_none());
+        state.closed.store(false, Ordering::Release);
+        let mut disconnected = fixture_snapshot();
+        disconnected.connected = false;
+        *state.snapshot.lock().unwrap() = Some((disconnected, Instant::now()));
+        assert!(fresh_snapshot(&state).is_none());
+        *state.snapshot.lock().unwrap() =
+            Some((fixture_snapshot(), Instant::now() - Duration::from_secs(4)));
+        assert!(fresh_snapshot(&state).is_none());
     }
 
     #[test]

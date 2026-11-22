@@ -822,13 +822,8 @@ impl State {
                 }
                 match worker_control::parse(rest)? {
                     Command::List => {
-                        let text = crate::client::worker_window::linked_snapshot().map(|pool| {
-                            let count = |name: &str| pool[name].as_u64().unwrap_or(0);
-                            format!("SSMCP workers · Esc closes\n\nSession: {}\nPID: {}\n\nStations: {} · target: {}\nRegistered: {}\nWorking: {} · standby: {} · offline: {} · closing: {}\nQueued: {}\n\n/worker +N adds stations\n/worker -N retires stations after acknowledgement",
-                                pool["client_id"].as_str().unwrap_or("unavailable"), count("process_id"),
-                                count("total"), pool["desired_total"].as_u64().unwrap_or_else(|| count("total")),
-                                count("registered_workers"), count("working"), count("idle"), count("offline"), count("retiring"), count("queued"))
-                        }).unwrap_or_else(|| "SSMCP workers · Esc closes\n\nNo worker window is connected.\nUse /worker +N to open one with N offline stations.".into());
+                        let text = crate::client::worker_window::linked_overview()
+                            .unwrap_or_else(|| "SSMCP workers · Esc closes\n\nNo worker window is connected.\nUse /worker +N to open one with N offline stations.".into());
                         self.chat_show_local_text(text);
                     }
                     Command::Delta(delta) => {

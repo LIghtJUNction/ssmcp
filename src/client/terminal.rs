@@ -1362,6 +1362,18 @@ impl Keyboard {
                 });
                 continue;
             }
+            if worker_controls
+                && !self.pasting
+                && self.pending.is_empty()
+                && matches!(byte, b'\t' | b'\r' | b't' | b'T')
+            {
+                actions.push(match byte {
+                    b'\t' => Key::CanvasRight,
+                    b't' | b'T' => Key::CanvasLeft,
+                    _ => Key::Toggle,
+                });
+                continue;
+            }
             // A fresh ESC starts a new key. Resolve a preceding standalone ESC
             // immediately, even when both keys arrive in one terminal read.
             if byte == 0x1b && !self.pasting && !self.pending.is_empty() {

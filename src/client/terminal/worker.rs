@@ -48,6 +48,8 @@ struct PendingScroll {
 #[derive(Default)]
 struct ActivitySummary<'a> {
     task: Option<&'a str>,
+    progress: Option<&'a str>,
+    command: Option<&'a str>,
     total_work_ms: u64,
     current_task_elapsed_ms: Option<u64>,
     recent_task_durations_ms: &'a [u64],
@@ -57,6 +59,8 @@ impl<'a> From<&'a SlotView> for ActivitySummary<'a> {
     fn from(slot: &'a SlotView) -> Self {
         Self {
             task: slot.task_summary.as_deref().or(slot.task_id.as_deref()),
+            progress: slot.progress.as_deref(),
+            command: slot.last_command.as_deref(),
             total_work_ms: slot.total_work_ms,
             current_task_elapsed_ms: slot.current_task_elapsed_ms,
             recent_task_durations_ms: &slot.recent_task_durations_ms,
@@ -73,10 +77,19 @@ pub(super) struct Monitor {
     // None follows new entries. A sequence anchor keeps a paused view stable
     // when another entry arrives or the bounded ring drops its oldest entry.
     anchors: BTreeMap<usize, Option<LogAnchor>>,
+    expanded_commands: BTreeMap<usize, bool>,
+    task_views: BTreeMap<usize, TaskView>,
     pending_scroll: BTreeMap<usize, PendingScroll>,
     panels: Vec<WorkerPanel>,
     tabs: Vec<WorkerTab>,
     resources: metrics::Sampler,
+}
+
+#[derive(Default)]
+struct TaskView {
+    saved_log_anchor: Option<LogAnchor>,
+    task_id: Option<String>,
+    initialized: bool,
 }
 
 impl Monitor {
@@ -92,6 +105,56 @@ impl Monitor {
         } else {
             self.selected.saturating_sub(1)
         };
+    }
+
+    fn cycle(&mut self, next: bool) {
+        let count = self.order.len();
+        if count > 0 {
+            self.selected = if next {
+                (self.selected + 1) % count
+            } else {
+                (self.selected + count - 1) % count
+            };
+        }
+    }
+
+    fn toggle_task(&mut self) {
+        let Some(slot) = self.selected_slot() else {
+            return;
+        };
+        if let Some(view) = self.task_views.remove(&slot) {
+            self.anchors.insert(slot, view.saved_log_anchor);
+        } else {
+            self.task_views.insert(
+                slot,
+                TaskView {
+                    saved_log_anchor: self.anchors.get(&slot).copied().flatten(),
+                    ..TaskView::default()
+                },
+            );
+            self.anchors.insert(
+                slot,
+                Some(LogAnchor {
+                    sequence: 0,
+                    part: 0,
+                }),
+            );
+        }
+        self.pending_scroll.remove(&slot);
+        self.panels.retain(|panel| panel.slot != slot);
+    }
+
+    fn toggle_commands(&mut self) {
+        if let Some(slot) = self.selected_slot() {
+            if self.task_views.contains_key(&slot) {
+                return;
+            }
+            let expanded = self.expanded_commands.entry(slot).or_default();
+            *expanded = !*expanded;
+            if let Some(Some(anchor)) = self.anchors.get_mut(&slot) {
+                anchor.part = 0;
+            }
+        }
     }
 
     fn scroll(&mut self, up: bool, amount: usize) {
@@ -186,6 +249,8 @@ impl Monitor {
             self.selected = 0;
             self.first = 0;
             self.anchors.clear();
+            self.expanded_commands.clear();
+            self.task_views.clear();
             self.pending_scroll.clear();
         }
         self.order = snapshot.slots.iter().map(|slot| slot.slot).collect();
@@ -193,6 +258,9 @@ impl Monitor {
             .and_then(|slot| self.order.iter().position(|value| *value == slot))
             .unwrap_or_else(|| self.selected.min(self.order.len().saturating_sub(1)));
         self.anchors.retain(|slot, _| self.order.contains(slot));
+        self.expanded_commands
+            .retain(|slot, _| self.order.contains(slot));
+        self.task_views.retain(|slot, _| self.order.contains(slot));
         self.pending_scroll
             .retain(|slot, _| self.order.contains(slot));
         self.panels.clear();
@@ -254,11 +322,25 @@ impl Monitor {
         }
         let slot = &snapshot.slots[self.selected];
         let activity = ActivitySummary::from(slot);
+        let task_view = self.task_views.contains_key(&slot.slot);
+        if let Some(view) = self.task_views.get_mut(&slot.slot) {
+            if view.initialized && view.task_id != slot.task_id {
+                self.anchors.insert(
+                    slot.slot,
+                    Some(LogAnchor {
+                        sequence: 0,
+                        part: 0,
+                    }),
+                );
+            }
+            view.task_id.clone_from(&slot.task_id);
+            view.initialized = true;
+        }
         let body_top = top + output.len();
         let body_rows = available - output.len();
-        let split = width >= 80;
+        let split = width >= 80 && !task_view;
         let right_cols = if split {
-            (width / 3).clamp(32, 48)
+            (width * 2 / 5).clamp(32, 56)
         } else {
             width
         };
@@ -268,7 +350,7 @@ impl Monitor {
         } else {
             width
         };
-        let compact_budget = if split {
+        let compact_budget = if split || task_view {
             0
         } else if body_rows >= 9 {
             4
@@ -284,7 +366,18 @@ impl Monitor {
         let header_rows = usize::from(log_area_rows >= 2);
         let log_row = log_area_row + header_rows;
         let log_rows = log_area_rows.saturating_sub(header_rows + 1);
-        let entries = log_lines(slot, left_cols.saturating_sub(2).max(1));
+        let entries = if task_view {
+            task_lines(slot, left_cols.saturating_sub(2).max(1))
+        } else {
+            log_lines(
+                slot,
+                left_cols.saturating_sub(2).max(1),
+                self.expanded_commands
+                    .get(&slot.slot)
+                    .copied()
+                    .unwrap_or(false),
+            )
+        };
         let keys: Vec<_> = entries.iter().map(|entry| entry.0).collect();
         let maximum = keys.len().saturating_sub(log_rows);
         let anchor = self.anchors.get(&slot.slot).copied().flatten();
@@ -330,11 +423,18 @@ impl Monitor {
             Vec::new()
         };
         if header_rows > 0 {
-            let heading = (PanelTone::Heading, "  Work log".into());
+            let heading = (
+                PanelTone::Heading,
+                if task_view {
+                    "  Full task · T Logs".into()
+                } else {
+                    "  Work log".into()
+                },
+            );
             output.push(if split {
                 columns(
                     heading,
-                    Some((PanelTone::Heading, "Task and metrics".into())),
+                    Some((PanelTone::Heading, "Task and metrics · T Full task".into())),
                     left_cols,
                     gap,
                 )
@@ -378,7 +478,8 @@ impl Monitor {
                 (
                     PanelTone::Muted,
                     format!(
-                        "  Log {range} · {}",
+                        "  {} {range} · {}",
+                        if task_view { "Task" } else { "Log" },
                         if following {
                             "Live"
                         } else {
@@ -437,8 +538,12 @@ impl State {
                 return;
             };
             match action {
-                Key::Back | Key::FocusBack => monitor.select(false),
+                Key::Back => monitor.select(false),
                 Key::Open => monitor.select(true),
+                Key::FocusBack => monitor.cycle(false),
+                Key::CanvasRight => monitor.cycle(true),
+                Key::CanvasLeft => monitor.toggle_task(),
+                Key::Toggle => monitor.toggle_commands(),
                 Key::HistoryStart => monitor.selected = 0,
                 Key::HistoryEnd => monitor.selected = monitor.order.len().saturating_sub(1),
                 Key::AuditUp => monitor.scroll(true, 1),
@@ -509,7 +614,9 @@ impl State {
                 "slot":panel.slot,"row":panel.row,"col":0,"rows":panel.rows,
                 "cols":self.geometry.cols,"selected":monitor.and_then(Monitor::selected_slot)==Some(panel.slot),
                 "logs":{"row":panel.log_row,"col":panel.log_col,"rows":panel.log_rows,"cols":panel.log_cols,"visible":panel.log_rows>0,
-                    "retained_lines":panel.keys.len(),"first_line":panel.start,"following":panel.following},
+                    "retained_lines":panel.keys.len(),"first_line":panel.start,"following":panel.following,
+                    "commands_expanded":monitor.and_then(|monitor| monitor.expanded_commands.get(&panel.slot)).copied().unwrap_or(false),
+                    "task_view":monitor.is_some_and(|monitor| monitor.task_views.contains_key(&panel.slot))},
                 "details":{"row":panel.details_row,"col":panel.details_col,"rows":panel.details_rows,"cols":panel.details_cols,"visible":panel.details_rows>0,"scrollable":false}
             })
         }).collect();
@@ -659,11 +766,13 @@ impl State {
         } else if height == 1 {
             "Workers · ^R Reload · ^C Stop"
         } else if g.cols < 48 {
-            "←→ ↑↓ · ^R Reload · ^C Stop"
+            "←→ ↑↓ · T Task · ^R Reload · ^C"
         } else if g.cols < 80 {
-            "←→ Worker · ↑↓ Logs · ^R Reload · ^C Stop"
+            "Tab Worker · T Task · Enter Cmd · ^R Reload · ^C"
+        } else if g.cols < 104 {
+            "Tab/Shift+Tab Worker · T Task · Enter Cmd · ↑↓ Logs · ^R Reload · ^C"
         } else {
-            "←→ Worker · ↑↓ / PgUp / PgDn Logs · End Live · Ctrl+R Reload · Ctrl+C Stop"
+            "Tab/Shift+Tab ←→ Worker · T Task · Enter Cmd · ↑↓ PgUp/PgDn · End Live · ^R Reload · ^C Stop"
         };
         rows.push(line(self, &[(PanelTone::Muted, footer.into())]));
         Frame {
@@ -710,7 +819,96 @@ fn identity_lines(snapshot: &Snapshot, width: u16) -> Vec<String> {
     output
 }
 
-fn log_lines(slot: &SlotView, width: usize) -> Vec<(LogAnchor, PanelTone, String)> {
+fn task_lines(slot: &SlotView, width: usize) -> Vec<(LogAnchor, PanelTone, String)> {
+    let text = slot
+        .task_text
+        .as_deref()
+        .or(slot.task_summary.as_deref())
+        .unwrap_or("No task assigned");
+    let mut output = Vec::new();
+    for paragraph in text.split('\n') {
+        for text in wrap_activity(&panel::safe_text(paragraph), width.max(1), usize::MAX) {
+            output.push((
+                LogAnchor {
+                    sequence: 0,
+                    part: output.len(),
+                },
+                PanelTone::Normal,
+                text,
+            ));
+        }
+    }
+    output
+}
+
+fn command_summary(command: &str) -> String {
+    let text = panel::safe_text(command);
+    let mut input = text.trim().strip_prefix('[').unwrap_or("");
+    let mut args = Vec::new();
+    for _ in 0..5 {
+        let mut values =
+            serde_json::Deserializer::from_str(input.trim_start()).into_iter::<String>();
+        let Some(Ok(argument)) = values.next() else {
+            break;
+        };
+        let consumed = values.byte_offset();
+        args.push(argument);
+        let program = args.first().map(String::as_str).unwrap_or("");
+        let program = std::path::Path::new(program)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(program);
+        let interpreter = program.starts_with("python")
+            || matches!(
+                program,
+                "sh" | "bash" | "zsh" | "node" | "nodejs" | "ruby" | "perl"
+            );
+        if interpreter
+            && args
+                .last()
+                .is_some_and(|arg| matches!(arg.as_str(), "-c" | "-e" | "--eval"))
+        {
+            args.push("[inline script]".into());
+            break;
+        }
+        let rest = input.trim_start()[consumed..].trim_start();
+        let Some(rest) = rest.strip_prefix(',') else {
+            break;
+        };
+        input = rest;
+    }
+    if args.is_empty() {
+        clipped(&text, 88)
+    } else {
+        clipped(&args.join(" "), 88)
+    }
+}
+
+fn command_log_summary(text: &str) -> String {
+    for prefix in ["Command started: ", "Command finished: "] {
+        if let Some(command) = text.strip_prefix(prefix) {
+            let (command, outcome) = (prefix == "Command finished: ")
+                .then(|| command.rsplit_once("; "))
+                .flatten()
+                .filter(|(_, outcome)| {
+                    outcome.starts_with("exit ")
+                        || outcome.starts_with("signal ")
+                        || matches!(*outcome, "cancelled" | "timed out")
+                })
+                .map_or((command, None), |(command, outcome)| {
+                    (command, Some(outcome))
+                });
+            return format!(
+                "{prefix}{}{}",
+                command_summary(command),
+                outcome.map_or_else(String::new, |outcome| format!("; {outcome}"))
+            );
+        }
+    }
+    text.to_owned()
+}
+
+fn log_lines(slot: &SlotView, width: usize, expanded: bool) -> Vec<(LogAnchor, PanelTone, String)> {
     let mut output = Vec::new();
     for entry in &slot.logs {
         let seconds = entry.at_ms / 1000;
@@ -720,7 +918,11 @@ fn log_lines(slot: &SlotView, width: usize) -> Vec<(LogAnchor, PanelTone, String
             seconds / 60 % 60,
             seconds % 60,
             entry.level,
-            entry.text
+            if expanded {
+                entry.text.clone()
+            } else {
+                command_log_summary(&entry.text)
+            }
         ));
         let tone = match entry.level.as_str() {
             "error" => PanelTone::Error,
@@ -836,8 +1038,15 @@ fn station_details(
     if budget == 0 {
         return Vec::new();
     }
-    let mut rows = activity_field("Task", activity.task, "No task assigned", width, 2);
-    rows.resize_with(2, || (PanelTone::Normal, String::new()));
+    let extra = budget.saturating_sub(20);
+    let mut rows = activity_field(
+        "Task",
+        activity.task,
+        "No task assigned",
+        width,
+        (2 + extra / 8).min(8),
+    );
+    rows.resize_with(rows.len().max(2), || (PanelTone::Normal, String::new()));
     rows.push(detail(
         "Current",
         &activity
@@ -847,21 +1056,43 @@ fn station_details(
         width,
     ));
     rows.push(detail("Total", &duration(activity.total_work_ms), width));
-    let recent = activity
-        .recent_task_durations_ms
-        .iter()
-        .take(3)
-        .map(|ms| duration(*ms))
-        .collect::<Vec<_>>();
-    rows.push(detail(
-        "Last 3",
-        &if recent.is_empty() {
-            "No completed tasks".into()
-        } else {
-            recent.join(" / ")
-        },
-        width,
-    ));
+    let recent = activity.recent_task_durations_ms.iter().take(3);
+    if budget >= 38 && !activity.recent_task_durations_ms.is_empty() {
+        rows.push((PanelTone::Heading, clipped("Recent tasks", width)));
+        for (index, elapsed) in recent.enumerate() {
+            rows.push(detail(
+                &format!("#{}", index + 1),
+                &duration(*elapsed),
+                width,
+            ));
+        }
+    } else {
+        let recent = recent.map(|elapsed| duration(*elapsed)).collect::<Vec<_>>();
+        rows.push(detail(
+            "Last 3",
+            &if recent.is_empty() {
+                "No completed tasks".into()
+            } else {
+                recent.join(" / ")
+            },
+            width,
+        ));
+    }
+    if budget >= 24 && activity.progress.is_some() {
+        rows.extend(activity_field(
+            "Progress",
+            activity.progress,
+            "",
+            width,
+            (extra / 3).clamp(2, 8),
+        ));
+    }
+    if budget >= 28
+        && let Some(command) = activity.command
+    {
+        let summary = command_summary(command);
+        rows.extend(activity_field("Command", Some(&summary), "", width, 3));
+    }
     rows.push((PanelTone::Normal, String::new()));
     rows.push((
         PanelTone::Muted,
@@ -882,43 +1113,74 @@ fn station_details(
             .unwrap_or_else(|| "Unavailable".into()),
         width,
     ));
-    rows.push(detail("Heat", &format!("{cpu} CPU"), width));
     let samples = resources.samples();
     let valid = samples
         .iter()
         .filter(|sample| sample.cpu_percent.is_some())
         .count();
+    let remaining = budget.saturating_sub(rows.len());
+    let memory_rows = if remaining >= 12 {
+        (remaining / 2).min(9)
+    } else {
+        0
+    };
+    let chart_rows = remaining.saturating_sub(memory_rows + 2).min(8);
     rows.push((
         PanelTone::Muted,
         clipped(&format!("CPU trend · {valid} samples"), width),
     ));
-    let chart_rows = budget.saturating_sub(13).min(3);
-    if chart_rows > 0 {
-        if valid > 0 {
-            let (plot, upper) = cpu_chart(samples, width, chart_rows);
-            rows.extend(plot.into_iter().map(|line| (PanelTone::Accent, line)));
-            rows.push((
-                PanelTone::Muted,
-                clipped(&format!("Scale 0–{upper:.1}% of machine"), width),
-            ));
-        } else {
-            rows.push((
-                PanelTone::Muted,
-                clipped(
-                    if resources.latest().is_some_and(|sample| sample.cpu_pending) {
-                        "Waiting for the next CPU sample"
-                    } else {
-                        "CPU samples unavailable"
-                    },
-                    width,
-                ),
-            ));
-        }
-    } else if budget > rows.len() {
+    if valid > 0 && chart_rows > 0 {
+        let (plot, upper) = resource_chart(samples, width, chart_rows, |sample| sample.cpu_percent);
+        rows.extend(plot.into_iter().map(|line| (PanelTone::Accent, line)));
         rows.push((
             PanelTone::Muted,
-            clipped("Enlarge to view the CPU chart", width),
+            clipped(&format!("Scale 0–{upper:.1}% of machine"), width),
         ));
+    } else {
+        rows.push((
+            PanelTone::Muted,
+            clipped(
+                if valid > 0 {
+                    "Enlarge to view the CPU chart"
+                } else if resources.latest().is_some_and(|sample| sample.cpu_pending) {
+                    "Waiting for the next CPU sample"
+                } else {
+                    "CPU samples unavailable"
+                },
+                width,
+            ),
+        ));
+    }
+    let remaining = budget.saturating_sub(rows.len());
+    if remaining >= 4 {
+        rows.push((PanelTone::Normal, String::new()));
+        let valid = samples
+            .iter()
+            .filter(|sample| sample.memory_bytes.is_some())
+            .count();
+        rows.push((
+            PanelTone::Muted,
+            clipped(&format!("RSS trend · {valid} samples"), width),
+        ));
+        if valid > 0 {
+            let (plot, upper) = resource_chart(
+                samples,
+                width,
+                remaining.saturating_sub(3).min(6),
+                |sample| {
+                    sample
+                        .memory_bytes
+                        .map(|bytes| bytes as f64 / (1024.0 * 1024.0))
+                },
+            );
+            rows.extend(plot.into_iter().map(|line| (PanelTone::Success, line)));
+            rows.push((
+                PanelTone::Muted,
+                clipped(&format!("Scale 0–{upper:.1} MiB"), width),
+            ));
+        } else {
+            rows.push((PanelTone::Muted, clipped("RSS samples unavailable", width)));
+        }
     }
     rows.truncate(budget);
     rows
@@ -969,13 +1231,19 @@ fn cpu_text(sample: Option<&metrics::Sample>) -> String {
     }
 }
 
-fn cpu_chart(samples: &VecDeque<metrics::Sample>, cols: usize, rows: usize) -> (Vec<String>, f64) {
+fn resource_chart(
+    samples: &VecDeque<metrics::Sample>,
+    cols: usize,
+    rows: usize,
+    measure: fn(&metrics::Sample) -> Option<f64>,
+) -> (Vec<String>, f64) {
     if cols == 0 || rows == 0 {
         return (Vec::new(), 0.1);
     }
     let upper = (samples
         .iter()
-        .filter_map(|sample| sample.cpu_percent)
+        .filter_map(measure)
+        .filter(|value| value.is_finite() && *value >= 0.0)
         .fold(0.0_f64, f64::max)
         * 10.0)
         .ceil()
@@ -990,10 +1258,7 @@ fn cpu_chart(samples: &VecDeque<metrics::Sample>, cols: usize, rows: usize) -> (
     });
     let mut previous = None;
     for sample in samples {
-        let Some(value) = sample
-            .cpu_percent
-            .filter(|value| value.is_finite() && *value >= 0.0)
-        else {
+        let Some(value) = measure(sample).filter(|value| value.is_finite() && *value >= 0.0) else {
             previous = None;
             continue;
         };
@@ -1199,6 +1464,7 @@ mod tests {
                     retire_requested: false,
                     task_id: None,
                     task_summary: None,
+                    task_text: None,
                     last_command: None,
                     progress: None,
                     total_work_ms: 0,
@@ -1217,6 +1483,7 @@ mod tests {
                     retire_requested: false,
                     task_id: Some("task-actual".into()),
                     task_summary: None,
+                    task_text: None,
                     last_command: None,
                     progress: None,
                     total_work_ms: 0,
@@ -1235,6 +1502,7 @@ mod tests {
                     retire_requested: false,
                     task_id: None,
                     task_summary: None,
+                    task_text: None,
                     last_command: None,
                     progress: None,
                     total_work_ms: 0,
@@ -1403,6 +1671,7 @@ mod tests {
             retire_requested: false,
             task_id: None,
             task_summary: None,
+            task_text: None,
             last_command: None,
             progress: None,
             total_work_ms: 0,
@@ -1699,7 +1968,7 @@ mod tests {
                 .into(),
             ..log(7)
         }];
-        let lines = log_lines(&snapshot.slots[0], 20);
+        let lines = log_lines(&snapshot.slots[0], 20, false);
         assert!(lines.len() > 1);
         assert!(lines.iter().all(|(_, _, text)| text.width() <= 20));
         let text: String = lines.iter().map(|(_, _, text)| text.as_str()).collect();
@@ -1719,6 +1988,7 @@ mod tests {
             total_work_ms: 125_000,
             current_task_elapsed_ms: Some(1_250),
             recent_task_durations_ms: &[500, 2_000, 61_000],
+            ..ActivitySummary::default()
         };
         let resources = metrics::Sampler::default();
         let rows = station_details(&activity, &resources, 42, 42, 16);
@@ -1782,7 +2052,7 @@ mod tests {
                 cpu_pending: false,
             });
         }
-        let (plot, upper) = cpu_chart(&samples, 9, 2);
+        let (plot, upper) = resource_chart(&samples, 9, 2, |sample| sample.cpu_percent);
         assert_eq!(upper, 1.0);
         assert_eq!(plot.len(), 2);
         assert!(plot.iter().all(|row| row.width() == 9));
@@ -1794,7 +2064,7 @@ mod tests {
             2
         );
         samples[1].cpu_percent = Some(0.5);
-        let (connected, _) = cpu_chart(&samples, 9, 2);
+        let (connected, _) = resource_chart(&samples, 9, 2, |sample| sample.cpu_percent);
         assert!(
             connected
                 .iter()
@@ -1807,7 +2077,7 @@ mod tests {
             sample.cpu_percent = None;
         }
         assert!(
-            cpu_chart(&samples, 9, 2)
+            resource_chart(&samples, 9, 2, |sample| sample.cpu_percent)
                 .0
                 .iter()
                 .all(|row| row.trim().is_empty())
@@ -1887,5 +2157,287 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn worker_tall_details_use_extra_height_for_task_progress_and_commands() {
+        let activity = ActivitySummary {
+            task: Some(
+                "Inspect the worker monitor layout, keep task ownership and finish the isolated verification",
+            ),
+            progress: Some(
+                "The task is running in an isolated worktree; the selected worker has retained its own log position.",
+            ),
+            command: Some(r#"["python3","-c","print('FULL_SCRIPT_BODY')"]"#),
+            current_task_elapsed_ms: Some(9_000),
+            recent_task_durations_ms: &[500, 2_000, 61_000],
+            ..ActivitySummary::default()
+        };
+        let resources = metrics::Sampler::default();
+        let compact = station_details(&activity, &resources, 42, 44, 16);
+        let tall = station_details(&activity, &resources, 42, 44, 48);
+        let text = tall
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(tall.len() > compact.len() + 6);
+        for label in [
+            "Progress",
+            "Command",
+            "[inline script]",
+            "Recent tasks",
+            "RSS trend",
+        ] {
+            assert!(text.contains(label), "{text}");
+        }
+        assert!(!text.contains("FULL_SCRIPT_BODY"));
+        assert!(text.contains("Agent CPU / RAM unavailable"));
+        assert!(!text.contains("0.0%"));
+        assert!(tall.len() <= 48 && tall.iter().all(|(_, text)| text.width() <= 44));
+    }
+
+    #[test]
+    fn worker_tabs_and_command_details_preserve_other_workers_and_paste_boundaries() {
+        let mut state = state(30, 100, false);
+        let mut snapshot = populated();
+        let command = serde_json::json!([
+            "python3",
+            "-c",
+            format!("{} FULL_COMMAND_END", "script; ".repeat(40))
+        ])
+        .to_string();
+        snapshot.slots[0].logs = vec![SlotLog {
+            text: format!("Command finished: {command}; exit 0"),
+            ..log(7)
+        }];
+        let compact = log_lines(&snapshot.slots[0], 32, false);
+        let full = log_lines(&snapshot.slots[0], 32, true);
+        assert!(compact.len() < full.len());
+        let compact: String = compact.iter().map(|(_, _, text)| text.as_str()).collect();
+        let full: String = full.iter().map(|(_, _, text)| text.as_str()).collect();
+        assert!(compact.contains("[inline script]") && compact.contains("exit 0"));
+        assert!(!compact.contains("FULL_COMMAND_END"));
+        assert!(full.contains("FULL_COMMAND_END"));
+        state.worker_frame(Some(&snapshot));
+        let now = Instant::now();
+        state.keyboard(b"\t", now, false);
+        assert_eq!(state.worker.as_ref().unwrap().selected_slot(), Some(1));
+        state.keyboard(b"\t", now, false);
+        assert_eq!(state.worker.as_ref().unwrap().selected_slot(), Some(0));
+        state.keyboard(b"\x1b[Z", now, false);
+        assert_eq!(state.worker.as_ref().unwrap().selected_slot(), Some(1));
+        state.keyboard(b"\x1b[Z\r", now, false);
+        state.worker_frame(Some(&snapshot));
+        assert_eq!(
+            state.worker_snapshot(true)["worker_panels"][0]["logs"]["commands_expanded"],
+            true
+        );
+        state.keyboard(b"\x1b[200~\t\r\x1b[Z\x1b[201~", now, false);
+        assert_eq!(state.worker.as_ref().unwrap().selected_slot(), Some(0));
+        assert!(state.worker.as_ref().unwrap().expanded_commands[&0]);
+        assert!(
+            !state
+                .worker
+                .as_ref()
+                .unwrap()
+                .expanded_commands
+                .contains_key(&1)
+        );
+        state.keyboard(b"\r", now, false);
+        assert!(!state.worker.as_ref().unwrap().expanded_commands[&0]);
+        assert!(state.actions.is_empty());
+        assert!(state.conversation.composer.text().is_empty());
+    }
+
+    #[test]
+    fn worker_resource_chart_uses_recorded_rss_and_keeps_missing_samples_blank() {
+        let now = Instant::now();
+        let samples: VecDeque<_> = [Some(8 * 1024 * 1024), None, Some(16 * 1024 * 1024)]
+            .into_iter()
+            .enumerate()
+            .map(|(index, memory_bytes)| metrics::Sample {
+                at: now + Duration::from_secs(index as u64),
+                cpu_percent: None,
+                memory_bytes,
+                cpu_pending: false,
+            })
+            .collect();
+        let (plot, upper) = resource_chart(&samples, 9, 4, |sample| {
+            sample
+                .memory_bytes
+                .map(|bytes| bytes as f64 / (1024.0 * 1024.0))
+        });
+        assert_eq!(upper, 16.0);
+        assert_eq!(plot.len(), 4);
+        assert_eq!(
+            plot.iter()
+                .flat_map(|row| row.chars())
+                .filter(|ch| *ch != ' ')
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    #[ignore = "writes production compositor frames to SSMCP_WORKER_SNAPSHOT_DIR"]
+    fn worker_layout_visual_fixture() {
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("SSMCP_WORKER_SNAPSHOT_DIR").expect("snapshot output directory"),
+        );
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut snapshot = populated();
+        snapshot.slots[0].state = "working";
+        snapshot.slots[0].task_summary = Some(
+            "Worker layout fixture · verify readable task context and independently scrolling logs"
+                .into(),
+        );
+        snapshot.slots[0].task_text = Some(format!(
+            "TASK_BEGIN 完整任务\n{}\nTASK_MIDDLE\n{}\nTASK_END",
+            "检查实际布局 / inspect the real worker layout and preserve every instruction.\n"
+                .repeat(24),
+            "保留独立日志位置 / keep independent log positions while reading task details.\n"
+                .repeat(24),
+        ));
+        snapshot.slots[0].progress = Some(
+            "The isolated layout patch is ready for focused checks. Verify the tall, wide and narrow monitors, then return the source commit and visual evidence.".into(),
+        );
+        snapshot.slots[0].last_command = Some(
+            serde_json::json!(["python3", "-c", "print('isolated verification fixture')"])
+                .to_string(),
+        );
+        snapshot.slots[0].current_task_elapsed_ms = Some(42_000);
+        snapshot.slots[0].total_work_ms = 184_000;
+        snapshot.slots[0].recent_task_durations_ms = vec![18_000, 63_000, 21_000];
+        snapshot.slots[0].logs[37].text = format!(
+            "Command started: {}",
+            serde_json::json!([
+                "python3",
+                "-c",
+                format!("{} COMMAND_END", "inspect_layout(); ".repeat(50))
+            ])
+        );
+        snapshot.slots[0].logs[38].text =
+            "Progress: Layout inspection completed in the private fixture".into();
+        snapshot.slots[0].logs[39].text =
+            "Command finished: [\"git\",\"diff\",\"--check\"]; exit 0".into();
+        let mut views: Vec<_> = [(64, 112, "tall"), (32, 132, "wide"), (26, 60, "narrow")]
+            .into_iter()
+            .map(|(rows, cols, name)| {
+                let mut state = state(rows, cols, true);
+                state.worker_frame(Some(&snapshot));
+                (state, name)
+            })
+            .collect();
+        // Resource readings come from this test process; task and log text are fixtures.
+        std::thread::sleep(Duration::from_millis(1100));
+        let write = |name: &str, frame: &Frame| {
+            std::fs::write(directory.join(format!("{name}.ansi")), frame.diff(None)).unwrap();
+            std::fs::write(
+                directory.join(format!("{name}.txt")),
+                screen(frame).screen().contents(),
+            )
+            .unwrap();
+            std::fs::write(
+                directory.join(format!("{name}.json")),
+                serde_json::to_vec(&serde_json::json!({
+                    "rows":frame.geometry.rows,"cols":frame.geometry.cols
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        };
+        for (mut state, name) in views.drain(..) {
+            let frame = state.worker_frame(Some(&snapshot));
+            write(name, &frame);
+            if name == "wide" {
+                state.keyboard(b"\r", Instant::now(), false);
+                let frame = state.worker_frame(Some(&snapshot));
+                write("wide-command-detail", &frame);
+                state.keyboard(b"\r", Instant::now(), false);
+            }
+            if matches!(name, "tall" | "narrow") {
+                state.keyboard(b"t", Instant::now(), false);
+                let frame = state.worker_frame(Some(&snapshot));
+                write(&format!("{name}-task-start"), &frame);
+                state.keyboard(b"\x1b[F", Instant::now(), false);
+                let frame = state.worker_frame(Some(&snapshot));
+                write(&format!("{name}-task-end"), &frame);
+            }
+        }
+    }
+    #[test]
+    fn worker_full_task_view_reaches_the_end_and_restores_independent_logs() {
+        for (rows, cols) in [(18, 48), (64, 112), (32, 132), (26, 60)] {
+            let mut state = state(rows, cols, false);
+            let mut snapshot = populated();
+            snapshot.slots[0].task_id = Some("task-full-view".into());
+            snapshot.slots[0].task_summary = Some("Short task summary only".into());
+            snapshot.slots[0].task_text = Some(format!(
+                "TASK_BEGIN 完整任务\n{}\nTASK_MIDDLE\n{}\nTASK_END",
+                "需要查看每一行 / keep every instruction readable.\n".repeat(30),
+                "每条要求都应保留 / preserve the full original task.\n".repeat(30),
+            ));
+            state.worker_frame(Some(&snapshot));
+            let now = Instant::now();
+            state.keyboard(b"\x1b[A", now, false);
+            state.worker_frame(Some(&snapshot));
+            let saved = state.worker.as_ref().unwrap().anchors[&0];
+            state.keyboard(b"t", now, false);
+            let frame = state.worker_frame(Some(&snapshot));
+            assert!(screen(&frame).screen().contents().contains("TASK_BEGIN"));
+            let mut middle_seen = false;
+            for _ in 0..64 {
+                state.keyboard(b"\x1b[6~", now, false);
+                let frame = state.worker_frame(Some(&snapshot));
+                if screen(&frame).screen().contents().contains("TASK_MIDDLE") {
+                    middle_seen = true;
+                    break;
+                }
+            }
+            assert!(middle_seen, "middle of the full task is reachable");
+            state.keyboard(b"\x1b[F", now, false);
+            let frame = state.worker_frame(Some(&snapshot));
+            assert!(screen(&frame).screen().contents().contains("TASK_END"));
+            snapshot.slots[0].logs.push(log(41));
+            let frame = state.worker_frame(Some(&snapshot));
+            assert!(screen(&frame).screen().contents().contains("TASK_END"));
+            state.keyboard(b"\t", now, false);
+            state.worker_frame(Some(&snapshot));
+            assert!(
+                !state.worker_snapshot(true)["worker_panels"][0]["logs"]["task_view"]
+                    .as_bool()
+                    .unwrap()
+            );
+            state.keyboard(b"\x1b[Z", now, false);
+            let frame = state.worker_frame(Some(&snapshot));
+            assert!(screen(&frame).screen().contents().contains("TASK_END"));
+            state.keyboard(b"\x1b[200~tT\x1b[201~", now, false);
+            assert!(state.worker.as_ref().unwrap().task_views.contains_key(&0));
+            state.keyboard(b"T", now, false);
+            state.worker_frame(Some(&snapshot));
+            assert_eq!(state.worker.as_ref().unwrap().anchors[&0], saved);
+            state.keyboard(b"t\x1b[F", now, false);
+            let frame = state.worker_frame(Some(&snapshot));
+            assert!(screen(&frame).screen().contents().contains("TASK_END"));
+            snapshot.slots[0].task_id = Some("next-task".into());
+            snapshot.slots[0].task_text = Some("NEXT_TASK_BEGIN".into());
+            let frame = state.worker_frame(Some(&snapshot));
+            assert!(
+                screen(&frame)
+                    .screen()
+                    .contents()
+                    .contains("NEXT_TASK_BEGIN")
+            );
+            assert!(state.actions.is_empty());
+            assert!(state.conversation.composer.text().is_empty());
+        }
+    }
+    #[test]
+    fn worker_command_start_does_not_report_script_exit_as_an_observed_result() {
+        let text = command_log_summary(r#"Command started: ["sh","-c","echo ok; exit 0"]"#);
+        assert_eq!(text, "Command started: sh -c [inline script]");
+        let text =
+            command_log_summary(r#"Command finished: ["sh","-c","echo ok; exit 0"]; exit 7"#);
+        assert_eq!(text, "Command finished: sh -c [inline script]; exit 7");
     }
 }
