@@ -1,0 +1,483 @@
+{
+  "deployment_policy": {
+    "deploy_server": "false",
+    "deployment_deferred": null,
+    "publish": "true",
+    "version": "0.10.27"
+  },
+  "dispatch_receipt": {
+    "bytes": 2759,
+    "sha256": "90bd3783c040682f427580d3275c18ec94d6f2d0925a50c9eff51f8a54623d7c"
+  },
+  "downloaded_artifact_bytes": {
+    "finalized-release-assets": {
+      "artifact_id": 14747165201,
+      "bytes": 46123447,
+      "contains_manifest_records": 8,
+      "file": "artifact-14747165201.zip",
+      "members": {
+        "SHA256SUMS": {
+          "bytes": 762,
+          "sha256": "9b7b6e39ca0d749ed0ad4e13ea2c2bca95bcee1c2ee273691b57ce11d80b9223"
+        },
+        "install.ps1": {
+          "bytes": 12928,
+          "sha256": "e2c0607275d6b04315e4ddce85d01280dcc56b2bb2710be0849fbaeee626d051"
+        },
+        "install.sh": {
+          "bytes": 6783,
+          "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+        },
+        "release-manifest.json": {
+          "bytes": 340211,
+          "sha256": "503facc0f762ac6724e8f8fa15f2958a6e735ad50d75e4be2299697d61f1af6c"
+        },
+        "ssmcp-aarch64-apple-darwin.tar.gz": {
+          "bytes": 5418882,
+          "sha256": "d2998fbcf34c73b7ebb7a3b20dbc47e7fe63eab7aba019282609ca9cd6cf057c"
+        },
+        "ssmcp-aarch64-apple-darwin.tar.gz.sha256": {
+          "bytes": 100,
+          "sha256": "59796149c7692931b7b4d6737fb766318a26dbf85fad4a8a0b4dbfb84693b3c9"
+        },
+        "ssmcp-aarch64-pc-windows-msvc.zip": {
+          "bytes": 5938273,
+          "sha256": "77637ffde296cae9724a812d3174237c53421ab1f0c4dd8a1d47f20cb4687090"
+        },
+        "ssmcp-aarch64-pc-windows-msvc.zip.sha256": {
+          "bytes": 101,
+          "sha256": "f4ab7e200d5b8fb0d9f00e14964f929dc23721abb06320dd5c819d8150bf57d0"
+        },
+        "ssmcp-aarch64-unknown-linux-gnu.tar.gz": {
+          "bytes": 11013734,
+          "sha256": "5eab3a87200f0f562fa870c40042651b11370097be1d43993682b94dd1141489"
+        },
+        "ssmcp-aarch64-unknown-linux-gnu.tar.gz.sha256": {
+          "bytes": 105,
+          "sha256": "78681d8561df5038d02243964ba41a394c7658b7c6a0e8568623f40cc090da23"
+        },
+        "ssmcp-x86_64-apple-darwin.tar.gz": {
+          "bytes": 5730305,
+          "sha256": "9cc9e3eb49ecc0c03748b662e9665acc91261d9e9998be43b06dde8540352d47"
+        },
+        "ssmcp-x86_64-apple-darwin.tar.gz.sha256": {
+          "bytes": 99,
+          "sha256": "72eb30bde03d7b0c6cbfb8b1b1493ae49795d055bcced526d989519cd92e70e1"
+        },
+        "ssmcp-x86_64-pc-windows-msvc.zip": {
+          "bytes": 6231427,
+          "sha256": "96bbe5a0e20f21e6c13d9ad64f687366cac9a8fb5108ae0a868a9d34d46975bd"
+        },
+        "ssmcp-x86_64-pc-windows-msvc.zip.sha256": {
+          "bytes": 100,
+          "sha256": "e31aa9a15392954c8bc5be3f2188885bdd0384660d806194801e9780ce331887"
+        },
+        "ssmcp-x86_64-unknown-linux-gnu.tar.gz": {
+          "bytes": 11427031,
+          "sha256": "f33208908c5878326aa0401a899271272e19a43f6ed2482baa80f89a7e26c5dd"
+        },
+        "ssmcp-x86_64-unknown-linux-gnu.tar.gz.sha256": {
+          "bytes": 104,
+          "sha256": "b3fc2763ee86918652483502dde6f2e838bf0ceac46152e9f1e0009e2919a063"
+        }
+      },
+      "public_members_byte_identical": 16,
+      "sha256": "b2013d01fa310f8945e27ad8f1cd859dfe3bb54521b7392292e99145a38d63e5"
+    },
+    "ssmcp-aarch64-apple-darwin": {
+      "artifact_id": 14746289060,
+      "bytes": 5419334,
+      "file": "artifact-14746289060.zip",
+      "members": {
+        "ssmcp-aarch64-apple-darwin.tar.gz": {
+          "bytes": 5418882,
+          "sha256": "d2998fbcf34c73b7ebb7a3b20dbc47e7fe63eab7aba019282609ca9cd6cf057c"
+        },
+        "ssmcp-aarch64-apple-darwin.tar.gz.sha256": {
+          "bytes": 100,
+          "sha256": "59796149c7692931b7b4d6737fb766318a26dbf85fad4a8a0b4dbfb84693b3c9"
+        }
+      },
+      "public_archive": {
+        "byte_identical": true,
+        "bytes": 5418882,
+        "name": "ssmcp-aarch64-apple-darwin.tar.gz",
+        "sha256": "d2998fbcf34c73b7ebb7a3b20dbc47e7fe63eab7aba019282609ca9cd6cf057c"
+      },
+      "sha256": "e61ef06bcccecff9289a5b90812bb1b986aa7b95cac5e43a2394a45cf7de63cd"
+    },
+    "ssmcp-aarch64-pc-windows-msvc": {
+      "artifact_id": 14746906630,
+      "bytes": 5938726,
+      "file": "artifact-14746906630.zip",
+      "members": {
+        "ssmcp-aarch64-pc-windows-msvc.zip": {
+          "bytes": 5938273,
+          "sha256": "77637ffde296cae9724a812d3174237c53421ab1f0c4dd8a1d47f20cb4687090"
+        },
+        "ssmcp-aarch64-pc-windows-msvc.zip.sha256": {
+          "bytes": 101,
+          "sha256": "f4ab7e200d5b8fb0d9f00e14964f929dc23721abb06320dd5c819d8150bf57d0"
+        }
+      },
+      "public_archive": {
+        "byte_identical": true,
+        "bytes": 5938273,
+        "name": "ssmcp-aarch64-pc-windows-msvc.zip",
+        "sha256": "77637ffde296cae9724a812d3174237c53421ab1f0c4dd8a1d47f20cb4687090"
+      },
+      "sha256": "eed46fe40dd715e456f62998ef584b0db36f68740d1268daa00032cdc91a22f0"
+    },
+    "ssmcp-aarch64-unknown-linux-gnu": {
+      "artifact_id": 14746237389,
+      "bytes": 11014211,
+      "file": "artifact-14746237389.zip",
+      "members": {
+        "ssmcp-aarch64-unknown-linux-gnu.tar.gz": {
+          "bytes": 11013734,
+          "sha256": "5eab3a87200f0f562fa870c40042651b11370097be1d43993682b94dd1141489"
+        },
+        "ssmcp-aarch64-unknown-linux-gnu.tar.gz.sha256": {
+          "bytes": 105,
+          "sha256": "78681d8561df5038d02243964ba41a394c7658b7c6a0e8568623f40cc090da23"
+        }
+      },
+      "public_archive": {
+        "byte_identical": true,
+        "bytes": 11013734,
+        "name": "ssmcp-aarch64-unknown-linux-gnu.tar.gz",
+        "sha256": "5eab3a87200f0f562fa870c40042651b11370097be1d43993682b94dd1141489"
+      },
+      "sha256": "251ecd3825c5b16de365573beabf99224cd3805dd94f9fd2904b686d2913401d"
+    },
+    "ssmcp-x86_64-apple-darwin": {
+      "artifact_id": 14746064837,
+      "bytes": 5730752,
+      "file": "artifact-14746064837.zip",
+      "members": {
+        "ssmcp-x86_64-apple-darwin.tar.gz": {
+          "bytes": 5730305,
+          "sha256": "9cc9e3eb49ecc0c03748b662e9665acc91261d9e9998be43b06dde8540352d47"
+        },
+        "ssmcp-x86_64-apple-darwin.tar.gz.sha256": {
+          "bytes": 99,
+          "sha256": "72eb30bde03d7b0c6cbfb8b1b1493ae49795d055bcced526d989519cd92e70e1"
+        }
+      },
+      "public_archive": {
+        "byte_identical": true,
+        "bytes": 5730305,
+        "name": "ssmcp-x86_64-apple-darwin.tar.gz",
+        "sha256": "9cc9e3eb49ecc0c03748b662e9665acc91261d9e9998be43b06dde8540352d47"
+      },
+      "sha256": "8122858c48ab7d7feb236b826f6904a9ac74e7c62ba4547b24e447826199d2e5"
+    },
+    "ssmcp-x86_64-pc-windows-msvc": {
+      "artifact_id": 14746159300,
+      "bytes": 6231875,
+      "file": "artifact-14746159300.zip",
+      "members": {
+        "ssmcp-x86_64-pc-windows-msvc.zip": {
+          "bytes": 6231427,
+          "sha256": "96bbe5a0e20f21e6c13d9ad64f687366cac9a8fb5108ae0a868a9d34d46975bd"
+        },
+        "ssmcp-x86_64-pc-windows-msvc.zip.sha256": {
+          "bytes": 100,
+          "sha256": "e31aa9a15392954c8bc5be3f2188885bdd0384660d806194801e9780ce331887"
+        }
+      },
+      "public_archive": {
+        "byte_identical": true,
+        "bytes": 6231427,
+        "name": "ssmcp-x86_64-pc-windows-msvc.zip",
+        "sha256": "96bbe5a0e20f21e6c13d9ad64f687366cac9a8fb5108ae0a868a9d34d46975bd"
+      },
+      "sha256": "f99e777b225d7134dfba8f7107d341b948bd008b78d526791b6b3aa3567be01a"
+    },
+    "ssmcp-x86_64-unknown-linux-gnu": {
+      "artifact_id": 14746082719,
+      "bytes": 11427503,
+      "file": "artifact-14746082719.zip",
+      "members": {
+        "ssmcp-x86_64-unknown-linux-gnu.tar.gz": {
+          "bytes": 11427031,
+          "sha256": "f33208908c5878326aa0401a899271272e19a43f6ed2482baa80f89a7e26c5dd"
+        },
+        "ssmcp-x86_64-unknown-linux-gnu.tar.gz.sha256": {
+          "bytes": 104,
+          "sha256": "b3fc2763ee86918652483502dde6f2e838bf0ceac46152e9f1e0009e2919a063"
+        }
+      },
+      "public_archive": {
+        "byte_identical": true,
+        "bytes": 11427031,
+        "name": "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+        "sha256": "f33208908c5878326aa0401a899271272e19a43f6ed2482baa80f89a7e26c5dd"
+      },
+      "sha256": "a305bfb220e2d733fff35d8f45b46432ad4f52565b8f4d42cf0ce16227647ba6"
+    },
+    "verified-source": {
+      "artifact_id": 14746263662,
+      "bytes": 19194,
+      "candidate_source_sha": "61a4de1cf522358691998ecb724b4a8518b91c47",
+      "complete_source_equals_manifest": true,
+      "contract": "git-source-v1",
+      "file": "artifact-14746263662.zip",
+      "members": {
+        "verified-source.json": {
+          "bytes": 364545,
+          "sha256": "ed4464d9bed1624012a27082ab490145c1f56861d75efe005bb50be251d518fe"
+        }
+      },
+      "sha256": "52dd5a52690d364a8961c9efad5be9ece103f179c9a74e71338e7ccfbbe559eb"
+    }
+  },
+  "execution_binding": {
+    "all_public_asset_bytes_verified": true,
+    "all_run_artifact_count": 15,
+    "candidate_source_sha": "61a4de1cf522358691998ecb724b4a8518b91c47",
+    "checkout_count": 17,
+    "public_asset_count": 16,
+    "registry_publication": {
+      "reason": "Independent registry dependencies and the external package require separate verification.",
+      "status": "deferred"
+    },
+    "registry_publication_verified": false,
+    "required_release_artifact_count": 8,
+    "run_attempt": 1,
+    "run_id": 45002392978,
+    "skipped_jobs": [
+      "publish_crates",
+      "deploy_server"
+    ],
+    "trust_boundary": "Reviewed recipe, pinned actions and GitHub runner; not malicious-builder attestation",
+    "verified": true,
+    "workflow_api_head_sha": "61a4de1cf522358691998ecb724b4a8518b91c47"
+  },
+  "execution_receipt": {
+    "bytes": 3011,
+    "exit_code": 0,
+    "finished_ms": 1795339303913,
+    "sha256": "75c740d1356bb4ec57df5a73e82b74a29443b148533d91b5e2a80a68cc2fd4ef",
+    "started_ms": 1795339111545,
+    "status": "passed"
+  },
+  "github_release": {
+    "asset_count": 16,
+    "assets": [
+      {
+        "digest": "sha256:e2c0607275d6b04315e4ddce85d01280dcc56b2bb2710be0849fbaeee626d051",
+        "name": "install.ps1",
+        "size": 12928
+      },
+      {
+        "digest": "sha256:25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906",
+        "name": "install.sh",
+        "size": 6783
+      },
+      {
+        "digest": "sha256:503facc0f762ac6724e8f8fa15f2958a6e735ad50d75e4be2299697d61f1af6c",
+        "name": "release-manifest.json",
+        "size": 340211
+      },
+      {
+        "digest": "sha256:9b7b6e39ca0d749ed0ad4e13ea2c2bca95bcee1c2ee273691b57ce11d80b9223",
+        "name": "SHA256SUMS",
+        "size": 762
+      },
+      {
+        "digest": "sha256:d2998fbcf34c73b7ebb7a3b20dbc47e7fe63eab7aba019282609ca9cd6cf057c",
+        "name": "ssmcp-aarch64-apple-darwin.tar.gz",
+        "size": 5418882
+      },
+      {
+        "digest": "sha256:59796149c7692931b7b4d6737fb766318a26dbf85fad4a8a0b4dbfb84693b3c9",
+        "name": "ssmcp-aarch64-apple-darwin.tar.gz.sha256",
+        "size": 100
+      },
+      {
+        "digest": "sha256:77637ffde296cae9724a812d3174237c53421ab1f0c4dd8a1d47f20cb4687090",
+        "name": "ssmcp-aarch64-pc-windows-msvc.zip",
+        "size": 5938273
+      },
+      {
+        "digest": "sha256:f4ab7e200d5b8fb0d9f00e14964f929dc23721abb06320dd5c819d8150bf57d0",
+        "name": "ssmcp-aarch64-pc-windows-msvc.zip.sha256",
+        "size": 101
+      },
+      {
+        "digest": "sha256:5eab3a87200f0f562fa870c40042651b11370097be1d43993682b94dd1141489",
+        "name": "ssmcp-aarch64-unknown-linux-gnu.tar.gz",
+        "size": 11013734
+      },
+      {
+        "digest": "sha256:78681d8561df5038d02243964ba41a394c7658b7c6a0e8568623f40cc090da23",
+        "name": "ssmcp-aarch64-unknown-linux-gnu.tar.gz.sha256",
+        "size": 105
+      },
+      {
+        "digest": "sha256:9cc9e3eb49ecc0c03748b662e9665acc91261d9e9998be43b06dde8540352d47",
+        "name": "ssmcp-x86_64-apple-darwin.tar.gz",
+        "size": 5730305
+      },
+      {
+        "digest": "sha256:72eb30bde03d7b0c6cbfb8b1b1493ae49795d055bcced526d989519cd92e70e1",
+        "name": "ssmcp-x86_64-apple-darwin.tar.gz.sha256",
+        "size": 99
+      },
+      {
+        "digest": "sha256:96bbe5a0e20f21e6c13d9ad64f687366cac9a8fb5108ae0a868a9d34d46975bd",
+        "name": "ssmcp-x86_64-pc-windows-msvc.zip",
+        "size": 6231427
+      },
+      {
+        "digest": "sha256:e31aa9a15392954c8bc5be3f2188885bdd0384660d806194801e9780ce331887",
+        "name": "ssmcp-x86_64-pc-windows-msvc.zip.sha256",
+        "size": 100
+      },
+      {
+        "digest": "sha256:f33208908c5878326aa0401a899271272e19a43f6ed2482baa80f89a7e26c5dd",
+        "name": "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+        "size": 11427031
+      },
+      {
+        "digest": "sha256:b3fc2763ee86918652483502dde6f2e838bf0ceac46152e9f1e0009e2919a063",
+        "name": "ssmcp-x86_64-unknown-linux-gnu.tar.gz.sha256",
+        "size": 104
+      }
+    ],
+    "id": 454310910,
+    "manifest_sha256": "503facc0f762ac6724e8f8fa15f2958a6e735ad50d75e4be2299697d61f1af6c",
+    "published_at": "2026-11-22T08:41:27Z",
+    "url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.27"
+  },
+  "jobs_summary": {
+    "skipped": [
+      "deploy_server",
+      "publish_crates"
+    ],
+    "success": 17,
+    "total": 19
+  },
+  "native_execution_receipt": {
+    "bytes": 13153,
+    "sha256": "4666e972ffbfaa753d9915ad5a56290288c4d39195d5ac06bf9fe2cfe3c9da06"
+  },
+  "publication_documents": {
+    "SHA256SUMS": {
+      "bytes": 762,
+      "sha256": "9b7b6e39ca0d749ed0ad4e13ea2c2bca95bcee1c2ee273691b57ce11d80b9223"
+    },
+    "install.ps1": {
+      "bytes": 12928,
+      "sha256": "e2c0607275d6b04315e4ddce85d01280dcc56b2bb2710be0849fbaeee626d051"
+    },
+    "install.sh": {
+      "bytes": 6783,
+      "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+    },
+    "release-manifest.json": {
+      "bytes": 340211,
+      "sha256": "503facc0f762ac6724e8f8fa15f2958a6e735ad50d75e4be2299697d61f1af6c"
+    },
+    "ssmcp-aarch64-apple-darwin.tar.gz.sha256": {
+      "bytes": 100,
+      "sha256": "59796149c7692931b7b4d6737fb766318a26dbf85fad4a8a0b4dbfb84693b3c9"
+    },
+    "ssmcp-aarch64-pc-windows-msvc.zip.sha256": {
+      "bytes": 101,
+      "sha256": "f4ab7e200d5b8fb0d9f00e14964f929dc23721abb06320dd5c819d8150bf57d0"
+    },
+    "ssmcp-aarch64-unknown-linux-gnu.tar.gz.sha256": {
+      "bytes": 105,
+      "sha256": "78681d8561df5038d02243964ba41a394c7658b7c6a0e8568623f40cc090da23"
+    },
+    "ssmcp-x86_64-apple-darwin.tar.gz.sha256": {
+      "bytes": 99,
+      "sha256": "72eb30bde03d7b0c6cbfb8b1b1493ae49795d055bcced526d989519cd92e70e1"
+    },
+    "ssmcp-x86_64-pc-windows-msvc.zip.sha256": {
+      "bytes": 100,
+      "sha256": "e31aa9a15392954c8bc5be3f2188885bdd0384660d806194801e9780ce331887"
+    },
+    "ssmcp-x86_64-unknown-linux-gnu.tar.gz.sha256": {
+      "bytes": 104,
+      "sha256": "b3fc2763ee86918652483502dde6f2e838bf0ceac46152e9f1e0009e2919a063"
+    }
+  },
+  "read_transport": {
+    "adapter_bytes": 4243,
+    "adapter_sha256": "858e79381f0488178dd3d72e2e45ebaaaf2fb6b1353f9537b668ffd4cfd2c9a3",
+    "attempt_count": 35,
+    "attempt_log_bytes": 18952,
+    "attempt_log_sha256": "5634ec6c787fa2ec0f008faf193d2d51ac3243188552783a9af2ce15c5c56d68",
+    "budget_seconds_per_request": 55,
+    "eof_retry_count": 2,
+    "max_attempts_per_request": 3,
+    "original_gh_sha256": "fa7cff06d4db9eee98e00b10ac93beebfe1822109ac04a6cbbf9d806c21d0073",
+    "successful_attempts": 33,
+    "timed_out_attempts": 0
+  },
+  "reviewed_recipe": {
+    "candidate_is_ancestor_of_workflow": true,
+    "candidate_sha": "61a4de1cf522358691998ecb724b4a8518b91c47",
+    "crate_publication": {
+      "reason": "Independent registry dependencies and the external package require separate verification.",
+      "status": "deferred"
+    },
+    "deferred_version": "0.10.27",
+    "files": {
+      ".github/workflows/ci.yml": {
+        "bytes": 14994,
+        "sha256": "e7c753ca1a058b43f798cb1f31bc2b8980a09b3bc72cdb1996ef6eaadb5a7172"
+      },
+      ".github/workflows/deploy-server.yml": {
+        "bytes": 4499,
+        "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+      },
+      ".github/workflows/release.yml": {
+        "bytes": 22866,
+        "sha256": "48e051452ed634d6cd8385e41640a6e16810ec7376a24faf63a63864916c1d5c"
+      },
+      "scripts/install.ps1": {
+        "bytes": 12928,
+        "sha256": "e2c0607275d6b04315e4ddce85d01280dcc56b2bb2710be0849fbaeee626d051"
+      },
+      "scripts/install.sh": {
+        "bytes": 6783,
+        "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+      },
+      "scripts/release.py": {
+        "bytes": 65219,
+        "sha256": "e9aaa8c132016f28ffed71d069921507fcf6e23ce1b87e86b83db334be7a193e"
+      }
+    },
+    "recipe_source_commit": "23ea4c7be0b358b17719421c3b655a13ac90ed40",
+    "release_contract": "git-source-v1",
+    "workflow_sha": "61a4de1cf522358691998ecb724b4a8518b91c47"
+  },
+  "schema_version": 1,
+  "source_report": {
+    "bytes": 427915,
+    "sha256": "98abea32d57e75ac6a617a0c1094ef22f728ff6d753bfc0db3d4fb6536f349c5"
+  },
+  "verification": {
+    "candidate_sha": "61a4de1cf522358691998ecb724b4a8518b91c47",
+    "crate_publication": {
+      "reason": "Independent registry dependencies and the external package require separate verification.",
+      "status": "deferred"
+    },
+    "finished_at_utc": "2026-11-22T09:21:43.845540+00:00",
+    "provenance_verified": true,
+    "registry_verified": false,
+    "release_contract": "git-source-v1",
+    "release_run_id": 45002392978,
+    "route": "manual-main",
+    "run_attempt": 1,
+    "started_at_utc": "2026-11-22T09:18:31.790233+00:00",
+    "status": "passed",
+    "tag": "v0.10.27",
+    "workflow_sha": "61a4de1cf522358691998ecb724b4a8518b91c47"
+  },
+  "verification_scope": "Downloaded all 16 public assets: manifest, SHA256SUMS, six sidecars, two installers, and six binary archives. Public documents and archives are byte-bound to the finalized-release-assets Actions ZIP; each binary archive also matches its platform build artifact. Outer ZIP digests are checked separately from member hashes. Installer bytes equal the immutable S scripts. The verified-source artifact is matched to the schema-2 manifest, candidate commit/tree, Cargo.toml, Cargo.lock, three gitlinks and dependency graph. Direct Project Z declarations use canonical Git URLs with no version/rev/tag/branch/path selector; locked versions and gitlink-backed package manifests are independently cross-checked. Graph identities and edges are checked against S's lock; feature/kind selection and Git trees without a recorded gitlink remain successful reviewed-workflow receipt evidence. The original dispatch capture and independent native readback bind P, S and the single attempt. All 19 jobs are checked: 17 successful jobs have their initial checkout/log windows verified, while publish_crates and deploy_server are skipped. Only the reviewed git-source-v1 publication provenance artifacts are required; auxiliary CI artifacts do not change that exact subset. Crate publication is deferred: no registry metadata, crate bytes, registry graph or registry availability was downloaded or verified. Legacy and build-only modes are unsupported. This is an ordinary reviewed CI chain, not malicious-builder attestation. No binary was installed or production service changed."
+}

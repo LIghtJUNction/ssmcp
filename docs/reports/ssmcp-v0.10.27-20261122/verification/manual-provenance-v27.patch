@@ -1,0 +1,43 @@
+--- previous/manual_main_provenance.py
++++ v27/manual_main_provenance.py
+@@ -4,7 +4,7 @@
+ malicious runner, build script, or compromised action. Job logs are obtained by
+ the job IDs in one exact attempt. An ambiguous or missing identity is an error;
+ there is no whole-log fallback that searches for a later favorable value.
+-Only 0.10.26 / git-source-v1 with registry publication deferred is supported.
++Only 0.10.27 / git-source-v1 with registry publication deferred is supported.
+ """
+ 
+ from collections import Counter
+@@ -30,9 +30,10 @@
+     "x86_64-apple-darwin", "aarch64-apple-darwin",
+     "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc",
+ )
+-DEFERRED_REASON = (
+-    "Preserve active relay sessions until a separate non-disruptive server switch is verified.")
+-RELEASE_VERSION = "0.10.26"
++# v0.10.27 is absent from the reviewed historical deployment-deferral map.
++# Its explicit deploy_server=false dispatch therefore has no deferral reason.
++DEFERRED_REASON = None
++RELEASE_VERSION = "0.10.27"
+ RELEASE_CONTRACT = "git-source-v1"
+ CRATE_DEFERRED_REASON = (
+     "Independent registry dependencies and the external package require separate verification.")
+@@ -308,7 +309,7 @@
+ def validated_release(candidate, version):
+     need(version == RELEASE_VERSION and isinstance(candidate, str)
+          and re.fullmatch(r"[0-9a-f]{40}", candidate),
+-         "only the reviewed 0.10.26 Git-source candidate is supported")
++         "only the reviewed 0.10.27 Git-source candidate is supported")
+     return {"tag": "v" + version, "version": version, "sha": candidate,
+             "submodule_count": 3, "prerelease": "false", "publish": "true",
+             "create_tag": "false", "build_only": "false",
+@@ -346,7 +347,7 @@
+         next_number=7, next_name="Test publication safeguards").json()
+     need(policy == {"publish": "true", "deploy_server": "false", "version": version,
+                     "deployment_deferred": DEFERRED_REASON},
+-         "effective durable deployment deferral is absent")
++         "effective no-deploy policy differs from the reviewed explicit dispatch")
+     return {"validate": value,
+             "publication_contract_step": {"step_number": 5,
+                 "observed_environment": {key: environment[key] for key in expected_environment},
