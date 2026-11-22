@@ -453,8 +453,9 @@ impl State {
                     y,
                     release,
                 } if !release && x < self.geometry.cols && y < self.geometry.rows => {
-                    if button & 35 == 0 && button & 64 == 0 {
-                        if let Some(slot) = monitor
+                    if button & 35 == 0
+                        && button & 64 == 0
+                        && let Some(slot) = monitor
                             .tabs
                             .iter()
                             .find(|tab| {
@@ -463,15 +464,12 @@ impl State {
                                     && usize::from(x) < tab.col + tab.cols
                             })
                             .map(|tab| tab.slot)
-                        {
-                            if let Some(index) =
-                                monitor.order.iter().position(|value| *value == slot)
-                            {
-                                monitor.selected = index;
-                                self.dirty = true;
-                            }
-                            continue;
+                    {
+                        if let Some(index) = monitor.order.iter().position(|value| *value == slot) {
+                            monitor.selected = index;
+                            self.dirty = true;
                         }
+                        continue;
                     }
                     let hovered = monitor
                         .panels

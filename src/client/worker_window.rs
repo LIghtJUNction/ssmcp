@@ -537,10 +537,10 @@ fn connect_child(address: SocketAddr, token: &str) -> io::Result<ChildSession> {
                         .lock()
                         .unwrap_or_else(|error| error.into_inner())
                         .clone();
-                    if let Some(client_id) = client_id {
-                        if watched.send_current_snapshot(&client_id, false).is_err() {
-                            break;
-                        }
+                    if let Some(client_id) = client_id
+                        && watched.send_current_snapshot(&client_id, false).is_err()
+                    {
+                        break;
                     }
                     last_sent = Instant::now();
                 }
