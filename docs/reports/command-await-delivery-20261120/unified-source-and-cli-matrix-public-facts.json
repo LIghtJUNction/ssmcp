@@ -1,16 +1,17 @@
 {
   "schema": "ssmcp-iteration-evidence.v2",
-  "snapshot_utc": "2026-11-22 02:11:34 UTC",
+  "snapshot_utc": "2026-11-22 03:09:32 UTC",
   "source": {
     "commit": "1d6b55320fff6533663dad2627891960b3b5c5cc",
     "tree": "fc28406bb20a3d1f6f9441ca34016357ab0ff39c",
     "parent": "083ef018e13cdf6672637d41ea1bd13542185d5a",
     "branch": "fix/release-0.10.26-20261121",
     "version": "0.10.26",
-    "final_release_source_bound": false,
+    "final_release_source_bound": true,
     "fixed_for_this_static_snapshot": true,
     "native_final_descriptors_available": true,
-    "native_validation_actual_source_bound": true
+    "native_validation_actual_source_bound": true,
+    "release_source_binding_scope": "Immutable tag target S independently read; actual H2 provenance and execution binding subsequently verified. Native validation remains bound to its original 1d6 source."
   },
   "evidence_policy": {
     "current_results_bound_to_stated_source": true,
@@ -25,7 +26,10 @@
     "new_native_result_read_scope": "Authenticated final completion summaries from the existing execution coordinators; exact supplied receipt identities are recorded, with no new native calls or original receipt/binary reads by this draft author.",
     "counts_not_aggregated_across_sources_or_test_families": true,
     "all_current_native_results_are_actual_1d6_not_inherited": true,
-    "remaining_result_gaps": "Exact V31 ignored count, three unsupplied original CLI check counts and unsupplied full subreceipt digests remain null; older values are not transferred."
+    "remaining_result_gaps": "Three unsupplied original CLI check counts and any still-unsupplied full subreceipt digests remain null; the current V31 ignored count is confirmed as 11 and is never counted as passing.",
+    "D_and_main_read_scope": "Cached actual GitHub D readback plus report-root confirmation of PR180 and main P; full recursive D delta is an execution-side source-owner observation, not a fresh tree scan by this draft author.",
+    "H2_and_production_read_scope": "Authenticated native owner completion summaries after relay reconnection; exact supplied receipt identities retained. No H2, product test, deployment, credential read or new remote operation by report group.",
+    "no_zero_interruption_or_all_booleans_pass_claim": true
   },
   "native_validation": {
     "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
@@ -404,7 +408,6 @@
       "real_PTY_snapshot_pairs": 5,
       "source": "1d6b55320fff6533663dad2627891960b3b5c5cc"
     },
-    "all_subcommands_final_release_complete": false,
     "final_source_and_shared_e2e_helper_binding": "Completed by the existing native owners against the actual frozen 1d6 descriptors; no earlier result transfer.",
     "tree": "fc28406bb20a3d1f6f9441ca34016357ab0ff39c",
     "handoff": {
@@ -417,12 +420,15 @@
     "cleanup_errors": [],
     "actual_on_current_source": true,
     "all_original_local_groups_completed": true,
-    "formal_release_complete": false,
+    "formal_release_complete": true,
     "per_group_count_scope": "Supplied current report counts are recorded; the three other passed original groups retain null counts rather than inferred older values.",
     "account_core_is_separate": {
       "checks_passed": 125,
       "included_in_12_group_count": false
-    }
+    },
+    "formal_release_complete_scope": "Formal GitHub Release and actual H2 verification completed; independent server upgrade and postflight also completed in their separate records.",
+    "declared_original_scope_completed": true,
+    "coverage_scope": "The named original 12 CLI groups and separately enumerated checks; no claim to an unenumerated exhaustive set of all possible subcommands."
   },
   "ci": {
     "run_id": 44973215329,
@@ -719,33 +725,690 @@
   },
   "release": {
     "planned_tag": "v0.10.26",
-    "S": null,
-    "P": null,
-    "run": null,
-    "H2_execution": false,
-    "release_published": false,
-    "release_get_result": "404 Not Found",
-    "release_get_observed_at_utc": "2026-11-22 00:16:24 UTC",
+    "S": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+    "P": "c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce",
+    "run": 44975626721,
+    "H2_execution": true,
+    "release_published": true,
+    "release_get_result": "200 OK; published Release independently read",
+    "release_get_observed_at_utc": "2026-11-22 02:40:52 UTC",
     "release_workflow_server_deploy": false,
     "independent_server_upgrade_authorized": true,
-    "independent_server_upgrade_executed": false,
+    "independent_server_upgrade_executed": true,
     "registry_publication": false,
-    "final_main_sync": "not performed in this evidence snapshot; planned documentation integration and subsequent release-owner action",
+    "final_main_sync": "PR180 integrated D as release-workflow main P. After successful H2, the two session documents were corrected on main Q. Final report integration is planned after this snapshot; release S/P remain unchanged.",
     "production_preflight": {
+      "observed_at_utc": "2026-11-22 02:29:04 UTC",
       "server_version": "0.10.20",
+      "server_service_state": "active",
+      "server_binary_sha256": "9c3be51a2443111b99e58c284408dbc89abe5b46b3160497aa052d36c2832d49",
       "installed_client_version": "0.10.25",
-      "persistent_registry_and_grants_active": true,
+      "existing_stored_credentials_used": true,
       "existing_authenticated_whoami_exit_code": 0,
-      "auth_baseline_at_utc": "2026-11-22 00:51:53 UTC",
+      "whoami_output_format": "JSON",
+      "whoami_stderr_bytes": 0,
+      "login_or_logout_performed": false,
+      "no_install_or_reload_performed": true,
+      "no_install_or_deploy_performed": true,
       "receipt": {
-        "file": "root-production-auth-baseline-20261122/receipt.json",
-        "bytes": 547,
-        "sha256": "1c04f667da947c24958f6d13584e386cf5d91c8760a57f2be1dad82e598d19c0"
+        "file": "root-production-immediate-baseline-20261122.json",
+        "bytes": 818,
+        "sha256": "4041a7608f9d306fae1113a757a71ce548b743bcbd97548747e56a1b8a006ad8",
+        "read_scope": "Exact identity and baseline fields reported by the native production owner; original receipt/binary not read by this draft author."
       },
-      "no_install_or_deploy_performed": true
+      "scope": "Read-only baseline immediately before any authorized production upgrade; not an upgrade result."
     },
-    "local_release_profile_and_staged_install": "passed on 1d6; see native_validation.release_profile_and_staged_install; not publication or production installation",
-    "documentation_integration_commit": null
+    "local_release_profile_and_staged_install": "Earlier isolated staging checks passed on 1d6. The independent production server upgrade is now separately recorded; the installed client remained unchanged.",
+    "documentation_integration_commit": "107ffe9b7ccdc65d8184d848311306c0baa2e77a",
+    "main_integration": {
+      "status": "merged",
+      "pull_request": 180,
+      "pull_request_url": "https://github.com/LIghtJUNction/ssmcp/pull/180",
+      "head": "107ffe9b7ccdc65d8184d848311306c0baa2e77a",
+      "merge_method": "merge",
+      "merge_commit": "c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce",
+      "tree": "07445acc7ba5faf80054223be5dfe6a6c768648d",
+      "parents": [
+        "add39e18ff92680ff3ac0c3e911407956e20b228",
+        "107ffe9b7ccdc65d8184d848311306c0baa2e77a"
+      ],
+      "merged_at": "2026-11-22T02:19:27Z",
+      "main_ref": "c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce",
+      "main_ref_independently_read_by_report_root": true,
+      "main_tree_equals_D_tree": true,
+      "evidence_scope": "Actual PR, merge/main identity independently read by report root using GitHub GET and supplied to this draft author; no new remote call by draft author.",
+      "root_readback_identity": {
+        "file": "integration-readback.private.json",
+        "bytes": 36052,
+        "sha256": "29298a8fdcbd7bd6b9e648d79e75c1917d736233991bcb98ef3f2ae27fcb1d41",
+        "scope": "D/PR180/main P identity from actual root GitHub readback; tag/run pending markers in this earlier receipt are historical and superseded by later evidence."
+      }
+    },
+    "planned_candidate_source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+    "observed_main_for_planned_dispatch": "c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce",
+    "tag": {
+      "name": "v0.10.26",
+      "status": "created and ref read back",
+      "object_type": "commit",
+      "target_commit": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "created_confirmed": true,
+      "independent_ref_reader": "report root using GitHub GET",
+      "receipt_read_scope": "Root independent tag-ref result supplied to this draft author; no new remote read by draft author."
+    },
+    "dispatch": {
+      "status": "performed exactly once; associated formal Release run completed successfully",
+      "post_attempted": true,
+      "post_count": 1,
+      "run_id": 44975626721,
+      "run_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44975626721",
+      "started_at": "2026-11-22T02:20:23.470615Z",
+      "finished_at": "2026-11-22T02:20:25.218848Z",
+      "ref": "main",
+      "workflow_sha": "c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce",
+      "inputs": {
+        "tag": "v0.10.26",
+        "deploy_server": false,
+        "build_only": false
+      },
+      "owner": "existing sole main/release coordinator",
+      "performed_by_report_group": false,
+      "raw_capture": {
+        "bytes": 2759,
+        "sha256": "5409dab9a284f590e178438c1c98817e994bfe138c587b46f3b10fc68e57fa24",
+        "read_scope": "Exact original capture identity supplied by the native release owner; not newly read or reconstructed by this draft author."
+      },
+      "original_flat_native_execution_receipt": {
+        "bytes": 9478,
+        "sha256": "46189b411083e86216297efa1d346701618160bcf5ecb85743f3727baa4f7197",
+        "read_scope": "Exact unchanged original native execution receipt identity supplied by its owner; private execution identity omitted."
+      },
+      "independent_run_and_jobs_readback_received": true
+    },
+    "binding_scope": "Run attempt 1 is workflow_dispatch on main P and tag resolves to tested S. Actual H2 compatibility-successor execution passed with provenance and execution binding verified; the two earlier failed attempts remain recorded.",
+    "run_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44975626721",
+    "run_status": "completed",
+    "run_conclusion": "success",
+    "prior_release_get_observations": [
+      {
+        "result": "404 Not Found",
+        "observed_at_utc": "2026-11-22 00:16:24 UTC"
+      }
+    ],
+    "run_attempt": 1,
+    "release_id": 454147144,
+    "release_url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.26",
+    "published_at": "2026-11-22T02:39:42Z",
+    "draft": false,
+    "prerelease": false,
+    "run_details": {
+      "id": 44975626721,
+      "event": "workflow_dispatch",
+      "head_branch": "main",
+      "head_sha": "c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce",
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-11-22T02:20:24Z",
+      "updated_at": "2026-11-22T02:39:45Z",
+      "run_started_at": "2026-11-22T02:20:24Z",
+      "html_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44975626721"
+    },
+    "jobs": {
+      "total": 19,
+      "success": 17,
+      "skipped": 2,
+      "failed": 0,
+      "skipped_names": [
+        "publish_crates",
+        "deploy_server"
+      ],
+      "all_terminal": true,
+      "items": [
+        {
+          "id": 137064762119,
+          "name": "validate",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:21:01Z"
+        },
+        {
+          "id": 137064905221,
+          "name": "Build x86_64-apple-darwin",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:27:58Z"
+        },
+        {
+          "id": 137064905226,
+          "name": "Build x86_64-pc-windows-msvc",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:26:21Z"
+        },
+        {
+          "id": 137064905268,
+          "name": "Build aarch64-unknown-linux-gnu",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:25:33Z"
+        },
+        {
+          "id": 137064905273,
+          "name": "Build aarch64-pc-windows-msvc",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:27:45Z"
+        },
+        {
+          "id": 137064905305,
+          "name": "Build x86_64-unknown-linux-gnu",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:24:29Z"
+        },
+        {
+          "id": 137064905326,
+          "name": "Build aarch64-apple-darwin",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:27:21Z"
+        },
+        {
+          "id": 137064905472,
+          "name": "checks / Client (macos-15)",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:25:47Z"
+        },
+        {
+          "id": 137064905476,
+          "name": "checks / Client (macos-15-intel)",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:30:45Z"
+        },
+        {
+          "id": 137064905497,
+          "name": "checks / Client (windows-2025)",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:26:11Z"
+        },
+        {
+          "id": 137064905511,
+          "name": "checks / Client (windows-11-arm)",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:28:29Z"
+        },
+        {
+          "id": 137064905539,
+          "name": "checks / linux (ubuntu-24.04)",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:36:29Z"
+        },
+        {
+          "id": 137064905543,
+          "name": "checks / linux (ubuntu-24.04-arm)",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:38:21Z"
+        },
+        {
+          "id": 137066619131,
+          "name": "Verify installed server aarch64-unknown-linux-gnu",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:28:24Z"
+        },
+        {
+          "id": 137066619165,
+          "name": "Verify installed server x86_64-unknown-linux-gnu",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:28:44Z"
+        },
+        {
+          "id": 137069082488,
+          "name": "finalize",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:38:55Z"
+        },
+        {
+          "id": 137069209816,
+          "name": "publish_release",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at": "2026-11-22T02:39:45Z"
+        },
+        {
+          "id": 137069211000,
+          "name": "publish_crates",
+          "status": "completed",
+          "conclusion": "skipped",
+          "completed_at": "2026-11-22T02:38:55Z"
+        },
+        {
+          "id": 137069399891,
+          "name": "deploy_server",
+          "status": "completed",
+          "conclusion": "skipped",
+          "completed_at": "2026-11-22T02:39:45Z"
+        }
+      ],
+      "job_counts_are_not_test_case_counts": true
+    },
+    "public_assets": {
+      "count": 16,
+      "all_uploaded": true,
+      "items": [
+        {
+          "id": 777633251,
+          "name": "install.ps1",
+          "state": "uploaded",
+          "size": 12928,
+          "digest": "sha256:e2c0607275d6b04315e4ddce85d01280dcc56b2bb2710be0849fbaeee626d051"
+        },
+        {
+          "id": 777633275,
+          "name": "install.sh",
+          "state": "uploaded",
+          "size": 6783,
+          "digest": "sha256:25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+        },
+        {
+          "id": 777633297,
+          "name": "release-manifest.json",
+          "state": "uploaded",
+          "size": 313560,
+          "digest": "sha256:6aa850809fd69cae70917cd2e0e2dbd3760daf50c87afe1da28e7aad346ca9c6"
+        },
+        {
+          "id": 777633230,
+          "name": "SHA256SUMS",
+          "state": "uploaded",
+          "size": 762,
+          "digest": "sha256:582f43c4f7222f1ce0b19d88c04a675bc21cb9f86dc26585d5fedaca44c50810"
+        },
+        {
+          "id": 777633324,
+          "name": "ssmcp-aarch64-apple-darwin.tar.gz",
+          "state": "uploaded",
+          "size": 5204420,
+          "digest": "sha256:8b03f02e6a6816d5e6eb5c07b707ff86972fc7b98b679e3010323e69578eb61f"
+        },
+        {
+          "id": 777633365,
+          "name": "ssmcp-aarch64-apple-darwin.tar.gz.sha256",
+          "state": "uploaded",
+          "size": 100,
+          "digest": "sha256:5ee41afcaa40327a99bc6a732c2300d2526ee2a51dc7612f59007fdaa8d94704"
+        },
+        {
+          "id": 777633396,
+          "name": "ssmcp-aarch64-pc-windows-msvc.zip",
+          "state": "uploaded",
+          "size": 5695896,
+          "digest": "sha256:e21f73b348b2de8c8deee0347fcf8048b046128f745362ec70076a1432f85ba7"
+        },
+        {
+          "id": 777633459,
+          "name": "ssmcp-aarch64-pc-windows-msvc.zip.sha256",
+          "state": "uploaded",
+          "size": 101,
+          "digest": "sha256:8235309c4120e616a5c8d32bf63d5f19ab9c7034f9f649ebd8858185629bdfe1"
+        },
+        {
+          "id": 777633482,
+          "name": "ssmcp-aarch64-unknown-linux-gnu.tar.gz",
+          "state": "uploaded",
+          "size": 10773741,
+          "digest": "sha256:b24d164d0f6b1405a6b0179238ca898b93446729e7493e5941b64de7f550311d"
+        },
+        {
+          "id": 777633539,
+          "name": "ssmcp-aarch64-unknown-linux-gnu.tar.gz.sha256",
+          "state": "uploaded",
+          "size": 105,
+          "digest": "sha256:67bae007a8f8338009a8cb146bab3f51011c9e7e53a9e31da6f6ef2f91c7415d"
+        },
+        {
+          "id": 777633569,
+          "name": "ssmcp-x86_64-apple-darwin.tar.gz",
+          "state": "uploaded",
+          "size": 5503869,
+          "digest": "sha256:9df0f4b72375cab5a5aaf6b2fc20333b32f78b1a0cb17e793217333c15b79ca2"
+        },
+        {
+          "id": 777633601,
+          "name": "ssmcp-x86_64-apple-darwin.tar.gz.sha256",
+          "state": "uploaded",
+          "size": 99,
+          "digest": "sha256:1af3851d92b14000509bb70782f6b8b7ac9892f79d1c2284dd3ab26efd2ca535"
+        },
+        {
+          "id": 777633631,
+          "name": "ssmcp-x86_64-pc-windows-msvc.zip",
+          "state": "uploaded",
+          "size": 5975719,
+          "digest": "sha256:df11de1b8f5ee85a9e3d9c16429110bddc073ebf8fec4efdcacaebc151e36aa2"
+        },
+        {
+          "id": 777633676,
+          "name": "ssmcp-x86_64-pc-windows-msvc.zip.sha256",
+          "state": "uploaded",
+          "size": 100,
+          "digest": "sha256:2c05a11072baaa9f10fb48f23d9b097976da0e3e0d8f296600d839dbe0997cbe"
+        },
+        {
+          "id": 777633707,
+          "name": "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+          "state": "uploaded",
+          "size": 11164267,
+          "digest": "sha256:bfc235fe9acd8ae3e23c4da08152ff5e30ca3b0ffce9d85eaca3967b571f53dd"
+        },
+        {
+          "id": 777633746,
+          "name": "ssmcp-x86_64-unknown-linux-gnu.tar.gz.sha256",
+          "state": "uploaded",
+          "size": 104,
+          "digest": "sha256:1bf64805601e687290ded7920a1f842a777678137b1b4557608129a6cf27efcf"
+        }
+      ],
+      "read_scope": "Actual GitHub release API metadata; this draft did not download asset bytes or verify the H2 artifact bridge.",
+      "H2_byte_verification_pending": false,
+      "H2_verification_reported_passed": true,
+      "H2_report": {
+        "file": "verification-1d6b55320fff.json",
+        "bytes": 399189,
+        "sha256": "4da9ac1e13589786b76308e61f3a5c41b0a2b2a3a5452bc4a3f1cfa4c9a78a14",
+        "read_scope": "Exact original receipt identity and selected results reported by the existing native execution owner; original receipt not independently read by this draft author."
+      },
+      "raw_asset_download_by_report_group": false
+    },
+    "release_body_identity": {
+      "bytes": 14534,
+      "sha256": "765fafd2e6eaef4958e48e6e9dc65077deca2530ab714f42fc4f2b88614f0aed",
+      "expected_source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "matches_source_owner_expected_hash": true,
+      "read_scope": "Full body UTF-8 bytes loaded from root actual GitHub release readback and hashed locally; expected body identity supplied by the source owner."
+    },
+    "terminal_readback": {
+      "file": "release-terminal-independent-readback.private.json",
+      "bytes": 164093,
+      "sha256": "83ba2ded096b18f376267b4bf6af676abbd2c0504e2cd56d4c1e178f5dc2ec33",
+      "observed_at_utc": "2026-11-22 02:40:52 UTC",
+      "root_read_scope": "Independent GitHub GET of run, all jobs, public release and tag.",
+      "draft_author_read_scope": "Whole saved JSON hash plus selected fields and complete release-body bytes; no new remote call, logs, asset download or H2 execution."
+    },
+    "H2_status": "passed",
+    "production_preflight_history": [
+      {
+        "server_version": "0.10.20",
+        "installed_client_version": "0.10.25",
+        "persistent_registry_and_grants_active": true,
+        "existing_authenticated_whoami_exit_code": 0,
+        "auth_baseline_at_utc": "2026-11-22 00:51:53 UTC",
+        "receipt": {
+          "file": "root-production-auth-baseline-20261122/receipt.json",
+          "bytes": 547,
+          "sha256": "1c04f667da947c24958f6d13584e386cf5d91c8760a57f2be1dad82e598d19c0"
+        },
+        "no_install_or_deploy_performed": true
+      }
+    ],
+    "github_release_immutable_flag": false,
+    "H2_report": {
+      "file": "verification-1d6b55320fff.json",
+      "bytes": 399189,
+      "sha256": "4da9ac1e13589786b76308e61f3a5c41b0a2b2a3a5452bc4a3f1cfa4c9a78a14",
+      "read_scope": "Exact original receipt identity and selected results reported by the existing native execution owner; original receipt not independently read by this draft author."
+    },
+    "H2_final_proof": {
+      "file": "root-H2-final-proof-20261122.json",
+      "bytes": 8849,
+      "sha256": "2cf9f7a7bb233e382bbe7daea913d7338042db73973857d8a1b24cb2997ecb97",
+      "read_scope": "Exact original receipt identity and selected results reported by the existing native execution owner; original receipt not independently read by this draft author."
+    },
+    "postrelease_main_Q": {
+      "commit": "03f667ab0ea03e2e3f5bc2dde65bc241b5121df9",
+      "tree": "2344a5e0dca144bc95cdddfc5c0e68f2359807f5",
+      "parents": [
+        "c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce"
+      ],
+      "paths": [
+        "docs/session-service.md",
+        "docs/session-control.md"
+      ],
+      "files_changed": 2,
+      "additions": 15,
+      "deletions": 14,
+      "scope": "Reviewed session-document intent plus the actual five-tool public MCP catalog correction.",
+      "source_identity_independently_read_by_report_root": true,
+      "original_patch_bytes_applied_unchanged": false
+    },
+    "current_main_commit": "03f667ab0ea03e2e3f5bc2dde65bc241b5121df9",
+    "independent_server_upgrade_status": "completed",
+    "production_upgrade": {
+      "operation_id": "44975626721-1",
+      "status": "deployed",
+      "phase": "completed",
+      "exit_code": 0,
+      "started_at": "2026-11-22T02:52:22Z",
+      "finished_at": "2026-11-22T02:52:25Z",
+      "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "version": "0.10.26",
+      "target_binary_sha256": "ad3af5835f8a14946e68c1f53887354c730900a7b0daee4be71c1c5a132ea564",
+      "running_binary_sha256": "ad3af5835f8a14946e68c1f53887354c730900a7b0daee4be71c1c5a132ea564",
+      "running_equals_target": true,
+      "operation_executed_once": true,
+      "reconnect_recovery": "The original deployment started once; after relay reconnection, a read of the same operation returned its terminal exit 0. The operation worker was not restarted.",
+      "configuration_unchanged": true,
+      "original_units_unchanged": true,
+      "original_runners_unchanged": true,
+      "proxy_unchanged": true,
+      "route_observations": {
+        "stage": {
+          "proxy_pricing_policy_preserved": false,
+          "single_public_footer": false
+        },
+        "direct": {
+          "proxy_pricing_policy_preserved": false,
+          "single_public_footer": false
+        },
+        "public": {
+          "proxy_pricing_policy_preserved": true,
+          "single_public_footer": true
+        }
+      },
+      "all_observation_booleans_true": false,
+      "route_observation_scope": "Explicit values from the completed deployment receipt as reported by its owner; stage/direct are not rewritten to true or folded into an all-booleans-pass claim.",
+      "owned_temporary_cleanup_bytes": 26442243,
+      "unrelated_tasks_touched": false,
+      "interruption": {
+        "occurred": true,
+        "zero_interruption_claim": false,
+        "duration_seconds": null,
+        "client_identifiers_reassigned": true,
+        "only_collaboration_registrations_rejoined": true
+      },
+      "completion_receipt": {
+        "file": "root-production-completion-44975626721-1.json",
+        "bytes": 8327,
+        "sha256": "18ed692a12427b83dc848214caae0f764235ab3aad1fe8cfd25f8b08a00654db",
+        "read_scope": "Exact original receipt identity and selected results reported by the existing native execution owner; original receipt not independently read by this draft author."
+      },
+      "scope": "Separately authorized production operation; the Release workflow deploy_server job remained skipped."
+    },
+    "production_postflight": {
+      "observed_at_utc": "2026-11-22 02:56:39 UTC",
+      "status": "pass",
+      "server_service_state": "active",
+      "server_version": "0.10.26",
+      "server_binary_sha256": "ad3af5835f8a14946e68c1f53887354c730900a7b0daee4be71c1c5a132ea564",
+      "server_hash_matches_target": true,
+      "installed_client_version": "0.10.25",
+      "installed_client_original_SHA_unchanged": true,
+      "stored_credentials_reused": true,
+      "whoami_and_authenticated_identity_check": "pass",
+      "login_or_logout_performed": false,
+      "client_install_performed": false,
+      "client_restart_performed": false,
+      "plugin_list": "success",
+      "native_call": "success",
+      "client_identifiers_reassigned": true,
+      "collaboration_registrations_rejoined": true,
+      "nonzero_interruption_observed": true,
+      "auth_continuity_receipt": {
+        "file": "root-postupgrade-auth-continuity-20261122.json",
+        "bytes": 4594,
+        "sha256": "c1e84088d940b31cb98c438f63276faef70374a58ed5adbebc4f028631b631a9",
+        "read_scope": "Exact original receipt identity and selected results reported by the existing native execution owner; original receipt not independently read by this draft author."
+      },
+      "postcheck_receipt": {
+        "file": "root-production-postupgrade-readonly-20261122.json",
+        "bytes": 2406,
+        "sha256": "6545ca91670c55c1a8502f7c622fbf4371e8ccbea27ec2dd87c26b3aef760d5f",
+        "read_scope": "Exact original receipt identity and selected results reported by the existing native execution owner; original receipt not independently read by this draft author."
+      },
+      "read_scope": "Actual native owner postflight after the one production operation; report draft author did not repeat it or read credentials."
+    },
+    "deployment_check_objects": {
+      "schema": "ssmcp.release-deployment.v1",
+      "status": "deployed",
+      "stage_checks": {
+        "admin_rejects_unauthenticated": true,
+        "assets": {
+          "brand-mark.png": {
+            "bytes": 492111,
+            "html_url_verified": true,
+            "sha256": "434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a"
+          },
+          "client-install-copy.js": {
+            "bytes": 681,
+            "html_url_verified": true,
+            "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96"
+          },
+          "copy-command.js": {
+            "bytes": 707,
+            "html_url_verified": true,
+            "sha256": "391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558"
+          },
+          "portal-refresh.css": {
+            "bytes": 28192,
+            "html_url_verified": true,
+            "sha256": "452278f6f782a29018d5d4f12a93245b8f929e99c453c41535577d5323e730f9"
+          },
+          "portal.css": {
+            "bytes": 24806,
+            "html_url_verified": true,
+            "sha256": "860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26"
+          },
+          "traffic-meter.js": {
+            "bytes": 1418,
+            "html_url_verified": true,
+            "sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c"
+          }
+        },
+        "candidate_runtime_preflight": true,
+        "commerce_disabled": true,
+        "dcr_survives_restart": true,
+        "fresh_state": true,
+        "health": true,
+        "homepage": true,
+        "matched_runner_sha256": "b56da636b2ca24b7b84398e57e56d270d5ef63c8f974946071faa9d455b48b30",
+        "mcp_rejects_unauthenticated": true,
+        "oauth_issuer": true,
+        "production_state_inaccessible": true,
+        "proxy_pricing_policy_preserved": false,
+        "single_public_footer": false
+      },
+      "direct_checks": {
+        "admin_rejects_unauthenticated": true,
+        "assets": {
+          "brand-mark.png": {
+            "bytes": 492111,
+            "html_url_verified": true,
+            "sha256": "434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a"
+          },
+          "client-install-copy.js": {
+            "bytes": 681,
+            "html_url_verified": true,
+            "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96"
+          },
+          "copy-command.js": {
+            "bytes": 707,
+            "html_url_verified": true,
+            "sha256": "391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558"
+          },
+          "portal-refresh.css": {
+            "bytes": 28192,
+            "html_url_verified": true,
+            "sha256": "452278f6f782a29018d5d4f12a93245b8f929e99c453c41535577d5323e730f9"
+          },
+          "portal.css": {
+            "bytes": 24806,
+            "html_url_verified": true,
+            "sha256": "860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26"
+          },
+          "traffic-meter.js": {
+            "bytes": 1418,
+            "html_url_verified": true,
+            "sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c"
+          }
+        },
+        "health": true,
+        "homepage": true,
+        "mcp_rejects_unauthenticated": true,
+        "oauth_issuer": true,
+        "proxy_pricing_policy_preserved": false,
+        "single_public_footer": false
+      },
+      "public_checks": {
+        "admin_rejects_unauthenticated": true,
+        "assets": {
+          "brand-mark.png": {
+            "bytes": 492111,
+            "html_url_verified": true,
+            "sha256": "434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a"
+          },
+          "client-install-copy.js": {
+            "bytes": 681,
+            "html_url_verified": true,
+            "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96"
+          },
+          "copy-command.js": {
+            "bytes": 707,
+            "html_url_verified": true,
+            "sha256": "391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558"
+          },
+          "portal-refresh.css": {
+            "bytes": 28192,
+            "html_url_verified": true,
+            "sha256": "452278f6f782a29018d5d4f12a93245b8f929e99c453c41535577d5323e730f9"
+          },
+          "portal.css": {
+            "bytes": 24806,
+            "html_url_verified": true,
+            "sha256": "860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26"
+          },
+          "traffic-meter.js": {
+            "bytes": 1418,
+            "html_url_verified": true,
+            "sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c"
+          }
+        },
+        "health": true,
+        "homepage": true,
+        "mcp_rejects_unauthenticated": true,
+        "oauth_issuer": true,
+        "proxy_pricing_policy_preserved": true,
+        "single_public_footer": true
+      }
+    },
+    "deployment_check_objects_origin": "Exact structured objects supplied in the authenticated release-owner continuation message; all field values and nesting preserved, including both false stage/direct flags."
   },
   "report_group": {
     "owned_branch": "docs/command-await-delivery-20261120",
@@ -755,17 +1418,32 @@
     "release_or_CI_POST": 0,
     "portal_commits": 3,
     "portal_writes_closed": true,
-    "google_writer": "existing execution coordinator",
-    "previous_snapshot_commit": "2bf653f413c59ffa4bc065089837545dedf66c2a",
-    "draft_preparation_only": true,
-    "canonical_report_modified": false,
-    "native_result_execution_owner": "existing source and acceptance coordinators, not the report group"
+    "google_writer": "existing main/release coordinator after confirmed handoff",
+    "previous_snapshot_commit": "16fd69f842d0a16c614ccd2268adffbefb89a66b",
+    "native_result_execution_owner": "existing source and acceptance coordinators, not the report group",
+    "previous_published_snapshot": {
+      "commit": "16fd69f842d0a16c614ccd2268adffbefb89a66b",
+      "snapshot_utc": "2026-11-22 02:11:34 UTC",
+      "facts_bytes": 150323,
+      "facts_sha256": "0d3ccd5763827556162f03577b590b06c9aa3a1c5ffafc1be52a7fd8ab65c3d3",
+      "current_facts_blob": "3c6c4ae408c45cd5a42e01fcf35de3873fd2c5ea"
+    },
+    "draft_author_activity": {
+      "scope": "Preparation of this successor working draft only; not the state of the already published prior report.",
+      "canonical_file_changed": false,
+      "new_local_working_draft_created": true,
+      "Git_or_Drive_publication_performed": false,
+      "native_product_or_Cargo": 0,
+      "H2_execution": 0,
+      "release_or_CI_POST": 0
+    },
+    "final_report_integrator": "existing main/release coordinator on Q; final commit not yet part of this snapshot"
   },
   "successor_validation": {
     "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
     "tree": "fc28406bb20a3d1f6f9441ca34016357ab0ff39c",
     "planned_round": "V31",
-    "phase": "Actual frozen-source local acceptance and all six CI jobs passed; documentation integration and formal release remain separate pending actions.",
+    "phase": "Actual 1d6 native acceptance, six-platform CI, formal Release, successful H2 compatibility verification, session-document correction on Q, independent server deployment and postflight completed. One final report integration is planned after this snapshot.",
     "checkout_reported_clean": true,
     "completed_native_results_inherited": false,
     "source_bound_completed_results_available": true,
@@ -775,7 +1453,7 @@
       "sha256": "7e206a8b3af1491b5e90c5aa4ba3031f2640328e32fbec5bd6e5940a4c55df22",
       "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
     },
-    "installation_status": "isolated staging installation passed four checks; production untouched",
+    "installation_status": "Isolated staging installation passed four checks; the production server is now active at 0.10.26 after its separate operation. Installed client 0.10.25 and its original SHA remain unchanged.",
     "shared_compile_lock": {
       "contention_observed": true,
       "holder_process_observed": true,
@@ -815,20 +1493,111 @@
     },
     "worker_and_panel_rebinding": "completed actual final worker and Panel execution on 1d6",
     "complete_six_platform_CI": "completed/success; all six jobs passed on 1d6, attempt 1",
-    "formal_release_H2_or_deployment_performed": false,
+    "formal_release_H2_or_deployment_performed": true,
     "documentation_integration": {
-      "status": "planned after confirmed green CI; no integration commit recorded in this draft",
+      "status": "created and merged into main",
       "base_source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
       "owner": "existing source coordinator",
-      "planned_content": [
+      "commit": "107ffe9b7ccdc65d8184d848311306c0baa2e77a",
+      "tree": "07445acc7ba5faf80054223be5dfe6a6c768648d",
+      "parents": [
+        "1d6b55320fff6533663dad2627891960b3b5c5cc"
+      ],
+      "branch": "integrate/release-0.10.26-final-20261122",
+      "already_integrated": true,
+      "files": [
+        {
+          "path": "docs/reports/command-await-delivery-20261120/README.md",
+          "bytes": 2907,
+          "git_blob": "dd1e6645d72650169801908517d71695c3909099"
+        },
+        {
+          "path": "docs/reports/command-await-delivery-20261120/current-iteration-unified-source-and-cli-matrix.md",
+          "bytes": 14577,
+          "git_blob": "8abc487d1f0f69191dccece54a12160a6e871c5e"
+        },
+        {
+          "path": "docs/reports/command-await-delivery-20261120/unified-source-and-cli-matrix-public-facts.json",
+          "bytes": 150323,
+          "git_blob": "3c6c4ae408c45cd5a42e01fcf35de3873fd2c5ea"
+        }
+      ],
+      "matrix_and_facts_reused_exact_published_blobs_from": "16fd69f842d0a16c614ccd2268adffbefb89a66b",
+      "short_index_scope": "Links the published full history README and fixed H2 preparation directory.",
+      "delta": {
+        "non_tree_leaf_additions": 3,
+        "other_blobs_gitlinks_and_modes_unchanged": true,
+        "source_tree_entries": 1331,
+        "documentation_tree_entries": 1335,
+        "complete_tree_comparison_reader": "existing source owner",
+        "report_root_read_scope": "Commit identity, sole parent, ref and the three file sizes/blob identities independently read; full tree delta supplied by source owner."
+      },
+      "root_readback_identity": {
+        "file": "documentation-successor-D-readback.private.json",
+        "bytes": 7059,
+        "sha256": "5e460e699a113bd753b8df63e7bab8b5e4fb39738fcf8f9e2d731aa2d6655332"
+      },
+      "draft_local_facts_blob_comparison": {
+        "matches_integrated_D_facts_blob": true,
+        "bytes": 150323,
+        "sha256": "0d3ccd5763827556162f03577b590b06c9aa3a1c5ffafc1be52a7fd8ab65c3d3",
+        "git_blob": "3c6c4ae408c45cd5a42e01fcf35de3873fd2c5ea"
+      },
+      "product_tests_reexecuted_for_D_by_report_group": false
+    },
+    "main_tag_Release_H2_production_owner": "existing sole main/release coordinator",
+    "main_integration": {
+      "status": "merged",
+      "pull_request": 180,
+      "pull_request_url": "https://github.com/LIghtJUNction/ssmcp/pull/180",
+      "head": "107ffe9b7ccdc65d8184d848311306c0baa2e77a",
+      "merge_method": "merge",
+      "merge_commit": "c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce",
+      "tree": "07445acc7ba5faf80054223be5dfe6a6c768648d",
+      "parents": [
+        "add39e18ff92680ff3ac0c3e911407956e20b228",
+        "107ffe9b7ccdc65d8184d848311306c0baa2e77a"
+      ],
+      "merged_at": "2026-11-22T02:19:27Z",
+      "main_ref": "c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce",
+      "main_ref_independently_read_by_report_root": true,
+      "main_tree_equals_D_tree": true,
+      "evidence_scope": "Actual PR, merge/main identity independently read by report root using GitHub GET and supplied to this draft author; no new remote call by draft author.",
+      "root_readback_identity": {
+        "file": "integration-readback.private.json",
+        "bytes": 36052,
+        "sha256": "29298a8fdcbd7bd6b9e648d79e75c1917d736233991bcb98ef3f2ae27fcb1d41",
+        "scope": "D/PR180/main P identity from actual root GitHub readback; tag/run pending markers in this earlier receipt are historical and superseded by later evidence."
+      }
+    },
+    "formal_release_dispatched": true,
+    "H2_executed": true,
+    "production_upgrade_executed": true,
+    "formal_release_run": 44975626721,
+    "formal_release_run_status": "completed",
+    "formal_release_run_conclusion": "success",
+    "closeout_plan": {
+      "final_report_commit_count_planned": 1,
+      "status": "ready for the single final report integration after this snapshot",
+      "post_H2_session_docs_owner": "existing main/release coordinator",
+      "post_session_docs_main_Q": "03f667ab0ea03e2e3f5bc2dde65bc241b5121df9",
+      "final_report_preparer": "existing main/release coordinator after confirmed handoff",
+      "final_report_base": "03f667ab0ea03e2e3f5bc2dde65bc241b5121df9",
+      "final_report_scope": [
         "final matrix",
         "public facts",
         "brief index"
       ],
-      "commit": null,
-      "already_integrated": false
+      "final_report_integration_status": "planned after this snapshot; actual final merge will be reported through Google/chat",
+      "final_merge_receipt_destination": [
+        "Google report",
+        "chat"
+      ],
+      "no_self_referential_report_update_cycle": true,
+      "source_coordinator_rejoin_required": false
     },
-    "main_tag_Release_H2_production_owner": "existing sole main/release coordinator"
+    "H2_status": "pass",
+    "production_upgrade_status": "completed"
   },
   "historical_stage_v1": {
     "schema": "ssmcp-unified-source-and-cli-matrix-stage.v1",
@@ -3321,16 +4090,31 @@
   },
   "h2_current_static": {
     "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
-    "fixed_package_commit": "432900420ef4fbe093ad284cb49e66e1e2892800",
+    "fixed_package_commit": "ab08dac0e18ced96445de8799839f83375174ddb",
     "six_recipes_exact_on_eb319": true,
     "six_recipes_and_Cargo_unchanged_eb319_to_current": true,
-    "S_P_run_final_binding": false,
-    "H2_executed": false,
+    "S_P_run_final_binding": true,
+    "H2_executed": true,
     "notes_unchanged_12a_to_current": true,
     "notes_last_content_change_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
-    "identity_basis": "Actual six-recipe identity on the previously reviewed source plus exact 12a-to-083 and 083-to-1d6 Git deltas; no new H2 execution.",
+    "identity_basis": "Previously reviewed fixed v26 contract and six recipe identities, followed by independently reviewed gh-log compatibility successor ab08; actual execution passed on the same S/P/run and original capture.",
     "current_nine_full_files_refetched": false,
-    "checkout_contract": "Actual candidate S checkout; S must be an ancestor of workflow P and the six reviewed recipe bytes must match. Whole-tree equality S=P is not required."
+    "checkout_contract": "Actual candidate S checkout; S must be an ancestor of workflow P and the six reviewed recipe bytes must match. Whole-tree equality S=P is not required.",
+    "observed_release_binding": {
+      "S": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "P": "c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce",
+      "run": 44975626721,
+      "status": "H2 passed; provenance and execution_binding verified",
+      "run_job_metadata_independently_read": true,
+      "H2_report": {
+        "file": "verification-1d6b55320fff.json",
+        "bytes": 399189,
+        "sha256": "4da9ac1e13589786b76308e61f3a5c41b0a2b2a3a5452bc4a3f1cfa4c9a78a14",
+        "read_scope": "Exact original receipt identity and selected results reported by the existing native execution owner; original receipt not independently read by this draft author."
+      }
+    },
+    "base_contract_package_commit": "432900420ef4fbe093ad284cb49e66e1e2892800",
+    "actual_execution_package_directory": "docs/reports/command-await-delivery-20261120/publication-verifier-gh-log-compat-20261122"
   },
   "previous_stage_snapshots": [
     {
@@ -3360,19 +4144,30 @@
       "url": "https://github.com/LIghtJUNction/ssmcp/blob/2bf653f413c59ffa4bc065089837545dedf66c2a/docs/reports/command-await-delivery-20261120/current-iteration-unified-source-and-cli-matrix.md",
       "facts_bytes": 129566,
       "facts_sha256": "8eb778535e16be8196ce826a007470e1ae57817ca4a13da35ae8fe4355a414af"
+    },
+    {
+      "commit": "16fd69f842d0a16c614ccd2268adffbefb89a66b",
+      "snapshot_utc": "2026-11-22 02:11:34 UTC",
+      "current_candidate_then": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "native_validation_source_then": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "ci_run": 44973215329,
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/16fd69f842d0a16c614ccd2268adffbefb89a66b/docs/reports/command-await-delivery-20261120/current-iteration-unified-source-and-cli-matrix.md",
+      "facts_bytes": 150323,
+      "facts_sha256": "0d3ccd5763827556162f03577b590b06c9aa3a1c5ffafc1be52a7fd8ab65c3d3",
+      "subsequently_integrated_unchanged_as_D_facts_blob": "3c6c4ae408c45cd5a42e01fcf35de3873fd2c5ea"
     }
   ],
   "google_report": {
     "document_url": "https://docs.google.com/document/d/1Nq6DQk1EteNRucZo8J5RvhPI8PVUaans4wLgAaWrTkY/edit",
-    "revision": "AHj4eMRS5m9958H9u756vKSJFxkzTKHnLRWAagtsx5PnuzzpR8jdr2zn082_SJXnC0BLBoyHGg1bDqwq9VsyXZcPsxo6VCWj7nAha67selM",
-    "text_length": 22584,
+    "revision": "AHj4eMRojCvmt5-gAJViiL_QPJm4BG1DDcqqoD8LhgA_-3bxruPFYdnGqe3nQsDWtOjsN-Yc1jwsNBusbcuy9aJoE7OOOVUZdinUroVepgM",
+    "text_length": 24933,
     "text_length_unit": "UTF-16 code units",
-    "body_snapshot_utc": "2026-11-22 02:08:24 UTC",
+    "body_snapshot_utc": "2026-11-22 03:06:04 UTC",
     "body_candidate": "1d6b55320fff6533663dad2627891960b3b5c5cc",
-    "writer": "existing sole source coordinator",
+    "writer": "existing main/release coordinator after confirmed handoff",
     "root_full_text_readback_confirmed": true,
     "history_tail_exact": true,
-    "contains_report_commit": "2bf653f413c59ffa4bc065089837545dedf66c2a",
+    "contains_report_commit": null,
     "reports_native_source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
     "reports_unified_checks": 105,
     "reports_unified_unit_cases": 4,
@@ -3391,7 +4186,7 @@
     ],
     "updated_to_1d6_actual_results": true,
     "root_google_write_performed": false,
-    "subsequent_update_status": "Latest 02:08:24 full document read by root; final report link replacement still belongs to the sole source writer.",
+    "subsequent_update_status": "Owner will add the fixed final report link after report publication and integrate the three final report files on Q.",
     "previous_confirmed_snapshot": {
       "body_snapshot_utc": "2026-11-22 02:01:35 UTC",
       "text_length_UTF16": 22595,
@@ -3400,7 +4195,7 @@
       "history_tail_root_verified": true,
       "history_tail_sha256": "6d4044e98d17b93fbb7122e598f824aed07949a8b669cd5ae268a308969a633b"
     },
-    "history_tail_verification_status": "Latest 02:08:24 revision full text and historical tail independently read by report root; exact tail SHA256 preserved.",
+    "history_tail_verification_status": "Latest 03:06:04 revision fully read back by report root; unchanged historical tail independently hashed.",
     "reports_CI": {
       "run_id": 44973215329,
       "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
@@ -3408,9 +4203,36 @@
       "status": "completed",
       "conclusion": "success"
     },
-    "linked_report_snapshot_utc": "2026-11-22 01:44:05 UTC",
-    "linked_report_is_explicitly_historical": true,
-    "history_tail_sha256": "6d4044e98d17b93fbb7122e598f824aed07949a8b669cd5ae268a308969a633b"
+    "linked_report_snapshot_utc": null,
+    "linked_report_is_explicitly_historical": null,
+    "history_tail_sha256": "6d4044e98d17b93fbb7122e598f824aed07949a8b669cd5ae268a308969a633b",
+    "previous_verified_snapshot": {
+      "revision": "AHj4eMRS5m9958H9u756vKSJFxkzTKHnLRWAagtsx5PnuzzpR8jdr2zn082_SJXnC0BLBoyHGg1bDqwq9VsyXZcPsxo6VCWj7nAha67selM",
+      "text_length": 22584,
+      "text_length_unit": "UTF-16 code units",
+      "body_snapshot_utc": "2026-11-22 02:08:24 UTC",
+      "history_tail_exact": true,
+      "history_tail_sha256": "6d4044e98d17b93fbb7122e598f824aed07949a8b669cd5ae268a308969a633b",
+      "contains_report_commit": "2bf653f413c59ffa4bc065089837545dedf66c2a"
+    },
+    "current_write_owner": "existing main/release coordinator after confirmed handoff",
+    "reported_H2_at_document_snapshot": "pass",
+    "reported_production_upgrade_executed_at_document_snapshot": true,
+    "previous_observed_snapshot": {
+      "revision": "AHj4eMTqVPyKydZcc2xpUGrWqqeTURop7zvFnU5A-6bcZbxDbTtCuqXZPg3DNBG1NH_M-nrz5Ww3V2yWmCeb2CumQMFCLegHXp1r5lj6wM4",
+      "text_length": 23808,
+      "body_snapshot_utc": "2026-11-22 02:52:03 UTC",
+      "reported_H2_at_document_snapshot": "pending",
+      "reported_production_upgrade_executed_at_document_snapshot": false
+    },
+    "product_release_and_deployment_states_match": true,
+    "document_body_predates_report_snapshot": true,
+    "current_report_link": "https://github.com/LIghtJUNction/ssmcp/tree/main/docs/reports/command-await-delivery-20261120",
+    "current_report_link_scope": "Main report directory; final fixed report link and final three-file integration follow this snapshot.",
+    "independent_final_state_readback": {
+      "bytes": 51641,
+      "sha256": "1ab6d049c2c5a1bd1ea7c971de581d9a1999c71add5441b5ddaceec8783174cc"
+    }
   },
   "previous_native_acceptance": {
     "source": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
@@ -3505,7 +4327,7 @@
       "script": "scripts/e2e.py"
     }
   },
-  "evidence_cutoff_utc": "2026-11-22 02:11:34 UTC",
+  "evidence_cutoff_utc": "2026-11-22 03:09:32 UTC",
   "source_transition": {
     "base_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
     "fixture_commit": "083ef018e13cdf6672637d41ea1bd13542185d5a",
@@ -3631,7 +4453,7 @@
     "not_runtime_validation": true
   },
   "postrelease_documents": {
-    "status": "original two-document patch delivered; minimal catalog correction pending; apply only after publication",
+    "status": "reviewed intent and five-tool catalog correction applied on main Q after H2",
     "paths": [
       "docs/session-service.md",
       "docs/session-control.md"
@@ -3641,8 +4463,7 @@
       "sha256": "efcf4e9882c4f1b2d03312e0a957893c869947e4beb2c5b23cd50f19daf1b31a"
     },
     "owner": "existing authorized source/release coordinator",
-    "original_patch_applied": false,
-    "catalog_correction_applied": false,
+    "catalog_correction_applied": true,
     "public_MCP_directory": [
       "list",
       "code_mode",
@@ -3652,7 +4473,16 @@
     ],
     "catalog_entry_count": 5,
     "scope": "Correct both existing document introductions and preserve the explicit absence of supported SSH execution.",
-    "does_not_change_current_source_or_release_binding": true
+    "does_not_change_current_source_or_release_binding": true,
+    "reviewed_intent_applied": true,
+    "original_patch_bytes_applied_unchanged": false,
+    "commit": "03f667ab0ea03e2e3f5bc2dde65bc241b5121df9",
+    "tree": "2344a5e0dca144bc95cdddfc5c0e68f2359807f5",
+    "parent": "c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce",
+    "files_changed": 2,
+    "additions": 15,
+    "deletions": 14,
+    "application_scope": "The actual two-document successor incorporates the reviewed intent and catalog correction; it is not represented as applying the original patch bytes unchanged."
   },
   "native_acceptance_history": [
     {
@@ -3897,5 +4727,151 @@
       "original_failures_retained": true
     }
   ],
-  "native_completion_summary_cutoff_utc": "2026-11-22 02:05:20 UTC"
+  "native_completion_summary_cutoff_utc": "2026-11-22 02:05:20 UTC",
+  "owned_workspace_cleanup": {
+    "status": "completed",
+    "worktrees_removed": 3,
+    "historical_source_labels": [
+      "508",
+      "eb319",
+      "final 1d6"
+    ],
+    "pre_remove_checks": [
+      "expected HEAD",
+      "clean worktree",
+      "no process cwd in owned worktree"
+    ],
+    "method": "git worktree remove without force",
+    "all_remove_exit_codes": 0,
+    "all_owned_paths_removed": true,
+    "main_user_dirty_state_unchanged": true,
+    "receipts_and_screenshots_retained": true,
+    "separate_release_H2_checkout_preserved": true,
+    "freed_bytes": null,
+    "scope": "Only three explicitly owned historical validation source worktrees; not user files, unrelated worktrees, or the managed-files acceptance count.",
+    "receipt": {
+      "file": "root-owned-worktree-cleanup-20261122.json",
+      "bytes": 1196,
+      "sha256": "04f70c4b9079b65dc8882ac863809eb5dffe118883652b58d24d12f1a25f0d72",
+      "read_scope": "Authenticated native owner completion summary; original receipt not read by this draft author."
+    }
+  },
+  "h2_verification": {
+    "status": "pass",
+    "executed": true,
+    "exit_code": 0,
+    "started_at": "2026-11-22T02:46:31Z",
+    "finished_at": "2026-11-22T02:49:35Z",
+    "S": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+    "P": "c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce",
+    "release_run_id": 44975626721,
+    "provenance_verified": true,
+    "execution_binding_verified": true,
+    "compatibility_successor": {
+      "commit": "ab08dac0e18ced96445de8799839f83375174ddb",
+      "tree": "e7bc0c63c0bcbca617a2df9ce5059e91c31329c8",
+      "directory": "docs/reports/command-await-delivery-20261120/publication-verifier-gh-log-compat-20261122",
+      "kind": "gh raw-log compatibility successor; existing verification assertions retained",
+      "base_contract_package_commit": "432900420ef4fbe093ad284cb49e66e1e2892800",
+      "changed_file": "verify_published_manual_main.py",
+      "changed_function": "api_bytes",
+      "original_file": {
+        "bytes": 48801,
+        "sha256": "04945d54734ce8b6c62900d71ca365217030cda486ed204e76cafa6972a59e12"
+      },
+      "executed_file": {
+        "bytes": 48829,
+        "sha256": "ed11f433e549419c2f11b35fb6ca9358822caa8d17356b56df2713930c6ff1d0"
+      },
+      "sole_source_insertion": {
+        "bytes": 28,
+        "byte_offset": 3083,
+        "text": "\"--allow-escape-sequences\", "
+      },
+      "capture_output_true_preserved": true,
+      "timeout_seconds": 180,
+      "check_true_preserved": true,
+      "raw_stdout_preserved": true,
+      "adapter_provenance_reviewed_recipe_blobs_unchanged": true,
+      "verification_assertions_unchanged": true,
+      "public_commit_scope": "Seven new compatibility documentation-package files; no product paths.",
+      "independent_static_review": "Existing direct reviewer closed the narrow delta; report root independently read the fixed patch.",
+      "not_a_product_source_change": true
+    },
+    "process_environment_override": {
+      "GODEBUG": "http2client=0",
+      "scope": "Verifier retry process only; no global network configuration or release rerun."
+    },
+    "capture_binding_unchanged_from_unique_release_POST": true,
+    "report": {
+      "file": "verification-1d6b55320fff.json",
+      "bytes": 399189,
+      "sha256": "4da9ac1e13589786b76308e61f3a5c41b0a2b2a3a5452bc4a3f1cfa4c9a78a14",
+      "read_scope": "Exact original receipt identity and selected results reported by the existing native execution owner; original receipt not independently read by this draft author."
+    },
+    "final_proof": {
+      "file": "root-H2-final-proof-20261122.json",
+      "bytes": 8849,
+      "sha256": "2cf9f7a7bb233e382bbe7daea913d7338042db73973857d8a1b24cb2997ecb97",
+      "read_scope": "Exact original receipt identity and selected results reported by the existing native execution owner; original receipt not independently read by this draft author."
+    },
+    "failed_attempts_retained": true,
+    "attempts": [
+      {
+        "attempt": 1,
+        "package": "original fixed v26 verifier",
+        "status": "failed",
+        "exit_code": 1,
+        "stage": "manual_main_provenance.py requested successful macOS ARM build job logs through gh api",
+        "GitHub_job_id": 137064905326,
+        "observed_error": "gh api returned exit 1; the original exception omitted stderr",
+        "cause": "unknown",
+        "original_report_retained": true,
+        "original_report_label": "root-h2-v26-44975626721-20261122/verification-1d6b55320fff.json",
+        "original_identity_recorded_in_final_proof": true
+      },
+      {
+        "attempt": 2,
+        "package_commit": "ab08dac0e18ced96445de8799839f83375174ddb",
+        "status": "failed",
+        "exit_code": 1,
+        "stage": "early GitHub Release-run metadata GET",
+        "cause": "unknown",
+        "subsequent_same_run_default_and_HTTP1_reads_succeeded": true,
+        "subsequent_response_bytes": 12720,
+        "subsequent_responses_identical_reported": true,
+        "original_identity_recorded_in_final_proof": true
+      },
+      {
+        "attempt": 3,
+        "package_commit": "ab08dac0e18ced96445de8799839f83375174ddb",
+        "status": "pass",
+        "exit_code": 0,
+        "process_only_GODEBUG": "http2client=0",
+        "same_S_P_run_and_original_capture": true,
+        "report": {
+          "file": "verification-1d6b55320fff.json",
+          "bytes": 399189,
+          "sha256": "4da9ac1e13589786b76308e61f3a5c41b0a2b2a3a5452bc4a3f1cfa4c9a78a14",
+          "read_scope": "Exact original receipt identity and selected results reported by the existing native execution owner; original receipt not independently read by this draft author."
+        }
+      }
+    ],
+    "bounded_diagnostic": {
+      "same_job_default_read_once_returned_EOF": true,
+      "HTTP1_diagnostic_observed_gh_terminal_control_character_refusal": true,
+      "gh_documented_flag": "--allow-escape-sequences",
+      "flagged_read_with_stdout_PIPE": {
+        "bytes": 78834,
+        "sha256": "baab687a7abf2ab15117529cca6086640f514f5bab84c826014881ce50197351",
+        "ESC_byte_count": 1412,
+        "stderr_bytes": 0
+      },
+      "causal_limit": "This diagnostic supports the compatibility change but does not uniquely establish the cause of the first attempt, whose stderr was absent."
+    },
+    "executed_by": "existing native main/release coordinator",
+    "executed_by_report_group": false,
+    "Release_rerun_or_second_POST_performed": false,
+    "read_scope": "Authenticated final execution and proof summaries; no helper import, execution or new gate by the report group."
+  }
 }

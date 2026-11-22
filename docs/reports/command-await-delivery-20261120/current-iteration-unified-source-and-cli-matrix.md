@@ -1,10 +1,12 @@
-# SSMCP 发布前验收：1d6 本机与六平台 CI 均通过，正式发布待执行
+# SSMCP 0.10.26 已正式发布，H2 核验通过，服务器升级完成
 
-**更新至 2026-11-22 02:11:34 UTC。** 当前候选 [1d6b5532](https://github.com/LIghtJUNction/ssmcp/commit/1d6b55320fff6533663dad2627891960b3b5c5cc) 已完成 V31 构建、库与协议检查、原 12 组 CLI、账户核心、原 CI 的其余本机场景，以及最终 worker、Agents 面板和补充检查。
+**报告快照：2026-11-22 03:09:32 UTC。**
 
-唯一的新六平台 [CI 44973215329](https://github.com/LIghtJUNction/ssmcp/actions/runs/44973215329) 已由报告协调者独立读取确认：**completed／success，6 个作业全部 success**。Google 进展文档也已更新到六平台通过的结果。正式 Release、H2 发布核验、主分支整合和独立服务器升级仍待实际执行回执。
+**结果更新至 2026-11-22 02:56:39 UTC 的升级后检查。** [v0.10.26 正式 Release](https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.26) 已于 **02:39:42 UTC** 发布，`draft=false`、`prerelease=false`，16 个资产均处于 uploaded 状态。唯一正式 [Release 工作流 44975626721](https://github.com/LIghtJUNction/ssmcp/actions/runs/44975626721) 已完成：**19 个作业中 17 个成功、2 个按计划跳过、0 个失败**。
 
-## 候选身份与验证范围
+标签仍指向已完成 V31 本机验收和六平台 CI 的产品源码 S1d6。验收报告的三文件文档后继已经通过 [PR 180](https://github.com/LIghtJUNction/ssmcp/pull/180) 正常合入主分支。**H2 发布核验已实际通过，独立服务器已升级到 0.10.26；现有客户端继续保持 0.10.25。** 升级后服务 active、运行摘要匹配，已有凭据的身份查询成功。两次 H2 失败记录和中继重连过程均保留。
+
+## 已验收的产品源码
 
 - **源码 S：** `1d6b55320fff6533663dad2627891960b3b5c5cc`
 - **源码树：** `fc28406bb20a3d1f6f9441ca34016357ab0ff39c`
@@ -14,6 +16,41 @@
 12a 修正了 unified 的严格审计事件匹配并补充发布说明；083 只改 Questions、Interactions、relay-composer 三份夹具；1d6 仅恢复前两份脚本的 100755 可执行模式，文件内容零变化。源码树和 blob 的静态比较已闭合，六份发布配方、相关 Cargo 文件及发布说明沿这两个后继提交保持。[固定差异](https://github.com/LIghtJUNction/ssmcp/commit/1d6b55320fff6533663dad2627891960b3b5c5cc)
 
 此前的 12a 二进制配合候选脚本运行结果保留为历史。本次表格使用新的 1d6/V31 完成回执，不再依赖那组混合来源作为最终本机结论。
+
+## 主分支、标签与正式发布
+
+此次有三个明确分工的提交：S 提供产品源码，D 在 S 上附加最终报告，P 是主分支合并后的工作流入口。
+
+| 身份 | 精确提交 | 已确认的关系 |
+| --- | --- | --- |
+| 产品源码 S | `1d6b55320fff6533663dad2627891960b3b5c5cc` | V31 与六平台 CI 的实际验收来源；`v0.10.26` 标签指向它 |
+| 文档后继 D | `107ffe9b7ccdc65d8184d848311306c0baa2e77a` | 唯一父提交为 S；只加入最终矩阵、事实与简短索引三份报告 |
+| 主分支工作流来源 P | `c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce` | PR 180 正常双父合并所得；源码树与 D 完全相同 |
+
+D 的 tree 为 `07445acc7ba5faf80054223be5dfe6a6c768648d`。三份新增文档位于 `docs/reports/command-await-delivery-20261120/`：`README.md`、`current-iteration-unified-source-and-cli-matrix.md`、`unified-source-and-cli-matrix-public-facts.json`。其中矩阵与事实原样复用已发布报告 [16fd69f8](https://github.com/LIghtJUNction/ssmcp/commit/16fd69f842d0a16c614ccd2268adffbefb89a66b) 的 blob；简短索引链接完整历史。报告协调者已独立读回三份文档的精确身份，其他产品文件、gitlink 和文件模式保持 S 的值。[D 固定提交](https://github.com/LIghtJUNction/ssmcp/commit/107ffe9b7ccdc65d8184d848311306c0baa2e77a) · [主分支 P](https://github.com/LIghtJUNction/ssmcp/commit/c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce)
+
+### 正式 Release 的实际终态
+
+| 项目 | 已确认结果 |
+| --- | --- |
+| 正式运行 | [44975626721](https://github.com/LIghtJUNction/ssmcp/actions/runs/44975626721)，attempt 1，completed／success |
+| 触发来源 | `workflow_dispatch`，main，head 为 P `c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce` |
+| 标签 | `v0.10.26` → S `1d6b55320fff6533663dad2627891960b3b5c5cc` |
+| 原始请求时间 | 02:20:23.470615–02:20:25.218848 UTC |
+| 请求输入 | `build_only=false`、`deploy_server=false` |
+| 工作流终态时间 | 02:39:45 UTC |
+| 公开 Release | [v0.10.26](https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.26)，ID 454147144，02:39:42 UTC 发布 |
+| 资产 | 16 个，全部 uploaded |
+| H2 发布核验 | 02:46:31–02:49:35 UTC 实际执行，退出 0；来源与执行绑定均 verified |
+| 独立服务器升级 | 02:52:22–02:52:25 UTC 完成；02:56:39 UTC 升级后检查通过 |
+
+报告协调者在 02:40:52 UTC 独立读取了运行、19 个作业、Release、资产目录和标签原始数据。17 个作业成功；`publish_crates` 与 `deploy_server` 是两个计划跳过项：本版 crates.io 发布继续延期，发布工作流没有执行服务器部署。其后的独立服务器升级按已有授权执行，另有完成回执；两条操作路径分别记录。
+
+16 个资产包括六个平台的二进制归档及六份对应摘要、两个安装器、`release-manifest.json` 和 `SHA256SUMS`。GitHub 的实际发布目录与 uploaded 状态已独立读回；后续 H2 也已完成资产下载、清单、源码和执行来源的关联核验。
+
+发布正文的实际 UTF-8 大小为 **14,534 字节**，SHA-256 为 `765fafd2e6eaef4958e48e6e9dc65077deca2530ab714f42fc4f2b88614f0aed`，与按标签源码 S 准备的预期正文完全一致。正文取源没有被主分支上的报告文档替换。
+
+工作流从 P 读取定义，标签指向产品源码 S。原始请求捕获与完整执行输出均保留，唯一请求返回的 run ID 对应本次成功运行。H2 始终核验同一 S/P、同一 run 和同一原始派发绑定，没有重跑或再次派发 Release。
 
 ## 1d6/V31 本机结果
 
@@ -73,7 +110,7 @@ Questions 保留真实视图、输入焦点、光标、精确 pending 数量及�
 
 ### release profile 与安装检查的边界
 
-本轮实际构建了 release profile 客户端和服务端，并通过隔离暂存安装的原四项检查。安装目标是验收拥有的暂存区，随后完成自有资源清理。**这些操作没有创建公开 GitHub Release，也没有覆盖当前运行客户端或生产服务。**
+本轮实际构建了 release profile 客户端和服务端，并通过隔离暂存安装的原四项检查。该验收阶段只安装到拥有的暂存区，随后完成自有资源清理；后来发生的正式发布和生产升级另有回执，现有运行客户端保持 0.10.25。
 
 较早的 180 秒准备超时原因仍保留为未知。后续 1d6 的离线 fetch 实际等待全局编译锁约 171 秒后完成，随后格式、Clippy、库与构建均正常结束；编译锁不再是当前阻挡。
 
@@ -136,15 +173,48 @@ worker 用 FIFO 原子领取和显式本地执行器工作，运行取消后须�
 
 门户原有 1,440 px 与 390 px 视觉证据来自匿名或合成页面。本轮准备回执确认已检查的 508 门户代码与最终 1d6 相同，因而继续保留这组页面证据；本次新增的实际宽窄查看针对 Agents 面板。真实付款、生产登录和升级后的在线页面不在这组视觉结果内。
 
-付款通知核验后才入账，页面回跳不确认付款，跨月到账仍需管理员核对退款。现有客户端和生产服务器尚未安装候选，本机通过没有改变此前线上版本基线。
+付款通知核验后才入账，页面回跳不确认付款，跨月到账仍需管理员核对退款。生产服务器现已完成本版升级；本次没有进行真实付款实验，原匿名／合成视觉证据与生产部署回执分别记录。
 
-## 发布准备与下一步
+## H2 通过及独立服务器升级
 
-[0.10.26 发布说明](https://github.com/LIghtJUNction/ssmcp/blob/1d6b55320fff6533663dad2627891960b3b5c5cc/docs/release-notes-0.10.26.md) 已补齐 worker、清理、工具仓库、finish_task、门户和支付体验。原 9,447 字节完整保留，新文件为 **13,772 字节**，SHA-256 为 `1a0b81c5c54c64d5ae6cc9bbab47f068d410663b07024705e9231de90378ec5f`。候选身份、发布说明及六份配方的静态来源核对已经闭合，既有 S/P 来源契约保持不变。
+[0.10.26 源码发布说明](https://github.com/LIghtJUNction/ssmcp/blob/1d6b55320fff6533663dad2627891960b3b5c5cc/docs/release-notes-0.10.26.md) 保留原 9,447 字节并补齐本轮功能，新文件为 **13,772 字节**，SHA-256 为 `1a0b81c5c54c64d5ae6cc9bbab47f068d410663b07024705e9231de90378ec5f`。该源文件与上文完整发布正文分别记录。来源及六份配方的静态核对已闭合，D 没有改动产品发布说明。
 
-在本轮 CI 已通过的基础上，原源码协调者将从 S 准备文档后继 D，只集成最终验收矩阵、事实文件和简短索引；随后按原流程进行主分支整合、Release、H2 和已授权的独立服务器升级。上述提交、发布与部署状态均以各自实际回执为准，本稿记录的是现已完成的验收。
+### H2 的失败记录、兼容修正与实际通过
 
-H2 当前只完成静态准备，没有 import 或执行；Release 工作流的服务器部署开关继续关闭。独立服务器升级单独推进，届时核对真实安装与服务状态。两篇 session 文档中的旧入口示例清理仍按发布后的原安排处理，保留后续新增内容。
+第一次核验在读取成功的 macOS ARM 构建作业日志时退出 1。原异常未保留底层 stderr，因此仅凭该回执无法确定直接原因。后续只读诊断另外证明，当前 `gh` 默认会拒绝该日志中的终端控制字符；取得原始日志不需要删去或转换这些字符。
+
+[兼容后继 ab08dac0](https://github.com/LIghtJUNction/ssmcp/commit/ab08dac0e18ced96445de8799839f83375174ddb) 只在 `verify_published_manual_main.py` 的 `api_bytes` 命令参数中增加 **28 字节**的 `"--allow-escape-sequences", `，文件从 48,801 字节变为 48,829 字节，stdout 仍以原始 PIPE 捕获。独立差分核对确认其他字节及断言不变，adapter、provenance 和已审配方的 blob 保持；原核验包也保留。该后继是单独的文档／核验器包，没有修改产品路径。
+
+兼容后继的第一次完整执行又在早期 GET run 元数据处退出 1，原因仍未知。后来默认连接与 HTTP/1 的同一 GET 均成功，不能据此反推那次失败必然是网络或协议问题。最终执行仅在该核验进程设置 `GODEBUG=http2client=0`，继续使用同一个兼容包、S/P、Release run 和原始请求捕获。
+
+**最终 H2 于 02:46:31–02:49:35 UTC 完成，退出 0。** 成功报告为 **399,189 字节**，其中 `provenance` 与 `execution_binding` 均为 `verified: true`。最终证明同时保留前两次失败原件的身份；19 个作业、16 个公开资产、源码与产物的既有核验条件没有放宽，也没有重新发布版本。
+
+### 生产升级与既有凭据连续性
+
+H2 通过后，唯一独立部署操作于 **02:52:22–02:52:25 UTC** 完成，部署来源仍为标签 S1d6／v0.10.26。运行服务的摘要与目标摘要一致：
+
+`ad3af5835f8a14946e68c1f53887354c730900a7b0daee4be71c1c5a132ea564`
+
+中继切换使旧连接失效；恢复连接后只读取同一部署操作的终态，没有再次执行部署。完成回执记录配置、原有 units、runners 和 proxy 保持，自有临时文件清理量为 **26,442,243 字节**。这是回执记录的清理字节数，不据此推算磁盘净释放空间。
+
+部署回执的分层检查结果照原样保留：stage／direct 的 `proxy_pricing_policy_preserved` 和 `single_public_footer` 为 false，public 两项为 true。公开入口与阶段／直接入口的结果分别记录，不能概括成“所有布尔检查均为 true”。
+
+| 对象 | 02:29:04 UTC 升级前 | 02:56:39 UTC 升级后 |
+| --- | --- | --- |
+| 生产服务 | `ssmcpd 0.10.20`，active | `ssmcpd 0.10.26`，active；运行摘要与目标匹配 |
+| 已安装客户端 | `0.10.25` | 仍为 `0.10.25`，原摘要不变 |
+| 已保存凭据查询 | `whoami` 退出 0，返回 JSON，stderr 为空 | 已有凭据查询成功，身份与升级前一致 |
+| 客户端及凭据操作 | 只读基线 | 没有登录、退出登录、客户端安装或客户端重启 |
+
+升级后插件目录与原生调用恢复可用，协作登记重新建立。**本次升级存在连接中断，未宣称零中断；已有账户凭据无须重新登录。** 这份真实凭据连续性检查与前面的 DCR 夹具范围分开记录，没有把 DCR 结果扩写为完整 access／refresh CLI 链。
+
+### 会话文档与最终报告收尾
+
+两篇会话文档已在 P 之后单独修订为 [Q `03f667ab0ea03e2e3f5bc2dde65bc241b5121df9`](https://github.com/LIghtJUNction/ssmcp/commit/03f667ab0ea03e2e3f5bc2dde65bc241b5121df9)，tree 为 `2344a5e0dca144bc95cdddfc5c0e68f2359807f5`，唯一父提交为 P。该提交只改两份文档，15 行新增、14 行删除，更新五项公开工具以及账户登录、本机 attach、远端 attach 的说明；报告协调者已独立读回。产品标签 S 和已经完成的 Release 来源保持不变。
+
+三份历史独立验收工作树已在逐一确认 HEAD、干净状态及没有进程以其为当前目录后正常移除，没有使用 force，操作均退出 0、路径已移除。用户主工作树的既有脏状态前后一致；验收回执、截图以及发布核验使用的源码工作区继续保留。
+
+本稿记录的产品验收、正式发布、H2 和独立服务器升级均已有实际结果。最后的矩阵、事实与简短索引将以 Q 为基线统一整合；Google 文档已于 03:06:04 UTC 更新为发布、H2 和服务器升级完成，报告协调者独立读回并确认历史原文摘要保持一致。最终报告的固定链接与主分支整合由后续实际读回记录，本稿不预写自己的未来提交或合并状态。当前事实记录中残留的 ignored 旧说明随本次文档更新校正；历史检查点原文保持不变。本稿保持 **11 项其他 ignored 未执行** 的实际范围。
 
 ## 回执身份与历史
 
@@ -152,6 +222,17 @@ H2 当前只完成静态准备，没有 import 或执行；Release 工作流的�
 
 | 证据 | 字节数 | SHA-256 |
 | --- | ---: | --- |
+| 正式 Release 终态独立只读快照 | 164,093 | `83ba2ded096b18f376267b4bf6af676abbd2c0504e2cd56d4c1e178f5dc2ec33` |
+| H2 兼容后继核验器 | 48,829 | `ed11f433e549419c2f11b35fb6ca9358822caa8d17356b56df2713930c6ff1d0` |
+| H2 成功报告 | 399,189 | `4da9ac1e13589786b76308e61f3a5c41b0a2b2a3a5452bc4a3f1cfa4c9a78a14` |
+| H2 最终证明（保留两次失败身份） | 8,849 | `2cf9f7a7bb233e382bbe7daea913d7338042db73973857d8a1b24cb2997ecb97` |
+| 独立服务器部署完成回执 | 8,327 | `18ed692a12427b83dc848214caae0f764235ab3aad1fe8cfd25f8b08a00654db` |
+| 升级后既有凭据连续性 | 4,594 | `c1e84088d940b31cb98c438f63276faef70374a58ed5adbebc4f028631b631a9` |
+| 02:56 升级后只读检查 | 2,406 | `6545ca91670c55c1a8502f7c622fbf4371e8ccbea27ec2dd87c26b3aef760d5f` |
+| 02:29 升级前基线 | 818 | `4041a7608f9d306fae1113a757a71ce548b743bcbd97548747e56a1b8a006ad8` |
+| 三份历史验收工作树清理 | 1,196 | `04f70c4b9079b65dc8882ac863809eb5dffe118883652b58d24d12f1a25f0d72` |
+| 唯一 Release 请求原始捕获 | 2,759 | `5409dab9a284f590e178438c1c98817e994bfe138c587b46f3b10fc68e57fa24` |
+| 唯一 Release 请求完整执行输出 | 9,478 | `46189b411083e86216297efa1d346701618160bcf5ecb85743f3727baa4f7197` |
 | V31 构建与原 CLI／账户核心交接 | 20,265 | `7e206a8b3af1491b5e90c5aa4ba3031f2640328e32fbec5bd6e5940a4c55df22` |
 | release profile 与暂存安装 | 16,968 | `42d2718e6f5473f8fa8460fd022edfbe4b4730cde6bb2fb4de2883c588a8d116` |
 | 本次唯一 CI 派发 | 1,317 | `eb7cdb97095dd7ec6d8bb32ea416e65f00e9c710727f222d5b98d4c4339f780b` |
@@ -167,6 +248,9 @@ H2 当前只完成静态准备，没有 import 或执行；Release 工作流的�
 
 早期失败与原因定位继续保留，不在本次终态汇总中重述全部过程：
 
+- [最终验收报告（16fd69f8）](https://github.com/LIghtJUNction/ssmcp/blob/16fd69f842d0a16c614ccd2268adffbefb89a66b/docs/reports/command-await-delivery-20261120/current-iteration-unified-source-and-cli-matrix.md)
+- [v0.10.26 正式 Release](https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.26)
+- [正式 Release 工作流](https://github.com/LIghtJUNction/ssmcp/actions/runs/44975626721)
 - [1d6 构建等待阶段报告（2bf653f4）](https://github.com/LIghtJUNction/ssmcp/blob/2bf653f413c59ffa4bc065089837545dedf66c2a/docs/reports/command-await-delivery-20261120/current-iteration-unified-source-and-cli-matrix.md)
 - [12a、eb319 及门户完整阶段报告（bba557f2）](https://github.com/LIghtJUNction/ssmcp/blob/bba557f2c710fe3b0e65883db29da8573e2e7014/docs/reports/command-await-delivery-20261120/current-iteration-unified-source-and-cli-matrix.md)
 - [本次六平台 CI](https://github.com/LIghtJUNction/ssmcp/actions/runs/44973215329)
