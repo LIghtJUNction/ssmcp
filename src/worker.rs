@@ -41,14 +41,26 @@ pub(crate) struct SlotView {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub(crate) struct ManagerView {
+    pub(crate) client_id: String,
+    pub(crate) thread_id: String,
+    pub(crate) participant_id: String,
+    pub(crate) connection: u64,
+    pub(crate) attached_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct Snapshot {
+    pub(crate) process_id: u32,
     pub(crate) generation: String,
+    pub(crate) manager: Option<ManagerView>,
     pub(crate) total: usize,
     pub(crate) idle: usize,
     pub(crate) working: usize,
     pub(crate) offline: usize,
     pub(crate) queued: usize,
     pub(crate) closed: bool,
+    pub(crate) stopping: bool,
     pub(crate) slots: Vec<SlotView>,
 }
 
@@ -68,13 +80,16 @@ fn view() -> &'static Mutex<Display> {
 pub(crate) fn prepare_display(config: Config) {
     let mut view = view().lock().unwrap_or_else(|error| error.into_inner());
     view.pending = Some(Snapshot {
+        process_id: std::process::id(),
         generation: String::new(),
+        manager: None,
         total: config.count,
         idle: 0,
         working: 0,
         offline: config.count,
         queued: 0,
         closed: false,
+        stopping: false,
         slots: (0..config.count)
             .map(|slot| SlotView {
                 slot,

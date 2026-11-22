@@ -1,6 +1,6 @@
 //! One native worker pool owns a bounded FIFO. A lease is internal authority;
 //! display labels and request JSON never select or complete an execution slot.
-use super::{SlotLog, SlotView, Snapshot};
+use super::{ManagerView, SlotLog, SlotView, Snapshot};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;
@@ -21,6 +21,63 @@ pub(crate) struct Actor {
     pub(crate) subject: String,
     pub(crate) participant: Option<String>,
     pub(crate) connection: u64,
+}
+
+struct Manager {
+    actor: Actor,
+    view: ManagerView,
+}
+
+impl Manager {
+    fn new(actor: &Actor, client_id: &str, now_ms: u64) -> Result<Self, String> {
+        let participant = actor.participant.as_ref().filter(|id| !id.is_empty())
+            .ok_or("worker management requires a verified participant thread")?;
+        if client_id.len() != 64 || !client_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("worker management requires the verified native client identity".into());
+        }
+        Ok(Self {
+            actor: actor.clone(),
+            view: ManagerView {
+                client_id: client_id.into(),
+                thread_id: participant.clone(),
+                participant_id: participant.clone(),
+                connection: actor.connection,
+                attached_at_ms: now_ms,
+            },
+        })
+    }
+
+    fn matches(&self, actor: &Actor, client_id: &str) -> bool {
+        &self.actor == actor && self.view.client_id == client_id
+    }
+}
+
+/// Manager listing deliberately omits prompts, expanded inputs and results.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct TaskSummary {
+    task_id: String,
+    status: TaskStatus,
+    slot: Option<usize>,
+    attempt: u64,
+    created_ms: u64,
+    updated_ms: u64,
+    replay_safe: bool,
+}
+
+impl From<&TaskView> for TaskSummary {
+    fn from(task: &TaskView) -> Self {
+        Self {
+            task_id: task.task_id.clone(), status: task.status, slot: task.slot,
+            attempt: task.attempt, created_ms: task.created_ms,
+            updated_ms: task.updated_ms, replay_safe: task.replay_safe,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct TaskPage {
+    tasks: Vec<TaskSummary>,
+    next_cursor: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -99,6 +156,7 @@ struct Slot {
 }
 
 struct State<T> {
+    manager: Option<Manager>,
     tasks: BTreeMap<String, Task<T>>,
     fifo: VecDeque<String>,
     finished: VecDeque<String>,
@@ -106,6 +164,7 @@ struct State<T> {
     sequence: u64,
     revision: u64,
     closed: bool,
+    stopping: bool,
     unknown_keys: BTreeSet<(Actor, String)>,
     unknown_guard_full: bool,
 }
@@ -125,6 +184,7 @@ impl<T: Clone> Queue<T> {
         Ok(Self {
             generation,
             state: Mutex::new(State {
+                manager: None,
                 tasks: BTreeMap::new(),
                 fifo: VecDeque::new(),
                 finished: VecDeque::new(),
@@ -139,6 +199,7 @@ impl<T: Clone> Queue<T> {
                 sequence: 0,
                 revision: 0,
                 closed: false,
+                stopping: false,
                 unknown_keys: BTreeSet::new(),
                 unknown_guard_full: false,
             }),
@@ -155,13 +216,101 @@ impl<T: Clone> Queue<T> {
         self.changed.send_replace(state.revision);
     }
 
+    /// This check never binds an observer or an executor as manager. Submission
+    /// repeats it under the admission lock after asynchronous input preparation.
+    pub(crate) fn check_submitter(&self, actor: &Actor, client_id: &str) -> Result<(), String> {
+        let _ = Manager::new(actor, client_id, 0)?;
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.manager.as_ref().is_some_and(|manager| !manager.matches(actor, client_id)) {
+            return Err("worker pool belongs to a different authenticated manager".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_manager(&self, actor: &Actor, client_id: &str) -> bool {
+        self.state.lock().unwrap_or_else(|error| error.into_inner())
+            .manager.as_ref().is_some_and(|manager| manager.matches(actor, client_id))
+    }
+
+    pub(crate) fn attach(&self, actor: &Actor, client_id: &str, now_ms: u64) -> Result<ManagerView, String> {
+        let manager = Manager::new(actor, client_id, now_ms)?;
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(current) = &state.manager {
+            return if current.matches(actor, client_id) {
+                Ok(current.view.clone())
+            } else {
+                Err("worker pool belongs to a different authenticated manager".into())
+            };
+        }
+        if state.closed || state.stopping {
+            return Err("worker pool is no longer accepting a manager".into());
+        }
+        let view = manager.view.clone();
+        state.manager = Some(manager);
+        self.changed(&mut state);
+        Ok(view)
+    }
+
+    pub(crate) fn tasks(&self, actor: &Actor, client_id: &str, cursor: Option<&str>, limit: usize) -> Result<TaskPage, String> {
+        if !(1..=128).contains(&limit) || cursor.is_some_and(|cursor| cursor.len() > 256 || cursor.chars().any(char::is_control)) {
+            return Err("worker tasks requires limit 1..128 and a valid task cursor".into());
+        }
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        require_manager(&state, actor, client_id)?;
+        let mut tasks: Vec<_> = state.tasks.iter()
+            .filter(|(id, task)| &task.actor == actor && cursor.is_none_or(|cursor| id.as_str() > cursor))
+            .take(limit + 1)
+            .map(|(_, task)| TaskSummary::from(&task.view))
+            .collect();
+        let more = tasks.len() > limit;
+        tasks.truncate(limit);
+        let next_cursor = more.then(|| tasks.last().expect("positive page limit").task_id.clone());
+        Ok(TaskPage { tasks, next_cursor })
+    }
+
+    /// Stop accepting work without consuming a remote lease or claiming that
+    /// an external process stopped. Existing claimants can still acknowledge.
+    pub(crate) fn stop(&self, actor: &Actor, client_id: &str, now_ms: u64) -> Result<bool, String> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        require_manager(&state, actor, client_id)?;
+        if state.stopping || state.closed {
+            return Ok(false);
+        }
+        state.stopping = true;
+        while let Some(id) = state.fifo.pop_front() {
+            if let Some(task) = state.tasks.get_mut(&id) {
+                task.view.status = TaskStatus::Cancelled;
+                task.view.updated_ms = now_ms;
+                state.finished.push_back(id);
+            }
+        }
+        for task in state.tasks.values_mut().filter(|task| task.view.status == TaskStatus::Working) {
+            task.view.status = TaskStatus::Cancelling;
+            task.view.updated_ms = now_ms;
+        }
+        for slot in &mut state.slots {
+            if matches!(slot.state, SlotState::Idle) {
+                slot.state = SlotState::Offline("stopped by manager; no new tasks accepted".into());
+            }
+            log(slot, now_ms, "warning", "Manager requested stop; active tasks await completion acknowledgement", None);
+        }
+        trim(&mut state);
+        self.changed(&mut state);
+        Ok(true)
+    }
+
+    pub(crate) fn accepting(&self) -> bool {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        !state.closed && !state.stopping
+    }
+
     /// Only the owner calls this after its execution backend is ready. For a
     /// local executor that requires the limited-child handshake; for remote
     /// mode it means the in-process claim service is ready, not a model process.
     pub(crate) fn online(&self, slot: usize) -> Result<u64, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.closed {
-            return Err("worker pool is closed".into());
+        if state.closed || state.stopping {
+            return Err("worker pool is closed or stopped by its manager".into());
         }
         let worker = state.slots.get_mut(slot).ok_or("unknown worker slot")?;
         if !matches!(worker.state, SlotState::Offline(_)) {
@@ -205,6 +354,7 @@ impl<T: Clone> Queue<T> {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn submit(
         &self,
         actor: Actor,
@@ -213,6 +363,19 @@ impl<T: Clone> Queue<T> {
         context: T,
         now_ms: u64,
     ) -> Result<TaskView, String> {
+        self.submit_inner(actor, key, text, context, now_ms, None)
+    }
+
+    pub(crate) fn submit_managed(
+        &self, actor: Actor, client_id: &str, key: &str, text: &str, context: T, now_ms: u64,
+    ) -> Result<TaskView, String> {
+        self.submit_inner(actor, key, text, context, now_ms, Some(client_id))
+    }
+
+    fn submit_inner(
+        &self, actor: Actor, key: &str, text: &str, context: T, now_ms: u64, client_id: Option<&str>,
+    ) -> Result<TaskView, String> {
+        let manager = client_id.map(|client_id| Manager::new(&actor, client_id, now_ms)).transpose()?;
         if key.is_empty() || key.len() > 128 || key.chars().any(char::is_control) {
             return Err(
                 "worker request_id must contain 1..128 bytes without control characters".into(),
@@ -222,6 +385,11 @@ impl<T: Clone> Queue<T> {
             return Err("worker task text must contain 1..16384 bytes without NUL".into());
         }
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(manager) = &manager
+            && state.manager.as_ref().is_some_and(|current| !current.matches(&actor, &manager.view.client_id))
+        {
+            return Err("worker pool belongs to a different authenticated manager".into());
+        }
         if let Some(task) = state
             .tasks
             .values()
@@ -242,8 +410,8 @@ impl<T: Clone> Queue<T> {
         if state.unknown_guard_full {
             return Err("worker unknown-result retry guard is full; no new task was admitted; reconcile unknown effects before starting another connection".into());
         }
-        if state.closed {
-            return Err("worker pool is closed; no task was admitted".into());
+        if state.closed || state.stopping {
+            return Err("worker pool is closed or stopped; no task was admitted".into());
         }
         if state
             .slots
@@ -255,10 +423,16 @@ impl<T: Clone> Queue<T> {
         if state.fifo.len() >= MAX_QUEUED {
             return Err("worker FIFO is full; no task was admitted".into());
         }
-        state.sequence = state
+        let sequence = state
             .sequence
             .checked_add(1)
             .ok_or("worker task sequence exhausted")?;
+        // Every rejection above leaves ownership untouched. Admission and the
+        // first manager binding are one transaction under this state lock.
+        if state.manager.is_none() {
+            state.manager = manager;
+        }
+        state.sequence = sequence;
         let id = format!("worker_task_{}_{}", self.generation, state.sequence);
         let view = TaskView {
             task_id: id.clone(),
@@ -296,7 +470,7 @@ impl<T: Clone> Queue<T> {
         now_ms: u64,
     ) -> Result<Option<Lease<T>>, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.closed {
+        if state.closed || state.stopping {
             return Ok(None);
         }
         let worker = state.slots.get(slot).ok_or("unknown worker slot")?;
@@ -320,7 +494,7 @@ impl<T: Clone> Queue<T> {
         now_ms: u64,
     ) -> Result<Option<Lease<T>>, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.closed {
+        if state.closed || state.stopping {
             return Ok(None);
         }
         let Some((slot, epoch)) = state.slots.iter().enumerate().find_map(|(index, slot)| {
@@ -499,6 +673,7 @@ impl<T: Clone> Queue<T> {
         source: &str,
     ) -> Result<TaskView, String> {
         let closed = state.closed;
+        let stopping = state.stopping;
         let task = state
             .tasks
             .get_mut(&lease.task_id)
@@ -527,8 +702,10 @@ impl<T: Clone> Queue<T> {
         task.view.updated_ms = now_ms;
         task.view.replay_safe = false;
         let view = task.view.clone();
-        state.slots[lease.slot].state = if reusable && !closed {
+        state.slots[lease.slot].state = if reusable && !closed && !stopping {
             SlotState::Idle
+        } else if stopping && !closed {
+            SlotState::Offline("stopped by manager; task completion acknowledged".into())
         } else if source == "Remote agent report" {
             SlotState::Offline("remote coordination closed; external effects may remain".into())
         } else {
@@ -613,13 +790,16 @@ impl<T: Clone> Queue<T> {
             })
             .collect();
         Snapshot {
+            process_id: std::process::id(),
             generation: self.generation.clone(),
+            manager: state.manager.as_ref().map(|manager| manager.view.clone()),
             total: slots.len(),
             idle: slots.iter().filter(|slot| slot.state == "idle").count(),
             working: slots.iter().filter(|slot| slot.state == "working").count(),
             offline: slots.iter().filter(|slot| slot.state == "offline").count(),
             queued: state.fifo.len(),
             closed: state.closed,
+            stopping: state.stopping,
             slots,
         }
     }
@@ -660,6 +840,14 @@ impl<T: Clone> Queue<T> {
         trim(&mut state);
         self.changed(&mut state);
         Ok(())
+    }
+}
+
+fn require_manager<T>(state: &State<T>, actor: &Actor, client_id: &str) -> Result<(), String> {
+    if state.manager.as_ref().is_some_and(|manager| manager.matches(actor, client_id)) {
+        Ok(())
+    } else {
+        Err("this worker management action requires the pool's authenticated manager".into())
     }
 }
 

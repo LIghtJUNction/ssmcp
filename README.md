@@ -139,7 +139,8 @@ ssmcp context use here
 
 | 操作 | 用法 |
 | --- | --- |
-| 发给指定 Agent | 光标在草稿开头时按 **←**，选择成员，Enter / → 返回 |
+| 查看会话统计 | 向左进入统计页，查看会话进程 ID、主 Agent 线程 ID 与实际计数 |
+| 发给指定 Agent | `/sessions` 或 `/message` 打开收件人选择器，选定后返回输入框发送 |
 | 引用文件、图片 | 输入 `@` 枚举工作区；支持中文、带空格路径和目录续补 |
 | 粘贴图片 | **Ctrl + V** 或 `/paste`；`/attach PATH` 导入本地图片 |
 | 引用技能 | 输入 `$` 枚举有效技能；项目技能覆盖同名全局技能 |
@@ -304,3 +305,4 @@ cargo run --locked --bin ssmcp -- ui preview
 ---
 
 [MIT License](LICENSE)
+
