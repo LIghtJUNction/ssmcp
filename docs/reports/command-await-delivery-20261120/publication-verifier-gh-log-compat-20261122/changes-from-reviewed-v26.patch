@@ -1,0 +1,11 @@
+--- a/verify_published_manual_main.py
++++ b/verify_published_manual_main.py
+@@ -72,7 +72,7 @@
+ 
+ def api_bytes(endpoint):
+     """Return the authenticated GitHub response body without text re-encoding."""
+-    result = subprocess.run(["gh", "api", "--hostname", "github.com", endpoint],
++    result = subprocess.run(["gh", "api", "--hostname", "github.com", "--allow-escape-sequences", endpoint],
+                             capture_output=True, timeout=180, check=True)
+     return result.stdout
+ 
