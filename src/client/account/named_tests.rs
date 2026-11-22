@@ -477,3 +477,240 @@ async fn account_compat_rejects_missing_expired_multi_and_cross_origin_before_ne
     assert!(matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock));
     fs::remove_dir_all(directory).unwrap();
 }
+
+fn identity_claims(username: &str, aliases: &[&str], generated: bool) -> Value {
+    let mut response = identity(Some(username));
+    response["identity"]["username_aliases"] = json!(aliases);
+    response["identity"]["username_generated"] = json!(generated);
+    response
+}
+
+#[tokio::test]
+async fn verified_alias_connect_saves_only_the_canonical_account() {
+    let directory = root();
+    let (origin, requests) = server(|_| {
+        vec![Step {
+            path: "/api/client/whoami",
+            status: 200,
+            body: identity_claims("current-name", &["former-name"], false),
+            authenticated: true,
+        }]
+    })
+    .await;
+    let mut credential = saved(&origin);
+    credential.username = Some("former-name".into());
+    save_at(&directory, &credential).unwrap();
+    let current = connect_at(&directory, Some(&origin), Some("Former-Name"), true, false)
+        .await
+        .unwrap();
+    assert_eq!(current.username.as_deref(), Some("current-name"));
+    assert_eq!(current.subject.as_deref(), Some("123"));
+    assert_eq!(current.token, credential.token);
+    let stored: Value =
+        serde_json::from_slice(&fs::read(credential_path(&directory, &origin)).unwrap()).unwrap();
+    assert_eq!(stored["username"], "current-name");
+    assert!(stored.get("username_aliases").is_none());
+    assert!(stored.get("username_generated").is_none());
+    assert_eq!(requests.await.unwrap(), vec![Value::Null]);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn unproven_alias_or_foreign_subject_connect_preserves_the_saved_login() {
+    let mut foreign = identity_claims("current-name", &["former-name"], false);
+    foreign["identity"]["subject"] = json!("456");
+    for body in [foreign, identity(Some("current-name"))] {
+        let directory = root();
+        let (origin, requests) = server(|_| {
+            vec![Step {
+                path: "/api/client/whoami",
+                status: 200,
+                body,
+                authenticated: true,
+            }]
+        })
+        .await;
+        save_at(&directory, &saved(&origin)).unwrap();
+        let path = credential_path(&directory, &origin);
+        let before = fs::read(&path).unwrap();
+        assert!(
+            connect_at(&directory, Some(&origin), Some("former-name"), true, false)
+                .await
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(requests.await.unwrap(), vec![Value::Null]);
+        fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn generated_username_is_claimed_only_for_an_explicit_connect_name() {
+    for requested in [None, Some("chosen-name"), Some("member-initial")] {
+        let directory = root();
+        let (origin, requests) = server(|_| {
+            let mut steps = vec![Step {
+                path: "/api/client/whoami",
+                status: 200,
+                body: identity_claims("member-initial", &[], true),
+                authenticated: true,
+            }];
+            if let Some(name) = requested {
+                steps.push(Step {
+                    path: "/api/client/username",
+                    status: 200,
+                    body: identity_claims(name, &[], false),
+                    authenticated: true,
+                });
+            }
+            steps
+        })
+        .await;
+        save_at(&directory, &saved(&origin)).unwrap();
+        let current = connect_at(&directory, Some(&origin), requested, true, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            current.username.as_deref(),
+            Some(requested.unwrap_or("member-initial"))
+        );
+        let bodies = requests.await.unwrap();
+        if let Some(name) = requested {
+            assert_eq!(bodies, vec![Value::Null, json!({"username":name})]);
+        } else {
+            assert_eq!(bodies, vec![Value::Null]);
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn generated_claim_pins_the_verified_subject_even_for_legacy_credentials() {
+    let mut foreign = identity_claims("chosen-name", &[], false);
+    foreign["identity"]["subject"] = json!("456");
+    for cached_subject in [None, Some("123")] {
+        for (status, body) in [
+            (200, foreign.clone()),
+            (409, json!({"error":"username_bound"})),
+            (200, identity_claims("different-name", &[], false)),
+        ] {
+            let directory = root();
+            let (origin, requests) = server(|_| {
+                vec![
+                    Step {
+                        path: "/api/client/whoami",
+                        status: 200,
+                        body: identity_claims("member-initial", &[], true),
+                        authenticated: true,
+                    },
+                    Step {
+                        path: "/api/client/username",
+                        status,
+                        body,
+                        authenticated: true,
+                    },
+                ]
+            })
+            .await;
+            let mut credential = saved(&origin);
+            credential.subject = cached_subject.map(str::to_owned);
+            save_at(&directory, &credential).unwrap();
+            let path = credential_path(&directory, &origin);
+            let before = fs::read(&path).unwrap();
+            assert!(
+                connect_at(&directory, Some(&origin), Some("chosen-name"), true, false)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(fs::read(&path).unwrap(), before);
+            assert_eq!(
+                requests.await.unwrap(),
+                vec![Value::Null, json!({"username":"chosen-name"})]
+            );
+            fs::remove_dir_all(directory).unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn oauth_alias_proof_keeps_the_saved_name_canonical() {
+    for proven in [true, false] {
+        let directory = root();
+        let (origin, requests) = server(|origin| {
+            let mut steps = authorization_steps(origin, "current-name");
+            if proven {
+                steps[1].body["identity"]["username_aliases"] = json!(["former-name"]);
+                steps[1].body["identity"]["username_generated"] = json!(false);
+            }
+            steps
+        })
+        .await;
+        let mut credential = saved(&origin);
+        credential.expires_at = now() - 1;
+        save_at(&directory, &credential).unwrap();
+        let path = credential_path(&directory, &origin);
+        let before = fs::read(&path).unwrap();
+        let result = connect_at(&directory, Some(&origin), Some("former-name"), true, true).await;
+        if proven {
+            assert_eq!(result.unwrap().username.as_deref(), Some("current-name"));
+            assert_eq!(
+                load_at(&directory, Some(&origin), false)
+                    .unwrap()
+                    .unwrap()
+                    .username
+                    .as_deref(),
+                Some("current-name")
+            );
+        } else {
+            assert!(result.is_err());
+            assert_eq!(fs::read(&path).unwrap(), before);
+        }
+        let bodies = requests.await.unwrap();
+        assert_eq!(bodies[0]["username"], "former-name");
+        assert_eq!(bodies[1], json!({"device_code":"c".repeat(64)}));
+        fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn account_compat_keeps_generated_names_read_only_and_rejects_old_aliases() {
+    for (body, requested, allowed) in [
+        (
+            identity_claims("member-initial", &[], true),
+            "member-initial",
+            true,
+        ),
+        (
+            identity_claims("current-name", &["former-name"], false),
+            "current-name",
+            true,
+        ),
+        (
+            identity_claims("current-name", &["former-name"], false),
+            "former-name",
+            false,
+        ),
+    ] {
+        let directory = root();
+        let (origin, requests) = server(|_| {
+            vec![Step {
+                path: "/api/client/whoami",
+                status: 200,
+                body,
+                authenticated: true,
+            }]
+        })
+        .await;
+        save_at(&directory, &saved(&origin)).unwrap();
+        let path = credential_path(&directory, &origin);
+        let before = fs::read(&path).unwrap();
+        let result = compat_at(&directory, &origin, &[format!("{requested}@{origin}")]).await;
+        assert_eq!(result.is_ok(), allowed);
+        if let Ok(current) = result {
+            assert_eq!(current.username.as_deref(), Some(requested));
+        }
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(requests.await.unwrap(), vec![Value::Null]);
+        fs::remove_dir_all(directory).unwrap();
+    }
+}

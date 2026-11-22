@@ -26,6 +26,7 @@ mod wait;
 pub(super) const DEFAULT_SERVER: &str = "https://ssmcp.lmm.best";
 const STORE_LIMIT: usize = 32 * 1024;
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
+const MAX_USERNAME_ALIASES: usize = 128;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -588,7 +589,44 @@ fn public_identity(value: &Value) -> Result<Value> {
         }
         public["username"] = json!(username);
     }
+    if let Some(value) = identity.get("username_aliases") {
+        let aliases = value
+            .as_array()
+            .filter(|aliases| aliases.len() <= MAX_USERNAME_ALIASES)
+            .ok_or("server returned invalid username aliases")?;
+        if aliases.iter().any(|value| {
+            value
+                .as_str()
+                .is_none_or(|alias| crate::username::normalize(alias).as_deref() != Ok(alias))
+        }) || (!aliases.is_empty() && public["username"].is_null())
+        {
+            return Err("server returned invalid username aliases".into());
+        }
+        public["username_aliases"] = value.clone();
+    }
+    if let Some(value) = identity.get("username_generated") {
+        let generated = value
+            .as_bool()
+            .ok_or("server returned invalid username generation status")?;
+        if generated && public["username"].is_null() {
+            return Err("server returned invalid username generation status".into());
+        }
+        public["username_generated"] = json!(generated);
+    }
     Ok(public)
+}
+
+// Only use metadata validated by public_identity from this relay's authenticated
+// response. Aliases never enter the credential cache or replace subject checks.
+fn identity_matches_username(identity: &Value, requested: &str) -> bool {
+    identity["username"].as_str() == Some(requested)
+        || identity["username_aliases"]
+            .as_array()
+            .is_some_and(|aliases| {
+                aliases
+                    .iter()
+                    .any(|alias| alias.as_str() == Some(requested))
+            })
 }
 
 fn verification_url(server: &str, raw: &str, secret: &str) -> Result<Url> {
@@ -749,7 +787,7 @@ async fn finish_authorization(root: &Path, authorization: Authorization) -> Resu
     let identity = public_identity(&response)?;
     if username
         .as_deref()
-        .is_some_and(|requested| identity["username"].as_str() != Some(requested))
+        .is_some_and(|requested| !identity_matches_username(&identity, requested))
     {
         return Err(
             "GitHub authorization did not bind the requested username; no credential was saved"
@@ -901,9 +939,13 @@ async fn connect_at(
         if reply.status != StatusCode::UNAUTHORIZED {
             let mut identity = public_identity(&Api::checked(reply)?)?;
             same_subject(credential, &identity)?;
-            if identity["username"].is_null()
+            if (identity["username"].is_null()
+                || identity["username_generated"].as_bool() == Some(true))
                 && let Some(username) = requested.as_deref()
             {
+                // Older saved credentials may omit subject. Pin the verified
+                // whoami subject before any claim, even for those credentials.
+                let subject = identity["subject"].as_str().unwrap().to_owned();
                 identity = public_identity(
                     &api.post(
                         "/api/client/username",
@@ -913,9 +955,14 @@ async fn connect_at(
                     .await?,
                 )?;
                 same_subject(credential, &identity)?;
+                if identity["subject"].as_str() != Some(subject.as_str()) {
+                    return Err(
+                        "the server returned a different GitHub account for this credential".into(),
+                    );
+                }
             }
             if let Some(requested) = requested.as_deref()
-                && identity["username"].as_str() != Some(requested)
+                && !identity_matches_username(&identity, requested)
             {
                 return Err("this account is registered with a different username; use its registered username or sign out with ssmcp logout to switch accounts".into());
             }
@@ -1670,6 +1717,68 @@ mod tests {
         assert!(!format!("{:?}", credential("https://example.com")).contains(&"a".repeat(64)));
         assert!(public_identity(&json!({"provider":"github","subject":"123","login":"alice","principal":"bob@github"})).is_err());
     }
+
+    #[test]
+    fn username_claim_metadata_is_optional_bounded_and_canonical() {
+        let legacy =
+            json!({"provider":"github","subject":"123","login":"alice","username":"current-name"});
+        let public = public_identity(&legacy).unwrap();
+        assert!(public.get("username_aliases").is_none());
+        assert!(public.get("username_generated").is_none());
+        assert!(identity_matches_username(&public, "current-name"));
+        assert!(!identity_matches_username(&public, "former-name"));
+
+        let aliases: Vec<_> = (0..MAX_USERNAME_ALIASES)
+            .map(|index| format!("former-{index}"))
+            .collect();
+        let mut identity = legacy;
+        identity["username_aliases"] = json!(aliases);
+        identity["username_generated"] = json!(false);
+        identity["token"] = json!("never-expose");
+        let public = public_identity(&json!({"identity":identity})).unwrap();
+        assert_eq!(public["username_aliases"].as_array().unwrap().len(), 128);
+        assert!(identity_matches_username(&public, "former-127"));
+        assert!(!identity_matches_username(&public, "unrelated"));
+        assert_eq!(public["username_generated"], false);
+        assert!(public.get("token").is_none());
+    }
+
+    #[test]
+    fn invalid_username_claim_metadata_is_rejected_before_matching() {
+        let base =
+            json!({"provider":"github","subject":"123","login":"alice","username":"current-name"});
+        for aliases in [
+            Value::Null,
+            json!(false),
+            json!("former-name"),
+            json!({"name":"former-name"}),
+            json!([null]),
+            json!([7]),
+            json!(["Former-Name"]),
+            json!(["bad name"]),
+            json!(["admin"]),
+            json!(vec!["former-name"; MAX_USERNAME_ALIASES + 1]),
+        ] {
+            let mut identity = base.clone();
+            identity["username_aliases"] = aliases;
+            assert!(public_identity(&identity).is_err());
+        }
+        for generated in [Value::Null, json!("false"), json!(0), json!([])] {
+            let mut identity = base.clone();
+            identity["username_generated"] = generated;
+            assert!(public_identity(&identity).is_err());
+        }
+        let mut unbound = base;
+        unbound.as_object_mut().unwrap().remove("username");
+        unbound["username_aliases"] = json!(["former-name"]);
+        assert!(public_identity(&unbound).is_err());
+        unbound["username_aliases"] = json!([]);
+        unbound["username_generated"] = json!(true);
+        assert!(public_identity(&unbound).is_err());
+        unbound["username_generated"] = json!(false);
+        assert!(public_identity(&unbound).is_ok());
+    }
+
     #[test]
     fn selector_requires_a_unique_live_session() {
         let entries = vec![

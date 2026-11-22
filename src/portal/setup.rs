@@ -754,11 +754,10 @@ async fn client_poll(
     };
     let identity = crate::identity::Identity {
         provider: "github".into(),
-        subject: account.subject,
-        login: account.github_login,
+        subject: subject.clone(),
+        login: account.github_login.clone(),
     };
-    let mut public_identity = crate::device::identity_json(&identity);
-    public_identity["username"] = json!(account.handle);
+    let public_identity = crate::device::account_identity_json(&identity, &account)?;
     broker
         .portal
         .record_audit(

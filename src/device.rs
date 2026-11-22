@@ -468,6 +468,22 @@ fn record_authorized(broker: &Broker, record: &Record) -> bool {
 pub(crate) fn identity_json(identity: &Identity) -> Value {
     json!({"provider":identity.provider,"subject":identity.subject,"login":identity.login,"principal":format!("{}@github",identity.login.to_ascii_lowercase())})
 }
+
+/// Account names are claims of the verified subject, never alternate identities.
+pub(crate) fn account_identity_json(
+    identity: &Identity,
+    account: &crate::portal::store::Account,
+) -> Result<Value, Problem> {
+    if identity.provider != "github" || identity.subject != account.subject {
+        return Err(Problem::Unauthorized);
+    }
+    let mut public = identity_json(identity);
+    public["username"] = json!(account.handle);
+    public["username_aliases"] = json!(account.handle_aliases);
+    public["username_generated"] = json!(account.generated_handle);
+    Ok(public)
+}
+
 /// Keep handler errors small; allocate the HTTP response only at the boundary.
 #[derive(Debug)]
 struct ApiError {
@@ -639,8 +655,7 @@ async fn whoami(
         .storage(move |store| store.account(&subject))
         .await
         .map_err(problem)?;
-    let mut identity = identity_json(&registration.identity);
-    identity["username"] = json!(account.handle);
+    let identity = account_identity_json(&registration.identity, &account).map_err(problem)?;
     let traffic = broker
         .traffic_quota(&registration.identity.subject)
         .await
@@ -670,8 +685,7 @@ async fn claim_username(
         .storage(move |store| store.claim_handle(&subject, &username))
         .await
         .map_err(problem)?;
-    let mut identity = identity_json(&registration.identity);
-    identity["username"] = json!(account.handle);
+    let identity = account_identity_json(&registration.identity, &account).map_err(problem)?;
     Ok(Json(json!({"identity":identity})))
 }
 
@@ -885,6 +899,40 @@ async fn socket_bridge(broker: Arc<Broker>, peer: DevicePeer, socket: WebSocket)
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn account_identity_metadata_requires_the_same_verified_subject() {
+        let account: crate::portal::store::Account = serde_json::from_value(json!({
+            "subject":"123", "username":"gh-123", "github_login":"previous-login",
+            "keys":[], "handle":"current-name", "handle_aliases":["former-name"],
+            "generated_handle":false, "banned":false, "rate_limit_bps":1024
+        }))
+        .unwrap();
+        let identity = Identity {
+            provider: "github".into(),
+            subject: "123".into(),
+            login: "Current-Login".into(),
+        };
+        assert_eq!(
+            account_identity_json(&identity, &account).unwrap(),
+            json!({
+                "provider":"github", "subject":"123", "login":"Current-Login",
+                "principal":"current-login@github", "username":"current-name",
+                "username_aliases":["former-name"], "username_generated":false
+            })
+        );
+        for (provider, subject) in [("github", "456"), ("other", "123")] {
+            let unrelated = Identity {
+                provider: provider.into(),
+                subject: subject.into(),
+                login: identity.login.clone(),
+            };
+            assert_eq!(
+                account_identity_json(&unrelated, &account),
+                Err(Problem::Unauthorized)
+            );
+        }
+    }
 
     struct Temporary(PathBuf);
     impl Temporary {
@@ -2365,6 +2413,21 @@ mod tests {
         let router = crate::http::router(broker.clone());
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let client = crate::http_client::builder().build().unwrap();
+        let before_claim: Value = client
+            .get(format!("{base}/api/client/whoami"))
+            .bearer_auth(&alice)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let generated = before_claim["identity"]["username"].as_str().unwrap();
+        assert!(generated.starts_with("member-"));
+        assert_eq!(before_claim["identity"]["username_generated"], true);
+        assert_eq!(before_claim["identity"]["username_aliases"], json!([]));
         let claimed: Value = client
             .post(format!("{base}/api/client/username"))
             .bearer_auth(&alice)
@@ -2379,6 +2442,20 @@ mod tests {
             .unwrap();
         assert_eq!(claimed["identity"]["username"], "alice");
         assert_eq!(claimed["identity"]["subject"], "123");
+        assert_eq!(claimed["identity"]["username_generated"], false);
+        assert_eq!(claimed["identity"]["username_aliases"], json!([generated]));
+        let current: Value = client
+            .get(format!("{base}/api/client/whoami"))
+            .bearer_auth(&alice)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(current["identity"], claimed["identity"]);
         let duplicate = client
             .post(format!("{base}/api/client/username"))
             .bearer_auth(&bob)
