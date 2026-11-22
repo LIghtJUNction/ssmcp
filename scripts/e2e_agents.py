@@ -250,8 +250,8 @@ def catalog(harness, mode, label):
                       for row in diagnostics if row["provider"] not in expected),
                   f"{mode}: unrelated providers remain unprobed after explicit loading")
     status, value, _ = harness.rpc("tools/list", modern=True)
-    harness.check(status == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["list", "code_mode", "collab", "await", "messages"],
-                  f"{mode}: public MCP catalog contains exactly list, code_mode, collab, await and messages")
+    harness.check(status == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["link", "list", "code_mode", "collab", "await", "messages"],
+                  f"{mode}: public MCP catalog contains exactly link, list, code_mode, collab, await and messages")
     inventory = harness.public_call("list")
     harness.check(len(inventory["clients"]) == 1
                   and inventory["clients"][0]["id"] == harness.client_id
