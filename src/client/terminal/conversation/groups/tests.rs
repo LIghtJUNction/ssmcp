@@ -516,9 +516,8 @@ fn send_uses_an_explicit_local_selection_even_when_a_group_is_available() {
     assert!(connection(&mut state).next_request().is_none());
     assert_only_native(&state);
 
-    let saved_group = state.conversation.groups.reload_snapshot();
     let saved_draft = state.chat_saved_draft();
-    state.conversation.groups.restore(saved_group).unwrap();
+    state.conversation.composer.set_text("");
     state.chat_restore_draft(saved_draft);
     state.chat_poll_native();
     assert_eq!(state.conversation.groups.selected.len(), 1);

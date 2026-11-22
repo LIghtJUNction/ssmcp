@@ -3033,6 +3033,7 @@ fn advertises_thread_events(tool: &Value) -> bool {
 #[cfg(test)]
 mod live_events_capability_tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn live_thread_capability_requires_the_advertised_name_and_action() {

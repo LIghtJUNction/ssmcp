@@ -1,6 +1,7 @@
 //! Agent-authored labels for trusted native call groups. Display IDs and caller
-//! names never authorize edits; reload restores text without live capabilities.
-use super::{EventView, HistoryOwner, Kind, MAX_EVENTS, Meta, Status};
+//! names never authorize edits; capabilities belong to the current process.
+use super::{EventView, Kind, MAX_EVENTS, Meta, Status};
+use crate::client::interface::history::HistoryOwner;
 use crate::runtime::call_scope::Source;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

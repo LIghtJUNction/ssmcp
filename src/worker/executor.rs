@@ -176,7 +176,10 @@ pub(crate) async fn supervise(pool: Arc<Pool>, program: Program, cwd: PathBuf) {
     let units = loop {
         if !pool.queue.accepting() {
             if let Err(error) = registry.leave(&pool.generation).await {
-                *pool.cleanup_error.lock().unwrap_or_else(|error| error.into_inner()) = Some(error);
+                *pool
+                    .cleanup_error
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = Some(error);
             }
             return;
         }
