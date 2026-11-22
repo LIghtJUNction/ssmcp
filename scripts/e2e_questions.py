@@ -74,14 +74,27 @@ class Questions(Composer):
     def composition(state):
         return {name: state[name] for name in ("draft", "target", "editing")}
 
+    def conversation_ready(self, shot):
+        if shot["hide_cursor"]:
+            return False
+        state = self.ui("/display/conversation")
+        if state["view"] != "activity" or state["focus"] != "input":
+            return False
+        pending = state["pending_questions"]
+        if pending == 0:
+            return column(shot) == ("conversation", 2, 8)
+        # Pending questions replace the title, but never establish the view by
+        # themselves. Match the live count as well as the ordinary input state.
+        header = shot["rows"][0].split("│", 1)[0].strip()
+        return pending > 0 and header == f"! {pending} 个问题待答 · Shift+↑"
+
     def activity(self, front):
         # Escape is decoded after a short timeout. Each transition gets a
         # separate input write, so it cannot accidentally become an Alt key.
         for _ in range(3):
             state = self.ui("/display/conversation")
             if state["view"] == "activity":
-                front.until(lambda shot: column(shot) == ("conversation", 2, 8)
-                            and not shot["hide_cursor"],
+                front.until(self.conversation_ready,
                             "the restored conversation column and ordinary composer")
                 return state
             front.send(ESC)
@@ -108,6 +121,20 @@ class Questions(Composer):
                 json.dumps(self.client_id), json.dumps(name), json.dumps(arguments)
             )
         )
+        diagnostic = json.dumps({"tool": name, "arguments": arguments,
+                                 "expected_error": expected_error, "response": response},
+                                ensure_ascii=False, sort_keys=True)
+        for secret in [self.secret, *self.sensitive]:
+            if secret:
+                diagnostic = diagnostic.replace(secret, "[redacted]")
+        encoded = diagnostic.encode("utf-8")
+        record = {"json": encoded[:16384].decode("utf-8", errors="replace"),
+                  "truncated": len(encoded) > 16384}
+        self.metrics.setdefault("rejected_ui_calls", []).append(record)
+        if self.output is not None:
+            self.output.mkdir(parents=True, exist_ok=True)
+            with (self.output / "rejected-ui-calls.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(record, ensure_ascii=False) + "\n")
         rejection = response["structuredContent"]["result"]
         self.check(rejection.get("rejected") is True
                    and expected_error in rejection.get("error", ""),
@@ -222,7 +249,7 @@ class Questions(Composer):
         front.until(lambda shot: column(shot) == ("questions", 5, 8) and shot["hide_cursor"],
                     "Escape returning from answer input to the question list")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
+        front.until(self.conversation_ready,
                     "a second Escape restoring the normal conversation")
         self.check(self.composition(self.ui("/display/conversation")) == original,
                    "two Escape transitions preserve normal text, cursor, recipient and edit identity")
@@ -292,7 +319,7 @@ class Questions(Composer):
         self.native_rejected("ssmcp.ui.message", {"text": "INJECTION\x1b[2J\x1b[?1049l"},
                              "message contains unsupported control characters")
         self.native_rejected("ssmcp.ui.message", {"text": "Cannot impersonate", "role": "user"},
-                             "message requires text and accepts kind and idempotency_key")
+                             "message requires text and accepts kind, idempotency_key and boolean finish_task")
         front.pump(0.15)
         shot = front.snapshot()
         self.check(shot["alternate_screen"]

@@ -89,7 +89,9 @@ class RelayFrontend(Frontend):
         git = shutil.which("git")
         if not git:
             raise RuntimeError("relay composer E2E requires an already-installed Git")
-        (Path(environment["PATH"]) / "git").symlink_to(Path(git).absolute())
+        supplied_git = Path(environment["PATH"]) / "git"
+        if not supplied_git.is_symlink() or supplied_git.resolve(strict=True) != Path(git).resolve(strict=True):
+            raise RuntimeError("relay composer E2E requires the shared fixture Git identity")
         environment.update(harness.safe_git_env)
         environment.update({
             "SSMCP_UI_CONFIG": str(config), "TERM": "xterm-256color",
