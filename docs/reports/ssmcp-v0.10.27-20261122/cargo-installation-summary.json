@@ -1,0 +1,132 @@
+{
+  "auxiliary_binaries": {
+    "ssmcp-frontend": {
+      "bytes": 1401304,
+      "sha256": "a94bc501e2bd34f29bb8f96dee41c3a433ed68acd31954dbb49ad87d4b1e7960"
+    },
+    "ssmcpd": {
+      "bytes": 7586056,
+      "sha256": "cc0103ceecae62dc125a63ac3a88761bf1e77bde5e3ccbe72fa32991a1a3488b"
+    }
+  },
+  "build_jobs": 6,
+  "cargo_metadata": {
+    "ssmcp_0_10_26_owned_bins": [
+      "ssmcp-frontend",
+      "ssmcpd"
+    ],
+    "ssmcp_0_10_27_owned_bins": [
+      "ssmcp"
+    ],
+    "v1": {
+      "bytes": 4480,
+      "sha256": "433829b01bf48215dc8f44a3f615be103943237e9b933c3f4eaf026f3de8941d"
+    },
+    "v2": {
+      "bytes": 19234,
+      "sha256": "b3c43c90f5cc8adf705383a095e502e3aec2002ba3c3a5ddd9bc8d1d5935a2e8"
+    }
+  },
+  "errors": [],
+  "exit_code": 0,
+  "finished_at_utc": "2026-11-22T09:26:03.694954+00:00",
+  "installation_prefix": "$HOME/.cargo",
+  "installed_binary": {
+    "bytes": 16083264,
+    "sha256": "d733fec9fb71e599afb785d10af75181a4d1b7548de2787c30a83ff23fd797ae"
+  },
+  "installed_matches_cargo_artifact": true,
+  "method": [
+    "cargo",
+    "install",
+    "--path",
+    "<fixed-source-checkout>",
+    "--bin",
+    "ssmcp",
+    "--force",
+    "--locked",
+    "--target",
+    "x86_64-unknown-linux-gnu",
+    "--root",
+    "<cargo-prefix>"
+  ],
+  "observed_process_count_after": 16,
+  "other_binaries_unchanged": true,
+  "preexisting_process_count": 16,
+  "preexisting_processes_still_running": true,
+  "publication_verification_report": {
+    "bytes": 427915,
+    "sha256": "98abea32d57e75ac6a617a0c1094ef22f728ff6d753bfc0db3d4fb6536f349c5"
+  },
+  "resolved_git_packages": [
+    {
+      "name": "zcall",
+      "source": "git+https://github.com/LIghtJUNction/zcall.git#aaac54236f7ce0f4e1559c6e3b78d680d9dabf41",
+      "version": "0.4.2"
+    },
+    {
+      "name": "zconv",
+      "source": "git+https://github.com/LIghtJUNction/zconv.git#f78b97b7065bbb7cf9ddfd0914d7f2296bbfe712",
+      "version": "0.4.1"
+    },
+    {
+      "name": "zguard",
+      "source": "git+https://github.com/LIghtJUNction/zguard.git#6772b932a65e18f64e13591dee6edb2f6b099406",
+      "version": "0.1.0"
+    },
+    {
+      "name": "zharness",
+      "source": "git+https://github.com/LIghtJUNction/zharness.git#8907262ce6c8494f2849f8e5abd84f7a3da2e405",
+      "version": "0.6.0"
+    },
+    {
+      "name": "zplugin",
+      "source": "git+https://github.com/LIghtJUNction/zplugin.git#592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "version": "0.3.1"
+    },
+    {
+      "name": "zplugin-macros",
+      "source": "git+https://github.com/LIghtJUNction/zplugin.git#592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "version": "0.3.1"
+    },
+    {
+      "name": "zsys",
+      "source": "git+https://github.com/LIghtJUNction/zsys.git#808fcfdb73584ca7ca122e20b76f0209f56ab0f7",
+      "version": "0.1.1"
+    },
+    {
+      "name": "ztuio",
+      "source": "git+https://github.com/LIghtJUNction/ztuio.git#9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "version": "0.1.0"
+    }
+  ],
+  "rustc_wrapper": {
+    "bytes": 272,
+    "sha256": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+  },
+  "schema_version": 1,
+  "scope": "Cargo-owned SSMCP client installation",
+  "shared_cargo_target_reused": true,
+  "signals_to_existing_processes": 0,
+  "source_report": {
+    "bytes": 17301,
+    "sha256": "f7a0bfdd189419a4be219c79e273db43bcd077774d8e5096e149d5173971553c"
+  },
+  "source_revision": "61a4de1cf522358691998ecb724b4a8518b91c47",
+  "source_tree": "beca471b32d2a89616772ef83c65bca84bc51b7f",
+  "source_unchanged": true,
+  "started_at_utc": "2026-11-22T09:25:58.996992+00:00",
+  "status": "passed",
+  "stderr": {
+    "bytes": 785,
+    "sha256": "e2d9ff8bd3e97de6e0fef63a797f2d503f84c88ec85acf2af52ca72fc9a57d71"
+  },
+  "stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "target": "x86_64-unknown-linux-gnu",
+  "unrelated_tracking_unchanged": true,
+  "version": "ssmcp 0.10.27",
+  "warnings": []
+}
