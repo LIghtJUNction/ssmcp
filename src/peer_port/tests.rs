@@ -1,4 +1,7 @@
 use super::*;
+mod automatic;
+mod cli_auto;
+mod netns;
 use crate::{
     backend, bridge,
     broker::Broker,
@@ -31,6 +34,18 @@ struct Fixture {
 }
 
 impl Fixture {
+    async fn wait_ready(&self, peers: &[Arc<crate::broker::Session>]) {
+        let auth = self.broker.authenticate("mcp", &self.token).await.unwrap();
+        // Relay registration precedes the CLI's native runtime startup. Complete
+        // a read-only round trip before starting the five-second offer window.
+        let catalogs = futures_util::future::try_join_all(peers.iter().map(|peer| {
+            peer.call_with_authorization(Operation::ListTools { cursor: None }, None, &auth)
+        }))
+        .await
+        .expect("CLI native runtime did not become ready");
+        assert!(catalogs.iter().all(|catalog| catalog["tools"].is_array()));
+    }
+
     async fn start() -> Self {
         let mut nonce = [0; 16];
         getrandom::fill(&mut nonce).unwrap();
@@ -96,7 +111,8 @@ impl Fixture {
             time_observation: false,
             chat_disabled: false,
             openai_context: false,
-            peer_ports: opted_in,
+            peer_ports: opted_in && config.auto_candidates.is_none(),
+            peer_ports_auto: opted_in && config.auto_candidates.is_some(),
         };
         let broker = self.broker.clone();
         self.workers.spawn(async move {
@@ -136,12 +152,12 @@ impl Fixture {
                 serde_json::to_string(&msg).unwrap()
             )
         };
-        assert_eq!(
-            capabilities
-                .iter()
-                .any(|s| s == wire::peer_port::CAPABILITY),
-            opted_in
-        );
+        let capability = if config.auto_candidates.is_some() {
+            wire::peer_port::AUTO_CAPABILITY
+        } else {
+            wire::peer_port::CAPABILITY
+        };
+        assert_eq!(capabilities.iter().any(|s| s == capability), opted_in);
         let peers = Arc::new(PeerPorts {
             client_id: client_id.clone(),
             policy: opted_in.then(|| config.policy().unwrap()),
@@ -211,10 +227,35 @@ fn config(role: Role, target: SocketAddr, candidate: SocketAddr) -> Config {
         role,
         listen: "127.0.0.1:0".parse().unwrap(),
         target,
-        candidate,
+        candidate: Some(candidate),
+        auto_candidates: None,
         bind: None,
         pair_key: STANDARD.encode([0x27; 32]),
     }
+}
+
+#[test]
+fn policy_mode_must_match_the_negotiated_capability() {
+    let target = "127.0.0.1:3000".parse().unwrap();
+    let candidate = "127.0.0.2:44443".parse().unwrap();
+    assert!(
+        config(Role::Listen, target, candidate)
+            .negotiated_policy(wire::peer_port::AUTO_CAPABILITY)
+            .is_err()
+    );
+    let mut automatic = config(Role::Listen, target, candidate);
+    automatic.candidate = None;
+    automatic.auto_candidates = Some(vec!["127.0.0.0/8".into()]);
+    assert!(
+        automatic
+            .negotiated_policy(wire::peer_port::CAPABILITY)
+            .is_err()
+    );
+    assert!(
+        config(Role::Listen, target, candidate)
+            .negotiated_policy(wire::peer_port::CAPABILITY)
+            .is_ok()
+    );
 }
 fn options(left: &str, right: &str, target: SocketAddr, mode: &str) -> Value {
     json!({"listen":{"client_id":left,"port":0},"target":{"client_id":right,"port":target.port()},"transport":mode})

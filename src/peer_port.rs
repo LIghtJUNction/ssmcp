@@ -1,5 +1,7 @@
 //! Per-registration state for one explicitly paired TCP service. Only the broker
-//! can dispatch these private operations. No address from the wire is dialed.
+//! can dispatch these private operations. Discovered candidates require both a
+//! pair-key signature and an explicit local network policy before any dial.
+mod candidates;
 mod transport;
 
 use crate::wire::peer_port::{Command, Mapping, Offer, Role};
@@ -15,6 +17,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
+    net::TcpSocket,
     sync::{Mutex, watch},
     task::JoinHandle,
     time::Instant,
@@ -32,7 +35,10 @@ struct Config {
     role: Role,
     listen: SocketAddr,
     target: SocketAddr,
-    candidate: SocketAddr,
+    #[serde(default)]
+    candidate: Option<SocketAddr>,
+    #[serde(default)]
+    auto_candidates: Option<Vec<String>>,
     #[serde(default)]
     bind: Option<SocketAddr>,
     pair_key: String,
@@ -42,50 +48,110 @@ struct Policy {
     role: Role,
     listen: SocketAddr,
     target: SocketAddr,
-    candidate: SocketAddr,
-    bind: SocketAddr,
+    candidates: CandidatePolicy,
     key: hmac::Key,
 }
 
+enum CandidatePolicy {
+    Fixed {
+        address: SocketAddr,
+        bind: SocketAddr,
+    },
+    Automatic(candidates::Networks),
+}
+
 impl Config {
+    fn capability(&self) -> &'static str {
+        if self.auto_candidates.is_some() {
+            crate::wire::peer_port::AUTO_CAPABILITY
+        } else {
+            crate::wire::peer_port::CAPABILITY
+        }
+    }
+
+    fn negotiated_policy(self, capability: &str) -> Result<Policy> {
+        if self.capability() != capability {
+            return Err("peer candidate mode changed during registration".into());
+        }
+        self.policy()
+    }
+
     fn policy(self) -> Result<Policy> {
         let key = STANDARD
             .decode(self.pair_key)
             .map_err(|_| "invalid peer pair key")?;
-        let bind = self.bind.unwrap_or(self.candidate);
-        if self.bind.is_some() && self.role != Role::Target {
-            return Err("only a target may configure a local candidate bind".into());
-        }
-        if bind.ip().is_unspecified()
-            || bind.ip().is_multicast()
-            || bind.port() == 0
-            || bind == self.target
-            || bind == self.listen
-        {
-            return Err("invalid local candidate bind".into());
-        }
         if key.len() != 32
             || !self.listen.ip().is_loopback()
             || !self.target.ip().is_loopback()
             || self.target.port() == 0
-            || self.candidate.port() == 0
-            || self.candidate.ip().is_unspecified()
-            || self.candidate.ip().is_multicast()
-            || self.candidate == self.target
-            || self.candidate == self.listen
-            || matches!(self.candidate.ip(), std::net::IpAddr::V4(ip) if ip.is_broadcast())
         {
             return Err("invalid peer port policy".into());
         }
+        let candidates = match (self.candidate, self.auto_candidates) {
+            (Some(address), None) => {
+                let bind = self.bind.unwrap_or(address);
+                if self.bind.is_some() && self.role != Role::Target {
+                    return Err("only a target may configure a local candidate bind".into());
+                }
+                for addr in [address, bind] {
+                    if addr.ip().is_unspecified()
+                        || addr.ip().is_multicast()
+                        || addr.port() == 0
+                        || addr == self.target
+                        || addr == self.listen
+                        || matches!(addr.ip(), std::net::IpAddr::V4(ip) if ip.is_broadcast())
+                    {
+                        return Err("invalid local candidate address".into());
+                    }
+                }
+                CandidatePolicy::Fixed { address, bind }
+            }
+            (None, Some(networks)) if self.bind.is_none() => {
+                CandidatePolicy::Automatic(candidates::Networks::parse(&networks)?)
+            }
+            _ => return Err(
+                "configure either candidate or auto_candidates, without an automatic bind override"
+                    .into(),
+            ),
+        };
         Ok(Policy {
             role: self.role,
             listen: self.listen,
             target: self.target,
-            candidate: self.candidate,
-            bind,
+            candidates,
             key: hmac::Key::new(hmac::HMAC_SHA256, &key),
         })
     }
+
+    fn from_env() -> Result<Self> {
+        let path = std::env::var_os(CONFIG_ENV).ok_or("missing local peer port policy")?;
+        let file = std::fs::File::open(path).map_err(|_| "cannot open peer port policy")?;
+        let meta = file
+            .metadata()
+            .map_err(|_| "cannot read peer port policy")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if meta.permissions().mode() & 0o077 != 0 {
+                return Err("peer port policy requires owner-only permissions".into());
+            }
+        }
+        if !meta.is_file() || meta.len() > 8192 {
+            return Err("invalid peer port policy file".into());
+        }
+        serde_json::from_reader(file.take(8193)).map_err(|_| "invalid peer port policy JSON".into())
+    }
+}
+
+/// Exactly one protocol is offered. Invalid files retain the v1 registration
+/// path so the existing post-registration policy loader reports the error.
+pub(crate) fn offered_capability() -> Option<&'static str> {
+    std::env::var_os(CONFIG_ENV)?;
+    Some(
+        Config::from_env().map_or(crate::wire::peer_port::CAPABILITY, |config| {
+            config.capability()
+        }),
+    )
 }
 
 pub(crate) fn now_ms() -> u64 {
@@ -100,6 +166,8 @@ struct Pending {
     role: Role,
     offer: Offer,
     identity: rcgen::CertifiedKey<rcgen::KeyPair>,
+    // Bound but not listening until the partner's signed offer is verified.
+    sockets: Vec<TcpSocket>,
     expires: Instant,
     deadline: Instant,
 }
@@ -126,29 +194,10 @@ pub(crate) struct PeerPorts {
 }
 
 impl PeerPorts {
-    pub(crate) fn from_env(negotiated: bool, client_id: &str) -> Result<Arc<Self>> {
-        let policy = if negotiated {
-            let path = std::env::var_os(CONFIG_ENV).ok_or("missing local peer port policy")?;
-            let file = std::fs::File::open(path).map_err(|_| "cannot open peer port policy")?;
-            let meta = file
-                .metadata()
-                .map_err(|_| "cannot read peer port policy")?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if meta.permissions().mode() & 0o077 != 0 {
-                    return Err("peer port policy requires owner-only permissions".into());
-                }
-            }
-            if !meta.is_file() || meta.len() > 8192 {
-                return Err("invalid peer port policy file".into());
-            }
-            let config: Config = serde_json::from_reader(file.take(8193))
-                .map_err(|_| "invalid peer port policy JSON")?;
-            Some(config.policy()?)
-        } else {
-            None
-        };
+    pub(crate) fn from_env(negotiated: Option<&str>, client_id: &str) -> Result<Arc<Self>> {
+        let policy = negotiated
+            .map(|capability| Config::from_env()?.negotiated_policy(capability))
+            .transpose()?;
         Ok(Arc::new(Self {
             client_id: client_id.into(),
             policy,
@@ -205,14 +254,16 @@ impl PeerPorts {
                     .map_err(|_| "peer key generation failed")?;
                 let mut nonce = [0; 16];
                 getrandom::fill(&mut nonce).map_err(|_| "peer nonce generation failed")?;
+                let (candidates, sockets) = reserve_candidates(policy)?;
                 let mut offer = Offer {
                     id: crate::hex::encode(nonce),
                     certificate: STANDARD.encode(identity.cert.der()),
                     proof: String::new(),
+                    candidates,
                 };
                 offer.proof = STANDARD.encode(hmac::sign(
                     &policy.key,
-                    &transcript(&mapping, policy.candidate, role, &offer)?,
+                    &transcript(&mapping, policy, role, &offer)?,
                 ));
                 let deadline = now + Duration::from_millis(mapping.ttl_ms);
                 let expires = (now + window).min(deadline);
@@ -238,6 +289,7 @@ impl PeerPorts {
                     role,
                     offer,
                     identity,
+                    sockets,
                     expires,
                     deadline,
                 });
@@ -257,21 +309,23 @@ impl PeerPorts {
                 }
                 let denial = "peer identity or mapping did not authenticate";
                 let tag = STANDARD.decode(&peer.proof).map_err(|_| denial)?;
-                let data = transcript(&p.mapping, policy.candidate, p.role.opposite(), &peer)?;
+                let data = transcript(&p.mapping, policy, p.role.opposite(), &peer)?;
                 hmac::verify(&policy.key, &data, &tag).map_err(|_| denial)?;
+                validate_candidates(policy, p.role.opposite(), &peer)?;
                 if !peer_available {
                     return Err(UNREACHABLE.into());
                 }
                 let (lease, receiver) = watch::channel((now + LEASE).min(p.deadline));
+                let deadline = p.deadline;
                 let (listener, worker) = tokio::time::timeout_at(
                     p.expires,
-                    transport::activate(policy, &p, peer, receiver),
+                    transport::activate(policy, p, peer, receiver),
                 )
                 .await
                 .map_err(|_| "peer offer expired during activation")??;
                 state.active = Some(Active {
                     id,
-                    deadline: p.deadline,
+                    deadline,
                     lease,
                     worker,
                 });
@@ -316,21 +370,91 @@ async fn stop(state: &mut State) {
     }
 }
 
-fn transcript(
-    mapping: &Mapping,
-    candidate: SocketAddr,
-    role: Role,
-    offer: &Offer,
-) -> Result<Vec<u8>> {
-    // Fixed, ordered serialization. The pair key and candidate never enter a relay frame.
-    serde_json::to_vec(&(
-        "ssmcp-peer-port-v1",
-        mapping,
-        candidate,
-        role,
-        &offer.id,
-        &offer.certificate,
-    ))
+type ReservedCandidates = (Option<Vec<SocketAddr>>, Vec<TcpSocket>);
+
+fn reserve_candidates(policy: &Policy) -> Result<ReservedCandidates> {
+    let CandidatePolicy::Automatic(networks) = &policy.candidates else {
+        return Ok((None, Vec::new()));
+    };
+    let mut addresses = Vec::new();
+    let mut sockets = Vec::new();
+    if policy.role == Role::Target {
+        for ip in networks.gather()? {
+            let socket = if ip.is_ipv4() {
+                TcpSocket::new_v4()
+            } else {
+                TcpSocket::new_v6()
+            }
+            .map_err(|_| "cannot create candidate socket")?;
+            // Ephemeral ports are reserved before signing. The socket does not
+            // accept connections until Activate authenticates the partner.
+            if let Err(error) = socket.bind(SocketAddr::new(ip, 0)) {
+                match error.kind() {
+                    std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::AddrInUse => {
+                        continue;
+                    }
+                    _ => return Err("cannot bind candidate socket".into()),
+                }
+            }
+            let address = socket
+                .local_addr()
+                .map_err(|_| "cannot read candidate address")?;
+            if networks.allows(address) && address != policy.listen && address != policy.target {
+                addresses.push(address);
+                sockets.push(socket);
+            }
+        }
+    }
+    Ok((Some(addresses), sockets))
+}
+
+fn validate_candidates(policy: &Policy, role: Role, offer: &Offer) -> Result<()> {
+    match (&policy.candidates, &offer.candidates) {
+        (CandidatePolicy::Fixed { .. }, None) => Ok(()),
+        (CandidatePolicy::Automatic(networks), Some(addresses)) => {
+            if addresses.len() > candidates::MAX_CANDIDATES
+                || (role == Role::Listen && !addresses.is_empty())
+                || addresses.iter().enumerate().any(|(index, address)| {
+                    !networks.allows(*address)
+                        || *address == policy.listen
+                        || *address == policy.target
+                        || addresses[..index].contains(address)
+                })
+            {
+                return Err("peer candidates violate the local network policy".into());
+            }
+            Ok(())
+        }
+        _ => Err("peer candidate mode did not authenticate".into()),
+    }
+}
+
+fn transcript(mapping: &Mapping, policy: &Policy, role: Role, offer: &Offer) -> Result<Vec<u8>> {
+    // Preserve the v1 transcript byte-for-byte. Automatic offers use a distinct
+    // domain and authenticate the entire ordered candidate list, never the key.
+    match (&policy.candidates, &offer.candidates) {
+        (CandidatePolicy::Fixed { address, .. }, None) => serde_json::to_vec(&(
+            "ssmcp-peer-port-v1",
+            mapping,
+            address,
+            role,
+            &offer.id,
+            &offer.certificate,
+        )),
+        (CandidatePolicy::Automatic(_), Some(addresses))
+            if addresses.len() <= candidates::MAX_CANDIDATES =>
+        {
+            serde_json::to_vec(&(
+                "ssmcp-peer-port-auto-v1",
+                mapping,
+                addresses,
+                role,
+                &offer.id,
+                &offer.certificate,
+            ))
+        }
+        _ => return Err("peer candidate mode did not authenticate".into()),
+    }
     .map_err(|e| e.to_string())
 }
 

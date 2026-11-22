@@ -1,8 +1,9 @@
 //! TLS 1.3 mutual authentication with a fresh local identity per offer. Only
 //! the authenticated partner's ephemeral certificate is trusted for this mapping.
-use super::{Pending, Policy, Result, Role, UNREACHABLE};
+use super::{CandidatePolicy, Pending, Policy, Result, Role, UNREACHABLE};
 use crate::wire::peer_port::Offer;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use futures_util::{StreamExt, future::select_all, stream};
 use rustls::{
     ClientConfig, RootCertStore, ServerConfig,
     pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName},
@@ -34,7 +35,7 @@ enum Side {
 
 pub(super) async fn activate(
     policy: &Policy,
-    pending: &Pending,
+    pending: Pending,
     peer: Offer,
     lease: watch::Receiver<Instant>,
 ) -> Result<(Value, JoinHandle<()>)> {
@@ -48,7 +49,7 @@ pub(super) async fn activate(
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let certs = vec![pending.identity.cert.der().clone()];
     let key = PrivatePkcs8KeyDer::from(pending.identity.signing_key.serialize_der()).into();
-    let (listener, side, description) = match policy.role {
+    let (listeners, side, description) = match policy.role {
         Role::Target => {
             let verifier =
                 WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider.clone())
@@ -60,14 +61,30 @@ pub(super) async fn activate(
                 .with_client_cert_verifier(verifier)
                 .with_single_cert(certs, key)
                 .map_err(|e| e.to_string())?;
-            let listener = TcpListener::bind(policy.bind)
-                .await
-                .map_err(|e| match e.kind() {
-                    io::ErrorKind::AddrInUse | io::ErrorKind::AddrNotAvailable => UNREACHABLE,
-                    _ => "configured peer listener unavailable",
-                })?;
+            let listeners = match &policy.candidates {
+                CandidatePolicy::Fixed { bind, .. } => {
+                    vec![TcpListener::bind(bind).await.map_err(|e| match e.kind() {
+                        io::ErrorKind::AddrInUse | io::ErrorKind::AddrNotAvailable => UNREACHABLE,
+                        _ => "configured peer listener unavailable",
+                    })?]
+                }
+                CandidatePolicy::Automatic(_) => {
+                    if pending.sockets.is_empty() {
+                        return Err(UNREACHABLE.into());
+                    }
+                    pending
+                        .sockets
+                        .into_iter()
+                        .map(|socket| {
+                            socket
+                                .listen(16)
+                                .map_err(|_| "automatic peer listener unavailable".into())
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                }
+            };
             (
-                listener,
+                listeners,
                 Side::Target(TlsAcceptor::from(Arc::new(config)), policy.target),
                 Value::Null,
             )
@@ -81,22 +98,66 @@ pub(super) async fn activate(
                 .map_err(|e| e.to_string())?;
             let connector = TlsConnector::from(Arc::new(config));
             // No application socket is opened, read, or replayed during selection.
-            timeout(ATTEMPT, connect(&connector, policy.candidate, PROBE))
-                .await
-                .map_err(|_| UNREACHABLE)??;
+            let candidate = match &policy.candidates {
+                CandidatePolicy::Fixed { address, .. } => {
+                    timeout(ATTEMPT, connect(&connector, *address, PROBE))
+                        .await
+                        .map_err(|_| UNREACHABLE)??;
+                    *address
+                }
+                CandidatePolicy::Automatic(_) => {
+                    probe_candidates(&connector, peer.candidates.unwrap_or_default()).await?
+                }
+            };
             let listener = TcpListener::bind(policy.listen)
                 .await
                 .map_err(|_| "application listener unavailable")?;
             let address = listener.local_addr().map_err(|e| e.to_string())?;
             let description = json!({"address":address.to_string(),"host":address.ip().to_string(),"port":address.port()});
             (
-                listener,
-                Side::Listen(connector, policy.candidate),
+                vec![listener],
+                Side::Listen(connector, candidate),
                 description,
             )
         }
     };
-    Ok((description, tokio::spawn(serve(listener, side, lease))))
+    Ok((description, tokio::spawn(serve(listeners, side, lease))))
+}
+
+async fn probe_candidates(
+    connector: &TlsConnector,
+    addresses: Vec<SocketAddr>,
+) -> Result<SocketAddr> {
+    let mut attempts = stream::iter(addresses)
+        .map(|address| async move {
+            // Two slots, up to four candidates, and a single two-second deadline.
+            let result = timeout(ATTEMPT / 2, connect(connector, address, PROBE))
+                .await
+                .map_err(|_| UNREACHABLE.to_string())
+                .and_then(|result| result);
+            (address, result)
+        })
+        .buffer_unordered(MAX_STREAMS);
+    let mut selected = None;
+    let result = timeout(ATTEMPT, async {
+        while let Some((address, result)) = attempts.next().await {
+            match result {
+                Ok(_) => {
+                    selected.get_or_insert(address);
+                }
+                Err(error) if error == UNREACHABLE => {}
+                // An observed authentication failure never becomes relay fallback.
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    })
+    .await;
+    if let Ok(Err(error)) = result {
+        return Err(error);
+    }
+    // Dropping attempts cancels every remaining probe before opening the app.
+    selected.ok_or_else(|| UNREACHABLE.into())
 }
 
 async fn connect(
@@ -121,7 +182,7 @@ async fn connect(
     Ok(tls)
 }
 
-async fn serve(listener: TcpListener, side: Side, mut lease: watch::Receiver<Instant>) {
+async fn serve(listeners: Vec<TcpListener>, side: Side, mut lease: watch::Receiver<Instant>) {
     let mut streams = JoinSet::new();
     loop {
         let expires = *lease.borrow_and_update();
@@ -133,7 +194,7 @@ async fn serve(listener: TcpListener, side: Side, mut lease: watch::Receiver<Ins
             changed = lease.changed() => if changed.is_err() { break; },
             _ = tokio::time::sleep_until(expires) => break,
             Some(_) = streams.join_next(), if !streams.is_empty() => {},
-            result = listener.accept() => {
+            (result, _, _) = select_all(listeners.iter().map(|listener| Box::pin(listener.accept()))) => {
                 let Ok((socket,_)) = result else { break; };
                 if streams.len() < MAX_STREAMS {
                     streams.spawn(handle(side.clone(),socket));
@@ -141,7 +202,7 @@ async fn serve(listener: TcpListener, side: Side, mut lease: watch::Receiver<Ins
             }
         }
     }
-    drop(listener);
+    drop(listeners);
     streams.shutdown().await;
 }
 

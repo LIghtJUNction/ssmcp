@@ -172,6 +172,7 @@ struct SessionTrafficFailure {
 
 pub struct Session {
     pub(crate) peer_ports: bool,
+    pub(crate) peer_ports_auto: bool,
     pub(crate) collaboration: crate::collab::Hub,
     pub(crate) steering: crate::steering::Queue,
     thread_scope: OnceCell<bool>,
@@ -873,6 +874,7 @@ impl Broker {
             collaboration: crate::collab::Hub::for_session(&id),
             steering: crate::steering::Queue::default(),
             peer_ports: false,
+            peer_ports_auto: false,
             thread_scope: OnceCell::new(),
             chat_disabled: false,
             tool_summary_advertised: AtomicBool::new(false),
@@ -1251,11 +1253,22 @@ impl Broker {
         let chat_disabled = peer
             .as_ref()
             .map_or(self.local_chat_disabled, |peer| peer.chat_disabled);
-        let peer_ports =
-            access_supported && control_attribution && peer.as_ref().is_some_and(|p| p.peer_ports);
+        let peer_ports = access_supported
+            && control_attribution
+            && peer
+                .as_ref()
+                .is_some_and(|p| p.peer_ports && !p.peer_ports_auto);
+        let peer_ports_auto = access_supported
+            && control_attribution
+            && peer
+                .as_ref()
+                .is_some_and(|p| p.peer_ports_auto && !p.peer_ports);
         let mut capabilities = Vec::new();
         if peer_ports {
             capabilities.push(wire::peer_port::CAPABILITY.into());
+        }
+        if peer_ports_auto {
+            capabilities.push(wire::peer_port::AUTO_CAPABILITY.into());
         }
         if chat_disabled {
             capabilities.push(wire::CHAT_DISABLED_CAPABILITY.into());
@@ -1296,6 +1309,7 @@ impl Broker {
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
             peer_ports,
+            peer_ports_auto,
             chat_disabled,
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
@@ -2181,6 +2195,7 @@ mod tests {
             collaboration: crate::collab::Hub::for_session(id),
             steering: crate::steering::Queue::default(),
             peer_ports: false,
+            peer_ports_auto: false,
             thread_scope: OnceCell::new(),
             chat_disabled: false,
             tool_summary_advertised: AtomicBool::new(false),

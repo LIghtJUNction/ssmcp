@@ -49,7 +49,11 @@ async fn prepare(
     )
     .await?;
     let offer: Offer = serde_json::from_value(value).map_err(|_| "invalid peer offer")?;
-    if offer.id.len() != 32 || offer.certificate.len() > 2048 || offer.proof.len() != 44 {
+    if offer.id.len() != 32
+        || offer.certificate.len() > 2048
+        || offer.proof.len() != 44
+        || offer.candidates.is_some() != session.peer_ports_auto
+    {
         return Err("invalid peer offer".into());
     }
     let remote = Remote {
@@ -72,7 +76,9 @@ pub(super) async fn run(
 ) -> Result<Outcome, String> {
     let left = access.session(&options.listen.client_id).await?;
     let right = access.session(&options.target.client_id).await?;
-    if !left.peer_ports || !right.peer_ports || left.client_id() == right.client_id() {
+    let static_pair = left.peer_ports && right.peer_ports;
+    let automatic_pair = left.peer_ports_auto && right.peer_ports_auto;
+    if !(static_pair || automatic_pair) || left.client_id() == right.client_id() {
         return Ok(Outcome::Fallback(
             "two distinct opted-in clients are required",
         ));

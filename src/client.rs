@@ -2056,7 +2056,7 @@ struct RegisteredSsh {
     time_observation_supported: bool,
     wait_display_supported: bool,
     openai_context_supported: bool,
-    peer_ports: bool,
+    peer_ports: Option<&'static str>,
     version_notice: Option<crate::wire::versions::Notice>,
 }
 
@@ -2186,10 +2186,7 @@ async fn register_ssh(
             }),
             relay::negotiated_timing(timing_offer, &capabilities).0,
             relay::negotiated_timing(timing_offer, &capabilities).1,
-            peer_offer
-                && capabilities
-                    .iter()
-                    .any(|c| c == crate::wire::peer_port::CAPABILITY),
+            relay::negotiated_peer_ports(peer_offer, &capabilities),
             openai_context_offer
                 && capabilities
                     .iter()
