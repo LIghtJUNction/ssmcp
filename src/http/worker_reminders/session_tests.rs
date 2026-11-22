@@ -92,7 +92,9 @@ async fn prepared(role: &str) -> (TestFixture, CodeRunReport, Vec<EligibleUserRe
             .unwrap()
         );
         fixture
-            .native_reply(json!({"isError":false,"structuredContent":{"path":".","kind":"directory"}}))
+            .native_reply(
+                json!({"isError":false,"structuredContent":{"path":".","kind":"directory"}}),
+            )
             .await
     };
     let (result, operation) = tokio::time::timeout(Duration::from_secs(2), async {
