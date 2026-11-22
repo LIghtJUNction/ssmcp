@@ -136,6 +136,8 @@ impl InputMode {
 
 struct State {
     running: bool,
+    #[cfg(target_os = "linux")]
+    tree_reaped: bool,
     exit_code: Option<i32>,
     exit_signal: Option<i32>,
     cancelled: bool,
@@ -157,7 +159,7 @@ struct Job {
     cwd: PathBuf,
     timing: ExecutionTiming,
     state: Mutex<State>,
-    changed: Notify,
+    changed: Arc<Notify>,
     cancel: watch::Sender<bool>,
     input_mode: InputMode,
     stdin: AsyncMutex<Option<ChildStdin>>,
@@ -167,6 +169,8 @@ struct Job {
     tty_slot: Option<usize>,
     #[cfg(target_os = "linux")]
     artifacts: Option<Mutex<artifacts::Artifacts>>,
+    #[cfg(target_os = "linux")]
+    temporary_artifacts: bool,
 }
 impl Job {
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -261,7 +265,31 @@ fn same_artifact_owner(
 struct Registry {
     jobs: HashMap<String, Arc<Job>>,
     closed: bool,
+    #[cfg(target_os = "linux")]
+    retired_temporary: VecDeque<Arc<Job>>,
 }
+
+impl Registry {
+    fn forget(&mut self, id: &str) -> bool {
+        let Some(_job) = self.jobs.remove(id) else {
+            return false;
+        };
+        #[cfg(target_os = "linux")]
+        if _job.temporary_artifacts {
+            if self.retired_temporary.len() == MAX_RETAINED
+                && let Some(old) = self.retired_temporary.pop_front()
+            {
+                eprintln!(
+                    "ssmcp: preserving temporary artifacts for job {} (retired queue full)",
+                    old.id
+                );
+            }
+            self.retired_temporary.push_back(_job);
+        }
+        true
+    }
+}
+
 pub struct Shell {
     root: PathBuf,
     output: Arc<OutputStore>,
@@ -327,6 +355,7 @@ impl Shell {
                     "env":{"type":"object","additionalProperties":{"type":"string"}},
                     "track_artifacts":{"type":"boolean","default":false,"description":format!("Enable Linux task artifact tracking for a verified Agent. Sets the job's TMPDIR and SSMCP_ARTIFACT_DIR. Default soft limit when enabled: {DEFAULT_ARTIFACT_BUDGET_BYTES} logical bytes.")},
                     "artifact_budget_bytes":{"type":"integer","minimum":1,"description":"Custom logical-byte soft limit. Providing a positive value also enables tracking for compatibility."},
+                    "temporary_artifacts":{"type":"boolean","default":false,"description":"Enable tracking for disposable, task-exclusive artifacts eligible for bounded shutdown cleanup. Omit to keep artifacts after close or reload."},
                     "stdin":{"enum":["null","pipe"],"type":"string","default":"null","description":"null delivers EOF immediately; pipe enables bounded exec.write input and explicit close_stdin."},
                     "timeout_ms":{"type":"integer","minimum":0,"maximum":MAX_TIMEOUT,"default":0,"description":"0 means no execution deadline. A nonzero deadline terminates the command."}}),
                 &["command"],
@@ -470,6 +499,9 @@ impl Shell {
             "ssmcp.exec.forget" => {
                 let args: Id = parse(args)?;
                 let mut registry = self.registry();
+                if registry.closed {
+                    return Err("shell command manager is closed".into());
+                }
                 if registry
                     .jobs
                     .get(&args.job_id)
@@ -477,9 +509,7 @@ impl Shell {
                 {
                     return Err("job is running; cancel it before forgetting".into());
                 }
-                Ok(
-                    json!({"job_id":args.job_id,"forgotten":registry.jobs.remove(&args.job_id).is_some()}),
-                )
+                Ok(json!({"job_id":args.job_id,"forgotten":registry.forget(&args.job_id)}))
             }
             "ssmcp.exec.events" => self.events.read(args).await,
             _ => Err(format!("unknown shell execution capability: {name}")),
@@ -489,7 +519,11 @@ impl Shell {
         if id.is_empty() || id.len() > 128 {
             return Err("invalid job_id".into());
         }
-        self.registry()
+        let registry = self.registry();
+        if registry.closed {
+            return Err("shell command manager is closed".into());
+        }
+        registry
             .jobs
             .get(id)
             .cloned()
@@ -609,6 +643,8 @@ impl Shell {
             #[serde(default)]
             track_artifacts: bool,
             #[serde(default)]
+            temporary_artifacts: bool,
+            #[serde(default)]
             stdin: InputMode,
             #[serde(default)]
             timeout_ms: u64,
@@ -616,7 +652,7 @@ impl Shell {
         let args: Start = parse(args)?;
         let title = job_title(args.title)?;
         let artifact_budget = args.artifact_budget_bytes.or_else(|| {
-            args.track_artifacts
+            (args.track_artifacts || args.temporary_artifacts)
                 .then_some(DEFAULT_ARTIFACT_BUDGET_BYTES)
         });
         if let Some(budget) = artifact_budget {
@@ -784,6 +820,8 @@ impl Shell {
             timing: ExecutionTiming::new(Instant::now().into_std(), args.timeout_ms),
             state: Mutex::new(State {
                 running: true,
+                #[cfg(target_os = "linux")]
+                tree_reaped: false,
                 exit_code: None,
                 exit_signal: None,
                 cancelled: false,
@@ -795,7 +833,7 @@ impl Shell {
                 stdout: Output::new(store, format!("job:{id}:stdout")),
                 stderr: Output::new(store, format!("job:{id}:stderr")),
             }),
-            changed: Notify::new(),
+            changed: Arc::new(Notify::new()),
             cancel,
             input_mode: args.stdin,
             stdin: AsyncMutex::new(process.child.stdin.take()),
@@ -805,10 +843,12 @@ impl Shell {
             tty_slot,
             #[cfg(target_os = "linux")]
             artifacts: artifacts.map(Mutex::new),
+            #[cfg(target_os = "linux")]
+            temporary_artifacts: args.temporary_artifacts,
         });
         // A failed spawn must leave the retained history untouched.
         if let Some(id) = &evicted {
-            registry.jobs.remove(id);
+            registry.forget(id);
         }
         registry.jobs.insert(id.clone(), job.clone());
         drop(registry);
@@ -853,6 +893,13 @@ impl Shell {
                 // Release capacity before publishing it under the same lock.
                 drop(permit);
                 state.running = false;
+                // The Linux supervisor can report a normal zero exit only
+                // after reaping the complete owned tree. A signal or other
+                // status cannot exclude supervisor escalation/failure.
+                #[cfg(target_os = "linux")]
+                {
+                    state.tree_reaped = outcome.0 == Some(0);
+                }
                 state.exit_code = outcome.0;
                 state.cancelled = outcome.1;
                 state.timed_out = outcome.2;
@@ -882,10 +929,12 @@ impl Shell {
             if let Some(lease) = worker.observation.lock().unwrap().take() {
                 lease.finish(&status);
             }
-            worker.changed.notify_waiters();
             let mut snapshot = worker.snapshot();
             snapshot["type"] = json!("exec.exited");
             events.push_scoped(snapshot, worker.creator.clone());
+            let changed = worker.changed.clone();
+            drop(worker);
+            changed.notify_waiters();
         });
         let mut result = job.snapshot();
         #[cfg(target_os = "linux")]
@@ -901,6 +950,9 @@ impl Shell {
     pub async fn shutdown(&self) {
         let jobs: Vec<_> = {
             let mut registry = self.registry();
+            if registry.closed {
+                return;
+            }
             registry.closed = true;
             registry.jobs.values().cloned().collect()
         };
@@ -909,7 +961,64 @@ impl Shell {
         }
         let waits = jobs.iter().map(|job| wait_finished(job, 8000));
         futures_util::future::join_all(waits).await;
+        drop(jobs);
+        #[cfg(target_os = "linux")]
+        self.reclaim_temporary().await;
         self.events.close();
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn reclaim_temporary(&self) {
+        let jobs = {
+            let mut registry = self.registry();
+            let mut jobs = std::mem::take(&mut registry.retired_temporary);
+            jobs.extend(
+                registry
+                    .jobs
+                    .drain()
+                    .map(|(_, job)| job)
+                    .filter(|job| job.temporary_artifacts),
+            );
+            jobs
+        };
+        if jobs.is_empty() {
+            return;
+        }
+        let deadline = std::time::Instant::now() + artifacts::CLEANUP_TIME;
+        let (done, result) = tokio::sync::oneshot::channel();
+        // The async runtime may be about to shut down. A stuck filesystem
+        // syscall cannot hold the runtime or extend its async wait.
+        let thread = std::thread::Builder::new().name("ssmcp-artifact-reclaim".into()).spawn(move || {
+            for job in jobs {
+                let job = match Arc::try_unwrap(job) {
+                    Ok(job) => job,
+                    Err(job) => {
+                        eprintln!("ssmcp: preserving temporary artifacts for job {} (active job references)", job.id);
+                        continue;
+                    }
+                };
+                if !job.state().tree_reaped {
+                    eprintln!("ssmcp: preserving temporary artifacts for job {} (owned tree exit unverified)", job.id);
+                    continue;
+                }
+                if let Some(artifacts) = job.artifacts {
+                    artifacts.into_inner().unwrap_or_else(|e| e.into_inner()).reclaim(deadline);
+                }
+            }
+            let _ = done.send(());
+        });
+        match thread {
+            Err(error) => {
+                eprintln!("ssmcp: could not start temporary artifact reclamation: {error}")
+            }
+            Ok(_) => match timeout_at(deadline.into(), result).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => {
+                    eprintln!("ssmcp: temporary artifact reclamation stopped unexpectedly")
+                }
+                Err(_) => eprintln!("ssmcp: temporary artifact reclamation reached its time limit"),
+            },
+        }
     }
 }
 
@@ -1168,6 +1277,8 @@ mod tests {
             timing: ExecutionTiming::new(Instant::now().into_std(), 0),
             state: Mutex::new(State {
                 running: false,
+                #[cfg(target_os = "linux")]
+                tree_reaped: false,
                 exit_code: Some(0),
                 exit_signal: None,
                 cancelled: false,
@@ -1179,7 +1290,7 @@ mod tests {
                 stdout,
                 stderr,
             }),
-            changed: Notify::new(),
+            changed: Arc::new(Notify::new()),
             cancel,
             input_mode: InputMode::Null,
             stdin: AsyncMutex::new(None),
@@ -1189,6 +1300,8 @@ mod tests {
             tty_slot: None,
             #[cfg(target_os = "linux")]
             artifacts: None,
+            #[cfg(target_os = "linux")]
+            temporary_artifacts: false,
         })
     }
 

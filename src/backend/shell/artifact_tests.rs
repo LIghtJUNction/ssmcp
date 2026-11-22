@@ -353,3 +353,140 @@ async fn tracked_exec_default_budget_is_opt_in_and_rearms_at_low_water() {
     );
     shell.shutdown().await;
 }
+
+#[tokio::test]
+async fn shutdown_reclaims_only_explicitly_temporary_unreferenced_jobs() {
+    let fixture = Fixture::new();
+    let shell =
+        Shell::with_workspace(fixture.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
+    let second =
+        Shell::with_workspace(fixture.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
+    let owner = source('a', "42", 81, 1);
+
+    async fn start(shell: &Shell, owner: &Source, temporary: bool, script: &str) -> Value {
+        shell
+            .call_scoped(
+                "ssmcp.exec.start",
+                json!({
+                    "command":["/bin/sh","-c",script],
+                    "track_artifacts":!temporary, "temporary_artifacts":temporary
+                }),
+                owner.clone(),
+            )
+            .await
+            .unwrap()
+    }
+    async fn wait(shell: &Shell, job: &Value) {
+        let done = shell
+            .call("ssmcp.exec.wait", json!({"job_id":job["job_id"]}))
+            .await
+            .unwrap();
+        assert_eq!(done["exit_code"], 0);
+    }
+    let path = |job: &Value| {
+        fixture
+            .0
+            .join(job["artifacts"]["directory"].as_str().unwrap())
+    };
+    let write = r#"mkdir "$TMPDIR/sub" && printf bytes > "$TMPDIR/sub/payload""#;
+    let reclaimed = start(&shell, &owner, true, write).await;
+    let forgotten = start(&shell, &owner, true, write).await;
+    let persisted = start(&shell, &owner, false, write).await;
+    let held = start(&shell, &owner, true, write).await;
+    let open_file = start(&shell, &owner, true, write).await;
+    let foreign = start(&second, &owner, true, write).await;
+    for job in [&reclaimed, &forgotten, &persisted, &held, &open_file] {
+        wait(&shell, job).await;
+    }
+    wait(&second, &foreign).await;
+    shell
+        .call("ssmcp.exec.forget", json!({"job_id":forgotten["job_id"]}))
+        .await
+        .unwrap();
+    let reference = shell.job(held["job_id"].as_str().unwrap()).unwrap();
+    let file_reference = fs::File::open(path(&open_file).join("sub/payload")).unwrap();
+
+    let parent = path(&reclaimed).parent().unwrap().to_owned();
+    let legacy = parent.join("unclaimed");
+    fs::create_dir(&legacy).unwrap();
+    fs::write(legacy.join("keep"), "old").unwrap();
+    let config = fixture.0.join(".ssmcp/config.toml");
+    fs::write(&config, "keep configuration").unwrap();
+
+    let active = start(
+        &shell,
+        &owner,
+        true,
+        r#"printf live > "$TMPDIR/live"; exec /bin/sleep 60"#,
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !path(&active).join("live").is_file() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    // Client close and reload both invoke this same shutdown path.
+    shell.shutdown().await;
+    assert!(!path(&reclaimed).exists());
+    assert!(!path(&forgotten).exists());
+    for job in [&persisted, &held, &foreign, &open_file] {
+        assert_eq!(fs::read(path(job).join("sub/payload")).unwrap(), b"bytes");
+    }
+    assert_eq!(fs::read(path(&active).join("live")).unwrap(), b"live");
+    assert_eq!(fs::read(legacy.join("keep")).unwrap(), b"old");
+    assert_eq!(fs::read(&config).unwrap(), b"keep configuration");
+    drop((reference, file_reference));
+
+    second.shutdown().await;
+    assert!(!path(&foreign).exists());
+}
+
+#[tokio::test]
+async fn shutdown_preserves_incomplete_or_escaped_temp_artifacts() {
+    let fixture = Fixture::new();
+    let shell =
+        Shell::with_workspace(fixture.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
+    let owner = source('a', "42", 81, 1);
+    let mut paths = Vec::new();
+    for _ in 0..3 {
+        let job = shell.call_scoped("ssmcp.exec.start", json!({
+            "command":["/bin/sh","-c","printf safe > \"$TMPDIR/keep\""], "temporary_artifacts":true
+        }), owner.clone()).await.unwrap();
+        shell
+            .call("ssmcp.exec.wait", json!({"job_id":job["job_id"]}))
+            .await
+            .unwrap();
+        paths.push((
+            job["job_id"].as_str().unwrap().to_owned(),
+            fixture
+                .0
+                .join(job["artifacts"]["directory"].as_str().unwrap()),
+        ));
+    }
+    let outside = fixture.0.join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("data"), "external").unwrap();
+    symlink(&outside, paths[0].1.join("link")).unwrap();
+    fs::rename(&paths[1].1, outside.join("moved")).unwrap();
+    symlink(&outside, &paths[1].1).unwrap();
+    for i in 0..9_000 {
+        let path = paths[2].1.join(format!("transient-{i:05}"));
+        fs::write(&path, "event").unwrap();
+        fs::remove_file(path).unwrap();
+    }
+    assert_eq!(
+        shell
+            .call_scoped("ssmcp.exec.status", json!({"job_id":paths[2].0}), owner)
+            .await
+            .unwrap()["artifacts"]["incomplete"],
+        true
+    );
+    shell.shutdown().await;
+    assert_eq!(fs::read(paths[0].1.join("keep")).unwrap(), b"safe");
+    assert_eq!(fs::read(outside.join("moved/keep")).unwrap(), b"safe");
+    assert_eq!(fs::read(paths[2].1.join("keep")).unwrap(), b"safe");
+    assert_eq!(fs::read(outside.join("data")).unwrap(), b"external");
+}

@@ -283,7 +283,7 @@ hook 默认关闭，不内置额外审核流程，也不改变工具原生权限
 
 图片导入会在客户端生成有界预览文件，仍以私有文件引用发送；不改变 wire v7。原生图片读取限制为 400 KiB，支持 PNG / JPEG / GIF / WebP。GIF / WebP 经 `code_mode` 返回时还需要支持这些格式的 relay；旧 relay 的图像通道仍只有 PNG / JPEG。长工具输出保留有界预览与内存捕获，展开界面事件只读取当前保留的显示正文。
 
-Linux 上的已验证 Agent 可用 `exec.start(clientId, { …, track_artifacts: true })` 为单个命令任务追踪产物。默认软额度为 20 GB（20,000,000,000 逻辑字节），可用 `artifact_budget_bytes` 覆盖。计量仅覆盖任务在 `.ssmcp/task-artifacts/` 下的独占目录，提醒随任务读取结果返回。[配置与计量范围](docs/workspaces.md#命令任务产物与软额度)
+Linux 上的已验证 Agent 可用 `exec.start(clientId, { …, track_artifacts: true })` 为单个命令任务追踪产物。默认软额度为 20 GB（20,000,000,000 逻辑字节），可用 `artifact_budget_bytes` 覆盖。计量仅覆盖任务在 `.ssmcp/task-artifacts/` 下的独占目录，提醒随任务读取结果返回。[配置与计量范围](docs/workspaces.md#命令任务产物与软额度) 默认保留任务产物。一次性、任务独占产物可显式设为 `temporary_artifacts: true`，正常关闭或 reload 时，客户端只在确认任务树已退出、文件身份和独占性可验证后尝试有界回收。
 
 ## 开发
 
