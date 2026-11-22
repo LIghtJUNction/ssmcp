@@ -665,8 +665,9 @@ class Harness:
             status, _, _ = self.request("GET", path="/api/client/whoami", secret=credential)
             self.check(status == 401, "the account API rejects missing or incorrect device credentials")
         status, account, _ = self.request("GET", path="/api/client/whoami", secret=self.account_token)
-        self.check(status == 200 and account["identity"] == self.identity,
-                   "the owned account credential resolves its stable provider identity")
+        self.check(status == 200 and isinstance(account, dict),
+                   "the owned account credential receives an account identity response")
+        self.account_gateway.validate_account_identity(account.get("identity"))
         self.client, credentials = self.start_client()
         self.client_id = credentials["client_id"]
         status, sessions, _ = self.request("GET", path="/api/client/sessions", secret=self.account_token)
