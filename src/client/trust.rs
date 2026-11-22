@@ -53,7 +53,7 @@ struct Server {
     pins: Vec<String>,
 }
 
-fn path() -> Result<PathBuf> {
+pub(super) fn path() -> Result<PathBuf> {
     Ok(super::config::config_path()?.with_file_name("trusted-servers.toml"))
 }
 

@@ -281,7 +281,6 @@ pub struct Runtime {
     catalog: Catalog,
     sessions: Option<crate::session::control::Control>,
     tool_root: PathBuf,
-    #[cfg(target_os = "linux")]
     workers: Mutex<Option<Arc<crate::worker::Pool>>>,
 }
 impl Runtime {
@@ -363,7 +362,6 @@ impl Runtime {
             catalog: Catalog::default(),
             sessions,
             tool_root: root,
-            #[cfg(target_os = "linux")]
             workers: Mutex::new(None),
         });
         crate::client::interface::harness::bind(&runtime);
@@ -513,7 +511,6 @@ impl Runtime {
     }
 
     pub fn validate_reload(&self) -> Result<(), String> {
-        #[cfg(target_os = "linux")]
         if let Some(pool) = self
             .workers
             .lock()
@@ -544,26 +541,17 @@ impl Runtime {
         config: crate::worker::Config,
         agent: &crate::client::chat_io::Agent,
     ) -> Result<(), String> {
-        #[cfg(target_os = "linux")]
-        {
-            let pool = crate::worker::Pool::new(config, agent, self.tool_root.clone())?;
-            self.registry
-                .replace(Provider::Worker, crate::worker::Pool::tools())?;
-            *self
-                .workers
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()) = Some(pool);
-            Ok(())
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = (config, agent);
-            Err("worker hard limits currently require Linux cgroup v2 and the user's systemd manager".into())
-        }
+        let pool = crate::worker::Pool::new(config, agent, self.tool_root.clone())?;
+        self.registry
+            .replace(Provider::Worker, crate::worker::Pool::tools())?;
+        *self
+            .workers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(pool);
+        Ok(())
     }
 
     pub(crate) fn start_workers(&self) {
-        #[cfg(target_os = "linux")]
         if let Some(pool) = self
             .workers
             .lock()
@@ -575,7 +563,6 @@ impl Runtime {
     }
 
     pub(crate) fn stop_workers(&self) {
-        #[cfg(target_os = "linux")]
         if let Some(pool) = self
             .workers
             .lock()
@@ -868,7 +855,6 @@ impl Runtime {
                     .map_err(|error| format!("managed-file operation failed: {error}"))?
                     .map(backend::result)
                 }
-                #[cfg(target_os = "linux")]
                 Provider::Worker => {
                     let pool = self
                         .workers
@@ -1017,7 +1003,6 @@ impl Runtime {
     }
     pub async fn shutdown(&self) {
         self.registry.close();
-        #[cfg(target_os = "linux")]
         {
             let pool = self
                 .workers

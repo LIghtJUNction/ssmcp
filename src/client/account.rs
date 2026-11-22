@@ -86,7 +86,7 @@ fn valid_credential(value: &Credential) -> Result<()> {
     Ok(())
 }
 
-fn state_root() -> Result<PathBuf> {
+pub(super) fn state_root() -> Result<PathBuf> {
     let root = if let Some(path) = std::env::var_os("SSMCP_AUTH_HOME") {
         PathBuf::from(path)
     } else {

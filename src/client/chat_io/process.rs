@@ -24,6 +24,10 @@ impl Target {
     pub(super) fn resolve(agent: &Agent) -> Result<Self, String> {
         let (program, args, argv_message) = match agent {
             Agent::NextCaller => return Ok(Self::NextCaller),
+            Agent::Remote => return Err(
+                "remote worker tasks are claimed through worker tools, not a local chat executable"
+                    .into(),
+            ),
             Agent::Ssmcp { id, account } => {
                 return Ok(Self::Ssmcp {
                     id: id.clone(),
@@ -175,7 +179,7 @@ impl Program {
     pub(crate) fn for_worker(agent: &Agent) -> Result<Self, String> {
         match Target::resolve(agent)? {
             Target::Program(program) => Ok(program),
-            _ => Err("worker executor required: select --agent codex, claude, opencode or an explicit --agent exec; Next caller and a forwarded peer are not locally resource-limited executors".into()),
+            _ => Err("a local worker executor requires an explicit --agent codex, claude, opencode or exec; the default remote pool uses worker task tools instead".into()),
         }
     }
 
@@ -279,6 +283,15 @@ impl Program {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_workers_never_resolve_to_a_local_chat_executable() {
+        assert!(Target::resolve(&Agent::Remote).is_err());
+        assert!(matches!(
+            Target::resolve(&Agent::NextCaller).unwrap(),
+            Target::NextCaller
+        ));
+    }
 
     #[test]
     fn failure_output_keeps_the_error_category_without_raw_provider_data() {

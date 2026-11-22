@@ -1,5 +1,5 @@
-//! Bounded worker task service. Execution slots are separate owned processes,
-//! while authentication and result ownership remain with the submitting call.
+//! Bounded worker task service. Remote slots are local coordination capacity;
+//! explicit local executors retain their separate owned processes and limits.
 mod config;
 pub(crate) use config::Config;
 #[cfg(target_os = "linux")]
@@ -8,17 +8,26 @@ mod child;
 mod executor;
 #[cfg(any(target_os = "linux", test))]
 mod limits;
-#[cfg(target_os = "linux")]
 mod pool;
-#[cfg(any(target_os = "linux", test))]
 mod queue;
 #[cfg(target_os = "linux")]
 mod registry;
+mod remote;
+pub(crate) use pool::Pool;
 #[cfg(target_os = "linux")]
-pub(crate) use pool::{Pool, TaskContext};
+pub(crate) use pool::TaskContext;
 
 use serde::Serialize;
 use std::sync::{Mutex, OnceLock};
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct SlotLog {
+    pub(crate) sequence: u64,
+    pub(crate) at_ms: u64,
+    pub(crate) level: String,
+    pub(crate) text: String,
+    pub(crate) task_id: Option<String>,
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct SlotView {
@@ -27,6 +36,8 @@ pub(crate) struct SlotView {
     pub(crate) state: &'static str,
     pub(crate) task_id: Option<String>,
     pub(crate) reason: Option<String>,
+    pub(crate) logs: Vec<SlotLog>,
+    pub(crate) next_log_sequence: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -44,7 +55,6 @@ pub(crate) struct Snapshot {
 #[derive(Default)]
 struct Display {
     pending: Option<Snapshot>,
-    #[cfg(target_os = "linux")]
     pool: Option<std::sync::Weak<Pool>>,
 }
 
@@ -72,25 +82,22 @@ pub(crate) fn prepare_display(config: Config) {
                 state: "offline",
                 task_id: None,
                 reason: Some("waiting for the authenticated worker connection".into()),
+                logs: Vec::new(),
+                next_log_sequence: 1,
             })
             .collect(),
     });
-    #[cfg(target_os = "linux")]
-    {
-        view.pool = None;
-    }
+    view.pool = None;
 }
 
 pub(crate) fn display() -> Option<Snapshot> {
     let view = view().lock().unwrap_or_else(|error| error.into_inner());
-    #[cfg(target_os = "linux")]
     if let Some(pool) = view.pool.as_ref().and_then(std::sync::Weak::upgrade) {
         return Some(pool.queue.snapshot());
     }
     view.pending.clone()
 }
 
-#[cfg(target_os = "linux")]
 pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

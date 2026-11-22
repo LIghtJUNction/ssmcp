@@ -16,6 +16,7 @@ pub(crate) mod harness;
 pub(crate) mod history;
 pub(crate) mod listener;
 pub(crate) mod messages;
+pub(crate) mod plugins;
 pub(crate) mod questions;
 pub(crate) mod reply;
 pub(crate) mod tool_summary;

@@ -89,6 +89,9 @@ fn local_command(text: &str) -> bool {
             "/message"
                 | "/recipients"
                 | "/help"
+                | "/version"
+                | "/about"
+                | "/plugin"
                 | "/questions"
                 | "/paste"
                 | "/paste-retry"
@@ -852,6 +855,103 @@ mod tests {
         );
         assert_eq!(state.conversation.composer.text(), "!printf never-execute");
         assert!(state.actions.is_empty());
+    }
+
+    #[test]
+    fn information_commands_stay_local_with_a_native_recipient_and_keep_invalid_input() {
+        let mut state = state(120);
+        let id = "client:1111111111111111111111111111111111111111111111111111111111111111";
+        let recipient = state.native_descriptor(id).unwrap();
+        state.chat_native_select(&recipient);
+
+        state.conversation.composer.set_text("/version");
+        state.chat_submit();
+        let expected = format!("ssmcp {}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(state.notice.as_deref(), Some(expected.as_str()));
+        assert!(state.conversation.composer.is_empty());
+        assert_eq!(state.conversation.native_recipient.as_deref(), Some(id));
+
+        state.conversation.composer.set_text("/about");
+        state.chat_submit();
+        assert!(state.help);
+        assert!(state.conversation.about);
+        assert!(state.conversation.composer.is_empty());
+        assert_eq!(state.conversation.native_recipient.as_deref(), Some(id));
+        state.chat_key(Key::Escape);
+
+        for command in ["/version", "/about"] {
+            state
+                .conversation
+                .composer
+                .set_text(&format!("{command} extra"));
+            state.conversation.composer.left();
+            let draft = state.chat_composer_stamp();
+            state.chat_submit();
+            let expected = format!("Use {command} without arguments");
+            assert_eq!(state.notice.as_deref(), Some(expected.as_str()));
+            assert_eq!(state.chat_composer_stamp(), draft);
+            assert!(!state.help);
+            assert!(!state.conversation.about);
+        }
+        assert!(state.conversation.native_pending.is_none());
+        assert!(state.conversation.submitting.is_none());
+        assert!(state.actions.is_empty());
+        assert!(!state.chat_native_is_command("/versioned"));
+        assert!(!state.chat_native_is_command("/about-face"));
+        assert!(!state.chat_native_is_command("/unknown path"));
+    }
+
+    #[test]
+    fn plugin_management_stays_local_and_preview_keeps_the_draft() {
+        let mut state = state(120);
+        state.preview = true;
+        let id = "client:1111111111111111111111111111111111111111111111111111111111111111";
+        let recipient = state.native_descriptor(id).unwrap();
+        state.chat_native_select(&recipient);
+        state.conversation.composer.set_text("/plugin help");
+        state.chat_submit();
+        assert!(state.help);
+        assert!(state.conversation.plugin_help);
+        assert!(!state.conversation.about);
+        assert!(state.conversation.composer.is_empty());
+        assert_eq!(state.conversation.native_recipient.as_deref(), Some(id));
+        let help = state.chat_help_rows(1000).join("\n");
+        assert!(help.contains("Native plugins"));
+        assert!(help.contains("/plugin load NAME PATH"));
+        state.chat_key(Key::Escape);
+        assert!(!state.help);
+        assert!(!state.conversation.plugin_help);
+        for command in [
+            "/plugin",
+            "/plugin list",
+            "/plugin load demo ./demo.so",
+            "/plugin unload demo",
+        ] {
+            state.conversation.composer.set_text(command);
+            state.conversation.composer.left();
+            let draft = state.chat_composer_stamp();
+            state.chat_submit();
+            assert_eq!(state.chat_composer_stamp(), draft);
+            assert!(
+                state
+                    .notice
+                    .as_deref()
+                    .unwrap()
+                    .contains("Preview does not manage native plugins")
+            );
+        }
+        assert!(state.conversation.native_pending.is_none());
+        assert!(state.conversation.submitting.is_none());
+        assert!(state.actions.is_empty());
+        assert!(!state.chat_native_is_command("/plugins"));
+        assert!(state.chat_command("/plugin help").unwrap());
+        assert!(state.chat_command("/about").unwrap());
+        assert!(!state.conversation.plugin_help);
+        assert!(state.conversation.about);
+        assert!(state.chat_command("/plugin help").unwrap());
+        assert!(state.chat_command("/help").unwrap());
+        assert!(!state.conversation.plugin_help);
+        assert!(!state.conversation.about);
     }
 
     #[test]

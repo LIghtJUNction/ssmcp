@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.10.26"
+version = "0.10.27"
 edition = "2024"
 rust-version = "1.100"
 description = "Connect local tools and remote terminals through authenticated MCP sessions"
@@ -73,6 +73,7 @@ include = [
     "/scripts/test_release.py",
     "/scripts/test_server_runtime.py",
     "/docs/commands.md",
+    "/docs/paths.md",
     "/docs/client-accounts.md",
     "/docs/client-server.md",
     "/docs/local-mode.md",

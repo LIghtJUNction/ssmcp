@@ -167,6 +167,12 @@ struct Paths {
     directory: PathBuf,
 }
 
+/// Return the configured locations without reading the RC or initializing repositories.
+pub(crate) fn configured_paths(workspace: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let paths = Paths::current(workspace)?;
+    Ok((paths.rc, paths.directory))
+}
+
 impl Paths {
     fn current(workspace: &Path) -> Result<Self, String> {
         let home = std::env::var_os("HOME")

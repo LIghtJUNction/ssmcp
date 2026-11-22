@@ -155,6 +155,12 @@ ssmcp ui preview --static --rows 36 --cols 120 --theme light
 | 命令 | 作用 |
 | --- | --- |
 | `/help` | 打开可滚动的完整快捷键与本地命令帮助 |
+| `/version` | 显示当前客户端的版本号，与此构建的 `ssmcp --version` 一致 |
+| `/about` | 打开独立关于页，显示应用名称、构建版本、用途、许可证、项目地址与帮助入口 |
+| `/plugin` / `/plugin list` | 列出当前客户端的原生插件及其状态 |
+| `/plugin load NAME PATH` | 显式加载本地可信动态库，含空格的路径需要引号 |
+| `/plugin unload NAME` | 禁用插件工具并请求工作线程停止，回执保留真实运行状态 |
+| `/plugin help` | 打开可离线查看的插件管理帮助 |
 | `/exit` / `/quit` | 正常关闭当前前端并恢复终端；本地 attach 只离开观察会话 |
 | `/login` / `/login copy` / `/login link` | 开始 GitHub 客户端授权：打开浏览器 / 复制公开授权链接 / 显示链接 |
 | `/diff [single\|split]` | 选择单列或双列 diff；省略参数时显示当前模式 |
@@ -178,6 +184,10 @@ ssmcp ui preview --static --rows 36 --cols 120 --theme light
 | `/resume` | 列出本工作区的已保存会话，选中后按 Enter 继续该文本历史 |
 | `/pi` / `/cc` / `/codex` | 查看对应后端的实际工具目录；`TOOL` 查看 schema，`TOOL {...}` 显式调用 |
 
+`/plugin` 管理当前客户端中的原生动态库插件，加载、列出和卸载结果异步显示在消息区。加载沿现有原生工具的权限、hook 和注册表校验执行，路径不会经过 Shell、环境变量或 `~` 展开。卸载请求不会删除动态库文件，正在运行的原生调用也不会被强制中止；结果中的 `worker_running` 表示实际工作线程状态。静态帮助可在预览中打开，预览拒绝实际插件操作；选中原生收件人时命令仍在本地处理，编辑队列正文时不会执行插件命令。JavaScript 工具仓库继续由 `ssmcp tools` 管理。
+
+`/version` 与 `/about` 只接受无参数形式；参数错误会保留当前输入。即使选中原生收件人，也只在本地显示信息，不会发送消息。正在编辑队列中的要求时，正文里的这两个命令仍是普通文字。关于页的信息来自当前构建的 Cargo 包元数据，不查询远程版本；`/help` 继续显示完整操作帮助。
+
 `/exit` 与 `/quit` 只接受无参数形式。输入 `/exit extra` 等带参数形式时，界面显示 `Use /exit or /quit without arguments`，保留当前输入并继续运行。合法退出沿正常清理路径关闭前端，恢复终端输入模式、光标、鼠标与括号粘贴状态；预览也使用同一退出入口。本地 attach 的退出只结束观察会话。[本地命令处理](../src/client/terminal/conversation.rs) · [预览清理路径](../src/client/ui_command.rs)
 
 `/reload` 重新启动客户端，F5 和原子 UI 动作 `reload` 只重载显示配置。重启前，客户端尝试取回仍在服务器排队的要求，并通过私有、单次读取的交接文件保留草稿与队列。新连接只继续发布确定尚未交付且目标仍适用的要求；目标成员失效或交付不确定时等待显式复核，不自动重发。
@@ -186,7 +196,7 @@ ssmcp ui preview --static --rows 36 --cols 120 --theme light
 
 重载仍遵守已有会话生命周期，连接所属任务会随旧连接结束；重连后需要确认新的客户端 ID。交接文件用于这次受控重启，不是跨任意退出的永久会话存档。[重载与恢复](session-control.md)
 
-帮助页可用 ↑/↓、滚轮、PgUp/PgDn、Home/End 滚动。按 F1 或 Esc 关闭。`/resume` 使用版本化的 `ssmcp.conversation.v1` JSONL，恢复显示文本并将后续消息写入所选会话；它不会重发旧要求、执行旧工具调用或恢复外部模型会话与凭据。[历史位置、容量与格式](conversation-history.md)
+帮助页和关于页可用 ↑/↓、滚轮、PgUp/PgDn、Home/End 滚动。按 F1 或 Esc 关闭；再次按 F1 打开完整操作帮助。`/resume` 使用版本化的 `ssmcp.conversation.v1` JSONL，恢复显示文本并将后续消息写入所选会话；它不会重发旧要求、执行旧工具调用或恢复外部模型会话与凭据。[历史位置、容量与格式](conversation-history.md)
 
 `/pi`、`/cc`、`/codex` 以及后接 `tools [OFFSET]` 只列出当前已注册工具；后接工具名只查看原始描述与参数 schema。显式追加 JSON 对象才异步调用原生工具，沿用其授权要求。`cc` 对应 Claude 的规范工具命名空间；工具缺失时直接报错。Pi RPC 的 `get_commands` 不等于内部 LSP 或模型工具清单，界面不会虚构这类接口。[目录与显式调用示例](client-input.md)
 

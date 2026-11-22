@@ -28,6 +28,7 @@ mod local;
 pub(crate) mod messaging;
 pub(crate) mod notification;
 mod panel;
+mod paths;
 pub(crate) mod presentation;
 #[cfg(test)]
 mod protocol_tests;
@@ -80,6 +81,7 @@ Usage: ssmcp [username@server] [options]
 
 Start
   ssmcp                         Reuse your last authorized account
+  ssmcp --worker N              Open a worker pool with N task slots
   ssmcp local                   Run a local MCP session on Linux
   ssmcp resume [options]        Open this workspace's saved conversation picker
   ssmcp alice@relay.example     Connect and sign in when needed
@@ -94,6 +96,7 @@ Manage
   context                     Saved local and HTTPS connection targets
   update [--check]              Update the installed client
   cleanup                      Inspect and clean registered workspace files
+  paths [NAME ...]             Show configuration and state paths without startup
   tools [status|check|update]    Inspect or update this client's tool repository
   sessions · attach · service  Saved and background sessions
   computer                     Zuse CLI version and installation
@@ -101,18 +104,14 @@ Manage
 
 Options
   --name NAME   --title TEXT   --context NAME   --server URL   --context-root PATH
-  --input MODE  Chat input (terminal by default, none disables chat)
-  --agent NAME  Chat recipient (next-caller by default)
-  --worker N    Worker monitor with N isolated execution slots (Linux)
-  --worker-k K  Resource share multiplier, default 1; choose an explicit --agent
-  --load-harness NAME  Preload one native protocol
-  --list-harnesses     List supported harness providers
+  --worker N    Worker monitor; no local agent installation is required
   --version [--all]    Show the version or the locked dependency tree
   --no-browser  --no-watchdog  --theme NAME   --no-color
   --allow USER@SERVER    Allow a registered account on this relay; repeat or comma-separate
   --account-compat       Use an existing verified self account on an older relay
 
-Use ssmcp COMMAND --help for command options; --help-full lists all connection flags.
+Use ssmcp COMMAND --help for command options; --help-full lists advanced connection and executor flags.
+Worker mode has no chat input; authorized remote agents submit, claim and complete tasks.
 In a connected chat: /help, @file, $skill, !command; Left opens Agents.
 "#;
 
@@ -121,12 +120,14 @@ const HELP_FULL: &str = r#"ssmcp — connect your devices and control authorized
 Usage: ssmcp username@server [options]
        ssmcp [--server URL] [options]
        ssmcp resume [options]
-       ssmcp [connection options] --worker N [--worker-k K] [--agent codex|claude|opencode|exec]
+       ssmcp [connection options] --worker N [--agent remote]
+       ssmcp [connection options] --worker N --agent codex|claude|opencode|exec [--worker-k K]
        ssmcp whoami|logout [--server URL] [--json]
        ssmcp list [--json | -i] [--client ID]
        ssmcp -i [--server URL] [--client ID]
        ssmcp config <set|get|unset> server [URL]
        ssmcp config path
+       ssmcp paths [NAME ...] [--json | --plain] [--list]
        ssmcp context <create|list|show|inspect|use|rm> [options]
        ssmcp update [--check]
        ssmcp cleanup [--dry-run|--list|--config|--set-config FILE]
@@ -156,7 +157,11 @@ Usage: ssmcp username@server [options]
   --input-port PORT    Port for web or MCP HTTP (required)
   --input-token-file PATH  Private bearer token file for web or MCP HTTP
   --input-socket PATH  Private Linux Unix socket path (default /tmp/ssmcp-UID/chat-input.sock)
-  --agent RECIPIENT    next-caller (default), codex, claude, opencode, exec or ssmcp
+  --agent RECIPIENT    Advanced: remote (worker default), next-caller (chat default), codex, claude, opencode, exec or ssmcp
+  --worker N          Remote task pool by default; no chat composer or local harness
+  --worker-k K        Resource share multiplier for explicit local worker executors (default 1)
+  --load-harness NAME  Explicitly preload one native protocol outside worker mode
+  --list-harnesses    List supported harness providers
   --agent-exec PATH    Absolute executable for exec; optional --agent-argv-file PATH
   --agent-peer ID      Exact native message recipient for ssmcp; also set --agent-account PROVIDER:SUBJECT
   --username NAME      Named account on the selected server
@@ -321,9 +326,9 @@ impl Incoming {
             loop {
                 let frame = read_frame(&mut reader).await;
                 let error = match &frame {
-                    Ok(None) => Some("SSH disconnected before local backend readiness".into()),
+                    Ok(None) => Some("Connection closed before tools became ready".into()),
                     Err(error) => Some(format!(
-                        "SSH stream failed before local backend readiness: {error}"
+                        "Connection stream failed before tools became ready: {error}"
                     )),
                     Ok(Some(Frame::Reject { message })) => {
                         if message == relay::AUTH_EXPIRED {
@@ -356,7 +361,7 @@ impl Incoming {
                 return error;
             }
             if self.closed.changed().await.is_err() {
-                return "SSH reader stopped before local backend readiness".into();
+                return "Connection reader stopped before tools became ready".into();
             }
         }
     }
@@ -405,7 +410,7 @@ impl Incoming {
             return Err(error);
         }
         if self.closed.has_changed().is_err() {
-            return Err("SSH reader stopped before local backend readiness".into());
+            return Err("Connection reader stopped before tools became ready".into());
         }
         // The process can exit before its reader task observes EOF (or a proxy
         // child can retain stdout). Check both sources before publishing a code.
@@ -503,6 +508,7 @@ impl Options {
         // legacy argv as permission to send chat or to launch a harness.
         let mut args = spec.args.iter();
         let mut explicit_input = false;
+        let mut explicit_worker = false;
         let mut ambiguous_agent = false;
         while let Some(arg) = args.next() {
             if arg == "--" {
@@ -513,6 +519,11 @@ impl Options {
                     explicit_input = true;
                     args.next();
                 }
+                "--worker" => {
+                    explicit_worker = true;
+                    args.next();
+                }
+                value if value.starts_with("--worker=") => explicit_worker = true,
                 "--agent" => {
                     ambiguous_agent |= args.next().is_some_and(|value| value != "next-caller");
                 }
@@ -525,16 +536,23 @@ impl Options {
                 _ => {}
             }
         }
-        if !explicit_input && ambiguous_agent {
+        if !explicit_input && ambiguous_agent && !explicit_worker {
             return Err("saved --agent has no explicit chat input and may select a legacy harness; recreate the session with --load-harness for protocol startup or configure a supported saved chat input and recipient".into());
         }
-        Self::parse_with_policy(
+        let mut parsed = Self::parse_with_policy(
             spec.args.iter().map(OsString::from),
             None,
             spec.watchdog,
             true,
             false,
-        )
+        )?;
+        if let Some(options) = &mut parsed
+            && options.worker.is_some()
+        {
+            // A saved worker has no foreground monitor or chat input.
+            options.chat.input = chat_io::Input::None;
+        }
+        Ok(parsed)
     }
 
     fn parse_with_policy(
@@ -870,11 +888,23 @@ impl Options {
                     tty = Some(value.into());
                 }
                 Some(flag) if chat_io::takes_value(flag) => {
-                    chat.set(
-                        flag,
-                        args.next()
-                            .ok_or_else(|| format!("{flag} requires a value"))?,
-                    )?;
+                    let value = args
+                        .next()
+                        .ok_or_else(|| format!("{flag} requires a value"))?;
+                    if flag == "--agent" {
+                        match value.to_str() {
+                            Some("-h" | "--help") => {
+                                print!("{HELP}");
+                                return Ok(None);
+                            }
+                            Some("--help-full") => {
+                                print!("{HELP_FULL}");
+                                return Ok(None);
+                            }
+                            _ => {}
+                        }
+                    }
+                    chat.set(flag, value)?;
                 }
                 Some("--shell") => {
                     shell = PathBuf::from(args.next().ok_or("--shell requires an absolute path")?);
@@ -893,22 +923,25 @@ impl Options {
             None if worker_factor.is_some() => return Err("--worker-k requires --worker N".into()),
             None => None,
         };
-        #[cfg(not(target_os = "linux"))]
-        if worker.is_some() {
-            return Err("worker hard limits currently require Linux cgroup v2 and the user's systemd manager".into());
-        }
-        let chat = if worker.is_some() {
+        let mut chat = if worker.is_some() {
             chat.finish_for_worker(true)?
         } else {
             chat.finish()?
         };
+        #[cfg(not(target_os = "linux"))]
+        if worker.is_some() && chat.agent != chat_io::Agent::Remote {
+            return Err("local worker executors require Linux cgroup v2 and the user's systemd manager; omit --agent to use the remote task pool".into());
+        }
         if worker.is_some()
             && (resume_history
                 || list_tools
                 || harness_name.is_some()
                 || !matches!(chat.input, chat_io::Input::Terminal | chat_io::Input::None))
         {
-            return Err("--worker is a tool-controlled monitor: use terminal or none input, omit resume, --list-tools and --load-harness; choose a local executable with --agent".into());
+            return Err("--worker is a remote task monitor by default: omit resume, --list-tools, --load-harness and external chat inputs".into());
+        }
+        if worker.is_some() && daemon {
+            chat.input = chat_io::Input::None;
         }
         if resume_history
             && (daemon
@@ -1349,7 +1382,7 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
     let options =
         Options::parse_saved(spec)?.ok_or("saved session must contain connection options")?;
     if options.worker.is_some() && options.chat.input != chat_io::Input::None {
-        return Err("saved worker pools require explicit --input none; the foreground monitor does not accept chat".into());
+        return Err("saved worker pools must disable chat input internally".into());
     }
     options.chat.validate_saved_input()?;
     if options.daemon
@@ -1712,6 +1745,10 @@ pub async fn run() -> crate::Result<()> {
         print!("{}", version::render(request)?);
         return Ok(());
     }
+    if let Some(output) = paths::output(&args)? {
+        print!("{output}");
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
     if args.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("__local-relay")) {
         let code = match local::relay().await {
@@ -1854,7 +1891,7 @@ pub async fn run() -> crate::Result<()> {
     };
     if service.is_some() || options.daemon {
         if options.worker.is_some() && options.chat.input != chat_io::Input::None {
-            return Err("background worker pools require explicit --input none".into());
+            return Err("background worker pools must disable chat input internally".into());
         }
         options.chat.validate_saved_input()?;
     }
@@ -2737,6 +2774,8 @@ async fn connect_inner(
         stop_registration(&mut registration.ssh, &mut registration.stderr_pump).await?;
         return Err(Box::new(relay::PermanentFailure(if chat_enabled {
             "relay disabled human chat without a matching local request".into()
+        } else if options.worker.is_some() {
+            "worker mode requires a relay that acknowledges disabled human chat".into()
         } else {
             "--input none requires a relay that acknowledges disabled human chat".into()
         })));
@@ -2790,7 +2829,10 @@ async fn connect_inner(
         && display_session.is_none()
     {
         let _ = ssh.kill().await;
-        return Err(Box::new(relay::PermanentFailure("worker monitor requires a live dashboard; use --input none for an explicitly headless pool".into())));
+        return Err(Box::new(relay::PermanentFailure(
+            "worker monitor requires an interactive dashboard; use --daemon for a background pool"
+                .into(),
+        )));
     }
     if options.resume_history.load(Ordering::Relaxed) {
         let Some(display) = display_session.as_ref() else {
@@ -2803,7 +2845,8 @@ async fn connect_inner(
             display.resume_history();
         }
     }
-    if options.chat.input == chat_io::Input::Terminal
+    if options.worker.is_none()
+        && options.chat.input == chat_io::Input::Terminal
         && options.chat.agent != chat_io::Agent::NextCaller
         && display_session.is_none()
     {
@@ -3419,7 +3462,7 @@ pub fn report_run_error(error: &(dyn std::error::Error + 'static)) {
 mod tests {
     #[cfg(target_os = "linux")]
     #[test]
-    fn worker_flags_keep_next_caller_nonexecuting_and_save_explicit_headless_execution() {
+    fn worker_flags_default_remote_and_save_explicit_headless_execution() {
         let parse = |args: &[&str]| {
             Options::parse(
                 ["--server", "https://relay.example"]
@@ -3438,7 +3481,9 @@ mod tests {
                 factor: 1.0
             })
         );
-        assert_eq!(default.chat.agent, chat_io::Agent::NextCaller);
+        assert_eq!(default.chat.agent, chat_io::Agent::Remote);
+        assert_eq!(default.chat.input, chat_io::Input::Terminal);
+        assert!(default.harness.is_none());
         let explicit = parse(&[
             "--name",
             "worker-fixture",
@@ -3457,6 +3502,81 @@ mod tests {
         assert_eq!(restored.chat.agent, chat_io::Agent::Codex);
         assert_eq!(restored.chat.input, chat_io::Input::None);
         assert!(!saved_chat_enabled(&saved));
+    }
+
+    #[test]
+    fn remote_worker_defaults_and_saved_pools_need_no_advanced_chat_flags() {
+        let parse = |args: &[&str]| {
+            Options::parse(
+                ["--server", "https://relay.example"]
+                    .into_iter()
+                    .chain(args.iter().copied())
+                    .map(OsString::from),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let normal = parse(&[]);
+        assert_eq!(normal.chat.agent, chat_io::Agent::NextCaller);
+        assert_eq!(normal.chat.input, chat_io::Input::Terminal);
+        assert!(normal.worker.is_none());
+        for args in [
+            vec!["--name", "remote-fixture", "--worker", "2"],
+            vec![
+                "--name",
+                "remote-fixture",
+                "--worker",
+                "2",
+                "--agent",
+                "remote",
+            ],
+            vec![
+                "--name",
+                "remote-fixture",
+                "--worker",
+                "2",
+                "--agent",
+                "next-caller",
+            ],
+        ] {
+            let options = parse(&args);
+            assert_eq!(options.chat.agent, chat_io::Agent::Remote);
+            assert_eq!(options.chat.input, chat_io::Input::Terminal);
+            assert_eq!(options.worker.unwrap().count, 2);
+            assert!(options.harness.is_none());
+            let saved = options.session_spec().unwrap();
+            validate_session_spec(&saved).unwrap();
+            let restored = Options::parse_saved(&saved).unwrap().unwrap();
+            assert_eq!(restored.chat.agent, chat_io::Agent::Remote);
+            assert_eq!(restored.chat.input, chat_io::Input::None);
+            assert_eq!(restored.worker, options.worker);
+            assert!(!saved_chat_enabled(&saved));
+        }
+        let background = parse(&["--worker", "2", "--daemon"]);
+        assert_eq!(background.chat.agent, chat_io::Agent::Remote);
+        assert_eq!(background.chat.input, chat_io::Input::None);
+        #[cfg(not(target_os = "linux"))]
+        assert!(
+            Options::parse(
+                [
+                    "--server",
+                    "https://relay.example",
+                    "--worker",
+                    "2",
+                    "--agent",
+                    "codex"
+                ]
+                .map(OsString::from)
+            )
+            .is_err()
+        );
+        for flag in ["--help", "-h", "--help-full"] {
+            assert!(
+                Options::parse(["--worker", "2", "--agent", flag].map(OsString::from))
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 
     #[test]
