@@ -1,6 +1,6 @@
 {
   "schema": "ssmcp-iteration-evidence.v2",
-  "snapshot_utc": "2026-11-22 01:44:05 UTC",
+  "snapshot_utc": "2026-11-22 02:11:34 UTC",
   "source": {
     "commit": "1d6b55320fff6533663dad2627891960b3b5c5cc",
     "tree": "fc28406bb20a3d1f6f9441ca34016357ab0ff39c",
@@ -9,7 +9,8 @@
     "version": "0.10.26",
     "final_release_source_bound": false,
     "fixed_for_this_static_snapshot": true,
-    "native_final_descriptors_available": false
+    "native_final_descriptors_available": true,
+    "native_validation_actual_source_bound": true
   },
   "evidence_policy": {
     "current_results_bound_to_stated_source": true,
@@ -20,19 +21,56 @@
     "draft_native_result_read_scope": "Existing authenticated completion summaries; no new native calls or independent receipt/binary reads by this draft author. Existing published receipt scopes remain attached to their original source.",
     "current_source_results_not_inherited_from_prior_sources": true,
     "static_delta_read_scope": "Cached immutable commit diff plus actual nonrecursive Git root/scripts trees; six recipe, Cargo and notes bytes are preserved by exact deltas, not re-downloaded here.",
-    "new_source_has_no_final_execution_result_in_this_snapshot": true
+    "current_source_actual_local_completed_results": true,
+    "new_native_result_read_scope": "Authenticated final completion summaries from the existing execution coordinators; exact supplied receipt identities are recorded, with no new native calls or original receipt/binary reads by this draft author.",
+    "counts_not_aggregated_across_sources_or_test_families": true,
+    "all_current_native_results_are_actual_1d6_not_inherited": true,
+    "remaining_result_gaps": "Exact V31 ignored count, three unsupplied original CLI check counts and unsupplied full subreceipt digests remain null; older values are not transferred."
   },
   "native_validation": {
-    "source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
-    "prefix": "cli-validation-20261121-v29",
-    "origin": "native source coordinator completed-results summary",
+    "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+    "tree": "fc28406bb20a3d1f6f9441ca34016357ab0ff39c",
+    "prefix": "cli-validation-20261121-v31",
+    "origin": "authenticated actual completed-results summaries from existing sole source and acceptance coordinators",
     "format": "pass",
     "strict_clippy_all_targets": "pass",
     "library_compile": "pass",
+    "library_build_receipt": {
+      "file": "library-build.json",
+      "bytes": 33471,
+      "sha256": "86301a19dae302f8c3d3998a719ad33c111d143c9ca8770d76e58cd4d7a49641",
+      "sha256_prefix": "86301",
+      "read_scope": "Full digest provided in the coordinator-owned Google report, independently read back by root at the revision in google_report; original native receipt not read by report root."
+    },
     "library_tests": {
       "ordinary_passed": 2079,
       "required_ignored_run_separately_passed": 2,
-      "other_ignored_not_counted_as_pass": 11
+      "other_ignored_not_counted_as_pass": 11,
+      "other_ignored_scope": "Final 1d6 count explicitly confirmed in the coordinator-owned Google document independently read by report root; never counted as passing.",
+      "receipt": {
+        "file": "library-tests/receipt.json",
+        "bytes": 227842,
+        "sha256": "f03cd4f6a500de5140d2184ac60dee159cf1fb54fae60f81d35c4a2bbf72d12c",
+        "sha256_prefix": "f03cd4f6",
+        "read_scope": "Full digest provided in the coordinator-owned Google report, independently read back by root at the revision in google_report; original native receipt not read by report root."
+      }
+    },
+    "wire_checks": {
+      "status": "pass",
+      "checks": 9,
+      "receipt": {
+        "file": null,
+        "bytes": 16280,
+        "sha256": null,
+        "sha256_prefix": "1c241f40",
+        "read_scope": "Only this digest prefix was supplied in the completion summary; no full digest is inferred."
+      }
+    },
+    "build_cli_handoff": {
+      "file": "cli-validation-20261121-v31/root-build-cli-handoff.json",
+      "bytes": 20265,
+      "sha256": "7e206a8b3af1491b5e90c5aa4ba3031f2640328e32fbec5bd6e5940a4c55df22",
+      "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
     },
     "candidate_build": {
       "status": "pass",
@@ -45,286 +83,440 @@
       "receipt": {
         "file": "candidate-build/receipt.json",
         "bytes": 7502,
-        "sha256": "056ff43eefb7dd7133470cda62fd76054dd6362154c1e2340be0e4e97e141ed6"
-      }
-    },
-    "wire_checks": {
-      "status": "pass",
-      "checks": 9
+        "sha256": null,
+        "sha256_prefix": "cf6b",
+        "read_scope": "Only this digest prefix was supplied in the completion summary; no full digest is inferred."
+      },
+      "layout_receipt": {
+        "file": null,
+        "bytes": 1489,
+        "sha256": null,
+        "sha256_prefix": "8f4b",
+        "read_scope": "Only this digest prefix was supplied in the completion summary; no full digest is inferred."
+      },
+      "actual_bin_and_library_hashes_reported_matching": true,
+      "hash_read_by_report_group": false,
+      "full_binary_descriptors_available_in_handoff": true
     },
     "existing_ci_account_core_e2e": {
-      "status": "pass"
+      "status": "pass",
+      "script": "scripts/e2e.py",
+      "steps": 1,
+      "included_in_handoff": true,
+      "checks_passed": 125,
+      "counted_as_original_CLI_group": false
     },
     "unified": {
       "status": "pass",
-      "original_unit_cases_passed": 4,
-      "receipt": {
-        "file": null,
-        "bytes": 32276,
-        "sha256": "c8f485c65b747053e1f2efd4df0e3701a5786f53ea3759ed03516db9da65ee3e"
-      },
       "checks_passed": 105,
-      "unit_cases_are_separate_from_checks": true
+      "original_unit_cases_passed": 4,
+      "unit_cases_are_separate_from_checks": true,
+      "receipt": null
     },
     "dashboard": {
       "status": "pass",
-      "receipt": {
-        "file": null,
-        "bytes": 15367,
-        "sha256": "716c1bfdaee70524ad3f24451080f899a232f899779de87da0cd5b7f716f3407"
-      },
-      "checks_passed": 80
+      "checks_passed": 80,
+      "receipt": null
     },
     "client_ui": {
+      "status": "pass",
       "required_leaf_scenarios": 10,
+      "passed_leaf_scenarios": 10,
+      "failed_leaf_scenarios": 0,
       "all_started": true,
-      "observed_passed_checks": {
-        "canvas": 72,
-        "composer": 87,
-        "presentations": 57,
-        "context": 71,
-        "filepaste": 145,
-        "preview": null,
-        "history": null
-      },
-      "observed_failures": {
-        "questions": "second Escape assertion; captured state Edit with original draft and new pending banner",
-        "relay-composer": "FileExistsError creating git symlink in private bin directory"
-      },
-      "observed_passed_scenarios": [
-        "preview",
-        "canvas",
-        "composer",
-        "history",
-        "presentations",
-        "context",
-        "filepaste"
+      "scenarios": [
+        {
+          "name": "client",
+          "status": "pass",
+          "checks_passed": 58
+        },
+        {
+          "name": "canvas",
+          "status": "pass",
+          "checks_passed": 72
+        },
+        {
+          "name": "composer",
+          "status": "pass",
+          "checks_passed": 87
+        },
+        {
+          "name": "questions",
+          "status": "pass",
+          "checks_passed": 43
+        },
+        {
+          "name": "history",
+          "status": "pass",
+          "checks_passed": 150
+        },
+        {
+          "name": "presentations",
+          "status": "pass",
+          "checks_passed": 57
+        },
+        {
+          "name": "context",
+          "status": "pass",
+          "checks_passed": 71
+        },
+        {
+          "name": "filepaste",
+          "status": "pass",
+          "checks_passed": 145
+        },
+        {
+          "name": "relay-composer",
+          "status": "pass",
+          "checks_passed": 46
+        },
+        {
+          "name": "interactions",
+          "status": "pass",
+          "checks_passed": 172
+        }
       ],
-      "observed_passed_scenarios_count": 7,
-      "checks_null_scope": "Preview and history pass status confirmed in the current source-owner document; their exact counts were not supplied in this draft evidence.",
-      "original_observed_failures_preserved": true,
-      "three_corrected_complete_followups": "fixture_candidate_probes; product binaries from 12a with candidate fixture text later committed in 083 and retained byte-for-byte in 1d6",
-      "single_unchanged_fixture_batch_all_ten_passed": false,
-      "result_scope": "Seven original V29 UI leaves passed. Three corrected full-scenario probes are separate results, not a completed V31 suite on 1d6."
+      "scope": "Actual original remaining-CI UI execution on frozen 1d6/V31; distinct from earlier 12a candidate fixture probes.",
+      "per_leaf_counts_scope": "Exact current V31 report counts read by the native execution coordinator; client corresponds to the earlier preview label, and filepaste to the reported paste leaf."
     },
     "daemon": {
       "status": "pass",
+      "product_source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
       "checks_passed": 182,
-      "product_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
+      "exit_code": 0,
       "cleanup_confirmed": true,
-      "cleanup_errors": [],
-      "environment_adjustment": "Private test environment exposes the already verified real user-manager runtime.",
-      "original_environment_blocker": {
-        "status": "blocked",
-        "assertions_executed": 0,
-        "observed_blocker": "private XDG_RUNTIME_DIR did not expose existing real user-manager bus",
-        "existing_user_bus_socket_confirmed": true,
-        "environment_preflight_under_review_at_original_attempt": true,
-        "resolved_by_validated_environment_run": true
-      },
-      "report": {
-        "bytes": 29166,
+      "cleanup_errors": []
+    },
+    "remaining_original_ci_scenarios_complete": true,
+    "release_profile_and_staged_install": {
+      "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "status": "pass",
+      "exit_code": 0,
+      "release_profile_build_performed": true,
+      "build_fresh": false,
+      "real_recompilation_reported": true,
+      "release_client": {
+        "file": null,
+        "bytes": 15552248,
         "sha256": null,
-        "sha256_prefix": "1c370827",
-        "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
+        "sha256_prefix": "8273647b",
+        "read_scope": "Only this digest prefix was supplied in the completion summary; no full digest is inferred."
+      },
+      "release_server": {
+        "file": null,
+        "bytes": 7608776,
+        "sha256": null,
+        "sha256_prefix": "c6201fb0",
+        "read_scope": "Only this digest prefix was supplied in the completion summary; no full digest is inferred."
+      },
+      "staged_install": {
+        "isolated": true,
+        "checks_passed": 4,
+        "owned_cleanup_passed": true,
+        "cleanup_errors": [],
+        "production_install": false
       },
       "receipt": {
-        "bytes": 38872,
-        "sha256": null,
-        "sha256_prefix": "145dce71",
-        "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
+        "file": null,
+        "bytes": 16968,
+        "sha256": "42d2718e6f5473f8fa8460fd022edfbe4b4730cde6bb2fb4de2883c588a8d116",
+        "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
       },
-      "completion_origin": "authenticated sole execution coordinator summary",
-      "completed_result_reported_at_utc": "2026-11-22 01:23:25 UTC",
-      "not_current_1d6_execution": true
+      "not_GitHub_Release_publication": true
     },
-    "reported_known_local_fixture_blockers_closed_by_followups": true,
-    "followups_do_not_bind_final_source": true
+    "oauth_supplement": {
+      "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "status": "pass",
+      "checks": 19,
+      "cli_calls": 7,
+      "scope": "client_registrations_only",
+      "real_access_refresh_chain_validated": false,
+      "receipt": {
+        "file": null,
+        "bytes": 19555,
+        "sha256": "516ccf6c688c1a2fa6d5fa4a846fb7c9f5fbf8a74bcc1195b80e152c4a1fd06e",
+        "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
+      }
+    },
+    "cleanup_supplement": {
+      "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "status": "pass",
+      "checks": 27,
+      "cli_calls": 9,
+      "owned_processes_reaped": 11,
+      "cleanup_errors": [],
+      "receipt": {
+        "file": null,
+        "bytes": 20925,
+        "sha256": "56a644cf2b95e97d37d417ee75947745459d6698cbc1069c3517bb1a7817f6f0",
+        "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
+      }
+    },
+    "supplemental_cli": {
+      "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "status": "pass",
+      "groups": [
+        {
+          "name": "gap",
+          "status": "pass",
+          "exit_code": 0,
+          "commands": 22,
+          "checks": 64,
+          "report": {
+            "file": null,
+            "bytes": 32030,
+            "sha256": "0d5887528c9baffbe6dda7299efe0577f6afc5d5e8173884f3c61099dadfd705",
+            "read_scope": "Original report read and hash checked by the native execution coordinator; this draft uses the authenticated summary."
+          }
+        },
+        {
+          "name": "007-prefix",
+          "status": "pass",
+          "exit_code": 0,
+          "checks": 9,
+          "records": 362,
+          "records_include_status_polling": true,
+          "records_are_not_command_kinds": true,
+          "report": {
+            "file": null,
+            "bytes": 436157,
+            "sha256": "39982193a497b60e9e651b83638e4adbe7f41d28a09c29cc7804dc854e89150f",
+            "read_scope": "Original report read and hash checked by the native execution coordinator; this draft uses the authenticated summary."
+          }
+        },
+        {
+          "name": "update",
+          "status": "pass",
+          "exit_code": 0,
+          "calls": 4,
+          "calls_include_read_only_context_request": true,
+          "check_result": "kept_newer",
+          "update_result": "kept_newer",
+          "candidate_version": "0.10.26",
+          "public_version_observed": "0.10.20",
+          "download_or_installed_binary_replacement": false,
+          "tools_repository_head": "d80054cf16f38b93a94fb2867fbfbfde78832066",
+          "tools_repository_status": "current",
+          "tools_applied": false,
+          "report": {
+            "file": null,
+            "bytes": 11597,
+            "sha256": "94e59a567a06bf120bdbb600a8a276f7dd259def07af52acd01d08f7c9627e85",
+            "read_scope": "Original report read and hash checked by the native execution coordinator; this draft uses the authenticated summary."
+          }
+        }
+      ],
+      "receipt": {
+        "file": "ssmcp-v31-supplemental-run-v1/receipt.json",
+        "bytes": 11230,
+        "sha256": "b2981f7b1a95d0edc230cc64632067dcb6782772648352517835ab9049bc185c",
+        "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
+      },
+      "update_result": "kept_newer",
+      "public_version_observed": "0.10.20",
+      "download_or_installed_binary_replacement": false,
+      "candidate_version": "0.10.26",
+      "inputs_unchanged": true,
+      "cleanup_errors": []
+    },
+    "all_owned_cleanup_passed": true,
+    "cleanup_errors": [],
+    "cleanup_scope": "Owned processes and temporary resources from the reported validation groups; no claim about unrelated tasks.",
+    "not_a_formal_release_run": true,
+    "final_report_identity_review": {
+      "report_count": 26,
+      "path_bytes_and_SHA256_all_matched": true,
+      "reader": "existing native execution coordinator",
+      "draft_author_read_original_reports": false,
+      "source": "1d6b55320fff6533663dad2627891960b3b5c5cc"
+    }
   },
   "cli_matrix": {
-    "source": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
+    "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
     "required_original_groups": 12,
     "passed_original_groups": 12,
     "failed_original_groups": 0,
     "groups": [
       {
         "name": "account-interactive",
-        "status": "pass"
+        "status": "pass",
+        "checks_passed": null
       },
       {
         "name": "agent-entry",
-        "status": "pass"
+        "status": "pass",
+        "checks_passed": 9
       },
       {
         "name": "local",
-        "status": "pass"
+        "status": "pass",
+        "checks_passed": 57
       },
       {
         "name": "local-socket",
-        "status": "pass"
+        "status": "pass",
+        "checks_passed": null
       },
       {
         "name": "context-reload",
-        "status": "pass"
+        "status": "pass",
+        "checks_passed": null
       },
       {
         "name": "message-references",
-        "status": "pass"
+        "status": "pass",
+        "checks_passed": 53
       },
       {
         "name": "terminal-control",
-        "status": "pass"
+        "status": "pass",
+        "checks_passed": 52
       },
       {
         "name": "service-portable",
-        "status": "pass"
+        "status": "pass",
+        "checks_passed": 42
       },
       {
         "name": "session-service",
-        "status": "pass"
+        "status": "pass",
+        "checks_passed": 69
       },
       {
         "name": "user-wait",
-        "status": "pass"
+        "status": "pass",
+        "checks_passed": 189
       },
       {
         "name": "007",
-        "status": "pass"
+        "status": "pass",
+        "checks_passed": 32
       },
       {
         "name": "007-upgrade",
-        "status": "pass"
+        "status": "pass",
+        "checks_passed": 14
       }
     ],
     "additional_agent_panel": {
       "status": "pass",
       "checks": 55,
-      "real_PTY_snapshot_pairs": 5
+      "real_PTY_snapshot_pairs": 5,
+      "source": "1d6b55320fff6533663dad2627891960b3b5c5cc"
     },
     "all_subcommands_final_release_complete": false,
-    "final_source_and_shared_e2e_helper_binding": "pending actual 1d6 build descriptors and final binding; the recorded 12 groups remain eb319 results"
+    "final_source_and_shared_e2e_helper_binding": "Completed by the existing native owners against the actual frozen 1d6 descriptors; no earlier result transfer.",
+    "tree": "fc28406bb20a3d1f6f9441ca34016357ab0ff39c",
+    "handoff": {
+      "file": "cli-validation-20261121-v31/root-build-cli-handoff.json",
+      "bytes": 20265,
+      "sha256": "7e206a8b3af1491b5e90c5aa4ba3031f2640328e32fbec5bd6e5940a4c55df22",
+      "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
+    },
+    "all_owned_cleanup_passed": true,
+    "cleanup_errors": [],
+    "actual_on_current_source": true,
+    "all_original_local_groups_completed": true,
+    "formal_release_complete": false,
+    "per_group_count_scope": "Supplied current report counts are recorded; the three other passed original groups retain null counts rather than inferred older values.",
+    "account_core_is_separate": {
+      "checks_passed": 125,
+      "included_in_12_group_count": false
+    }
   },
   "ci": {
-    "run_id": 44967293207,
+    "run_id": 44973215329,
     "attempt": 1,
-    "source": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
-    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44967293207",
+    "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44973215329",
+    "created_at": "2026-11-22T01:49:07Z",
+    "status": "completed",
+    "conclusion": "success",
     "all_six_jobs_terminal": true,
-    "passed_jobs": 4,
-    "failed_jobs": 2,
+    "passed_jobs": 6,
+    "failed_jobs": 0,
+    "running_jobs": 0,
+    "total_jobs": 6,
     "jobs": [
       {
-        "id": 137039106568,
+        "id": 137057300188,
+        "name": "linux (ubuntu-24.04-arm)",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+        "completed_at": "2026-11-22T02:06:45Z"
+      },
+      {
+        "id": 137057300386,
         "name": "Client (macos-15-intel)",
         "status": "completed",
         "conclusion": "success",
-        "head_sha": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
-        "completed_at": "2026-11-22T00:42:43Z",
-        "failed_steps": []
+        "head_sha": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+        "completed_at": "2026-11-22T01:59:44Z"
       },
       {
-        "id": 137039106832,
-        "name": "Client (windows-11-arm)",
-        "status": "completed",
-        "conclusion": "success",
-        "head_sha": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
-        "completed_at": "2026-11-22T00:46:51Z",
-        "failed_steps": []
-      },
-      {
-        "id": 137039106853,
-        "name": "linux (ubuntu-24.04-arm)",
-        "status": "completed",
-        "conclusion": "failure",
-        "head_sha": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
-        "completed_at": "2026-11-22T00:42:17Z",
-        "failed_steps": [
-          "Exercise unified execution, audit and connection isolation"
-        ]
-      },
-      {
-        "id": 137039106878,
-        "name": "Client (macos-15)",
-        "status": "completed",
-        "conclusion": "success",
-        "head_sha": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
-        "completed_at": "2026-11-22T00:41:03Z",
-        "failed_steps": []
-      },
-      {
-        "id": 137039106920,
-        "name": "linux (ubuntu-24.04)",
-        "status": "completed",
-        "conclusion": "failure",
-        "head_sha": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
-        "completed_at": "2026-11-22T00:40:53Z",
-        "failed_steps": [
-          "Exercise unified execution, audit and connection isolation"
-        ]
-      },
-      {
-        "id": 137039106991,
+        "id": 137057300442,
         "name": "Client (windows-2025)",
         "status": "completed",
         "conclusion": "success",
-        "head_sha": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
-        "completed_at": "2026-11-22T00:41:00Z",
-        "failed_steps": []
+        "head_sha": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+        "completed_at": "2026-11-22T01:54:47Z"
+      },
+      {
+        "id": 137057300506,
+        "name": "Client (macos-15)",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+        "completed_at": "2026-11-22T01:53:15Z"
+      },
+      {
+        "id": 137057300536,
+        "name": "Client (windows-11-arm)",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+        "completed_at": "2026-11-22T01:56:22Z"
+      },
+      {
+        "id": 137057300572,
+        "name": "linux (ubuntu-24.04)",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+        "completed_at": "2026-11-22T02:05:28Z"
       }
     ],
-    "status": "completed",
-    "conclusion": "failure",
-    "linux_first_failure": {
-      "step": 27,
-      "step_name": "Exercise unified execution, audit and connection isolation",
-      "script": "scripts/e2e_unified.py",
-      "stage": "client_isolation",
-      "checks_before_failure": 74,
-      "assertion": "ssmcp.audit.events on another client does not expose the first client's audit stream",
-      "account_core_and_account_auth_steps_passed": true,
-      "cleanup_errors": [],
-      "raw_reports_actually_read": true
-    },
-    "diagnostic": {
-      "source": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
-      "old_predicate_unchanged": true,
-      "exit_code": 1,
-      "checks_before_failure": 74,
-      "total_sibling_rows": 37,
-      "complete_empty_startup_cleanup_rows": 1,
-      "code_mode_rows": 36,
-      "own_sibling_started_runs": 8,
+    "job_state_origin": "Report root independently read the terminal GitHub run and all six jobs: attempt 1, head 1d6, completed/success. Draft author made no new CI request.",
+    "dispatch": {
+      "confirmed": true,
+      "post_attempted": true,
+      "dispatch_count": 1,
+      "owner": "existing sole source coordinator",
+      "report_group_dispatch_count": 0,
       "receipt": {
-        "file": "cli-validation-20261121-v28/native-ci-unified-diagnostic/receipt.json",
-        "bytes": 36472,
-        "sha256": "e6f66321096c82557ce1da818b0b4950d3877c641b33486df43baf922c9d55ea"
+        "file": "cli-validation-20261121-v31/ci-dispatch/receipt.json",
+        "bytes": 1317,
+        "sha256": "eb7cdb97095dd7ec6d8bb32ea416e65f00e9c710727f222d5b98d4c4339f780b",
+        "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
       },
-      "rows": {
-        "file": "sibling-audit-events.jsonl",
-        "bytes": 13740,
-        "sha256": "feab0fcb29b316de1377e3337e3213c13879891a717beeb24a7274e94042e18b"
-      }
+      "error": null
     },
-    "strict_fixture_fix": {
-      "commit": "12a847803e952420e7b4534f11fd57ae64ee5c32",
-      "retains_own_code_mode_run_check": true,
-      "requires_exactly_one_complete_empty_startup_cleanup": true,
-      "saves_original_rows_before_assertion": true,
-      "product_behavior_changed": false,
-      "full_unified_execution_on_fixed_source": "pass",
-      "receipt": {
-        "file": null,
-        "bytes": 32276,
-        "sha256": "c8f485c65b747053e1f2efd4df0e3701a5786f53ea3759ed03516db9da65ee3e"
-      }
+    "terminal_result_pending": false,
+    "not_formal_release_workflow": true,
+    "latest_job_completed_at": "2026-11-22T02:06:45Z",
+    "terminal_head_sha_verified": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+    "independent_run_and_jobs_readback": {
+      "bytes": 61821,
+      "sha256": "d831f8368fb7bb09717b047af3f7cc5edd0cc01bf3a4c3e72c4adcaff0af3ed6",
+      "reader": "report root",
+      "method": "read-only GitHub connector GET"
     },
-    "latest_completed_run_scope": "eb319 only; no confirmed successor CI run ID in this snapshot",
-    "successor_ci": {
-      "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
-      "coordination_in_progress": true,
-      "dispatch_confirmed": false,
-      "run_id": null,
-      "status": "awaiting actual run identity"
+    "workflow_steps": {
+      "total": 138,
+      "success": 131,
+      "skipped": 7,
+      "not_test_case_counts": true
     }
   },
   "portal": {
@@ -379,14 +571,24 @@
       }
     },
     "report_group_review_scope": "static implementation review; native visual results recorded separately",
-    "source_identity_scope": "Existing fixed-source reads through 12a, then two exact fixture/mode-only deltas prove portal and commerce blobs unchanged at 1d6; no new visual or payment execution."
+    "source_identity_scope": "Existing fixed-source reads through 12a, then two exact fixture/mode-only deltas prove portal and commerce blobs unchanged at 1d6; no new visual or payment execution.",
+    "final_source_equivalence_receipt": {
+      "receipt": {
+        "file": null,
+        "bytes": 2489,
+        "sha256": "4b1e8a4a06468750ab8802eacca6a19d747805c32fa33eacec90ca2269ba7c13",
+        "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
+      },
+      "reported_equivalent_from": "508888bc11bf6ca5ce90316361effed38a3160f8",
+      "reported_equivalent_to": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "scope": "Portal source equivalence reported by the final acceptance preparation; no new payment transaction or portal re-render claimed."
+    }
   },
   "worker": {
     "implemented": true,
     "runtime_validation": {
-      "source": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
+      "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
       "checks": 202,
-      "real_pools": 2,
       "status": "pass",
       "coverage": [
         "resource caps",
@@ -399,22 +601,27 @@
       ],
       "executor": "synthetic",
       "receipt": {
-        "file": "root-final-acceptance-eb319-20261122/worker/receipt.json",
-        "bytes": 8138,
-        "sha256": "4a7ecf44abe4e067c21b5a80f53d99f540b8affd49dc1addca1cad3df9864630"
+        "file": null,
+        "bytes": 8120,
+        "sha256": "8084359e3b532514434708b7452e7e8b3fea3c40348444f303c953b076f70d4b",
+        "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
       },
       "result": {
-        "file": "root-final-acceptance-eb319-20261122/worker/evidence/result.json",
-        "bytes": 187612,
-        "sha256": "1e5142c242e8f9c09dcd2a41e1206ddd61b11a5fd1543e888cb0d75cfdcc5c85"
+        "file": null,
+        "bytes": 187433,
+        "sha256": "d08e3e44efe531e418edf55b0cc293ca49f0bb58a3caf8b65895d7855c662b8e",
+        "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
       },
-      "final_source_and_shared_helper_binding": "pending actual 1d6 build descriptors; this 202-check result remains eb319",
+      "final_source_and_shared_helper_binding": "Actual final execution bound by the native acceptance coordinator to the frozen 1d6 build handoff.",
       "real_cgroup_observations": 7,
       "all_children_reaped": true,
       "forced_cleanup": false,
       "remaining_children": 0,
       "cleanup_errors": [],
-      "inputs_unchanged": true
+      "inputs_unchanged": true,
+      "seconds": 8.14,
+      "real_unit_observations": 7,
+      "coverage_origin": "Existing full scenario reported passed; this report draft did not inspect its raw case rows."
     },
     "resource_scope": "same OS UID and shared registry/user-systemd/cgroup namespaces; Linux cgroup v2 required",
     "formula": "effective capacity / registered worker count * k",
@@ -458,16 +665,30 @@
     },
     "record_created_holds_long_term_lease": false,
     "long_term_lease_contract": "retain Registration or FileLease",
-    "current_runtime_validation_source": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
-    "current_runtime_validation": "previous_native_acceptance.cleanup_supplement"
+    "current_runtime_validation_source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+    "current_runtime_validation": "native_validation.cleanup_supplement"
   },
   "tools_repository": {
     "url": "https://github.com/LIghtJUNction/ssmcp-tools",
     "loader_rc_user_override_and_update_checks_implemented": true,
     "native_permissions_retained": true,
     "head_commit": "d80054cf16f38b93a94fb2867fbfbfde78832066",
-    "update_observation_source": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
-    "update_result": "kept_newer for client; tools repository current"
+    "update_observation_source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+    "update_result": "Client check and update kept_newer; tools repository current; applied=false.",
+    "head_observation_source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+    "current_update_receipt": {
+      "file": "ssmcp-v31-supplemental-run-v1/receipt.json",
+      "bytes": 11230,
+      "sha256": "b2981f7b1a95d0edc230cc64632067dcb6782772648352517835ab9049bc185c",
+      "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
+    },
+    "applied": false,
+    "current_update_report": {
+      "file": null,
+      "bytes": 11597,
+      "sha256": "94e59a567a06bf120bdbb600a8a276f7dd259def07af52acd01d08f7c9627e85",
+      "read_scope": "Original report read and hash checked by the native execution coordinator; this draft uses the authenticated summary."
+    }
   },
   "finish": {
     "strict_boolean": "finish_task",
@@ -479,22 +700,21 @@
     "approval_source": "real Human Yes consumed for current authenticated account/connection/member/input episode",
     "timeout_no_cancel_new_input_keep_task_active": true,
     "user_wait_validation": {
-      "source": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
+      "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
       "status": "pass",
+      "included_in_original_12_CLI_groups": true,
       "checks": 189,
-      "real_terminal_active_visual_sleep": true,
-      "sleep_warning_bold_red": true,
-      "mouse_wakeup_keeps_native_wait_pending": true,
-      "four_slots_and_fifth_busy": true,
-      "finish_starts_no": true,
-      "deadline_preserves_draft": true,
       "receipt": {
-        "file": "cli-validation-20261121-v28/native-cli-conversations/user-wait/artifacts/report.json",
-        "bytes": 15148,
-        "sha256": "273d975806c53b769c32bf24e8f229e631db32b03e5e3e57abbf14ccb2204fc2"
+        "file": "cli-validation-20261121-v31/root-build-cli-handoff.json",
+        "bytes": 20265,
+        "sha256": "7e206a8b3af1491b5e90c5aa4ba3031f2640328e32fbec5bd6e5940a4c55df22",
+        "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
       },
+      "current_detailed_case_rows_independently_read": false,
+      "historical_detailed_case_evidence": "native_acceptance_history for eb319",
       "current_live_client_upgraded": false,
-      "specific_previous_live_entry_cause_identified": false
+      "specific_previous_live_entry_cause_identified": false,
+      "report_identity_checked_by_native_coordinator": true
     }
   },
   "release": {
@@ -510,7 +730,7 @@
     "independent_server_upgrade_authorized": true,
     "independent_server_upgrade_executed": false,
     "registry_publication": false,
-    "final_main_sync": "pending final-source completion",
+    "final_main_sync": "not performed in this evidence snapshot; planned documentation integration and subsequent release-owner action",
     "production_preflight": {
       "server_version": "0.10.20",
       "installed_client_version": "0.10.25",
@@ -523,7 +743,9 @@
         "sha256": "1c04f667da947c24958f6d13584e386cf5d91c8760a57f2be1dad82e598d19c0"
       },
       "no_install_or_deploy_performed": true
-    }
+    },
+    "local_release_profile_and_staged_install": "passed on 1d6; see native_validation.release_profile_and_staged_install; not publication or production installation",
+    "documentation_integration_commit": null
   },
   "report_group": {
     "owned_branch": "docs/command-await-delivery-20261120",
@@ -534,24 +756,35 @@
     "portal_commits": 3,
     "portal_writes_closed": true,
     "google_writer": "existing execution coordinator",
-    "previous_snapshot_commit": "bba557f2c710fe3b0e65883db29da8573e2e7014"
+    "previous_snapshot_commit": "2bf653f413c59ffa4bc065089837545dedf66c2a",
+    "draft_preparation_only": true,
+    "canonical_report_modified": false,
+    "native_result_execution_owner": "existing source and acceptance coordinators, not the report group"
   },
   "successor_validation": {
     "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
     "tree": "fc28406bb20a3d1f6f9441ca34016357ab0ff39c",
     "planned_round": "V31",
-    "phase": "preparation waiting on the shared rustc-serial lock; final descriptors, installation and source-bound validation results pending",
+    "phase": "Actual frozen-source local acceptance and all six CI jobs passed; documentation integration and formal release remain separate pending actions.",
     "checkout_reported_clean": true,
     "completed_native_results_inherited": false,
-    "source_bound_completed_results_available": false,
-    "final_build_descriptors": null,
-    "installation_status": "pending",
+    "source_bound_completed_results_available": true,
+    "final_build_descriptors": {
+      "file": "cli-validation-20261121-v31/root-build-cli-handoff.json",
+      "bytes": 20265,
+      "sha256": "7e206a8b3af1491b5e90c5aa4ba3031f2640328e32fbec5bd6e5940a4c55df22",
+      "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
+    },
+    "installation_status": "isolated staging installation passed four checks; production untouched",
     "shared_compile_lock": {
       "contention_observed": true,
       "holder_process_observed": true,
       "owning_task_identified": false,
-      "evidence": "execution coordinator inspected the waiting lock path and matching lock inode; task ownership remains unconfirmed",
-      "other_tasks_stopped": false
+      "evidence": "The actual offline preparation waited 171 seconds on the shared compiler lock and then passed; the earlier timeout remains of unknown cause.",
+      "other_tasks_stopped": false,
+      "resolved_for_this_execution": true,
+      "wait_seconds": 171,
+      "outcome": "passed after waiting"
     },
     "previous_source_preparation": {
       "source": "083ef018e13cdf6672637d41ea1bd13542185d5a",
@@ -560,25 +793,42 @@
       "outcome": "timeout",
       "network_failure_established": false,
       "timeout_is_not_network_diagnosis": true,
-      "historical_receipt_retained": true
+      "historical_receipt_retained": true,
+      "cause": "unknown"
     },
     "new_ci": {
       "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
       "coordination_authorized": true,
-      "may_proceed_in_parallel_with_lock_investigation": true,
       "sole_dispatch_owner": "existing source coordinator",
-      "dispatch_confirmed": false,
-      "run_id": null,
+      "dispatch_confirmed": true,
+      "run_id": 44973215329,
       "all_native_validation_steps_retained": true,
-      "github_fixed_head_read": {
-        "observed_at_utc": "2026-11-22 01:44:05 UTC",
-        "matching_runs": 0,
-        "head_sha": "1d6b55320fff6533663dad2627891960b3b5c5cc"
-      }
+      "receipt": {
+        "file": "cli-validation-20261121-v31/ci-dispatch/receipt.json",
+        "bytes": 1317,
+        "sha256": "eb7cdb97095dd7ec6d8bb32ea416e65f00e9c710727f222d5b98d4c4339f780b",
+        "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
+      },
+      "status": "completed",
+      "conclusion": "success",
+      "passed_jobs": 6
     },
-    "worker_and_panel_rebinding": "pending actual 1d6 final build descriptors; current worker/Panel PASS remains on eb319",
-    "complete_six_platform_CI": "pending; latest completed run remains eb319 44967293207",
-    "formal_release_H2_or_deployment_performed": false
+    "worker_and_panel_rebinding": "completed actual final worker and Panel execution on 1d6",
+    "complete_six_platform_CI": "completed/success; all six jobs passed on 1d6, attempt 1",
+    "formal_release_H2_or_deployment_performed": false,
+    "documentation_integration": {
+      "status": "planned after confirmed green CI; no integration commit recorded in this draft",
+      "base_source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "owner": "existing source coordinator",
+      "planned_content": [
+        "final matrix",
+        "public facts",
+        "brief index"
+      ],
+      "commit": null,
+      "already_integrated": false
+    },
+    "main_tag_Release_H2_production_owner": "existing sole main/release coordinator"
   },
   "historical_stage_v1": {
     "schema": "ssmcp-unified-source-and-cli-matrix-stage.v1",
@@ -3010,25 +3260,44 @@
     }
   },
   "agent_panel": {
-    "source": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
+    "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
     "status": "pass",
     "checks": 55,
-    "registered_members": 2,
-    "repeated_calls": 4,
     "real_PTY_snapshot_pairs": 5,
     "owned_cleanup_passed": true,
-    "short_tmp_removed": true,
+    "cleanup_errors": [],
+    "source_reported_clean": true,
     "receipt": {
-      "file": "cli-validation-20261121-v28/root-agent-panel-eb319-20261122/receipt.json",
-      "bytes": 13174,
-      "sha256": "3f2ba6f327a4da925dc4efc7810a964807198c27997cb149d59f4f704a851eea"
+      "file": null,
+      "bytes": 13134,
+      "sha256": "c033bcb779b001bb2aece3dca651b1eae7cb5731bd7b550f478801bcf6b665d6",
+      "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
     },
     "report": {
-      "file": "agent-panel/report.json",
+      "file": null,
       "bytes": 5135,
-      "sha256": "8768799581548b5fe69d9739ddfe5f5c4d17a87d608ea20abbf0d7fc3a8e8d2b"
+      "sha256": "b3673dfe73369afe6df85aaa12587db04f8ea1d0010977273b219d15ee8933ab",
+      "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
     },
-    "current_1d6_binding": "pending actual final build descriptors; the 55-check/5-snapshot-pair result remains eb319"
+    "current_1d6_binding": "Actual final source-bound execution completed by the existing native acceptance coordinator.",
+    "manual_visual_review": {
+      "status": "pass",
+      "views": [
+        "wide",
+        "narrow"
+      ],
+      "observed_no_layout_overlap": true,
+      "draft_and_selection_identity_suffix_visible": true,
+      "reviewer": "existing native acceptance coordinator",
+      "receipt": {
+        "file": "agent-panel-visual-receipt.json",
+        "bytes": 2679,
+        "sha256": "5467ef4652bbc84aaa0c85395b98be66d04cbd64145ccfb83318c9a3885533e8",
+        "read_scope": "Exact identity supplied in authenticated completion summary; original file not independently read by the report draft author."
+      },
+      "temporary_copy_removed": true,
+      "not_new_visual_execution_by_report_group": true
+    }
   },
   "release_notes": {
     "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
@@ -3081,34 +3350,67 @@
       "url": "https://github.com/LIghtJUNction/ssmcp/blob/bba557f2c710fe3b0e65883db29da8573e2e7014/docs/reports/command-await-delivery-20261120/current-iteration-unified-source-and-cli-matrix.md",
       "facts_bytes": 112921,
       "facts_sha256": "94f852fb66a4c99958a97ad3d046f0309692f223b7d4a358456e998d928a89c4"
+    },
+    {
+      "commit": "2bf653f413c59ffa4bc065089837545dedf66c2a",
+      "snapshot_utc": "2026-11-22 01:44:05 UTC",
+      "current_candidate_then": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "native_validation_source_then": "12a847803e952420e7b4534f11fd57ae64ee5c32",
+      "ci_run": 44967293207,
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/2bf653f413c59ffa4bc065089837545dedf66c2a/docs/reports/command-await-delivery-20261120/current-iteration-unified-source-and-cli-matrix.md",
+      "facts_bytes": 129566,
+      "facts_sha256": "8eb778535e16be8196ce826a007470e1ae57817ca4a13da35ae8fe4355a414af"
     }
   ],
   "google_report": {
     "document_url": "https://docs.google.com/document/d/1Nq6DQk1EteNRucZo8J5RvhPI8PVUaans4wLgAaWrTkY/edit",
-    "revision": "AHj4eMRlzhOYNgViCm_cRPzAoUnkpNfl_wG_uu6CuVFe2jcrGvKbhAzvS2iPQlPwl8An0y7AkkGnD9kR5asxJiXnSGomFK0r_5d8pLW1SHg",
-    "text_length": 22356,
+    "revision": "AHj4eMRS5m9958H9u756vKSJFxkzTKHnLRWAagtsx5PnuzzpR8jdr2zn082_SJXnC0BLBoyHGg1bDqwq9VsyXZcPsxo6VCWj7nAha67selM",
+    "text_length": 22584,
     "text_length_unit": "UTF-16 code units",
-    "body_snapshot_utc": "2026-11-22 01:24:10 UTC",
-    "body_candidate": "083ef018e13cdf6672637d41ea1bd13542185d5a",
+    "body_snapshot_utc": "2026-11-22 02:08:24 UTC",
+    "body_candidate": "1d6b55320fff6533663dad2627891960b3b5c5cc",
     "writer": "existing sole source coordinator",
     "root_full_text_readback_confirmed": true,
     "history_tail_exact": true,
-    "contains_report_commit": "bba557f2c710fe3b0e65883db29da8573e2e7014",
-    "reports_native_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
+    "contains_report_commit": "2bf653f413c59ffa4bc065089837545dedf66c2a",
+    "reports_native_source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
     "reports_unified_checks": 105,
     "reports_unified_unit_cases": 4,
     "reports_dashboard_checks": 80,
     "reports_original_ui_passed_scenarios": [
-      "preview",
+      "client",
       "canvas",
       "composer",
+      "questions",
       "history",
       "presentations",
       "context",
-      "filepaste"
+      "filepaste",
+      "relay-composer",
+      "interactions"
     ],
-    "updated_to_1d6_actual_results": false,
-    "root_google_write_performed": false
+    "updated_to_1d6_actual_results": true,
+    "root_google_write_performed": false,
+    "subsequent_update_status": "Latest 02:08:24 full document read by root; final report link replacement still belongs to the sole source writer.",
+    "previous_confirmed_snapshot": {
+      "body_snapshot_utc": "2026-11-22 02:01:35 UTC",
+      "text_length_UTF16": 22595,
+      "revision": "AHj4eMS0I5bXChLRVVppTtRZmPx3_-NRnu8AtnO2a-sFE9vYLRGSzd8cIbTblJnigFkvbJB_BNiV0SB7-Wkg6IAFwW9-_yALcKFFmB28z2A",
+      "CI_at_that_time": "4 passed / 2 Linux running",
+      "history_tail_root_verified": true,
+      "history_tail_sha256": "6d4044e98d17b93fbb7122e598f824aed07949a8b669cd5ae268a308969a633b"
+    },
+    "history_tail_verification_status": "Latest 02:08:24 revision full text and historical tail independently read by report root; exact tail SHA256 preserved.",
+    "reports_CI": {
+      "run_id": 44973215329,
+      "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+      "passed_jobs": 6,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    "linked_report_snapshot_utc": "2026-11-22 01:44:05 UTC",
+    "linked_report_is_explicitly_historical": true,
+    "history_tail_sha256": "6d4044e98d17b93fbb7122e598f824aed07949a8b669cd5ae268a308969a633b"
   },
   "previous_native_acceptance": {
     "source": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
@@ -3203,7 +3505,7 @@
       "script": "scripts/e2e.py"
     }
   },
-  "evidence_cutoff_utc": "2026-11-22 01:36:22 UTC",
+  "evidence_cutoff_utc": "2026-11-22 02:11:34 UTC",
   "source_transition": {
     "base_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
     "fixture_commit": "083ef018e13cdf6672637d41ea1bd13542185d5a",
@@ -3328,98 +3630,6 @@
     },
     "not_runtime_validation": true
   },
-  "fixture_candidate_probes": {
-    "origin": "authenticated sole execution coordinator completion summaries",
-    "all_three_complete_scenarios_passed": true,
-    "product_binary_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
-    "fixture_text_source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
-    "candidate_probes": [
-      {
-        "name": "questions",
-        "status": "pass",
-        "checks_passed": 43,
-        "full_original_scenario": true,
-        "product_binary_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
-        "fixture_text_committed_at": "083ef018e13cdf6672637d41ea1bd13542185d5a",
-        "fixture_text_preserved_at": "1d6b55320fff6533663dad2627891960b3b5c5cc",
-        "fixture_path": "scripts/e2e_questions.py",
-        "fixture_git_blob": "e4ce1bb81488946e8dd6d0e9eca4461c95dc6763",
-        "fixture_bytes": 20723,
-        "fixture_final_mode": "100755",
-        "report": {
-          "bytes": 9931,
-          "sha256": null,
-          "sha256_prefix": "138058b5",
-          "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
-        },
-        "receipt": {
-          "bytes": 17483,
-          "sha256": null,
-          "sha256_prefix": "70983fcc",
-          "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
-        },
-        "not_V31_execution": true
-      },
-      {
-        "name": "interactions",
-        "status": "pass",
-        "checks_passed": 172,
-        "full_original_scenario": true,
-        "product_binary_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
-        "fixture_text_committed_at": "083ef018e13cdf6672637d41ea1bd13542185d5a",
-        "fixture_text_preserved_at": "1d6b55320fff6533663dad2627891960b3b5c5cc",
-        "fixture_path": "scripts/e2e_interactions.py",
-        "fixture_git_blob": "39aef927bb25f35f21dffa1bb97e4935678fe660",
-        "fixture_bytes": 45320,
-        "fixture_final_mode": "100755",
-        "report": {
-          "bytes": 18729,
-          "sha256": null,
-          "sha256_prefix": "9a7c8060",
-          "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
-        },
-        "receipt": {
-          "bytes": 28030,
-          "sha256": null,
-          "sha256_prefix": "ce3b7cce",
-          "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
-        },
-        "not_V31_execution": true
-      },
-      {
-        "name": "relay-composer",
-        "status": "pass",
-        "checks_passed": 46,
-        "full_original_scenario": true,
-        "product_binary_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
-        "fixture_text_committed_at": "083ef018e13cdf6672637d41ea1bd13542185d5a",
-        "fixture_text_preserved_at": "1d6b55320fff6533663dad2627891960b3b5c5cc",
-        "fixture_path": "scripts/e2e_relay_composer.py",
-        "fixture_git_blob": "472e328052dad0a85733b3c9ab30b6db3a56cf6d",
-        "fixture_bytes": 27627,
-        "fixture_final_mode": "100644",
-        "report": {
-          "bytes": 5154,
-          "sha256": null,
-          "sha256_prefix": "e57ffcf5",
-          "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
-        },
-        "receipt": {
-          "bytes": 12743,
-          "sha256": null,
-          "sha256_prefix": "d4eb35a8",
-          "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
-        },
-        "not_V31_execution": true
-      }
-    ],
-    "earlier_failures_retained": {
-      "original_questions_and_relay_observations": "native_validation.client_ui.observed_failures",
-      "intermediate_questions_probe": "passed the original Escape check, then failed after check 38 at the second invalid ui.message assertion before the later complete 43-check pass"
-    },
-    "counts_not_added_to_library_or_other_source_results": true,
-    "final_1d6_suite_execution_proven": false
-  },
   "postrelease_documents": {
     "status": "original two-document patch delivered; minimal catalog correction pending; apply only after publication",
     "paths": [
@@ -3443,5 +3653,249 @@
     "catalog_entry_count": 5,
     "scope": "Correct both existing document introductions and preserve the explicit absence of supported SSH execution.",
     "does_not_change_current_source_or_release_binding": true
-  }
+  },
+  "native_acceptance_history": [
+    {
+      "source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
+      "round": "V29",
+      "reference_commit": "2bf653f413c59ffa4bc065089837545dedf66c2a",
+      "reference_url": "https://github.com/LIghtJUNction/ssmcp/blob/2bf653f413c59ffa4bc065089837545dedf66c2a/docs/reports/command-await-delivery-20261120/unified-source-and-cli-matrix-public-facts.json",
+      "core_summary": {
+        "library_ordinary_passed": 2079,
+        "required_ignored_passed": 2,
+        "other_ignored": 11,
+        "wire_passed": 9,
+        "unified_checks": 105,
+        "unified_unit_cases": 4,
+        "dashboard_checks": 80
+      },
+      "receipts": {
+        "candidate_build": {
+          "file": "candidate-build/receipt.json",
+          "bytes": 7502,
+          "sha256": "056ff43eefb7dd7133470cda62fd76054dd6362154c1e2340be0e4e97e141ed6"
+        },
+        "unified": {
+          "file": null,
+          "bytes": 32276,
+          "sha256": "c8f485c65b747053e1f2efd4df0e3701a5786f53ea3759ed03516db9da65ee3e"
+        },
+        "dashboard": {
+          "file": null,
+          "bytes": 15367,
+          "sha256": "716c1bfdaee70524ad3f24451080f899a232f899779de87da0cd5b7f716f3407"
+        }
+      },
+      "original_client_ui_failures": {
+        "questions": "second Escape assertion; captured state Edit with original draft and new pending banner",
+        "relay-composer": "FileExistsError creating git symlink in private bin directory"
+      },
+      "daemon_original_blocker": {
+        "status": "blocked",
+        "assertions_executed": 0,
+        "observed_blocker": "private XDG_RUNTIME_DIR did not expose existing real user-manager bus",
+        "existing_user_bus_socket_confirmed": true,
+        "environment_preflight_under_review_at_original_attempt": true,
+        "resolved_by_validated_environment_run": true
+      },
+      "daemon_followup": {
+        "status": "pass",
+        "checks_passed": 182,
+        "product_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
+        "cleanup_confirmed": true,
+        "cleanup_errors": [],
+        "report": {
+          "bytes": 29166,
+          "sha256": null,
+          "sha256_prefix": "1c370827",
+          "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
+        },
+        "receipt": {
+          "bytes": 38872,
+          "sha256": null,
+          "sha256_prefix": "145dce71",
+          "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
+        }
+      },
+      "candidate_fixture_probes": {
+        "origin": "authenticated sole execution coordinator completion summaries",
+        "all_three_complete_scenarios_passed": true,
+        "product_binary_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
+        "fixture_text_source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+        "candidate_probes": [
+          {
+            "name": "questions",
+            "status": "pass",
+            "checks_passed": 43,
+            "full_original_scenario": true,
+            "product_binary_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
+            "fixture_text_committed_at": "083ef018e13cdf6672637d41ea1bd13542185d5a",
+            "fixture_text_preserved_at": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+            "fixture_path": "scripts/e2e_questions.py",
+            "fixture_git_blob": "e4ce1bb81488946e8dd6d0e9eca4461c95dc6763",
+            "fixture_bytes": 20723,
+            "fixture_final_mode": "100755",
+            "report": {
+              "bytes": 9931,
+              "sha256": null,
+              "sha256_prefix": "138058b5",
+              "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
+            },
+            "receipt": {
+              "bytes": 17483,
+              "sha256": null,
+              "sha256_prefix": "70983fcc",
+              "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
+            },
+            "not_V31_execution": true
+          },
+          {
+            "name": "interactions",
+            "status": "pass",
+            "checks_passed": 172,
+            "full_original_scenario": true,
+            "product_binary_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
+            "fixture_text_committed_at": "083ef018e13cdf6672637d41ea1bd13542185d5a",
+            "fixture_text_preserved_at": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+            "fixture_path": "scripts/e2e_interactions.py",
+            "fixture_git_blob": "39aef927bb25f35f21dffa1bb97e4935678fe660",
+            "fixture_bytes": 45320,
+            "fixture_final_mode": "100755",
+            "report": {
+              "bytes": 18729,
+              "sha256": null,
+              "sha256_prefix": "9a7c8060",
+              "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
+            },
+            "receipt": {
+              "bytes": 28030,
+              "sha256": null,
+              "sha256_prefix": "ce3b7cce",
+              "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
+            },
+            "not_V31_execution": true
+          },
+          {
+            "name": "relay-composer",
+            "status": "pass",
+            "checks_passed": 46,
+            "full_original_scenario": true,
+            "product_binary_source": "12a847803e952420e7b4534f11fd57ae64ee5c32",
+            "fixture_text_committed_at": "083ef018e13cdf6672637d41ea1bd13542185d5a",
+            "fixture_text_preserved_at": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+            "fixture_path": "scripts/e2e_relay_composer.py",
+            "fixture_git_blob": "472e328052dad0a85733b3c9ab30b6db3a56cf6d",
+            "fixture_bytes": 27627,
+            "fixture_final_mode": "100644",
+            "report": {
+              "bytes": 5154,
+              "sha256": null,
+              "sha256_prefix": "e57ffcf5",
+              "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
+            },
+            "receipt": {
+              "bytes": 12743,
+              "sha256": null,
+              "sha256_prefix": "d4eb35a8",
+              "identity_scope": "byte count and digest prefix reported in authenticated completion summary; full original file not read for this draft"
+            },
+            "not_V31_execution": true
+          }
+        ],
+        "earlier_failures_retained": {
+          "original_questions_and_relay_observations": "native_validation.client_ui.observed_failures",
+          "intermediate_questions_probe": "passed the original Escape check, then failed after check 38 at the second invalid ui.message assertion before the later complete 43-check pass"
+        },
+        "counts_not_added_to_library_or_other_source_results": true,
+        "final_1d6_suite_execution_proven": false
+      },
+      "not_current_1d6_execution": true
+    },
+    {
+      "source": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
+      "round": "V28",
+      "reference_commit": "2bf653f413c59ffa4bc065089837545dedf66c2a",
+      "core_record": "previous_native_acceptance",
+      "worker": {
+        "checks": 202,
+        "receipt": {
+          "file": "root-final-acceptance-eb319-20261122/worker/receipt.json",
+          "bytes": 8138,
+          "sha256": "4a7ecf44abe4e067c21b5a80f53d99f540b8affd49dc1addca1cad3df9864630"
+        },
+        "result": {
+          "file": "root-final-acceptance-eb319-20261122/worker/evidence/result.json",
+          "bytes": 187612,
+          "sha256": "1e5142c242e8f9c09dcd2a41e1206ddd61b11a5fd1543e888cb0d75cfdcc5c85"
+        }
+      },
+      "agent_panel": {
+        "checks": 55,
+        "real_PTY_snapshot_pairs": 5,
+        "receipt": {
+          "file": "cli-validation-20261121-v28/root-agent-panel-eb319-20261122/receipt.json",
+          "bytes": 13174,
+          "sha256": "3f2ba6f327a4da925dc4efc7810a964807198c27997cb149d59f4f704a851eea"
+        },
+        "report": {
+          "file": "agent-panel/report.json",
+          "bytes": 5135,
+          "sha256": "8768799581548b5fe69d9739ddfe5f5c4d17a87d608ea20abbf0d7fc3a8e8d2b"
+        }
+      },
+      "user_wait": {
+        "source": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
+        "status": "pass",
+        "checks": 189,
+        "real_terminal_active_visual_sleep": true,
+        "sleep_warning_bold_red": true,
+        "mouse_wakeup_keeps_native_wait_pending": true,
+        "four_slots_and_fifth_busy": true,
+        "finish_starts_no": true,
+        "deadline_preserves_draft": true,
+        "receipt": {
+          "file": "cli-validation-20261121-v28/native-cli-conversations/user-wait/artifacts/report.json",
+          "bytes": 15148,
+          "sha256": "273d975806c53b769c32bf24e8f229e631db32b03e5e3e57abbf14ccb2204fc2"
+        },
+        "current_live_client_upgraded": false,
+        "specific_previous_live_entry_cause_identified": false
+      },
+      "tools_update_observation": {
+        "result": "kept_newer for client; tools repository current",
+        "head_commit": "d80054cf16f38b93a94fb2867fbfbfde78832066"
+      },
+      "not_current_1d6_execution": true
+    }
+  ],
+  "ci_history": [
+    {
+      "run_id": 44967293207,
+      "attempt": 1,
+      "source": "eb319166ec8d09deafe4a0da4e6bbe2e04b3705c",
+      "status": "completed",
+      "conclusion": "failure",
+      "passed_jobs": 4,
+      "failed_jobs": 2,
+      "failure_scope": "Both Linux jobs failed in the former unified isolation fixture; this historical result remains unchanged.",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44967293207",
+      "evidence_reference_commit": "2bf653f413c59ffa4bc065089837545dedf66c2a",
+      "evidence_url": "https://github.com/LIghtJUNction/ssmcp/blob/2bf653f413c59ffa4bc065089837545dedf66c2a/docs/reports/command-await-delivery-20261120/unified-source-and-cli-matrix-public-facts.json",
+      "strict_fixture_fix": {
+        "commit": "12a847803e952420e7b4534f11fd57ae64ee5c32",
+        "retains_own_code_mode_run_check": true,
+        "requires_exactly_one_complete_empty_startup_cleanup": true,
+        "saves_original_rows_before_assertion": true,
+        "product_behavior_changed": false,
+        "full_unified_execution_on_fixed_source": "pass",
+        "receipt": {
+          "file": null,
+          "bytes": 32276,
+          "sha256": "c8f485c65b747053e1f2efd4df0e3701a5786f53ea3759ed03516db9da65ee3e"
+        }
+      },
+      "original_failures_retained": true
+    }
+  ],
+  "native_completion_summary_cutoff_utc": "2026-11-22 02:05:20 UTC"
 }
