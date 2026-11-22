@@ -31,6 +31,19 @@ ssmcp -i --server https://relay.example --client SESSION_ID
 
 看门狗默认开启，`--no-watchdog` 可禁用；显式停止后不会继续恢复。设备访问授权使用 `--allow 用户名@服务器`，获准接入的 Agent 用 `collab.join` 登记会话内身份。主窗口中的 `/invite` 和 `/invite worker` 生成协作接入说明，沿用现有账号授权。[首次连接](onboarding.md)
 
+## 工具仓库入口与连接诊断
+
+`ssmcp tool` 与 `ssmcp tools` 使用相同的工具仓库命令入口，支持相同的参数、子命令和专用帮助。例如：
+
+~~~sh
+ssmcp tool --help
+ssmcp tools status
+~~~
+
+连接目标使用 `ssmcp username@server` 或 `ssmcp --server https://server`。无法识别的裸命令会报告命令或目标格式错误，并给出这些入口；显式 `--ssh` 仍给出旧连接方式已移除的迁移说明。
+
+连接诊断按实际路径显示 `Relay transport` 或 `Local transport`，对应日志来源为 `relay` 或 `local`。注册超时、连接拒绝和底层 I/O 错误保留实际原因。结果回传超时只说明回传未及时完成；相关操作可能已经执行，应先核对原生任务状态，再决定是否重试。
+
 ## 查询本地路径
 
 `ssmcp paths` 枚举实际配置、凭据目录、工具仓库和本地状态的位置。它在连接与配置加载之前返回，不读取文件内容、不创建目录。可组合选择名称，按给定顺序输出；不指定名称时列出全部可查询项。
@@ -98,7 +111,7 @@ ssmcp --worker 2 --daemon
 
 ## 前台观察与终端输入
 
-前台默认使用 `dark` 主题和 `chat` 布局，连续显示执行记录，底部输入框用于追加用户要求。最左侧是统计页，展示会话进程 ID、已绑定主 Agent 的会话线程 ID、OS PID 和实际计数。Enter 提交到队列；`/queue` 管理待交付项，`/sessions` 或 `/message` 显式选择收件人，`/audit` 打开源码审计。`/agents` 与旧的默认 Agent 页已移除。Tab 切换输入与内容焦点，滚轮或 PgUp/PgDn 直接浏览当前内容；`/filter 文本` 搜索日志，F9 切换类别。[客户端 UI 与队列原子接口](client-ui.md)
+前台默认使用 `dark` 主题和 `chat` 布局，连续显示执行记录，底部输入框用于追加用户要求。最左侧是统计页，展示会话进程 ID、本连接已登记的会话线程 ID、worker 管理者线程、OS PID 和实际计数。Enter 提交到队列；`/queue` 管理待交付项，`/sessions` 或 `/message` 显式选择收件人，`/audit` 打开源码审计。`/agents` 与旧的默认 Agent 页已移除。Tab 切换输入与内容焦点，滚轮或 PgUp/PgDn 直接浏览当前内容；`/filter 文本` 搜索日志，F9 切换类别。[客户端 UI 与队列原子接口](client-ui.md)
 
 输入框要求通过支持协议 v7 的连接附加到下一次符合目标的 `code_mode` 响应，已交付不代表模型已阅读或执行。需要直接终端输入时，在另一个终端运行 `ssmcp -i`；自定义前端使用 `terminal.read/write/resize`。`ssmcp attach NAME` 用于观察本地后台会话，目前不转发 attach 输入框的要求队列；后台连接可通过 `ssmcp.ui.queue` 管理要求。独立命令继续使用下方的 `exec.*`。
 

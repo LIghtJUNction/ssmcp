@@ -170,12 +170,20 @@ struct SessionTrafficFailure {
     pending: String,
 }
 
+/// The validated static tool-source protocol of one authenticated connection.
+#[derive(Clone)]
+pub(crate) struct ToolSourceSupport {
+    pub client_version: String,
+    pub editable: bool,
+}
+
 pub struct Session {
     pub(crate) peer_ports: bool,
     pub(crate) peer_ports_auto: bool,
     pub(crate) collaboration: crate::collab::Hub,
     pub(crate) steering: crate::steering::Queue,
     thread_scope: OnceCell<bool>,
+    tool_source_support: OnceCell<ToolSourceSupport>,
     chat_disabled: bool,
     tool_summary_advertised: AtomicBool,
     io_reply_advertised: AtomicBool,
@@ -340,6 +348,18 @@ impl Session {
             .copied()
     }
 
+    /// Coalesce successful protocol negotiation without caching errors or bundles.
+    /// Each caller must still recheck its own authorization after waiting.
+    pub(crate) async fn tool_source_support(
+        &self,
+        probe: impl Future<Output = Result<ToolSourceSupport, String>>,
+    ) -> Result<ToolSourceSupport, String> {
+        self.tool_source_support
+            .get_or_try_init(|| probe)
+            .await
+            .cloned()
+    }
+
     pub async fn call(&self, operation: Operation) -> CallResult {
         self.call_with_controller(operation, None).await
     }
@@ -449,8 +469,8 @@ impl Session {
             if attribution
                 .as_ref()
                 .is_some_and(|source| source.agent.is_some())
-                && self.supports_thread_scope().await?
                 && let Some(context) = &mut code_context
+                && self.supports_thread_scope().await?
             {
                 context.session_id = Some(self.client_id().into());
                 context.thread_id = Some(binding.agent_id.clone());
@@ -866,6 +886,7 @@ impl Broker {
             peer_ports: false,
             peer_ports_auto: false,
             thread_scope: OnceCell::new(),
+            tool_source_support: OnceCell::new(),
             chat_disabled: false,
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
@@ -1298,6 +1319,7 @@ impl Broker {
             collaboration: crate::collab::Hub::for_session(&client_id),
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
+            tool_source_support: OnceCell::new(),
             peer_ports,
             peer_ports_auto,
             chat_disabled,
@@ -2187,6 +2209,7 @@ mod tests {
             peer_ports: false,
             peer_ports_auto: false,
             thread_scope: OnceCell::new(),
+            tool_source_support: OnceCell::new(),
             chat_disabled: false,
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
@@ -2897,6 +2920,45 @@ mod tests {
             &anchor
         ));
     }
+    #[tokio::test]
+    async fn cancelled_tool_source_negotiation_can_retry_on_the_same_session() {
+        timeout(Duration::from_secs(3), async {
+            for expire in [false, true] {
+                let session = session("source_probe_retry", "unused");
+                let (entered, started) = oneshot::channel();
+                let mut probe = Box::pin(session.tool_source_support(async {
+                    entered.send(()).unwrap();
+                    std::future::pending::<Result<ToolSourceSupport, String>>().await
+                }));
+                // First prove the initializer holds the cell; an unpolled future
+                // would not exercise cancellation of an in-flight negotiation.
+                tokio::select! {
+                    biased;
+                    _ = &mut probe => panic!("pending capability probe returned"),
+                    result = started => result.unwrap(),
+                }
+                if expire {
+                    assert!(timeout(Duration::ZERO, probe).await.is_err());
+                } else {
+                    drop(probe);
+                }
+                let support = session
+                    .tool_source_support(async {
+                        Ok(ToolSourceSupport {
+                            client_version: "0.10.27".into(),
+                            editable: true,
+                        })
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(support.client_version, "0.10.27");
+                assert!(support.editable);
+            }
+        })
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn native_thread_scope_is_bound_and_capability_gated_once() {
         for supported in [false, true] {

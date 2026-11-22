@@ -1888,6 +1888,33 @@ impl Renderer {
         writeln!(out)
     }
 
+    fn status_summary(
+        &mut self,
+        out: &mut impl Write,
+        label: &str,
+        title: &str,
+        text: &str,
+        interactive: bool,
+    ) -> io::Result<()> {
+        if interactive || !matches!(title, "Error" | "Timeout") {
+            return self.summary(out, label, title, text);
+        }
+        // Redirected diagnostics are often the only copy of a CLI failure.
+        // Keep the complete, already-redacted message without a screen-width cap.
+        self.finish_visible(out)?;
+        self.prefix(out, title)?;
+        let label = activity::single_line(&clean(label), 24);
+        let text = clean(text);
+        if !label.is_empty() {
+            painted(out, self.color, &self.ui.color("muted"), &label)?;
+            if !text.is_empty() {
+                write!(out, " ")?;
+            }
+        }
+        painted(out, self.color, &self.ui.color("error"), &text)?;
+        writeln!(out)
+    }
+
     fn heading(&mut self, out: &mut impl Write, label: &str, title: &str) -> io::Result<()> {
         self.finish_visible(out)?;
         self.prefix(out, title)?;
@@ -2125,11 +2152,13 @@ impl Renderer {
             return Ok(());
         }
         if v["type"] == "ssmcp.status" {
-            return self.summary(
+            let interactive = self.dashboard_active || io::stderr().is_terminal();
+            return self.status_summary(
                 out,
                 label,
                 v["level"].as_str().unwrap_or("Result"),
                 v["message"].as_str().unwrap_or(""),
+                interactive,
             );
         }
         let kind = v["method"]
@@ -4288,6 +4317,44 @@ mod tests {
         let event = json!({"type":"ssmcp.status","level":"Error","message":"x\ny"});
         r.event(&mut out, "codex", &event).unwrap();
         assert_eq!(out, format!("{event}\n").as_bytes());
+    }
+
+    #[test]
+    fn non_terminal_status_errors_keep_complete_diagnostics() {
+        for message in [
+            "unrecognized command or destination; see ssmcp --help. For tool sources use ssmcp tools [status|check|update]; for a connection use ssmcp username@server or ssmcp --server https://server",
+            "SSH device connections have been removed. Use ssmcp username@server or ssmcp login --server https://server",
+        ] {
+            for level in ["Error", "Timeout"] {
+                for width in [40, 100] {
+                    let mut renderer = Renderer::new(false, false, width);
+                    let mut out = Vec::new();
+                    renderer
+                        .status_summary(&mut out, "ssmcp", level, message, false)
+                        .unwrap();
+                    assert_eq!(out, format!("[ERR ] ssmcp {message}\n").as_bytes());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_status_errors_keep_the_transcript_width_limit() {
+        let message = "SSH device connections have been removed. Use ssmcp username@server or ssmcp login --server https://server";
+        for level in ["Error", "Timeout"] {
+            for width in [40, 100] {
+                let mut renderer = Renderer::new(false, false, width);
+                let mut out = Vec::new();
+                renderer
+                    .status_summary(&mut out, "ssmcp", level, message, true)
+                    .unwrap();
+                let text = String::from_utf8(out).unwrap();
+                assert!(text.starts_with("[ERR ] ssmcp "), "{text}");
+                assert!(text.ends_with("…\n"), "{text}");
+                assert_eq!(text.lines().count(), 1);
+                assert!(unicode_width::UnicodeWidthStr::width(text.trim_end()) <= width);
+            }
+        }
     }
 
     #[test]

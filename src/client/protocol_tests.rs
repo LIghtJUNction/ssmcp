@@ -1,4 +1,4 @@
-//! Registration-only tests with real, isolated fake SSH subprocesses.
+//! Registration-only tests with real, isolated transport subprocesses.
 //! No backend, installed coding harness, network, credentials, or model is used.
 use super::*;
 use serde_json::Value;
@@ -183,9 +183,10 @@ impl Fixture {
         metadata: &ClientMetadata,
         registered: &mut bool,
         deadline: Duration,
-    ) -> (crate::Result<Option<RegisteredSsh>>, usize) {
+    ) -> (crate::Result<Option<RegisteredTransport>>, usize) {
         let count = Cell::new(0usize);
-        let result = register_ssh(
+        let result = register_transport(
+            TransportKind::Relay,
             metadata,
             false,
             registered,
@@ -201,7 +202,11 @@ impl Fixture {
         (result, count.get())
     }
 
-    fn report_registration(&self, scenario: &str, result: &crate::Result<Option<RegisteredSsh>>) {
+    fn report_registration(
+        &self,
+        scenario: &str,
+        result: &crate::Result<Option<RegisteredTransport>>,
+    ) {
         let outcome = result.as_ref().map(|registration| {
             if registration.is_some() {
                 "Ready"
@@ -251,18 +256,25 @@ fn metadata(allow: bool) -> ClientMetadata {
     }
 }
 
-fn registration_error(result: crate::Result<Option<RegisteredSsh>>) -> crate::Error {
+fn registration_error(result: crate::Result<Option<RegisteredTransport>>) -> crate::Error {
     match result {
         Err(error) => error,
         Ok(_) => panic!("registration unexpectedly succeeded"),
     }
 }
 
-async fn close(mut registration: RegisteredSsh) {
-    stop_registration(&mut registration.ssh, &mut registration.stderr_pump)
-        .await
-        .unwrap();
-    assert!(registration.ssh.id().is_none(), "SSH child was not reaped");
+async fn close(mut registration: RegisteredTransport) {
+    stop_registration(
+        &mut registration.process,
+        &mut registration.stderr_pump,
+        registration.transport_kind,
+    )
+    .await
+    .unwrap();
+    assert!(
+        registration.process.id().is_none(),
+        "transport child was not reaped"
+    );
 }
 
 const READY_LIMIT: Duration = Duration::from_secs(10);
@@ -283,7 +295,7 @@ async fn initial_allow_requires_capability_and_reaps_an_unacknowledged_transport
     assert!(error.to_string().contains("account access controls"));
     assert!(error.downcast_ref::<relay::PermanentFailure>().is_some());
     assert!(
-        registration.ssh.id().is_none(),
+        registration.process.id().is_none(),
         "the unsupported relay was not reaped"
     );
 
@@ -463,9 +475,10 @@ async fn handshake_deadline_stops_the_single_current_protocol_attempt() {
         )
         .await;
     let error = registration_error(result);
-    assert!(
-        error.to_string().contains("SSH authentication timed out"),
-        "{error}"
+    assert_eq!(error.to_string(), "Relay transport registration timed out");
+    assert_eq!(
+        error.downcast_ref::<io::Error>().unwrap().kind(),
+        io::ErrorKind::TimedOut
     );
     assert_eq!(attempts, 1);
     assert!(!registered);
@@ -477,7 +490,8 @@ async fn cancelled_registration_does_not_start_a_transport() {
     let metadata = metadata(false);
     let mut registered = false;
     let attempts = Cell::new(0usize);
-    let result = register_ssh(
+    let result = register_transport(
+        TransportKind::Relay,
         &metadata,
         false,
         &mut registered,
@@ -512,7 +526,8 @@ async fn account_compat_accepts_only_self_owned_ready_and_reaps_rejected_peers()
         let fixture = Fixture::new();
         let metadata = metadata(false);
         let mut registered = false;
-        let result = register_ssh(
+        let result = register_transport(
+            TransportKind::Relay,
             &metadata,
             true,
             &mut registered,
@@ -545,7 +560,8 @@ async fn account_compat_accepts_only_self_owned_ready_and_reaps_rejected_peers()
             assert!(error.downcast_ref::<relay::PermanentFailure>().is_some());
             // The next peer takes the same exclusive lease, proving the rejected
             // process was terminated and reaped before another connection starts.
-            let registration = register_ssh(
+            let registration = register_transport(
+                TransportKind::Relay,
                 &metadata,
                 true,
                 &mut registered,
@@ -587,4 +603,39 @@ async fn legacy_account_format_rejection_is_permanent_and_reaps_the_peer() {
         )
         .await;
     close(result.unwrap().unwrap()).await;
+}
+
+#[tokio::test]
+async fn transport_spawn_failure_identifies_the_path_without_retrying() {
+    let fixture = Fixture::new();
+    for (kind, label) in [
+        (TransportKind::Relay, "Relay transport"),
+        (TransportKind::Local, "Local transport"),
+    ] {
+        let mut registered = false;
+        let attempts = Cell::new(0usize);
+        let error = registration_error(
+            register_transport(
+                kind,
+                &metadata(false),
+                false,
+                &mut registered,
+                || {
+                    attempts.set(attempts.get() + 1);
+                    Command::new(fixture.directory.join("missing-transport-executable"))
+                },
+                std::future::pending(),
+                READY_LIMIT,
+            )
+            .await,
+        );
+        assert!(
+            error
+                .to_string()
+                .starts_with(&format!("could not start {label} process: "))
+        );
+        assert!(!error.to_string().contains("OpenSSH"));
+        assert_eq!(attempts.get(), 1);
+        assert!(!registered);
+    }
 }

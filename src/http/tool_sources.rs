@@ -1,6 +1,9 @@
 //! Tool-source preparation is metadata, not eligible user work or queue delivery.
 use super::*;
-use crate::tool_repository::{Bundle, URI};
+use crate::{
+    broker::ToolSourceSupport,
+    tool_repository::{Bundle, URI},
+};
 
 pub(super) struct Loaded {
     pub bundle: Bundle,
@@ -148,49 +151,66 @@ pub(super) async fn load(
         hint: None,
     };
     if arguments.tool_client_id.is_none() {
-        // Compatibility is negotiated from a real, valid capability manifest,
-        // never inferred from a resource error. Explicit selection stays strict.
-        let capabilities = session
-            .call_with_bound_authorization(
-                Operation::CallTool {
-                    name: "ssmcp.client.capabilities".into(),
-                    arguments: json!({}),
-                },
-                arguments.controller_context.clone(),
-                &authorization,
-                binding.clone(),
-            )
-            .await?;
-        loaded.verify(broker, user, token).await?;
-        if capabilities
-            .get("isError")
-            .is_some_and(|value| value != &Value::Bool(false))
-        {
-            return Err("could not negotiate the selected client's tool-source capability".into());
-        }
-        let capabilities = capabilities
-            .get("structuredContent")
-            .unwrap_or(&capabilities);
-        let version = capabilities["client_version"]
-            .as_str()
-            .filter(|value| {
-                !value.is_empty() && value.len() <= 64 && !value.chars().any(char::is_control)
-            })
-            .ok_or("selected client returned an invalid capability version")?;
-        if capabilities["schema"] != "ssmcp.client.capabilities.v1" {
-            return Err("selected client returned an unknown capability manifest".into());
-        }
-        loaded.client_version = Some(version.to_owned());
-        match capabilities.get("tool_sources") {
-            None => {
-                loaded.bundle = crate::tool_repository::official_seed().await?;
+        // Only a validated static declaration is shared by this connection.
+        // Errors/cancellation leave the cell empty; RC and bundles are never cached.
+        let support = session
+            .tool_source_support(async {
+                let capabilities = session
+                    .call_with_bound_authorization(
+                        Operation::CallTool {
+                            name: "ssmcp.client.capabilities".into(),
+                            arguments: json!({}),
+                        },
+                        arguments.controller_context.clone(),
+                        &authorization,
+                        binding.clone(),
+                    )
+                    .await?;
                 loaded.verify(broker, user, token).await?;
-                loaded.mode = "legacy_client_official_seed";
-                loaded.hint = Some("This implicitly selected client predates editable tool sources. This run uses the pinned read-only official Git seed; native calls retain their existing permissions. Upgrade the client to load its RC and local overrides. Explicit tool_client_id never uses this compatibility default.");
-                return Ok(loaded);
-            }
-            Some(capability) if capability["schema"] == 1 && capability["uri"] == URI => {}
-            Some(_) => return Err("selected client advertises an unsupported tool-source capability; upgrade compatible components".into()),
+                if capabilities
+                    .get("isError")
+                    .is_some_and(|value| value != &Value::Bool(false))
+                {
+                    return Err(
+                        "could not negotiate the selected client's tool-source capability".into(),
+                    );
+                }
+                let capabilities = capabilities
+                    .get("structuredContent")
+                    .unwrap_or(&capabilities);
+                let version = capabilities["client_version"]
+                    .as_str()
+                    .filter(|value| {
+                        !value.is_empty()
+                            && value.len() <= 64
+                            && !value.chars().any(char::is_control)
+                    })
+                    .ok_or("selected client returned an invalid capability version")?;
+                if capabilities["schema"] != "ssmcp.client.capabilities.v1" {
+                    return Err("selected client returned an unknown capability manifest".into());
+                }
+                let editable = match capabilities.get("tool_sources") {
+                    None => false,
+                    Some(capability) if capability["schema"] == 1 && capability["uri"] == URI => true,
+                    Some(_) => return Err("selected client advertises an unsupported tool-source capability; upgrade compatible components".into()),
+                };
+                Ok(ToolSourceSupport {
+                    client_version: version.to_owned(),
+                    editable,
+                })
+            })
+            .await?;
+        // A cache hit or another caller's successful probe is not authorization.
+        loaded.verify(broker, user, token).await?;
+        loaded.client_version = Some(support.client_version);
+        if !support.editable {
+            loaded.bundle = crate::tool_repository::official_seed().await?;
+            loaded.verify(broker, user, token).await?;
+            loaded.mode = "legacy_client_official_seed";
+            loaded.hint = Some(
+                "This implicitly selected client predates editable tool sources. This run uses the pinned read-only official Git seed; native calls retain their existing permissions. Upgrade the client to load its RC and local overrides. Explicit tool_client_id never uses this compatibility default.",
+            );
+            return Ok(loaded);
         }
     }
     // Do not enter AUDIT_RUN here: preloading this fixed resource is not the
