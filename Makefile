@@ -70,6 +70,14 @@ test-client-ui-ready:
 	  --decoder "$(CARGO_TARGET_DIR)/debug/examples/vt_snapshot" \
 	  --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" \
 	  --source-revision "$(SSMCP_SOURCE_REVISION)" --out "$$ssmcp_interactions_out"
+	@set -eu; mkdir -p "$(CARGO_TARGET_DIR)/acceptance"; \
+	ssmcp_worker_windows_out="$$(mktemp -d "$(CARGO_TARGET_DIR)/acceptance/worker-windows-XXXXXX")"; \
+	python3 scripts/e2e_worker_windows.py --bin-dir "$(CARGO_TARGET_DIR)/debug" \
+	  --decoder "$(CARGO_TARGET_DIR)/debug/examples/vt_snapshot" \
+	  --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" \
+	  --source-revision "$(SSMCP_SOURCE_REVISION)" \
+	  --report "$$ssmcp_worker_windows_out/report.json" \
+	  --evidence-dir "$$ssmcp_worker_windows_out/evidence"
 
 install:
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/share/man/man1 $(DESTDIR)$(PREFIX)/share/man/man8
