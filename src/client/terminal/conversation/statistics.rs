@@ -184,7 +184,10 @@ fn rows(
             ),
             PanelTone::Normal,
         );
-        push(&format!("Queued tasks {}", count("queued")), PanelTone::Normal);
+        push(
+            &format!("Queued tasks {}", count("queued")),
+            PanelTone::Normal,
+        );
         if linked["closed"] == true {
             push("Worker pool closed", PanelTone::Muted);
         } else if linked["stopping"] == true {

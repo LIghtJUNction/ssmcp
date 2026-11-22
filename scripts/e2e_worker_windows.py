@@ -478,6 +478,45 @@ class WorkerWindows(Harness):
                    "worker invitation identifies the linked pool and active wait workflow")
         self.clipboard_expectations[directory] = 2
         executors = self.register_waiting_workers(frontend, parent, worker)
+        # Earlier projection calls used another coordinator and may have emitted
+        # its reminder. This authenticated member has a fresh delivery scope.
+        coordinator = self.join(parent["id"], "standby-reminder-coordinator", role="coordinator")
+        reminder_arguments = {
+            "agent": {"client_id": parent["id"], "id": coordinator["agent_id"], "token": coordinator["token"]},
+            "code": "const response = await call(%s, %s, %s); return response;" % (
+                json.dumps(parent["id"]), json.dumps("ssmcp.ui.get"), json.dumps({"path": "/worker_pool"}),
+            ),
+        }
+        reminder_case = {}
+        self.cases["standby-reminders"] = reminder_case
+        standby_pool = {"client_id": worker["id"], "total": 3, "desired_total": 3, "idle": 3,
+                        "working": 0, "offline": 0, "retiring": 0, "queued": 0, "registered_workers": 3,
+                        "connected": True, "stopping": False, "closed": False}
+        for phase in ("first", "repeated"):
+            # Keep the actual outer structuredContent, before extracting result.
+            outer = self.public_call("code_mode", reminder_arguments)
+            reminder_case[phase] = outer
+            native = outer["result"]
+            projection = native.get("structuredContent", {})
+            pool = projection.get("value")
+            self.check(not native.get("isError") and projection.get("path") == "/worker_pool"
+                       and isinstance(pool, dict)
+                       and all(pool.get(key) == value for key, value in standby_pool.items()),
+                       f"{phase} coordinator call observes the same actual linked pool with three standby workers")
+            reminders = outer.get("worker_reminders", [])
+            if phase == "first":
+                self.check(isinstance(reminders, list) and len(reminders) == 1
+                           and isinstance(reminders[0], dict)
+                           and reminders[0].get("schema_version") == 1
+                           and reminders[0].get("client_id") == parent["id"]
+                           and reminders[0].get("agent_id") == coordinator["agent_id"]
+                           and reminders[0].get("worker_client_id") == worker["id"]
+                           and reminders[0].get("process_id") == pool["process_id"]
+                           and reminders[0].get("standby") == 3,
+                           "the authenticated parent coordinator receives the actual child pool standby reminder")
+            else:
+                self.check(reminders == [],
+                           "an immediate same-state coordinator call does not repeat the standby reminder")
         before = len([entry for entry in events(directory) if entry["kind"] == "clipboard"])
         frontend.send(b"\x01\x0b/invite worker\r")
         frontend.until(lambda shot: "Worker stations are fully staffed." in "\n".join(shot["rows"]),
