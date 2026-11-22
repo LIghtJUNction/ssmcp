@@ -112,7 +112,7 @@ Options
 
 Use ssmcp COMMAND --help for command options; --help-full lists advanced connection and executor flags.
 Worker mode has no chat input; authorized remote agents submit, claim and complete tasks.
-In a connected chat: /help, @file, $skill, !command; Left opens Agents.
+In a connected chat: /help, @file, $skill, !command; Left opens Statistics.
 "#;
 
 const HELP_FULL: &str = r#"ssmcp — connect your devices and control authorized sessions
