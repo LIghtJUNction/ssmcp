@@ -348,6 +348,33 @@ class Composer(Dashboard):
                        and expected in item.get("text", "") for item in response["content"]),
                    "the tool response contains a conspicuous separate user-requirements text block")
 
+    def check_post_delivery_journal(self, baseline, forbidden, *, marker, limit=16):
+        # Exact-recipient input is verified at the HTTP delivery boundary. Use a
+        # separate public probe to verify that the live process journal still works.
+        receipt = self.observe("ssmcp.ui.message", {"text": marker})
+        self.check(receipt.get("recorded") is True and receipt.get("storage") == "memory"
+                   and bool(receipt.get("message_id")),
+                   "the post-delivery journal probe has a real in-memory receipt")
+        current = self.live_events(limit=limit)
+        self.check(current["generation"] == baseline["generation"],
+                   "post-delivery journal keeps the replacement process generation")
+        self.check(current["scope"] == baseline["scope"],
+                   "post-delivery journal keeps the replacement client scope")
+        self.check(current["next_cursor"] >= baseline["next_cursor"],
+                   "the replacement journal cursor advances monotonically")
+        serialized = json.dumps(current["events"], ensure_ascii=False)
+        matches = [event for event in current["events"]
+                   if event.get("value", {}).get("message_id") == receipt["message_id"]]
+        old_matches = sum(marker in serialized for marker in forbidden)
+        self.check(old_matches == 0,
+                   f"post-delivery journal excludes old bodies and identities (matches={old_matches})")
+        self.check(len(matches) == 1 and matches[0]["value"].get("type") == "ssmcp.message"
+                   and matches[0]["value"].get("text") == marker
+                   and baseline["next_cursor"] <= matches[0]["sequence"] < current["next_cursor"],
+                   "post-delivery journal contains the exact new probe inside its snapshot "
+                   f"(matching_ids={len(matches)}, events={len(current['events'])}, "
+                   f"cursor={baseline['next_cursor']}..{current['next_cursor']})")
+
     def wait_delivered(self, front, record, request_text=None):
         request_text = request_text if request_text is not None else record["text"]
         self.activate_column(front, "queue")
@@ -858,23 +885,15 @@ class Composer(Dashboard):
                    and final_queue["draft"] == {"text": "", "cursor": 0}
                    and final_queue["draft_context"]["parked"] is None,
                    "only the newly delivered request belongs to the fresh process queue")
-        continued_events = self.live_events(limit=4)
+        self.check_post_delivery_journal(events_after, forbidden_after,
+                                         marker="COMPOSER_POST_DELIVERY_JOURNAL_PROBE", limit=4)
         continued_state = self.ui("/display/conversation")
         continued_screen = front.until(
             lambda shot: visible_record(shot, fresh_text, "delivered", fresh["id"])
             and all(marker not in text(shot) for marker in forbidden_after),
             "the newly delivered request without old draft or message bodies",
         )
-        continued_body = json.dumps(continued_events["events"], ensure_ascii=False)
         continued_ui = json.dumps(continued_state, ensure_ascii=False)
-        self.check(continued_events["generation"] == events_after["generation"]
-                   and continued_events["scope"] == events_after["scope"]
-                   and any(event.get("value", {}).get("type") == "ssmcp.message"
-                           and event["value"].get("role") == "user"
-                           and event["value"].get("text") == fresh_text
-                           for event in continued_events["events"])
-                   and all(marker not in continued_body for marker in forbidden_after),
-                   "successful fresh delivery stays in the new event generation without old bodies or identities")
         self.check(continued_state["draft"] == {"text": "", "cursor": 0}
                    and continued_state["editing"] is None
                    and all(marker not in continued_ui and marker not in text(continued_screen)
