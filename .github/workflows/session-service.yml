@@ -79,7 +79,7 @@ jobs:
           result=$?
           cat "$RUNNER_TEMP/ssmcp-lint.txt"
           if [ "$result" -ne 0 ]; then
-            reason=$(sed -E 's/\x1b\[[0-9;]*[mK]//g' "$RUNNER_TEMP/ssmcp-lint.txt" | grep -E 'error| -->' | head -n 9 | tr '\r\n' '  ' | cut -c 1-480)
+            reason=$(sed -E 's/\x1b\[[0-9;]*[mK]//g' "$RUNNER_TEMP/ssmcp-lint.txt" | grep -E '^[[:space:]]*(error(\[[^]]+\])?:|-->)' | head -n 12 | tr '\r\n' '  ' | cut -c 1-1500)
             reason="${reason:-diagnostic output had no matching error lines}"
             printf 'reason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
             printf '::error::%s\n' "$reason"
