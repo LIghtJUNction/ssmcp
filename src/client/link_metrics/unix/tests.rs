@@ -198,8 +198,16 @@ fn link_metrics_reporter_is_one_hertz_bounded_and_never_waits_for_a_subscriber()
     assert_eq!((recovered.uploaded, recovered.downloaded), (12, 16));
     assert!(recorder.enabled(), "draining resumes the same reporter");
     drop(prepared);
-    recorder.last_report = Some(Instant::now() - Duration::from_secs(2));
-    recorder.publish();
+    // A parallel fork can briefly retain the peer FD before exec closes it.
+    // Keep probing for the real disconnect without waiting out the sample interval.
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while recorder.enabled() && Instant::now() < deadline {
+        recorder.last_report = Some(Instant::now() - Duration::from_secs(2));
+        recorder.publish();
+        if recorder.enabled() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
     assert!(
         !recorder.enabled(),
         "an absent subscriber disables telemetry"

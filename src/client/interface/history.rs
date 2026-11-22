@@ -690,7 +690,7 @@ pub(super) fn call(arguments: Value) -> Result<Value, String> {
 pub(super) fn tool() -> Value {
     json!({
         "name":"ssmcp.ui.events",
-        "description":"Read the bounded live process event log. No conversation history, archive, checkpoint or replay is stored. Use this connection's real client_id; agent_id selects a verified thread and main selects the unbound main caller. Omit both for the process aggregate. Follow generation and next_cursor; retention_gap_possible reports bounded log pruning.",
+        "description":"Read the bounded live process event log. No conversation history, archive, checkpoint or replay is stored. Use this connection's real client_id; agent_id selects a verified thread and main selects the unbound main caller. Omit both for the process aggregate. Follow generation and next_cursor. The first page’s end_cursor is the exclusive upper bound for a finite read; later entries may arrive while paging. retention_gap_possible reports bounded log pruning.",
         "inputSchema":{
             "type":"object","required":["action","client_id"],"additionalProperties":false,
             "properties":{
