@@ -518,13 +518,16 @@ mod tests {
 
     fn snapshot() -> Snapshot {
         Snapshot {
+            process_id: std::process::id(),
             generation: "fixture".into(),
+            manager: None,
             total: 3,
             idle: 1,
             working: 1,
             offline: 1,
             queued: 2,
             closed: false,
+            stopping: false,
             slots: vec![
                 SlotView {
                     slot: 0,
