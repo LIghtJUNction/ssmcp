@@ -215,10 +215,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn url_commands_and_private_display_follow_the_selected_saved_conversation() {
+    async fn url_commands_and_private_display_follow_the_selected_live_context() {
         let fixture = Fixture::new();
         saved::with_test_history(fixture.0.join("history"), async {
-            saved::record("user", "Saved A").unwrap();
+            saved::record("user", "Live A").unwrap();
             let a = saved::current_owner().unwrap();
             let context = OpenAiContext {
                 session: Some("synthetic-A-session".into()),
@@ -253,7 +253,7 @@ mod tests {
             ));
 
             saved::release_current().unwrap();
-            saved::record("user", "Saved B").unwrap();
+            saved::record("user", "Live B").unwrap();
             assert!(view.chat_openai_rows().is_none());
             assert!(view.chat_command("/openai-subject").unwrap());
             assert!(
@@ -271,7 +271,7 @@ mod tests {
             );
             assert!(view.conversation.input_task.is_none());
 
-            saved::resume(a.id()).unwrap();
+            saved::resume_test_history(a.id()).unwrap();
             let resumed = saved::current_owner().unwrap();
             let record = store::read_selected(&resumed).unwrap().unwrap();
             assert_eq!(record.chatgpt_url.as_deref(), Some(url));
@@ -283,5 +283,6 @@ mod tests {
             assert!(view.conversation.input_task.is_none());
         })
         .await;
+        assert!(!fixture.0.join("history").exists());
     }
 }

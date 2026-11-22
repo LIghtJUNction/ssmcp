@@ -610,7 +610,7 @@ pub(crate) fn read(id: &str) -> Result<Conversation, String> {
     with(|history| history.read(id))
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(crate) fn resume_test_history(id: &str) -> Result<Conversation, String> {
     ownership::TEST_HISTORY
         .try_with(|_| ())

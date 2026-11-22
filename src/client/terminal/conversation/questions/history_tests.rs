@@ -142,7 +142,7 @@ async fn full_keyboard_empty_questions_list_arrows_move_between_panels() {
                     let queued_messages = state.chat_data()["queue"].clone();
 
                     press(&mut state, right);
-                    assert_eq!(state.conversation.view, View::History);
+                    assert_eq!(state.conversation.view, View::Logs);
                     press(&mut state, left);
                     assert_eq!(state.conversation.view, View::Questions);
                     assert_eq!(state.conversation.content_focus, content_focus);
@@ -191,7 +191,7 @@ async fn full_keyboard_questions_list_arrows_preserve_selection_until_enter() {
             assert!(!state.conversation.detail);
 
             press(&mut state, b"\x1bOC");
-            assert_eq!(state.conversation.view, View::History);
+            assert_eq!(state.conversation.view, View::Logs);
             press(&mut state, b"\x1bOD\x1bOD");
             assert_eq!(state.conversation.view, View::Queue);
             press(&mut state, b"\x1bOC");
@@ -218,7 +218,7 @@ async fn full_keyboard_questions_list_arrows_preserve_selection_until_enter() {
 }
 
 #[tokio::test]
-async fn question_and_finish_replies_stay_in_original_history_after_switch_and_release() {
+async fn question_and_finish_replies_stay_in_original_live_context_after_switch_and_release() {
     for finish in [false, true] {
         let fixture = Fixture::new();
         saved::with_test_history(
@@ -236,7 +236,7 @@ async fn question_and_finish_replies_stay_in_original_history_after_switch_and_r
                 )
                 .question
                 .id;
-                saved::resume(&second.metadata.id).unwrap();
+                saved::resume_test_history(&second.metadata.id).unwrap();
                 let recorded = if finish {
                     queue::decide_finish(&id, FinishChoice::Yes, Some("answer-for-A-only")).unwrap()
                 } else {
@@ -277,7 +277,7 @@ async fn question_and_finish_replies_stay_in_original_history_after_switch_and_r
                 assert!(!parser.screen().contents().contains("answer-for-A-only"));
                 // Same ID with a new lease is not the old request's writer capability.
                 saved::release_current().unwrap();
-                saved::resume(first.id()).unwrap();
+                saved::resume_test_history(first.id()).unwrap();
                 assert_ne!(saved::current_owner().unwrap(), first);
                 let unchanged = saved::current().unwrap().unwrap();
                 state.preview = false;
@@ -294,5 +294,6 @@ async fn question_and_finish_replies_stay_in_original_history_after_switch_and_r
             }),
         )
         .await;
+        assert!(!fixture.0.join("history").exists());
     }
 }
