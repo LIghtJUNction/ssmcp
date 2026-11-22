@@ -6,6 +6,8 @@ mod allow;
 mod attribution;
 #[cfg(test)]
 mod attribution_tests;
+#[cfg(test)]
+mod execution_group;
 mod management;
 mod messaging;
 pub(crate) mod session_io;

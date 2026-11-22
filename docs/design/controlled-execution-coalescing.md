@@ -180,3 +180,13 @@ visibility test (four total for that invocation). These validate current retaine
 compatibility, not future execution coalescing. Concurrent command savings,
 per-authority execution separation, cancellation/failure credits and supported
 numeric Stats rendering remain unimplemented and untested.
+
+The draft includes a test-only lifecycle in `src/broker/execution_group.rs`.
+A fixed local process fixture holds execution open while ten independent reply
+channels subscribe. Separate cases cover mismatched keys, duplicate request IDs,
+cancellation, revoked delivery and failed execution. The fixture counts accepted
+oneshot sends. Production still needs the negotiated spawn evidence at
+`Frame::Reply` and per-member acceptance through `ReplyReady` plus the final
+authorization check in `Session::call_with_actor`. The client transport currently
+receives calls without a per-request cancellation frame, so broker cancellation
+cannot yet stop a shared native process when its last subscriber leaves.
