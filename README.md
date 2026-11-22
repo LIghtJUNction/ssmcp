@@ -4,7 +4,7 @@
 > 客户端可以随便改！自由创造
 **支持 Astra Pro 集群，在你自己的开发环境中协同完成开发任务。**
 
-[![Donate](https://donate.lmm.best/badge.svg?project=ssmcp&lang=zh-CN&layout=compact&theme=transparent&width=480&animation=steam)](https://donate.lmm.best/?project=ssmcp)
+[![Donate](https://donate.lmm.best/badge.svg?project=ssmcp&lang=zh-CN&layout=compact&theme=dark&width=480&animation=steam)](https://donate.lmm.best/?project=ssmcp)
 
 ssmcp 把多个已授权的 Astra Pro 会话连接到你的开发机，围绕同一项目分工、交换进度、执行命令并汇总结果。命令和工具在你的开发环境中运行，所需结果与上下文通过已授权的会话传递。
 
