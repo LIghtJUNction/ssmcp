@@ -329,11 +329,11 @@ printf 'a\nb\n' | count-lines
 
 SSMCP 默认启用原生命令、文件、会话和 Zuse CLI 管理工具。第三方工具可以使用独立的 MCP 客户端接入；`ssmcp.harnesses.load` 仅支持显式配置的 SSMCP peer。[迁移与连接说明](docs/optional-harnesses.md)
 
-`--input` 默认从终端接收聊天消息，`--agent` 默认由下一位调用方领取。要在启动时加载原生协议，请用 `--load-harness codex` 或 `--load-harness claude-code`。用 `ssmcp --list-harnesses` 查看支持项。`--load-harness ssmcp` 可以连接明确指定并已认证的 MCP 网关。[客户端输入](docs/client-input.md) · [协议加载](docs/agent-entry.md)
+`--input` 默认从终端接收聊天消息，`--agent` 默认由下一位调用方领取。使用 `ssmcp --list-harnesses` 查看支持项。`--load-harness ssmcp` 可以连接明确指定并已认证的 MCP 网关。[客户端输入](docs/client-input.md) · [协议加载](docs/agent-entry.md)
 
 `ssmcp local --socket` 提供默认路径的本机 HTTP/MCP Unix socket，`--socket PATH` 可指定私有路径。时间工具支持当前 UTC、跨时区时间差和倒计时，终端直接显示运行时长与剩余时间，`/wait` 可查看详情。[本机连接](docs/local-mode.md) · [时间原语](docs/time-primitives.md)
 
-- **开发工具**：Codex、Claude Code、Pi、OpenCode；能力以当前成功注册的目录为准。
+- **外部开发工具**：通过各自独立的 MCP 客户端接入，或显式从本地终端运行。
 - **桌面与浏览器**：直接运行独立 Zuse CLI，通过通用 `exec` 传递 argv、管理任务和读取结果。`computer` 原生工具只提供版本查询、下载、安装、卸载；没有内置动作代理或隐藏 fallback。[Zuse 工作流](docs/computer-use.md) · [Windows 安装范围](docs/windows-browser-setup.md)
 - **上下文**：工作区文件、项目指令、有效技能视图和显式只读 context roots。
 
