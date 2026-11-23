@@ -305,6 +305,7 @@ pub(super) async fn credentials(server: Option<&str>) -> Result<Option<Credentia
     load_at(&state_root()?, Some(&server), false)
 }
 
+#[cfg(target_os = "linux")]
 pub(super) fn recovery_credential_stamp(server: &str) -> Result<Option<(String, String)>> {
     let server = normalize_server(server)?;
     Ok(

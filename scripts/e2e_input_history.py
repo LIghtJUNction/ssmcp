@@ -679,6 +679,10 @@ class InputHistory(Composer):
         front.until(lambda shot: view(shot, "tasks") and identity in text(shot)
                     and "stats-proof" in text(shot),
                     "native Tasks displays the same tracked command")
+        # Native Tasks lists the running main PTY before completed commands.
+        front.send(DOWN)
+        front.until(lambda shot: f"› {identity} ·" in text(shot),
+                    "select the tracked native job before opening its details")
         front.send(ENTER)
         front.until(lambda shot: f"Job: {identity}" in text(shot)
                     and "complete argv · read only" in text(shot) and "stats-proof" in text(shot),
@@ -688,6 +692,10 @@ class InputHistory(Composer):
         front.send(ESC)
         front.until(lambda shot: "Message the agent" in text(shot) and not shot["hide_cursor"],
                     "restore the editor from command details")
+        # Escape restores input focus in Tasks, not the conversation view.
+        front.send("/new chat")
+        front.send(ENTER)
+        front.until(empty_composer_ready, "conversation view for command result events")
         front.send("! exit 7")
         front.send(ENTER)
         failed = front.until(lambda shot: "command · exit 7" in text(shot),

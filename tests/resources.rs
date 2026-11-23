@@ -490,10 +490,11 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
         let (status, body) = server.rpc("resources/list", json!({}), modern, 0).await;
         assert_eq!(status, 200, "{body}");
         let resources = body["result"]["resources"].as_array().unwrap();
-        assert_eq!(resources.len(), 14);
+        assert_eq!(resources.len(), 6 + CLIENT_RESOURCE_KINDS.len());
         let expected = [
             "ssmcp://guide",
             "ssmcp://limits",
+            "ssmcp://recovery",
             "ssmcp://collaboration",
             "ssmcp://skill",
             "ssmcp://clients",
@@ -632,7 +633,7 @@ async fn snapshots_change_with_connections_and_offline_resource_ids_are_denied()
         let (_, remaining) = server.rpc("resources/list", json!({}), modern, 0).await;
         assert_eq!(
             remaining["result"]["resources"].as_array().unwrap().len(),
-            14
+            before_uris.len()
         );
         assert_eq!(resource_uris(&remaining), before_uris);
     }
