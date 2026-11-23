@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       clients_only:
-        description: Validate native macOS and Windows clients only
+        description: Validate client surfaces without Linux integration
         required: false
         type: boolean
         default: false
@@ -19,7 +19,7 @@ on:
         required: false
         type: string
       clients_only:
-        description: Validate native macOS and Windows clients only
+        description: Validate client surfaces without Linux integration
         required: false
         type: boolean
         default: false
@@ -32,6 +32,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  web:
+    name: Web client
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - name: Record selected web source
+        id: source
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/ssmcp-web-source-commit.txt"
+          if test -f apps/ssmcp-web/package.json; then
+            git rev-parse HEAD:apps/ssmcp-web > "$RUNNER_TEMP/ssmcp-web-source-tree.txt"
+            echo "has_web=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_web=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        if: steps.source.outputs.has_web == 'true'
+        with:
+          node-version: '22'
+      - name: Test web state and protocol contracts
+        if: steps.source.outputs.has_web == 'true'
+        run: npm --prefix apps/ssmcp-web test
+      - name: Install pinned browser test runtime
+        if: steps.source.outputs.has_web == 'true'
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ssmcp-browser" --no-save --no-package-lock --no-audit --no-fund playwright@1.65.1
+          node "$RUNNER_TEMP/ssmcp-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Exercise actual browser inputs and quoted replies
+        if: steps.source.outputs.has_web == 'true'
+        run: |
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/ssmcp-browser/node_modules/playwright" \
+          WEB_TEST_EVIDENCE="$RUNNER_TEMP/ssmcp-web-evidence" \
+          npm --prefix apps/ssmcp-web run test:browser
+      - name: Retain browser source and interaction evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ssmcp-web-validation
+          path: |
+            ${{ runner.temp }}/ssmcp-web-source-*.txt
+            ${{ runner.temp }}/ssmcp-web-evidence
+          if-no-files-found: error
+          retention-days: 7
+
   linux:
     if: ${{ !inputs.clients_only }}
     strategy:

@@ -363,9 +363,18 @@ async fn members_exchange_private_and_broadcast_messages_with_ack_and_retry() {
         server.call("list", json!({"client_id":other_room})).await["agents"],
         json!([])
     );
+    let current = agents
+        .iter()
+        .find(|peer| peer["agent_id"] == a["agent_id"])
+        .unwrap();
+    let revision = current["lifecycle"]["revision"].as_u64().unwrap();
+    assert_eq!(current["status"], "idle");
     let mut update = credentials(&room, &a);
-    update["status"] = json!("implementing message transport");
-    server.call("update", update).await;
+    update["expected_revision"] = json!(revision);
+    update["status"] = json!("working");
+    let updated = server.call("update", update).await;
+    assert_eq!(updated["agent"]["status"], "working");
+    assert_eq!(updated["agent"]["lifecycle"]["revision"], revision + 1);
     let peers = server.call("list", json!({"client_id":room})).await;
     assert!(
         peers["agents"]
@@ -373,7 +382,8 @@ async fn members_exchange_private_and_broadcast_messages_with_ack_and_retry() {
             .unwrap()
             .iter()
             .any(|peer| peer["agent_id"] == a["agent_id"]
-                && peer["status"] == "implementing message transport")
+                && peer["status"] == "working"
+                && peer["lifecycle"]["revision"] == revision + 1)
     );
 
     let mut message = credentials(&room, &a);

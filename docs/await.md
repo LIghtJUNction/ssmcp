@@ -125,6 +125,10 @@ return await waitFor(clientId, {wait_id: previous.wait_id, timeout_ms: 1000});
 
 公共 `await` 只报告被观察对象的状态。它的兼容字段 `completion_permission` 保持为 `null`，`continue_wait` 表示原等待仍待继续或本次读取窗口超时。订阅事件可以提前唤醒一次读取；若原目标尚未完成，响应仍为 `pending` 且 `continue_wait: true`，应沿用原 `wait_id`。这些字段不能用作结束许可。`ui.wait(intent: "finish")` 的独立外层回执和重试规则见[等待用户输入](user-wait.md#结束前取得真实用户决定)。[返回结构](../src/http/await_tool.rs)
 
+## 自动回归与十分钟验收
+
+Linux 的 `make test-client-ui` 使用同次构建的原生客户端和账号路由 fixture，运行真实终端引用回复及 15 秒后台等待回归。短回归检查断开观察后的原任务完成、结果重读、精确 ACK 与定时提示，报告明确标记为 `short_diagnostic`。独立十分钟验收使用同一脚本的 `--duration-seconds 600`，报告标记为 `600_second`；短回归不能替代这份证据。每次运行使用新报告路径，并核对实际二进制 SHA256 和构建提交。[回归入口](../Makefile) · [后台等待验收](../scripts/e2e_durable_wait.py)
+
 ## 历史验证范围
 
 2026-11-20，源码 `a6b1e29ddc2bac1e730efbfd063e46843731df92` 的 26 项等待回归及 80 项关联回归全部通过。等待测试包括真实内存身份的范围隔离、两个成员并发、租约到期、取消与最终交付竞争、容量和保留期限保护、同一 ID 超时恢复；它们没有启动外部模型或切换生产进程。[完整验证记录](validation/await-finish-20261120.md)
