@@ -336,6 +336,7 @@ async fn coordinate_wait(
             "finish_request_id":run.finish_request_id(&client_id)
         }),
     };
+    let native_controller = controller.clone();
     let native = async {
         if broker_only {
             std::future::pending().await
@@ -343,7 +344,7 @@ async fn coordinate_wait(
             session
                 .call_with_bound_authorization(
                     operation,
-                    controller.clone(),
+                    native_controller,
                     &authorization,
                     recipient.binding.clone(),
                 )
