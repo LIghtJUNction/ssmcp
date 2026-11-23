@@ -256,6 +256,30 @@ def locked_project_z(lock):
     return packages
 
 
+def application_version_files(root):
+    """Version bytes owned by this application, including its desktop path lock."""
+    root = Path(root)
+    files = [Path("Cargo.toml"), Path("Cargo.lock")]
+    desktop = Path("apps/ssmcp-desktop")
+    manifest_path, lock_path = root / desktop / "Cargo.toml", root / desktop / "Cargo.lock"
+    if manifest_path.exists():
+        manifest = read_toml(manifest_path)
+        dependency = manifest.get("dependencies", {}).get("ssmcp")
+        if (manifest.get("package", {}).get("name") != "ssmcp-desktop"
+                or not isinstance(dependency, dict)
+                or not isinstance(dependency.get("path"), str)
+                or Path(dependency["path"]).is_absolute()
+                or (manifest_path.parent / dependency["path"]).resolve() != root.resolve()
+                or set(dependency) & {"version", "git", "registry", "registry-index"}):
+            raise ValueError("ssmcp-desktop must use this repository's ssmcp path dependency")
+        if not lock_path.is_file():
+            raise ValueError("apps/ssmcp-desktop/Cargo.lock must exist before a release bump")
+        files.append(desktop / "Cargo.lock")
+    elif lock_path.exists():
+        raise ValueError("desktop Cargo.lock has no matching application manifest")
+    return files
+
+
 def validate_package(tag, root):
     match = TAG.fullmatch(tag)
     if not match or any(part.isdigit() and len(part) > 1 and part.startswith("0")
@@ -270,6 +294,10 @@ def validate_package(tag, root):
         locked = [p["version"] for p in lock["package"] if p["name"] == name]
         if locked != [package_version]:
             raise ValueError(f"Cargo.lock must contain exactly the manifest's {name} version")
+    for relative in application_version_files(root)[2:]:
+        rows = [row for row in read_toml(root / relative)["package"] if row["name"] == "ssmcp"]
+        if len(rows) != 1 or rows[0]["version"] != actual or rows[0].get("source") is not None:
+            raise ValueError(f"{relative} must contain exactly this local ssmcp version")
     return actual
 
 
@@ -505,24 +533,30 @@ def bumped_version(old, level, custom_version=None):
     return ".".join(map(str, parts))
 
 def bump(level, root=None, *, custom_version=None, dry_run=False):
-    root = root or ROOT
+    root = Path(root or ROOT)
     old = version(root)
-    # Validate every local dependency/lock entry before changing either app file.
+    # Validate and prepare every replacement before changing any version bytes.
     validate_package("v" + old, root)
     new = bumped_version(old, level, custom_version)
-    manifest_path, lock_path = root / "Cargo.toml", root / "Cargo.lock"
+    manifest_path = root / "Cargo.toml"
     manifest, manifest_count = re.subn(
         r'(?m)^(version\s*=\s*")' + re.escape(old) + r'("\s*)$',
         lambda match: match[1] + new + match[2], manifest_path.read_text(encoding="utf-8"), count=1)
-    lock, lock_count = re.subn(
-        r'(\[\[package\]\]\nname = "ssmcp"\nversion = ")' + re.escape(old) + r'("\n)',
-        lambda match: match[1] + new + match[2], lock_path.read_text(encoding="utf-8"))
-    if manifest_count != 1 or lock_count != 1:
-        raise ValueError("expected one matching ssmcp version in Cargo.toml and Cargo.lock")
+    if manifest_count != 1:
+        raise ValueError("expected one matching ssmcp version in Cargo.toml")
+    replacements = {manifest_path: manifest}
+    for relative in application_version_files(root)[1:]:
+        lock_path = root / relative
+        lock, count = re.subn(
+            r'(\[\[package\]\]\nname = "ssmcp"\nversion = ")' + re.escape(old) + r'("\n)',
+            lambda match: match[1] + new + match[2], lock_path.read_text(encoding="utf-8"))
+        if count != 1:
+            raise ValueError(f"expected one matching ssmcp version in {relative}")
+        replacements[lock_path] = lock
     result = {"tag": "v" + new, "version": new, "dry_run": str(dry_run).lower()}
     if not dry_run:
-        manifest_path.write_text(manifest, encoding="utf-8")
-        lock_path.write_text(lock, encoding="utf-8")
+        for path, text in replacements.items():
+            path.write_text(text, encoding="utf-8")
     return emit(result)
 
 def archive_name(target, release_version):

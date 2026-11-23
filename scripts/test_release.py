@@ -629,6 +629,81 @@ class ReleaseTests(unittest.TestCase):
                 self.assertIn('name = "ssmcp"\nversion = "' + expected + '"', updated)
                 self.assertIn('name = "fixture"\nversion = "0.5.9"', updated)
 
+    def desktop_version_fixture(self):
+        desktop = self.root / "apps/ssmcp-desktop"
+        desktop.mkdir(parents=True)
+        (desktop / "Cargo.toml").write_text(
+            '[package]\nname = "ssmcp-desktop"\nversion = "0.1.0"\n'
+            '[workspace]\n[dependencies]\nssmcp = { path = "../.." }\n'
+        )
+        (desktop / "Cargo.lock").write_text(
+            'version = 4\n\n[[package]]\nname = "ssmcp"\nversion = "0.5.0"\n'
+            '\n[[package]]\nname = "ssmcp-desktop"\nversion = "0.1.0"\ndependencies = ["ssmcp"]\n'
+            '\n[[package]]\nname = "fixture"\nversion = "0.5.0"\n'
+        )
+        return desktop
+
+    def test_bump_updates_desktop_path_lock_without_changing_app_or_other_packages(self):
+        desktop = self.desktop_version_fixture()
+        paths = [self.root / path for path in release.application_version_files(self.root)]
+        before = {path: path.read_bytes() for path in paths}
+        manifest = (desktop / "Cargo.toml").read_bytes()
+        preview = release.bump("minor", self.root, dry_run=True)
+        self.assertEqual(preview["version"], "0.6.0")
+        self.assertEqual(before, {path: path.read_bytes() for path in paths})
+        release.bump("minor", self.root)
+        self.assertEqual(release.version(self.root), "0.6.0")
+        self.assertEqual((desktop / "Cargo.toml").read_bytes(), manifest)
+        self.assertEqual(
+            {row["name"]: row["version"] for row in release.read_toml(desktop / "Cargo.lock")["package"]},
+            {"ssmcp": "0.6.0", "ssmcp-desktop": "0.1.0", "fixture": "0.5.0"},
+        )
+        self.assertEqual(release.validate_package("v0.6.0", self.root), "0.6.0")
+
+    def test_invalid_desktop_lock_prevents_every_version_write(self):
+        desktop = self.desktop_version_fixture()
+        path = desktop / "Cargo.lock"
+        valid = path.read_text()
+        variants = [
+            None,
+            valid.replace('name = "ssmcp"\nversion = "0.5.0"', 'name = "ssmcp"\nversion = "0.4.0"'),
+            valid + '\n[[package]]\nname = "ssmcp"\nversion = "0.5.0"\n',
+            valid.replace('name = "ssmcp"\nversion = "0.5.0"',
+                          'name = "ssmcp"\nversion = "0.5.0"\nsource = "registry+https://example.invalid"'),
+        ]
+        for content in variants:
+            with self.subTest(content=content):
+                if content is None:
+                    path.unlink()
+                else:
+                    path.write_text(content)
+                files = [self.root / "Cargo.toml", self.root / "Cargo.lock", desktop / "Cargo.toml", path]
+                before = {item: item.read_bytes() if item.exists() else None for item in files}
+                with self.assertRaises(ValueError):
+                    release.bump("minor", self.root)
+                self.assertEqual(before, {
+                    item: item.read_bytes() if item.exists() else None for item in files
+                })
+
+    def test_bump_workflow_commits_desktop_lock_and_reuses_the_same_commit(self):
+        desktop = self.desktop_version_fixture()
+        self.git("add", "apps/ssmcp-desktop")
+        self.git("commit", "--quiet", "-m", "independent desktop fixture")
+        baseline = self.git("rev-parse", "HEAD")
+        with self.bump_origin() as remote:
+            first = bump_release.prepare("minor", baseline, self.root)
+            self.assertEqual(
+                self.git("diff", "--name-only", baseline, first["sha"]).splitlines(),
+                ["Cargo.lock", "Cargo.toml", "apps/ssmcp-desktop/Cargo.lock"],
+            )
+            self.assertEqual(self.git("status", "--porcelain"), "")
+            self.assertIn('name = "ssmcp"\nversion = "0.6.0"', (desktop / "Cargo.lock").read_text())
+            self.git("checkout", "--quiet", "--detach", baseline)
+            repeated = bump_release.prepare("minor", baseline, self.root)
+            self.assertEqual(repeated["sha"], first["sha"])
+            self.assertEqual(repeated["status"], "reused")
+            self.assertEqual(self.remote_commit(remote, "refs/tags/v0.6.0^{commit}"), first["sha"])
+
     @contextmanager
     def bump_origin(self):
         with tempfile.TemporaryDirectory(prefix="ssmcp-bump-origin-") as directory:
