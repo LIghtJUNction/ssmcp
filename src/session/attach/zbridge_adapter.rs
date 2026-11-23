@@ -1,6 +1,8 @@
 //! Project Z frontends use the same protected local attach authority as the
 //! terminal. A lease is a host capability, never an account or agent identity.
+mod observation;
 mod remote;
+pub use observation::{EventObserver, MAX_OBSERVATION_MS};
 pub use remote::RemoteFrontend;
 
 use super::{Capture, Runtime};

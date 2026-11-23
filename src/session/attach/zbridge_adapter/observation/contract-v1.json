@@ -1,0 +1,52 @@
+{
+  "schema": "ssmcp-client-contract-v1",
+  "description": "Synthetic protocol fixtures; no credentials, live sessions or platform acceptance claims.",
+  "cases": [
+    {
+      "name": "observer_capabilities",
+      "request": {"version": 1, "id": "discover", "operation": {"op": "capabilities"}},
+      "response": {
+        "version": 1, "id": "discover", "generation": "fixture-runtime-a",
+        "body": {"kind": "capabilities", "value": {
+          "application": "ssmcp", "mode": "observe",
+          "resources": [
+            {"id": "runtime", "schema_version": 1, "description": "Current backend and live event boundary"},
+            {"id": "terminals", "schema_version": 1, "description": "Current backend terminals"},
+            {"id": "workers", "schema_version": 1, "description": "Configured worker pool, bounded pages"}
+          ],
+          "commands": [], "events": true, "max_frame_bytes": 261120, "max_event_page_bytes": 131072
+        }}
+      }
+    },
+    {
+      "name": "large_cursor",
+      "request": {"version": 1, "id": "observe.0", "operation": {"op": "events", "generation": "fixture-runtime-a", "cursor": "9007199254740993", "limit": 16, "wait_ms": 1000}},
+      "response": {
+        "version": 1, "id": "observe.0", "generation": "fixture-runtime-a",
+        "body": {"kind": "events", "value": {
+          "events": [{"sequence": "9007199254740993", "topic": "worker.progress", "value": {"task_id": "fixture-task", "progress": "running"}}],
+          "start_cursor": "9007199254740993", "next_cursor": "9007199254740994", "live_cursor": "9007199254740994", "retention_gap": false, "has_more": false
+        }}
+      }
+    },
+    {
+      "name": "retention_gap",
+      "request": {"version": 1, "id": "gap.0", "operation": {"op": "events", "generation": "fixture-runtime-a", "cursor": "40", "limit": 16, "wait_ms": 0}},
+      "response": {
+        "version": 1, "id": "gap.0", "generation": "fixture-runtime-a",
+        "body": {"kind": "events", "value": {
+          "events": [{"sequence": "44", "topic": "worker.completed", "value": {"task_id": "fixture-task", "status": "completed"}}],
+          "start_cursor": "44", "next_cursor": "45", "live_cursor": "45", "retention_gap": true, "has_more": false
+        }}
+      }
+    },
+    {
+      "name": "command_unknown",
+      "request": {"version": 1, "id": "write-once", "operation": {"op": "command", "generation": "fixture-runtime-a", "command": "terminal.write", "arguments": {"terminal_id": "fixture-terminal", "data": "status\n"}}},
+      "response": {
+        "version": 1, "id": "write-once", "generation": "fixture-runtime-a",
+        "body": {"kind": "error", "value": {"code": "unavailable", "message": "connection ended before receipt", "effect": "may_have_occurred"}}
+      }
+    }
+  ]
+}

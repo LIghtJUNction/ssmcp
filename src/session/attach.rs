@@ -3,7 +3,7 @@
 pub(crate) mod input;
 pub(crate) mod thread_history;
 mod zbridge_adapter;
-pub use zbridge_adapter::{Frontend, RemoteFrontend};
+pub use zbridge_adapter::{EventObserver, Frontend, MAX_OBSERVATION_MS, RemoteFrontend};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
