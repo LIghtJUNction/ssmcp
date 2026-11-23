@@ -23,6 +23,7 @@ import subprocess
 import tempfile
 import time
 
+from e2e_composer import journal_value
 from e2e_input_history import InputHistory
 from e2e_dashboard import sha256, text
 
@@ -142,7 +143,7 @@ class Presentations(InputHistory):
     def message_events(self):
         page = self.live_events(agent_id=self.presenter["agent_id"], limit=4)
         return [event["value"] for event in page["events"]
-                if event.get("value", {}).get("type") == "ssmcp.message"]
+                if journal_value(event).get("type") == "ssmcp.message"]
 
     def message(self, message_id):
         matching = [row for row in self.message_events() if row.get("message_id") == message_id]
