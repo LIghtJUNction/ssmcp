@@ -343,6 +343,23 @@ mod rule_tests {
         });
     }
 
+    #[test]
+    fn rule_sources_must_be_regular_files() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let scratch = Scratch::new();
+        let baseline = scratch.policy_dir("home").join("baseline.toml");
+        let home = scratch.0.join("home");
+        let workspace = fs::File::open(&scratch.0).unwrap();
+        let name = std::ffi::CString::new(baseline.as_os_str().as_bytes()).unwrap();
+        // SAFETY: the fixture path is a valid C string in a private directory.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert!(linux::load_at(&home, &workspace).is_err());
+        fs::remove_file(&baseline).unwrap();
+        fs::write(&baseline, rule("deny")).unwrap();
+        assert!(linux::load_at(&home, &workspace).unwrap().is_some());
+    }
+
     #[tokio::test]
     async fn trusted_reload_is_atomic_and_failed_cold_start_never_writes() {
         let scratch = Scratch::new();

@@ -6,7 +6,7 @@ use std::{
     ffi::CString,
     fs::File,
     io::{self, Read},
-    os::unix::fs::MetadataExt,
+    os::{fd::AsRawFd, unix::fs::MetadataExt},
     path::{Component, Path},
 };
 
@@ -55,8 +55,11 @@ fn read_rule(root: &File, file: &str, uid: u32) -> io::Result<String> {
     safe_dir(&config, uid, false)?;
     let directory = open(&config, "safety", libc::O_DIRECTORY)?;
     safe_dir(&directory, uid, false)?;
-    let file = open(&directory, file, 0)?;
-    let metadata = file.metadata()?;
+    // Pin the directory entry without opening it for I/O. In particular a
+    // special file must not acquire device or FIFO open semantics.
+    let name = CString::new(file).map_err(io::Error::other)?;
+    let pinned = open_at(&directory, &name, libc::O_PATH, 0)?;
+    let metadata = pinned.metadata()?;
     if !metadata.is_file()
         || metadata.uid() != uid
         || metadata.mode() & 0o022 != 0
@@ -65,6 +68,9 @@ fn read_rule(root: &File, file: &str, uid: u32) -> io::Result<String> {
     {
         return Err(io::Error::from(io::ErrorKind::PermissionDenied));
     }
+    // Reopen the inspected inode, rather than looking up the pathname
+    // again. Keep the O_PATH descriptor alive through the bounded read.
+    let file = File::open(format!("/proc/self/fd/{}", pinned.as_raw_fd()))?;
     let mut source = String::new();
     file.take(MAX_RULE_BYTES + 1).read_to_string(&mut source)?;
     if source.len() as u64 > MAX_RULE_BYTES {
