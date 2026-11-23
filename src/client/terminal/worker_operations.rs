@@ -433,10 +433,17 @@ mod tests {
         operation["kind"] = json!("result");
         operation["mode"] = json!("single");
         operation["targets"] = json!([{"kind":"task_result","task_id":"legacy-result-task"}]);
+        let rows = full(&pool)
+            .into_iter()
+            .map(|row| row.0)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rows.contains("Worker task result"));
+        assert!(rows.contains("Task ID legacy-result-task"));
         assert!(
-            full(&pool)
+            !compact(&pool, 120, 2)
                 .iter()
-                .any(|row| row.0 == "Task legacy-result-task result")
+                .any(|row| row.0.contains("legacy-result-task"))
         );
         let operation = &mut pool["manager_operations"][0];
         operation["kind"] = json!("wait_available");
