@@ -853,14 +853,11 @@ async fn observe(
         } => {
             super::events_tool::observe(
                 &scope.broker,
-                &scope.user,
-                &scope.token,
+                (&scope.user, &scope.token),
                 scope.session.client_id(),
-                &scope.binding.agent_id,
-                &scope.binding.token,
+                (&scope.binding.agent_id, &scope.binding.token),
                 subscription_id,
-                *limit,
-                timeout_ms,
+                (*limit, timeout_ms),
                 Some(wait_id),
             )
             .await
