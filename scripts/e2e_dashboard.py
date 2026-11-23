@@ -438,13 +438,26 @@ class Dashboard(Harness):
             self.check(shot["hide_cursor"], "resizing preserves audit input ownership")
 
         def task_rows(snapshot):
-            side = region(snapshot, 0, 57, 76, 106)
+            side = sidebar(snapshot)
             tasks = side.split("Tasks", 1)[1] if "Tasks" in side else ""
             return re.split(r"\n\s*(?:Progress|Git|Recent commits)\b", tasks, maxsplit=1)[0]
 
-        front.until(lambda shot: "Tasks · 1 running" in text(shot)
-                    and re.search(r"(?m)^\s*main ", task_rows(shot)),
-                    "the existing main PTY in the sidebar", cells=True)
+        def running_jobs():
+            return [job for job in self.call("ssmcp.exec.list")["jobs"] if job["running"]]
+
+        main = self.call("terminal.status")
+        baseline = running_jobs()
+        baseline_ids = {job["job_id"] for job in baseline}
+        self.check(main["running"] and baseline_ids == {main["job_id"]}
+                   and len(baseline) == 1 and baseline[0]["mode"] == "pty"
+                   and baseline[0]["pid"] == main["pid"],
+                   "the initial running inventory is the owned main PTY")
+
+        def main_visible(snapshot):
+            return re.search(rf"(?m)^\s*{re.escape(main['job_id'])} ", task_rows(snapshot)) is not None
+
+        front.until(lambda shot: f"Tasks · {len(baseline_ids)} running" in sidebar(shot)
+                    and main_visible(shot), "the owned main PTY in the sidebar", cells=True)
         titles = ("silent-alpha", "silent-bravo")
         first, second = [
             self.call("ssmcp.exec.start", {
@@ -453,30 +466,59 @@ class Dashboard(Harness):
             })
             for title in titles
         ]
-        front.until(lambda shot: "Tasks · 3 running" in text(shot)
-                    and all(title in task_rows(shot) for title in titles),
-                    "two real simultaneous tasks alongside the main PTY", cells=True)
-        self.check(first["job_id"] != second["job_id"], "two independent tasks have different identities in the live sidebar")
+        fixture_ids = {first["job_id"], second["job_id"]}
+        self.check(len(fixture_ids) == 2 and fixture_ids.isdisjoint(baseline_ids),
+                   "two independent fixture tasks have distinct identities from the main PTY")
+        expected_ids = baseline_ids | fixture_ids
+        active = running_jobs()
+        self.check({job["job_id"] for job in active} == expected_ids
+                   and len(active) == len(expected_ids),
+                   "the live inventory contains exactly the main PTY and both fixture tasks")
+        # Match the renderer's short IDs to these exact native jobs, never row order.
+        labels = {}
+        for job, title in zip((first, second), titles):
+            job_id = job["job_id"]
+            match = re.fullmatch(r"[0-9a-fA-F]{32}-([0-9a-fA-F]+)", job_id)
+            if match is None:
+                raise AssertionError(f"unexpected native task identity: {job_id}")
+            labels[f"#{match.group(1)}"] = title
+        self.check(len(labels) == len(fixture_ids), "fixture tasks have distinct sidebar labels")
 
-        def both_tasks_elapsed(snapshot):
-            rows = task_rows(snapshot)
-            for title in titles:
-                row = re.search(rf"{title}[^\n]*\n[^\n]*?\b(\d+(?:\.\d+)?)s\b", rows)
-                if row is None or float(row[1]) < 6:
-                    return False
-            return True
+        def fixture_rows(snapshot):
+            lines = task_rows(snapshot).splitlines()
+            return {label: (line, lines[index + 1])
+                    for index, line in enumerate(lines[:-1]) for label, title in labels.items()
+                    if line.lstrip().startswith(f"{label} ") and title in line}
 
-        # Observe both fixture clocks, since main's clock is already older.
-        shot = front.until(both_tasks_elapsed, "both silent tasks displaying at least six elapsed seconds",
+        front.until(lambda shot: f"Tasks · {len(expected_ids)} running" in sidebar(shot)
+                    and main_visible(shot) and set(fixture_rows(shot)) == set(labels),
+                    "the real running inventory and both fixture identities in the sidebar", cells=True)
+
+        def fixtures_elapsed(snapshot):
+            rows = fixture_rows(snapshot)
+            if set(rows) != set(labels):
+                return False
+            times = [re.match(r"\s*[·◦○]\s+(\d+(?:\.\d+)?)s\b", rows[label][1])
+                     for label in labels]
+            return all(match is not None and float(match.group(1)) >= 6 for match in times)
+
+        # Each fixture's own timer must cross six seconds; the persistent main
+        # PTY's earlier start cannot satisfy this check.
+        shot = front.until(fixtures_elapsed,
+                           "both silent fixture tasks displaying at least six elapsed seconds",
                            timeout=10, cells=True)
         self.check("%" not in task_rows(shot),
                    "tasks silent for over six seconds show elapsed time without inventing a completion percentage")
         self.finish_job(first, front)
         self.finish_job(second, front)
-        front.until(lambda shot: "Tasks · 1 running" in text(shot)
-                    and re.search(r"(?m)^\s*main ", task_rows(shot))
+        remaining = running_jobs()
+        self.check({job["job_id"] for job in remaining} == baseline_ids
+                   and len(remaining) == len(baseline),
+                   "both fixture tasks finish while the original main PTY keeps running")
+        front.until(lambda shot: f"Tasks · {len(baseline_ids)} running" in sidebar(shot)
+                    and main_visible(shot) and not fixture_rows(shot)
                     and all(title not in task_rows(shot) for title in titles),
-                    "completed tasks leaving only the main PTY in the active sidebar", cells=True)
+                    "completed fixture tasks leave the sidebar while the main PTY remains", cells=True)
 
         # Build markers from pieces so the readable command preview cannot
         # satisfy or duplicate the stream-content assertions below.

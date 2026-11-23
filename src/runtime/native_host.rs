@@ -7,7 +7,6 @@
 mod abi;
 
 use crate::{
-    backend::rpc::HarnessCall,
     output::OutputStore,
     registry::{Provider, RegisteredTool, Registry},
 };
@@ -136,7 +135,6 @@ impl Completion {
 
 struct RequestScope {
     source: super::call_scope::Source,
-    harness: Option<HarnessCall>,
     request_id: Option<String>,
 }
 
@@ -144,22 +142,14 @@ impl RequestScope {
     fn capture() -> Self {
         Self {
             source: super::call_scope::Source::capture(),
-            harness: HarnessCall::current(),
             request_id: crate::observability::REQUEST_ID.try_with(Clone::clone).ok(),
         }
     }
 
     async fn run<F: Future>(&self, future: F) -> F::Output {
-        let observed = async {
-            if let Some(harness) = &self.harness {
-                harness.scope(future).await
-            } else {
-                future.await
-            }
-        };
         // The executor is a different thread/LocalSet. The authenticated caller
         // and local history are retained in Rust and never enter plugin ABI JSON.
-        let attributed = self.source.clone().scope(observed);
+        let attributed = self.source.clone().scope(future);
         if let Some(request_id) = &self.request_id {
             crate::observability::REQUEST_ID
                 .scope(request_id.clone(), attributed)

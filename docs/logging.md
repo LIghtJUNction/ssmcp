@@ -71,7 +71,7 @@ HEAD 改变时先清除旧历史，再读取对应提交链，失败显示 unava
 
 `python -c`、`node -e`、`bash -lc` 等内联脚本使用 `python3 -c · 83 lines` 这样的中性标签，按解释器与源码行数识别命令，不把某一条赋值或文件操作当作执行结论。默认日志直接展示命令输出与退出状态；`--verbose` 额外展开带行号的脱敏脚本正文。编排源码可在审计视图浏览，`--max-inline-output N` 控制缓冲输出的展示行数。[命令展示](../src/client/command.rs) · [渲染器](../src/client/render.rs)
 
-Codex 命令调用以一次原生 `command/exec` 请求和响应为显示单位。外层工具调用通过桥接端生成的 `harness_call_id` 与原生请求精确对应；默认日志显示一套开始和结果，右侧活动区跟踪同一条命令。并行命令乱序完成时仍按各自 ID 配对。派发或发送失败、没有收到原生响应时保留外层失败提示；verbose 和 JSONL 保留外层审计元数据。其他工具调用继续显示各自的开始和结束。[调用关联](../src/backend/rpc.rs) · [回归事件](../src/client/readable_log_fixture.rs)
+原生命令以 `job_id` 关联开始、stdout/stderr 和退出事件。并行命令可以交错完成；读取单个任务时使用完整 ID，分别推进 `stdout_cursor`、`stderr_cursor`，并检查各流的 EOF 与捕获错误。`exec.start` 或一次 `code_mode` 返回后，后台进程仍可能运行；最终进程结果须检查 `running`、`exit_code`、`timed_out` 和 `cancelled`，缺少退出信息时保留未知状态。[命令生命周期](../src/backend/shell.rs) · [原生调用路由](../src/runtime.rs)
 
 [默认活动流、输入框与侧栏](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/client-ui.png`）
 
@@ -89,7 +89,7 @@ Codex 命令调用以一次原生 `command/exec` 请求和响应为显示单位�
 
 成功原生文件读取显示 `READ`；原子写入或编辑提交成功后显示 `EDIT`，随后显示 `DIFF` 路径与实际 `+新增 / -删除` 行数。快照有 missing、known、unknown 三态。敏感路径、二进制、不可读或过大快照显示具体不可用原因和未知计数，不用空文本伪造 Diff。小 Diff 在事件内保留完整正文，大 Diff 由 `diff_artifact` 引用同一内存输出存储；查询时检查 `complete` 和错误信息，确认仍保留内容的完整性。[文件审计](../src/workspace/audit.rs)
 
-技能事件明确区分发现元数据、读取正文和实际调用。`ssmcp.skill.discovered/read` 与扫描摘要来自 Context；它们不表示模型已使用技能。只有原生接口提供明确调用证据才能展示 invoked。Harness 的 started/completed 记录提供者、工具、调用 ID、耗时和状态，外部文件副作用为 `file_audit:"unknown"`，不会根据参数或工具名猜测写入成功。
+技能发现和读取事件只证明对应的 Context 操作已经完成。`ssmcp.skill.discovered`、`ssmcp.skill.read` 与扫描摘要均标注 `invoked: false`，用于说明元数据已发现或正文已读取，不能据此宣称模型已执行技能。文件读取、写入和 Diff 仍以原生文件操作产生的审计事件为准。[技能事件](../src/runtime.rs) · [文件审计](../src/workspace/audit.rs)
 
 ## 本地主题配置
 

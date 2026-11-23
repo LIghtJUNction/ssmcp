@@ -5,15 +5,18 @@ use std::path::PathBuf;
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let mut random = [0_u8; 16];
-        crate::platform::random_bytes(&mut random).unwrap();
-        let suffix = random.map(|byte| format!("{byte:02x}")).join("");
-        let path = std::env::temp_dir()
-            .canonicalize()
-            .unwrap()
-            .join(format!("ssmcp-question-key-{suffix}"));
-        crate::platform::private_directory(&path).unwrap();
-        Self(path)
+        let directory = std::env::temp_dir().canonicalize().unwrap();
+        loop {
+            let mut random = [0; 16];
+            crate::platform::random_bytes(&mut random).unwrap();
+            let name = crate::hex::encode(random);
+            let path = directory.join(format!("ssmcp-question-key-{}-{name}", std::process::id()));
+            match crate::platform::private_directory(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("cannot create private question fixture directory: {error}"),
+            }
+        }
     }
 }
 impl Drop for Fixture {
