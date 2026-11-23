@@ -811,7 +811,7 @@ async fn linked_pool_revocation_during_visible_guidance_withholds_the_hint() {
                     } else {
                         assert_eq!(operation["arguments"]["input_origin"], "maintenance");
                         publications += 1;
-                        pool.allowed().clear();
+                        TestFixture::revoke_session_access(&pool);
                         TestFixture::input_receipt(operation)
                     }
                 }) => {}

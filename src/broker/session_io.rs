@@ -827,7 +827,10 @@ impl TestFixture {
     }
     /// Real Session call channel with an isolated native responder, no provider/model.
     pub(crate) fn revoke_access(&self) {
-        self.session.allowed().clear();
+        Self::revoke_session_access(&self.session);
+    }
+    pub(crate) fn revoke_session_access(session: &Session) {
+        session.allowed().clear();
     }
     pub(crate) async fn native_reply_with(&self, reply: impl FnOnce(&Value) -> Value) -> Value {
         let call = self.calls.lock().await.recv().await.expect("native call");
