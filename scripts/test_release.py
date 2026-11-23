@@ -468,14 +468,26 @@ class ReleaseTests(unittest.TestCase):
             (directory / "tests.log").write_text(
                 "INSTRUMENTATION_RESULT: stream=SSMCP protocol and controller checks passed: fixture\n"
                 if platform == "android" else "test result: ok. 1 passed; 0 failed;\n"
-                if platform == "windows" else "Executed 1 test, with 0 failures (0 unexpected)\n")
+                if platform in {"linux", "windows"} else "Executed 1 test, with 0 failures (0 unexpected)\n")
             (directory / "result.json").write_text(json.dumps({
                 "source_commit": sha, "target": spec["target"], "profile": spec["profile"],
                 "build_exit": 0, "test_exit": 0,
             }))
             binary = None
             # Structural fixture bytes only; these are not native acceptance tests.
-            if platform == "windows":
+            if platform == "linux":
+                binary = directory / "ssmcp-desktop"
+                binary.write_bytes(b"\x7fELF\x02\x01\x01" + b"\0" * 11 + b"\x3e\0fixture executable")
+                window = {"source_commit": sha, "target": spec["target"], "profile": "release",
+                          "backend": "x11-opengl", "renderer": "llvmpipe", "title": "ssmcp-desktop · 本地工作台",
+                          "mapped": True, "width": 1180, "height": 800, "exit_after_ms": 10000,
+                          "exit_code": 0, "elapsed_ms": 10248, "binary_bytes": binary.stat().st_size,
+                          "binary_sha256": release.digest(binary)}
+                (directory / "window.json").write_text(json.dumps(window, indent=2) + "\n")
+                (directory / "window.log").write_text("")  # A successful application may be quiet.
+                (directory / "xwininfo.log").write_text("fixture: Map State: IsViewable\n")
+                (directory / "renderer.log").write_text("fixture: OpenGL renderer string: llvmpipe\n")
+            elif platform == "windows":
                 binary = directory / "ssmcp-desktop.exe"
                 binary.write_bytes(b"MZfixture executable")
             elif platform == "android":
@@ -495,13 +507,21 @@ class ReleaseTests(unittest.TestCase):
         release.checksums(self.root)
         release.checksums(self.root, recheck=True)
         manifest = json.loads((output / "release-manifest.json").read_text())
-        self.assertEqual(len(manifest["artifacts"]), 13)
-        self.assertEqual({row["platform"] for row in manifest["gui_clients"]}, {"windows", "android", "ios"})
+        self.assertEqual(len(manifest["artifacts"]), 15)
+        self.assertEqual(len(list(output.iterdir())), 26)
+        self.assertEqual({row["platform"] for row in manifest["gui_clients"]}, {"linux", "windows", "android", "ios"})
         self.assertTrue(all(row["source"]["commit"] == manifest["commit"] for row in manifest["gui_clients"]))
         self.assertIsNone(next(row for row in manifest["gui_clients"] if row["platform"] == "ios")["asset"])
         with zipfile.ZipFile(output / release.GUI_CLIENTS["windows"]["asset"]) as archive:
             self.assertEqual(set(archive.namelist()), {"ssmcp-desktop.exe", "README.md", "LICENSE", "build-source.json"})
             self.assertEqual(archive.read("ssmcp-desktop.exe"), b"MZfixture executable")
+        linux = next(row for row in manifest["gui_clients"] if row["platform"] == "linux")
+        self.assertEqual(linux["profile"], "release")
+        self.assertEqual(linux["window"]["source_commit"], manifest["commit"])
+        with tarfile.open(output / release.GUI_CLIENTS["linux"]["asset"], "r:gz") as archive:
+            self.assertEqual(set(archive.getnames()), {"ssmcp-desktop", "README.md", "LICENSE", "build-source.json"})
+            self.assertEqual(archive.getmember("ssmcp-desktop").mode, 0o755)
+            self.assertEqual(json.load(archive.extractfile("build-source.json")), linux["source"])
         result = release.validate_tag(None, self.root, build_only=True)
         self.assertEqual(result["gui_clients"], "true")
 
@@ -583,12 +603,111 @@ class ReleaseTests(unittest.TestCase):
 
     def test_gui_native_test_logs_cannot_claim_a_zero_test_run(self):
         for platform, text in (
+            ("linux", ""), ("linux", "test result: ok. 0 passed; 0 failed;\n"),
+            ("linux", "test result: ok. 1 passed; 0 failed;\ntest result: FAILED. 0 passed; 1 failed;\n"),
             ("windows", ""), ("windows", "test result: ok. 0 passed; 0 failed;\n"),
             ("ios", ""), ("ios", "Executed 0 tests, with 0 failures\n"),
             ("ios", "Executed 3 tests, with 1 failures\n"),
         ):
             with self.subTest(platform=platform, text=text), self.assertRaises(ValueError):
                 release.validate_gui_test_log(platform, text)
+
+    def test_linux_gui_packaging_requires_same_release_source_and_a_successful_native_window(self):
+        evidence, binary = self.gui_fixtures(package=False)["linux"]
+        path = evidence / "window.json"
+        original = path.read_bytes()
+        for change in (
+            {"source_commit": "0" * 40}, {"profile": "debug"}, {"target": "aarch64-unknown-linux-gnu"},
+            {"mapped": False}, {"mapped": 1}, {"exit_code": 1}, {"exit_code": False},
+            {"elapsed_ms": 9999}, {"elapsed_ms": 30000}, {"width": 0}, {"height": True},
+            {"backend": "x11-software"}, {"renderer": ""}, {"binary_sha256": ""},
+        ):
+            with self.subTest(change=change):
+                window = json.loads(original)
+                window.update(change)
+                path.write_text(json.dumps(window))
+                with self.assertRaisesRegex(ValueError, "native window receipt"):
+                    release.package_gui("linux", evidence, binary, self.root)
+        path.write_bytes(original)
+        for name in ("window.json", "window.log", "xwininfo.log", "renderer.log"):
+            with self.subTest(missing=name):
+                missing = evidence / name
+                data = missing.read_bytes()
+                missing.unlink()
+                with self.assertRaisesRegex(ValueError, "native window evidence"):
+                    release.package_gui("linux", evidence, binary, self.root)
+                missing.write_bytes(data)
+        self.assertFalse((self.root / "dist").exists())
+
+    def test_linux_gui_packaging_cannot_replace_the_window_tested_binary(self):
+        evidence, binary = self.gui_fixtures(package=False)["linux"]
+        original = binary.read_bytes()
+        binary.write_bytes(original + b"changed after window exit")
+        with self.assertRaisesRegex(ValueError, "changed after its native window check"):
+            release.package_gui("linux", evidence, binary, self.root)
+        wrong_arch = bytearray(original)
+        wrong_arch[18:20] = b"\xb7\0"  # AArch64 cannot be relabelled as this x86_64 release.
+        binary.write_bytes(wrong_arch)
+        with self.assertRaisesRegex(ValueError, "x86_64 ELF"):
+            release.package_gui("linux", evidence, binary, self.root)
+
+    def test_linux_gui_finalization_requires_window_receipt_and_all_evidence_hashes(self):
+        output = self.fixtures()
+        self.gui_fixtures()
+        self.stub_verified_crate()
+        path = output / release.gui_receipt_name("linux")
+        original = path.read_bytes()
+        for mutate in (
+            lambda row: row.pop("window"),
+            lambda row: row["window"].update(source_commit="0" * 40),
+            lambda row: row["window"].update(mapped=False),
+            lambda row: row["window"].update(exit_code=-9),
+            lambda row: row["evidence"].pop("window.json"),
+            lambda row: row["evidence"].pop("xwininfo.log"),
+            lambda row: row["evidence"].pop("renderer.log"),
+        ):
+            row = json.loads(original)
+            mutate(row)
+            path.write_text(json.dumps(row))
+            with self.assertRaisesRegex(ValueError, "native window"):
+                release.checksums(self.root)
+            path.write_bytes(original)
+        self.assertFalse((output / "release-manifest.json").exists())
+
+    def test_linux_gui_finalization_rechecks_executable_mode_payload_and_archived_source(self):
+        output = self.fixtures()
+        self.gui_fixtures()
+        self.stub_verified_crate()
+        path = output / release.gui_receipt_name("linux")
+        receipt = json.loads(path.read_text())
+        artifact = output / release.GUI_CLIENTS["linux"]["asset"]
+        original = artifact.read_bytes()
+        for change in ("mode", "payload", "source"):
+            with self.subTest(change=change):
+                with tarfile.open(fileobj=io.BytesIO(original), mode="r:gz") as before:
+                    with tarfile.open(artifact, "w:gz") as after:
+                        for member in before.getmembers():
+                            data = before.extractfile(member).read()
+                            if member.name == "ssmcp-desktop":
+                                if change == "mode":
+                                    member.mode = 0o644
+                                elif change == "payload":
+                                    data = data[:-1] + b"!"
+                            elif member.name == "build-source.json" and change == "source":
+                                source = json.loads(data)
+                                source["commit"] = "0" * 40
+                                data = json.dumps(source).encode()
+                            member.size = len(data)
+                            after.addfile(member, io.BytesIO(data))
+                # Even an internally consistent new outer checksum cannot replace
+                # the executable observed in the successful native window check.
+                checksum = release.digest(artifact)
+                (output / (artifact.name + ".sha256")).write_text(f"{checksum}  {artifact.name}\n")
+                receipt["asset"].update(sha256=checksum, bytes=artifact.stat().st_size)
+                path.write_text(json.dumps(receipt))
+                with self.assertRaisesRegex(ValueError, "native window|archived source proof"):
+                    release.checksums(self.root)
+        self.assertFalse((output / "release-manifest.json").exists())
 
     def test_incomplete_gui_source_cannot_silently_skip_the_release_gate(self):
         (self.root / "apps/ssmcp-android").mkdir(parents=True)
