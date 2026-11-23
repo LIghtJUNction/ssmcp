@@ -135,6 +135,7 @@ fn run(options: Options) -> Result<(), String> {
         })
         .transpose()?;
     let mut presented_frames = 0_u64;
+    let mut presented_size = None;
     loop {
         if options
             .exit_after
@@ -152,17 +153,22 @@ fn run(options: Options) -> Result<(), String> {
             revision = next_revision;
             dirty = true;
         }
+        // Native event coalescing can replace a resize notification with input.
+        // Compare actual dimensions independently so every new size is drawn.
+        let size = window.size();
+        dirty |= presented_size != Some(size);
         if dirty {
             if let Some(event) = &pending_event {
                 desktop.event(event);
             }
             ui.begin(pending_event.take());
-            let (width, height) = window.size();
+            let (width, height) = size;
             let mut canvas = window.begin(ui::BG);
             desktop.draw(&mut canvas, &mut ui, &handle, &snapshot, width, height);
             ui.end();
             drop(canvas);
             window.present();
+            presented_size = Some(size);
             presented_frames += 1;
             if first_frame_receipt.is_some() || frame_receipts.is_some() {
                 // A present-call receipt is not proof of visible pixels.

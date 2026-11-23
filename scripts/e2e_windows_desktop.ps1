@@ -275,6 +275,10 @@ public static class SsmcpWindowProbe {
             -not [SsmcpWindowProbe]::ClientToScreen($window, [ref]$clientOrigin)) {
             throw 'Could not map the owned client area to screen pixels.'
         }
+        $report.expected_client = [ordered]@{
+            width = $client.Right - $client.Left; height = $client.Bottom - $client.Top
+            screen_x = $clientOrigin.X; screen_y = $clientOrigin.Y
+        }
         # Geometry alone can precede the resize repaint. Wait for an actual
         # completed present of this client size, rather than capture its old frame.
         $renderClock = [Diagnostics.Stopwatch]::StartNew()
