@@ -170,6 +170,7 @@ fn render(role: &str, control_id: &str, cwd: &str, pool: Option<&Value>) -> Resu
         }
     });
     prompt.push_str("\nOn unexpected disconnect, try reconnecting: refresh `list` and schemas, verify the authorized workspace/control/pool link, and rejoin/bind your own fresh credentials if needed. Reconcile saved claims, commits and job outcomes before fresh assignments. Preserve `unknown`; never replay uncertain work or restart models.");
+    prompt.push_str("\nRead `ssmcp://recovery`: preserve the original task/checkpoint and make at most four read-only rediscovery attempts with 1/2/4/8-second backoff. Prefer a previously verified, authorized 007 on the same device; read its status/list serially and use guarded `ssmcp.007.recover` only for matching device/definition IDs. Never clear explicit stop/retirement or bypass revoked authorization. If recovery stays unavailable, report a blocked, resumable task, not completion. A timed-out recovery action is unknown and must not be replayed automatically.");
     Ok(prompt)
 }
 

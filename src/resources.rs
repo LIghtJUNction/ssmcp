@@ -15,6 +15,7 @@ pub const MAX_RESOURCE_BYTES: usize = 1024 * 1024;
 pub const MAX_URI_BYTES: usize = 8192;
 
 const GUIDE: &str = include_str!("../docs/code-mode.md");
+const RECOVERY: &str = include_str!("../docs/recovery.md");
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ResourceError {
@@ -117,6 +118,12 @@ pub async fn list(
             "Runtime limits".into(),
             "Current code_mode and resource budgets, supported backends and observation capabilities.",
             "application/json",
+        ),
+        descriptor(
+            "ssmcp://recovery".into(),
+            "Recover an interrupted control session".into(),
+            "Bounded rediscovery, verified 007 recovery, authorization and stop boundaries, and unknown outcome reconciliation.",
+            "text/markdown",
         ),
         descriptor(
             "ssmcp://collaboration".into(),
@@ -719,6 +726,7 @@ pub async fn read(
     }
     match base {
         "ssmcp://guide" => content(uri, "text/markdown", GUIDE.into()),
+        "ssmcp://recovery" => content(uri, "text/markdown", RECOVERY.into()),
         "ssmcp://limits" => json_content(uri, limits()),
         "ssmcp://collaboration" => content(
             uri,
@@ -792,6 +800,7 @@ mod tests {
         broker.disconnect_all().await;
         for uri in [
             "ssmcp://guide",
+            "ssmcp://recovery",
             "ssmcp://limits",
             "ssmcp://collaboration",
             "ssmcp://skill",
@@ -821,7 +830,7 @@ mod tests {
                 .iter()
                 .map(|page| page["resources"].as_array().unwrap().len())
                 .collect::<Vec<_>>(),
-            [32, 32, 32, 32, 32, 32, 2]
+            [32, 32, 32, 32, 32, 32, 3]
         );
         let all: Vec<_> = pages
             .iter()
@@ -829,7 +838,7 @@ mod tests {
             .map(|r| r["uri"].as_str().unwrap())
             .collect();
         let unique: std::collections::HashSet<_> = all.iter().collect();
-        assert_eq!(all.len(), 194);
+        assert_eq!(all.len(), 195);
         assert_eq!(all.len(), unique.len());
         broker.test_register("alice", &"a".repeat(64)).await;
         assert!(matches!(

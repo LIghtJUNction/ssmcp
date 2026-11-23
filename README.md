@@ -8,6 +8,8 @@
 
 ssmcp 把多个已授权的 Astra Pro 会话连接到你的开发机，围绕同一项目分工、交换进度、执行命令并汇总结果。命令和工具在你的开发环境中运行，所需结果与上下文通过已授权的会话传递。
 
+同一个账号可以同时连接多台设备，Agent 通过一个 MCP 端点选择具体设备和会话。**受控设备无需登录你的 AI 账号**：AI 应用持有 MCP 授权，设备持有自己的 SSMCP 授权；命令在被选中的设备上执行。CLI 面向专业开发者，适合脚本、服务管理和诊断；Windows 用户的日常连接与任务管理优先使用[桌面版](apps/ssmcp-desktop/README.md)。
+
 你可以让不同会话分别实现功能、检查改动和运行测试，通过成员身份和定向消息协作，把结果提交到同一个项目。[了解集群协作](docs/agent-collaboration.md)
 
 [演示视频](#演示视频) · [快速开始](#快速开始) · [本地与远程目标](docs/connection-contexts.md) · [会话操作](docs/client-input.md) · [工具与 Zuse CLI](docs/computer-use.md) · [编写自己的客户端](docs/client-extension.md) · [部署服务器](docs/deployment.md)
@@ -33,7 +35,11 @@ ssmcp 把多个已授权的 Astra Pro 会话连接到你的开发机，围绕同
 
 ## 快速开始
 
-### 1. 安装
+### 1. 选择客户端并安装
+
+Windows 用户推荐桌面版。桌面版复用 CLI 的会话和权限系统，提供连接、任务进度和按需展开的诊断界面。下载前核对[平台构建与发布状态](docs/clients.md)；源码和 CI 中的构建结果不表示所有平台已有正式发布包。
+
+需要命令行、自动化或后台服务的专业开发者可安装 CLI：
 
 Linux / macOS：
 
@@ -119,6 +125,78 @@ return await exec.run(clientId, {
 ```
 
 返回值包含任务 ID、运行状态、退出码与输出游标。等待时间到期后，任务可以继续运行；使用同一个 ID 读取或取消。大结果保留在有界内存中，通过返回的输出 ID 分页读取；容量不足或内容被裁剪时会明确标记。[命令接口](docs/commands.md) · [编排与输出](docs/session-control.md)
+
+## 一个 Agent 控制多台设备
+
+### 连接与地址
+
+`alice@relay.example.com` 表示中继上的账号，不限定只能有一台设备在线。在两台设备各自愿意开放的工作目录中运行，例如：
+
+```sh
+# 开发笔记本
+ssmcp alice@relay.example.com --name dev --title "本地开发"
+
+# 构建机器；--daemon 保存后台会话定义
+ssmcp alice@relay.example.com --name build --daemon
+```
+
+每台设备需要安装并启动 SSMCP，不需要安装或登录 AI 应用。可使用设备授权邀请，也可使用上文的显式 `--allow` 连接方式；这些授权由设备用户决定，不能从一个 AI 账号推导出所有机器的控制权限。账号登录、设备接入凭据和 AI 应用的 MCP OAuth 授权分别管理。
+
+当前源码为完成身份签名协商的账号连接返回以下地址信息；实际运行版本以 `list` 的字段和实时 schema 为准：
+
+| 字段 | 用途与生命周期 |
+| --- | --- |
+| `routing.device_id` | 服务器、经验证账号与安装签名密钥共同确定的设备身份；网络重连和主机改名不改变它 |
+| `routing.session_id` | 设备下的保存会话定义或当前前台进程；保存定义重启后保持，删除重建定义或重开前台进程会改变 |
+| `id` / `routing.connection_id` | 这一次在线连接的 ID；每次重连变化，工具调用必须使用当前值 |
+| `routing.alias` | 例如 `dev@laptop.local`，用于阅读；同名允许重复，需要完整 ID 消歧 |
+| `routing.alias_kind` | 固定为 `display_only`，明确标签的含义 |
+
+这里的 `.local` 标签不会自动注册 DNS 或 mDNS，也不表示能从互联网解析。真正的 `.local` mDNS 名称有链路本地语义；公网域名需另外配置。旧版、匿名或兼容连接可以继续使用当前连接 ID，但没有完成证明时不会伪造稳定设备身份。[地址语义与安全模型](docs/device-control-plane.md#三层身份)
+
+### 发现后逐设备调用
+
+只在 AI 应用中配置一次 `https://relay.example.com/mcp`。调用公开的 `list` 工具，查看当前授权范围内的 `clients`。需要重找某个已记录的设备和会话时，给 `list` 传入从先前结果取得的完整 `device_id`、`session_id`；这两个字段只过滤发现结果，不执行操作。
+
+选定两条具体连接后，先分别取得它们的工具 schema。各设备的操作系统、已安装工具和工作区可以不同：
+
+```javascript
+const targets = ["CURRENT_CLIENT_ID_A", "CURRENT_CLIENT_ID_B"];
+return await Promise.all(targets.map(id =>
+  tools.search(id, {name_prefix: "ssmcp.exec.", include_schemas: true})
+));
+```
+
+确认工具参数后，再对明确选中的 ID 操作。例如分别查看两台机器的项目状态：
+
+```javascript
+const targets = ["CURRENT_CLIENT_ID_A", "CURRENT_CLIENT_ID_B"];
+return await Promise.allSettled(targets.map(async id => ({
+  client_id: id,
+  result: await exec.run(id, {
+    command: ["git", "status", "--short"],
+    wait_ms: 5000
+  })
+})));
+```
+
+把示例占位符替换为此次 `list` 返回的真实 ID。产品不会按相同名字、账号或设备组自动广播命令；逐目标结果仍需分别检查。身份、会话 ACL、原生权限和在途调用边界会继续校验，知道设备 ID 不等于拥有操作权限。
+
+### 断线、离线和当前阶段
+
+重连后应先重新发现稳定设备／会话对应的当前连接，再读取原任务的可验证状态。旧连接 ID 不会自动转向新连接，命令超时也不能当作“没有执行”。保存任务 ID、worker claim、提交和输出游标；回执不确定时保持 `unknown`，先核实实际效果。
+
+有已授权的 007 服务时，Agent 先串行读取其状态和保存会话目录。新版本的 `ssmcp.007.recover` 仅恢复设备 ID 和定义 ID 都匹配、且未被明确停止的原定义；活动管理器只返回现状。旧版 007 缺少该能力、目标没有保存定义、权限被撤销或机器离线时，应保留检查点并报告阻塞。恢复连接不会恢复已结束进程的内存任务，也不会自动重放命令。[恢复协议](docs/recovery.md)
+
+| 阶段 | 当前范围 |
+| --- | --- |
+| P0 | 同账号多设备、签名设备身份、稳定保存会话 ID、单 MCP 端点发现和精确连接路由、受限离线目录、恢复目标核对 |
+| P1 · roadmap | 经认证加密的通用设备间直连、ICE/STUN 与必要的 TCP 路径、失败回退中继、保持设备身份的签名密钥轮换、迁移和 NAT 变化验收 |
+| P2 · roadmap | 设备组与搜索、持久目录、可选真实名称发现、更大规模与界面优化 |
+
+P0 的命令数据经过中继，当前传输标记为 `relay`。现有显式配对的 TCP 服务能力也不代表已经实现通用 ICE/P2P 数据平面；只有抓包与故障验证完成后才会声明相应直连能力。公网 IP 本身不保证路径可达。
+
+当前每个账号最多 128 条在线连接；最近会话目录最多 8192 项，离线记录最多保留到 broker 重启或断线后 24 小时，且仅所有者可见。安装签名密钥保存在本机私有账号目录；复制它会复制设备身份，删除它会改变设备 ID。登录凭据续期不等于签名密钥轮换。更完整的限制、信任边界、分阶段设计和验收条件见[多设备控制平面](docs/device-control-plane.md)。
 
 ## 终端就是工作会话
 

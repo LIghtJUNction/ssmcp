@@ -342,6 +342,8 @@ Queued cancellation prevents assignment. Cancellation of an assigned remote task
 
 A worker client disconnect makes unconfirmed assigned work `unknown`. Preserve that outcome and inspect any effects before retrying. Identical submission requests deduplicate within the same caller and connection; terminal results have bounded retention.
 
+An unexpected disconnect is a recovery attempt, not a completed task. Follow [`ssmcp://recovery`](recovery.md): preserve the exact claim and original request IDs; make bounded read-only rediscovery attempts; prefer a previously verified, authorized 007 on the target device; never clear explicit stop/retirement or bypass revoked authorization. Match device and saved-definition identities before a single guarded `ssmcp.007.recover`. A recovered connection cannot make an old pool generation or unknown effect replay-safe. If the target or 007 is unavailable, report the blocker and retained checkpoint, and remain resumable.
+
 A waiting external agent uses bounded `worker.wait` calls and continues waiting after idle timeouts. It does not occupy a human question dialog. Default worker pools impose no local model process or CPU/RAM quota on that external agent.
 
 ## Live content and process lifetime
