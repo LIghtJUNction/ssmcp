@@ -263,6 +263,14 @@ fn wait_outcome(outcome: crate::wire::wait_display::Outcome) -> &'static str {
     }
 }
 
+fn compact_wait_outcome(outcome: crate::wire::wait_display::Outcome) -> &'static str {
+    if outcome == crate::wire::wait_display::Outcome::ObservationStopped {
+        "Wait stopped"
+    } else {
+        wait_outcome(outcome)
+    }
+}
+
 #[derive(Clone)]
 struct WaitCard {
     key: String,
@@ -284,8 +292,10 @@ fn wait_card(entry: &Entry) -> Option<WaitCard> {
         .map(|ms| format!("/{}", wait_duration(ms)))
         .unwrap_or_default();
     let heading = format!(
-        "{} · {} · {} · {}{budget}",
+        "{} · {} · {}{budget} · {}",
         wait_mode(wait.mode),
+        compact_wait_outcome(wait.outcome),
+        wait_duration(entry.elapsed_ms),
         if wait.targets.len() > 1 {
             format!(
                 "{} +{}",
@@ -294,11 +304,10 @@ fn wait_card(entry: &Entry) -> Option<WaitCard> {
             )
         } else {
             panel::fit(&panel::safe_text(target), 22)
-        },
-        wait_outcome(wait.outcome),
-        wait_duration(entry.elapsed_ms)
+        }
     );
     let mut detail = vec![
+        format!("Outcome: {}", wait_outcome(wait.outcome)),
         match wait.mode {
             Mode::Any => "ANY: at least one target must report ready.",
             Mode::All if wait.operation == "ssmcp.worker.wait_for" => {
@@ -358,14 +367,14 @@ fn wait_card(entry: &Entry) -> Option<WaitCard> {
             .map(|episode| format!(" · episode {episode}"))
             .unwrap_or_default()
     ));
-    if let Some(attribution) = &entry.attribution {
-        if let Some(agent) = &attribution.agent {
-            detail.push(format!(
-                "Observed by {} @ {}",
-                panel::safe_text(&agent.name),
-                panel::safe_text(&attribution.account.login)
-            ));
-        }
+    if let Some(attribution) = &entry.attribution
+        && let Some(agent) = &attribution.agent
+    {
+        detail.push(format!(
+            "Observed by {} @ {}",
+            panel::safe_text(&agent.name),
+            panel::safe_text(&attribution.account.login)
+        ));
     }
     if entry.cancellable {
         detail.push(format!(

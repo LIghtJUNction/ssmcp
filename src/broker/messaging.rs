@@ -139,8 +139,7 @@ impl Broker {
         sender: &Sender,
         recipient: &Recipient,
         receipt: &messages::Receipt,
-        kind: &str,
-        receiving_agent: Option<&str>,
+        (kind, receiving_agent): (&str, Option<&str>),
     ) {
         let sender_id = sender.agent.as_ref().map(|agent| agent.id.as_str());
         let recipient_id = recipient.agent_id.as_deref().or(receiving_agent);
@@ -183,8 +182,7 @@ impl Broker {
                 actor,
                 kind,
                 data.clone(),
-                Some(audience),
-                Some(&key),
+                (Some(audience), Some(&key)),
             );
         }
     }
@@ -344,8 +342,7 @@ impl Broker {
                     &message.sender,
                     &message.recipient,
                     &message.receipt,
-                    "message.received",
-                    agent_id,
+                    ("message.received", agent_id),
                 );
             }
         }
@@ -600,8 +597,7 @@ impl Broker {
                         &sender,
                         &recipient,
                         &receipt,
-                        "message.sent",
-                        None,
+                        ("message.sent", None),
                     );
                 }
                 reply.receipts.push(receipt);
@@ -658,8 +654,10 @@ impl Broker {
                             &message.sender,
                             &message.recipient,
                             &message.receipt,
-                            "message.received",
-                            sender.agent.as_ref().map(|agent| agent.id.as_str()),
+                            (
+                                "message.received",
+                                sender.agent.as_ref().map(|agent| agent.id.as_str()),
+                            ),
                         );
                     }
                 }
@@ -689,8 +687,10 @@ impl Broker {
                         &proof.sender,
                         &recipient,
                         &receipt,
-                        "message.acknowledged",
-                        sender.agent.as_ref().map(|agent| agent.id.as_str()),
+                        (
+                            "message.acknowledged",
+                            sender.agent.as_ref().map(|agent| agent.id.as_str()),
+                        ),
                     );
                 }
                 reply.receipts.push(receipt);

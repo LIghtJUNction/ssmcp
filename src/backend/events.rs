@@ -188,6 +188,7 @@ enum Presentation {
     Native,
     Control,
     LocalDiscovery,
+    LiveTerminalBytes,
 }
 
 #[cfg(all(test, unix))]
@@ -278,6 +279,16 @@ impl EventLog {
         self.push_inner(event, Presentation::Native, source, None);
     }
 
+    /// Live PTYs already render original bytes through the terminal path.
+    /// Keep the native event and its provenance without a second rendering.
+    pub(crate) fn push_live_terminal_bytes(
+        &self,
+        event: Value,
+        source: crate::runtime::call_scope::Source,
+    ) {
+        self.push_inner(event, Presentation::LiveTerminalBytes, source, None);
+    }
+
     /// Exact native job instants travel beside the redacted JSON. Neither
     /// provider JSON nor attach replay can manufacture this local projection.
     pub(crate) fn push_execution(
@@ -343,10 +354,16 @@ impl EventLog {
             if let Some(sink) = self.projection.lock().unwrap().as_ref() {
                 let _ = sink.try_send((event.clone(), source.clone()));
             }
-            if presentation == Presentation::Control {
-                crate::client::render::trusted_event(&self.label, &event);
-            } else {
-                crate::client::render::scoped_timed_event(&self.label, &event, source, timing);
+            match presentation {
+                Presentation::LiveTerminalBytes => {
+                    crate::session::attach::record_scoped_event(
+                        &self.label,
+                        &event,
+                        &source.display(),
+                    );
+                }
+                Presentation::Control => crate::client::render::trusted_event(&self.label, &event),
+                _ => crate::client::render::scoped_timed_event(&self.label, &event, source, timing),
             }
         }
         // Codex command streaming carries bytes as base64. Keep the original event

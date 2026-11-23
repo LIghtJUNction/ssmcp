@@ -37,7 +37,7 @@ LEGACY = "2025-11-25"
 PUBLIC_URL = "https://ssmcp.example"
 PROTOCOL_META = "io.modelcontextprotocol/protocolVersion"
 CAPABILITIES_META = "io.modelcontextprotocol/clientCapabilities"
-PUBLIC_TOOLS = frozenset({"list", "code_mode", "collab", "await", "messages", "link"})
+PUBLIC_TOOLS = frozenset({"list", "code_mode", "collab", "await", "events", "messages", "link"})
 
 SHELL_TOOLS = frozenset({
     "terminal.read", "terminal.write", "terminal.resize", "terminal.status",
@@ -58,7 +58,8 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.output.read", "ssmcp.output.stat", "ssmcp.output.cleanup",
     "ssmcp.time.now", "ssmcp.time.wait",
     "ssmcp.exec.start", "ssmcp.exec.list", "ssmcp.exec.status", "ssmcp.exec.wait",
-    "ssmcp.exec.read", "ssmcp.exec.write", "ssmcp.exec.cancel", "ssmcp.exec.forget", "ssmcp.exec.events",
+    "ssmcp.exec.read", "ssmcp.exec.write", "ssmcp.exec.resize", "ssmcp.exec.cancel",
+    "ssmcp.exec.forget", "ssmcp.exec.events",
     "ssmcp.harnesses.list", "ssmcp.harnesses.load", "ssmcp.audit.events",
     "ssmcp.plugins.list", "ssmcp.plugins.load", "ssmcp.plugins.unload",
     "ssmcp.ui.listener",
@@ -851,17 +852,20 @@ class Harness:
         self.check(self.call("terminal.status")["running"], "runtime failures leave the original client usable")
         # Local observation is independent of terminal.read and PTY echo settings.
         self.check(credentials.get("type") == "shell", "shell is the default backend")
-        self.call("terminal.write", {"data": "stty -echo; printf '%s%s\\n' 'SSMCP_' 'LIVE_OUTPUT'\n"})
+        self.call("terminal.write", {"data": "stty -echo && printf '%s%s\\n' 'SSMCP_' 'LIVE_OUTPUT'\n"})
         log_path = self.directory / "client.log"
         wait_for(lambda: "SSMCP_LIVE_OUTPUT" in log_path.read_text(errors="replace"), description="live shell output on local stderr")
         self.check(True, "local stderr receives shell output without any MCP read")
         self.call("terminal.write", {"data": "printf '%s%s\\n' 'SSMCP_' 'ECHO_DISABLED'; stty echo\n"})
         wait_for(lambda: "SSMCP_ECHO_DISABLED" in log_path.read_text(errors="replace"), description="output with PTY echo disabled")
         transcript = log_path.read_text(errors="replace")
-        self.check(transcript.count("SSMCP_ECHO_DISABLED") == 1
-                   and "'ECHO_DISABLED'; stty echo" not in transcript
-                   and "[ssmcp shell input]" not in transcript,
-                   "local transcript shows PTY output once and respects disabled input echo")
+        count = transcript.count("SSMCP_ECHO_DISABLED")
+        echoed = "'ECHO_DISABLED'; stty echo" in transcript
+        synthetic = "[ssmcp shell input]" in transcript
+        evidence = f"count={count}, echoed={echoed}, synthetic_input_tag={synthetic}"
+        self.check(count == 1, f"local transcript shows PTY output once: {evidence}")
+        self.check(not echoed, f"local transcript respects disabled input echo: {evidence}")
+        self.check(not synthetic, f"local transcript omits synthetic input tags: {evidence}")
         self.call("terminal.resize", {"rows": 37, "cols": 91})
         self.call("terminal.write", {"data": "stty size; tty; printf '%s%s:%s\\n' 'SSMCP_' 'SHELL' \"$$\"\n"})
         match, cursor, output = self.read_until(r"[\r\n]SSMCP_SHELL:(\d+)\r?\n")

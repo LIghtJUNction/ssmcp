@@ -347,6 +347,8 @@ fn start_event_wait(fixture: &Fixture, arguments: Value) -> JoinHandle<Value> {
 #[tokio::test]
 async fn standalone_event_wait_displays_only_authorized_conditions_and_actual_outcomes() {
     let fixture = Fixture::with_timing(true).await;
+    fixture.publish_summary_requirement();
+    let message_id = fixture.send_message(0).await;
     let subscription = event_request(
         &fixture,
         json!({"action":"subscribe","request_id":"display_events",
@@ -354,7 +356,6 @@ async fn standalone_event_wait_displays_only_authorized_conditions_and_actual_ou
     )
     .await;
     let subscription_id = subscription["subscription_id"].as_str().unwrap();
-    let calls = fixture.native.lock().unwrap().calls.clone();
     let waiting = start_event_wait(
         &fixture,
         json!({"action":"wait","subscription_id":subscription_id,"wait_ms":500}),
@@ -412,7 +413,20 @@ async fn standalone_event_wait_displays_only_authorized_conditions_and_actual_ou
     ] {
         assert!(!encoded.contains(private));
     }
-    assert_eq!(fixture.native.lock().unwrap().calls, calls);
+    fixture.assert_summary_observation_did_not_consume_questions();
+    assert_eq!(fixture.message_status(&message_id).await, "queued");
+    assert!(
+        fixture
+            .native
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .all(|name| matches!(
+                name.as_str(),
+                "ssmcp.client.capabilities" | "ssmcp.worker.events"
+            ))
+    );
     let before = fixture.native.lock().unwrap().display_frames.len();
     let denied = crate::http::events_tool::dispatch(
         fixture.broker.clone(),

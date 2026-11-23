@@ -360,8 +360,7 @@ impl Session {
                     serde_json::json!({"message_id":message.id,"revision":message.revision,
                         "target":message.target,"queue_revision":snapshot.revision,
                         "observation":if seed.is_some(){"queued_snapshot"}else{"queue_changed"}}),
-                    Some(audience),
-                    Some(&key),
+                    (Some(audience), Some(&key)),
                 );
             }
         }
@@ -1110,7 +1109,7 @@ impl Broker {
             self.native_messages.close_connection(session);
             session.collaboration.close();
             session.events.close_client(session.client_id());
-            self.worker_events.close_connection(&session);
+            self.worker_events.close_connection(session);
             session.steering.close();
             session.disconnect.notify_one();
         }

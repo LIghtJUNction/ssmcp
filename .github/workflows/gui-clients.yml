@@ -668,7 +668,7 @@ jobs:
           set -euo pipefail
           sdkmanager="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           "$sdkmanager" --licenses < <(printf 'y\n%.0s' {1..100}) > "$ANDROID_EVIDENCE_DIR/licenses.log"
-          "$sdkmanager" --install 'cmdline-tools;16.0' 'platforms;android-35' \
+          "$sdkmanager" --install 'platform-tools' 'cmdline-tools;16.0' 'platforms;android-35' \
             'build-tools;35.0.0' 'system-images;android-35;google_apis;x86_64' \
             2>&1 | tee "$ANDROID_EVIDENCE_DIR/sdk-install.log"
           # SDK Manager verifies its archive metadata. Retain the resolved package
@@ -687,6 +687,9 @@ jobs:
                   output.write(f"{directory} sha256={hashlib.sha256(data).hexdigest()}\n")
                   output.write(data.decode("utf-8") + "\n")
           PY
+          export PATH="$ANDROID_SDK_ROOT/platform-tools:$PATH"
+          printf '%s\n' "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          command -v adb | tee "$ANDROID_EVIDENCE_DIR/adb-path.log"
           gradle --version 2>&1 | tee "$ANDROID_EVIDENCE_DIR/gradle-version.log"
           adb version 2>&1 | tee "$ANDROID_EVIDENCE_DIR/adb-version.log"
 
