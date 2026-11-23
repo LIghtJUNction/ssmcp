@@ -595,17 +595,30 @@ class Unified(SessionFeatures):
         self.oauth_login(credentials)
         self.sibling_token = self.secret
         self.secret, self.oauth_grant = token, grant
-        self.check(self.call("terminal.status", client_id=self.sibling_id, secret=self.sibling_token)["running"],
+        sibling_terminal = self.call("terminal.status", client_id=self.sibling_id, secret=self.sibling_token)
+        self.check(sibling_terminal["running"] and sibling_terminal["job_id"] == "main",
                    "the sibling is authorized and online before testing its per-client resource boundary")
         denied = {}
         for tool in ("ssmcp.output.read", "ssmcp.output.stat"):
             denied[tool] = self.rejected(tool, {"id": self.retained_artifact["id"]}, client_id=self.sibling_id, secret=self.sibling_token)
         denied["job"] = self.rejected("ssmcp.exec.status", {"job_id": self.concurrent_jobs[0]["job_id"]}, client_id=self.sibling_id, secret=self.sibling_token)
-        self.check(not self.call("ssmcp.exec.list", client_id=self.sibling_id, secret=self.sibling_token)["jobs"],
-                   "a separate client cannot list or address the first client's tasks")
+        jobs = self.call("ssmcp.exec.list", client_id=self.sibling_id, secret=self.sibling_token)["jobs"]
+        self.check(len(jobs) == 1 and jobs[0]["job_id"] == "main" and jobs[0]["mode"] == "pty"
+                   and jobs[0]["pid"] == sibling_terminal["pid"] and jobs[0]["running"],
+                   "a separate client lists only its own running main PTY and cannot address the first client's tasks")
         for tool in ("ssmcp.exec.events", "ssmcp.fs.events", "ssmcp.audit.events"):
             rows, _ = self.events(tool, client_id=self.sibling_id, secret=self.sibling_token)
             isolated = not rows
+            if tool == "ssmcp.exec.events":
+                events = [row["event"] for row in rows]
+                starts = [event for event in events if event["type"] == "exec.started"]
+                isolated = (
+                    len(starts) == 1
+                    and starts[0]["pid"] == sibling_terminal["pid"]
+                    and starts[0]["cwd"] == str(sibling_workspace.resolve())
+                    and all(event["job_id"] == "main"
+                            and event["type"] in {"exec.started", "exec.stdout"} for event in events)
+                )
             if tool == "ssmcp.audit.events":
                 self.save("sibling-audit-events.jsonl", rows, jsonl=True)
                 # Every code-mode event must still belong to this sibling's run.
