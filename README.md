@@ -87,7 +87,8 @@ ssmcp whoami    # 查看当前账号
 | `list` | 发现当前身份可访问的设备与客户端工具目录 |
 | `code_mode` | 用 JavaScript 组合原生调用，安排顺序、并发和结果读取 |
 | `collab` | 同一会话中的成员身份、定向消息、广播与确认 |
-| `await` | 等待执行任务、成员状态或消息、用户输入，不占用 JavaScript 运行槽 |
+| `events` | 订阅事件、显式确认游标、等待状态变化，并配置主控等待建议 |
+| `await` | 等待事件、执行任务、成员状态或消息、用户输入，不占用 JavaScript 运行槽 |
 | `messages` | 客户端与线程之间的定向消息、收件箱和确认 |
 | `link` | 为已授权客户端中的图片创建短期、单次下载链接 |
 
@@ -155,8 +156,6 @@ ssmcp context use here
 | 运行本地命令 | `!pwd`、`!cargo test`；输出与退出码回到会话 |
 | 查看任务 | `/tasks`；`/tasks cancel JOB_ID` 停止指定命令任务 |
 | 回答问题 | **Shift + ↑** 打开待答问题，保留普通草稿 |
-| 邀请协作者 | `/invite` 生成主 Agent 说明；`/invite worker` 生成关联 worker 池的接入说明 |
-| 管理 worker 席位 | `/worker ls` 查看状态；`/worker +N`、`/worker -N` 调整席位数 |
 | 查看原生工具 | `/pi`、`/cc`、`/codex` 列出真实目录；`TOOL {...}` 显式调用 |
 | 浏览工具输出 | 默认显示状态与最多两行已脱敏结果；点击 `Click expand` 或选中后按 Enter 展开 |
 | 查看成员事件 | 在成员列表右键点击进程或线程，查看当前进程保留的对应事件；Esc 返回 |
@@ -176,11 +175,47 @@ Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重
 
 ### 主窗口与 worker 分工
 
-在交互终端运行 `ssmcp --worker 3`，主窗口保留普通聊天输入，并打开一个关联的 worker 监控窗口。三个席位初始为离线；外部 Agent 在对应的 worker 连接登记 `role: "worker"`，调用 `ssmcp.worker.wait` 等待任务，完成后提交回执并继续等待。启动席位不会自动启动模型。
+在项目目录的交互终端启动主聊天和关联的 worker 监控窗口：
 
-在主窗口输入 `/invite` 获取主 Agent 的协作说明，输入 `/invite worker` 获取指向关联任务池的 worker 说明。说明可在本地面板阅读，并尝试复制到剪贴板；已登记人数达到席位数时，worker 邀请会提示满员。用 `/worker ls` 查看实际状态，或用 `/worker +N`、`/worker -N` 调整席位数。退出或重载主窗口会清理它启动的 worker 窗口；单独关闭监控窗口后，主聊天仍可使用。[Worker 接入、任务回执与窗口生命周期](docs/workers.md)
+~~~sh
+ssmcp --worker 3
+~~~
 
-已绑定的协调 Agent 可用 `ssmcp.worker.wait_available` 读取容量，或等待最多 5 秒观察容量变化。返回值区分实际空闲 worker、离线席位和等待退役的席位；可接收排队任务不代表已有空闲 worker。该接口只观察任务池，不领取人的输入或启动模型。[容量观察与游标](docs/workers.md#observe-capacity-changes)
+这会创建三个初始离线的席位。默认 worker 是外部 Agent，继续使用它自己的应用和模型；SSMCP 提供任务队列、工具与回执，不启动模型。主窗口保留聊天输入，worker 窗口显示实际任务状态和日志。
+
+在主窗口按需使用以下命令：
+
+| 命令 | 作用 |
+| --- | --- |
+| `/invite` | 生成主协调者的接入说明 |
+| `/invite worker` | 生成指向关联池的外部 worker 说明 |
+| `/worker ls` | 查看席位、注册人数、工作中、待命与离线数量 |
+| `/worker +2` | 增加两个离线席位；尚无池时创建关联窗口 |
+| `/worker -1` | 请求减少一个席位，等待正在执行的任务和退役确认 |
+
+把邀请说明交给对应的 Agent。Worker 在池连接中用 `collab.join` 登记 `role: "worker"`，绑定自己的私有凭据，再调用 `ssmcp.worker.wait` 注册席位并领取任务。`registered_workers` 是已注册 worker 数，`working` 是任务执行中，`standby`／`idle` 才表示待命容量；创建席位或复制邀请不会增加待命人数。
+
+协调者派发任务后，worker 保留完整 claim，用 `ssmcp.worker.complete` 报告实际结果，再用新请求 ID 等待下一项任务；等待重试复用原 ID。取消请求不会直接释放执行中的席位，断线造成的 `unknown` 结果也不能自动重放。邀请、缩容、主窗口退出或重载的完整流程见 [Worker 指南](docs/workers.md)。
+
+### 主控何时等待
+
+Code Mode 回复末尾的提示词 hook 根据真实关联池状态，向身份、协调角色和权限均通过检查的主控提供建议。提示有节流和长度上限：有待命 worker 时提示分工；没有独立工作可继续时，建议等待 `user.input_available`、`worker.completed`、`worker.idle` 和 `worker.progress`。这段建议不会自动派发任务或启动模型。
+
+使用已取得的控制会话 ID 和该会话自己的凭据，修改当前成员的等待建议：
+
+~~~javascript
+await collab.bind(controlId, controlCredentials);
+return await events.policy(controlId, {
+  patch: {
+    enabled: true,
+    window_ms: 55000,
+    kinds: ["user.input_available", "worker.completed", "worker.idle", "worker.progress"],
+    strategy: "先完成独立工作，空闲时再等待用户输入和 worker 事件。"
+  }
+});
+~~~
+
+`enabled`、`window_ms`、`kinds` 和 `strategy` 可调整；`strategy` 是建议文本。长等待使用公开 `await` 或 `events` 工具，默认且最长为 55 秒；JavaScript 内的 `events.wait` 默认且最多等待 1 秒。跨窗口保留 `wait_id`，处理事件后分别确认事件与等待结果游标；输入事件只负责唤醒，正文仍通过原输入通道领取。[订阅、绑定与等待示例](docs/events.md) · [JavaScript 短等待](docs/code-mode.md#events)
 
 ### 从命令行连接对话与传递结果
 
@@ -257,13 +292,15 @@ ssmcp 默认启用命令、文件、会话和 Zuse CLI 管理工具，不要求�
 
 ### 项目与全局工具仓库
 
-`code_mode` 的 JavaScript helper 可以在本地 Git 仓库中维护。客户端按“官方 → 可信 RC 中的显式 overrides → 全局 → 项目”加载，同名导出由后者覆盖，项目 helper 的优先级最高。
+[ssmcp-tools](https://github.com/LIghtJUNction/ssmcp-tools) 提供 Code Mode 的官方 JavaScript helper；项目和全局 Git 仓库可以维护自己的编排函数。加载顺序为 **官方 → 可信 RC 中按序列出的 overrides → 已启用全局 → 已登记项目**，后加载的同名导出覆盖前者。
 
-| 来源 | 路径 | 启用方式 |
+| 来源 | 路径 | 启用条件 |
 | --- | --- | --- |
-| 项目 | 当前工作区的 `./.ssmcp/tools/` | 在可信 RC 中登记这个规范化的绝对工作区路径 |
-| 全局 | `~/.ssmcp/tool/`，注意单数 `tool` | 在可信 RC 中启用 `tools.global` |
-| 官方 | `$XDG_DATA_HOME/ssmcp/tools/official`，默认 `~/.local/share/ssmcp/tools/official` | 使用客户端的官方源码 |
+| 项目 | 当前工作区的 `./.ssmcp/tools/` | 可信 RC 的 `tools.projects` 精确登记规范化后的工作区绝对路径 |
+| 全局 | `~/.ssmcp/tools/` | 可信 RC 中 `tools.global = true` |
+| 官方 | `$XDG_DATA_HOME/ssmcp/tools/official`，默认 `~/.local/share/ssmcp/tools/official` | 使用所选客户端的官方源码 |
+
+在要登记的项目目录执行：
 
 ~~~sh
 ssmcp tools paths
@@ -271,9 +308,20 @@ ssmcp tools init project --git
 ssmcp tools status
 ~~~
 
-`paths` 只查询位置。`init` 离线创建工厂、manifest 和 README，并明确登记来源；`--git` 创建独立本地仓库，不自动提交或连接远端。全局初始化使用 `ssmcp tools init global --git`；已有源码用 `enable project|global` 登记，`disable project|global` 停用并保留文件。普通 checkout 中出现文件不会自动启用；已启用来源损坏时调用明确失败。每次新调用的外层 `tool_sources` 回执给出实际路径、SHA-256 和 Git 状态。
+`paths` 只查询位置。`init` 离线创建 helper 工厂、manifest 和 README，并登记来源；`--git` 初始化独立 Git 仓库，不自动提交或连接远端。全局仓库用 `ssmcp tools init global --git`。已有源码用 `enable project|global` 登记，`disable project|global` 停用并保留文件。目录存在、克隆完成或父目录已登记，都不等于当前项目已启用。
 
-Dreaming 可以使用已有的执行、文件和 Git 操作维护这些工具仓库与工作流内容，检查后在新调用中验证实际源码摘要。初始化本身不会启动模型或调度器。[工具仓库、可信配置与维护流程](docs/tool-repositories.md) · [code_mode 源码回执](docs/code-mode.md#find-and-iterate-tool-implementations)
+维护本地 helper 时，在 MCP `code_mode` 参数中显式选择其客户端：
+
+~~~json
+{
+  "tool_client_id": "CLIENT_ID_FROM_LIST",
+  "code": "return 'sources loaded';"
+}
+~~~
+
+检查这次调用外层的 `structuredContent.tool_sources`：它报告实际加载的层、路径、SHA-256 和 Git HEAD／dirty 状态。各仓库独立提交、测试和管理 Git 历史；修改 JavaScript 后用同一 `tool_client_id` 发起新调用即可核对加载结果。新增底层原语仍需要支持它的 CLI／中继版本，helper 覆盖不改变原生权限、身份或参数校验。
+
+`ssmcp tools check` 和 `ssmcp tools update` 只管理官方仓库，项目与全局仓库由各自的 Git 工作流维护。Dreaming 也可使用已有执行、文件和 Git 操作维护这些工作流；初始化本身不创建模型或调度器。[完整命令、可信配置与覆盖规则](docs/tool-repositories.md) · [源码选择与回执](docs/code-mode.md#find-and-iterate-tool-implementations)
 
 其他客户端的源码入口与各端验收范围见[客户端](docs/clients.md)；HTTP 接入与配对协议见[GUI 网关](docs/gui-gateway.md)。
 
