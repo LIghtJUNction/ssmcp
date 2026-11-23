@@ -1414,52 +1414,6 @@ mod managed_file_integration_tests {
     }
 
     #[tokio::test]
-    async fn safety_rejects_policy_writes_before_creating_parents() {
-        let scratch = Scratch::new();
-        let workspace = scratch.workspace();
-        let decision = workspace
-            .perform(
-                "ssmcp.fs.write_text",
-                json!({
-                    "path":"./.ssmcp/safety/rules.toml",
-                    "text":"synthetic-sensitive-text",
-                    "create_parents":true
-                }),
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(decision, "native file mutation blocked by safety policy");
-        assert!(!scratch.0.join(".ssmcp/safety").exists());
-        let page = workspace
-            .perform("ssmcp.fs.events", json!({"stream":"safety"}))
-            .await
-            .unwrap();
-        let entries = page["events"].as_array().unwrap();
-        assert_eq!(entries.len(), 1);
-        let event = &entries[0]["event"];
-        assert_eq!(event["type"], "ssmcp.safety.decision");
-        assert_eq!(event["decision"], "require_approval");
-        assert_eq!(event["outcome"], "blocked");
-        let encoded = event.to_string();
-        assert!(!encoded.contains("synthetic-sensitive-text"));
-        assert!(!encoded.contains("rules.toml"));
-
-        workspace
-            .perform(
-                "ssmcp.fs.write_text",
-                json!({
-                    "path":"allowed.txt", "text":"allowed"
-                }),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            std::fs::read_to_string(scratch.0.join("allowed.txt")).unwrap(),
-            "allowed"
-        );
-    }
-
-    #[tokio::test]
     async fn native_writes_record_creation_and_only_explicit_temporary_files_expire() {
         let scratch = Scratch::new();
         let workspace = scratch.workspace();

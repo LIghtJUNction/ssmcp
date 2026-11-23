@@ -33,7 +33,7 @@ impl From<Action> for Decision {
 #[cfg(target_os = "linux")]
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Baseline {
+struct Baseline {
     #[serde(default)]
     project_rules: bool,
     #[serde(default)]
@@ -43,7 +43,7 @@ pub(super) struct Baseline {
 #[cfg(target_os = "linux")]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Project {
+struct Project {
     #[serde(default)]
     operations: BTreeMap<String, Action>,
 }
@@ -62,6 +62,14 @@ impl Rules {
             .expect("native mutation");
         [self.baseline[index], self.project[index]]
     }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn baseline_only(self) -> Self {
+        Self {
+            project: [None; OPERATIONS.len()],
+            ..self
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -74,7 +82,15 @@ fn decisions(input: BTreeMap<String, Action>) -> Result<[Option<Decision>; OPERA
     Ok(result)
 }
 
-#[derive(Clone, Copy, Debug)]
+/// A valid user baseline is still evidence when a subordinate project fails.
+/// This never authorizes a mutation: every load error publishes deny_all.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct LoadError {
+    pub(super) baseline: Option<Rules>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::workspace) struct Snapshot {
     pub(super) rules: Rules,
     pub(super) revision: u64,
@@ -96,10 +112,11 @@ impl Default for Snapshot {
 #[cfg(target_os = "linux")]
 #[derive(Default)]
 struct State {
-    active: Option<Rules>,
-    revision: u64,
+    // Only a complete, successful load latches activation. A missing baseline
+    // after activation cannot silently remove a user's previous restrictions.
+    last_valid: Option<Rules>,
+    snapshot: Snapshot,
     next_check: Option<Instant>,
-    failed: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -113,35 +130,45 @@ impl Store {
     pub(super) fn refresh(
         &self,
         now: Instant,
-        load: impl FnOnce() -> Result<Option<Rules>, ()>,
+        load: impl FnOnce() -> Result<Option<Rules>, LoadError>,
     ) -> Snapshot {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.next_check.is_none_or(|check| now >= check) {
             state.next_check = Some(now + Duration::from_secs(1));
-            match load() {
+            let mut next = match load() {
                 Ok(Some(rules)) => {
-                    if state.active != Some(rules) {
-                        state.revision = state.revision.saturating_add(1);
-                        state.active = Some(rules);
+                    state.last_valid = Some(rules);
+                    Snapshot {
+                        rules,
+                        state: "active",
+                        ..Snapshot::default()
                     }
-                    state.failed = false;
                 }
-                Ok(None) if state.active.is_none() && !state.failed => (),
-                Ok(None) | Err(()) => state.failed = true,
+                Ok(None) if state.last_valid.is_none() => Snapshot::default(),
+                Ok(None) => Snapshot {
+                    rules: state.last_valid.unwrap_or_default(),
+                    state: "active_unavailable",
+                    deny_all: true,
+                    ..Snapshot::default()
+                },
+                Err(error) => Snapshot {
+                    rules: error.baseline.or(state.last_valid).unwrap_or_default(),
+                    state: if state.last_valid.is_some() {
+                        "active_unavailable"
+                    } else {
+                        "configured_unavailable"
+                    },
+                    deny_all: true,
+                    ..Snapshot::default()
+                },
+            };
+            next.revision = state.snapshot.revision;
+            if next != state.snapshot {
+                next.revision = next.revision.saturating_add(1);
             }
+            state.snapshot = next;
         }
-        let status = match (state.active, state.failed) {
-            (Some(_), false) => "active",
-            (Some(_), true) => "retained_previous",
-            (None, false) => "builtin",
-            (None, true) => "configured_unavailable",
-        };
-        Snapshot {
-            rules: state.active.unwrap_or_default(),
-            revision: state.revision,
-            state: status,
-            deny_all: state.active.is_none() && state.failed,
-        }
+        state.snapshot
     }
 }
 
@@ -149,15 +176,19 @@ impl Store {
 pub(super) fn parse(
     baseline: &str,
     project: impl FnOnce() -> Result<String, ()>,
-) -> Result<Rules, ()> {
-    let baseline: Baseline = toml::from_str(baseline).map_err(|_| ())?;
+) -> Result<Rules, LoadError> {
+    let baseline: Baseline = toml::from_str(baseline).map_err(|_| LoadError::default())?;
     let mut rules = Rules {
-        baseline: decisions(baseline.operations)?,
+        baseline: decisions(baseline.operations).map_err(|_| LoadError::default())?,
         ..Rules::default()
     };
     if baseline.project_rules {
-        let project: Project = toml::from_str(&project()?).map_err(|_| ())?;
-        rules.project = decisions(project.operations)?;
+        let unavailable = LoadError {
+            baseline: Some(rules),
+        };
+        let project: Project =
+            toml::from_str(&project().map_err(|_| unavailable)?).map_err(|_| unavailable)?;
+        rules.project = decisions(project.operations).map_err(|_| unavailable)?;
     }
     Ok(rules)
 }

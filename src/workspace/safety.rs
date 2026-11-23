@@ -27,9 +27,6 @@ pub(super) fn operation(name: &str) -> Option<&'static str> {
 pub(super) fn authorize(operation: &'static str, args: &Value, snapshot: Snapshot) -> Verdict {
     let relative = args.get("path").and_then(Value::as_str);
     let decision = match relative {
-        Some(path) if valid_relative_path(path) && reserved_policy_path(path) => {
-            Decision::RequireApproval
-        }
         Some(path) if valid_relative_path(path) => Decision::Allow,
         _ => Decision::Deny,
     };
@@ -104,21 +101,6 @@ fn valid_relative_path(path: &str) -> bool {
     true
 }
 
-// This reserves the proposed project policy namespace from direct native tool
-// mutations. This is lexical classification, not a filesystem access control.
-fn reserved_policy_path(path: &str) -> bool {
-    let mut parts = Path::new(path).components().filter_map(|part| match part {
-        Component::Normal(name) => name.to_str(),
-        _ => None,
-    });
-    parts
-        .next()
-        .is_some_and(|part| part.eq_ignore_ascii_case(".ssmcp"))
-        && parts
-            .next()
-            .is_some_and(|part| part.eq_ignore_ascii_case("safety"))
-}
-
 pub(super) fn event(
     operation: &'static str,
     verdict: Verdict,
@@ -190,226 +172,19 @@ mod tests {
                     .to_string()
                     .contains("synthetic-secret")
             );
-            assert!(
-                authorize(
-                    operation,
-                    &json!({"path":"fixture/file"}),
-                    Snapshot::default()
-                )
-                .is_allowed()
-            );
+            for path in [
+                "fixture/file",
+                ".ssmcp/safety/rules.toml",
+                "./.ssmcp/safety",
+                ".SSMCP/SAFETY/rules.toml",
+            ] {
+                assert!(
+                    authorize(operation, &json!({"path":path}), Snapshot::default()).is_allowed()
+                );
+            }
         }
     }
 }
 
 #[cfg(all(test, target_os = "linux"))]
-mod rule_tests {
-    use super::*;
-    use std::{
-        fs,
-        os::unix::fs::symlink,
-        path::PathBuf,
-        time::{Duration, Instant},
-    };
-
-    const PROJECT_MODE: &str = "project_rules = true\n";
-    const OP: &str = "ssmcp.fs.write_text";
-
-    fn rule(action: &str) -> String {
-        format!("[operations]\n\"{OP}\" = \"{action}\"\n")
-    }
-
-    #[test]
-    fn actual_guard_matches_independent_decision_matrix() {
-        use Decision::{Allow, Deny, RequireApproval};
-        let names = ["allow", "require_approval", "deny"];
-        let reference = [
-            [Allow, RequireApproval, Deny],
-            [RequireApproval, RequireApproval, Deny],
-            [Deny, Deny, Deny],
-        ];
-        for (i, baseline) in names.into_iter().enumerate() {
-            for (j, project) in names.into_iter().enumerate() {
-                let baseline = format!("{PROJECT_MODE}{}", rule(baseline));
-                let rules = rules::parse(&baseline, || Ok(rule(project))).unwrap();
-                let snapshot = Snapshot {
-                    rules,
-                    ..Snapshot::default()
-                };
-                let allowed_path = authorize(OP, &json!({"path":"fixture"}), snapshot);
-                assert_eq!(allowed_path.decision, reference[i][j], "{i}, {j}");
-                assert_eq!(
-                    authorize(OP, &json!({"path":"../fixture"}), snapshot).decision,
-                    Deny
-                );
-            }
-        }
-    }
-
-    struct Scratch(PathBuf);
-
-    impl Scratch {
-        fn new() -> Self {
-            let mut token = [0u8; 8];
-            crate::platform::random_bytes(&mut token).unwrap();
-            let root = std::env::temp_dir().join(format!(
-                "ssmcp-safety-rules-{:016x}",
-                u64::from_ne_bytes(token)
-            ));
-            crate::platform::private_directory(&root).unwrap();
-            Self(root)
-        }
-
-        fn policy_dir(&self, key: &str) -> PathBuf {
-            let state = self.0.join(key);
-            let config = state.join(".ssmcp");
-            let policy = config.join("safety");
-            for dir in [&state, &config, &policy] {
-                crate::platform::private_directory(dir).unwrap();
-            }
-            policy
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[test]
-    #[ignore = "manual synthetic latency measurement"]
-    fn safety_latency_samples() {
-        use std::hint::black_box;
-
-        const WARMUP: usize = 1_000;
-        const SAMPLES: usize = 10_000;
-
-        fn measure(label: &str, mut attempt: impl FnMut()) {
-            for _ in 0..WARMUP {
-                attempt();
-            }
-            let mut times = Vec::with_capacity(SAMPLES);
-            for _ in 0..SAMPLES {
-                let start = Instant::now();
-                attempt();
-                times.push(start.elapsed().as_nanos());
-            }
-            times.sort_unstable();
-            println!(
-                "{label}: n={SAMPLES} p50={} ns p95={} ns",
-                times[SAMPLES / 2 - 1],
-                times[SAMPLES * 95 / 100 - 1]
-            );
-        }
-
-        let scratch = Scratch::new();
-        let workspace = super::super::Workspace::new(scratch.0.clone()).unwrap();
-        let rules = rules::parse(&rule("deny"), || unreachable!()).unwrap();
-        workspace
-            .root
-            .safety_rules
-            .refresh(Instant::now() + Duration::from_secs(60), || Ok(Some(rules)));
-        let arguments = json!({"path":"fixture","text":"synthetic"});
-        measure(
-            "SSMCP blocked native preflight + bounded memory audit",
-            || {
-                assert!(black_box(workspace.root.perform_audited(OP, arguments.clone())).is_err());
-            },
-        );
-
-        let rules = [
-            Rule::new(1, ActionKind::Tool, OP, Decision::Allow),
-            Rule::new(2, ActionKind::Tool, OP, Decision::Deny),
-            Rule::new(3, ActionKind::Tool, OP, Decision::Allow),
-        ];
-        let policy = Policy::new(1, &rules).unwrap();
-        let mut guard = Guard::new(
-            policy,
-            Context {
-                session: 1,
-                capabilities: 0,
-            },
-            Limits {
-                max_calls: u64::MAX,
-                max_payload_bytes: usize::MAX,
-            },
-        );
-        let request = Request::tool("fixture", OP, b"{}");
-        measure("zguard three exact rules, NoAudit, deny", || {
-            assert!(
-                !black_box(guard.authorize(black_box(request), 0, None, &mut NoAudit)).is_allowed()
-            );
-        });
-    }
-
-    #[test]
-    fn rule_sources_must_be_regular_files() {
-        use std::os::unix::ffi::OsStrExt;
-
-        let scratch = Scratch::new();
-        let baseline = scratch.policy_dir("home").join("baseline.toml");
-        let home = scratch.0.join("home");
-        let workspace = fs::File::open(&scratch.0).unwrap();
-        let name = std::ffi::CString::new(baseline.as_os_str().as_bytes()).unwrap();
-        // SAFETY: the fixture path is a valid C string in a private directory.
-        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
-        assert!(linux::load_at(&home, &workspace).is_err());
-        fs::remove_file(&baseline).unwrap();
-        fs::write(&baseline, rule("deny")).unwrap();
-        assert!(linux::load_at(&home, &workspace).unwrap().is_some());
-    }
-
-    #[tokio::test]
-    async fn trusted_reload_is_atomic_and_failed_cold_start_never_writes() {
-        let scratch = Scratch::new();
-        let baseline = scratch.policy_dir("home").join("baseline.toml");
-        let project = scratch.policy_dir("workspace").join("rules.toml");
-        let home = scratch.0.join("home");
-        let workspace_path = scratch.0.join("workspace");
-        let workspace = super::super::Workspace::new(workspace_path.clone()).unwrap();
-        let now = Instant::now();
-        let store = &workspace.root.safety_rules;
-        let load = || linux::load_at(&home, &workspace.root.directory);
-
-        fs::write(&project, rule("deny")).unwrap();
-        assert!(
-            load().unwrap().is_none(),
-            "workspace alone cannot activate rules"
-        );
-        fs::write(&baseline, PROJECT_MODE).unwrap();
-        fs::write(&project, "malformed!").unwrap();
-        let cold = store.refresh(now, load);
-        assert_eq!(cold.state, "configured_unavailable");
-        let args = || json!({"path":"nested/fixture", "text":"test", "create_parents":true});
-        assert!(workspace.perform(OP, args()).await.is_err());
-        assert!(!workspace_path.join("nested").exists());
-
-        fs::write(&project, rule("allow")).unwrap();
-        let active = store.refresh(now + Duration::from_secs(2), load);
-        assert_eq!((active.state, active.revision), ("active", 1));
-        workspace.perform(OP, args()).await.unwrap();
-        assert_eq!(
-            fs::read_to_string(workspace_path.join("nested/fixture")).unwrap(),
-            "test"
-        );
-
-        fs::write(&baseline, format!("{PROJECT_MODE}{}", rule("deny"))).unwrap();
-        fs::remove_file(&project).unwrap();
-        symlink(&baseline, &project).unwrap();
-        let retained = store.refresh(now + Duration::from_secs(4), load);
-        assert_eq!(
-            (retained.state, retained.revision),
-            ("retained_previous", 1)
-        );
-        assert!(authorize(OP, &args(), retained).is_allowed());
-
-        fs::remove_file(&project).unwrap();
-        fs::write(&project, rule("allow")).unwrap();
-        let denied = store.refresh(now + Duration::from_secs(6), load);
-        assert_eq!((denied.state, denied.revision), ("active", 2));
-        let untouched = json!({"path":"blocked/data", "text":"secret", "create_parents":true});
-        assert!(workspace.perform(OP, untouched).await.is_err());
-        assert!(!workspace_path.join("blocked").exists());
-    }
-}
+mod rule_tests;

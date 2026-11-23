@@ -1194,7 +1194,7 @@ mod tests {
         let operation = || Operation::CallTool {
             name: "ssmcp.fs.write_text".into(),
             arguments: json!({
-                "path":".ssmcp/safety/rules.toml",
+                "path":"../synthetic-private-target",
                 "text":"synthetic-private",
                 "create_parents":true
             }),
@@ -1205,13 +1205,12 @@ mod tests {
             .unwrap();
         assert_eq!(empty["events"], json!([]));
         assert!(runtime.perform(operation()).await.is_err());
-        assert!(!root.0.join(".ssmcp/safety").exists());
 
         let queue = attach::safety_at_directory(endpoint.clone(), None)
             .await
             .unwrap();
         let event = &queue["events"][0];
-        assert_eq!(event["decision"], "require_approval");
+        assert_eq!(event["decision"], "deny");
         assert!(!queue.to_string().contains("synthetic-private"));
         let id = event["id"].as_str().unwrap();
         assert_eq!(
