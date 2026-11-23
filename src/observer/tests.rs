@@ -1,10 +1,11 @@
 use super::*;
 
 fn fixture(count: usize) -> Arc<Pool> {
+    static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let directory = std::env::temp_dir().join(format!(
         "ssmcp-tty-unit-{}-{}",
         std::process::id(),
-        NEXT_CALL.fetch_add(1, Ordering::Relaxed)
+        NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
     ));
     crate::platform::private_directory(&directory).unwrap();
     let pool = Arc::new(Pool {

@@ -573,13 +573,8 @@ class Harness:
             raise AssertionError("invalid external fixture invocation record")
         return rows
 
-    def client_environment(self, label, *, harness=None, fixture=None, fixture_args=(), harnesses=()):
-        """Expose only shell utilities and the explicitly selected local fixture.
-
-        Production loads external providers only on explicit request. Never inherit
-        installed harnesses here: the tests must not start a real model account.
-        Every fixture invocation is recorded before even handling --version.
-        """
+    def client_environment(self, label):
+        """Use only owned utilities and canaries for retired executables."""
         directory = self.directory / f"{label}-bin"
         directory.mkdir(mode=0o700)
         (directory / "client.toml").touch(exist_ok=True)
@@ -591,35 +586,15 @@ class Harness:
         # Fixtures have env-based shebangs; retain the running interpreter even
         # when the rest of the host PATH is deliberately unavailable.
         (directory / "python3").symlink_to(Path(sys.executable).absolute())
-        installed = list(harnesses)
-        if harness is not None:
-            installed.append((harness, fixture, fixture_args))
-        elif fixture is not None or fixture_args:
-            raise ValueError("fixture arguments require an explicit harness")
-        names = {"codex": "codex", "cc": "claude", "pi": "pi", "opencode": "opencode"}
-        for kind, program, arguments in installed:
-            if kind not in names or program is None:
-                raise ValueError("a known harness and local fixture must be supplied together")
-            wrapper = directory / names[kind]
-            if wrapper.exists():
-                raise ValueError(f"duplicate harness fixture: {kind}")
-            provider = "claude" if kind == "cc" else kind
+        for provider in ("codex", "claude", "pi", "opencode"):
             invocation_log = directory / "external-invocations.jsonl"
-            executable = [sys.executable, str(Path(program).resolve())]
-            extra = [str(argument) for argument in arguments]
+            wrapper = directory / provider
             wrapper.write_text(
                 f"#!{sys.executable}\n"
                 "import json, os, sys\n"
-                f"record = {{'provider': {provider!r}, 'argv': sys.argv[1:], 'pid': os.getpid()}}\n"
-                f"fd = os.open({str(invocation_log)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)\n"
-                "try:\n"
-                "    os.write(fd, (json.dumps(record, separators=(',', ':')) + '\\n').encode())\n"
-                "finally:\n"
-                "    os.close(fd)\n"
-                "if sys.argv[1:2] == ['--version']:\n"
-                f"    print({(names[kind] + ' fixture 2.3.0')!r})\n"
-                "    raise SystemExit(0)\n"
-                f"os.execv({sys.executable!r}, {executable!r} + sys.argv[1:] + {extra!r})\n"
+                f"with open({str(invocation_log)!r}, 'a', encoding='utf-8') as log:\n"
+                f"    log.write(json.dumps(dict(provider={provider!r}, argv=sys.argv[1:], pid=os.getpid())) + '\\n')\n"
+                "raise SystemExit(99)\n"
             )
             wrapper.chmod(0o700)
         # Each child gets only the owned fixture account and isolated lifecycle
@@ -645,14 +620,12 @@ class Harness:
         })
         return self.account_gateway.seed_login(environment)
 
-    def start_client(self, label="client", *, name="workstation", cwd=None, harness=None,
-                     fixture=None, fixture_args=(), destination=None, harnesses=(), extra_env=None):
+    def start_client(self, label="client", *, name="workstation", cwd=None,
+                     destination=None, extra_env=None):
         if destination is not None:
             raise ValueError("SSH destinations are retired; this fixture uses its owned account server")
         command = self.client_command(name=name)
-        environment = self.client_environment(
-            label, harness=harness, fixture=fixture, fixture_args=fixture_args, harnesses=harnesses
-        )
+        environment = self.client_environment(label)
         if extra_env:
             environment.update(extra_env)
         process = self.spawn(label, command, stdout=subprocess.PIPE, cwd=cwd, env=environment)
