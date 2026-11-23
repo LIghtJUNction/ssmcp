@@ -143,7 +143,7 @@ ssmcp --server https://ssmcp.lmm.best --log-format jsonl --allow alice@ssmcp.lmm
 NO_COLOR=1 ssmcp --server https://ssmcp.lmm.best --allow alice@ssmcp.lmm.best
 ```
 
-更新已安装的程序后，可以从 `code_mode` 调用 `await reload(clientId)`，让客户端从原安装入口重新启动，并保留启动参数、目录、环境和 `--allow`。先确认目录包含 `ssmcp.client.reload`；不支持该工具的旧客户端，初次升级须在本机普通重启。`accepted:true` 只是接收应答，应再调用 `list` 确认重连及新的 ID。重载会停止本连接拥有的命令任务和转发、关闭原生桥接；不会终止操作者已运行的外部 Pi/OpenCode 服务；在途调用会导致 busy 拒绝。[重载协议与回归测试](../src/client/reload.rs)
+更新已安装的程序后，可以从 `code_mode` 调用 `await call(clientId, "ssmcp.client.reload", {})`，让客户端从原安装入口重新启动，并保留启动参数、目录、环境和 `--allow`。先确认目录包含 `ssmcp.client.reload`；不支持该工具的旧客户端，初次升级须在本机普通重启。`accepted:true` 只是接收应答，应再调用 `list` 确认重连及新的 ID。重载会停止本连接拥有的命令任务和转发、关闭原生桥接；不会终止操作者已运行的外部 Pi/OpenCode 服务；在途调用会导致 busy 拒绝。[重载协议与回归测试](../src/client/reload.rs)
 
 有效的账号授权在新连接继续允许同一账号时可复用；控制请求会重新核对凭据和名单。调用方应重新发现在线设备及实际版本，不能把“程序已更新”或“重载已接收”报告为“新版本已经在线”。[重载完整说明](backends.md#9-更新后的客户端重载)
 

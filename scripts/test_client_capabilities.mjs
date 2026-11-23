@@ -118,9 +118,9 @@ test('tool factories cannot start native operations during source preparation', 
   assert.equal(record.requests.length,0);
 });
 
-test('dynamic native API calls a future client primitive without relay provider changes', async () => {
+test('exact native calls reach future client primitives without helper changes', async () => {
   const record = await run(
-    "const api = native('one'); const same = await Promise.resolve(api); return await same.future.version_two.capture({region:[1,2,3,4]});",
+    "const name = 'future.version_two.capture'; return await call('one',name,{region:[1,2,3,4]});",
     request => {
       assert.equal(request.op,'call');
       assert.equal(request.client_id,'one');
@@ -135,7 +135,7 @@ test('dynamic native API calls a future client primitive without relay provider 
 
 test('client capability manifests are fresh and never shared between client IDs', async () => {
   const record = await run(
-    "const a=await capabilities('one'); const b=await capabilities('two'); const changed=await capabilities('one'); return [a,b,changed];",
+    "const a=await call('one','ssmcp.client.capabilities',{}); const b=await call('two','ssmcp.client.capabilities',{}); const changed=await call('one','ssmcp.client.capabilities',{}); return [a,b,changed];",
     request => {
       assert.equal(request.name,'ssmcp.client.capabilities');
       const generation = request.client_id === 'two' ? 20 : ++count;
@@ -161,21 +161,21 @@ test('client resource helper preserves opaque cursors, templates and future cont
   assert.equal(value(record)[3],true);
 });
 
-test('dynamic API keeps native failures and validation instead of pretending success', async () => {
+test('exact calls preserve native failures and host argument validation', async () => {
   const nativeFailure = await run(
-    "return await native('one').future.fail({});",
+    "return await call('one','future.fail',{});",
     () => ({ok:true,value:{isError:true,content:[{type:'text',text:'Unavailable'}]}}));
   success(nativeFailure);
   assert.equal(value(nativeFailure).isError,true);
   const unregistered = await run(
-    "return await native('one').missing.tool({});",
+    "return await call('one','missing.tool',{});",
     () => ({ok:false,error:'tool is unavailable or not registered'}));
   failure(unregistered,/unavailable/);
   for (const code of [
-    "return native('one').future.test([]);",
-    "return native('one').future.test({},{});",
-    "return native('one').constructor;",
-    "return native('');",
+    "return call('one','future.test',[]);",
+    "return call('one','future test',{});",
+    "return call('one','',{});",
+    "return call('','future.test',{});",
   ]) {
     const invalid = await run(code,()=>assert.fail('invalid API must not call host'));
     assert.equal(invalid.exitCode,1);
@@ -183,7 +183,7 @@ test('dynamic API keeps native failures and validation instead of pretending suc
   }
 });
 
-test('legacy call and relay resource helpers keep their existing wire requests', async () => {
+test('canonical calls and relay resources keep their existing wire requests', async () => {
   const record = await run(
     "return [await call('one','legacy.tool',{x:1}),await resources.list(),await resources.templates(),await resources.read('ssmcp://guide')];",
     request=>({ok:true,value:request}));

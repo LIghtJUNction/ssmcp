@@ -21,7 +21,7 @@
 }
 ```
 
-`waitFor(clientId, options)` 使用相同的 `targets`、`mode`、`timeout_ms` 和 `wait_id`。外层 `code_mode` 超时应留出返回余量；不要将 helper 的存在解释为旧 relay 已获得新接口。公共工具和 helper 都来自已安装的 relay；`exec` 目标还依赖客户端对应的原生工具，缺失时明确返回 `unavailable`。[公共目录](../src/http.rs) · [能力说明](../src/runtime/capabilities.rs)
+`waitFor(clientId, options)` 使用相同的目标和身份字段，但只做一次 1000 ms 的短观察；默认 `timeout_ms:1000`，显式 `window_ms` 也只能是 1000。长等待使用公共 `await`，避免占用 JavaScript 名额。外层 `code_mode` 超时仍须留出返回余量；不要将 helper 的存在解释为旧 relay 已获得新接口。公共工具和 helper 都来自已安装的 relay；`exec` 目标还依赖客户端对应的原生工具，缺失时明确返回 `unavailable`。[公共目录](../src/http.rs) · [能力说明](../src/runtime/capabilities.rs)
 
 ## 可等待的对象
 
@@ -42,10 +42,10 @@
 `timeout_ms` 为 1000–25000，默认 20000。首次等待创建随机的服务端 `wait_id`；它标识观察记录，不是执行任务 ID。超时或资源忙时，带返回的 `wait_id` 恢复，不再传 `targets` 或 `mode`：
 
 ```javascript
-return await waitFor(clientId, {wait_id: previous.wait_id, timeout_ms: 20000});
+return await waitFor(clientId, {wait_id: previous.wait_id, timeout_ms: 1000});
 ```
 
-首次传入 `window_ms: 20000` 可启用短窗口协议。窗口到期返回 `pending`，同一个 `wait_id` 可继续观察原目标。作业、任务分派和待交付输入继续由各自的有界队列持有，窗口结束不取消它们。普通结果就绪时返回 `cursor: 1`。处理前用 `after: 0` 重读同一结果，应用成功后用 `after: 1` 确认。确认可重复，逾期游标与超出 128 KiB 的结果会显式报错。协作收件箱仍应单独执行 `collab.ack`。用户输入仍由外层交付事务提交。短窗口的外层回执返回 `await_delivery_cursor`，公共 `await` 的响应也返回 `cursor: 1`。响应丢失时用 `after: 0` 重读已交付的同一消息及版本，按 `message_id` 和 `revision` 去重，处理后用 `after: 1` 确认。重读不会领取下一条输入。Code Mode 的 `waitFor` 重试将已交付消息放在目标数据的 `replayed_user_messages`；首次交付仍以外层 `user_messages` 为准。
+公共 `await` 首次传入 `window_ms: 20000` 可启用窗口协议；在 JS 的 `waitFor` 中使用 `window_ms: 1000`。窗口到期返回 `pending`，同一个 `wait_id` 可继续观察原目标。作业、任务分派和待交付输入继续由各自的有界队列持有，窗口结束不取消它们。普通结果就绪时返回 `cursor: 1`。处理前用 `after: 0` 重读同一结果，应用成功后用 `after: 1` 确认。确认可重复，逾期游标与超出 128 KiB 的结果会显式报错。协作收件箱仍应单独执行 `collab.ack`。用户输入仍由外层交付事务提交。短窗口的外层回执返回 `await_delivery_cursor`，公共 `await` 的响应也返回 `cursor: 1`。响应丢失时用 `after: 0` 重读已交付的同一消息及版本，按 `message_id` 和 `revision` 去重，处理后用 `after: 1` 确认。重读不会领取下一条输入。Code Mode 的 `waitFor` 重试将已交付消息放在目标数据的 `replayed_user_messages`；首次交付仍以外层 `user_messages` 为准。
 
 `worker_assignment` 接受该 worker 的 `request_id`，同一个观察持续使用该 ID。 `worker_result` 接受原任务的 `task_id`，并保留原生结果的终态。两个目标都要求独立等待，并继续由原生 worker 权限检查约束。
 

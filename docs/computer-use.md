@@ -1,19 +1,19 @@
 # Zuse CLI 管理与桌面、浏览器任务
 
-SSMCP 的 `computer` 工具只管理独立的 Zuse CLI：查询版本、下载、安装和卸载。桌面与浏览器程序直接交给 Zuse CLI，通过通用 `exec` 运行。SSMCP 不内置桌面适配器、CDP 浏览器、Omarchy 动作、Playwright 专用桥或内部 Zuse worker，也不在调用失败时切换到这些实现。
+SSMCP 的 `ssmcp.computer.*` 原生工具只管理独立的 Zuse CLI：查询版本、下载、安装和卸载。桌面与浏览器程序直接交给 Zuse CLI，通过通用 `exec` 运行。SSMCP 不内置桌面适配器、CDP 浏览器、Omarchy 动作、Playwright 专用桥或内部 Zuse worker，也不在调用失败时切换到这些实现。
 
 本页说明当前源码的接口。已发布的旧客户端可能提供不同目录；先从 `list` 选定客户端，再读取它实际注册的工具和 schema。[管理器](../src/computer.rs) · [CLI 参数](../src/client/computer_control.rs) · [通用命令](code-mode.md#exec)
 
 ## 四个管理工具
 
-每个 JavaScript helper 都以实际 `clientId` 为第一个参数，并返回完整原生 MCP 结果。检查 `isError`，再读取 `structuredContent`。
+使用 `call(clientId, nativeToolName, args)` 调用已发现的原生工具，并保留完整 MCP 结果。检查 `isError`，再读取 `structuredContent`。
 
-| JavaScript helper | 原生工具 | 参数 | 结果与边界 |
+| JavaScript 调用 | 原生工具 | 参数 | 结果与边界 |
 | --- | --- | --- | --- |
-| `computer.version(id)` | `ssmcp.computer.version` | `{}` | 实际执行已选 CLI 的 `--version`，返回版本、路径、摘要与是否受管；未安装时返回 `available:false` |
-| `computer.download(id, args)` | `ssmcp.computer.download` | 可选 `version` | 下载当前平台的官方稳定版，返回 `download_id` 和 release 身份；不执行、不安装 |
-| `computer.install(id, args)` | `ssmcp.computer.install` | `download_id` | 重新核验受管下载，安装到私有目录，返回 `installation_id` 和 `path`；不修改 PATH |
-| `computer.uninstall(id, args)` | `ssmcp.computer.uninstall` | `installation_id` | 只删除所有权、文件身份与字节仍匹配的受管安装 |
+| `call(id, "ssmcp.computer.version", {})` | `ssmcp.computer.version` | `{}` | 实际执行已选 CLI 的 `--version`，返回版本、路径、摘要与是否受管；未安装时返回 `available:false` |
+| `call(id, "ssmcp.computer.download", args)` | `ssmcp.computer.download` | 可选 `version` | 下载当前平台的官方稳定版，返回 `download_id` 和 release 身份；不执行、不安装 |
+| `call(id, "ssmcp.computer.install", args)` | `ssmcp.computer.install` | `download_id` | 重新核验受管下载，安装到私有目录，返回 `installation_id` 和 `path`；不修改 PATH |
+| `call(id, "ssmcp.computer.uninstall", args)` | `ssmcp.computer.uninstall` | `installation_id` | 只删除所有权、文件身份与字节仍匹配的受管安装 |
 
 使用返回的原始 ID；下载 ID 和安装 ID 不能互换。参数不接受任意下载 URL、安装目标或待删除路径。普通 PATH、Cargo 和系统包管理器安装的 Zuse 不会被接管、覆盖或卸载。[工具 schema 与分派](../src/computer.rs) · [所有权与存储](../src/computer/storage.rs)
 
@@ -45,13 +45,13 @@ ssmcp computer uninstall INSTALLATION_ID_FROM_REPLY --json
 先查询安装，再使用真实返回的绝对路径。下面只读取该 CLI 的帮助：
 
 ```js
-const reply = await computer.version(clientId);
+const reply = await call(clientId, "ssmcp.computer.version", {});
 if (reply.isError) return reply;
 const cli = reply.structuredContent;
 if (!cli.available) return cli;
 return await exec.run(clientId, {
   command: [cli.path, "--help"],
-  wait_ms: 5000,
+  wait_ms: 1000,
   timeout_ms: 10000,
   max_bytes: 16384
 });

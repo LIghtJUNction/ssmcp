@@ -277,17 +277,17 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.questions", {
 
 ## 8. 直接调用 Zuse CLI 操作桌面与浏览器
 
-先查询实际 Zuse CLI，再通过通用 exec 运行它。SSMCP 的 `computer` 命名空间只提供版本查询、下载、安装和卸载；旧浏览器、桌面动作和 Playwright setup 入口已撤去。
+先查询实际 Zuse CLI，再通过通用 exec 运行它。SSMCP 的 `ssmcp.computer.*` 原生工具只提供版本查询、下载、安装和卸载；旧浏览器、桌面动作和 Playwright setup 入口已撤去。
 
 ```javascript
 const clientId = "CLIENT_ID_FROM_LIST";
-const reply = await computer.version(clientId);
+const reply = await call(clientId, "ssmcp.computer.version", {});
 if (reply.isError) return reply;
 const cli = reply.structuredContent;
 if (!cli.available) return cli;
 return await exec.run(clientId, {
   command: [cli.path, "--help"],
-  wait_ms: 5000,
+  wait_ms: 1000,
   timeout_ms: 10000
 });
 ```

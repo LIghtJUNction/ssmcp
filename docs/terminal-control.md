@@ -5,7 +5,7 @@
 | 需要完成的工作 | 原语 | 状态保留范围 |
 | --- | --- | --- |
 | 获取退出码，执行构建、检查或脚本 | `exec.run` | 短等待后可继续读取同一 job |
-| 同时执行一组有结束时间的命令 | `exec.parallel` | 返回全部结果；按真实运行状态限制并发 |
+| 同时执行一组有结束时间的命令 | `exec.parallel` | 返回逐项观察与未启动状态；按真实运行状态限制并发 |
 | 启动开发服务器或持续任务 | `exec.start` | 保留到任务完成、取消或客户端断开 |
 | 运行交互程序，保留 shell 环境 | `terminal.open/write/read` | 每个 terminal 保留自己的 shell 和画面 |
 | 操作电脑或浏览器 | 通过 `exec.start/run` 调用独立 Zuse CLI | 状态由所选 CLI 进程维护；SSMCP 保留任务和输出 |
@@ -32,7 +32,7 @@ return await exec.parallel(id, [
 ], {concurrency: 2});
 ```
 
-concurrency 的默认值为 4，允许 1–8；一次最多提交 32 条命令。一个 worker 等到当前命令实际结束才启动下一条，因此即使 wait_ms 为 0，运行中的本批命令也不会突破所设上限。初次短等待后，内部以最多 60 秒的等待继续观察。结果按输入顺序返回，逐项包含 fulfilled/value 或 rejected/reason；退出码非零仍需由调用者检查 value.exit_code。
+concurrency 默认 4，允许 1–8；一次最多提交 32 项。批次选项 `wait_ms` 是共享观察窗口，默认 1000 ms、上限 55000 ms。每个已启动任务最多等待一次并立即读取一次，之后返回；只有已确认结束的任务才释放批次名额。运行中任务保留原 job ID 和游标，其余无法启动的项明确标记 `not_started:true`。结果按输入顺序排列，fulfilled 只表示取得观察结果，仍须检查 `value.running` 和 `value.exit_code`。
 
 观察失败时，结果尽可能保留 job_id，该 worker 停止启动新任务。未启动的项目标记 not_started:true，可以和“已启动、状态待确认”的项目分开处理。每次 code_mode 仍有 128 次原生调用预算和总时限；外层超时后，已启动任务继续运行，使用 exec.list/status/read 接管，不重复提交整批命令。持续服务使用 exec.start，避免长期占据 parallel 的 worker。
 
@@ -61,21 +61,25 @@ exec.read 的 stdout_cursor 和 stderr_cursor 分别推进；完整长输出保�
 
 ## 多个独立终端
 
-每条连接保留 main 终端，并可创建其他交互式终端，总计最多 16 个。每个终端拥有独立 shell、输入、输出游标和启动目录。它们在后台保留状态，不占据默认仪表盘的显示区域；选择其他终端不会暂停已有进程。
+以下 `terminal.*` 是原生工具名，通过 `call(clientId, name, args)` 调用；SDK 不再导出 `terminal` 对象。原生返回先检查 `isError`，再读取 `structuredContent`。每条连接保留 main 终端，并可创建其他交互式终端，总计最多 16 个。每个终端拥有独立 shell、输入、输出游标和启动目录。它们在后台保留状态，不占据默认仪表盘的显示区域；选择其他终端不会暂停已有进程。
 
 ```javascript
-const [build, logs] = await Promise.all([
-  terminal.open(clientId, {name: "build", cwd: "."}),
-  terminal.open(clientId, {name: "logs", cwd: "."})
+const opened = await Promise.all([
+  call(clientId, "terminal.open", {name:"build",cwd:"."}),
+  call(clientId, "terminal.open", {name:"logs",cwd:"."})
 ]);
-await terminal.write(clientId, {
+if (opened.some(reply => reply.isError)) return {opened};
+const build = opened[0].structuredContent;
+const written = await call(clientId, "terminal.write", {
   terminal_id: build.terminal_id,
   data: "pwd\n"
 });
-await terminal.select(clientId, {terminal_id: build.terminal_id});
+if (written.isError) return {opened, written};
+const selected = await call(clientId, "terminal.select", {terminal_id:build.terminal_id});
+if (selected.isError) return {opened, selected};
 return {
-  terminals: await terminal.list(clientId),
-  output: await terminal.read(clientId, {
+  terminals: await call(clientId, "terminal.list", {}),
+  output: await call(clientId, "terminal.read", {
     terminal_id: build.terminal_id,
     cursor: 0,
     max_bytes: 16384,
@@ -86,7 +90,7 @@ return {
 
 `terminal.select` 更新所选终端状态，默认审计界面保持原有布局。自定义前端根据 `terminal.list` 的 ID 选择要呈现的终端，显式把同一个 `terminal_id` 传给 read、write 和 resize；终端字节交给终端解析器处理，不能直接当作普通日志文本。
 
-| 方法 | 参数与行为 |
+| 原生工具名 | 参数与行为 |
 | --- | --- |
 | terminal.open | name、cwd、select 均可省略；cwd 必须在共享根目录内 |
 | terminal.list | 返回全部终端、selected、default_terminal_id 和上限 |
@@ -130,7 +134,7 @@ return {
 
 ## Zuse 程序与图片结果
 
-桌面和浏览器任务使用独立 Zuse CLI。先用 `computer.version` 读取实际可执行路径；管理器只另提供 `download/install/uninstall`，不代理截图或输入动作。[管理命令与直接执行](computer-use.md)
+桌面和浏览器任务使用独立 Zuse CLI。先用 `ssmcp.computer.version` 读取实际可执行路径；管理器只另提供 `download/install/uninstall`，不代理截图或输入动作。[管理命令与直接执行](computer-use.md)
 
 对 CLI 生成的工作区图片，按实际文件路径调用已有文件图片工具。图片字节与 JSON 文本分开：
 
@@ -152,6 +156,6 @@ return picture.structuredContent;
 - 多终端隔离、关闭和容量：tests/terminals.rs。
 - 浏览输入分派、设备回复与独立终端状态：src/client/input.rs、src/client/terminal.rs。
 - 源码浏览、日志筛选与布局：src/client/audit_view.rs、scripts/e2e_client_ui.py。
-- 并发、调用预算、stdin/terminal helper：scripts/test_execution_helpers.mjs。
+- 并发、调用预算、stdin 与 terminal 原生调用：scripts/test_execution_helpers.mjs。
 - Zuse 生命周期助手与通用图片/错误透传：scripts/test_cua_facade.mjs。
 - 真实 SSH、MCP 与客户端画面：scripts/e2e_terminal_control.py。

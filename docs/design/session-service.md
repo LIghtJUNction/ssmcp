@@ -34,7 +34,7 @@ Linux `systemctl` 默认是系统 scope，`--user` 是用户 scope；`enable --n
 
 ## 原子能力与授权
 
-新增原生工具 `ssmcp.session.list/status/create/restart/close`，经现有 `list` 与 `code_mode` 发现和调用。JavaScript 便捷入口为 `sessions.list/status/create/restart/close(clientId, arguments)`。
+新增原生工具 `ssmcp.session.list/status/create/restart/close`，经现有 `list` 与 `code_mode` 发现和调用。JavaScript 使用 `call(clientId, "ssmcp.session.<operation>", arguments)`，其中 operation 使用目录中的精确操作名。
 
 管理连接须显式使用 `--session-control`。新建会话继承该连接的 SSH 目标、SSH 配置和 GitHub 允许列表；原子参数不接受任意 argv、身份或允许列表。工作目录必须在该连接已授权的工作区内，子会话默认不继承管理授权。重启或关闭管理连接自身须通过另一个管理连接或本机 CLI，以免请求在返回确认前切断自己。
 

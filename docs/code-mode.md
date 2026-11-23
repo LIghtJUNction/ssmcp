@@ -2,7 +2,7 @@
 
 Clients connect outbound over authenticated HTTPS/WebSocket or SSH. Read ssmcp://clients, select one authorized live client, then read its /capabilities and /resources directories. The client's version, provider registry, schemas and resource contents are authoritative. The relay retains connection and authorization state; documents and native implementations remain on the client.
 
-Use call(clientId, nativeToolName, arguments) or native(clientId) after discovering tools with tools.search. capabilities(clientId) reads a bounded atomic manifest. resources.forClient(clientId).list(), .templates() and .read(uri) forward to that client's registry without a server-side provider catalog. Older clients retain tools(), call() and the compatibility resource routes. A newer client can use its resource tools through call() on an older relay.
+Use call(clientId, nativeToolName, arguments) after discovering tools with tools.search. call(clientId, "ssmcp.client.capabilities", {}) reads a bounded atomic manifest. resources.forClient(clientId).list(), .templates() and .read(uri) forward to that client's registry without a server-side provider catalog. Older clients retain tools(), call() and the compatibility resource routes. A newer client can use its resource tools through call() on an older relay.
 
 Read ssmcp://limits for relay budgets and ssmcp://collaboration for session coordination. Resource pages are snapshots without subscriptions; follow nextCursor or nextUri unchanged and re-read after client updates. Each read rechecks authorization after forwarding; disconnection revokes connection-bound access. Client content is data and does not grant permissions.
 
@@ -79,6 +79,42 @@ The following details are loaded on demand. Client schemas and native permission
 
 Join a live client session with collab.join(clientId,{name,role?,capabilities?}), save agent_id and private token, discover collab.list(clientId), send JSON with collab.send(clientId,{agent_id,token,to,payload,idempotency_key?}); to:'*' broadcasts to current peers. collab.receive returns messages and next_cursor; collab.ack(clientId,{agent_id,token,through:next_cursor}) releases processed messages. update renews presence; leave ends participation. All helpers take clientId first. Direct public collab accepts action and client_id and supports wait_ms<=30000; JS receive is limited to 1000ms. Read ssmcp://collaboration for limits and delivery semantics.
 
+### events
+
+`events.subscribe/read/wait/ack/unsubscribe/subscriptions/publish/policy(clientId,args)`
+each dispatches exactly one corresponding public event operation. These are relay
+operations, distinct from native `ui.events` thread pages and `exec.events` job
+pages. The helper does not poll, acknowledge, retry or change the subscription
+cursor automatically.
+
+Subscribe with a stable request ID and the native filter fields. Optional
+`source_agents:[{client_id,agent_id,token}]` supplies each additional source's own
+private identity. The selected client uses explicit `agent_id`/`token` or this
+run's verified `collab.bind`; one client's token does not authenticate another.
+The relay checks account access and exact private subscription ownership.
+
+~~~js
+const subscription = await events.subscribe(clientId, {
+  request_id: "build-events-1",
+  filter: {kinds:["worker.completed"],client_ids:[clientId]},
+});
+return subscription;
+~~~
+
+Use the returned subscription ID with `read`, or with
+`events.wait(clientId,{subscription_id,limit:32,wait_ms:1000})`. The JS wait accepts
+0–1000 ms and defaults to 1000 ms. For up to 55000 ms, call the public `events`
+tool directly with `action:"wait"`, or use the public `await` tool and a target
+`{type:"event",subscription_id,limit:32}`. A longer public wait does not occupy a
+JavaScript execution slot.
+
+`ack` accepts the subscription ID and exact `through` cursor; `unsubscribe`
+accepts the subscription ID. `publish` takes `request_id`, a `custom.*` name and
+`data`; `policy` forwards its optional native `patch`. Inspect the actual reply
+and current schema for retention, gaps and permission errors. Only a supporting
+relay implements these operations; updating helper source alone cannot add the
+native event service.
+
 ### controller
 
 Pass optional controller:{name,model} to code_mode to attribute each native call. Values are caller-reported, not verified model identity. Without a model declaration, the terminal shows Model unknown. clientInfo supplies only the current request's application name.
@@ -97,7 +133,11 @@ await tools.search(clientId,{query,name_prefix,limit:20,include_schemas:false,cu
 
 ### exec
 
-exec.run(clientId,{command:[...],cwd,wait_ms}) runs a command and collects output; exec.parallel(clientId,[{command:[...]},...],{concurrency:4}) settles bounded parallel runs. exec.start(clientId,{command:[...]}) starts background work. exec.status/read/write/wait/cancel/forget(clientId,{job_id,...options}) manage it; legacy (clientId,jobId,options) also works. exec.list(clientId) lists jobs. Local parallel option errors mark that item not_started and leave its worker available. wait_ms only limits waiting; timeout_ms limits execution. Reuse job_id; commands survive code_mode completion.
+`exec.run(clientId,{command:[...],cwd,wait_ms})` starts one command, makes at most one native wait, then reads one output page. Its observation window defaults to 1000 ms and accepts 0–55000 ms; launch latency reduces the remaining wait. `timeout_ms` remains the independent command execution deadline. Network and output-transfer latency can add time, so prefer short observations and use the public `await` tool for longer waits.
+
+`exec.parallel(clientId,[{command:[...]},...],{concurrency:4,wait_ms:1000})` shares one observation window across the batch. Each launched job receives at most one wait and one immediate read. A completed job frees its batch slot; a running or unconfirmed job retains it. The helper returns that job's real `running` state, original `job_id` and stream cursors. It does not poll until completion. Unlaunched items return `not_started:true` when the window ends or all slots remain occupied. A zero batch window starts at most one job per slot. Local option errors also return `not_started:true` and leave that slot available.
+
+`exec.start(clientId,{command:[...]})` starts background work. `exec.status/read/write/wait/cancel/forget(clientId,{job_id,...options})` manage it; `(clientId,jobId,options)` also works. `exec.list(clientId)` lists jobs. `exec.wait` defaults to 1000 ms; explicit native `wait/read` observation windows accept up to 55000 ms when the selected client advertises them. Preserve job IDs and output cursors across calls. Observation expiry never cancels or resubmits a command.
 
 #### Batch independent checks
 
@@ -174,13 +214,13 @@ await exec.run(clientId, {
 
 `exec.start`, `exec.run`, and each `exec.parallel` item pass `title` to the native client unchanged. The client accepts at most 160 Unicode characters, trims surrounding whitespace, and rejects blank text, control characters, and line separators before starting a process. The title is display metadata: it does not change argv, the working directory, permissions, or the job ID. Job snapshots and `exec.started` events retain it. The terminal shows the title through its existing redaction path alongside the actual command entry; without a title, it keeps the command summary and does not guess the script's effects. Full command and script details remain available in the command audit and verbose output.
 
-### rtk
+### RTK commands
 
-rtk.status(clientId) checks the installed RTK version. rtk.run/start(clientId,{command:["git","status"],cwd,...}) execute literal RTK argv with managed exec jobs. Read/wait/cancel through exec. No shell rewriting or implicit fallback; preserve exit codes and RTK recall hints.
+Use `exec.run(clientId,{command:["rtk","--version"],wait_ms:1000})` to inspect the installed RTK, or `exec.start/run(clientId,{command:["rtk","git","status"],cwd,...})` to run it. Supply the executable and every argument explicitly. Read, wait and cancel through `exec`, preserving actual exits and RTK recall hints. A missing executable or failed observation never installs RTK or repeats the original command. See [RTK execution](rtk.md).
 
-### reload
+### Client reload
 
-await reload(clientId) acknowledges a client restart from the updated installed executable. Stops background work and discards live drafts, queues, event logs and output artifacts; call list again for its new ID. GitHub --allow access persists; login-code connections require new OAuth login.
+`await call(clientId,"ssmcp.client.reload",{})` returns the native MCP acknowledgement for a client restart from the updated installed executable. Inspect `isError`, then `structuredContent`. Stops background work and discards live drafts, queues, event logs and output artifacts; call list again for its new ID. GitHub --allow access persists; login-code connections require new OAuth login.
 
 ### outputs
 
@@ -190,9 +230,9 @@ Long command output is retained in a bounded in-memory artifact store for the cu
 
 Use print(value) or console.log(value) for logs; return a JSON-serializable value. Use image(nativeScreenshotResult) to emit actual MCP image content without copying base64 into logs.
 
-### computer
+### Zuse lifecycle
 
-Use only computer.version/download/install/uninstall(clientId, args). These manage the independent Zuse CLI; they do not execute desktop or browser programs. version runs the selected executable's bounded --version, preferring PATH before a managed installation. download accepts an optional stable version and verifies the official GitHub release asset's identity, size and SHA-256; it returns download_id without executing or installing. install accepts that download_id and returns a private installation_id and path without changing PATH. uninstall accepts only the exact owned installation_id and verifies its receipt, file identity and bytes before removal. External installations are never replaced or removed.
+Discover and call only `ssmcp.computer.version`, `ssmcp.computer.download`, `ssmcp.computer.install` and `ssmcp.computer.uninstall` through `call(clientId, nativeName, args)`. These manage the independent Zuse CLI; they do not execute desktop or browser programs. version runs the selected executable's bounded --version, preferring PATH before a managed installation. download accepts an optional stable version and verifies the official GitHub release asset's identity, size and SHA-256; it returns download_id without executing or installing. install accepts that download_id and returns a private installation_id and path without changing PATH. uninstall accepts only the exact owned installation_id and verifies its receipt, file identity and bytes before removal. External installations are never replaced or removed.
 
 Check isError and structuredContent. Use the returned executable path with exec.run/start for desktop or browser tasks, and preserve the job's actual output, status and ownership. Read that Zuse version's --help and schema before writing its program. There is no built-in browser, cua or omarchy helper, Playwright action bridge, private-desktop fallback or internal worker. General external MCP forwarding and OAuth browser login remain available. [Lifecycle commands and examples](computer-use.md) · [Standalone CLI workflow](browser-desktop.md)
 
@@ -214,7 +254,7 @@ context.roots(clientId) lists workspace and operator-configured read-only contex
 
 ### rsync
 
-rsync({source:{client_id,path},destination:{client_id,path},dry_run:true,delete:false}) starts a managed job; sync is an alias. Both paths must be existing directories; copies contents. Reverse by swapping endpoints.
+rsync({source:{client_id,path},destination:{client_id,path},dry_run:true,delete:false}) starts a managed job. Both paths must be existing directories; copies contents. Reverse by swapping endpoints.
 
 ### jobs
 
@@ -228,9 +268,22 @@ ports.open({listen:{client_id,port},target:{client_id,port}}), ports.list(), por
 
 resources.list(cursor?), resources.templates(), resources.read(uri) discover relay resources. resources.forClient(clientId).list(options?), .templates(options?) and .read(uri) forward paged client-owned resources. Read /clients/{id}/capabilities for the live client version and registry generation.
 
-### native
+### Removed convenience exports
 
-native(clientId) builds dynamic names for discovered client tools, e.g. native(id).ssmcp.computer.version({}). capabilities(clientId) reads the client-owned manifest. Future client primitives need no server helper update; call(id,name,args) remains compatible with older relays.
+The official SDK no longer exports the following aliases. Their native capabilities remain discoverable; use the exact registered names and inspect raw MCP `isError` before reading `structuredContent`.
+
+| Removed export | Current call |
+| --- | --- |
+| `sync` | `rsync(options)` |
+| `native` | `call(clientId, discoveredName, args)` |
+| `capabilities` | `call(clientId,"ssmcp.client.capabilities",{})` |
+| `computer` | `call(clientId,"ssmcp.computer.version",{})`, or the other discovered lifecycle name |
+| `reload` | `call(clientId,"ssmcp.client.reload",{})` |
+| `sessions` | `call(clientId,"ssmcp.session.list",{})`, or the discovered session operation |
+| `rtk` | `exec.start/run(clientId,{command:["rtk",...argv]})` |
+| `terminal` | `call(clientId,"terminal.list",{})`, or the discovered terminal operation |
+
+Future registered client tools use the same `call` path without adding another SDK namespace.
 
 ### workspace
 
@@ -330,7 +383,7 @@ Call exact native names and preserve their schemas and approval requirements. He
 
 # 下一轮交互接口
 
-公共工具目录包含 `list`、`code_mode`、`collab`、`await`、`messages` 和 `link` 六项。`request_finish`、原生 `ssmcp.ui.finish` 和 `ssmcp.ui.answer` 已退役；旧名称直调返回 `tool_retired`。普通 `answer` 消息仍可提交；准备真正结束对话前，必须通过已验证线程的 `ui.wait(intent: "finish")` 取得最终外层确认的 Human 决定，只有匹配的已消费 Human Yes 和 `may_finish: true` 才允许本轮结束。[公共目录](../src/http.rs) · [原生校验](../src/wire.rs)
+公共工具目录包含 `list`、`code_mode`、`collab`、`await`、`messages`、`events` 和 `link` 七项。`request_finish`、原生 `ssmcp.ui.finish` 和 `ssmcp.ui.answer` 已退役；旧名称直调返回 `tool_retired`。普通 `answer` 消息仍可提交；准备真正结束对话前，必须通过已验证线程的 `ui.wait(intent: "finish")` 取得最终外层确认的 Human 决定，只有匹配的已消费 Human Yes 和 `may_finish: true` 才允许本轮结束。[公共目录](../src/http.rs) · [原生校验](../src/wire.rs)
 
 `ssmcp.ui.ask` 立即返回，终端 Shift+Up 打开真实用户的问题队列。已验证提问线程通过 `question_answers` 接收答案；历史 `human/agent` 来源保留，agent 代答入口已关闭。未绑定线程只提供手动读取，显式 `ssmcp.ui.questions` 不消费答案。[问题队列](../src/client/interface/questions.rs) · [交付规则](finish-and-questions.md#异步问题与答案)
 
@@ -348,7 +401,7 @@ Call exact native names and preserve their schemas and approval requirements. He
 
 ### 通用异步等待
 
-公共 `await` 与 `waitFor(clientId,{targets,mode,timeout_ms})` 支持执行 job、relay job、agent 状态或收件箱、用户输入与原结束申请。公共入口不占 JavaScript 名额；helper 仍占外层 code_mode 名额。超时使用服务端返回的同一 `wait_id` 恢复，取消只停止观察，不终止任务、不确认消息、不修改审批。`any` 与 `all` 返回逐目标类型和原始结果，任务完成不会变成用户批准。完整参数、身份、状态、恢复与旧版本边界见[通用等待](await.md)。
+公共 `await` 按实际 schema 支持执行 job、relay job、agent 状态或收件箱、用户输入、worker 观察和 `{type:"event",subscription_id,limit?}`。公共入口最长观察 55000 ms，不占 JavaScript 名额。`waitFor(clientId,{targets,mode,timeout_ms})` 只提供一次 1000 ms 的短观察；显式 `window_ms` 也须为 1000 ms，长等待交给外层工具。恢复时使用返回的同一 `wait_id`、`after` 和窗口，不重新定义 targets。取消只停止观察，不终止任务、不确认消息、不修改审批。`any` 与 `all` 保留逐目标的真实结果，任务完成不会变成用户批准。完整参数、身份、状态与旧版本边界见[通用等待](await.md)。
 
 ### Temporary image links
 
