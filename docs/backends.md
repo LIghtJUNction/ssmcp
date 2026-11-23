@@ -239,7 +239,7 @@ PTY 最近 1 MiB 输出保存在内存中。单次读取最多 32 KiB，写入�
 
 长输出超过 32 KiB 或 500 行时按来源转储，返回 ID、路径、摘要、字节数和行数。Unix 使用 `/tmp/ssmcp-<uid>`，Windows 默认使用 `%LOCALAPPDATA%\ssmcp\output`，未设置 LOCALAPPDATA 时使用用户临时目录下的 `ssmcp/output`；返回路径属于目标客户端机器。默认保留 24 小时，已结束文件总量上限 512 MiB，单文件上限 256 MiB，活动文件不参加自动淘汰。具体的 `complete`、范围及截断语义见[长输出护卫](session-control.md#长输出自动转储)与[实现](../src/output.rs)。
 
-## 9. 更新后的客户端重载
+## 5. 更新后的客户端重载
 
 更新磁盘上的 ssmcp 后，在当前工具目录确认 `ssmcp.client.reload` 可用，再通过 `code_mode` 调用 `await reload(clientId)`。helper 返回原生重载应答；`accepted:true` 表示请求已经被接收，仍须再次调用公开 `list` 验证新连接。支持此协议的客户端会等待服务器确认应答已收取，随后停止本连接拥有的后台任务与转发、关闭原生适配器连接，并从原安装入口启动更新后的程序，保留参数、cwd、环境与允许列表。[重载握手](../src/client.rs) · [重启实现](../src/client/reload.rs)
 
@@ -249,20 +249,16 @@ PTY 最近 1 MiB 输出保存在内存中。单次读取最多 32 KiB，写入�
 
 <a id="传输与资源边界"></a>
 
-## 10. 事件、权限与运行边界
+## 6. 事件、权限与运行边界
 
 | 后端 | 事件或输出 | 待处理请求与回复 |
 | --- | --- | --- |
 | Shell | `terminal.read` | 控制字符由 `terminal.write` 显式发送 |
 | 独立命令 | `exec.read`、`exec.events` | `exec.wait`、`exec.cancel`、`exec.forget` |
-| Codex | `ssmcp.codex.events` | `ssmcp.codex.requests`、`ssmcp.codex.respond`、`ssmcp.codex.schema` |
-| Claude Code | `ssmcp.claude.events` | `ssmcp.claude.requests`、`ssmcp.claude.respond` |
-| Pi | `ssmcp.pi.events` | `ssmcp.pi.requests`、`ssmcp.pi.respond` |
-| OpenCode | `opencode.events` | 发现到的原生 permission 操作 |
 
 事件页接受 `cursor`、`max_events` 和 `wait_ms`，返回 `next_cursor`。内存缓存有界；`truncated:true` 表示游标早于缓存起点，应检查返回的 JSONL 归档引用，通过 `outputs.read` 读取已保存记录。每页最多 256 条事件，等待最多 5000 ms；归档完整性由 artifact 和 `archive_error` 判断。一次长轮询结束不证明原生任务完成。[事件日志](../src/backend/events.rs)
 
-后台命令以 `exec.started/stdout/stderr/exited` 实时显示，stdout/stderr 有任务 ID 与独立顺序。`read/wait` 返回历史数据时，日志只显示响应元数据，避免把同一正文再打印一次。Harness 调用的开始、完成、耗时和原生审批状态由 `ssmcp.harness.tool.started/completed` 记录；不能据工具名称推断文件已写入或技能已调用。
+后台命令以 `exec.started/stdout/stderr/exited` 实时显示，stdout/stderr 有任务 ID 与独立顺序。`read/wait` 返回历史数据时，日志只显示响应元数据，避免把同一正文再打印一次。文件和技能是否实际发生操作，以相应的审计事件为准。
 
 ### 文件与技能审计
 
@@ -274,7 +270,7 @@ Context 的 `ssmcp.skill.discovered` 表示返回具体技能元数据，`ssmcp.
 
 终端摘要、详细日志、JSONL 与持久化审计使用脱敏副本，隐藏环境映射、凭据字段、敏感路径正文和可识别的秘密格式。原生调用返回及结构化结果保持各自类型；这不构成对任意未知秘密的完整识别保证。[脱敏](../src/audit.rs) · [渲染](../src/client/render.rs)
 
-输出、任务、工具代号和审计游标属于各自连接；每次调用重新检查授权与提供者。文件存储在共享用户目录不意味着另一连接可读取它。断线与 reload 会清理连接拥有的进程和路由，旧连接 ID 不再可用。Pi/OpenCode 的既有外部服务不属于连接拥有的进程；ssmcp 关闭与它们的桥接，不终止这些服务。
+输出、任务、工具代号和审计游标属于各自连接；每次调用重新检查授权与提供者。文件存储在共享用户目录不意味着另一连接可读取它。断线与 reload 会清理连接拥有的进程和路由，旧连接 ID 不再可用。SSMCP peer 网关继续管理自身的进程。
 
 注册连接时，服务器把 `--allow` 中当前中继的门户用户名解析为稳定账号 ID；控制请求按已验证身份和目标 ACL 检查。注册者仅是来源记录，匿名连接没有注册者；调用与结果流量计入实际控制账号。[解析](../src/broker/allow.rs) · [访问与计费](../src/broker.rs)
 
