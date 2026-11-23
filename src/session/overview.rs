@@ -154,21 +154,17 @@ async fn snapshot(sampler: &mut metrics::Sampler) -> crate::Result<Value> {
     .buffer_unordered(8);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
     let mut observed = std::collections::BTreeMap::new();
-    loop {
-        match tokio::time::timeout_at(deadline, pending.next()).await {
-            Ok(Some((target, mut value))) => {
-                if value["state"] == "connected" || value["state"] == "connecting" {
-                    if let Some(pid) = value["pid"]
-                        .as_u64()
-                        .and_then(|value| u32::try_from(value).ok())
-                    {
-                        value["metrics"] = sampler.observe(&target, pid);
-                    }
-                }
-                observed.insert(target, value);
-            }
-            Ok(None) | Err(_) => break,
+    while let Ok(Some((target, mut value))) =
+        tokio::time::timeout_at(deadline, pending.next()).await
+    {
+        if (value["state"] == "connected" || value["state"] == "connecting")
+            && let Some(pid) = value["pid"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+        {
+            value["metrics"] = sampler.observe(&target, pid);
         }
+        observed.insert(target, value);
     }
     drop(pending);
     let sessions = inventory

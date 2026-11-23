@@ -259,19 +259,23 @@ fn systemd_scope_limit_child_fixture() {
     let directory = std::path::PathBuf::from(std::env::var_os("SSMCP_LIMIT_TEST_DIR").unwrap());
     limits("50%", "256MiB").verify_current(&unit).unwrap();
     let descendant = std::env::var_os("SSMCP_LIMIT_TEST_DESCENDANT").is_some();
-    if !descendant {
-        // The guardian owns cleanup; this fixture intentionally keeps the child alive.
-        let _owned_descendant = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "session::limits::tests::systemd_scope_limit_child_fixture",
-                "--nocapture",
-            ])
-            .env("SSMCP_LIMIT_TEST_DESCENDANT", "1")
-            .process_group(0)
-            .spawn()
-            .unwrap();
-    }
+    let child = if !descendant {
+        // Keep the child owned and wait for it after publishing the parent PID.
+        Some(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "session::limits::tests::systemd_scope_limit_child_fixture",
+                    "--nocapture",
+                ])
+                .env("SSMCP_LIMIT_TEST_DESCENDANT", "1")
+                .process_group(0)
+                .spawn()
+                .unwrap(),
+        )
+    } else {
+        None
+    };
     let name = if descendant {
         "descendant.pid"
     } else {
@@ -281,6 +285,10 @@ fn systemd_scope_limit_child_fixture() {
     std::fs::write(&temporary, std::process::id().to_string()).unwrap();
     // Publish readiness only after the complete PID is visible to the observer.
     std::fs::rename(temporary, directory.join(name)).unwrap();
+    if let Some(mut child) = child {
+        let status = child.wait().unwrap();
+        panic!("owned descendant exited before guardian shutdown: {status}");
+    }
     loop {
         std::thread::park();
     }

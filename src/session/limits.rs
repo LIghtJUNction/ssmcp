@@ -194,15 +194,14 @@ impl Limits {
                 );
             }
         }
-        if let Some(bytes) = self.memory_bytes {
-            if !memory
+        if let Some(bytes) = self.memory_bytes
+            && !memory
                 .and_then(|value| value.trim().parse::<u64>().ok())
                 .is_some_and(|limit| limit <= bytes)
-            {
-                return Err(
-                    "memory.max is missing, unlimited, malformed or exceeds --memory-limit".into(),
-                );
-            }
+        {
+            return Err(
+                "memory.max is missing, unlimited, malformed or exceeds --memory-limit".into(),
+            );
         }
         Ok(())
     }
