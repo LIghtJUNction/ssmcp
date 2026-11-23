@@ -18,6 +18,17 @@ pub(crate) struct Files {
 }
 
 impl Files {
+    pub(crate) async fn safety_events(&self, cursor: u64, limit: usize) -> Result<Value, String> {
+        self.workspace
+            .perform(
+                "ssmcp.fs.events",
+                serde_json::json!({
+                    "stream":"safety", "cursor":cursor, "max_events":limit
+                }),
+            )
+            .await
+    }
+
     pub(crate) fn new(context: &ConstructorContext) -> Result<Arc<Self>, String> {
         Ok(Arc::new(Self {
             workspace: Workspace::with_output(context.root.clone(), context.output.clone())?,

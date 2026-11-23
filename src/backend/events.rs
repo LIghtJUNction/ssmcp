@@ -214,6 +214,10 @@ impl EventLog {
         )
     }
 
+    pub(crate) fn memory_only(label: &str) -> Arc<Self> {
+        Self::create(label, None, AuditMode::default())
+    }
+
     pub fn with_output(label: &str, output: Arc<crate::output::OutputStore>) -> Arc<Self> {
         Self::with_output_and_audit(label, output, AuditMode::default())
     }

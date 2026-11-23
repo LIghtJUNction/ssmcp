@@ -97,6 +97,7 @@ Manage
   tools [status|check|update]    Inspect or update this client's tool repository
   sessions · attach · service  Saved and background sessions
   computer                     Zuse CLI version and installation
+  safety [status]              Show native filesystem safety coverage
   setup · ui · 007             Setup, appearance and recovery
 
 Options
@@ -2103,6 +2104,9 @@ pub async fn run() -> crate::Result<()> {
     if let Some(request) = version::request(&args)? {
         print!("{}", version::render(request)?);
         return Ok(());
+    }
+    if args.first().and_then(|arg| arg.to_str()) == Some("safety") {
+        return crate::workspace::safety::run(&args[1..]).await;
     }
     if let Some(output) = paths::output(&args)? {
         print!("{output}");
