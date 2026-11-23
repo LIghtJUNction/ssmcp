@@ -152,8 +152,8 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
     let mut assets = None;
     let mut pairing = None;
     let mut public_origin = None;
-    let mut options = arguments[1..].chunks_exact(2);
-    for pair in &mut options {
+    let (options, remainder) = arguments[1..].as_chunks::<2>();
+    for pair in options {
         match pair[0].as_str() {
             "--listen" => {
                 listen = pair[1]
@@ -172,7 +172,7 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
             _ => return Err(format!("unknown gui option {}\n{HELP}", pair[0]).into()),
         }
     }
-    if !options.remainder().is_empty() {
+    if !remainder.is_empty() {
         return Err("gui options require values".into());
     }
     if !listen.ip().is_loopback() {
@@ -188,10 +188,10 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
     }
     let parent = pairing.parent().ok_or("pairing file has no parent")?;
     super::verify_directory(parent)?;
-    if let Some(assets) = &assets {
-        if parent.canonicalize()?.starts_with(assets) {
-            return Err("pairing credentials must stay outside the public assets directory".into());
-        }
+    if let Some(assets) = &assets
+        && parent.canonicalize()?.starts_with(assets)
+    {
+        return Err("pairing credentials must stay outside the public assets directory".into());
     }
     if pairing.try_exists()? {
         let previous: Value = super::read_json(&pairing)?;

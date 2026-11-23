@@ -222,13 +222,13 @@ impl Arguments {
             }
             _ => {}
         }
-        if let Request::Wait { wait_ms, .. } = &request {
-            if *wait_ms > crate::wire::MAX_OBSERVATION_WAIT_MS {
-                return Err(format!(
-                    "events wait_ms must be 0..={}",
-                    crate::wire::MAX_OBSERVATION_WAIT_MS
-                ));
-            }
+        if let Request::Wait { wait_ms, .. } = &request
+            && *wait_ms > crate::wire::MAX_OBSERVATION_WAIT_MS
+        {
+            return Err(format!(
+                "events wait_ms must be 0..={}",
+                crate::wire::MAX_OBSERVATION_WAIT_MS
+            ));
         }
         Ok(Self {
             client_id,
@@ -919,14 +919,11 @@ pub(crate) fn authorize_observation_now(
 
 pub(crate) async fn observe(
     broker: &Broker,
-    user: &str,
-    access_token: &str,
+    (user, access_token): (&str, &str),
     client_id: &str,
-    agent_id: &str,
-    agent_token: &str,
+    agent_credentials: (&str, &str),
     subscription_id: &str,
-    limit: usize,
-    wait_ms: u64,
+    (limit, wait_ms): (usize, u64),
     exclude_origin_wait_id: Option<&str>,
 ) -> Result<Value, String> {
     validate_observation(subscription_id, limit, wait_ms)?;
@@ -935,7 +932,7 @@ pub(crate) async fn observe(
         user,
         access_token,
         client_id,
-        Some((agent_id, agent_token)),
+        Some(agent_credentials),
     )
     .await?;
     let record = broker
@@ -1044,8 +1041,7 @@ pub(crate) fn wait_transition(
         Some(agent_id),
         kind,
         Value::Object(fields),
-        None,
-        None,
+        (None, None),
     );
 }
 
@@ -1291,14 +1287,11 @@ pub(crate) async fn dispatch(
                     observation.suspend();
                     observe(
                         &broker,
-                        &user,
-                        &access_token,
+                        (&user, &access_token),
                         &context.actor.client_id,
-                        &context.actor.agent_id,
-                        &context.binding.token,
+                        (&context.actor.agent_id, &context.binding.token),
                         &subscription_id,
-                        limit,
-                        remaining,
+                        (limit, remaining),
                         Some(&observation.id),
                     )
                     .await?
@@ -1710,12 +1703,14 @@ mod tests {
                 member["agent_id"].as_str(),
                 "message.sent",
                 json!({"message_id":"private-message"}),
-                Some(vec![format!(
-                    "{}:{}",
-                    source.client_id(),
-                    member["agent_id"].as_str().unwrap()
-                )]),
-                None,
+                (
+                    Some(vec![format!(
+                        "{}:{}",
+                        source.client_id(),
+                        member["agent_id"].as_str().unwrap()
+                    )]),
+                    None,
+                ),
             )
             .unwrap();
         let read = fixture

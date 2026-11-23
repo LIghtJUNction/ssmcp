@@ -395,19 +395,12 @@ mod tests {
         let native = args(&[
             "--agent=next-caller",
             "--load-harness",
-            "codex",
+            "ssmcp",
             "--",
-            "--server",
-            "native-server",
-            "--context",
-            "native-context",
-            "--title",
-            "--context=literal",
-            "--help",
-            "--socket",
-            "native.sock",
-            "中文参数",
-            "",
+            "--endpoint",
+            "https://peer.example/alice",
+            "--token-env",
+            "SSMCP_TEST_PEER_TOKEN",
         ]);
         let mut initial = args(&[
             "--server",
@@ -453,18 +446,12 @@ mod tests {
             let mut trailing = socket;
             trailing.extend(args(&[
                 "--load-harness",
-                "claude-code",
+                "ssmcp",
                 "--",
-                "--server",
-                "native-server",
-                "--context",
-                "native-context",
-                "--title",
-                "native title",
-                "--help",
-                "--socket",
-                "native.sock",
-                "",
+                "--endpoint",
+                "https://peer.example/alice",
+                "--token-env",
+                "SSMCP_TEST_PEER_TOKEN",
             ]));
             let mut initial = args(&["local"]);
             initial.extend(trailing.clone());

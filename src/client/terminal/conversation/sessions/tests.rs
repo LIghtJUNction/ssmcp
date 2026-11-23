@@ -289,7 +289,7 @@ fn history_key_keeps_same_name_threads_and_the_composition_separate() {
         assert_eq!(snapshot["thread_history"]["scope"]["kind"], "thread");
         assert_eq!(
             snapshot["thread_history"]["scope"]["provenance"],
-            "authenticated_call_scope"
+            "authenticated_call_scope_or_local_input_lease"
         );
         assert_eq!(snapshot["thread_history"]["read_only"], true);
         assert_eq!(state.chat_saved_draft(), before);

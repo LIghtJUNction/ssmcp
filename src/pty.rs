@@ -638,11 +638,11 @@ impl Terminal {
             }
         }
         let reader = self.reader.lock().unwrap().take();
-        if let Some(mut reader) = reader {
-            if timeout(Duration::from_secs(2), &mut reader).await.is_err() {
-                reader.abort();
-                let _ = reader.await;
-            }
+        if let Some(mut reader) = reader
+            && timeout(Duration::from_secs(2), &mut reader).await.is_err()
+        {
+            reader.abort();
+            let _ = reader.await;
         }
         self.master.lock().unwrap().take();
         let mut output = self.output.lock().unwrap();

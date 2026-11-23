@@ -37,7 +37,7 @@ LEGACY = "2025-11-25"
 PUBLIC_URL = "https://ssmcp.example"
 PROTOCOL_META = "io.modelcontextprotocol/protocolVersion"
 CAPABILITIES_META = "io.modelcontextprotocol/clientCapabilities"
-PUBLIC_TOOLS = frozenset({"list", "code_mode", "collab", "await", "messages", "link"})
+PUBLIC_TOOLS = frozenset({"list", "code_mode", "collab", "await", "events", "messages", "link"})
 
 SHELL_TOOLS = frozenset({
     "terminal.read", "terminal.write", "terminal.resize", "terminal.status",
@@ -58,14 +58,15 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.output.read", "ssmcp.output.stat", "ssmcp.output.cleanup",
     "ssmcp.time.now", "ssmcp.time.wait",
     "ssmcp.exec.start", "ssmcp.exec.list", "ssmcp.exec.status", "ssmcp.exec.wait",
-    "ssmcp.exec.read", "ssmcp.exec.write", "ssmcp.exec.cancel", "ssmcp.exec.forget", "ssmcp.exec.events",
+    "ssmcp.exec.read", "ssmcp.exec.write", "ssmcp.exec.resize", "ssmcp.exec.cancel",
+    "ssmcp.exec.forget", "ssmcp.exec.events",
     "ssmcp.harnesses.list", "ssmcp.harnesses.load", "ssmcp.audit.events",
     "ssmcp.plugins.list", "ssmcp.plugins.load", "ssmcp.plugins.unload",
     "ssmcp.ui.listener",
     "ssmcp.ui.reply",
     "ssmcp.ui.wait",
     "ssmcp.ui.tool_summary",
-    "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.present", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.question_ack","ssmcp.ui.question_delivery", "ssmcp.ui.events", "ssmcp.ui.harness",
+    "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.present", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.question_ack","ssmcp.ui.question_delivery", "ssmcp.ui.events",
     "ssmcp.computer.version", "ssmcp.computer.download",
     "ssmcp.computer.install", "ssmcp.computer.uninstall",
 })
@@ -573,13 +574,8 @@ class Harness:
             raise AssertionError("invalid external fixture invocation record")
         return rows
 
-    def client_environment(self, label, *, harness=None, fixture=None, fixture_args=(), harnesses=()):
-        """Expose only shell utilities and the explicitly selected local fixture.
-
-        Production loads external providers only on explicit request. Never inherit
-        installed harnesses here: the tests must not start a real model account.
-        Every fixture invocation is recorded before even handling --version.
-        """
+    def client_environment(self, label):
+        """Use only owned utilities and canaries for retired executables."""
         directory = self.directory / f"{label}-bin"
         directory.mkdir(mode=0o700)
         (directory / "client.toml").touch(exist_ok=True)
@@ -591,35 +587,15 @@ class Harness:
         # Fixtures have env-based shebangs; retain the running interpreter even
         # when the rest of the host PATH is deliberately unavailable.
         (directory / "python3").symlink_to(Path(sys.executable).absolute())
-        installed = list(harnesses)
-        if harness is not None:
-            installed.append((harness, fixture, fixture_args))
-        elif fixture is not None or fixture_args:
-            raise ValueError("fixture arguments require an explicit harness")
-        names = {"codex": "codex", "cc": "claude", "pi": "pi", "opencode": "opencode"}
-        for kind, program, arguments in installed:
-            if kind not in names or program is None:
-                raise ValueError("a known harness and local fixture must be supplied together")
-            wrapper = directory / names[kind]
-            if wrapper.exists():
-                raise ValueError(f"duplicate harness fixture: {kind}")
-            provider = "claude" if kind == "cc" else kind
+        for provider in ("codex", "claude", "pi", "opencode"):
             invocation_log = directory / "external-invocations.jsonl"
-            executable = [sys.executable, str(Path(program).resolve())]
-            extra = [str(argument) for argument in arguments]
+            wrapper = directory / provider
             wrapper.write_text(
                 f"#!{sys.executable}\n"
                 "import json, os, sys\n"
-                f"record = {{'provider': {provider!r}, 'argv': sys.argv[1:], 'pid': os.getpid()}}\n"
-                f"fd = os.open({str(invocation_log)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)\n"
-                "try:\n"
-                "    os.write(fd, (json.dumps(record, separators=(',', ':')) + '\\n').encode())\n"
-                "finally:\n"
-                "    os.close(fd)\n"
-                "if sys.argv[1:2] == ['--version']:\n"
-                f"    print({(names[kind] + ' fixture 2.3.0')!r})\n"
-                "    raise SystemExit(0)\n"
-                f"os.execv({sys.executable!r}, {executable!r} + sys.argv[1:] + {extra!r})\n"
+                f"with open({str(invocation_log)!r}, 'a', encoding='utf-8') as log:\n"
+                f"    log.write(json.dumps(dict(provider={provider!r}, argv=sys.argv[1:], pid=os.getpid())) + '\\n')\n"
+                "raise SystemExit(99)\n"
             )
             wrapper.chmod(0o700)
         # Each child gets only the owned fixture account and isolated lifecycle
@@ -645,14 +621,12 @@ class Harness:
         })
         return self.account_gateway.seed_login(environment)
 
-    def start_client(self, label="client", *, name="workstation", cwd=None, harness=None,
-                     fixture=None, fixture_args=(), destination=None, harnesses=(), extra_env=None):
+    def start_client(self, label="client", *, name="workstation", cwd=None,
+                     destination=None, extra_env=None):
         if destination is not None:
             raise ValueError("SSH destinations are retired; this fixture uses its owned account server")
         command = self.client_command(name=name)
-        environment = self.client_environment(
-            label, harness=harness, fixture=fixture, fixture_args=fixture_args, harnesses=harnesses
-        )
+        environment = self.client_environment(label)
         if extra_env:
             environment.update(extra_env)
         process = self.spawn(label, command, stdout=subprocess.PIPE, cwd=cwd, env=environment)
@@ -721,7 +695,7 @@ class Harness:
         status, result, headers = self.rpc("tools/list")
         self.check(status == 200 and {tool["name"] for tool in result["result"]["tools"]} == PUBLIC_TOOLS
                    and len(result["result"]["tools"]) == len(PUBLIC_TOOLS),
-                   "legacy tools/list exposes exactly list, code_mode, collab, await, messages and link")
+                   "legacy tools/list exposes exactly link, list, code_mode, collab, await, events and messages")
         inventory = self.public_call("list")
         self.check(len(inventory["clients"]) == 1
                    and inventory["clients"][0]["id"] == self.client_id
@@ -851,17 +825,20 @@ class Harness:
         self.check(self.call("terminal.status")["running"], "runtime failures leave the original client usable")
         # Local observation is independent of terminal.read and PTY echo settings.
         self.check(credentials.get("type") == "shell", "shell is the default backend")
-        self.call("terminal.write", {"data": "stty -echo; printf '%s%s\\n' 'SSMCP_' 'LIVE_OUTPUT'\n"})
+        self.call("terminal.write", {"data": "stty -echo && printf '%s%s\\n' 'SSMCP_' 'LIVE_OUTPUT'\n"})
         log_path = self.directory / "client.log"
         wait_for(lambda: "SSMCP_LIVE_OUTPUT" in log_path.read_text(errors="replace"), description="live shell output on local stderr")
         self.check(True, "local stderr receives shell output without any MCP read")
         self.call("terminal.write", {"data": "printf '%s%s\\n' 'SSMCP_' 'ECHO_DISABLED'; stty echo\n"})
         wait_for(lambda: "SSMCP_ECHO_DISABLED" in log_path.read_text(errors="replace"), description="output with PTY echo disabled")
         transcript = log_path.read_text(errors="replace")
-        self.check(transcript.count("SSMCP_ECHO_DISABLED") == 1
-                   and "'ECHO_DISABLED'; stty echo" not in transcript
-                   and "[ssmcp shell input]" not in transcript,
-                   "local transcript shows PTY output once and respects disabled input echo")
+        count = transcript.count("SSMCP_ECHO_DISABLED")
+        echoed = "'ECHO_DISABLED'; stty echo" in transcript
+        synthetic = "[ssmcp shell input]" in transcript
+        evidence = f"count={count}, echoed={echoed}, synthetic_input_tag={synthetic}"
+        self.check(count == 1, f"local transcript shows PTY output once: {evidence}")
+        self.check(not echoed, f"local transcript respects disabled input echo: {evidence}")
+        self.check(not synthetic, f"local transcript omits synthetic input tags: {evidence}")
         self.call("terminal.resize", {"rows": 37, "cols": 91})
         self.call("terminal.write", {"data": "stty size; tty; printf '%s%s:%s\\n' 'SSMCP_' 'SHELL' \"$$\"\n"})
         match, cursor, output = self.read_until(r"[\r\n]SSMCP_SHELL:(\d+)\r?\n")

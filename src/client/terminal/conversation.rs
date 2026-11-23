@@ -858,12 +858,8 @@ impl State {
             | "/archived" | "/unarchive" => {
                 return Err("Saved history, archives and context checkpoints have been removed. This session keeps only live process logs.".into());
             }
-            "/pi" | "/cc" | "/codex" => {
-                if self.preview {
-                    return Err("Preview does not invoke installed harnesses".into());
-                }
-                crate::client::interface::harness::submit(&command[1..], rest)?;
-                self.notice = Some("Harness request queued · results appear here".into());
+            "/pi" | "/cc" | "/codex" | "/opencode" => {
+                return Err("Embedded harness commands were removed. Use ! to run a local command explicitly, or connect an external MCP client.".into());
             }
             "/track-command" => {
                 if self.preview {

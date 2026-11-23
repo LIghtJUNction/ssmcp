@@ -188,6 +188,7 @@ enum Presentation {
     Native,
     Control,
     LocalDiscovery,
+    LiveTerminalBytes,
 }
 
 #[cfg(all(test, unix))]
@@ -253,11 +254,6 @@ impl EventLog {
         receive
     }
 
-    pub(crate) fn map_background(&self, path: &std::path::Path) {
-        if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
-            pool.map_background(path);
-        }
-    }
     pub fn push(&self, event: Value) {
         if crate::client::render::reserved_control_event(&event) {
             return;
@@ -272,6 +268,16 @@ impl EventLog {
             return;
         }
         self.push_inner(event, Presentation::Native, source, None);
+    }
+
+    /// Live PTYs already render original bytes through the terminal path.
+    /// Keep the native event and its provenance without a second rendering.
+    pub(crate) fn push_live_terminal_bytes(
+        &self,
+        event: Value,
+        source: crate::runtime::call_scope::Source,
+    ) {
+        self.push_inner(event, Presentation::LiveTerminalBytes, source, None);
     }
 
     /// Exact native job instants travel beside the redacted JSON. Neither
@@ -319,9 +325,6 @@ impl EventLog {
         timing: Option<crate::runtime::time::ExecutionTiming>,
     ) {
         let mut event = self.audit_mode.event(event);
-        if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
-            pool.native_event(&self.label, &event);
-        }
         // Serialise persistence, display and sequence assignment for this stream.
         let mut archive = self.archive.lock().unwrap_or_else(|e| e.into_inner());
         let external_output = self
@@ -329,20 +332,23 @@ impl EventLog {
             .as_ref()
             .and_then(std::sync::Weak::upgrade)
             .is_some()
-            && (event["method"] == "command/exec/outputDelta"
-                || matches!(
-                    event["type"].as_str(),
-                    Some("background_output" | "bash_execution_update")
-                ));
+            && self.label == "shell"
+            && event["method"] == "command/exec/outputDelta";
         if !external_output && presentation != Presentation::LocalDiscovery {
             #[cfg(all(test, unix))]
             if let Some(sink) = self.projection.lock().unwrap().as_ref() {
                 let _ = sink.try_send((event.clone(), source.clone()));
             }
-            if presentation == Presentation::Control {
-                crate::client::render::trusted_event(&self.label, &event);
-            } else {
-                crate::client::render::scoped_timed_event(&self.label, &event, source, timing);
+            match presentation {
+                Presentation::LiveTerminalBytes => {
+                    crate::session::attach::record_scoped_event(
+                        &self.label,
+                        &event,
+                        &source.display(),
+                    );
+                }
+                Presentation::Control => crate::client::render::trusted_event(&self.label, &event),
+                _ => crate::client::render::scoped_timed_event(&self.label, &event, source, timing),
             }
         }
         // Codex command streaming carries bytes as base64. Keep the original event

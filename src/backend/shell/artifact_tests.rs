@@ -510,16 +510,30 @@ async fn shutdown_reclaims_only_explicitly_temporary_unreferenced_jobs() {
         &shell,
         &owner,
         true,
-        r#"printf live > "$TMPDIR/live"; exec /bin/sleep 60"#,
+        r#"printf live > "$TMPDIR/live" && printf ready && exec /bin/sleep 60"#,
     )
     .await;
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while !path(&active).join("live").is_file() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+    // A file can exist before the child has written it. The child emits
+    // this marker only after the write and the redirection have completed.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut stdout = String::new();
+        let mut cursor = 0;
+        while stdout.len() < "ready".len() {
+            let page = shell
+                .call(
+                    "ssmcp.exec.read",
+                    json!({"job_id":active["job_id"], "stdout_cursor":cursor, "wait_ms":1000}),
+                )
+                .await
+                .unwrap();
+            cursor = page["stdout_cursor"].as_u64().unwrap();
+            stdout.push_str(page["stdout"].as_str().unwrap());
+            assert_eq!(page["running"], true, "{page}");
         }
+        assert_eq!(stdout, "ready");
     })
     .await
-    .unwrap();
+    .expect("the active fixture never confirmed its completed write");
 
     // Client close and reload both invoke this same shutdown path.
     shell.shutdown().await;

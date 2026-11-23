@@ -1,12 +1,7 @@
 //! Native tools are always available; optional external harnesses load only on request.
-pub mod cc;
-pub mod codex;
 pub mod events;
-pub mod opencode;
 pub(crate) mod peer;
-pub mod pi;
 pub mod process;
-pub mod rpc;
 pub mod shell;
 
 // Keep the established public startup API while the implementation belongs to

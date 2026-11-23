@@ -2,7 +2,7 @@
 //! Owns provider state, registration, native dispatch and cleanup.
 mod lazy;
 use super::super::native_host::{Call, NativePlugin, PluginFuture};
-use crate::backend::{cc, codex, opencode, peer, pi, process, result, shell};
+use crate::backend::{peer, result, shell};
 use crate::{
     output::OutputStore,
     pty::Terminal,
@@ -18,94 +18,16 @@ use std::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
-use tokio::io::AsyncReadExt;
-
-#[derive(Clone)]
-enum Driver {
-    Codex(Arc<codex::Codex>),
-    Claude(Arc<cc::Claude>),
-    Pi(Arc<pi::Pi>),
-    OpenCode(Arc<opencode::OpenCode>),
-    Peer(Arc<peer::Peer>),
-}
-impl Driver {
-    async fn tools(&self) -> Result<Vec<crate::catalog::ToolDescriptor>, String> {
-        let tools = match self {
-            Self::Codex(d) => return d.background_catalog().await,
-            Self::Claude(d) => return d.compact_tools().await,
-            Self::Pi(d) => d.tools().await,
-            Self::OpenCode(d) => return d.compact_tools().await,
-            Self::Peer(d) => return d.compact_tools().await,
-        }?;
-        crate::catalog::compact(tools)
-    }
-    async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
-        match self {
-            Self::Codex(d) => d.call(name, args).await,
-            Self::Claude(d) => d.call(name, args).await,
-            Self::Pi(d) => d.call(name, args).await,
-            Self::OpenCode(d) => d.call(name, args).await,
-            Self::Peer(d) => d.call(name, args).await,
-        }
-    }
-    async fn shutdown(&self) {
-        match self {
-            Self::Codex(d) => d.shutdown().await,
-            Self::Claude(d) => d.shutdown().await,
-            Self::Pi(d) => d.shutdown().await,
-            Self::OpenCode(d) => d.shutdown().await,
-            Self::Peer(d) => d.shutdown().await,
-        }
-    }
-    async fn details(&self) -> Value {
-        match self {
-            Self::Codex(d) => d.diagnostics().await,
-            Self::Pi(d) => d.diagnostics().await,
-            Self::Claude(_) => json!({"scope":"native MCP tools"}),
-            Self::OpenCode(_) => json!({"scope":"native OpenAPI operations"}),
-            Self::Peer(d) => d.details(),
-        }
-    }
-}
-
-type Installed = (PathBuf, u64, std::time::SystemTime);
-
-fn reject_self_program(program: &Path) -> Result<(), String> {
-    let own = std::env::current_exe().map_err(|_| "could not identify the running ssmcp binary")?;
-    let same_path = program
-        .canonicalize()
-        .ok()
-        .zip(own.canonicalize().ok())
-        .is_some_and(|(a, b)| a == b);
-    #[cfg(unix)]
-    let same_file = {
-        use std::os::unix::fs::MetadataExt;
-        let selected = std::fs::metadata(program).map_err(|e| e.to_string())?;
-        #[cfg(target_os = "linux")]
-        let running = std::fs::metadata("/proc/self/exe").map_err(|e| e.to_string())?;
-        #[cfg(not(target_os = "linux"))]
-        let running = std::fs::metadata(&own).map_err(|e| e.to_string())?;
-        selected.dev() == running.dev() && selected.ino() == running.ino()
-    };
-    #[cfg(not(unix))]
-    let same_file = false;
-    if same_path || same_file {
-        return Err("an agent executable resolves to the running ssmcp; use --load-harness ssmcp with an explicit authenticated MCP peer endpoint".into());
-    }
-    Ok(())
-}
 
 pub struct Process {
     observer: Option<Arc<crate::observer::Pool>>,
     shell: Arc<shell::Shell>,
     pub(crate) registry: Arc<Registry>,
     output: Arc<OutputStore>,
-    drivers: StdMutex<BTreeMap<Provider, Driver>>,
+    drivers: StdMutex<BTreeMap<Provider, Arc<peer::Peer>>>,
     diagnostics: StdMutex<BTreeMap<Provider, Value>>,
     loads: lazy::Loads,
-    installed: StdMutex<BTreeMap<Provider, Installed>>,
     closed: AtomicBool,
     chat_enabled: AtomicBool,
     harness: Option<crate::client::agent::Selection>,
@@ -180,7 +102,6 @@ impl Process {
             drivers: StdMutex::new(BTreeMap::new()),
             diagnostics: StdMutex::new(lazy::initial_diagnostics()),
             loads: lazy::Loads::default(),
-            installed: StdMutex::new(BTreeMap::new()),
             closed: AtomicBool::new(false),
             chat_enabled: AtomicBool::new(true),
             harness,
@@ -244,19 +165,7 @@ impl Process {
                 diagnostic["status"] = json!("loading");
                 diagnostic["activation"] = json!("explicit");
             }
-            let mut installed = backend.installed.lock().unwrap().get(&provider).cloned();
-            let result = backend.refresh(provider, name, &mut installed).await;
-            {
-                let mut known = backend.installed.lock().unwrap();
-                match installed {
-                    Some(identity) => {
-                        known.insert(provider, identity);
-                    }
-                    None => {
-                        known.remove(&provider);
-                    }
-                }
-            }
+            let result = backend.refresh(provider, name).await;
             crate::memory::release_unused_heap();
             result
         })?;
@@ -269,87 +178,8 @@ impl Process {
         self.shell.clone()
     }
 
-    async fn refresh(
-        self: &Arc<Self>,
-        provider: Provider,
-        name: &str,
-        installed: &mut Option<Installed>,
-    ) -> Result<Value, String> {
-        let mut detected_program = None;
-        let mut detected_version = None;
-        let outcome = async {
-            if provider == Provider::Peer {
-                return self.refresh_peer().await;
-            }
-            let arguments = self.harness.as_ref().filter(|agent| agent.provider == provider)
-                .map_or(&[][..], |agent| agent.arguments.as_slice());
-            let program = crate::program::executable(name)?;
-            reject_self_program(&program)?;
-            let metadata = std::fs::metadata(&program).map_err(|e| e.to_string())?;
-            detected_program = Some(program.clone());
-            let identity = (program.clone(), metadata.len(), metadata.modified().map_err(|e| e.to_string())?);
-            if installed.as_ref() != Some(&identity) {
-                self.registry.invalidate(provider);
-                let old = self.drivers.lock().unwrap().remove(&provider);
-                if let Some(old) = old { old.shutdown().await; }
-                *installed = None;
-            }
-            let mut driver = self.drivers.lock().unwrap().get(&provider).cloned();
-            let new_driver = driver.is_none();
-            if new_driver {
-                detected_version = Some(probe_version(&program).await?);
-                let output = self.output.clone();
-                let future = async {
-                    match provider {
-                        Provider::Codex => codex::Codex::start_with_output(program.as_os_str(), arguments, output).await.map(Driver::Codex),
-                        Provider::Claude => cc::Claude::start_with_output(program.as_os_str(), arguments, output).await.map(Driver::Claude),
-                        Provider::Pi => pi::Pi::start_discovered_with_output(program.as_os_str(), &[], output).await.map(Driver::Pi),
-                        Provider::OpenCode => {
-                            let endpoint = std::env::var("SSMCP_OPENCODE_URL").map_err(|_| "OpenCode is installed; set SSMCP_OPENCODE_URL to an already-running native loopback service. Discovery does not start scheduled work.")?;
-                            let password = std::env::var("OPENCODE_PASSWORD").map_err(|_| "OpenCode attachment requires the native OPENCODE_PASSWORD")?;
-                            opencode::OpenCode::attach_with_output(&endpoint, &password, output).await.map(Driver::OpenCode)
-                        }
-                        _ => unreachable!(),
-                    }
-                };
-                let opening = async {
-                    tokio::time::timeout(Duration::from_secs(90), future).await
-                        .map_err(|_| "native protocol handshake timed out".to_owned())?
-                        .map_err(|e| e.to_string())
-                };
-                driver = Some(opening.await?);
-            } else {
-                detected_version = self.diagnostics.lock().unwrap().get(&provider)
-                    .and_then(|d| d["version"].as_str().map(str::to_owned));
-            }
-            let driver = driver.unwrap();
-            let listing = tokio::time::timeout(Duration::from_secs(75), driver.tools());
-            let listed = listing.await;
-            let catalog = match listed {
-                Ok(Ok(catalog)) => catalog,
-                result => {
-                    driver.shutdown().await;
-                    return Err(match result {
-                        Ok(Err(error)) => error,
-                        _ => "native capability enumeration timed out".into(),
-                    });
-                }
-            };
-            let count = catalog.len();
-            let details = driver.details().await;
-            // Install the destination before publishing its current-generation routes.
-            let publish = || {
-                let mut drivers = self.drivers.lock().unwrap();
-                drivers.insert(provider, driver.clone());
-                let published = self.registry.replace_catalog(provider, catalog);
-                if published.is_err() { drivers.remove(&provider); }
-                published
-            };
-            let published = publish();
-            if let Err(error) = published { driver.shutdown().await; return Err(error); }
-            *installed = Some(identity);
-            Ok(json!({"provider":name,"status":"ready","executable":program,"version":detected_version,"tools":count,"details":details}))
-        }.await;
+    async fn refresh(&self, provider: Provider, name: &str) -> Result<Value, String> {
+        let outcome = self.refresh_peer().await;
         let diagnostic = match outcome {
             Ok(value) => value,
             Err(error) => {
@@ -358,8 +188,7 @@ impl Process {
                 if let Some(old) = old {
                     old.shutdown().await
                 }
-                *installed = None;
-                json!({"provider":name,"status":"unavailable","reason":error,"tools":0,"executable":detected_program,"version":detected_version})
+                json!({"provider":name,"status":"unavailable","reason":error,"tools":0,"executable":null,"version":null})
             }
         };
         let changed = {
@@ -408,9 +237,9 @@ impl Process {
         let existing = self.drivers.lock().unwrap().get(&Provider::Peer).cloned();
         let driver = match existing {
             Some(driver) => driver,
-            None => Driver::Peer(peer::Peer::start(settings.clone()).await?),
+            None => peer::Peer::start(settings.clone()).await?,
         };
-        let catalog = match driver.tools().await {
+        let catalog = match driver.compact_tools().await {
             Ok(catalog) => catalog,
             Err(error) => {
                 driver.shutdown().await;
@@ -418,7 +247,7 @@ impl Process {
             }
         };
         let count = catalog.len();
-        let details = driver.details().await;
+        let details = driver.details();
         let published = {
             let mut drivers = self.drivers.lock().unwrap();
             drivers.insert(Provider::Peer, driver.clone());
@@ -539,7 +368,7 @@ impl Process {
                 }
                 _ => Err("unknown optional harness primitive".into()),
             },
-            provider if provider.is_harness() || provider == Provider::Peer => {
+            provider @ Provider::Peer => {
                 let driver = self
                     .drivers
                     .lock()
@@ -549,18 +378,7 @@ impl Process {
                     .ok_or("provider is no longer connected; refresh tools")?;
                 self.registry
                     .validate_route(&id, provider, generation, &native_name)?;
-                let observation = match &self.observer {
-                    Some(pool) => {
-                        pool.native_begin(provider.label(), &native_name, &arguments)
-                            .await?
-                    }
-                    None => None,
-                };
-                let result = driver.call(&native_name, arguments).await;
-                if let (Some(pool), Some(lease)) = (&self.observer, observation) {
-                    pool.native_finish(lease, &result);
-                }
-                result
+                driver.call(&native_name, arguments).await
             }
             _ => Err("provider belongs to the workspace runtime".into()),
         }
@@ -600,63 +418,6 @@ pub(crate) fn diagnostic_changed(previous: &Value, current: &Value) -> bool {
         value
     }
     stable(previous.clone()) != stable(current.clone())
-}
-
-async fn probe_version(program: &Path) -> Result<String, String> {
-    probe_command(tokio::process::Command::new(program)).await
-}
-
-async fn probe_command(mut command: tokio::process::Command) -> Result<String, String> {
-    use std::process::Stdio;
-    crate::program::configure(&mut command);
-    command
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut process = process::Managed::spawn(&mut command).map_err(|e| e.to_string())?;
-    let mut stdout = process
-        .child
-        .stdout
-        .take()
-        .ok_or("version stdout unavailable")?
-        .take(16385);
-    let mut stderr = process
-        .child
-        .stderr
-        .take()
-        .ok_or("version stderr unavailable")?
-        .take(16385);
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let checked = tokio::time::timeout(Duration::from_secs(5), async {
-        let (a, b, status) = tokio::join!(
-            stdout.read_to_end(&mut out),
-            stderr.read_to_end(&mut err),
-            process.wait()
-        );
-        a.map_err(|e| e.to_string())?;
-        b.map_err(|e| e.to_string())?;
-        let status = status.map_err(|e| e.to_string())?;
-        if !status.success() {
-            return Err(format!("version check failed ({status})"));
-        }
-        if out.len() > 16384 || err.len() > 16384 {
-            return Err("version output exceeds 16 KiB".into());
-        }
-        let text = String::from_utf8_lossy(if out.is_empty() { &err } else { &out });
-        let version = text
-            .lines()
-            .find(|line| line.chars().any(|c| c.is_ascii_digit()) && line.contains('.'))
-            .filter(|line| line.len() <= 512)
-            .ok_or("version check returned no recognizable installed version")?;
-        Ok(version.trim().to_owned())
-    })
-    .await
-    .map_err(|_| "version check timed out".to_owned())
-    .and_then(|v| v);
-    process.shutdown().await;
-    checked
 }
 
 fn terminal_tools() -> Value {
@@ -728,10 +489,6 @@ impl NativePlugin for Process {
             Provider::Exec,
             Provider::Ui,
             Provider::Harnesses,
-            Provider::Codex,
-            Provider::Claude,
-            Provider::Pi,
-            Provider::OpenCode,
             Provider::Peer,
         ]
     }
@@ -760,17 +517,5 @@ impl NativePlugin for Process {
             Process::shutdown(&self).await;
             Ok(json!({"status":"stopped"}))
         })
-    }
-}
-
-#[cfg(test)]
-mod agent_tests {
-    use super::*;
-
-    #[test]
-    fn agent_provider_refuses_the_current_binary_before_any_version_probe() {
-        assert!(reject_self_program(&std::env::current_exe().unwrap()).is_err());
-        #[cfg(target_os = "linux")]
-        assert!(reject_self_program(Path::new("/proc/self/exe")).is_err());
     }
 }

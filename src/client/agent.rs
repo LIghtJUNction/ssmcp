@@ -12,15 +12,10 @@ pub(crate) const HELP: &str = "\
 ssmcp [connection options] --load-harness NAME [-- native protocol arguments]
 ssmcp --list-harnesses [--json]
 
-codex                     Codex App Server (installed codex executable)
-claude, claude-code, cc    Claude Code MCP server (installed claude executable)
-pi                        Existing private SSMCP_PI_RPC_SOCKET session
-opencode                  Existing SSMCP_OPENCODE_URL + OPENCODE_PASSWORD service
 ssmcp                     Explicit authenticated MCP peer; no child ssmcp is started
 
-Only Codex/Claude accept native process arguments, and only after --.
-Selection loads a protocol/catalog. It does not send a prompt or start a model turn.
-Other providers keep their existing explicit attachment configuration.
+Third-party harness import has been removed. Run that tool externally, or use
+SSMCP terminal or exec for explicit commands. Existing saved files are retained.
 Peer arguments after --: --endpoint URL --token-env NAME [--socket /absolute/path]
 Use the peer's exact displayed MCP URL, including /USER; this names a gateway,
 not an individual device/session. The environment variable contains its OAuth bearer.
@@ -36,10 +31,12 @@ pub(crate) struct Selection {
 
 impl Selection {
     pub fn new(name: &str, arguments: Vec<OsString>) -> Result<Self, String> {
-        let name = match name {
-            "claude-code" | "cc" => "claude",
-            value => value,
-        };
+        if matches!(
+            name,
+            "codex" | "claude" | "claude-code" | "cc" | "pi" | "opencode"
+        ) {
+            return Err("built-in third-party harness import was removed; run it externally or use explicit terminal/exec. Existing session files are retained".into());
+        }
         let provider = OPTIONAL_PROVIDERS
             .iter()
             .find(|(_, canonical)| *canonical == name)
@@ -55,16 +52,7 @@ impl Selection {
                 return Err("agent arguments cannot contain NUL".into());
             }
         }
-        let peer = if provider == Provider::Peer {
-            Some(peer::Settings::parse(&arguments)?)
-        } else {
-            if !arguments.is_empty() && !matches!(provider, Provider::Codex | Provider::Claude) {
-                return Err(format!(
-                    "--load-harness {name} uses its existing attachment configuration and does not accept process arguments after --; see ssmcp --list-harnesses"
-                ));
-            }
-            None
-        };
+        let peer = Some(peer::Settings::parse(&arguments)?);
         Ok(Self {
             provider,
             arguments,
@@ -124,8 +112,8 @@ pub(super) fn dispatch(args: &[OsString]) -> Result<bool, String> {
             .map(|(_, name)| {
                 json!({
                     "name":name,
-                    "aliases":if *name == "claude" { vec!["claude-code", "cc"] } else { vec![] },
-                    "process_arguments":matches!(*name, "codex" | "claude"),
+                    "aliases":[],
+                    "process_arguments":false,
                     "model_turn_started":false,
                     "installation":"not_probed",
                 })
@@ -150,39 +138,16 @@ mod tests {
     }
 
     #[test]
-    fn harness_cli_aliases_and_separator_preserve_native_arguments() {
-        for alias in ["claude", "claude-code", "cc"] {
-            let selected = options(&[
-                "--list-tools",
-                "--load-harness",
-                alias,
-                "--",
-                "--help",
-                "--name",
-                "中文",
-                "",
-            ]);
-            let selection = selected.harness.unwrap();
-            assert_eq!(selection.provider, Provider::Claude);
-            assert_eq!(
-                selection.arguments,
-                ["--help", "--name", "中文", ""].map(OsString::from)
+    fn removed_harnesses_have_an_explicit_migration_error() {
+        for alias in ["codex", "claude", "claude-code", "cc", "pi", "opencode"] {
+            assert!(
+                Selection::new(alias, vec![])
+                    .unwrap_err()
+                    .contains("third-party harness import was removed")
             );
-            assert!(selected.name.is_none());
         }
-        assert_eq!(
-            options(&["--list-tools", "--load-harness=codex"])
-                .harness
-                .unwrap()
-                .provider,
-            Provider::Codex
-        );
-        assert_eq!(
-            options(&["--list-tools", "--title", "--load-harness"])
-                .title
-                .as_deref(),
-            Some("--load-harness")
-        );
+        assert_eq!(OPTIONAL_PROVIDERS, [(Provider::Peer, "ssmcp")]);
+        assert!(options(&["--list-tools"]).harness.is_none());
     }
 
     #[test]
@@ -240,10 +205,13 @@ mod tests {
     }
 
     #[test]
-    fn harness_saved_session_native_flags_do_not_change_metadata_or_validation() {
-        assert!(super::super::connection_option_takes_value(
-            "--load-harness"
-        ));
+    fn saved_peer_arguments_roundtrip_with_native_session_metadata() {
+        let arguments = [
+            "--endpoint",
+            "https://peer.example/alice",
+            "--token-env",
+            "SSMCP_TEST_PEER_TOKEN",
+        ];
         let parsed = options(&[
             "--server",
             "https://relay.example",
@@ -251,116 +219,41 @@ mod tests {
             "selected",
             "--title",
             "session title",
-            "--load-harness",
-            "codex",
-            "--",
-            "--help",
-            "--version",
-            "--title",
-            "native title",
-            "--context",
-            "native-context",
-        ]);
-        let spec = parsed.session_spec().unwrap();
-        super::super::validate_session_spec(&spec).unwrap();
-        assert_eq!(
-            super::super::session_title(&spec).unwrap().as_deref(),
-            Some("session title")
-        );
-        let restored = Options::parse_saved(&spec).unwrap().unwrap();
-        assert_eq!(parsed.harness, restored.harness);
-        assert_eq!(restored.title.as_deref(), Some("session title"));
-        let mut invalid = spec.clone();
-        invalid.args.insert(0, "--help".into());
-        assert!(super::super::validate_session_spec(&invalid).is_err());
-    }
-
-    #[test]
-    fn legacy_saved_harness_needs_explicit_migration_with_or_without_native_tail() {
-        let parsed = options(&["--server", "https://relay.example", "--name", "legacy"]);
-        for tail in [vec![], vec!["--", "--title", "native title", ""]] {
-            let mut spec = parsed.session_spec().unwrap();
-            spec.args.extend(
-                ["--agent", "codex"]
-                    .into_iter()
-                    .chain(tail)
-                    .map(String::from),
-            );
-            let error = super::super::validate_session_spec(&spec).unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("recreate the session with --load-harness")
-            );
-        }
-    }
-
-    #[test]
-    fn disabled_chat_and_protocol_startup_roundtrip_independently() {
-        let parsed = options(&[
-            "--server",
-            "https://relay.example",
-            "--name",
-            "quiet",
-            "--load-harness",
-            "codex",
             "--input",
             "none",
-            "--agent=next-caller",
+            "--load-harness",
+            "ssmcp",
             "--",
-            "--agent",
-            "",
-            "中文",
+            arguments[0],
+            arguments[1],
+            arguments[2],
+            arguments[3],
         ]);
         let spec = parsed.session_spec().unwrap();
         super::super::validate_session_spec(&spec).unwrap();
         assert!(!super::super::saved_chat_enabled(&spec));
         let restored = Options::parse_saved(&spec).unwrap().unwrap();
-        assert_eq!(restored.chat, parsed.chat);
+        assert_eq!(restored.title.as_deref(), Some("session title"));
         assert_eq!(restored.harness, parsed.harness);
         assert_eq!(
             restored.harness.unwrap().arguments,
-            ["--agent", "", "中文"].map(OsString::from)
+            arguments.map(OsString::from)
         );
     }
 
     #[test]
-    fn harness_session_roundtrip_keeps_selection_and_native_separator() {
-        let token = std::env::temp_dir().join("chat token");
-        let parsed = options(&[
-            "--server",
-            "https://relay.example",
-            "--input",
-            "mcp-http",
-            "--input-host",
-            "127.0.0.1",
-            "--input-port",
-            "8181",
-            "--input-token-file",
-            token.to_str().unwrap(),
-            "--agent=codex",
-            "--load-harness",
-            "claude-code",
-            "--",
-            "--model",
-            "fixture",
-            "--name",
-        ]);
-        let spec = parsed.session_spec().unwrap();
-        let restored = Options::parse_saved(&spec).unwrap().unwrap();
-        assert_eq!(parsed.harness, restored.harness);
-        assert_eq!(restored.server.as_deref(), Some("https://relay.example"));
-        assert_eq!(restored.chat, parsed.chat);
-        assert_eq!(restored.chat.agent, super::super::chat_io::Agent::Codex);
-        super::super::validate_session_spec(&spec).unwrap();
+    fn saved_external_harness_requires_migration_without_changing_saved_arguments() {
+        let parsed = options(&["--server", "https://relay.example", "--name", "legacy"]);
+        let mut spec = parsed.session_spec().unwrap();
+        spec.args
+            .extend(["--load-harness", "codex", "--", "--help"].map(String::from));
+        let original = spec.args.clone();
+        let error = super::super::validate_session_spec(&spec).unwrap_err();
         assert!(
-            spec.args
-                .windows(2)
-                .any(|args| args == ["--load-harness", "claude"])
+            error
+                .to_string()
+                .contains("third-party harness import was removed")
         );
-        assert!(
-            spec.args
-                .ends_with(&["--", "--model", "fixture", "--name"].map(String::from))
-        );
+        assert_eq!(spec.args, original);
     }
 }

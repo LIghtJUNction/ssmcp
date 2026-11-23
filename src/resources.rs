@@ -368,7 +368,7 @@ fn limits() -> Value {
             "listChanged":false,
             "observation":"fresh snapshot per read"
         },
-        "public_tools":["link", "list", "code_mode", "collab", "await", "messages"]
+        "public_tools":["link", "list", "code_mode", "collab", "await", "events", "messages"]
     })
 }
 
@@ -940,7 +940,15 @@ mod tests {
         assert_eq!(limits()["resources"]["subscribe"], false);
         assert_eq!(
             limits()["public_tools"],
-            json!(["link", "list", "code_mode", "collab", "await", "messages"])
+            json!([
+                "link",
+                "list",
+                "code_mode",
+                "collab",
+                "await",
+                "events",
+                "messages"
+            ])
         );
     }
 }

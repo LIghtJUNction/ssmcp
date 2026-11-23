@@ -168,7 +168,7 @@ jobs:
         run: python3 scripts/e2e_account_names.py --bin-dir target/debug --fixture-binary "$SSMCP_E2E_FIXTURE_BINARY" --report "$RUNNER_TEMP/ssmcp-account-names-report.json"
       - name: Exercise session title, reload and output artifacts
         run: python3 scripts/e2e_session_features.py --bin-dir target/debug
-      - name: Exercise discovered harness fixtures through account WebSocket and OAuth
+      - name: Exercise native PTY and exact tool catalog through account WebSocket and OAuth
         run: python3 scripts/e2e_agents.py --bin-dir target/debug
       - name: Exercise unified execution, audit and connection isolation
         run: |
