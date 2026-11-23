@@ -743,15 +743,6 @@ async fn authorize_record(
     access_token: &str,
     context: &Context,
     record: &Subscription,
-) -> Result<Vec<(Arc<Session>, Option<RunBinding>)>, String> {
-    authorize_record_state(broker, access_token, context, record, true).await
-}
-
-async fn authorize_record_state(
-    broker: &Broker,
-    access_token: &str,
-    context: &Context,
-    record: &Subscription,
     require_active: bool,
 ) -> Result<Vec<(Arc<Session>, Option<RunBinding>)>, String> {
     if !record.owns(context) || (require_active && !record.active.load(Ordering::Acquire)) {
@@ -786,13 +777,12 @@ async fn authorize_record_state(
     Ok(sources)
 }
 
-fn native_sources(broker: &Broker, record: &Subscription) -> Value {
-    let ids = record
-        .sources
-        .iter()
-        .map(|source| source.client_id.clone())
-        .collect::<Vec<_>>();
-    let mut snapshot = broker.worker_events.snapshot(&record.owner, &ids);
+fn native_sources(
+    broker: &Broker,
+    record: &Subscription,
+    sources: &[(Arc<Session>, Option<RunBinding>)],
+) -> Value {
+    let mut snapshot = broker.worker_events.snapshot(&record.owner, sources);
     if let Some(sources) = snapshot.as_array_mut() {
         for source in &record.sources {
             if source.binding.is_none() {
@@ -839,17 +829,6 @@ fn attach_native_sources(mut result: Value, sources: Value) -> Result<Value, Str
     Ok(result)
 }
 
-fn touch_native_sources(broker: &Broker, access_token: &str, record: &Subscription) {
-    let ids = record
-        .sources
-        .iter()
-        .map(|source| source.client_id.clone())
-        .collect::<Vec<_>>();
-    broker
-        .worker_events
-        .touch(&record.owner, &ids, access_token);
-}
-
 pub(crate) async fn subscription_sources(
     broker: &Broker,
     user: &str,
@@ -870,7 +849,7 @@ pub(crate) async fn subscription_sources(
     let record = broker
         .event_subscriptions
         .get(&broker.events, &context, subscription_id)?;
-    authorize_record(broker, access_token, &context, &record).await
+    authorize_record(broker, access_token, &context, &record, true).await
 }
 
 pub(crate) async fn authorize_observation(
@@ -962,9 +941,11 @@ pub(crate) async fn observe(
     let record = broker
         .event_subscriptions
         .get(&broker.events, &context, subscription_id)?;
-    authorize_record(broker, access_token, &context, &record).await?;
-    touch_native_sources(broker, access_token, &record);
-    check_native_sources(&native_sources(broker, &record))?;
+    let sources = authorize_record(broker, access_token, &context, &record, true).await?;
+    broker
+        .worker_events
+        .touch(&record.owner, &sources, access_token);
+    check_native_sources(&native_sources(broker, &record, &sources))?;
     let result = broker
         .events
         .wait_excluding(
@@ -975,8 +956,8 @@ pub(crate) async fn observe(
             exclude_origin_wait_id,
         )
         .await?;
-    authorize_record(broker, access_token, &context, &record).await?;
-    let result = attach_native_sources(result, native_sources(broker, &record))?;
+    let sources = authorize_record(broker, access_token, &context, &record, true).await?;
+    let result = attach_native_sources(result, native_sources(broker, &record, &sources))?;
     broker.event_subscriptions.note_delivery(record)?;
     Ok(result)
 }
@@ -1025,7 +1006,7 @@ pub(crate) async fn authorize_run(
             session,
             binding,
         };
-        authorize_record_state(broker, access_token, &context, proof, false).await?;
+        authorize_record(broker, access_token, &context, proof, false).await?;
     }
     let authorization = broker
         .authenticate_now(user, access_token)
@@ -1203,7 +1184,7 @@ pub(crate) async fn dispatch(
             let record = broker
                 .event_subscriptions
                 .get(&broker.events, &context, id)?;
-            let sources = authorize_record(&broker, &access_token, &context, &record)
+            let sources = authorize_record(&broker, &access_token, &context, &record, true)
                 .await
                 .map_err(|error| {
                     format!("events_response_withheld: subscription may exist; {error}")
@@ -1231,7 +1212,7 @@ pub(crate) async fn dispatch(
             )
             .err()
             .map(|error| error.chars().take(512).collect::<String>());
-            result["native_sources"] = native_sources(&broker, &record);
+            result["native_sources"] = native_sources(&broker, &record, &sources);
             broker.event_subscriptions.note_delivery(record)?;
             mutation = true;
             result
@@ -1244,14 +1225,16 @@ pub(crate) async fn dispatch(
                 broker
                     .event_subscriptions
                     .get(&broker.events, &context, &subscription_id)?;
-            authorize_record(&broker, &access_token, &context, &record).await?;
-            touch_native_sources(&broker, &access_token, &record);
-            check_native_sources(&native_sources(&broker, &record))?;
+            let sources = authorize_record(&broker, &access_token, &context, &record, true).await?;
+            broker
+                .worker_events
+                .touch(&record.owner, &sources, &access_token);
+            check_native_sources(&native_sources(&broker, &record, &sources))?;
             let result = broker
                 .events
                 .read(&context.actor, &subscription_id, limit)?;
-            authorize_record(&broker, &access_token, &context, &record).await?;
-            let result = attach_native_sources(result, native_sources(&broker, &record))?;
+            let sources = authorize_record(&broker, &access_token, &context, &record, true).await?;
+            let result = attach_native_sources(result, native_sources(&broker, &record, &sources))?;
             broker.event_subscriptions.note_delivery(record)?;
             result
         }
@@ -1264,9 +1247,11 @@ pub(crate) async fn dispatch(
                 broker
                     .event_subscriptions
                     .get(&broker.events, &context, &subscription_id)?;
-            authorize_record(&broker, &access_token, &context, &record).await?;
-            touch_native_sources(&broker, &access_token, &record);
-            check_native_sources(&native_sources(&broker, &record))?;
+            let sources = authorize_record(&broker, &access_token, &context, &record, true).await?;
+            broker
+                .worker_events
+                .touch(&record.owner, &sources, &access_token);
+            check_native_sources(&native_sources(&broker, &record, &sources))?;
             let mut observation =
                 DirectObservation::start(&broker, &context.actor, &subscription_id)?;
             let started = Instant::now();
@@ -1299,8 +1284,10 @@ pub(crate) async fn dispatch(
                     )
                     .await?
                 } else {
-                    authorize_record(&broker, &access_token, &context, &record).await?;
-                    let result = attach_native_sources(first, native_sources(&broker, &record))?;
+                    let sources =
+                        authorize_record(&broker, &access_token, &context, &record, true).await?;
+                    let result =
+                        attach_native_sources(first, native_sources(&broker, &record, &sources))?;
                     broker.event_subscriptions.note_delivery(record.clone())?;
                     result
                 };
@@ -1325,11 +1312,11 @@ pub(crate) async fn dispatch(
                 broker
                     .event_subscriptions
                     .get(&broker.events, &context, &subscription_id)?;
-            authorize_record(&broker, &access_token, &context, &record).await?;
+            authorize_record(&broker, &access_token, &context, &record, true).await?;
             let result = broker
                 .events
                 .ack(&context.actor, &subscription_id, through)?;
-            authorize_record(&broker, &access_token, &context, &record)
+            authorize_record(&broker, &access_token, &context, &record, true)
                 .await
                 .map_err(|error| {
                     format!("events_response_withheld: acknowledgement may have completed; {error}")
@@ -1345,12 +1332,12 @@ pub(crate) async fn dispatch(
                 &subscription_id,
                 true,
             )?;
-            authorize_record_state(&broker, &access_token, &context, &record, false).await?;
+            authorize_record(&broker, &access_token, &context, &record, false).await?;
             let result = broker
                 .events
                 .unsubscribe(&context.actor, &subscription_id)?;
             broker.event_subscriptions.remove(&subscription_id, &record);
-            authorize_record_state(&broker, &access_token, &context, &record, false)
+            authorize_record(&broker, &access_token, &context, &record, false)
                 .await
                 .map_err(|error| {
                     format!("events_response_withheld: unsubscribe may have completed; {error}")
@@ -1372,7 +1359,7 @@ pub(crate) async fn dispatch(
                 let record = broker
                     .event_subscriptions
                     .get(&broker.events, &context, id)?;
-                authorize_record(&broker, &access_token, &context, &record).await?;
+                authorize_record(&broker, &access_token, &context, &record, true).await?;
                 records.push(record);
             }
             let authorization = context.final_authorization(&broker, &access_token)?;
@@ -1618,6 +1605,62 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn native_source_health_follows_each_subscriptions_explicit_binding() {
+        let fixture = Fixture::new().await;
+        let (source, first_member) = fixture.source().await;
+        let second_member = source
+            .collaboration
+            .dispatch(
+                &fixture.owner,
+                "join",
+                json!({"name":"second-source-member"}),
+            )
+            .await
+            .unwrap();
+        let first = fixture
+            .call(fixture.source_args(&source, &first_member, "first-source-health"))
+            .await
+            .unwrap();
+        let second = fixture
+            .call(fixture.source_args(&source, &second_member, "second-source-health"))
+            .await
+            .unwrap();
+
+        for (subscription, member) in [(&first, &first_member), (&second, &second_member)] {
+            let read = fixture
+                .call(json!({"action":"read","subscription_id":subscription["subscription_id"]}))
+                .await
+                .unwrap();
+            assert_eq!(read["status"], "pending");
+            for response in [subscription, &read] {
+                let sources = response["native_sources"].as_array().unwrap();
+                assert_eq!(sources.len(), 1);
+                assert_eq!(sources[0]["client_id"], source.client_id());
+                assert_eq!(sources[0]["agent_id"], member["agent_id"]);
+            }
+        }
+
+        let unbound = fixture
+            .call(json!({
+                "action":"subscribe","request_id":"unbound-source-health",
+                "filter":{"client_ids":[source.client_id()],"kinds":["custom.done"]}
+            }))
+            .await
+            .unwrap();
+        let read = fixture
+            .call(json!({"action":"read","subscription_id":unbound["subscription_id"]}))
+            .await
+            .unwrap();
+        for response in [unbound, read] {
+            let sources = response["native_sources"].as_array().unwrap();
+            assert_eq!(sources.len(), 1);
+            assert_eq!(sources[0]["client_id"], source.client_id());
+            assert_eq!(sources[0]["status"], "needs_binding");
+            assert!(sources[0].get("agent_id").is_none());
+        }
     }
 
     #[tokio::test]

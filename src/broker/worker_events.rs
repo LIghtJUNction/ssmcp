@@ -34,6 +34,19 @@ struct Key {
     connection: usize,
 }
 
+impl Key {
+    fn selected_by(&self, owner: &str, sources: &[(Arc<Session>, Option<RunBinding>)]) -> bool {
+        self.owner == owner
+            && sources.iter().any(|(session, binding)| {
+                self.client_id == session.client_id()
+                    && self.connection == Arc::as_ptr(session) as usize
+                    && binding.as_ref().is_some_and(|binding| {
+                        binding.owner == owner && binding.agent_id == self.agent_id
+                    })
+            })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct Cursor {
     generation: String,
@@ -104,22 +117,31 @@ pub(crate) struct Sources {
 }
 
 impl Sources {
-    pub(crate) fn touch(&self, owner: &str, client_ids: &[String], token: &str) {
+    pub(crate) fn touch(
+        &self,
+        owner: &str,
+        sources: &[(Arc<Session>, Option<RunBinding>)],
+        token: &str,
+    ) {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         for source in entries
             .values()
-            .filter(|entry| entry.key.owner == owner && client_ids.contains(&entry.key.client_id))
+            .filter(|entry| entry.key.selected_by(owner, sources))
         {
             *source.touched.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
             *source.token.lock().unwrap_or_else(|e| e.into_inner()) = token.into();
         }
     }
 
-    pub(crate) fn snapshot(&self, owner: &str, client_ids: &[String]) -> Value {
+    pub(crate) fn snapshot(
+        &self,
+        owner: &str,
+        sources: &[(Arc<Session>, Option<RunBinding>)],
+    ) -> Value {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let mut values: Vec<_> = entries
             .values()
-            .filter(|entry| entry.key.owner == owner && client_ids.contains(&entry.key.client_id))
+            .filter(|entry| entry.key.selected_by(owner, sources))
             .map(|source| {
                 let progress = source.progress.lock().unwrap_or_else(|e| e.into_inner());
                 json!({"client_id":source.key.client_id,"agent_id":source.key.agent_id,
@@ -217,10 +239,6 @@ pub(crate) fn ensure(
     });
     check_capacity(&entries, owner, requested.keys().cloned())?;
     let mut created = Vec::new();
-    let ids: Vec<_> = sources
-        .iter()
-        .map(|(session, _)| session.client_id().to_owned())
-        .collect();
     for (key, (session, binding)) in requested {
         if let Some(source) = entries.get(&key) {
             *source.touched.lock().unwrap_or_else(|e| e.into_inner()) = now;
@@ -255,7 +273,7 @@ pub(crate) fn ensure(
             binding,
         ));
     }
-    Ok(broker.worker_events.snapshot(owner, &ids))
+    Ok(broker.worker_events.snapshot(owner, sources))
 }
 
 fn state(source: &Source, status: &'static str, error: Option<&'static str>) {
@@ -932,6 +950,75 @@ mod tests {
             entries
                 .keys()
                 .all(|key| key.client_id.starts_with("existing_"))
+        );
+    }
+
+    #[tokio::test]
+    async fn source_health_and_refresh_are_scoped_to_the_bound_member_and_connection() {
+        let broker = Arc::new(Broker::new("https://relay.test".into()));
+        let session = broker.test_register("source", &"a".repeat(64)).await;
+        let retired = broker.test_register("retired", &"b".repeat(64)).await;
+        let binding = RunBinding {
+            owner: "owner".into(),
+            agent_id: "selected_agent".into(),
+            token: "c".repeat(64),
+        };
+        let key = Key {
+            owner: binding.owner.clone(),
+            client_id: session.client_id().into(),
+            agent_id: binding.agent_id.clone(),
+            connection: Arc::as_ptr(&session) as usize,
+        };
+        let before = Instant::now() - Duration::from_secs(10);
+        let selected = Arc::new(Source::new(key.clone(), "original", before));
+        state(&selected, "observing", None);
+        let mut other_member = key.clone();
+        other_member.agent_id = "other_agent".into();
+        let mut old_connection = key.clone();
+        old_connection.connection = Arc::as_ptr(&retired) as usize;
+        let mut other_owner = key.clone();
+        other_owner.owner = "other_owner".into();
+        let unrelated = [other_member, old_connection, other_owner]
+            .map(|key| Arc::new(Source::new(key, "original", before)));
+        {
+            let mut entries = broker.worker_events.entries.lock().unwrap();
+            entries.insert(key, selected.clone());
+            for source in &unrelated {
+                state(source, "gap", Some("worker_events_history_gap"));
+                entries.insert(source.key.clone(), source.clone());
+            }
+        }
+
+        let sources = [(session.clone(), Some(binding.clone()))];
+        let snapshot = broker.worker_events.snapshot("owner", &sources);
+        let visible = snapshot.as_array().unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0]["client_id"], session.client_id());
+        assert_eq!(visible[0]["agent_id"], binding.agent_id);
+        assert_eq!(visible[0]["status"], "observing");
+
+        let unbound = [(session.clone(), None)];
+        assert_eq!(broker.worker_events.snapshot("owner", &unbound), json!([]));
+        let mut wrong_owner = binding;
+        wrong_owner.owner = "other_owner".into();
+        let wrong_binding = [(session, Some(wrong_owner))];
+        assert_eq!(
+            broker.worker_events.snapshot("owner", &wrong_binding),
+            json!([])
+        );
+
+        broker.worker_events.touch("owner", &sources, "renewed");
+        assert!(*selected.touched.lock().unwrap() > before);
+        assert_eq!(selected.token.lock().unwrap().as_str(), "renewed");
+        for source in &unrelated {
+            assert_eq!(*source.touched.lock().unwrap(), before);
+            assert_eq!(source.token.lock().unwrap().as_str(), "original");
+        }
+
+        state(&selected, "gap", Some("worker_events_history_gap"));
+        assert_eq!(
+            broker.worker_events.snapshot("owner", &sources)[0]["status"],
+            "gap"
         );
     }
 
