@@ -472,6 +472,10 @@ ssmcp computer install DOWNLOAD_ID_FROM_REPLY --json
 
 通用 Shell 与独立 Zuse 仍遵循操作系统权限；需要隔离时配置实际的账户、会话或沙箱边界。
 
+### 命令执行统计
+
+Statistics 的「命令执行」区统计当前进程本地原生执行入口（包括终端 `!`）。启动调用、成功 spawn 和启动错误分别显示，wait/read 不增加计数。最近 20 项保留任务按状态显示，耗时榜取其中已结束的前 5 项。统计不显示命令参数、目录、环境或输出，也不合并浏览器、中继和其他 worker 的数字。Linux 在任务回收后按该命令的 wait4 记录分别排列用户态加内核态 CPU 时间与峰值 RSS。内核可能将命令自行回收的后代计入，RSS 不是整棵进程树的并发峰值。未取得回收记录或其他平台显示不可用。缓存和去重指标目前未接入。Linux 的 `/track-command COMMAND` 显式启用原生任务独占目录跟踪。Stats 在任务结束后显示该目录相对空目录的逻辑字节净变化，并标记账本不完整状态。普通 `!` 保持原行为，Stats 不扫描共享目录、工作树或全盘。已验证 Agent 的任务账本继续通过原有授权任务状态读取。
+
 ## 独立核心库
 
 [ztuio](https://github.com/LIghtJUNction/ztuio)、[zharness](https://github.com/LIghtJUNction/zharness) 和 [zplugin](https://github.com/LIghtJUNction/zplugin) 作为固定源码的 Rust 依赖参与构建，分别承担终端帧、扩展接口和本机动态库加载。三个库均使用固定 Git 子模块，ztuio 的包名与 Rust 导入名均为 `ztuio`，精确版本为 `0.1.0`。它们独立维护版本，不启动模型或外部 harness。源码构建请使用 `git clone --recurse-submodules`；已有 checkout 使用 `git submodule update --init --recursive`。[依赖与协同开发](docs/dependencies.md)
