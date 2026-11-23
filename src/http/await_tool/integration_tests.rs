@@ -154,6 +154,200 @@ impl Fixture {
 }
 
 #[tokio::test]
+#[ignore = "real loopback MCP transport with three 20-second observation windows"]
+async fn windowed_await_over_http_retains_one_id_past_sixty_seconds() {
+    let fixture = Fixture::new().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let routes = crate::http::router(fixture.broker.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+    let client = crate::http_client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(25))
+        .build()
+        .unwrap();
+    let call = |mut arguments: Value| {
+        arguments["client_id"] = json!(fixture.session.client_id());
+        arguments["agent"] =
+            json!({"id":fixture.member["agent_id"],"token":fixture.member["token"]});
+        let request = client
+            .post(&endpoint)
+            .bearer_auth(&fixture.token)
+            .header("MCP-Protocol-Version", "2025-06-18")
+            .header("Accept", "application/json, text/event-stream")
+            .json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                          "params":{"name":"await","arguments":arguments}}));
+        async move {
+            let body: Value = request
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert!(body.get("error").is_none(), "{body}");
+            body["result"]["structuredContent"].clone()
+        }
+    };
+    let started = std::time::Instant::now();
+    let first =
+        call(json!({"window_ms":20_000,"targets":[{"type":"user_input","notify":false}]})).await;
+    assert_eq!(first["status"], "pending");
+    let id = first["wait_id"].as_str().unwrap();
+    for _ in 0..2 {
+        let next = call(json!({"wait_id":id,"window_ms":20_000})).await;
+        assert_eq!(next["wait_id"], id);
+        assert_eq!(next["status"], "pending");
+    }
+    assert!(started.elapsed() >= Duration::from_secs(60));
+    fixture.publish("between_http_windows");
+    let ready = call(json!({"wait_id":id,"window_ms":20_000})).await;
+    assert_eq!(ready["wait_id"], id);
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(
+        ready["user_messages"][0]["message_id"],
+        "between_http_windows"
+    );
+    assert_eq!(ready["user_messages"].as_array().unwrap().len(), 1);
+    assert_eq!(ready["cursor"], 1);
+    // Simulate a lost response by resuming from the last application cursor.
+    fixture.publish("second_http_input");
+    let replay = call(json!({"wait_id":id,"after":0})).await;
+    assert_eq!(replay["cursor"], 1);
+    assert_eq!(replay["user_messages"], ready["user_messages"]);
+    assert_eq!(replay["user_wait"][0]["status"], "received");
+    assert_eq!(fixture.state("second_http_input"), SteeringState::Queued);
+    for _ in 0..2 {
+        let ack = call(json!({"wait_id":id,"after":1})).await;
+        assert_eq!(ack["acknowledged"], true);
+        assert!(ack.get("user_messages").is_none());
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn windowed_await_replays_one_completed_snapshot_until_acknowledged() {
+    let fixture = Fixture::new().await;
+    let first = fixture
+        .public(
+            &fixture.member,
+            json!({"window_ms":1000,"targets":[
+                {"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["done"]}
+            ]}),
+        )
+        .await;
+    assert_eq!(first["status"], "pending");
+    assert_eq!(first["cursor"], 0);
+    let id = first["wait_id"].as_str().unwrap();
+    let error = execute(
+        fixture.broker.clone(),
+        "mcp".into(),
+        fixture.token.clone(),
+        fixture.args(&fixture.member, json!({"wait_id":id,"after":1})),
+    )
+    .await;
+    assert!(error.unwrap_err().contains("ahead"));
+    fixture.update(&fixture.peer, "done").await;
+    let ready = fixture
+        .public(&fixture.member, json!({"wait_id":id,"after":0}))
+        .await;
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["cursor"], 1);
+    assert_eq!(ready["wait_id"], id);
+    fixture.update(&fixture.peer, "changed").await;
+    let other = fixture
+        .public(&fixture.peer, json!({"wait_id":id,"after":0}))
+        .await;
+    assert_eq!(other["status"], "unauthorized");
+    let retry = fixture
+        .public(&fixture.member, json!({"wait_id":id,"after":0}))
+        .await;
+    assert_eq!(retry["results"], ready["results"]);
+    for _ in 0..2 {
+        let ack = fixture
+            .public(&fixture.member, json!({"wait_id":id,"after":1}))
+            .await;
+        assert_eq!(ack["acknowledged"], true);
+        assert_eq!(ack["results"], json!([]));
+    }
+    let error = execute(
+        fixture.broker.clone(),
+        "mcp".into(),
+        fixture.token.clone(),
+        fixture.args(&fixture.member, json!({"wait_id":id,"after":0})),
+    )
+    .await;
+    assert!(error.unwrap_err().contains("expired"));
+}
+
+#[tokio::test]
+async fn windowed_user_input_delivers_input_published_between_requests_once() {
+    let fixture = Fixture::new().await;
+    let first = fixture
+        .public(
+            &fixture.member,
+            json!({"window_ms":1000,
+        "targets":[{"type":"user_input","notify":false}]}),
+        )
+        .await;
+    assert_eq!(first["status"], "pending");
+    let id = first["wait_id"].as_str().unwrap();
+    fixture.publish("between_windows");
+    let ready = fixture
+        .public(&fixture.member, json!({"wait_id":id,"window_ms":1000}))
+        .await;
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["user_messages"][0]["message_id"], "between_windows");
+    assert_eq!(ready["cursor"], 1);
+    let denied = fixture
+        .public(&fixture.peer, json!({"wait_id":id,"after":0}))
+        .await;
+    assert_eq!(denied["status"], "unauthorized");
+    assert!(denied.get("user_messages").is_none());
+    let retry = fixture
+        .public(&fixture.member, json!({"wait_id":id,"after":0}))
+        .await;
+    assert_eq!(retry["user_messages"], ready["user_messages"]);
+    let ack = fixture
+        .public(&fixture.member, json!({"wait_id":id,"after":1}))
+        .await;
+    assert_eq!(ack["acknowledged"], true);
+    assert!(ack.get("user_messages").is_none());
+}
+
+#[tokio::test]
+async fn user_delivery_replay_overflow_is_explicit_and_keeps_no_partial_copy() {
+    let fixture = Fixture::new().await;
+    let first = fixture
+        .public(
+            &fixture.member,
+            json!({"window_ms":1000,
+        "targets":[{"type":"user_input","notify":false}]}),
+        )
+        .await;
+    let record = fixture.record(first["wait_id"].as_str().unwrap());
+    let receipt = json!({"status":"received","messages":[{"message_id":"big","revision":1}]});
+    let mut response = json!({"structuredContent":{"user_messages":[{
+        "client_id":fixture.session.client_id(),"agent_id":fixture.member["agent_id"],
+        "message_id":"big","revision":1,"text":"x".repeat(MAX_SNAPSHOT_BYTES),
+    }]}});
+    retain_user_delivery(&record, receipt, &mut response);
+    record.terminal.store(true, Ordering::Release);
+    assert_eq!(
+        response["structuredContent"]["replay_error"],
+        "await_snapshot_overflow"
+    );
+    assert!(record.snapshot.lock().unwrap().is_none());
+    assert!(
+        read_window_snapshot(&record, Some(0))
+            .unwrap_err()
+            .contains("await_snapshot_overflow")
+    );
+}
+
+#[tokio::test]
 async fn timeout_resumes_same_server_record_and_another_member_cannot_cancel_it() {
     let fixture = Fixture::new().await;
     let first = fixture

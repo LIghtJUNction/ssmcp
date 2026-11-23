@@ -233,7 +233,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--fixture-clipboard":
     record(Path(os.environ[FIXTURE_DIR_ENV]), "clipboard", argv=sys.argv[2:], text=sys.stdin.read())
     raise SystemExit(0)
 
-from e2e import Harness, wait_for
+from e2e import Harness, WORKER_TOOLS, wait_for
 from e2e_client_ui import prompt_text
 from e2e_composer import input_text
 from e2e_dashboard import Decoder
@@ -1061,6 +1061,12 @@ class WorkerWindows(Harness):
             "geometry": [[64, 112], [26, 60], [32, 132]], "screenshots": len(self.child_evidence)}
 
     def protocol(self, frontend, directory, parent, worker, manager):
+        tools = [tool for tool in self.native_catalog(worker["id"])
+                 if tool["name"].startswith("ssmcp.worker.")]
+        self.check({tool["name"] for tool in tools} == WORKER_TOOLS
+                   and len(tools) == len(WORKER_TOOLS)
+                   and all(isinstance(tool.get("inputSchema"), dict) for tool in tools),
+                   "the configured worker pool advertises the exact worker tool catalog and schemas")
         attached = self.bound(worker["id"], manager, "ssmcp.worker.attach")
         self.check(attached["caller_is_manager"], "the main participant attaches to the discovered worker pool")
         executor = self.invitations_and_resize(frontend, directory, parent, worker, manager)
@@ -1070,6 +1076,15 @@ class WorkerWindows(Harness):
                    "the external executor explicitly registers as a worker before waiting")
         denied = self.bound(worker["id"], executor, "ssmcp.worker.attach", allow_error=True)
         self.check(denied.get("isError") is True, "an executor cannot take over the pool manager")
+        client_id = worker["id"]
+        assignment_window = self.public_call("await", {
+            "client_id": client_id,
+            "agent": {"id": executor["agent_id"], "token": executor["token"]},
+            "window_ms": 1000,
+            "targets": [{"type": "worker_assignment", "request_id": executor["wait_request_id"]}],
+        })
+        self.check(assignment_window["status"] == "pending" and assignment_window["cursor"] == 0,
+                   "the authenticated worker's first observation ends before submission")
         task_text = long_task_text()
         submitted = self.bound(worker["id"], manager, "ssmcp.worker.submit", {
             "request_id": "worker-windows-task-one", "text": task_text,
@@ -1080,11 +1095,22 @@ class WorkerWindows(Harness):
                    and submitted["worker"]["queued"] == 1 and submitted["worker"]["working"] == 0,
                    "submit is a real queued task and does not pretend an executor has claimed it")
         self.assert_dispatch_display(directory, worker, manager, task_id)
-        assignment = self.bound(worker["id"], executor, "ssmcp.worker.wait", {
-            "request_id": executor["wait_request_id"], "wait_ms": 1000,
-        })
-        self.check(assignment["status"] == "assigned" and assignment["claim"]["task_id"] == task_id,
-                   "one authenticated executor receives the submitted task")
+        def resume_assignment(after):
+            return self.public_call("await", {
+                "client_id": client_id,
+                "agent": {"id": executor["agent_id"], "token": executor["token"]},
+                "wait_id": assignment_window["wait_id"], "after": after,
+            })
+
+        observed = resume_assignment(0)
+        assignment = observed["results"][0]["data"]
+        self.check(observed["status"] == "ready" and observed["cursor"] == 1
+                   and assignment["status"] == "assigned" and assignment["claim"]["task_id"] == task_id,
+                   "one authenticated executor receives the task submitted between observation windows")
+        self.check(resume_assignment(0)["results"] == observed["results"],
+                   "retrying the unconfirmed observation returns exactly the same assignment")
+        self.check(resume_assignment(1)["acknowledged"] is True,
+                   "confirming the assignment clears its replay receipt without dispatching again")
         duplicate = self.bound(worker["id"], executor, "ssmcp.worker.claim", {
             "request_id": executor["wait_request_id"],
         })
@@ -1132,6 +1158,25 @@ class WorkerWindows(Harness):
         task = result.get("task", result)
         self.check(task["status"] == "completed" and task["output"] == "WINDOW_TASK_OK",
                    "the main participant retrieves the exact worker result through the real relay")
+        code = "return await waitFor(%s, %s);" % (
+            json.dumps(client_id),
+            json.dumps({"window_ms": 1000, "targets": [{"type": "worker_result", "task_id": task_id}]}),
+        )
+        via_code = self.public_call("code_mode", {
+            "agent": {"client_id": client_id, "id": manager["agent_id"], "token": manager["token"]},
+            "code": code,
+        })["result"]
+        self.check(via_code["status"] == "ready" and via_code["cursor"] == 1
+                   and via_code["results"][0]["data"]["task"]["task_id"] == task_id
+                   and via_code["results"][0]["data"]["task"]["output"] == "WINDOW_TASK_OK",
+                   "real Code Mode observes the exact completed worker task through the relay")
+        ack = self.public_call("await", {
+            "client_id": client_id,
+            "agent": {"id": manager["agent_id"], "token": manager["token"]},
+            "wait_id": via_code["wait_id"], "after": 1,
+        })
+        self.check(ack["acknowledged"] is True,
+                   "the same manager can confirm the Code Mode observation through public await")
         status = self.bound(worker["id"], manager, "ssmcp.worker.status")
         self.check(status["worker"]["idle"] == 3 and status["worker"]["working"] == 0,
                    "completion returns the child pool to three idle slots")

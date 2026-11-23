@@ -45,6 +45,10 @@
 return await waitFor(clientId, {wait_id: previous.wait_id, timeout_ms: 20000});
 ```
 
+首次传入 `window_ms: 20000` 可启用短窗口协议。窗口到期返回 `pending`，同一个 `wait_id` 可继续观察原目标。作业、任务分派和待交付输入继续由各自的有界队列持有，窗口结束不取消它们。普通结果就绪时返回 `cursor: 1`。处理前用 `after: 0` 重读同一结果，应用成功后用 `after: 1` 确认。确认可重复，逾期游标与超出 128 KiB 的结果会显式报错。协作收件箱仍应单独执行 `collab.ack`。用户输入仍由外层交付事务提交。短窗口的外层回执返回 `await_delivery_cursor`，公共 `await` 的响应也返回 `cursor: 1`。响应丢失时用 `after: 0` 重读已交付的同一消息及版本，按 `message_id` 和 `revision` 去重，处理后用 `after: 1` 确认。重读不会领取下一条输入。Code Mode 的 `waitFor` 重试将已交付消息放在目标数据的 `replayed_user_messages`；首次交付仍以外层 `user_messages` 为准。
+
+`worker_assignment` 接受该 worker 的 `request_id`，同一个观察持续使用该 ID。 `worker_result` 接受原任务的 `task_id`，并保留原生结果的终态。两个目标都要求独立等待，并继续由原生 worker 权限检查约束。
+
 只有原账户、原客户端连接和原成员能恢复或取消该记录。调用者不能指定一个新 `wait_id` 来创建记录，也不能取消同账户下其他成员的等待。每条记录最多同时有一个活动等待；普通观察每成员最多四个、每连接最多三十二个，不占用户输入的等待名额。只有 `user_input` 沿用客户端已有的四个用户等待名额，记录数量与保留时间也有明确上限。空闲记录最多保留五分钟，已结束记录在容量压力下可提前回收。已预留用户输入但尚待最终交付的记录会受保护，直到真实交付结算或外层调用取消；最终结果仍是超时或资源忙时，原 ID 继续可恢复。`ssmcp://limits` 返回当前数值。[记录和容量](../src/http/await_tool.rs)
 
 公共取消使用 `{"client_id":"…","agent":{"id":"…","token":"…"},"op":"cancel","wait_id":"…"}`；helper 使用 `waitFor.cancel(clientId, waitId)`。取消只停止观察，释放等待者；不会调用 `exec.cancel`、结束被观察的 agent、确认收件。首次请求尚未返回 ID 时，宿主取消该工具请求也会释放当前观察。完成后的观察不能重新用于消费下一份用户输入；返回 `await_already_resolved` 时应为新事件创建新观察。[取消与响应](../src/http/await_tool.rs)

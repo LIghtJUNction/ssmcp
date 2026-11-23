@@ -345,8 +345,8 @@ impl Pool {
             ),
             tool(
                 "result",
-                "Read only your own task's result, optionally waiting at most 5 seconds. unknown/cancelling is not permission to replay effects. Workers block locally between tasks without occupying human ui.wait calls.",
-                json!({"task_id":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":5000}}),
+                "Read only your own task's result, optionally waiting at most 25 seconds. unknown/cancelling is not permission to replay effects. Workers block locally between tasks without occupying human ui.wait calls.",
+                json!({"task_id":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":25000}}),
                 json!(["task_id"]),
                 true,
             ),
@@ -360,8 +360,8 @@ impl Pool {
         ];
         tools.extend([
             tool("wait",
-                "Register this authenticated external worker in one stable station and block up to 5 seconds for one same-account task. A timeout does not complete a task. Retry the same request_id after a lost response to recover its exact claim; use a new ID after completion. A retiring response requires stopping owned activity and acknowledging worker.release; a released response means stop waiting. No model is started. Receipts are retained for the last 128 reports.",
-                json!({"request_id":{"type":"string","minLength":1,"maxLength":128},"wait_ms":{"type":"integer","minimum":0,"maximum":5000,"default":5000}}), json!(["request_id"]), false),
+                "Register this authenticated external worker in one stable station and block up to 25 seconds for one same-account task. A timeout does not complete a task. Retry the same request_id after a lost response to recover its exact claim; use a new ID after completion. A retiring response requires stopping owned activity and acknowledging worker.release; a released response means stop waiting. No model is started. Receipts are retained for the last 128 reports.",
+                json!({"request_id":{"type":"string","minLength":1,"maxLength":128},"wait_ms":{"type":"integer","minimum":0,"maximum":25000,"default":5000}}), json!(["request_id"]), false),
             tool("claim", "Nonblocking worker.wait. Only a verified remote participant can claim one same-account task; assigning a slot does not execute the text.",
                 json!({"request_id":{"type":"string","minLength":1,"maxLength":128}}), json!(["request_id"]), false),
             tool("complete", "Report a remote task's result using the exact claim and authenticated claimant. This records an external agent report, not independently observed OS completion. Identical retries are idempotent while retained; changed results and stale claims are rejected. After completion return to worker.wait.",
@@ -538,8 +538,8 @@ impl Pool {
         client_id: &str,
         request: Task,
     ) -> Result<Value, String> {
-        if request.wait_ms > 5000 {
-            return Err("worker result wait_ms must be at most 5000".into());
+        if request.wait_ms > 25_000 {
+            return Err("worker result wait_ms must be at most 25000".into());
         }
         let mut wake = self.queue.subscribe();
         self.queue.result(actor, &request.task_id)?;
@@ -603,8 +603,8 @@ impl Pool {
         request_id: &str,
         wait_ms: u64,
     ) -> Result<Value, String> {
-        if wait_ms > 5000 {
-            return Err("worker wait_ms must be at most 5000".into());
+        if wait_ms > 25_000 {
+            return Err("worker wait_ms must be at most 25000".into());
         }
         let remote = self.remote()?;
         let mut wake = self.queue.subscribe();

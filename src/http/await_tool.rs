@@ -18,6 +18,7 @@ use tokio::{
 };
 
 const MAX_TARGETS: usize = 8;
+const MAX_SNAPSHOT_BYTES: usize = 128 * 1024;
 const MAX_RECORDS: usize = 256;
 const MAX_ACTOR_RECORDS: usize = 32;
 const MAX_ACTIVE_PER_MEMBER: usize = 4;
@@ -29,7 +30,7 @@ pub(crate) fn limits() -> Value {
         "min_wait_ms":1000,"max_wait_ms":25000,"max_records":MAX_RECORDS,
         "max_records_per_actor":MAX_ACTOR_RECORDS,"retention_ms":RETAIN_FOR.as_millis(),
         "max_active_per_member":MAX_ACTIVE_PER_MEMBER,"max_active_per_connection":MAX_ACTIVE_PER_CONNECTION,
-        "modes":["any","all"],"targets":["exec","job","agent_status","agent_messages","user_input"],
+        "modes":["any","all"],"targets":["exec","job","agent_status","agent_messages","worker_result","worker_assignment","user_input"],
         "server_issued_wait_id":true,"cancel_changes_target":false,"acknowledges_inbox":false,
         "grants_completion_permission":false,"public_wait_uses_javascript_slot":false,
         "helper_uses_enclosing_javascript_slot":true})
@@ -59,6 +60,12 @@ enum Target {
     },
     Job {
         id: String,
+    },
+    WorkerResult {
+        task_id: String,
+    },
+    WorkerAssignment {
+        request_id: String,
     },
     AgentStatus {
         agent_id: String,
@@ -113,6 +120,10 @@ pub(super) struct Arguments {
     #[serde(default = "default_timeout")]
     timeout_ms: u64,
     #[serde(default)]
+    window_ms: Option<u64>,
+    #[serde(default)]
+    after: Option<u64>,
+    #[serde(default)]
     agent: Option<Agent>,
     #[serde(skip)]
     pub(super) controller: Option<Controller>,
@@ -144,6 +155,15 @@ impl Arguments {
         {
             return Err("wait_id must be the server-issued ID from a previous await".into());
         }
+        if args
+            .window_ms
+            .is_some_and(|ms| !(1_000..=25_000).contains(&ms))
+            || args.after.is_some_and(|after| after > 1)
+            || (args.after.is_some() && (args.wait_id.is_none() || args.op != Op::Wait))
+            || (args.window_ms.is_some() && args.op == Op::Cancel)
+        {
+            return Err("invalid await observation window or result cursor".into());
+        }
         if args.agent.as_ref().is_some_and(|agent| {
             !identifier(&agent.id, 64)
                 || agent.token.len() != 64
@@ -164,6 +184,9 @@ impl Arguments {
                     match target {
                         Target::Exec { job_id } if !identifier(job_id, 128) => return Err("invalid execution job_id".into()),
                         Target::Job { id } if !identifier(id, 128) => return Err("invalid relay job id".into()),
+                        Target::WorkerResult { task_id } if !identifier(task_id, 128) => return Err("invalid worker task_id".into()),
+                        Target::WorkerAssignment { request_id } if !identifier(request_id, 128) => return Err("invalid worker request_id".into()),
+                        Target::WorkerResult { .. } | Target::WorkerAssignment { .. } if args.window_ms.is_none() || targets.len() != 1 => return Err("worker await requires window_ms and exactly one target".into()),
                         Target::Finish { .. } => return Err("tool_retired: await finish targets are disabled".into()),
                         Target::AgentStatus { agent_id, statuses } if !identifier(agent_id, 64)
                             || statuses.is_empty() || statuses.len() > 16
@@ -272,6 +295,10 @@ struct Record {
     terminal: AtomicBool,
     cancelled: watch::Sender<bool>,
     delivery_run: Mutex<Option<String>>,
+    windowed: bool,
+    snapshot: Mutex<Option<Vec<TargetResult>>>,
+    acknowledged: AtomicBool,
+    snapshot_overflow: AtomicBool,
 }
 
 impl Record {
@@ -370,6 +397,10 @@ impl Registry {
             terminal: AtomicBool::new(false),
             cancelled: watch::channel(false).0,
             delivery_run: Mutex::new(None),
+            windowed: args.window_ms.is_some(),
+            snapshot: Mutex::new(None),
+            acknowledged: AtomicBool::new(false),
+            snapshot_overflow: AtomicBool::new(false),
         });
         records.insert(id, record.clone());
         Ok(record)
@@ -613,6 +644,7 @@ async fn observe(
     target: &Target,
     timeout_ms: u64,
     controller: Option<Controller>,
+    windowed: bool,
 ) -> TargetResult {
     let data = match target {
         Target::Exec { job_id } => {
@@ -629,6 +661,24 @@ async fn observe(
                 .broker
                 .bridges
                 .observe_job(&scope.binding.owner, id, timeout_ms)
+                .await
+        }
+        Target::WorkerResult { task_id } => {
+            scope
+                .native(
+                    "ssmcp.worker.result",
+                    json!({"task_id":task_id,"wait_ms":timeout_ms}),
+                    controller,
+                )
+                .await
+        }
+        Target::WorkerAssignment { request_id } => {
+            scope
+                .native(
+                    "ssmcp.worker.wait",
+                    json!({"request_id":request_id,"wait_ms":timeout_ms}),
+                    controller,
+                )
                 .await
         }
         Target::AgentStatus { agent_id, statuses } => {
@@ -674,7 +724,7 @@ async fn observe(
                     finish_request_id: None,
                 },
                 controller,
-                Some(&scope.user_wait_admitted),
+                Some((&scope.user_wait_admitted, windowed)),
             )
             .await
         }
@@ -710,6 +760,19 @@ async fn observe(
                 Status::Ready
             }
         }
+        Target::WorkerResult { .. } => match data["task"]["status"].as_str() {
+            Some("queued" | "working" | "cancelling") => Status::TimedOut,
+            Some("completed" | "failed" | "cancelled") => Status::Ready,
+            Some("unknown") => Status::UnknownTarget,
+            _ => Status::Unavailable,
+        },
+        Target::WorkerAssignment { .. } => match data["status"].as_str() {
+            Some("waiting") => Status::TimedOut,
+            Some("assigned" | "already_completed" | "retiring" | "released" | "not_accepting") => {
+                Status::Ready
+            }
+            _ => Status::Unavailable,
+        },
         Target::AgentStatus { .. } => {
             if data["matched"] == true {
                 Status::Ready
@@ -777,6 +840,63 @@ fn resolved(mode: Mode, results: &[TargetResult]) -> Option<Status> {
     None
 }
 
+fn window_envelope(
+    record: &Record,
+    status: Status,
+    results: Vec<TargetResult>,
+    cursor: u64,
+) -> Value {
+    let mut value = envelope(Some(&record.id), record.mode, status, results);
+    value["cursor"] = json!(cursor);
+    value["continue_wait"] = json!(status == Status::Pending);
+    value
+}
+
+fn read_window_snapshot(record: &Record, after: Option<u64>) -> Result<Option<Value>, String> {
+    let mut snapshot = record.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+    if !record.terminal.load(Ordering::Acquire) {
+        return if after == Some(1) {
+            Err("await cursor is ahead of the retained result".into())
+        } else {
+            Ok(None)
+        };
+    }
+    if record.snapshot_overflow.load(Ordering::Acquire) {
+        return Err(
+            "await_snapshot_overflow: the original delivery exceeded the replay byte limit".into(),
+        );
+    }
+    if record.acknowledged.load(Ordering::Acquire) {
+        if after != Some(1) {
+            return Err("await result cursor expired after acknowledgement".into());
+        }
+        let mut receipt = window_envelope(record, Status::Ready, Vec::new(), 1);
+        receipt["acknowledged"] = json!(true);
+        return Ok(Some(receipt));
+    }
+    let Some(results) = snapshot.as_ref() else {
+        return Ok(None);
+    };
+    // Only a ready result earns cursor 1. A legacy failure must never
+    // disclose a previously retained partial result.
+    if resolved(record.mode, results) != Some(Status::Ready) {
+        return Ok(None);
+    }
+    if after == Some(1) {
+        snapshot.take();
+        record.acknowledged.store(true, Ordering::Release);
+        let mut receipt = window_envelope(record, Status::Ready, Vec::new(), 1);
+        receipt["acknowledged"] = json!(true);
+        return Ok(Some(receipt));
+    }
+    Ok(Some(window_envelope(
+        record,
+        Status::Ready,
+        results.clone(),
+        1,
+    )))
+}
+
 pub(super) async fn wait(
     broker: Arc<Broker>,
     user: String,
@@ -829,6 +949,21 @@ pub(super) async fn wait(
             results,
         ));
     }
+    let passive_window = record.windowed
+        && !record
+            .targets
+            .iter()
+            .any(|target| matches!(target, Target::UserInput { .. }));
+    if (!record.windowed && args.window_ms.is_some()) || (args.after.is_some() && !record.windowed)
+    {
+        return Err("observation mode and result cursor must match the original await".into());
+    }
+    if (passive_window || args.after.is_some())
+        && let Some(response) = read_window_snapshot(&record, args.after)?
+    {
+        return Ok(response);
+    }
+    let window_ms = args.window_ms.unwrap_or(args.timeout_ms);
     let _active = match broker.awaiting.activate(&record) {
         Ok(active) => active,
         Err((status, code)) => {
@@ -857,32 +992,54 @@ pub(super) async fn wait(
                 .iter()
                 .map(|target| match target {
                     Target::Exec { .. } => crate::wire::wait_display::Kind::Exec,
-                    Target::Job { .. } => crate::wire::wait_display::Kind::Job,
+                    Target::Job { .. }
+                    | Target::WorkerResult { .. }
+                    | Target::WorkerAssignment { .. } => crate::wire::wait_display::Kind::Job,
                     Target::AgentStatus { .. } => crate::wire::wait_display::Kind::AgentStatus,
                     Target::AgentMessages { .. } => crate::wire::wait_display::Kind::AgentMessages,
                     Target::UserInput { .. } => crate::wire::wait_display::Kind::UserInput,
                     Target::Finish { .. } => crate::wire::wait_display::Kind::Finish,
                 })
                 .collect(),
-            timeout_ms: args.timeout_ms,
+            timeout_ms: window_ms,
         },
     );
     let mut cancelled = record.cancelled.subscribe();
     let mut pending = FuturesUnordered::new();
     // Leave a small transport margin so native bounded waits can return their
     // actual final state before the outer deadline closes the observation.
-    let target_timeout = args.timeout_ms.saturating_sub(100).max(1_000);
+    let target_timeout = window_ms.saturating_sub(100).max(1_000);
+    if passive_window
+        && let Some(previous) = record
+            .snapshot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    {
+        results = previous;
+    }
     for (index, target) in record.targets.iter().enumerate() {
+        if results[index].status == Status::Ready {
+            continue;
+        }
+
         let scope = &scope;
         let controller = args.controller.clone();
+        let windowed = record.windowed;
+        let target_timeout =
+            if windowed && matches!(target, Target::UserInput { notify: false, .. }) {
+                window_ms
+            } else {
+                target_timeout
+            };
         pending.push(async move {
             (
                 index,
-                observe(scope, target, target_timeout, controller).await,
+                observe(scope, target, target_timeout, controller, windowed).await,
             )
         });
     }
-    let deadline = Instant::now() + Duration::from_millis(args.timeout_ms);
+    let deadline = Instant::now() + Duration::from_millis(window_ms);
     let mut authority = tokio::time::interval(Duration::from_secs(1));
     authority.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let status = loop {
@@ -955,8 +1112,55 @@ pub(super) async fn wait(
     }
     // A retryable observation must not overwrite a concurrent cancel's terminal
     // transition. Final user-delivery retries are settled under the registry lock.
+    if passive_window && matches!(status, Status::Ready | Status::TimedOut) {
+        let mut retained = results.clone();
+        for result in &mut retained {
+            if result.status == Status::TimedOut {
+                *result = TargetResult::pending(&result.target);
+            }
+        }
+        if serde_json::to_vec(&retained).is_ok_and(|bytes| bytes.len() <= MAX_SNAPSHOT_BYTES) {
+            *record.snapshot.lock().unwrap_or_else(|e| e.into_inner()) = Some(retained);
+        } else {
+            record.terminal.store(true, Ordering::Release);
+            let overflow = record
+                .targets
+                .iter()
+                .map(|target| {
+                    TargetResult::failed(
+                        target,
+                        Status::Unavailable,
+                        "await_snapshot_overflow",
+                        "bounded wait snapshot exceeded its byte limit",
+                    )
+                })
+                .collect();
+            return Ok(envelope(
+                Some(&record.id),
+                record.mode,
+                Status::Unavailable,
+                overflow,
+            ));
+        }
+    }
     if !matches!(status, Status::TimedOut | Status::Busy) {
         record.terminal.store(true, Ordering::Release);
+    }
+    if record.windowed && status == Status::TimedOut {
+        for result in &mut results {
+            if result.status == Status::TimedOut {
+                *result = TargetResult::pending(&result.target);
+            }
+        }
+        return Ok(window_envelope(&record, Status::Pending, results, 0));
+    }
+    if record.windowed && status == Status::Ready {
+        return Ok(window_envelope(
+            &record,
+            Status::Ready,
+            results,
+            u64::from(passive_window),
+        ));
     }
     Ok(envelope(Some(&record.id), record.mode, status, results))
 }
@@ -996,6 +1200,17 @@ pub(super) async fn execute(
             .iter()
             .any(|result| result["target"]["type"] == "user_input")
     });
+    if is_user_input
+        && let Some(messages) = value["results"][0]["data"]
+            .as_object_mut()
+            .and_then(|data| data.remove("replayed_user_messages"))
+            .and_then(|messages| messages.as_array().cloned())
+    {
+        let receipt = value["results"][0]["data"].clone();
+        let mut response = append_user_messages(tool_result(Ok(value)), messages);
+        response["structuredContent"]["user_wait"] = json!([receipt]);
+        return Ok(response);
+    }
     // Passive object observation has no automatic inbox/question acknowledgement.
     // User input explicitly opts into the existing atomic outer delivery protocol.
     if !is_user_input {
@@ -1005,6 +1220,7 @@ pub(super) async fn execute(
         let response = commit_user_delivery(&report, || tool_result(Ok(value)));
         return Ok(user_wait::append(response, &run));
     }
+    let windowed = value.get("cursor").is_some();
     let mut response = finish_user_response(&report, tool_result(Ok(value.clone()))).await;
     let mut receipt = run.user_wait_receipt(&client_id);
     // The authoritative bodies are in outer user_messages; never duplicate a
@@ -1020,10 +1236,23 @@ pub(super) async fn execute(
         Some("busy") => Status::Busy,
         _ => Status::Unavailable,
     };
+    let status = if status == Status::TimedOut && windowed {
+        Status::Pending
+    } else {
+        status
+    };
     value["status"] = json!(status);
-    value["continue_wait"] = json!(status == Status::TimedOut);
+    value["continue_wait"] = json!(matches!(status, Status::Pending | Status::TimedOut));
     value["results"][0]["status"] = json!(status);
     value["results"][0]["data"] = receipt;
+    if windowed && status == Status::Ready {
+        if response["structuredContent"].get("replay_error").is_none() {
+            value["cursor"] = json!(1);
+        } else {
+            value["replay_error"] = response["structuredContent"]["replay_error"].clone();
+        }
+        response["structuredContent"]["cursor"] = value["cursor"].clone();
+    }
     for key in ["status", "continue_wait", "results"] {
         response["structuredContent"][key] = value[key].clone();
     }
@@ -1143,9 +1372,12 @@ pub(super) fn commit_user_delivery(
             );
         }
     }
-    let response = commit();
+    let mut response = commit();
     for record in current {
         let receipt = report.run.user_wait_receipt(&record.actor.client_id);
+        if record.windowed && receipt["status"] == "received" && !*record.cancelled.borrow() {
+            retain_user_delivery(record, receipt.clone(), &mut response);
+        }
         let retryable = matches!(receipt["status"].as_str(), Some("timed_out" | "busy"));
         record
             .terminal
@@ -1157,6 +1389,47 @@ pub(super) fn commit_user_delivery(
         *record.touched.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
     }
     response
+}
+
+fn retain_user_delivery(record: &Record, mut receipt: Value, response: &mut Value) {
+    let identities = receipt["messages"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let messages: Vec<Value> = response["structuredContent"]["user_messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|message| {
+            message["client_id"] == record.actor.client_id
+                && message["agent_id"] == record.actor.agent_id
+                && identities.iter().any(|id| {
+                    message["message_id"] == id["message_id"]
+                        && message["revision"] == id["revision"]
+                })
+        })
+        .cloned()
+        .collect();
+    if messages.is_empty() || messages.len() != identities.len() {
+        record.snapshot_overflow.store(true, Ordering::Release);
+        response["structuredContent"]["replay_error"] = json!("await_receipt_unavailable");
+        return;
+    }
+    receipt["replayed_user_messages"] = json!(messages);
+    let snapshot = vec![TargetResult {
+        target: record.targets[0].clone(),
+        status: Status::Ready,
+        data: Some(receipt),
+        error: None,
+    }];
+    if serde_json::to_vec(&snapshot).is_ok_and(|bytes| bytes.len() <= MAX_SNAPSHOT_BYTES) {
+        *record.snapshot.lock().unwrap_or_else(|e| e.into_inner()) = Some(snapshot);
+        response["structuredContent"]["await_delivery_cursor"] =
+            json!({"wait_id":record.id,"cursor":1});
+    } else {
+        record.snapshot_overflow.store(true, Ordering::Release);
+        response["structuredContent"]["replay_error"] = json!("await_snapshot_overflow");
+    }
 }
 
 /// A dropped HTTP/code_mode response cannot leave a protected reservation
@@ -1186,19 +1459,24 @@ pub(super) fn abandon_user_delivery(report: &CodeRunReport) {
 }
 
 pub(super) fn tool() -> Value {
+    let targets = json!([
+                {"type":"object","additionalProperties":false,"required":["type","job_id"],"properties":{"type":{"const":"exec"},"job_id":{"type":"string","minLength":1,"maxLength":128}}},
+                {"type":"object","additionalProperties":false,"required":["type","id"],"properties":{"type":{"const":"job"},"id":{"type":"string","minLength":1,"maxLength":128}}},
+                {"type":"object","additionalProperties":false,"required":["type","task_id"],"properties":{"type":{"const":"worker_result"},"task_id":{"type":"string","minLength":1,"maxLength":128}}},
+                {"type":"object","additionalProperties":false,"required":["type","request_id"],"properties":{"type":{"const":"worker_assignment"},"request_id":{"type":"string","minLength":1,"maxLength":128}}},
+                {"type":"object","additionalProperties":false,"required":["type","agent_id","statuses"],"properties":{"type":{"const":"agent_status"},"agent_id":{"type":"string","minLength":1,"maxLength":64},"statuses":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","minLength":1,"maxLength":128}}}},
+                {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"agent_messages"},"after":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":64,"default":32}}},
+                {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"user_input"},"reason":{"type":"string","minLength":1,"maxLength":512},"notify":{"type":"boolean","default":true}}},
+    ]);
     json!({"name":"await","description":"Wait on typed execution jobs, relay jobs, agent status or inbox messages, or user input without occupying a JavaScript worker. Authenticate the current participant with collab credentials. Create with targets; resume/cancel with the server-issued wait_id only. Timeout is bounded to 1000..25000ms. Cancellation stops observation only: it never kills a job or acknowledges messages. any returns when one target is ready; all requires all ready; explicit target failures return immediately with every target represented. Pending entries in an any response were not resolved. user_input must be a single-target wait. Only outer user_wait received plus matching user_messages proves user-input delivery.",
         "inputSchema":{"type":"object","additionalProperties":false,"required":["client_id"],"properties":{
             "client_id":{"type":"string","minLength":1,"maxLength":64},"op":{"enum":["wait","cancel"],"default":"wait"},
             "wait_id":{"type":"string","minLength":1,"maxLength":128},"mode":{"enum":["any","all"],"default":"any"},
             "timeout_ms":{"type":"integer","minimum":1000,"maximum":25000,"default":20000},
+            "window_ms":{"type":"integer","minimum":1000,"maximum":25000,"description":"Opt into short resumable observations. Window expiry returns pending; targets are not cancelled."},
+            "after":{"type":"integer","minimum":0,"maximum":1,"description":"On a passive resume, 0 retries the retained result and 1 acknowledges it."},
             "agent":{"type":"object","additionalProperties":false,"required":["id","token"],"properties":{"id":{"type":"string","minLength":1,"maxLength":64},"token":{"type":"string","minLength":64,"maxLength":64}}},
-            "targets":{"type":"array","minItems":1,"maxItems":8,"items":{"oneOf":[
-                {"type":"object","additionalProperties":false,"required":["type","job_id"],"properties":{"type":{"const":"exec"},"job_id":{"type":"string","minLength":1,"maxLength":128}}},
-                {"type":"object","additionalProperties":false,"required":["type","id"],"properties":{"type":{"const":"job"},"id":{"type":"string","minLength":1,"maxLength":128}}},
-                {"type":"object","additionalProperties":false,"required":["type","agent_id","statuses"],"properties":{"type":{"const":"agent_status"},"agent_id":{"type":"string","minLength":1,"maxLength":64},"statuses":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","minLength":1,"maxLength":128}}}},
-                {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"agent_messages"},"after":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":64,"default":32}}},
-                {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"user_input"},"reason":{"type":"string","minLength":1,"maxLength":512},"notify":{"type":"boolean","default":true}}},
-            ]}}},"oneOf":[{"properties":{"op":{"const":"wait"}},"required":["targets"],"not":{"required":["wait_id"]}},
+            "targets":{"type":"array","minItems":1,"maxItems":8,"items":{"oneOf":targets}}},"oneOf":[{"properties":{"op":{"const":"wait"}},"required":["targets"],"not":{"required":["wait_id"]}},
                 {"required":["wait_id"],"not":{"anyOf":[{"required":["targets"]},{"required":["mode"]}]}}]},
         "annotations":{"readOnlyHint":false,"destructiveHint":false}})
 }

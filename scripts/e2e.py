@@ -66,14 +66,16 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.ui.wait",
     "ssmcp.ui.tool_summary",
     "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.present", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.question_ack","ssmcp.ui.question_delivery", "ssmcp.ui.events", "ssmcp.ui.harness",
-    "ssmcp.worker.status", "ssmcp.worker.attach", "ssmcp.worker.tasks",
-    "ssmcp.worker.stop", "ssmcp.worker.resize", "ssmcp.worker.submit", "ssmcp.worker.result",
-    "ssmcp.worker.cancel", "ssmcp.worker.wait", "ssmcp.worker.wait_available", "ssmcp.worker.wait_for", "ssmcp.worker.claim", "ssmcp.worker.complete",
-    "ssmcp.worker.report", "ssmcp.worker.release",
     "ssmcp.computer.version", "ssmcp.computer.download",
     "ssmcp.computer.install", "ssmcp.computer.uninstall",
 })
 
+WORKER_TOOLS = frozenset({
+    "ssmcp.worker.status", "ssmcp.worker.attach", "ssmcp.worker.tasks",
+    "ssmcp.worker.stop", "ssmcp.worker.resize", "ssmcp.worker.submit", "ssmcp.worker.result",
+    "ssmcp.worker.cancel", "ssmcp.worker.wait", "ssmcp.worker.wait_available", "ssmcp.worker.wait_for", "ssmcp.worker.claim", "ssmcp.worker.complete",
+    "ssmcp.worker.report", "ssmcp.worker.release",
+})
 
 def free_port() -> int:
     with socket.socket() as sock:
@@ -236,6 +238,19 @@ class Harness:
         if result.get("isError"):
             raise AssertionError(f"Native tool {name} failed: {result}")
         return result["structuredContent"]
+
+    def native_catalog(self, client_id):
+        capabilities = self.public_call("list", {"client_id": client_id})
+        catalog = list(capabilities["tools"])
+        cursors = set()
+        while capabilities.get("nextCursor"):
+            cursor = capabilities["nextCursor"]
+            if cursor in cursors:
+                raise AssertionError("list repeated a catalog cursor")
+            cursors.add(cursor)
+            capabilities = self.public_call("list", {"client_id": client_id, "cursor": cursor})
+            catalog.extend(capabilities["tools"])
+        return catalog
 
     def live_events(self, *, agent_id=None, main=False, client_id=None, limit=16,
                     cursor=None, generation=None):
@@ -702,16 +717,7 @@ class Harness:
                    and inventory["clients"][0]["type"] == "shell"
                    and isinstance(inventory["code_mode"], dict),
                    "list returns client identity, display name, launch cwd, backend type and code API")
-        capabilities = self.public_call("list", {"client_id": self.client_id})
-        catalog = list(capabilities["tools"])
-        cursors = set()
-        while capabilities.get("nextCursor"):
-            cursor = capabilities["nextCursor"]
-            if cursor in cursors:
-                raise AssertionError("list repeated a catalog cursor")
-            cursors.add(cursor)
-            capabilities = self.public_call("list", {"client_id": self.client_id, "cursor": cursor})
-            catalog.extend(capabilities["tools"])
+        catalog = self.native_catalog(self.client_id)
         expected_tools = SHELL_TOOLS | BUILTIN_TOOLS
         actual_tools = {tool["name"] for tool in catalog}
         invalid_schemas = [tool["name"] for tool in catalog
