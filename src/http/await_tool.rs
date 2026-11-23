@@ -484,27 +484,27 @@ impl Registry {
             *record.touched.lock().unwrap_or_else(|e| e.into_inner()) = now;
             return Ok(record.clone());
         }
-        if let Some(request_id) = &args.request_id {
-            if let Some(record) = records.values().find(|record| {
+        if let Some(request_id) = &args.request_id
+            && let Some(record) = records.values().find(|record| {
                 record.actor.same_identity(&actor)
                     && record
                         .durable
                         .as_ref()
                         .is_some_and(|value| &value.request_id == request_id)
-            }) {
-                if !record.actor.same(&actor) {
-                    return Err((Status::Unauthorized, "await_connection_changed"));
-                }
-                if !record
-                    .durable
-                    .as_ref()
-                    .expect("durable request")
-                    .matches(args)
-                {
-                    return Err((Status::Unavailable, "await_request_conflict"));
-                }
-                return Ok(record.clone());
+            })
+        {
+            if !record.actor.same(&actor) {
+                return Err((Status::Unauthorized, "await_connection_changed"));
             }
+            if !record
+                .durable
+                .as_ref()
+                .expect("durable request")
+                .matches(args)
+            {
+                return Err((Status::Unavailable, "await_request_conflict"));
+            }
+            return Ok(record.clone());
         }
         let at_capacity = |records: &HashMap<String, Arc<Record>>| {
             records.len() >= MAX_RECORDS

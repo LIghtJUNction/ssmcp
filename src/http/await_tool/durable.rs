@@ -782,7 +782,7 @@ async fn observe_until(
                 "observer lifetime expired",
             );
         }
-        let window_ms = remaining.min(MAX_OBSERVATION_WAIT_MS).max(1_000);
+        let window_ms = remaining.clamp(1_000, MAX_OBSERVATION_WAIT_MS);
         let result = observe(scope, target, window_ms, controller.clone(), true, wait_id).await;
         // Only a documented, determinate no-match window may be renewed. Hard
         // failures, unknown work and malformed responses become cached outcomes.

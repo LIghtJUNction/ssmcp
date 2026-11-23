@@ -218,9 +218,7 @@ impl Hub {
 
     /// Revalidate at the socket writer's last synchronous decision point.
     pub(super) fn snapshot(&self, broker: &Broker, session: &Arc<Session>) -> Option<Snapshot> {
-        if self.version.is_none() {
-            return None;
-        }
+        self.version?;
         self.refresh(broker, session);
         let now = Instant::now();
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());

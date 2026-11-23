@@ -694,8 +694,10 @@ impl Clock {
         if state.closed {
             return Snapshot::default();
         }
-        let mut snapshot = Snapshot::default();
-        snapshot.prompts = state.prompts.summaries(owner);
+        let mut snapshot = Snapshot {
+            prompts: state.prompts.summaries(owner),
+            ..Snapshot::default()
+        };
         for timer in state
             .timers
             .values()
