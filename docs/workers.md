@@ -49,11 +49,12 @@ Capacity can range from zero to 128 stations. While a resize is awaiting retirem
 
 A worker is an external agent that actively joins the worker connection and waits for a task. Keep each agent's existing conversation open while it waits. SSMCP supplies the task queue and tools; the external application supplies the model.
 
-1. Start `ssmcp --worker 3`, use `/invite`, and connect the coordinating agent to the main chat.
-2. Use `/invite worker` for each external agent. Each joins the linked worker connection once with `role: "worker"` and keeps its returned credentials private.
-3. Each worker binds its own credentials and calls `ssmcp.worker.wait`. A wait timeout leaves it available; it calls the wait tool again.
-4. The main agent submits tasks. A waiting worker receives one authenticated claim, performs the task, and reports it with `ssmcp.worker.complete`.
-5. After completion, the worker requests another task with a new wait request ID.
+1. Connect the main window. Enter `/invite` and press Enter, then paste the prompt into the authorized coordinator conversation. The coordinator joins the control session as `main` and binds with its own credentials.
+2. Start the linked pool with `ssmcp --worker 3` or open stations with `/worker +N` in the main window. Check for a connected pool and a free station with `/worker ls`. In the main window, enter `/invite worker` and press Enter. Paste the prompt into each separate authorized worker conversation.
+3. Each worker joins the linked pool as `worker`, binds with its own private credentials, and calls `ssmcp.worker.wait`. A wait timeout leaves it available. The worker calls wait again.
+4. The main agent submits tasks. A waiting worker receives one authenticated claim, performs the task, and reports it with `ssmcp.worker.complete`. After completion, it requests another task with a new wait request ID.
+
+Both commands open a scrollable panel and try to copy the text. Copy it manually if needed and press Esc to close the panel. Wait for a connected, stable pool with a free station before creating a worker invitation.
 
 Join the selected worker client once:
 
