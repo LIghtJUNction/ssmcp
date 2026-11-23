@@ -180,10 +180,10 @@ class DurableWait(Harness):
         self.record("http_absence_ended", label=label, http_requests=self.http_requests,
                     absent_seconds=time.monotonic() - began)
 
-    def abandon_observation(self):
+    def abandon_observation(self, before_windows):
         self.request_id += 1
         arguments = {"client_id": self.client_id, "agent": self.agent,
-                     "wait_id": self.wait_id, "after": 0, "window_ms": 1000}
+                     "wait_id": self.wait_id, "after": 0, "window_ms": 10000}
         payload = {"jsonrpc": "2.0", "id": self.request_id, "method": "tools/call",
                    "params": {"name": "await", "arguments": arguments,
                               "_meta": {PROTOCOL_META: MODERN, CAPABILITIES_META: {}}}}
@@ -196,9 +196,20 @@ class DurableWait(Harness):
                 "Accept": "application/json, text/event-stream", "Content-Type": "application/json",
                 "Authorization": "Bearer " + self.secret, "MCP-Protocol-Version": MODERN,
                 "Mcp-Method": "tools/call", "Mcp-Name": "await"})
-            # Drop the live response before its 1-second observation window ends.
-            # No response or target state is read here; execution is never retried.
-            time.sleep(0.15)
+            # Observe admission of this exact request, then drop its unread
+            # response while its ten-second observation window is still pending.
+            # Metadata reads neither replay execution nor acknowledge its body.
+            deadline = time.monotonic() + 2
+            while True:
+                admitted = self.metadata()
+                if admitted["metadata"]["read_windows"] >= before_windows + 1:
+                    self.check(admitted.get("status") == "pending"
+                               and admitted["metadata"].get("first_read_at_ms") is None,
+                               "the original abandoned observation is admitted before disconnect")
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError("original observation admission remains unknown; no wait or exec replay")
+                time.sleep(0.02)
             if connection.sock is not None:
                 try:
                     connection.sock.shutdown(socket.SHUT_RDWR)
@@ -323,10 +334,10 @@ class DurableWait(Harness):
         self.conflict(create, "mode", "all")
         self.conflict(create, "lifetime_ms", create["lifetime_ms"] + 1000)
         before = self.metadata()
-        self.check(before["metadata"]["first_read_at_ms"] is None,
+        self.check(before["metadata"].get("first_read_at_ms") is None,
                    "pending metadata inspection is not a terminal result read")
         before_windows = before["metadata"]["read_windows"]
-        self.abandon_observation()
+        self.abandon_observation(before_windows)
         self.checkpoint(status="http_absent", observer_abandoned=True,
                         abandoned_response_outcome="unknown", exec_dispatches=self.exec_dispatches)
         self.no_http_until(exec_receipt_at + self.options.duration_seconds + 5,
@@ -347,7 +358,7 @@ class DurableWait(Harness):
         metadata = terminal_meta["metadata"]
         self.check(terminal_meta.get("status") == "ready" and terminal_meta.get("cursor") == 1,
                    "durable observer completed while HTTP observation was absent")
-        self.check(metadata["first_read_at_ms"] is None and metadata["read_windows"] >= before_windows + 1,
+        self.check(metadata.get("first_read_at_ms") is None and metadata["read_windows"] >= before_windows + 1,
                    "abandoned observation was admitted but metadata inspection did not read cached body")
         self.check(metadata["lifetime_ms"] == create["lifetime_ms"]
                    and isinstance(metadata["completed_at_ms"], int)
@@ -400,14 +411,21 @@ class DurableWait(Harness):
         expired = self.response("await", {"client_id": self.client_id, "agent": self.agent,
                                          "wait_id": self.wait_id, "window_ms": 1000, "after": 0})
         expired_result = expired.get("result", {})
-        self.check("error" in expired or expired_result.get("isError") or
-                   expired_result.get("structuredContent", {}).get("error") is not None,
-                   "after:0 following ACK explicitly rejects the expired body cursor")
+        self.check(("error" in expired or expired_result.get("isError") or
+                    expired_result.get("structuredContent", {}).get("error") is not None)
+                   and "await result cursor expired after acknowledgement" in json.dumps(expired),
+                   "after:0 following ACK rejects the exact expired result cursor")
         acknowledged_create = self.await_call(**create)
         self.check(acknowledged_create.get("wait_id") == self.wait_id
-                   and acknowledged_create.get("acknowledged") is True
-                   and acknowledged_create.get("results") == [],
-                   "creation retry after ACK returns the same acknowledged wait")
+                   and acknowledged_create.get("request_id") == create["request_id"]
+                   and acknowledged_create.get("cursor") == 1
+                   and acknowledged_create.get("status") == "ready"
+                   and acknowledged_create.get("metadata_only") is True
+                   and acknowledged_create.get("results") == []
+                   and acknowledged_create["metadata"]["state"] == "acknowledged"
+                   and acknowledged_create["metadata"]["acknowledged_at_ms"] ==
+                   acknowledged["metadata"]["acknowledged_at_ms"],
+                   "creation retry after ACK returns metadata for the same acknowledged wait")
 
         output = self.native("ssmcp.exec.read", {"job_id": self.job_id, "stdout_cursor": 0,
                                                "stderr_cursor": 0, "max_bytes": 32768, "wait_ms": 0})
@@ -487,6 +505,58 @@ class DurableWait(Harness):
         return self.prompt(action="ack", timer_id=event["timer_id"],
                            event_id=event["event_id"], revision=event["revision"])
 
+    def visible_prompt(self, event):
+        """Read a finite original-thread journal snapshot; never publish or ACK."""
+        cursor, generation, end = None, None, None
+        rows = []
+        for _ in range(32):
+            arguments = {"action": "thread", "client_id": self.client_id,
+                         "agent_id": self.member["agent_id"], "limit": 64}
+            if cursor is not None:
+                arguments.update(cursor=cursor, generation=generation)
+            page = self.native("ssmcp.ui.events", arguments)
+            if generation is None:
+                generation, end = page["generation"], page["end_cursor"]
+            if (page["generation"] != generation or page.get("retention_gap_possible")
+                    or not isinstance(page.get("events"), list)):
+                raise AssertionError("original Input journal changed generation or lost retained evidence")
+            if page.get("scope", {}).get("client_id") != self.client_id or (
+                    page.get("scope", {}).get("agent_id") != self.member["agent_id"]):
+                raise AssertionError("native Input journal returned another caller scope")
+            self.check(all(not item.get("user_messages") for item in mappings(self.last_public_reply)),
+                       "visible Input observation does not create or claim human input")
+            rows.extend(row for row in page["events"] if row["sequence"] < end)
+            next_cursor = page["next_cursor"]
+            if next_cursor >= end:
+                break
+            if cursor is not None and next_cursor <= cursor:
+                raise AssertionError("native Input journal cursor failed to advance")
+            cursor = next_cursor
+        else:
+            raise AssertionError("original Input journal exceeded bounded finite-page observation")
+        matches = [row for row in rows if isinstance(row.get("value"), dict)
+                   and row["value"].get("type") == "ssmcp.message"
+                   and row["value"].get("kind") == "input"
+                   and row["value"].get("input_origin") == "agent_timer"
+                   and row["value"].get("text") == event["body"]]
+        self.check(len(matches) == 1,
+                   "the original timer event revision has exactly one native visible Input record")
+        row = matches[0]
+        value, source = row["value"], row["source"]
+        self.check(row.get("kind") == "input" and row.get("input_side") is True
+                   and row.get("input_origin") == "agent_timer"
+                   and source.get("kind") == "thread"
+                   and source.get("client_id") == self.client_id
+                   and source.get("agent_id") == self.member["agent_id"]
+                   and value.get("role") == "tool" and value.get("completion_permission") is False
+                   and isinstance(value.get("message_id"), str)
+                   and re.fullmatch(r"native_[0-9a-f]{32}", value["message_id"]) is not None
+                   and row.get("message_id") == value["message_id"]
+                   and row.get("truncated") is False,
+                   "visible timer Input retains its native ID, original caller and passive provenance")
+        return {"timer_id": event["timer_id"], "event_id": event["event_id"],
+                "revision": event["revision"], "generation": generation, "record": row}
+
     def timed_case(self):
         if "ssmcp.time.prompt" not in self.native_tools:
             if self.options.require_timed_prompts:
@@ -550,6 +620,7 @@ class DurableWait(Harness):
         self.check(once_event["tick"] == 1 and label in once_event["body"]
                    and "{{label}}" not in once_event["body"],
                    "one-shot timer renders scalar variables and fires once")
+        once_visible = self.visible_prompt(once_event)
         once_ack = self.ack_prompt(once_event)
         self.check(once_ack.get("acknowledged") is True and once_ack.get("duplicate") is False
                    and once_ack["schedule"]["pending_count"] == 0,
@@ -558,13 +629,20 @@ class DurableWait(Harness):
         self.check(once_ack_again.get("acknowledged") is True and once_ack_again.get("duplicate") is True,
                    "same one-shot ACK is idempotent")
 
+        once_after_ack = self.visible_prompt(once_event)
+        self.check(once_after_ack == once_visible,
+                   "reading and repeated ACK do not republish the one-shot Input record")
         previous = self.read_prompt(repeat_id)
+        previous_visible = self.visible_prompt(previous)
         self.no_http_until(time.monotonic() + 2.3, "recurring prompt coalesces while HTTP is absent")
         cancelled = self.prompt(action="cancel", timer_id=repeat_id)
         latest = self.read_prompt(repeat_id)
         self.check(latest["event_id"] == previous["event_id"] and latest["revision"] > previous["revision"]
                    and latest["tick"] > previous["tick"] and latest["missed"] >= previous["missed"],
                    "missed recurring ticks coalesce into one event with a newer revision")
+        latest_visible = self.visible_prompt(latest)
+        self.check(latest_visible["record"]["message_id"] != previous_visible["record"]["message_id"],
+                   "a newer coalesced timer revision has its own native Input identity")
         stale_outer = self.native_reply("ssmcp.time.prompt", {
             "action": "ack", "timer_id": repeat_id, "event_id": previous["event_id"],
             "revision": previous["revision"]})
@@ -582,7 +660,11 @@ class DurableWait(Harness):
                    "repeated exact ACK remains idempotent after timer cancellation")
         final = self.prompt(action="read", timer_id=repeat_id, limit=4)
         self.check(final.get("events") == [], "cancelled and acknowledged timer has no pending body")
+        latest_after_ack = self.visible_prompt(latest)
+        self.check(latest_after_ack == latest_visible,
+                   "stale and repeated exact ACKs do not republish the latest Input revision")
         self.checkpoint(timed_prompt_case={"status": "passed", "executed": True,
+            "visible_input_records": [once_visible, previous_visible, latest_visible],
             "once_id": once_id, "recurring_id": repeat_id, "outer_prompt_hooks": matching,
             "once_event": once_event, "previous_revision": previous, "latest_revision": latest,
             "stale_ack_result": stale, "exact_ack": exact, "cancel_receipt": cancelled,
@@ -604,13 +686,43 @@ class DurableWait(Harness):
                    "entire acceptance performed exactly one native exec and started no model")
 
     def finish(self):
-        cleanup = {"native_wait_cancel": None, "timer_cancel": [], "owned_processes": []}
+        cleanup = {"native_wait_cancel": None, "timer_cancel": [], "owned_processes": [],
+                   "original_execution": None}
         if self.member is not None and self.client is not None and self.client.poll() is None:
             if self.wait_id is not None and not self.wait_acked:
                 try:
                     cleanup["native_wait_cancel"] = self.await_call(op="cancel", wait_id=self.wait_id)
                 except Exception as error:
                     cleanup["native_wait_cancel"] = {"outcome": "unknown", "error": str(error)}
+            if self.job_id is not None:
+                try:
+                    observed = self.native("ssmcp.exec.read", {"job_id": self.job_id, "wait_ms": 0,
+                                           "stdout_cursor": 0, "stderr_cursor": 0, "max_bytes": 32768})
+                    execution = {"job_id": self.job_id, "initial_observation": observed}
+                    if observed.get("running") is True:
+                        execution["cancel_receipt"] = self.native("ssmcp.exec.cancel",
+                                                                  {"job_id": self.job_id})
+                        deadline = time.monotonic() + 5
+                        while True:
+                            observed = self.native("ssmcp.exec.read", {"job_id": self.job_id,
+                                "wait_ms": 0, "stdout_cursor": 0, "stderr_cursor": 0, "max_bytes": 32768})
+                            if observed.get("running") is False or time.monotonic() >= deadline:
+                                break
+                            time.sleep(0.05)
+                    execution["final_observation"] = observed
+                    execution["outcome"] = ("terminal_observed" if observed.get("running") is False
+                        and observed.get("stdout_eof") is True and observed.get("stderr_eof") is True
+                        else "unknown")
+                    cleanup["original_execution"] = execution
+                    if execution["outcome"] == "unknown":
+                        self.report["status"] = "failed"
+                except Exception as error:
+                    cleanup["original_execution"] = {"job_id": self.job_id,
+                        "outcome": "unknown", "error": str(error), "replayed": False}
+                    self.report["status"] = "failed"
+            elif self.exec_dispatches:
+                cleanup["original_execution"] = {"outcome": "unknown",
+                    "reason": "original exec dispatch has no verified receipt", "replayed": False}
             if "ssmcp.time.prompt" in self.native_tools:
                 for timer_id in self.timer_ids:
                     try:
