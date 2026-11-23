@@ -374,6 +374,7 @@ class Composer(Dashboard):
                    "post-delivery journal contains the exact new probe inside its snapshot "
                    f"(matching_ids={len(matches)}, events={len(current['events'])}, "
                    f"cursor={baseline['next_cursor']}..{current['next_cursor']})")
+        return current
 
     def wait_delivered(self, front, record, request_text=None):
         request_text = request_text if request_text is not None else record["text"]

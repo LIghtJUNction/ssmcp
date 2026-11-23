@@ -310,7 +310,7 @@ class InputHistory(Composer):
         self.check("▀" not in text(image_shot),
                    "the TUI shows original PNG dimensions and an attachment card without half-block pixels")
         self.save_shot("image", front, cells=True)
-        return source
+        return record, source
 
     def read_text_pages(self, path, expected):
         """Use native UTF-8 cursors; even newline-only pages stay below 500 lines."""
@@ -610,11 +610,11 @@ class InputHistory(Composer):
         continuation = "LIVE_NEW_PROCESS_REQUEST 界"
         record = self.submit_source(fresh, continuation)
         self.expect_delivery(self.work(), record, request_text=continuation, agent_id=None)
-        current = self.live_events()
-        self.check(any(event.get("value", {}).get("type") == "ssmcp.message"
-                       and event["value"].get("role") == "user"
-                       and event["value"].get("text") == continuation for event in current["events"]),
-                   "new input belongs to the new process event journal")
+        self.wait_delivered(fresh, record, request_text=continuation)
+        current = self.check_post_delivery_journal(
+            after, {pending_text, pending["id"], reply, receipt["message_id"], legacy_marker},
+            marker="INPUT_HISTORY_POST_DELIVERY_JOURNAL_PROBE",
+        )
         self.check(legacy.read_bytes() == legacy_bytes, "new live work leaves the legacy fixture unchanged")
         (self.output / "input-live-events.json").write_text(
             json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -689,12 +689,11 @@ class InputHistory(Composer):
         self.check(selected["target"] == member["agent_id"]
                    and selected["native_recipient"] is None,
                    "input setup selects the exact local member rather than a native namesake")
-        first_source = self.reference_scenarios(front, member)
-        self.check(any(event.get("value", {}).get("type") == "ssmcp.message"
-                       and event["value"].get("role") == "user"
-                       and event["value"].get("text") == first_source
-                       for event in self.live_events()["events"]),
-                   "the retained live user event preserves the original delivered reference text")
+        first_reference, first_source = self.reference_scenarios(front, member)
+        retained = self.record(self.queue(), message_id=first_reference["id"])
+        self.check(retained["status"] == "delivered" and retained["text"] == first_source
+                   and retained["target"] == member["agent_id"],
+                   "the delivered queue record retains the original reference text and exact recipient")
         self.paste_scenario(front, member)
         self.attachment_handoff_scenario(front, member)
         self.copy_and_help(front)
