@@ -456,11 +456,11 @@ jobs:
           retention-days: 7
 
   windows:
-    name: Windows native desktop build and tests
+    name: Windows CLI, process/IPC, and desktop acceptance
     needs: validate
     if: needs.validate.outputs.windows == 'true'
     runs-on: windows-2025
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       SOURCE_COMMIT: ${{ needs.validate.outputs.ref }}
       CARGO_TERM_COLOR: never
@@ -500,6 +500,13 @@ jobs:
             throw 'The requested commit must contain apps/ssmcp-desktop/Cargo.lock; CI does not generate it.'
           }
 
+      - name: Parse the Windows desktop acceptance script
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/e2e_windows_desktop.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors) { throw ($errors | Out-String) }
+
       - name: Install Rust 1.100.0 for native Windows
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
         with:
@@ -523,7 +530,7 @@ jobs:
           $visualStudio = ($installations | Select-Object -First 1).Trim()
           $developerShell = Join-Path $visualStudio 'Common7/Tools/Launch-VsDevShell.ps1'
           # zgpui's native build script directly invokes cl and lib. Keep this
-          # environment and both Cargo commands in the same PowerShell step.
+          # environment and all Cargo commands in the same PowerShell step.
           & $developerShell -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
           Get-Command cl.exe, lib.exe, cargo.exe, rustc.exe |
             Format-Table Name, Source -AutoSize | Out-String |
@@ -532,6 +539,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'rustc version inspection failed.' }
           & cargo -V 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'cargo.log')
           if ($LASTEXITCODE -ne 0) { throw 'Cargo version inspection failed.' }
+
+          # Reuse the native client checks from ci.yml; these execute Windows
+          # process, IPC, CLI, and library tests on the requested source.
+          & cargo test --locked --lib --bin ssmcp --test release_client 2>&1 |
+            Tee-Object -FilePath (Join-Path $evidence 'cli-tests.log')
+          $clientTestExit = $LASTEXITCODE
+          & cargo build --locked --bin ssmcp --example native_plugin_fixture 2>&1 |
+            Tee-Object -FilePath (Join-Path $evidence 'cli-build.log')
+          $clientBuildExit = $LASTEXITCODE
+          $pluginExit = $null
+          if ($clientBuildExit -eq 0) {
+            & cargo test --lib --locked runtime::plugins::tests::native_plugin_runtime_contract -- --ignored --exact 2>&1 |
+              Tee-Object -FilePath (Join-Path $evidence 'native-plugin.log')
+            $pluginExit = $LASTEXITCODE
+          }
 
           & cargo test --manifest-path apps/ssmcp-desktop/Cargo.toml --locked --target x86_64-pc-windows-msvc 2>&1 |
             Tee-Object -FilePath (Join-Path $evidence 'tests.log')
@@ -543,12 +565,21 @@ jobs:
             source_commit = $env:SOURCE_COMMIT
             target = 'x86_64-pc-windows-msvc'
             profile = 'debug'
+            cli_test_exit = $clientTestExit
+            cli_build_exit = $clientBuildExit
+            native_plugin_exit = $pluginExit
             test_exit = $testExit
             build_exit = $buildExit
           } | ConvertTo-Json | Set-Content -Path (Join-Path $evidence 'result.json')
-          if ($testExit -ne 0 -or $buildExit -ne 0) {
-            throw "Desktop checks failed: cargo test=$testExit, cargo build=$buildExit."
+          if ($clientTestExit -ne 0 -or $clientBuildExit -ne 0 -or $pluginExit -ne 0 -or $testExit -ne 0 -or $buildExit -ne 0) {
+            throw "Windows checks failed: CLI tests=$clientTestExit, CLI build=$clientBuildExit, native plugin=$pluginExit, desktop tests=$testExit, desktop build=$buildExit."
           }
+          $cliExecutable = Join-Path $env:CARGO_TARGET_DIR 'debug/ssmcp.exe'
+          [ordered]@{
+            file = 'ssmcp.exe'
+            bytes = (Get-Item $cliExecutable).Length
+            sha256 = (Get-FileHash -Algorithm SHA256 -Path $cliExecutable).Hash.ToLowerInvariant()
+          } | ConvertTo-Json | Set-Content -Path (Join-Path $evidence 'cli-executable.json')
           $executable = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/debug/ssmcp-desktop.exe'
           if (-not (Test-Path $executable -PathType Leaf)) {
             throw 'Cargo reported success without the expected desktop executable.'
@@ -558,6 +589,105 @@ jobs:
             bytes = (Get-Item $executable).Length
             sha256 = (Get-FileHash -Algorithm SHA256 -Path $executable).Hash.ToLowerInvariant()
           } | ConvertTo-Json | Set-Content -Path (Join-Path $evidence 'executable.json')
+
+      - name: Exercise the Windows CLI and private process/IPC lifecycle
+        id: cli_runtime
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $evidence = Join-Path $env:RUNNER_TEMP 'ssmcp-gui-ci-windows'
+          $binaryDirectory = Join-Path $env:CARGO_TARGET_DIR 'debug'
+          $cliExecutable = Join-Path $binaryDirectory 'ssmcp.exe'
+          & $cliExecutable --version 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'cli-version.log')
+          if ($LASTEXITCODE -ne 0) { throw 'The built Windows CLI did not report its version.' }
+          & $cliExecutable --help 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'cli-help.log')
+          if ($LASTEXITCODE -ne 0) { throw 'The built Windows CLI did not report its help.' }
+          # The shared fixture owns its temporary state and foreground processes.
+          # Service installation is previewed with --dry-run, never applied.
+          & python scripts/e2e_service_portable.py --bin-dir $binaryDirectory --report (Join-Path $evidence 'session-service.json') --revision $env:SOURCE_COMMIT 2>&1 |
+            Tee-Object -FilePath (Join-Path $evidence 'session-service.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Private Windows lifecycle acceptance failed or was blocked; inspect session-service.json.' }
+
+      - name: Verify an empty overview without creating a session registry
+        id: overview_runtime
+        if: ${{ !cancelled() && steps.native.outcome == 'success' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          @'
+          import hashlib, json, os, shutil, subprocess, sys, uuid
+          from pathlib import Path
+
+          evidence = Path(os.environ['RUNNER_TEMP']) / 'ssmcp-gui-ci-windows'
+          binary = Path(os.environ['CARGO_TARGET_DIR']) / 'debug' / 'ssmcp.exe'
+          overview_home = (Path(os.environ['RUNNER_TEMP']) / ('ssmcp-overview-empty-' + uuid.uuid4().hex)).resolve()
+          expected = {
+              'schema': 'ssmcp.overview.v1', 'scope': 'current_os_user',
+              'sessions': [], 'truncated': False, 'skipped_invalid_entries': 0,
+              'logs_omitted': True, 'automatic_command_retry': False, 'max_sessions': 256,
+          }
+          report = {
+              'source_commit': os.environ['SOURCE_COMMIT'], 'status': 'failed',
+              'command': ['ssmcp.exe', 'overview', '--json'], 'timeout_seconds': 15,
+              'session_home': str(overview_home), 'exit_code': None, 'timed_out': False,
+          }
+          stdout, stderr = b'', b''
+          try:
+              if not overview_home.is_absolute() or overview_home.exists():
+                  raise RuntimeError('The overview fixture requires a fresh absolute session home.')
+              with binary.open('rb') as source:
+                  report['executable_sha256'] = hashlib.file_digest(source, 'sha256').hexdigest()
+              environment = dict(os.environ, SSMCP_SESSION_HOME=str(overview_home))
+              result = subprocess.run([str(binary), 'overview', '--json'], env=environment,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+              stdout, stderr = result.stdout, result.stderr
+              report['exit_code'] = result.returncode
+              if result.returncode != 0:
+                  raise RuntimeError(f'overview exited with {result.returncode}')
+              value = json.loads(stdout)
+              if not isinstance(value, dict):
+                  raise RuntimeError('overview did not return a JSON object.')
+              report['checks'] = {
+                  key: key in value and type(value[key]) is type(wanted) and value[key] == wanted
+                  for key, wanted in expected.items()
+              }
+              if not all(report['checks'].values()):
+                  raise RuntimeError('Unexpected overview fields: ' + ', '.join(
+                      key for key, passed in report['checks'].items() if not passed))
+              report['status'] = 'passed'
+          except subprocess.TimeoutExpired as error:
+              stdout, stderr = error.stdout or b'', error.stderr or b''
+              report['timed_out'] = True
+              report['error'] = 'overview exceeded the 15-second bound.'
+          except Exception as error:
+              report['error'] = f'{type(error).__name__}: {error}'
+          finally:
+              report['registry_created'] = overview_home.exists() or overview_home.is_symlink()
+              if report['registry_created']:
+                  report['status'] = 'failed'
+                  report.setdefault('error', 'Read-only overview unexpectedly created its session home.')
+                  try:
+                      if overview_home.is_symlink() or overview_home.is_file():
+                          overview_home.unlink()
+                      else:
+                          shutil.rmtree(overview_home)
+                  except OSError as error:
+                      report['cleanup_error'] = str(error)
+              (evidence / 'overview.stdout.json').write_bytes(stdout)
+              (evidence / 'overview.stderr.log').write_bytes(stderr)
+              (evidence / 'overview-result.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+          print(json.dumps(report, indent=2))
+          sys.exit(0 if report['status'] == 'passed' else 1)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Empty Windows overview acceptance failed; inspect overview-result.json.' }
+      - name: Launch and capture the actual Windows desktop executable
+        id: desktop_runtime
+        if: ${{ !cancelled() && steps.native.outcome == 'success' }}
+        run: |
+          $evidence = Join-Path $env:RUNNER_TEMP 'ssmcp-gui-ci-windows'
+          $executable = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/debug/ssmcp-desktop.exe'
+          & pwsh -NoLogo -NoProfile -File scripts/e2e_windows_desktop.ps1 -Binary $executable -EvidenceDirectory (Join-Path $evidence 'desktop-runtime') -SourceCommit $env:SOURCE_COMMIT
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop runtime acceptance failed or was blocked; inspect desktop-runtime/result.json.' }
 
       - name: Package the tested Windows debug executable
         run: |
@@ -579,13 +709,30 @@ jobs:
         if: always()
         env:
           NATIVE_OUTCOME: ${{ steps.native.outcome }}
+          CLI_OUTCOME: ${{ steps.cli_runtime.outcome }}
+          OVERVIEW_OUTCOME: ${{ steps.overview_runtime.outcome }}
+          DESKTOP_OUTCOME: ${{ steps.desktop_runtime.outcome }}
         run: |
+          $overviewStatus = 'not_run'
+          $overviewReport = Join-Path $env:RUNNER_TEMP 'ssmcp-gui-ci-windows/overview-result.json'
+          if (Test-Path -LiteralPath $overviewReport) {
+            $overviewStatus = (Get-Content -LiteralPath $overviewReport -Raw | ConvertFrom-Json).status
+          }
+          $desktopStatus = 'not_run'
+          $desktopReport = Join-Path $env:RUNNER_TEMP 'ssmcp-gui-ci-windows/desktop-runtime/result.json'
+          if (Test-Path -LiteralPath $desktopReport) {
+            $desktopStatus = (Get-Content -LiteralPath $desktopReport -Raw | ConvertFrom-Json).status
+          }
           @(
-            '### Windows desktop client'
+            '### Windows CLI and desktop acceptance'
             ''
             ('- Source commit: `{0}`' -f $env:SOURCE_COMMIT)
-            ('- Native MSVC Debug build and Rust tests: {0}' -f $env:NATIVE_OUTCOME)
-            '- Scope: compilation and automated tests; this job does not launch or visually inspect a window or connect to a live session.'
+            ('- Native MSVC Debug builds, shared CLI/library tests, and native plugin contract: {0}' -f $env:NATIVE_OUTCOME)
+            ('- Actual CLI and private process/IPC lifecycle: {0}' -f $env:CLI_OUTCOME)
+            ('- Empty current-user overview without registry creation: {0}; execution step: {1}' -f $overviewStatus, $env:OVERVIEW_OUTCOME)
+            ('- Actual desktop window: {0}; execution step: {1}' -f $desktopStatus, $env:DESKTOP_OUTCOME)
+            '- Evidence: executable hashes, private lifecycle report, owned window metadata, captured PNG, and stdout/stderr.'
+            '- Scope: isolated fixtures and a bounded desktop window; no external account, live session, installed service, or human visual acceptance.'
           ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Preserve Windows build and test evidence
