@@ -15,6 +15,8 @@ mod command_rows;
 mod command_visibility_tests;
 mod correlation;
 mod diff;
+#[cfg(test)]
+mod highlight_tests;
 mod read_activity;
 #[cfg(all(test, unix))]
 mod source_tests;
@@ -2781,6 +2783,16 @@ fn semantic_text(text: &str, ui: &Ui, language: &str) -> String {
                 let _ = lexer.line(&plain);
             }
             output.push_str(line);
+        } else if !code
+            && (trimmed.starts_with('{') || trimmed.starts_with('['))
+            && serde_json::from_str::<serde::de::IgnoredAny>(trimmed).is_ok()
+        {
+            // JSON escapes and embedded markup are string data, not paths.
+            // Validate without materializing values; paint the original bytes.
+            let mut json = crate::client::highlight::Lexer::for_language("json");
+            for token in json.line(line) {
+                output.push_str(&paint(token.text, token.tone, ui, token.bold));
+            }
         } else if trimmed.starts_with('[') {
             let tone = if trimmed.starts_with("[ERR") {
                 "error"
