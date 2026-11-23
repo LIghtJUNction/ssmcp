@@ -497,10 +497,10 @@ fn page(value: &Value, previous: Option<&Cursor>) -> Result<Page, &'static str> 
             data,
         });
     }
-    if let Some(last) = last {
-        if next.seq != last {
-            return Err("worker_events_invalid_cursor");
-        }
+    if let Some(last) = last
+        && next.seq != last
+    {
+        return Err("worker_events_invalid_cursor");
     }
     if has_more != (next.seq < latest) || (has_more && events.is_empty()) {
         return Err("worker_events_invalid_cursor");
@@ -727,8 +727,7 @@ async fn pump(
                     event.actor.as_deref(),
                     &event.kind,
                     event.data.clone(),
-                    None,
-                    Some(&key),
+                    (None, Some(&key)),
                 )
                 .is_err()
             {

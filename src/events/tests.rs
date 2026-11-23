@@ -23,8 +23,7 @@ fn publish(hub: &Hub, owner: &str, client: &str, index: usize) -> Value {
         Some("worker"),
         "worker.progress",
         json!({"index":index,"task_id":"task-one"}),
-        None,
-        None,
+        (None, None),
     )
     .unwrap()
 }
@@ -150,8 +149,10 @@ fn private_audience_uses_the_complete_client_and_agent_identity() {
         Some("sender"),
         "message.received",
         json!({"message_id":"message-one"}),
-        Some(vec!["client-a:same-agent".into()]),
-        Some("message-one-received"),
+        (
+            Some(vec!["client-a:same-agent".into()]),
+            Some("message-one-received"),
+        ),
     )
     .unwrap();
     for (index, who) in [&a, &b, &peer].iter().enumerate() {
@@ -192,8 +193,7 @@ fn filters_scan_unmatched_events_without_exposing_or_implicitly_acknowledging_th
         Some("worker"),
         "message.sent",
         json!({"task_id":"task-one"}),
-        None,
-        None,
+        (None, None),
     )
     .unwrap();
     publish(&hub, "owner", "client-b", 10);
@@ -203,8 +203,7 @@ fn filters_scan_unmatched_events_without_exposing_or_implicitly_acknowledging_th
         Some("another-worker"),
         "worker.started",
         json!({"task_id":"task-one"}),
-        None,
-        None,
+        (None, None),
     )
     .unwrap();
     hub.publish_system(
@@ -213,8 +212,7 @@ fn filters_scan_unmatched_events_without_exposing_or_implicitly_acknowledging_th
         Some("worker"),
         "worker.completed",
         json!({"task_id":"another-task"}),
-        None,
-        None,
+        (None, None),
     )
     .unwrap();
     publish(&hub, "owner", "client-a", 20);
@@ -285,8 +283,7 @@ fn custom_events_cannot_impersonate_system_sources_or_supply_authority_fields() 
             None,
             "custom.impersonation",
             json!({}),
-            None,
-            None
+            (None, None)
         )
         .is_err()
     );
@@ -298,8 +295,7 @@ fn custom_events_cannot_impersonate_system_sources_or_supply_authority_fields() 
             None,
             "message.sent",
             json!({}),
-            Some(vec!["agent-without-client".into()]),
-            None
+            (Some(vec!["agent-without-client".into()]), None)
         )
         .is_err()
     );
@@ -480,8 +476,7 @@ fn byte_capacity_and_read_page_budget_are_enforced_without_partial_events() {
             None,
             "worker.progress",
             data.clone(),
-            None,
-            None,
+            (None, None),
         )
         .unwrap();
     }
@@ -520,8 +515,7 @@ async fn system_receipt_capacity_failure_wakes_readers_with_an_explicit_gap() {
             None,
             "worker.completed",
             json!({"index":0}),
-            None,
-            Some("system-0"),
+            (None, Some("system-0")),
         )
         .unwrap();
     for index in 1..MAX_PUBLISH_RECEIPTS {
@@ -531,8 +525,7 @@ async fn system_receipt_capacity_failure_wakes_readers_with_an_explicit_gap() {
             None,
             "worker.completed",
             json!({"index":index}),
-            None,
-            Some(&format!("system-{index}")),
+            (None, Some(&format!("system-{index}"))),
         )
         .unwrap();
     }
@@ -552,8 +545,7 @@ async fn system_receipt_capacity_failure_wakes_readers_with_an_explicit_gap() {
             None,
             "worker.completed",
             json!({"index":"lost"}),
-            None,
-            Some("system-overflow"),
+            (None, Some("system-overflow")),
         )
         .unwrap_err();
     assert!(error.starts_with("events_dedupe_capacity"));
@@ -572,8 +564,7 @@ async fn system_receipt_capacity_failure_wakes_readers_with_an_explicit_gap() {
             None,
             "worker.completed",
             json!({"index":0}),
-            None,
-            Some("system-0"),
+            (None, Some("system-0")),
         )
         .unwrap();
     assert_eq!(retry["event_id"], first["event_id"]);
@@ -612,8 +603,7 @@ fn oversized_system_metadata_marks_loss_but_invalid_requests_do_not() {
             None,
             "worker.completed",
             json!({}),
-            None,
-            None
+            (None, None)
         )
         .is_err()
     );
@@ -625,8 +615,7 @@ fn oversized_system_metadata_marks_loss_but_invalid_requests_do_not() {
             None,
             "worker.completed",
             json!({"detail":"x".repeat(MAX_EVENT_BYTES)}),
-            None,
-            None
+            (None, None)
         )
         .unwrap_err()
         .starts_with("events_event_too_large")
@@ -696,8 +685,7 @@ fn subscription_and_account_capacities_are_bounded_with_retries_preserved() {
             None,
             "worker.idle",
             json!({}),
-            None,
-            None
+            (None, None)
         )
         .is_err()
     );
@@ -765,8 +753,7 @@ async fn a_subscriber_does_not_wake_itself_with_its_own_wait_lifecycle() {
             Some("waiting-agent"),
             kind,
             json!({"origin_wait_id":format!("wait-{index}")}),
-            None,
-            None,
+            (None, None),
         )
         .unwrap();
         tokio::select! {
@@ -812,8 +799,7 @@ async fn explicit_own_wait_observation_still_excludes_the_active_origin_id() {
         Some("agent"),
         "wait.started",
         json!({"origin_wait_id":"current"}),
-        None,
-        None,
+        (None, None),
     )
     .unwrap();
     let pending = hub
@@ -829,8 +815,7 @@ async fn explicit_own_wait_observation_still_excludes_the_active_origin_id() {
         Some("agent"),
         "wait.completed",
         json!({"origin_wait_id":"previous"}),
-        None,
-        None,
+        (None, None),
     )
     .unwrap();
     let page = hub
