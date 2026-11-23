@@ -16,6 +16,7 @@ pub(super) fn delay(base_seconds: u64, consecutive_failures: u32, entropy: u8) -
 
 /// Both values are non-secret (verified-subject identifier, credential digest).
 /// Changing the account cannot silently continue a revoked recovery identity.
+#[cfg(any(target_os = "linux", test))]
 pub(super) fn renewed_same_account(
     previous: Option<&(String, String)>,
     current: Option<&(String, String)>,

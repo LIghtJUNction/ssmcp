@@ -94,6 +94,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except ValueError:
             fixture.record("unexpected_requests")
             return self.reply(400, {"error": "invalid_fixture_request"})
+        if (self.path == "/api/client/device/challenge" and body == {}
+                and self.headers.get("Authorization") == "Bearer " + fixture.token):
+            # Simulate the documented legacy gateway response for a challenge.
+            fixture.record("device_challenge")
+            return self.reply(404, {"error": "fixture_challenge_not_supported"})
         if self.path == "/api/client/login/start":
             fixture.record("login_start")
             return self.reply(200, {
@@ -116,7 +121,7 @@ class UnavailableGateway:
         self.device_code = secrets.token_hex(32)
         self.lock = threading.Lock()
         self.counts = {key: 0 for key in
-                       ("login_start", "login_poll", "whoami", "connect", "unexpected_requests")}
+                       ("login_start", "login_poll", "whoami", "connect", "device_challenge", "unexpected_requests")}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), GatewayHandler)
         self.server.daemon_threads = True
         self.server.fixture = self
@@ -509,6 +514,7 @@ class Portable:
         self.samples["gateway_requests"] = observed
         self.check(observed["login_start"] == observed["login_poll"] == 1
                    and observed["whoami"] > 0 and observed["connect"] > 1
+                   and observed["device_challenge"] == observed["connect"]
                    and observed["unexpected_requests"] == 0,
                    "session retries and supervisor restoration reuse the local login without new authorization")
 
