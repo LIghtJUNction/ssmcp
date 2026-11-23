@@ -187,10 +187,11 @@ class AccountGateway:
 
     def client_command(self, *, name="workstation", shell="/bin/sh", extra_args=()):
         h = self.harness
+        reconnect = () if "--no-watchdog" in extra_args or "--reconnect-delay" in extra_args else ("--reconnect-delay", "1")
         if not getattr(h, "origin", ""):
             raise RuntimeError("prepare the owned account router before creating a client")
         return [str(h.binary_dir / "ssmcp"), "--server", h.origin, "--name", name,
-                "--shell", shell, "--no-setup", "--reconnect-delay", "1", *extra_args]
+                "--shell", shell, "--no-setup", *reconnect, *extra_args]
 
     def validate_connection_record(self, value):
         if (not isinstance(value, dict) or not value.get("client_id")
