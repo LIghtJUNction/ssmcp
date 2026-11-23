@@ -472,6 +472,13 @@ async fn exec_read_native_result_expands_without_replaying_folded_output() {
         assert_eq!(view.events[0].id, id);
         assert!(view.events[0].meta.keys.is_empty());
         assert_eq!(view.events[0].meta.status, Some(Status::Done));
+        // Keyed observations keep their own renderer even if their retained
+        // text looks exactly like a native exec.read receipt.
+        for key in ["wait-observation\0exec.read", "worker-operation\0exec.read"] {
+            view.events[0].meta.keys = vec![key.to_owned()];
+            assert!(exec_read_preview(&view.events[0], 48).is_none());
+        }
+        view.events[0].meta.keys.clear();
         let ui = Ui { color: false, ..Ui::default() };
         for width in [48, 120] {
             let folded = view.render(width, 24, &ui, true).join("\n");

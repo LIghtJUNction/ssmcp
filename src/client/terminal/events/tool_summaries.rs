@@ -163,7 +163,8 @@ struct ExecReadDetail {
 /// The compact row is generated from a validated native read result. Its marker
 /// separates the projection from retained diagnostics and untrusted output text.
 pub(super) fn exec_read_preview(event: &super::Event, width: usize) -> Option<Vec<String>> {
-    if event.meta.command || event.summary != "[RUN] ssmcp.exec.read" {
+    if event.meta.command || !event.meta.keys.is_empty() || event.summary != "[RUN] ssmcp.exec.read"
+    {
         return None;
     }
     let body = event
