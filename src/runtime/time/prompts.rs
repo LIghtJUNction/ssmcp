@@ -1164,6 +1164,113 @@ mod tests {
     }
 
     #[test]
+    fn renamed_display_labels_preserve_timer_dedup_read_cancel_and_ack() {
+        use crate::wire::{ControlAccount, ControlAgent, ControlAttribution};
+        let mut original = owner(7);
+        original.attribution = Some(ControlAttribution {
+            account: ControlAccount {
+                provider: "github".into(),
+                subject: "123".into(),
+                login: "controller-before".into(),
+            },
+            owner: Some(ControlAccount {
+                provider: "github".into(),
+                subject: "456".into(),
+                login: "device-owner-before".into(),
+            }),
+            agent: Some(ControlAgent {
+                id: format!("agent_{}", "a".repeat(32)),
+                name: "participant-before".into(),
+            }),
+        });
+        let mut renamed = original.clone();
+        let attribution = renamed.attribution.as_mut().unwrap();
+        attribution.account.login = "controller-after".into();
+        attribution.owner.as_mut().unwrap().login = "device-owner-after".into();
+        attribution.agent.as_mut().unwrap().name = "participant-after".into();
+        assert_ne!(original.attribution, renamed.attribution);
+        assert_eq!(original, renamed);
+
+        let now = Instant::now();
+        let mut state = State::default();
+        let id = add(
+            &mut state,
+            original.clone(),
+            schedule("rename", 0, Some(1000)),
+            now,
+        );
+        state.tick(now, 1_000_000);
+        let event = read(&mut state, original, &id, now)[0].clone();
+        assert_eq!(
+            add(
+                &mut state,
+                renamed.clone(),
+                schedule("rename", 0, Some(1000)),
+                now
+            ),
+            id
+        );
+        assert_eq!(state.records.len(), 1);
+        assert_eq!(read(&mut state, renamed.clone(), &id, now)[0], event);
+
+        let mut other_device_owner = renamed.clone();
+        other_device_owner
+            .attribution
+            .as_mut()
+            .unwrap()
+            .owner
+            .as_mut()
+            .unwrap()
+            .subject = "999".into();
+        assert!(
+            state
+                .request(
+                    other_device_owner,
+                    "test",
+                    Request::Read {
+                        timer_id: Some(id.clone()),
+                        limit: 4,
+                    },
+                    now,
+                    1_000_000
+                )
+                .is_err()
+        );
+
+        state
+            .request(
+                renamed.clone(),
+                "test",
+                Request::Cancel {
+                    timer_id: id.clone(),
+                },
+                now,
+                1_000_000,
+            )
+            .unwrap();
+        assert_eq!(state.records[&id].status, PromptStatus::Cancelled);
+        state
+            .request(
+                renamed.clone(),
+                "test",
+                Request::Ack {
+                    timer_id: id.clone(),
+                    event_id: event["event_id"].as_str().unwrap().into(),
+                    revision: event["revision"].as_u64().unwrap(),
+                },
+                now,
+                1_000_000,
+            )
+            .unwrap();
+        assert!(
+            read(&mut state, renamed, &id, now)
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn finite_fires_expiry_and_past_absolute_deadline_keep_truthful_timing() {
         let now = Instant::now();
         let mut state = State::default();

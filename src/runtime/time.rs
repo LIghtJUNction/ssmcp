@@ -53,12 +53,41 @@ fn display_clock() -> &'static Mutex<Weak<Clock>> {
     DISPLAY.get_or_init(Mutex::default)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq)]
 struct Owner {
     connection: Option<u64>,
     attribution: Option<ControlAttribution>,
     thread: Option<ThreadScope>,
     history: Option<HistoryOwner>,
+}
+
+impl PartialEq for Owner {
+    fn eq(&self, other: &Self) -> bool {
+        let same_attribution = match (&self.attribution, &other.attribution) {
+            (None, None) => true,
+            (Some(left), Some(right)) => {
+                left.account.provider == right.account.provider
+                    && left.account.subject == right.account.subject
+                    && left
+                        .owner
+                        .as_ref()
+                        .map(|owner| (&owner.provider, &owner.subject))
+                        == right
+                            .owner
+                            .as_ref()
+                            .map(|owner| (&owner.provider, &owner.subject))
+                    && left.agent.as_ref().map(|agent| &agent.id)
+                        == right.agent.as_ref().map(|agent| &agent.id)
+            }
+            _ => false,
+        };
+        // Login and participant names are presentation metadata. Renaming them
+        // must not replace an authenticated account, member or conversation.
+        same_attribution
+            && self.connection == other.connection
+            && self.thread == other.thread
+            && self.history == other.history
+    }
 }
 
 impl Owner {
