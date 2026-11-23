@@ -477,8 +477,9 @@ async fn retiring_main_and_revoked_main_cannot_be_woken_or_read() {
         )
         .await
         .unwrap();
+    assert_eq!(fixture.lifecycle()["status"], "offline");
     fixture.emit("worker.completed");
-    assert_eq!(fixture.lifecycle()["status"], "retiring");
+    assert_eq!(fixture.lifecycle()["status"], "offline");
     let context = fixture.context().await;
     assert!(
         wait_for_notice(
@@ -541,7 +542,15 @@ async fn both_ordinary_and_durable_await_wake_without_completing_the_original_ta
         assert_eq!(pending["status"], "pending", "{pending}");
         assert_eq!(pending["continue_wait"], true);
         assert_eq!(pending["wake_reason"], "subscription_event");
-        assert_eq!(pending["results"][0]["status"], "pending");
+        if durable {
+            assert_eq!(pending["results"], json!([]));
+            assert_eq!(pending["metadata_only"], true);
+            assert_eq!(pending["cursor"], 0);
+            assert_eq!(pending["targets"][0]["agent_id"], peer["agent_id"]);
+            assert!(pending["metadata"]["completed_at_ms"].is_null());
+        } else {
+            assert_eq!(pending["results"][0]["status"], "pending");
+        }
         let notice = &pending["worker_events"][0];
         assert_eq!(notice["events"][0]["kind"], "worker.completed");
         assert_eq!(fixture.input_state("still_queued"), SteeringState::Queued);

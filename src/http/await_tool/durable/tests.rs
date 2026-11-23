@@ -63,12 +63,12 @@ fn explicit_lifetime_requires_idempotency_and_excludes_consuming_targets() {
 fn idempotency_normalizes_definitions_but_read_windows_are_independent() {
     let registry = Registry::default();
     let first = Arguments::parse(json!({"client_id":"client","request_id":"stable","lifetime_ms":60_000,
-        "window_ms":1000,"targets":[{"type":"agent_status","agent_id":"agent_peer","statuses":["ready","done"]},
+        "window_ms":1000,"targets":[{"type":"agent_status","agent_id":"agent_peer","statuses":["idle","working"]},
             {"type":"exec","job_id":"exec_1"}]})).unwrap();
     let record = registry.record(actor(), &first).unwrap();
     let retry = Arguments::parse(json!({"client_id":"client","request_id":"stable","lifetime_ms":60_000,
         "window_ms":55_000,"timeout_ms":1000,"mode":"any","targets":[{"type":"exec","job_id":"exec_1"},
-            {"type":"agent_status","agent_id":"agent_peer","statuses":["done","ready","ready"]}]})).unwrap();
+            {"type":"agent_status","agent_id":"agent_peer","statuses":["working","idle","idle"]}]})).unwrap();
     assert!(Arc::ptr_eq(
         &record,
         &registry.record(actor(), &retry).unwrap()

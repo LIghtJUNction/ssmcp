@@ -282,8 +282,8 @@ fn guidance(
     }
     let maintenance = round.map_or_else(String::new, |round| {
         format!(
-            " Agent lifecycle maintenance request {}: budget {} ms for one already-authorized {} improvement. This request is not execution. Use collab.update with current lifecycle revision to report start; report the actual complete/fail/cancel/unknown result for this same round. Delegate only through real authorized worker claims. Preserve original receipts and unknown outcomes; yield immediately to new user input.",
-            round.round_id, round.budget_ms, round.repository
+            " Maintenance {}: one authorized {} task, {} ms. Use collab.update with the current revision and original round_id to report start and the actual outcome; yield to input and preserve unknown operations.",
+            round.round_id, round.repository, round.budget_ms
         )
     });
     json!({
@@ -296,7 +296,7 @@ fn guidance(
         "subscription_filter":{"client_ids":clients,"kinds":kinds},
         "await_target_type":"event",
         "message":format!(
-            "Continue independent authorized work when available. For maintenance, use the live Agent lifecycle request and report its actual outcome. Otherwise subscribe to listed events and use public await event windows of at most {} ms. Resume the same wait_id. Acknowledge subscription and await result cursors after processing. user.input_available wakes you; ui.wait delivers its text. Inspect unknown outcomes by original operation ID. Use events action=policy to change this guidance.{}",
+            "Continue authorized work; otherwise await these events for at most {} ms. Resume the same wait_id; acknowledge processed event and result cursors. ui.wait delivers input.{}",
             policy.window_ms, maintenance
         )
     })
@@ -472,9 +472,16 @@ pub(super) async fn append(
     // oversized append does not consume the reminder's next delivery opportunity.
     let mut notices = Vec::new();
     let mut appended = None;
-    for (index, pool, _) in &observed {
+    for (index, pool, connection) in &observed {
         let target = &eligible[*index];
-        if response_authorization(report, target).is_none() || !is_coordinator(report, target) {
+        let Some(authorization) = response_authorization(report, target) else {
+            continue;
+        };
+        if !is_coordinator(report, target)
+            || connection
+                .as_ref()
+                .is_none_or(|session| !session.is_alive() || !authorization.permits(session))
+        {
             continue;
         }
         let binding = target

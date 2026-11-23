@@ -290,6 +290,14 @@ impl Session {
             .map_err(|_| "code audit completion queue unavailable".into())
     }
 
+    #[cfg(test)]
+    pub(crate) fn steering_command_for_test(
+        &self,
+        command: wire::SteeringCommand,
+    ) -> Result<wire::SteeringSnapshot, String> {
+        self.steering_command(command)
+    }
+
     fn steering_command(
         &self,
         command: wire::SteeringCommand,

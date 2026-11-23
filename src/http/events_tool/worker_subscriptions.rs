@@ -116,7 +116,7 @@ fn main_member(context: &Context, allow_retiring: bool) -> bool {
     ["main", "coordinator", "controller", "lead"]
         .iter()
         .any(|expected| role.eq_ignore_ascii_case(expected))
-        && (allow_retiring || member["status"] != "retiring")
+        && (allow_retiring || !matches!(member["status"].as_str(), Some("retiring" | "offline")))
 }
 
 impl Registry {

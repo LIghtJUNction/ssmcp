@@ -177,18 +177,13 @@ async fn prepared(role: &str) -> (TestFixture, CodeRunReport, Vec<EligibleUserRe
 fn publish_pending(target: &EligibleUserResponse) {
     target
         .session
-        .steering
-        .command(
-            target.session.client_id(),
-            target.session.collaboration.presence().unwrap(),
-            wire::SteeringCommand::Publish {
-                command_id: "publish-worker-hint-fixture".into(),
-                message_id: "worker-hint-fixture".into(),
-                expected_revision: 0,
-                text: "Keep this genuine input queued during the passive worker probe.".into(),
-                target: target.binding.as_ref().unwrap().agent_id.clone(),
-            },
-        )
+        .steering_command_for_test(wire::SteeringCommand::Publish {
+            command_id: "publish-worker-hint-fixture".into(),
+            message_id: "worker-hint-fixture".into(),
+            expected_revision: 0,
+            text: "Keep this genuine input queued during the passive worker probe.".into(),
+            target: target.binding.as_ref().unwrap().agent_id.clone(),
+        })
         .unwrap();
 }
 
@@ -504,6 +499,7 @@ async fn maintenance_uses_only_main_authority_and_yields_to_errors_or_input() {
         assert_probe(operation);
         let hint = &after["structuredContent"]["coordination_hints"][0];
         if matches!(failure, "unavailable" | "unauthorized") {
+            assert!(hint.is_object(), "{failure}: {after}");
             assert_eq!(hint["dreaming_round"]["round_id"], round_id);
             assert_eq!(
                 hint["subscription_filter"]["client_ids"],
@@ -538,18 +534,13 @@ async fn pending_input_observation_is_recipient_scoped_and_never_claims() {
         .unwrap();
     let mut snapshot = target
         .session
-        .steering
-        .command(
-            target.session.client_id(),
-            target.session.collaboration.presence().unwrap(),
-            wire::SteeringCommand::Publish {
-                command_id: "other-input-publish".into(),
-                message_id: "other-input".into(),
-                expected_revision: 0,
-                text: "private other participant input".into(),
-                target: other["agent_id"].as_str().unwrap().into(),
-            },
-        )
+        .steering_command_for_test(wire::SteeringCommand::Publish {
+            command_id: "other-input-publish".into(),
+            message_id: "other-input".into(),
+            expected_revision: 0,
+            text: "private other participant input".into(),
+            target: other["agent_id"].as_str().unwrap().into(),
+        })
         .unwrap();
     assert!(!input_pending(target, &successful()));
     assert_eq!(snapshot.messages[0].state, wire::SteeringState::Queued);
