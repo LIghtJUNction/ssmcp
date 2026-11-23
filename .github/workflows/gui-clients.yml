@@ -439,8 +439,6 @@ jobs:
     timeout-minutes: 35
     env:
       SOURCE_COMMIT: ${{ needs.validate.outputs.ref }}
-      ANDROID_EVIDENCE_DIR: ${{ runner.temp }}/ssmcp-gui-ci-android
-      ANDROID_AVD_HOME: ${{ runner.temp }}/ssmcp-android-avd
       ANDROID_SERIAL: emulator-5554
     defaults:
       run:
@@ -454,6 +452,12 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.13'
+
+      - name: Prepare Android evidence and emulator directories
+        run: |
+          set -euo pipefail
+          printf 'ANDROID_EVIDENCE_DIR=%s\nANDROID_AVD_HOME=%s\n' \
+            "$RUNNER_TEMP/ssmcp-gui-ci-android" "$RUNNER_TEMP/ssmcp-android-avd" >> "$GITHUB_ENV"
 
       - name: Install fixed Gradle and emulator archives on the runner
         run: |
