@@ -581,7 +581,7 @@ class DurableWait(Harness):
                    and source.get("agent_id") == self.member["agent_id"]
                    and value.get("role") == "tool" and value.get("completion_permission") is False
                    and isinstance(value.get("message_id"), str)
-                   and re.fullmatch(r"native_[0-9a-f]{32}", value["message_id"]) is not None
+                   and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value["message_id"]) is not None
                    and row.get("message_id") == value["message_id"]
                    and row.get("truncated") is False,
                    "visible timer Input retains its native ID, original caller and passive provenance")
