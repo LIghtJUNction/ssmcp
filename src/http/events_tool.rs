@@ -1474,7 +1474,12 @@ pub(crate) fn tool() -> Value {
             variant("policy",json!({"patch":{"type":"object","additionalProperties":false,"properties":{
                 "enabled":{"type":"boolean"},"window_ms":{"type":"integer","minimum":1000,"maximum":crate::wire::MAX_OBSERVATION_WAIT_MS},
                 "kinds":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string"}},
-                "strategy":{"type":["string","null"],"maxLength":512}
+                "strategy":{"type":["string","null"],"maxLength":512},
+                "dreaming":{"type":["object","null"],"additionalProperties":false,
+                    "required":["round_id","repository","budget_ms"],"properties":{
+                    "round_id":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,128}$"},
+                    "repository":{"type":"string","enum":["project","global"]},
+                    "budget_ms":{"type":"integer","minimum":1000,"maximum":crate::wire::MAX_OBSERVATION_WAIT_MS}}}
             }}}), &[])
         ]},
         "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}
