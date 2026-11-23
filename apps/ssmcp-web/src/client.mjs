@@ -5,7 +5,7 @@ import {
 import { projectEvent, projectHistory, validateHistory } from './presentation.mjs';
 import { Timeline, CommandLedger } from './store.mjs';
 
-const supported = ['runtime', 'terminals', 'workers', 'threads', 'chat.queue'];
+const supported = ['runtime', 'terminals', 'workers', 'threads', 'chat.queue', 'time'];
 const paged = new Set(['workers', 'threads', 'chat.queue']);
 const pauseCodes = new Set(['denied', 'closed', 'authentication_required', 'unsupported_version']);
 const readTimeout = () => Object.assign(new Error('读取状态的 55 秒窗口已结束，尚未完成同步。'), { code: 'read_window_timeout' });

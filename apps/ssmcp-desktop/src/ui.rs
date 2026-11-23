@@ -30,6 +30,7 @@ enum Page {
     Terminal,
     Workers,
     Receipts,
+    Waits,
 }
 
 impl Page {
@@ -40,6 +41,7 @@ impl Page {
             Self::Terminal => 2,
             Self::Workers => 3,
             Self::Receipts => 4,
+            Self::Waits => 5,
         }
     }
 }
@@ -76,7 +78,8 @@ pub struct Desktop {
     local_notice: String,
     pending: Option<Pending>,
     unknown_draft: Option<String>,
-    scroll: [f32; 5],
+    scroll: [f32; 6],
+    wait_layout: Option<(Vec<String>, i32, Vec<String>)>,
     pointer: (f32, f32),
     expanded: Option<(usize, Counter)>,
     layouts: VecDeque<Layout>,
@@ -105,7 +108,8 @@ impl Default for Desktop {
             local_notice: String::new(),
             pending: None,
             unknown_draft: None,
-            scroll: [0.; 5],
+            scroll: [0.; 6],
+            wait_layout: None,
             pointer: (0., 0.),
             expanded: None,
             layouts: VecDeque::new(),
@@ -151,7 +155,8 @@ impl Desktop {
         if view.generation.is_some() && self.generation != view.generation {
             self.generation = view.generation.clone();
             self.layouts.clear();
-            self.scroll = [0.; 5];
+            self.scroll = [0.; 6];
+            self.wait_layout = None;
             self.expanded = None;
             self.thread_picker = false;
         }
@@ -391,9 +396,16 @@ impl Desktop {
             (Page::Terminal, "终端"),
             (Page::Workers, "Worker"),
             (Page::Receipts, "回执"),
+            (Page::Waits, "等待"),
         ];
+        let tab_width = (w / tabs.len() as f32).min(94.);
         for (index, (page, label)) in tabs.into_iter().enumerate() {
-            let rect = Rect::new(x + index as f32 * 94., 99., 84., 36.);
+            let rect = Rect::new(
+                x + index as f32 * tab_width,
+                99.,
+                (tab_width - 10.).max(1.),
+                36.,
+            );
             let style = ButtonStyle::Quiet;
             if ui.button(canvas, 20 + index as u64, rect, label, style, true) {
                 self.page = page;
@@ -408,7 +420,7 @@ impl Desktop {
             canvas.ellipsis(
                 "正在等待实际回执…",
                 right - 220.,
-                111.,
+                74.,
                 220.,
                 13,
                 false,
@@ -432,6 +444,7 @@ impl Desktop {
             Page::Terminal => self.terminal(canvas, ui, handle, view, bounds),
             Page::Workers => self.workers(canvas, ui, handle, view, bounds),
             Page::Receipts => self.receipts(canvas, ui, handle, view, bounds),
+            Page::Waits => self.waits(canvas, view, bounds),
         }
         if self.thread_picker {
             self.threads(canvas, ui, handle, view, bounds);
@@ -1160,6 +1173,55 @@ impl Desktop {
             false,
             if terminal.incomplete { AMBER } else { MUTED },
         );
+    }
+
+    fn waits(&mut self, canvas: &mut Canvas<'_>, view: &View, bounds: Rect) {
+        canvas.text("等待与计时", bounds.x, bounds.y, 19, true, TEXT);
+        let Some(snapshot) = &view.time else {
+            self.empty(
+                canvas,
+                Rect::new(bounds.x, bounds.y + 48., bounds.w, bounds.h - 48.),
+                "等待数据尚不可用",
+                "连接支持的后端后显示真实等待、读取状态与定时计划。",
+            );
+            return;
+        };
+        canvas.ellipsis(
+            "最近一次实际快照 · 只读 · 刷新状态不会确认或重放结果",
+            bounds.x,
+            bounds.y + 34.,
+            bounds.w,
+            12,
+            false,
+            MUTED,
+        );
+        let body = Rect::new(bounds.x, bounds.y + 68., bounds.w, (bounds.h - 68.).max(1.));
+        let width = body.w.max(1.) as i32;
+        if self
+            .wait_layout
+            .as_ref()
+            .is_none_or(|(source, previous_width, _)| {
+                source != &snapshot.lines || *previous_width != width
+            })
+        {
+            let (mut lines, more) = wrap(canvas, &snapshot.lines.join("\n"), body.w, 13, 16_384);
+            if more {
+                lines.push("显示内容已达到当前面板上限。".into());
+            }
+            self.wait_layout = Some((snapshot.lines.clone(), width, lines));
+        }
+        let lines = &self.wait_layout.as_ref().expect("prepared wait layout").2;
+        let row_height = 24.;
+        self.scroll[5] = self.scroll[5].min((lines.len() as f32 * row_height - body.h).max(0.));
+        canvas.clip(body);
+        for (index, line) in lines.iter().enumerate() {
+            let y = body.y + index as f32 * row_height - self.scroll[5];
+            if y + row_height < body.y || y > body.y + body.h {
+                continue;
+            }
+            canvas.text(line, body.x, y, 13, false, TEXT);
+        }
+        canvas.unclip();
     }
 
     fn workers(

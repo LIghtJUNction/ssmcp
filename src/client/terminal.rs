@@ -886,6 +886,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
             "worker_activity":{"row":conversation::body_top(g.rows),"col":0,"rows":state.conversation.worker_activity_rows.min(g.log_rows),"cols":g.left,"visible":chat && !state.help && state.conversation.view == conversation::View::Activity && state.conversation.worker_activity_rows>0},
             "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":if chat {g.log_rows} else {g.pty_rows},"cols":g.left,"visible":if chat {!state.conversation.logs_open && state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
             "tasks":{"row":conversation::body_top(g.rows),"col":0,"rows":g.log_rows,"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
+            "waits":{"row":conversation::body_top(g.rows),"col":0,"rows":g.log_rows,"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Waits},
             "input":{"row":conversation::prompt_top(g)+1,"col":0,"rows":g.input_rows,"cols":g.left,"visible":chat && g.input_rows>0}},
         "focus":if chat && state.conversation.logs_open && state.conversation.content_focus {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "sleeping":state.sleep.visible,

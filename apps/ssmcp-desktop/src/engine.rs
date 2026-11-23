@@ -616,6 +616,9 @@ impl Engine {
         if !self.view.resource("workers") {
             self.view.workers = None;
         }
+        if !self.view.resource("time") {
+            self.view.time = None;
+        }
         if !self.view.resource("threads") {
             self.view.agents.clear();
             self.view.can_send = false;
@@ -641,6 +644,10 @@ impl Engine {
         }
         if self.view.resource("workers") {
             self.refresh_workers(budget).await?;
+        }
+        if self.view.resource("time") {
+            let value = self.state("time", json!({}), budget).await?;
+            self.view.time = Some(WaitSnapshot::parse(&value)?);
         }
         if self.view.resource("threads") {
             self.refresh_threads(budget).await?;

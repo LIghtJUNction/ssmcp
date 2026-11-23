@@ -1,6 +1,7 @@
 import { Gateway } from './src/gateway.mjs';
 import { BridgeClient } from './src/client.mjs';
 import { byteLength } from './src/protocol.mjs';
+import { renderWaitContent } from './src/wait-view.mjs';
 import { plain, shortId, duration, redact, mayClearDraft } from './src/presentation.mjs';
 
 const $ = id => document.getElementById(id);
@@ -293,13 +294,36 @@ function renderWorkers() {
   $('workers-next').disabled = !Number.isSafeInteger(state.next_offset) || state.next_offset <= offset || busy.has('workers-page');
 }
 
-function renderAll() { renderStatus(); renderSessions(); renderComposer(); renderTimeline(); renderTerminals(); renderWorkers(); }
+let timeReadInFlight = false;
+function renderWaits() {
+  const snapshot = client.states.get('time'), supported = client.hasResource('time');
+  show('waits-content', supported && Boolean(snapshot)); show('waits-empty', !supported || !snapshot);
+  setText('waits-empty', client.stateErrors.get('time') ?? (supported ? '正在读取等待与计时。' : '当前连接尚不支持等待面板。'));
+  setText('wait-count', snapshot?.active?.length ?? '');
+  if (snapshot && supported) renderWaitContent($('waits-content'), snapshot,
+    client.stateErrors.get('time') ? '刷新未完成，保留上次核实的快照。' :
+    client.observation === 'paused' ? '观察已暂停，保留最近快照。' : '显示当前连接最近一次返回的实际快照。');
+}
+async function refreshWaits() {
+  if (timeReadInFlight || !client.connection || !client.hasResource('time')) return;
+  timeReadInFlight = true;
+  try { await client.readWindow(signal => client.readState('time', {}, { signal })); }
+  catch (error) { if (error?.name !== 'AbortError') renderWaits(); }
+  finally { timeReadInFlight = false; }
+}
+// A visible read-only panel refreshes independently of the long event window.
+// Pausing observation or hiding the page stops new reads; no command is sent.
+setInterval(() => {
+  if (activePanel === 'waits' && !document.hidden && client.observation === 'observing') void refreshWaits();
+}, 2000);
+
+function renderAll() { renderStatus(); renderSessions(); renderComposer(); renderTimeline(); renderTerminals(); renderWorkers(); renderWaits(); }
 let pendingRender = false;
 client.subscribe(event => {
-  if (event.type === 'status' || event.type === 'error') { renderStatus(); return; }
+  if (event.type === 'status' || event.type === 'error') { renderStatus(); renderWaits(); return; }
   if (pendingRender) return;
   pendingRender = true;
-  requestAnimationFrame(() => { pendingRender = false; renderStatus(); renderComposer(); renderTimeline(); renderTerminals(); renderWorkers(); });
+  requestAnimationFrame(() => { pendingRender = false; renderStatus(); renderComposer(); renderTimeline(); renderTerminals(); renderWorkers(); renderWaits(); });
 });
 
 async function send(command, args, textarea) {
@@ -358,13 +382,14 @@ function setPanel(name) {
   activePanel = name;
   tabButtons.forEach(button => { const active = button.dataset.panel === name; button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1; show(`panel-${button.dataset.panel}`, active); });
   if (name === 'conversation') renderTimeline();
+  if (name === 'waits') { renderWaits(); void refreshWaits(); }
 }
 tabButtons.forEach(button => {
   button.addEventListener('click', () => setPanel(button.dataset.panel));
   button.addEventListener('keydown', event => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault(); const index = tabButtons.indexOf(button);
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (index + (event.key === 'ArrowRight' ? 1 : -1) + 3) % 3;
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabButtons.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabButtons.length) % tabButtons.length;
     setPanel(tabButtons[next].dataset.panel); tabButtons[next].focus();
   });
 });

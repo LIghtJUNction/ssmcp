@@ -1,7 +1,9 @@
 //! Bounded display projections. Transport credentials never enter this module.
+mod waits;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+pub use waits::WaitSnapshot;
 use zgpui::bridge::{CommandOutcome, CommandRecord, protocol::*};
 
 pub const HISTORY_ROWS: usize = 320;
@@ -348,6 +350,7 @@ pub struct View {
     pub queue_next: Option<usize>,
     pub terminals: Vec<Terminal>,
     pub workers: Option<Workers>,
+    pub time: Option<WaitSnapshot>,
     pub receipts: VecDeque<Receipt>,
 }
 
@@ -415,6 +418,7 @@ impl View {
         self.queue.clear();
         self.terminals.clear();
         self.workers = None;
+        self.time = None;
         self.can_send = false;
         self.reloading = false;
         self.queue_more = false;

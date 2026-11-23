@@ -44,6 +44,7 @@ pub(super) enum View {
     History,
     Logs,
     Tasks,
+    Waits,
 }
 impl View {
     fn name(self) -> &'static str {
@@ -57,6 +58,7 @@ impl View {
             Self::History => "Live logs",
             Self::Logs => "Logs",
             Self::Tasks => "Tasks",
+            Self::Waits => "Waits",
         }
     }
     fn next(self) -> Self {
@@ -69,6 +71,7 @@ impl View {
             Self::History => Self::Logs,
             Self::Logs => Self::Tasks,
             Self::Tasks => Self::Statistics,
+            Self::Waits => Self::Activity,
         }
     }
 }
@@ -211,7 +214,7 @@ pub(super) struct Conversation {
 
 impl Conversation {
     pub(super) fn snapshot(&self) -> Value {
-        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Statistics=>"statistics",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"live_logs",View::Logs=>"logs",View::Tasks=>"tasks" },
+        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Statistics=>"statistics",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"live_logs",View::Logs=>"logs",View::Tasks=>"tasks",View::Waits=>"waits" },
             "focus":if self.content_focus {"content"} else {"input"},
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"native_recipient":self.native_recipient,"native_pending":self.native_pending.is_some(),"editing":self.editing,
@@ -1410,7 +1413,7 @@ impl State {
             View::Tasks => {
                 self.conversation.tasks.open();
             }
-            View::Logs => {}
+            View::Logs | View::Waits => {}
             View::Activity => {
                 if self.raw_logs {
                     self.notice = Some("Raw transcript · /logs returns to tool details".into());
@@ -1441,7 +1444,7 @@ impl State {
                 self.scroll_logs(-delta);
                 self.events.scroll_by(delta);
             }
-            View::Statistics => {
+            View::Statistics | View::Waits => {
                 self.conversation.detail_scroll =
                     self.conversation.detail_scroll.saturating_add_signed(delta);
             }
@@ -1753,8 +1756,10 @@ impl State {
             self.question_key(key);
             return;
         }
-        if matches!(self.conversation.view, View::Statistics | View::Agents)
-            && self.conversation.content_focus
+        if matches!(
+            self.conversation.view,
+            View::Statistics | View::Agents | View::Waits
+        ) && self.conversation.content_focus
             && matches!(key, Key::Delete | Key::Newline)
         {
             self.chat_change_view(View::Activity);
@@ -2036,6 +2041,10 @@ impl State {
             self.logs_close_restore();
             return;
         }
+        if self.conversation.view == View::Waits {
+            self.chat_change_view(View::Activity);
+            return;
+        }
         if self.conversation.view == View::Tasks {
             self.conversation.content_focus = self.conversation.tasks.back();
             self.notice = None;
@@ -2157,8 +2166,10 @@ impl State {
                 return;
             }
         }
-        if matches!(self.conversation.view, View::Statistics | View::Agents)
-            && self.conversation.content_focus
+        if matches!(
+            self.conversation.view,
+            View::Statistics | View::Agents | View::Waits
+        ) && self.conversation.content_focus
             && matches!(
                 character,
                 '\n' | '\u{1}' | '\u{5}' | '\u{15}' | '\u{b}' | '\u{17}' | '\u{7f}' | '\u{8}'
@@ -2289,7 +2300,10 @@ impl State {
                 self.help = !self.help;
             }
             ch if !ch.is_control() => {
-                if matches!(self.conversation.view, View::Statistics | View::Agents) {
+                if matches!(
+                    self.conversation.view,
+                    View::Statistics | View::Agents | View::Waits
+                ) {
                     self.chat_change_view(View::Activity);
                 }
                 self.conversation.content_focus = false;
@@ -2603,7 +2617,10 @@ impl State {
         if output == b"\x1b[201~" && !self.keyboard.pasting {
             if let Some(paste) = self.conversation.paste.take() {
                 if !paste.is_empty() {
-                    if matches!(self.conversation.view, View::Statistics | View::Agents) {
+                    if matches!(
+                        self.conversation.view,
+                        View::Statistics | View::Agents | View::Waits
+                    ) {
                         self.chat_change_view(View::Activity);
                     }
                     if self.help {
@@ -3101,6 +3118,7 @@ impl State {
                 rows
             }
             View::Statistics => self.chat_statistics_rows(&data, height),
+            View::Waits => self.chat_wait_rows(height),
             View::History => self.chat_history_rows(height),
             View::Questions => self.question_rows(height),
             View::Logs => self.filtered_logs().unwrap_or_else(|| {
@@ -3247,6 +3265,9 @@ impl State {
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
+                    if self.conversation.view == View::Waits {
+                        return "Waits · ↑↓ / PgUp/PgDn scroll · Esc conversation · ←/→ panels · read-only".into();
+                    }
                     if self.conversation.view == View::Statistics {
                         return if self.conversation.detail {
                             "Diagnostics · Enter summary · Esc back · ↑↓ scroll · ←/→ panels".into()

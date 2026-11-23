@@ -43,7 +43,7 @@ fn outcome_text(outcome: Outcome) -> &'static str {
     }
 }
 
-fn detail(snapshot: &Snapshot) -> String {
+pub(super) fn detail(snapshot: &Snapshot) -> String {
     let episodes = groups(snapshot);
     let mut lines = Vec::new();
     if episodes.is_empty() {
@@ -158,6 +158,13 @@ impl State {
         }
         let text = match arguments.split_whitespace().collect::<Vec<_>>().as_slice() {
             [] => {
+                self.chat_change_view(View::Waits);
+                self.conversation.content_focus = true;
+                self.notice = None;
+                self.dirty = true;
+                return Ok(());
+            }
+            ["status"] => {
                 let mut text = detail(&waiting::snapshot());
                 if let Some(timing) = self.chat_timing_detail() {
                     text.push_str("\n\n");
@@ -174,9 +181,12 @@ impl State {
                 };
                 format!("已取消等待 #{id}；会话继续，消息队列和草稿保持原样")
             }
-            _ => return Err("用法：/wait 或 /wait cancel <等待编号或唯一前缀>".into()),
+            _ => return Err(
+                "用法：/wait 打开面板，/wait status 查看快照，/wait cancel <等待编号或唯一前缀>"
+                    .into(),
+            ),
         };
-        self.chat_show_user_wait(&text, arguments.is_empty());
+        self.chat_show_user_wait(&text, arguments.trim() == "status");
         Ok(())
     }
 
