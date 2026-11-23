@@ -210,15 +210,21 @@ return await collab.receive("CLIENT_ID_FROM_LIST", {
 每个成员的租约为 15 分钟，成功的成员操作会续租；开始收件等待也会续租。单纯查询 `list` 不续租。需要长时间思考或等待其他系统时，调用方应在租约到期前 `update`，同时可以向同伴说明自己的状态：
 
 ~~~javascript
+const roster = await collab.list("CLIENT_ID_FROM_LIST");
+const current = roster.agents.find(agent => agent.agent_id === "AGENT_ID_FROM_JOIN");
+if (!current) throw new Error("The original member is no longer active");
 return await collab.update("CLIENT_ID_FROM_LIST", {
   agent_id: "AGENT_ID_FROM_JOIN",
   token: "PRIVATE_TOKEN_FROM_JOIN",
-  status: "reviewing",
+  expected_revision: current.lifecycle.revision,
+  status: "working",
   role: "reviewer"
 });
 ~~~
 
-`name`、`status` 最多 128 个 UTF-8 字节；`role` 最多 128 字节，`update` 传 `role: ""` 可清空角色。`capabilities` 最多 16 项，每项为 1–64 字节。主题、回复 ID 和发送去重 key 若提供，须为 1–128 字节；这些文字字段均拒绝控制字符。
+`status` 只能是 `working`、`idle`、`offline`、`dreaming`、`retiring`。修改状态、维护配置或维护轮次均须携带当前 `expected_revision`；成功响应的 `agent.lifecycle.revision` 是新的版本。版本冲突先重新读取并核对，结果未知时不能直接重发。状态与维护结果须分开更新。[状态与版本规则](../src/collab/lifecycle.rs)
+
+`name` 最多 128 个 UTF-8 字节；`role` 最多 128 字节，`update` 传 `role: ""` 可清空角色。`capabilities` 最多 16 项，每项为 1–64 字节。主题、回复 ID 和发送去重 key 若提供，须为 1–128 字节；这些文字字段均拒绝控制字符。
 
 租约到期后，成员不再出现在有效名单中，其邮箱和凭证被清理。主动 `leave` 也会删除成员与邮箱，并结束该成员的收件等待；重复使用已经离开的凭证返回成员失效。退出前先处理需要保留的消息。
 

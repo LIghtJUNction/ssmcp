@@ -40,6 +40,20 @@ Linux 的 `ssmcp local --input sock` 默认监听 `/tmp/ssmcp-UID/chat-input.soc
 
 `/queue` 可以取回、编辑和取消仍可撤回的要求。编辑必须等服务器确认取回；交付已经发生时不能撤销。具体状态及失败恢复见[队列说明](client-ui.md#输入要求与队列)。
 
+### 统一的输入与引用回复
+
+人类发言、系统 hook、定时提示词、Worker 订阅通知和维护提示使用同一套右侧输入展示。来源标签说明这段输入从哪里来；布局不会把它们变成不同的对话系统。自动提示保留原连接、原线程和原消息 ID，记录成功后才向对应 Agent 交付。它们不会伪装成人类回答，也不授予结束许可。[原生输入](../src/client/interface/messages.rs) · [服务端提示记录](../src/http/input_projection.rs)
+
+选中一条有稳定原始 ID 的消息后，可以引用原文继续回答：
+
+| 界面 | 操作 |
+|---|---|
+| 终端 | 在内容区选中消息，按 `R`，或点击消息上的 `[R 引用]`。 |
+| Web | 点击“引用回复”，或让消息获得焦点后按 `R`；选中正文中的一段文字时只引用该段。 |
+| 桌面 | 点击“引用回复”，或选中消息后按 `Ctrl+Shift+R`。输入框支持多行；`Enter` 换行，`Ctrl+Enter` 发送。 |
+
+引用以可编辑的 `>` 文本放入现有草稿，并带回原消息 ID。已有草稿保留；引用本身不发送消息。单次原文摘录最多 2048 个 UTF-8 字节，超过后明确标注截断；整条输入继续受各客户端的大小限制。引用行中的 `@文件`、`$技能`、斜杠或 shell 文本保持普通引文，不作为新的操作执行。发送仍走同一个输入队列与回执流程。[引用格式](../src/client/replies.rs) · [引用解析](../src/client/references.rs) · [桌面编辑](../apps/ssmcp-desktop/src/composer.rs)
+
 ### 查看当前计时
 
 有活动计时时，会话分隔栏显示倒计时剩余、已计时或本轮观察剩余。观察预算耗尽后，底层任务仍可能继续运行。`/wait` 打开带完整 ID 的当前快照；分隔栏继续更新。在客户端能力中查看 `timing.primitives_available` 查询该连接是否启用了时间工具。`ssmcp.time.now` 的单调计数只能在同一个 `monotonic_scope` 内比较。[计时显示](../src/client/terminal/conversation/timing.rs) · [时间原语](../src/runtime/time.rs)

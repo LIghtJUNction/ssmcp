@@ -14,7 +14,7 @@
   "agent": {"id": "REGISTERED_AGENT_ID", "token": "PRIVATE_MEMBER_TOKEN"},
   "targets": [
     {"type": "exec", "job_id": "EXEC_JOB_ID"},
-    {"type": "agent_status", "agent_id": "REGISTERED_PEER_ID", "statuses": ["done", "failed"]}
+    {"type": "agent_status", "agent_id": "REGISTERED_PEER_ID", "statuses": ["idle", "offline"]}
   ],
   "mode": "any",
   "timeout_ms": 20000
@@ -31,7 +31,7 @@
 | `job` | `id` | 现有 relay 同步任务已离开启动、运行或收尾状态；原始 `state`、错误和清理信息仍返回。 |
 | `worker_result` | `task_id` | 原任务处于 `completed`、`failed` 或 `cancelled`，保留真实输出与错误；`unknown` 返回 `unknown_target`，应先核对原任务效果。 |
 | `worker_assignment` | `request_id` | 原生等待返回 `assigned`、`already_completed`、`retiring`、`released` 或 `not_accepting`；按实际状态处理，原样保留分派的完整 `claim`。 |
-| `agent_status` | `agent_id`、`statuses` | 该已登记成员当前声明的状态匹配指定字符串；状态由该 agent 自己报告，不证明用户验收。 |
+| `agent_status` | `agent_id`、`statuses` | 已登记成员的生命周期状态匹配指定集合。可用值为 `working`、`idle`、`offline`、`dreaming`、`retiring`。状态匹配不证明任务成功或用户验收；任务结果仍读取原 `exec` 或 `worker_result` 回执。 |
 | `agent_messages` | 可选 `after`、`limit` | 当前绑定成员的收件箱已有消息；返回原始来源与游标，不自动确认消息。 |
 | `event` | `subscription_id`，可选 `limit` | 订阅已有匹配事件，返回原始来源与游标；处理后显式调用 `events.ack`。保留缺口和权限错误按原状态处理。 |
 | `user_input` | 可选 `reason`、`notify` | 已收到可供最终响应交付的用户输入；真正交付以外层 `user_wait.status: "received"` 和匹配的 `user_messages` 为准。 |
@@ -95,6 +95,8 @@
 后台记录绑定原账户、原成员和原客户端连接，每次读结果都会重新鉴权。ChatGPT 的 HTTP 调用重连可以沿用这些身份；换一个原生客户端连接不能接管旧记录。记录保存在当前 relay 进程内。relay 重启或原连接消失后，应核对原任务的实际状态；`unknown` 不构成重新执行的依据。
 
 终端 `/wait`、Web 与桌面的等待页面展示后台期限、读窗口、总耗时、结果状态、首次读取延迟和确认状态。耗时统计基于页面当前保留的有界样本；取消、未知状态和仍在等待的记录单独列示。首次读取时间表示服务端尝试向已授权调用返回结果的时间，不能证明模型已经处理结果或用户已经确认。新版面板通过 `wait_display_v4` 协商；旧 `v3` 连接继续接收原有的短窗口显示格式。[显示协议](../src/wire/wait_display.rs) · [运行时投影](../src/runtime/time/relay.rs)
+
+时间字段在对应事件尚未发生时可以省略。例如，未尝试返回终态正文时没有 `first_read_at_ms`，尚未确认时没有 `acknowledged_at_ms`。读取元数据不能产生这两个事件；处理方应按字段是否存在解释状态。[元数据格式](../src/wire/wait_display.rs) · [读出与确认](../src/http/await_tool/durable.rs)
 
 ## 单次观察的超时、恢复与取消
 

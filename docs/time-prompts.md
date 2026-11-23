@@ -1,6 +1,6 @@
 # 定时提示词
 
-`ssmcp.time.prompt` 为当前 Agent 的原生连接保存一个有界的时间安排。到点时，客户端把渲染后的提示词加入队列；同一 Agent 的后续工具响应会带回 `prompt_hooks`。创建提示词不会启动模型，也不会把提示词变成用户消息或审批。[调度器](../src/runtime/time/prompts.rs) · [响应交付](../src/http/prompt_hooks.rs)
+`ssmcp.time.prompt` 把安排绑定到创建时的原生连接和已验证 Agent 会话。到期后，原生调度器推进事件，把当前版本记录为原会话中的输入，来源标记为 `agent_timer`。只有该精确版本已有记录，正文才会从 `read` 返回，或由同一 Agent 的后续响应通过 `prompt_hooks` 带回。创建安排不会启动模型，也不授予用户消息或审批的权限。[调度器](../src/runtime/time/prompts.rs) · [原生输入记录](../src/client/interface/messages.rs) · [响应交付](../src/http/prompt_hooks.rs)
 
 ## 创建一次或重复提醒
 
@@ -25,7 +25,7 @@ return await call(clientId, "ssmcp.time.prompt", {
 
 系统把到期事件作为 `prompt_hooks` 附加到同一已验证 Agent 的后续响应。事件的来源固定为 `agent_timer`，包含 `timer_id`、`event_id`、`revision`、计划与实际触发时间，以及渲染后的 `body`。它不能代替 `user_messages`、用户回答或允许结束的回执。
 
-没有 HTTP 调用时，原生调度器仍会推进时间并保留队列。交付发生在下一次符合条件的工具响应；它不会主动创建一个新的 ChatGPT 回合。也可以显式读原队列：
+没有 HTTP 调用时，原生调度和输入记录仍可继续；原生记录与工具响应中的转交可以发生在不同时间。工具响应会带回已确认记录的正文，但不会主动创建新的 ChatGPT 回合。这些输入不会进入人类请求队列，也不会取消已请求的维护轮次。可以显式读取原安排：[被动输入处理](../src/broker/session_io.rs)
 
 ```javascript
 return await call(clientId, "ssmcp.time.prompt", {
@@ -33,7 +33,9 @@ return await call(clientId, "ssmcp.time.prompt", {
 });
 ```
 
-读取不确认。处理完成后，按刚才读取的精确事件 ID 与版本确认：
+`read` 返回空的 `events` 不一定表示没有待处理事件。`visibility_deferred` 大于零时，至少一个待处理版本尚未确认原生记录。`status` 的 `schedule.visibility` 为 `none` 时没有待处理事件；`queued`、`in_progress` 表示发布尚未完成；`recorded` 表示该版本已有记录；`rejected`、`unknown` 保留实际发布结果。继续观察原 `timer_id`，不要重新安排或重发结果不明的效果。历史缺失或被淘汰不能证明发布从未发生。[发布状态](../src/runtime/time/prompts.rs) · [原记录核对](../src/client/interface/history/ownership.rs)
+
+原生记录、向工具调用返回正文、处理后的 ACK 是三个阶段。记录成功不证明模型已处理或用户已阅读；旧版本已记录也不代表新版本可读。读取不确认。处理完成后，按刚才读取的精确事件 ID 与版本确认：
 
 ```javascript
 return await call(clientId, "ssmcp.time.prompt", {
@@ -56,4 +58,4 @@ return await call(clientId, "ssmcp.time.prompt", {
 
 安排绑定原来的原生连接和 Agent 身份。HTTP 调用中断不销毁安排；原生客户端断开、重载或关闭会结束该命名空间，新的客户端连接不能接管旧安排。活动安排和保留记录都有数量上限，未确认事件不会被静默淘汰。终态已确认记录保留五分钟，方便识别重复请求。
 
-等待面板展示安排的状态、下一次触发时间、逻辑次数和待确认数量。完整正文只交付给对应的已授权 Agent。[后台等待](await.md)
+等待面板展示安排状态、下一次触发时间、逻辑次数与待确认数量。完整正文记录在原会话的输入区，并通过对应 Agent 的已授权响应返回；它与人类发言、系统提示和订阅通知使用同一套右侧输入展示。[后台等待](await.md) · [输入与引用回复](client-input.md#统一的输入与引用回复)
