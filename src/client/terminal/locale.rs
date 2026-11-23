@@ -10,12 +10,26 @@ const EN: &[Message<'static>] = &[
         "server update required for queue",
     ),
     Message::text("connection.online", "connected"),
+    Message::text("tip.help", "/help · show commands"),
+    Message::text("tip.invite", "/invite · copy coordinator instructions"),
+    Message::text("tip.worker_list", "/worker ls · show worker pool status"),
+    Message::text(
+        "tip.worker_invite",
+        "/invite worker · copy instructions for an open station",
+    ),
 ];
 const ZH: &[Message<'static>] = &[
     Message::text("connection.preview", "预览 · 示例数据"),
     Message::text("connection.offline", "未连接"),
     Message::text("connection.queue_update", "队列需要更新服务端"),
     Message::text("connection.online", "已连接"),
+    Message::text("tip.help", "/help · 查看操作帮助"),
+    Message::text("tip.invite", "/invite · 复制主 Agent 协作说明"),
+    Message::text("tip.worker_list", "/worker ls · 查看 worker 池状态"),
+    Message::text(
+        "tip.worker_invite",
+        "/invite worker · 复制空闲席位的接入说明",
+    ),
 ];
 
 pub(super) fn text(key: &'static str) -> &'static str {
