@@ -37,7 +37,7 @@ LEGACY = "2025-11-25"
 PUBLIC_URL = "https://ssmcp.example"
 PROTOCOL_META = "io.modelcontextprotocol/protocolVersion"
 CAPABILITIES_META = "io.modelcontextprotocol/clientCapabilities"
-PUBLIC_TOOLS = frozenset({"list", "code_mode", "collab", "await", "messages", "link"})
+PUBLIC_TOOLS = frozenset({"list", "code_mode", "collab", "await", "events", "messages", "link"})
 
 SHELL_TOOLS = frozenset({
     "terminal.read", "terminal.write", "terminal.resize", "terminal.status",

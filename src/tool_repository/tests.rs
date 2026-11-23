@@ -177,6 +177,7 @@ async fn git_filter_included_configuration_is_rejected_before_status() {
 }
 
 fn local_paths(root: &Path) -> Paths {
+    let root = root.canonicalize().unwrap();
     let workspace = root.join("project");
     std::fs::create_dir(&workspace).unwrap();
     Paths {

@@ -1071,7 +1071,15 @@ async fn public_tools_cover_every_backend_with_native_discovery_and_javascript_d
             .collect();
         assert_eq!(
             names,
-            ["link", "list", "code_mode", "collab", "await", "messages"]
+            [
+                "link",
+                "list",
+                "code_mode",
+                "collab",
+                "await",
+                "events",
+                "messages"
+            ]
         );
     }
     let inventory = server.call("list", json!({})).await;

@@ -1052,7 +1052,7 @@ async fn tool_summary_code_mode_wait_for_keeps_the_native_delivery_boundary() {
         .await
         .unwrap();
     let arguments: CodeArguments = serde_json::from_value(json!({
-        "code":format!("return await waitFor({},{{targets:[{{type:'exec',job_id:'summary-job'}}],timeout_ms:{SUMMARY_TARGET_TIMEOUT_MS}}});",
+        "code":format!("return await waitFor({},{{targets:[{{type:'exec',job_id:'summary-job'}}],timeout_ms:1000}});",
             serde_json::to_string(fixture.session.client_id()).unwrap()),
         "timeout_ms":10000,
         "agent":{"client_id":fixture.session.client_id(),"id":fixture.agent_id,"token":fixture.agent_token}
