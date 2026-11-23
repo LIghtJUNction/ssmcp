@@ -106,6 +106,18 @@ class GatewayHandler(BaseHTTPRequestHandler):
             fixture.record("login_poll")
             return self.reply(200, {"status": "authorized", "access_token": fixture.token,
                                     "identity": IDENTITY, "expires_in": 3600})
+        if self.path == "/api/client/device/challenge":
+            # This fixture models the explicit legacy-device-proof fallback,
+            # not an arbitrary ignored endpoint. Malformed or unauthenticated
+            # requests must still fail the final unexpected-request assertion.
+            if self.headers.get("Authorization") != "Bearer " + fixture.token:
+                fixture.record("unexpected_requests")
+                return self.reply(403, {"error": "invalid_fixture_credential"})
+            if body:
+                fixture.record("unexpected_requests")
+                return self.reply(400, {"error": "invalid_fixture_request"})
+            fixture.record("device_challenge")
+            return self.reply(404, {"error": "fixture_device_proof_unavailable"})
         fixture.record("unexpected_requests")
         self.reply(404, {"error": "fixture_route_not_found"})
 
@@ -116,7 +128,7 @@ class UnavailableGateway:
         self.device_code = secrets.token_hex(32)
         self.lock = threading.Lock()
         self.counts = {key: 0 for key in
-                       ("login_start", "login_poll", "whoami", "connect", "unexpected_requests")}
+                       ("login_start", "login_poll", "whoami", "connect", "device_challenge", "unexpected_requests")}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), GatewayHandler)
         self.server.daemon_threads = True
         self.server.fixture = self
@@ -509,6 +521,7 @@ class Portable:
         self.samples["gateway_requests"] = observed
         self.check(observed["login_start"] == observed["login_poll"] == 1
                    and observed["whoami"] > 0 and observed["connect"] > 1
+                   and observed["device_challenge"] >= observed["connect"]
                    and observed["unexpected_requests"] == 0,
                    "session retries and supervisor restoration reuse the local login without new authorization")
 
