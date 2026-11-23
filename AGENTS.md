@@ -1,5 +1,13 @@
 # Repository instructions
 
+## Required user reply and wait
+
+For a chat-enabled SSMCP session, deliver every user-facing progress update and answer through `say` / `ssmcp.ui.message`, or use `ssmcp.ui.reply` for the exact authenticated thread input. Text emitted only inside an external assistant tag is not a delivered SSMCP reply and must not replace these tools.
+
+After delivering an answer, call the current authenticated `ui.wait` helper and wait for a real user response. Preserve the returned wait/request identity across observation windows. A timeout means no reply was received; it is not confirmation. Only the final outer receipt with the matching user messages establishes ordinary input delivery. If ending the task, follow the currently advertised finish-decision contract and its exact consumed human decision. Do not invent a response or start a model to supply one.
+
+Worker-to-coordinator reports use collaboration messages and the exact worker claim; after reporting, return to `worker.wait` rather than opening a human-input wait.
+
 ## Generated artifacts
 
 Commit source code, text reports, manifests, and test inputs. Store generated screenshots, recordings, archives, compiled binaries, and acceptance bundles in Google Drive or GitHub Release assets; do not add them to Git, including with `git add -f`.

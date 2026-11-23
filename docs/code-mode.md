@@ -83,6 +83,12 @@ remain authoritative. `ssmcp tools status` reports source identity but can
 bootstrap the official checkout; `check` fetches official upstream state and
 `update` may fast-forward it. Neither is needed for local validation.
 
+## Required replies and user feedback
+
+In a chat-enabled session, send user-facing progress and answers through `say` / `ssmcp.ui.message`. Use `ssmcp.ui.reply` when replying to a delivered, authenticated thread input. An external assistant-tag message is not submitted to the SSMCP conversation and must not substitute for these reply tools.
+
+After an answer, call `ui.wait` for real user feedback using the original verified participant. A transport timeout or a pending observation is not a user reply. Keep the returned request identity and inspect the final outer receipt: ordinary input requires `user_wait.status: "received"` with matching `user_messages`; a task-ending decision follows the separately documented finish protocol. This rule describes the agent workflow; MCP cannot intercept or prevent arbitrary text emitted by another application. [Reply ownership](../src/client/interface/messages.rs) · [Wait delivery](../src/http/user_wait.rs)
+
 ## Working order
 
 Select an authorized live client by task identity and use its returned id. Discover only the needed names with tools.search, requesting include_schemas:true before a call. Keep the same query, name_prefix, limit and schema options when continuing a cursor.
@@ -95,7 +101,7 @@ Inspect response errors, running jobs and output completeness before deciding th
 
 Human chat instructions apply to selected clients with `chat_enabled:true`. Disabled clients return `chat_disabled` for supported human chat tools. Execution, scoped collaboration, independent native messages and negotiated time tools retain their permissions.
 
-Progress and final replies use `say` / `ssmcp.ui.message` or `ssmcp.ui.present`, with the original conversation owner and idempotency checks. Use `ssmcp.ui.reply` for progress or a result tied to an authenticated thread input. Responses omit forced continuation, conversation reminders and end-consent instructions. [Response delivery](../src/http.rs) · [Message submission](../src/client/interface/messages.rs)
+Progress and final replies use `say` / `ssmcp.ui.message` or `ssmcp.ui.present`, with the original conversation owner and idempotency checks. Use `ssmcp.ui.reply` for progress or a result tied to an authenticated thread input. After an answer, use the authenticated wait helper for real user feedback; a tool acknowledgement alone does not establish that feedback. [Response delivery](../src/http.rs) · [Message submission](../src/client/interface/messages.rs)
 
 ## Reconnect after an unexpected disconnect
 
