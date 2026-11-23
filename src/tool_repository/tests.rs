@@ -10,7 +10,7 @@ fn rc_loads_explicit_workspace_overrides_and_rejects_unknown_or_invalid_inputs()
         workspace: root.clone(),
         rc: root.join("ssmcprc.toml"),
         directory: root.join("data"),
-        global: root.join("home/.ssmcp/tool"),
+        global: root.join("home/.ssmcp/tools"),
     };
     assert!(paths.config().unwrap().0.is_none());
     write_new(
@@ -183,7 +183,7 @@ fn local_paths(root: &Path) -> Paths {
         workspace: workspace.canonicalize().unwrap(),
         rc: root.join("config/ssmcprc.toml"),
         directory: root.join("data/tools"),
-        global: root.join("home/.ssmcp/tool"),
+        global: root.join("home/.ssmcp/tools"),
     }
 }
 
@@ -402,7 +402,7 @@ async fn init_project_creates_an_independent_git_repository_and_registration_is_
 }
 
 #[tokio::test]
-async fn global_init_uses_singular_tool_and_disable_preserves_broken_source_and_git() {
+async fn global_init_uses_plural_tools_and_disable_preserves_broken_source_and_git() {
     let temporary = Temporary::new(&std::env::temp_dir()).unwrap();
     let paths = local_paths(&temporary.0);
     git::owned(async move {
@@ -415,8 +415,8 @@ async fn global_init_uses_singular_tool_and_disable_preserves_broken_source_and_
         )
         .await?;
         assert_eq!(result["path"], paths.global.display().to_string());
-        assert!(paths.global.ends_with(".ssmcp/tool"));
-        assert!(!paths.global.with_file_name("tools").exists());
+        assert!(paths.global.ends_with(".ssmcp/tools"));
+        assert!(!paths.global.with_file_name("tool").exists());
         std::fs::remove_file(paths.global.join("tools.js")).unwrap();
         assert!(load_configured(&paths).await.is_err());
         let disabled =
@@ -668,7 +668,7 @@ async fn initialization_rejects_symlinks_above_an_existing_local_parent() {
     std::fs::create_dir_all(external.join("home/.ssmcp")).unwrap();
     let alias = temporary.0.join("alias");
     symlink(&external, &alias).unwrap();
-    paths.global = alias.join("home/.ssmcp/tool");
+    paths.global = alias.join("home/.ssmcp/tools");
     git::owned(async move {
         assert!(
             local::manage_owned(
@@ -682,7 +682,7 @@ async fn initialization_rejects_symlinks_above_an_existing_local_parent() {
             .unwrap_err()
             .contains("symlinks")
         );
-        assert!(!external.join("home/.ssmcp/tool").exists());
+        assert!(!external.join("home/.ssmcp/tools").exists());
         assert!(!paths.rc.exists());
         assert_eq!(
             std::fs::read_dir(external.join("home/.ssmcp"))

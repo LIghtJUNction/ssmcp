@@ -19,7 +19,7 @@ silently use a seed instead.
 JavaScript helper factories load in this order: the selected client's official
 [ssmcp-tools source](https://github.com/LIghtJUNction/ssmcp-tools/blob/main/tools.js),
 explicit RC overrides in their listed order, enabled global
-`~/.ssmcp/tool/`, then registered project `./.ssmcp/tools/`. Later same-name
+`~/.ssmcp/tools/`, then registered project `./.ssmcp/tools/`. Later same-name
 exports replace earlier ones; use `core.previous` when extending a namespace.
 
 The client RC is `$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml` (default

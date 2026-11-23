@@ -86,7 +86,7 @@ global = true
 projects = ["/absolute/canonical/project"]
 ~~~
 
-`global` 默认关闭，启用后读取 `~/.ssmcp/tool/`；`projects` 默认空列表，
+`global` 默认关闭，启用后读取 `~/.ssmcp/tools/`；`projects` 默认空列表，
 最多登记 128 个互不重复的规范绝对工作区路径，只有与当前工作区完全相同的
 条目会启用 `./.ssmcp/tools/`，不向上查找。已有 `overrides` 保留原来的
 列表顺序和相对当前工作区解析的规则，最多 16 项。

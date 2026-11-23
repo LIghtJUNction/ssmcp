@@ -230,7 +230,7 @@ impl Paths {
             workspace: workspace.canonicalize().map_err(|e| e.to_string())?,
             rc: base("XDG_CONFIG_HOME", home.join(".config"))?.join("ssmcp/ssmcprc.toml"),
             directory: base("XDG_DATA_HOME", home.join(".local/share"))?.join("ssmcp/tools"),
-            global: home.join(".ssmcp/tool"),
+            global: home.join(".ssmcp/tools"),
         })
     }
 
@@ -895,7 +895,7 @@ check    Fetch and inspect the official default branch; preserve working files\n
 update   Fast-forward a clean official checkout; preserve dirty/diverged work\n\n\
 RC: $XDG_CONFIG_HOME/ssmcp/ssmcprc.toml\n\
 Project: <client workspace>/.ssmcp/tools (only registered project roots)\n\
-Global: $HOME/.ssmcp/tool (only when enabled)\n\
+Global: $HOME/.ssmcp/tools (only when enabled)\n\
 Official: $XDG_DATA_HOME/ssmcp/tools/official\n\
 Load order: official, RC overrides in order, global, project. Later exports win.\n\
 Local init is offline; --git creates an independent repository without a commit or remote.\n";

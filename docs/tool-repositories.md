@@ -10,7 +10,7 @@ a project retain its own workflows and makes each loaded revision inspectable.
 | Layer | Location | Activation |
 | --- | --- | --- |
 | Project | `./.ssmcp/tools/` under the client's exact workspace root | That canonical workspace root is registered in the trusted RC |
-| Global | `~/.ssmcp/tool/` (singular `tool`) | `tools.global = true` in the trusted RC |
+| Global | `~/.ssmcp/tools/` | `tools.global = true` in the trusted RC |
 | Official | `$XDG_DATA_HOME/ssmcp/tools/official`, default `~/.local/share/ssmcp/tools/official` | Selected client's official source |
 
 Factories load in this order: **official → explicit RC overrides in their listed
