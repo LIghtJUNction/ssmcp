@@ -461,7 +461,11 @@ mod tests {
 
     fn publish(root: &Path, target: &str, bytes: &[u8]) {
         use sha2::{Digest, Sha256};
-        let digest = crate::hex::encode(Sha256::digest(bytes));
+        // Keep the expected release checksum independent of the production codec.
+        let digest = Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         std::fs::write(
             root.join("release.json"),
             serde_json::to_vec(&serde_json::json!({
