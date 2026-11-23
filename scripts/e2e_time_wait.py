@@ -311,14 +311,19 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
 
         # This public Rust await executes no native operation. Its display
         # arrives through the negotiated, independent relay snapshot channel.
-        # The known participant starts at `available`; readiness is changed
-        # explicitly only after the real countdown has been observed.
+        # Establish the lifecycle baseline before queueing input.
+        self.public_call("collab", self.lifecycle_update_arguments(member, "idle"))
         self.verify_clock_layout()
         public_queued = self.submit_source(front, "PUBLIC_WAIT_REQUIREMENT_STAYS_QUEUED")
         self.save_draft(front)
         self.verify_clock_layout()
+        current = next(agent for agent in self.public_call("collab", {
+            "action": "list", "client_id": self.client_id})["agents"]
+            if agent["agent_id"] == member["agent_id"])
+        self.check(current["status"] == "idle",
+                   "the exact participant is still idle before passive lifecycle observation")
         target = {"type":"agent_status", "agent_id":member["agent_id"],
-                  "statuses":["timer-fixture-ready"]}
+                  "statuses":["working"]}
         future = self.public_wait({"targets":[target], "timeout_ms":4000}, member)
         first = self.wait_timing(front, lambda entry: entry["kind"] == "relay_wait")
         self.check(first["attribution"]["agent"]["id"] == member["agent_id"]
@@ -342,9 +347,8 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
                                    and entry["id"] == first["id"] and entry["episode"] > first["episode"])
         self.capture_clock(front, "public-await", "Wait", False)
         self.preserve_queued(public_queued)
-        status, updated_rpc, _ = self.rpc("tools/call", {"name":"collab", "arguments":{
-            "action":"update", "client_id":self.client_id, "agent_id":member["agent_id"],
-            "token":member["token"], "status":"timer-fixture-ready"}}, modern=True)
+        status, updated_rpc, _ = self.rpc("tools/call", {"name":"collab",
+            "arguments": self.lifecycle_update_arguments(member, "working")}, modern=True)
         if status != 200 or not isinstance(updated_rpc, dict) or "error" in updated_rpc:
             raise AssertionError("explicit collaboration update failed at the HTTP boundary")
         updated = updated_rpc["result"]
@@ -359,8 +363,7 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
                    and ready["results"][0]["data"]["matched"] is True,
                    "the same timed-out wait becomes ready only after its real target status changes")
 
-        self.public_call("collab", {"action":"update", "client_id":self.client_id,
-            "agent_id":member["agent_id"], "token":member["token"], "status":"available"})
+        self.public_call("collab", self.lifecycle_update_arguments(member, "idle"))
         cancel_queued = self.submit_source(front, "PUBLIC_WAIT_CANCEL_STAYS_PASSIVE")
         self.save_draft(front)
         self.verify_clock_layout()

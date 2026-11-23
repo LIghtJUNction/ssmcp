@@ -178,6 +178,7 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    #[cfg(test)]
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.validate_for(Version::V3)
     }

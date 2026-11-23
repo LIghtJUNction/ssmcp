@@ -230,6 +230,14 @@ class Harness:
             raise AssertionError(f"Tool {name} failed: HTTP {status}, {result}")
         return result["result"]["structuredContent"]
 
+    def lifecycle_update_arguments(self, member, status):
+        """Use one current CAS snapshot; never replay a rejected or unknown update."""
+        members = self.public_call("collab", {"action": "list", "client_id": self.client_id})["agents"]
+        current = next(agent for agent in members if agent["agent_id"] == member["agent_id"])
+        return {"action": "update", "client_id": self.client_id,
+                "agent_id": member["agent_id"], "token": member["token"],
+                "expected_revision": current["lifecycle"]["revision"], "status": status}
+
     def call(self, name, arguments=None, *, modern=True, client_id=None, secret=None):
         """Call a native capability through the public JavaScript interface."""
         code = "return await call(%s, %s, %s);" % (

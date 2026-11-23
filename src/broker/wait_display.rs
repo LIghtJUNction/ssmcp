@@ -80,6 +80,7 @@ pub(crate) struct Hub {
 }
 
 impl Hub {
+    #[cfg(test)]
     pub(super) fn new(supported: bool) -> Arc<Self> {
         Self::new_version(supported.then_some(Version::V3))
     }
