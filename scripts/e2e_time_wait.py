@@ -134,6 +134,29 @@ class TimeWait(Interactions):
         self.await_receipts.append(value)
         return value
 
+    def member_snapshot(self, member):
+        # Ordinary collab.list is a response-delivery boundary. Observe the
+        # current revision passively while an exact human input must stay queued.
+        value = self.public_call("await", {
+            "client_id": self.client_id,
+            "agent": {"id": member["agent_id"], "token": member["token"]},
+            "targets": [{"type": "agent_status", "agent_id": member["agent_id"],
+                         "statuses": ["working", "idle", "offline", "dreaming", "retiring"]}],
+            "timeout_ms": 1000})
+        data = value["results"][0]["data"]
+        self.check(value["status"] == "ready" and data["matched"] is True
+                   and data["agent"]["agent_id"] == member["agent_id"],
+                   "a passive status snapshot returns the exact member and current lifecycle revision")
+        for key in ("user_messages", "native_messages", "question_answers", "tool_summary_reminders"):
+            self.check(not value.get(key), "the passive lifecycle snapshot does not consume " + key)
+        return data["agent"]
+
+    def lifecycle_update_arguments(self, member, status):
+        current = self.member_snapshot(member)
+        return {"action": "update", "client_id": self.client_id,
+                "agent_id": member["agent_id"], "token": member["token"],
+                "expected_revision": current["lifecycle"]["revision"], "status": status}
+
     def wait_timing(self, front, predicate):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
@@ -340,9 +363,7 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
         public_queued = self.submit_source(front, "PUBLIC_WAIT_REQUIREMENT_STAYS_QUEUED")
         self.save_draft(front)
         self.verify_clock_layout()
-        current = next(agent for agent in self.public_call("collab", {
-            "action": "list", "client_id": self.client_id})["agents"]
-            if agent["agent_id"] == member["agent_id"])
+        current = self.member_snapshot(member)
         self.check(current["status"] == "working",
                    "queued human input wakes the exact participant before passive observation")
         target = {"type":"agent_status", "agent_id":member["agent_id"],
