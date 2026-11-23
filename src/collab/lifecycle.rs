@@ -182,6 +182,38 @@ impl Lifecycle {
         }
     }
 
+    fn confirm_completed_claim(&mut self, completed: &Claim) {
+        let claim_key = completed.key();
+        if self
+            .claims
+            .get(&claim_key)
+            .is_some_and(|known| known.claim == *completed)
+        {
+            self.claims.remove(&claim_key);
+        }
+        let completion_key = format!("complete:{claim_key}");
+        if self
+            .operations
+            .get(&completion_key)
+            .is_some_and(|operation| {
+                !operation.active
+                    && operation.unknown
+                    && matches!(
+                        &operation.work,
+                        NativeWork::Complete(expected) if expected == completed
+                    )
+            })
+        {
+            self.operations.remove(&completion_key);
+        }
+        if !self.completed_claims.contains(&claim_key) {
+            if self.completed_claims.len() == MAX_WAKE_KEYS {
+                self.completed_claims.pop_front();
+            }
+            self.completed_claims.push_back(claim_key);
+        }
+    }
+
     pub(super) fn public(&self) -> Value {
         json!({"revision":self.revision,"status_since_ms":self.status_since_ms,
             "idle_after_ms":self.idle_after_ms,"maintenance_budget_ms":self.maintenance_budget_ms,
@@ -1011,14 +1043,38 @@ impl NativeActivity<'_> {
                                 }
                                 confirmed = true;
                             }
+                        } else if receipt["status"] == "already_completed" {
+                            if let Some(completed) = Claim::parse(&receipt["claim"])
+                                && matches!(
+                                    receipt["task"]["status"].as_str(),
+                                    Some("completed" | "failed" | "cancelled")
+                                )
+                            {
+                                life.confirm_completed_claim(&completed);
+                                confirmed = true;
+                            }
                         } else if matches!(
                             receipt["status"].as_str(),
-                            Some("waiting" | "idle" | "retiring" | "retired" | "closed")
+                            Some(
+                                "waiting"
+                                    | "idle"
+                                    | "retiring"
+                                    | "retired"
+                                    | "released"
+                                    | "not_accepting"
+                                    | "closed"
+                            )
                         ) {
                             confirmed = true;
                             if matches!(
                                 receipt["status"].as_str(),
-                                Some("retiring" | "retired" | "closed")
+                                Some(
+                                    "retiring"
+                                        | "retired"
+                                        | "released"
+                                        | "not_accepting"
+                                        | "closed"
+                                )
                             ) {
                                 if life
                                     .round
@@ -1045,18 +1101,7 @@ impl NativeActivity<'_> {
                                 Some("completed" | "failed" | "cancelled")
                             )
                         {
-                            let claim_key = expected.key();
-                            if life
-                                .claims
-                                .get(&claim_key)
-                                .is_some_and(|known| known.claim == *expected)
-                            {
-                                life.claims.remove(&claim_key);
-                            }
-                            if life.completed_claims.len() == MAX_WAKE_KEYS {
-                                life.completed_claims.pop_front();
-                            }
-                            life.completed_claims.push_back(claim_key);
+                            life.confirm_completed_claim(expected);
                             confirmed = true;
                         }
                     }

@@ -65,6 +65,14 @@ fn passive(response: &Value) {
 #[tokio::test]
 async fn public_wait_display_works_with_every_native_slot_held_without_calls_or_delivery() {
     let fixture = Fixture::with_timing(true).await;
+    let peer = fixture
+        .session
+        .collaboration
+        .dispatch(&fixture.owner, "join", json!({"name":"wait-display-peer"}))
+        .await
+        .unwrap();
+    let peer_id = peer["agent_id"].as_str().unwrap();
+    let peer_token = peer["token"].as_str().unwrap();
     // Resolve the optional native thread scope before occupying actual permits.
     fixture
         .native_call(fixture.run(), "fixture.actual")
@@ -112,7 +120,7 @@ async fn public_wait_display_works_with_every_native_slot_held_without_calls_or_
 
     let waiting = start(
         &fixture,
-        json!({"targets":[target(&fixture)],"timeout_ms":5000}),
+        json!({"targets":[{"type":"agent_status","agent_id":peer_id,"statuses":["working"]}],"timeout_ms":5000}),
     );
     let frame = snapshot(&fixture, |frame| frame.active.len() == 1).await;
     assert!(
@@ -123,8 +131,8 @@ async fn public_wait_display_works_with_every_native_slot_held_without_calls_or_
     assert_eq!(display.targets, vec![wire::wait_display::Kind::AgentStatus]);
     assert_eq!(display.target_labels.len(), 1);
     assert!(display.target_labels[0].contains("requested status"));
-    assert!(display.target_details[0].contains(&fixture.agent_id));
-    assert!(display.target_details[0].contains("retiring"));
+    assert!(display.target_details[0].contains(peer_id));
+    assert!(display.target_details[0].contains("working"));
     assert_eq!(display.mode, wire::wait_display::Mode::Any);
     assert_eq!(display.outcome, wire::wait_display::Outcome::Pending);
     assert_eq!(display.window_ms, 5000);
@@ -141,7 +149,7 @@ async fn public_wait_display_works_with_every_native_slot_held_without_calls_or_
     let lifecycle = fixture
         .session
         .collaboration
-        .lifecycle_snapshot(&fixture.owner, &fixture.agent_id, &fixture.agent_token)
+        .lifecycle_snapshot(&fixture.owner, peer_id, peer_token)
         .unwrap();
     fixture
         .session
@@ -150,7 +158,7 @@ async fn public_wait_display_works_with_every_native_slot_held_without_calls_or_
             &fixture.owner,
             "update",
             json!({
-                "agent_id":fixture.agent_id,"token":fixture.agent_token,"status":"retiring",
+                "agent_id":peer_id,"token":peer_token,"status":"working",
                 "expected_revision":lifecycle["lifecycle"]["revision"]
             }),
         )

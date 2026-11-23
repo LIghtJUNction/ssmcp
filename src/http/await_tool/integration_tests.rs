@@ -790,7 +790,7 @@ async fn cancelling_a_running_observer_wakes_it_without_removing_the_agent() {
             )
             .unwrap()
             .status,
-        "available"
+        "idle"
     );
 }
 
@@ -1210,7 +1210,7 @@ async fn a_real_membership_lease_expiring_during_observation_revokes_the_result(
             )
             .unwrap()
             .status,
-        "available"
+        "idle"
     );
 }
 

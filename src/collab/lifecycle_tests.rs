@@ -552,3 +552,153 @@ async fn nonblocking_claim_alias_tracks_the_same_immutable_worker_claim() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn completed_wait_retry_reconciles_only_its_exact_claim() {
+    for (lost_completion, unrelated_unknown) in [(false, false), (true, false), (true, true)] {
+        let hub = Hub::for_session("completed-wait-room");
+        let (id, token) = member(&hub, "owner", "worker");
+        assigned(&hub, &id, &token);
+        let complete = native(
+            "worker.complete",
+            json!({"claim":claim(),"status":"completed","output":"actual result"}),
+        );
+        let mut call = hub
+            .prepare_native_activity("owner", &id, &token, &complete)
+            .unwrap();
+        call.dispatched();
+        if lost_completion {
+            drop(call);
+        } else {
+            call.finish(&receipt(json!({
+                "status":"recorded","claim":claim(),
+                "task":{"status":"completed"}
+            })));
+        }
+        if unrelated_unknown {
+            let separate = native(
+                "worker.wait",
+                json!({"request_id":"unrelated-unknown-wait"}),
+            );
+            let mut call = hub
+                .prepare_native_activity("owner", &id, &token, &separate)
+                .unwrap();
+            call.dispatched();
+            drop(call);
+        }
+        let original = native("worker.wait", json!({"request_id":"original-wait"}));
+        let mut call = hub
+            .prepare_native_activity("owner", &id, &token, &original)
+            .unwrap();
+        call.dispatched();
+        call.finish(&receipt(json!({
+            "status":"already_completed","claim":claim(),
+            "task":{"status":"completed"}
+        })));
+        let current = snapshot(&hub, &id, &token);
+        assert_eq!(current["lifecycle"]["active_claims"], 0);
+        assert_eq!(current["lifecycle"]["in_flight"], 0);
+        assert_eq!(
+            current["lifecycle"]["unknown_outcomes"],
+            usize::from(unrelated_unknown)
+        );
+        assert_eq!(
+            current["status"],
+            if unrelated_unknown { "working" } else { "idle" }
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_wait_stop_receipts_do_not_invent_unknown_work() {
+    for status in ["retiring", "released", "not_accepting"] {
+        let hub = Hub::for_session("native-stop-room");
+        let (id, token) = member(&hub, "owner", "worker");
+        let operation = native("worker.wait", json!({"request_id":"native-stop-receipt"}));
+        let mut reply = json!({"status":status,"execution":"remote"});
+        if status != "not_accepting" {
+            reply["retirement"] = json!({
+                "id":"native-retirement","generation":"pool_generation",
+                "slot":0,"epoch":7
+            });
+        }
+        let mut call = hub
+            .prepare_native_activity("owner", &id, &token, &operation)
+            .unwrap();
+        call.dispatched();
+        call.finish(&receipt(reply));
+        let current = snapshot(&hub, &id, &token);
+        assert_eq!(current["status"], "offline", "{status}");
+        assert_eq!(current["lifecycle"]["active_claims"], 0, "{status}");
+        assert_eq!(current["lifecycle"]["in_flight"], 0, "{status}");
+        assert_eq!(current["lifecycle"]["unknown_outcomes"], 0, "{status}");
+    }
+}
+
+#[tokio::test]
+async fn completed_wait_preserves_unrelated_or_unproven_claims() {
+    for case in ["different_generation", "missing_claim", "nonterminal"] {
+        let hub = Hub::for_session("unproven-wait-room");
+        let (id, token) = member(&hub, "owner", "worker");
+        assigned(&hub, &id, &token);
+        let complete = native(
+            "worker.complete",
+            json!({"claim":claim(),"status":"completed","output":"actual result"}),
+        );
+        let mut lost = hub
+            .prepare_native_activity("owner", &id, &token, &complete)
+            .unwrap();
+        lost.dispatched();
+        drop(lost);
+        let before = snapshot(&hub, &id, &token);
+        let mut reply =
+            json!({"status":"already_completed","claim":claim(),"task":{"status":"completed"}});
+        match case {
+            "different_generation" => reply["claim"]["generation"] = json!("different_pool"),
+            "missing_claim" => {
+                reply.as_object_mut().unwrap().remove("claim");
+            }
+            "nonterminal" => reply["task"]["status"] = json!("running"),
+            _ => unreachable!(),
+        }
+        let original = native("worker.wait", json!({"request_id":"original-wait"}));
+        let mut call = hub
+            .prepare_native_activity("owner", &id, &token, &original)
+            .unwrap();
+        call.dispatched();
+        call.finish(&receipt(reply));
+        let current = snapshot(&hub, &id, &token);
+        assert_eq!(current["lifecycle"]["active_claims"], 1, "{case}");
+        assert!(
+            current["lifecycle"]["unknown_outcomes"].as_u64().unwrap()
+                >= before["lifecycle"]["unknown_outcomes"].as_u64().unwrap(),
+            "{case}"
+        );
+        assert_eq!(current["status"], "working", "{case}");
+    }
+}
+
+#[tokio::test]
+async fn native_stop_receipt_retains_an_unrelated_unknown_wait() {
+    for status in ["released", "not_accepting"] {
+        let hub = Hub::for_session("unknown-stop-room");
+        let (id, token) = member(&hub, "owner", "worker");
+        let unknown = native("worker.wait", json!({"request_id":"separate-unobserved"}));
+        let mut lost = hub
+            .prepare_native_activity("owner", &id, &token, &unknown)
+            .unwrap();
+        lost.dispatched();
+        drop(lost);
+        let stop = native("worker.wait", json!({"request_id":"stop"}));
+        let mut call = hub
+            .prepare_native_activity("owner", &id, &token, &stop)
+            .unwrap();
+        call.dispatched();
+        call.finish(&receipt(
+            json!({"status":status,"retirement":{"id":"actual-retirement"}}),
+        ));
+        let current = snapshot(&hub, &id, &token);
+        assert_eq!(current["status"], "retiring");
+        assert_eq!(current["lifecycle"]["unknown_outcomes"], 1);
+    }
+}

@@ -944,10 +944,6 @@ pub(crate) fn utc_at(unix_ms: i64) -> Result<String, String> {
     civil::format(unix_ms)
 }
 
-pub(crate) fn utc_now() -> Result<String, String> {
-    civil::format(civil::now_ms()?)
-}
-
 pub(crate) fn cancel_local(id: &str) -> Result<(), String> {
     validate_id(id)?;
     let clock = display_clock()
