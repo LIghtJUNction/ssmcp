@@ -691,9 +691,16 @@ class InputHistory(Composer):
                    "input setup selects the exact local member rather than a native namesake")
         first_reference, first_source = self.reference_scenarios(front, member)
         retained = self.record(self.queue(), message_id=first_reference["id"])
-        self.check(retained["status"] == "delivered" and retained["text"] == first_source
-                   and retained["target"] == member["agent_id"],
-                   "the delivered queue record retains the original reference text and exact recipient")
+        original, separator, encoded = retained["text"].partition(REFERENCE_BEGIN)
+        self.check(retained["status"] == "delivered"
+                   and retained["target"] == member["agent_id"]
+                   and retained["delivery"]["agent_id"] == member["agent_id"],
+                   "the queue records delivery to the exact authenticated recipient")
+        self.check(original == first_source and separator and encoded.endswith(REFERENCE_END),
+                   "the delivered queue record retains the original reference text and its expansion")
+        references = json.loads(encoded[:-len(REFERENCE_END)])
+        self.check(references["source_sha256"] == hashlib.sha256(first_source.encode()).hexdigest(),
+                   "the expanded queue record is bound to the original reference text")
         self.paste_scenario(front, member)
         self.attachment_handoff_scenario(front, member)
         self.copy_and_help(front)
