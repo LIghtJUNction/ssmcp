@@ -133,6 +133,7 @@ mod tests {
 
     fn message(role: &str) -> history::Message {
         history::Message {
+            input_origin: None,
             id: "message_00000000000000000000000000000001".into(),
             role: role.into(),
             content: "PRIVATE_LIVE_RECORD_DO_NOT_REMEMBER".into(),
