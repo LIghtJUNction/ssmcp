@@ -20,12 +20,12 @@ import traceback
 import uuid
 
 import e2e_account_relay as relay
-from e2e_computer_controls import Session, save, until
+from e2e_pty_session import Session, save, until
 from e2e_dashboard import sha256
 
 DRAFT = "TIME_FIXTURE_DRAFT_保持不变"
 TIME_CAPABILITY = "time_observation_v2"
-SOURCES = ("e2e_time_primitives.py", "e2e_account_relay.py", "e2e_computer_controls.py", "e2e_dashboard.py")
+SOURCES = ("e2e_time_primitives.py", "e2e_account_relay.py", "e2e_pty_session.py", "e2e_dashboard.py")
 
 
 def fingerprints():
