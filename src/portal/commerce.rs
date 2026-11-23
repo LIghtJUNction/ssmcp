@@ -178,7 +178,7 @@ async fn traffic(
     };
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).map_err(|_| Problem::Storage)?;
-    let nonce = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let nonce = crate::hex::encode(bytes);
     body.push_str(&format!(
         "<div class=commerce-grid><section class=purchase-card aria-labelledby=\"purchase-title\"><p class=eyebrow>购买流量</p><h2 id=purchase-title>购买当月流量</h2><dl class=price-facts><div><dt>适用月份</dt><dd>{}</dd></div><div><dt>每 GB 税前单价</dt><dd>{} {}</dd></div><div><dt>当前可售</dt><dd>{} GB</dd></div></dl>",
         view::escape(&period),

@@ -477,10 +477,7 @@ impl Registry {
             let mut bytes = [0_u8; 16];
             crate::platform::random_bytes(&mut bytes)
                 .map_err(|_| (Status::Unavailable, "await_id_unavailable"))?;
-            let id = format!(
-                "await_{}",
-                bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-            );
+            let id = format!("await_{}", crate::hex::encode(bytes));
             if !records.contains_key(&id) {
                 break id;
             }

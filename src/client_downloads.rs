@@ -452,13 +452,8 @@ mod tests {
     fn temporary() -> std::path::PathBuf {
         let mut random = [0; 16];
         crate::platform::random_bytes(&mut random).unwrap();
-        let path = std::env::temp_dir().join(format!(
-            "ssmcp-downloads-{}",
-            random
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("ssmcp-downloads-{}", crate::hex::encode(random)));
         std::fs::create_dir(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         path
@@ -466,10 +461,7 @@ mod tests {
 
     fn publish(root: &Path, target: &str, bytes: &[u8]) {
         use sha2::{Digest, Sha256};
-        let digest = Sha256::digest(bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let digest = crate::hex::encode(Sha256::digest(bytes));
         std::fs::write(
             root.join("release.json"),
             serde_json::to_vec(&serde_json::json!({

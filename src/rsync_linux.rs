@@ -629,7 +629,7 @@ fn secret() -> Result<String, String> {
     File::open("/dev/urandom")
         .and_then(|mut file| file.read_exact(&mut bytes))
         .map_err(|error| error.to_string())?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(crate::hex::encode(bytes))
 }
 
 fn rsh_quote(value: &str) -> String {

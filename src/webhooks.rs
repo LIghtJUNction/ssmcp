@@ -223,13 +223,7 @@ impl Webhooks {
                     let mut bytes = [0u8; 16];
                     crate::platform::random_bytes(&mut bytes)
                         .map_err(|_| "cannot allocate notification ID")?;
-                    format!(
-                        "notification_{}",
-                        bytes
-                            .iter()
-                            .map(|byte| format!("{byte:02x}"))
-                            .collect::<String>()
-                    )
+                    format!("notification_{}", crate::hex::encode(bytes))
                 };
                 let payload = json!({
                     "schema_version":1,"id":id,"event":input.event,"text":input.text,

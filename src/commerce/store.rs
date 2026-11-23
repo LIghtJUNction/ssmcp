@@ -261,10 +261,7 @@ impl OrderStore {
         let anchored = PathBuf::from(format!("/proc/self/fd/{}", self.directory.as_raw_fd()));
         let mut random = [0_u8; 16];
         getrandom::fill(&mut random).map_err(|_| Error::Storage)?;
-        let name = random
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>();
+        let name = crate::hex::encode(random);
         let temporary = anchored.join(format!(".orders-{name}.tmp"));
         let result = (|| -> std::io::Result<()> {
             let mut file = OpenOptions::new()

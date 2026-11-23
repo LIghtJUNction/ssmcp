@@ -100,13 +100,7 @@ pub(super) struct Call {
 fn new_id() -> Option<String> {
     let mut bytes = [0u8; 16];
     crate::platform::random_bytes(&mut bytes).ok()?;
-    Some(format!(
-        "tool_group_{}",
-        bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    ))
+    Some(format!("tool_group_{}", crate::hex::encode(bytes)))
 }
 
 fn clean_summary(text: &str) -> Result<String, String> {

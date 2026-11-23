@@ -78,7 +78,7 @@ fn fingerprint(request: &Request, presentation: Option<&Presentation>) -> [u8; 3
 fn message_id() -> Result<String, String> {
     let mut bytes = [0u8; 16];
     crate::platform::random_bytes(&mut bytes).map_err(|_| "cannot create message identity")?;
-    let suffix: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let suffix: String = crate::hex::encode(bytes);
     Ok(format!("message_{suffix}"))
 }
 

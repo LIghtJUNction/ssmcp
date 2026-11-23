@@ -1143,7 +1143,7 @@ fn atomic_write(
 fn random_id() -> io::Result<String> {
     let mut bytes = [0u8; 16];
     crate::platform::random_bytes(&mut bytes)?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(crate::hex::encode(bytes))
 }
 fn modified(metadata: &std::fs::Metadata) -> String {
     #[cfg(unix)]

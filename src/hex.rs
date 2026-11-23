@@ -71,4 +71,23 @@ mod tests {
             assert_eq!(encode(bytes.as_slice()), "af".repeat(len), "length {len}");
         }
     }
+
+    #[test]
+    fn byte_values_and_vector_boundaries_preserve_the_existing_format() {
+        use std::fmt::Write as _;
+
+        let source: Vec<u8> = (0..4098).map(|index| index as u8).collect();
+        for length in [
+            0, 1, 2, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256, 257, 1024,
+            4096,
+        ] {
+            // The offset exercises unaligned buffers as well as every byte value.
+            let input = &source[1..1 + length];
+            let mut previous = String::new();
+            for byte in input {
+                write!(&mut previous, "{byte:02x}").unwrap();
+            }
+            assert_eq!(encode(input), previous, "input length {length}");
+        }
+    }
 }

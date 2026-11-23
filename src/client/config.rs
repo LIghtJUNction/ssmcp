@@ -209,7 +209,7 @@ pub(super) fn save_document(path: &Path, text: &str, document: DocumentMut) -> R
     fs::create_dir_all(parent)?;
     let mut random = [0u8; 8];
     crate::platform::random_bytes(&mut random)?;
-    let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let suffix: String = crate::hex::encode(random);
     let temporary = path.with_extension(format!("tmp-{suffix}"));
     let result = (|| -> Result<()> {
         let mut options = OpenOptions::new();
@@ -310,13 +310,8 @@ mod tests {
     fn directory() -> PathBuf {
         let mut random = [0u8; 8];
         crate::platform::random_bytes(&mut random).unwrap();
-        let root = std::env::temp_dir().join(format!(
-            "ssmcp-config-{}",
-            random
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("ssmcp-config-{}", crate::hex::encode(random)));
         fs::create_dir(&root).unwrap();
         root
     }

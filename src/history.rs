@@ -579,7 +579,7 @@ impl AuditLog {
             state.failed = true;
             return Err(error.into());
         }
-        let nonce: String = entropy.iter().map(|byte| format!("{byte:02x}")).collect();
+        let nonce: String = crate::hex::encode(entropy);
         let temporary = directory.join(format!(".audit-{nonce}.tmp"));
         let result = (|| -> crate::Result<(File, u64)> {
             let mut file = OpenOptions::new()

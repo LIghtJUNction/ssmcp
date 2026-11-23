@@ -132,7 +132,7 @@ impl Pool {
         };
         let mut nonce = [0u8; 8];
         crate::platform::random_bytes(&mut nonce)?;
-        let suffix: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+        let suffix: String = crate::hex::encode(nonce);
         let directory =
             std::env::temp_dir().join(format!("ssmcp-tty-{}-{suffix}", std::process::id()));
         crate::platform::private_directory(&directory)?;

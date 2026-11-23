@@ -261,13 +261,7 @@ impl State {
             let mut bytes = [0u8; 16];
             crate::platform::random_bytes(&mut bytes)
                 .map_err(|error| format!("Could not create a group request ID: {error}"))?;
-            let id = format!(
-                "ui-group-{}",
-                bytes
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()
-            );
+            let id = format!("ui-group-{}", crate::hex::encode(bytes));
             self.chat_transport_send_group(&recipients, body, &id)?;
             (id, recipients)
         };

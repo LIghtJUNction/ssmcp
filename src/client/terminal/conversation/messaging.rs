@@ -594,13 +594,7 @@ impl State {
             let mut bytes = [0u8; 16];
             crate::platform::random_bytes(&mut bytes)
                 .map_err(|error| format!("Could not create a message request ID: {error}"))?;
-            format!(
-                "ui-{}",
-                bytes
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()
-            )
+            format!("ui-{}", crate::hex::encode(bytes))
         };
         let pending = Pending {
             request_id: request_id.clone(),

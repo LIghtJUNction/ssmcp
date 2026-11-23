@@ -95,7 +95,7 @@ impl Fixture {
     async fn with_timing(timing: bool) -> Self {
         let mut nonce = [0_u8; 16];
         crate::platform::random_bytes(&mut nonce).unwrap();
-        let nonce: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+        let nonce: String = crate::hex::encode(nonce);
         let directory =
             Directory(std::env::temp_dir().join(format!("ssmcp-question-delivery-{nonce}")));
         let mut broker = Broker::with_identity_config(

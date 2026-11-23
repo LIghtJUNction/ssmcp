@@ -165,13 +165,7 @@ impl Broker {
         // re-emitting it, including when one account has multiple participants.
         let fingerprint = serde_json::to_vec(&(kind, &receipt.message_id, event_client, actor))
             .expect("typed event key serializes");
-        let key = format!(
-            "native_{}",
-            Sha256::digest(fingerprint)
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        );
+        let key = format!("native_{}", crate::hex::encode(Sha256::digest(fingerprint)));
         let data = native_event_data(receipt, sender, recipient, receiving_agent);
         for (owner, audience) in audiences {
             // A successful mailbox commit stays successful if the bounded

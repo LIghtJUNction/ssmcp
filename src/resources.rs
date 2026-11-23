@@ -52,10 +52,7 @@ fn client_info(session: &Session) -> Value {
 fn snapshot<T: serde::Serialize>(value: &T) -> String {
     let bytes = serde_json::to_vec(value).expect("resource metadata is serializable");
     let digest = Sha256::digest(bytes);
-    digest[..12]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    crate::hex::encode(&digest[..12])
 }
 
 fn page_offset(

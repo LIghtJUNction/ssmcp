@@ -242,7 +242,7 @@ fn write_at(path: &Path, store: &Store) -> Result<()> {
     let _ = read_file(path, STORE_LIMIT, true)?;
     let mut random = [0; 16];
     crate::platform::random_bytes(&mut random)?;
-    let suffix: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    let suffix: String = crate::hex::encode(random);
     let temporary = path.with_extension(format!("tmp-{suffix}"));
     let result = (|| -> Result<()> {
         let mut options = OpenOptions::new();

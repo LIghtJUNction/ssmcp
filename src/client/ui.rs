@@ -598,7 +598,7 @@ mod tests {
 
         let mut random = [0u8; 8];
         crate::platform::random_bytes(&mut random).unwrap();
-        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let suffix: String = crate::hex::encode(random);
         let path = std::env::temp_dir().join(format!("ssmcp-ui-browser-{suffix}.toml"));
         std::fs::write(&path, &text).unwrap();
         let loaded = Ui::load(Some(&path));
