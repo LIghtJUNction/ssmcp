@@ -504,6 +504,12 @@ hook 默认关闭，不内置额外审核流程，也不改变工具原生权限
 
 Linux 上的已验证 Agent 可用 `exec.start(clientId, { …, track_artifacts: true })` 为单个命令任务追踪产物。默认软额度为 20 GB（20,000,000,000 逻辑字节），可用 `artifact_budget_bytes` 覆盖。计量仅覆盖任务在 `.ssmcp/task-artifacts/` 下的独占目录，提醒随任务读取结果返回。[配置与计量范围](docs/workspaces.md#命令任务产物与软额度) 默认保留任务产物。一次性、任务独占产物可显式设为 `temporary_artifacts: true`，正常关闭或 reload 时，客户端只在确认任务树已退出、文件身份和独占性可验证后尝试有界回收。
 
+### 原生文件安全预检
+
+原生文件变更支持路径预检、显式选择的 Linux 用户与项目规则，以及独立的安全裁决流。
+未配置策略时保留普通文件操作；配置失效后的阻止与恢复方式、只读裁决查询和覆盖范围见
+[原生文件安全预检](docs/workspace-safety.md)。
+
 ## 开发
 
 ```sh

@@ -496,6 +496,12 @@ enum Request {
     Detach {
         lease: String,
     },
+    Safety {
+        lease: String,
+        generation: String,
+        backend_generation: u64,
+        cursor: Option<u64>,
+    },
     Bridge {
         lease: String,
         request: zbridge::Request,
@@ -578,10 +584,124 @@ async fn handle_request(capture: &Capture, request: Value) -> Result<Value> {
                 .is_some();
             Ok(json!({"detached":removed,"session_stopped":false}))
         }
+        Request::Safety {
+            lease,
+            generation,
+            backend_generation,
+            cursor,
+        } => {
+            capture.touch(&lease, false)?;
+            if capture.generation != generation {
+                return Err("safety session generation changed".into());
+            }
+            let runtime = capture.runtime(backend_generation)?;
+            let (start, limit) = match cursor {
+                Some(cursor) => (cursor, 1),
+                None => {
+                    let head = runtime.safety_events(0, 1).await?;
+                    let end = head["end_cursor"]
+                        .as_u64()
+                        .ok_or("invalid safety stream end")?;
+                    (end.saturating_sub(128), 128)
+                }
+            };
+            let page = runtime.safety_events(start, limit).await?;
+            capture.runtime(backend_generation)?;
+            safety_page(page, &generation, backend_generation, cursor)
+        }
         Request::Bridge { lease, request } => Ok(serde_json::to_value(
             zbridge_adapter::request(capture, &lease, request).await,
         )?),
     }
+}
+
+fn safety_page(
+    page: Value,
+    generation: &str,
+    backend_generation: u64,
+    cursor: Option<u64>,
+) -> Result<Value> {
+    let rows = page["events"]
+        .as_array()
+        .ok_or("invalid safety stream page")?;
+    let mut events = Vec::new();
+    for row in rows {
+        let sequence = row["cursor"]
+            .as_u64()
+            .ok_or("invalid safety event cursor")?;
+        let event = &row["event"];
+        if cursor.is_some_and(|cursor| cursor != sequence)
+            || (cursor.is_none() && event["outcome"] == "succeeded")
+        {
+            continue;
+        }
+        events.push(json!({
+            "id":format!("{generation}:{backend_generation}:{sequence}"),
+            "tool":event["tool"],
+            "policy":event["policy"],
+            "rules_revision":event["rules_revision"],
+            "rules_state":event["rules_state"],
+            "decision":event["decision"],
+            "outcome":event["outcome"],
+        }));
+    }
+    if cursor.is_some() {
+        return events
+            .pop()
+            .ok_or_else(|| "safety event is unavailable in this session generation".into());
+    }
+    Ok(json!({"events":events,"window":128,"truncated":page["truncated"]}))
+}
+
+pub(crate) async fn safety(name: &str, event: Option<&str>) -> Result<Value> {
+    let root = super::session_root(false)?;
+    let (directory, _) = super::load(&root, name)?;
+    safety_at_directory(directory, event).await
+}
+
+pub(crate) async fn safety_at_directory(directory: PathBuf, event: Option<&str>) -> Result<Value> {
+    let open = ipc::request(&directory, ENDPOINT, json!({"op":"open","read_only":true})).await?;
+    let key = open["lease"]
+        .as_str()
+        .ok_or("attach endpoint returned no lease")?;
+    let mut lease = LiveLogLease {
+        directory,
+        key: Some(key.to_owned()),
+    };
+    let result = async {
+        if open["read_only"] != true || open["backend_active"] != true {
+            return Err("active read-only attach session required".into());
+        }
+        let generation = open["generation"]
+            .as_str()
+            .ok_or("missing attach generation")?;
+        let backend = open["backend_generation"]
+            .as_u64()
+            .ok_or("missing backend generation")?;
+        let cursor = if let Some(event) = event {
+            let prefix = format!("{generation}:{backend}:");
+            Some(
+                event
+                    .strip_prefix(&prefix)
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .ok_or("safety event ID does not match the active session generation")?,
+            )
+        } else {
+            None
+        };
+        ipc::request(
+            &lease.directory,
+            ENDPOINT,
+            json!({
+                "op":"safety","lease":key,"generation":generation,
+                "backend_generation":backend,"cursor":cursor
+            }),
+        )
+        .await
+    }
+    .await;
+    lease.release().await;
+    result
 }
 
 /// A bounded snapshot of the running process, obtained with an observer lease.
@@ -1248,6 +1368,39 @@ async fn send_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn safety_queue_filters_success_and_inspect_rejects_an_evicted_cursor() {
+        let page = json!({"truncated":true,"events":[
+            {"cursor":4,"event":{"tool":"ssmcp.fs.write_text","outcome":"blocked","text":"synthetic-private"}},
+            {"cursor":5,"event":{"tool":"ssmcp.fs.write_text","outcome":"succeeded"}}
+        ]});
+        let queue = safety_page(page.clone(), "fixture", 2, None).unwrap();
+        assert_eq!(queue["events"].as_array().unwrap().len(), 1);
+        assert_eq!(queue["events"][0]["id"], "fixture:2:4");
+        assert_eq!(queue["truncated"], true);
+        assert!(!queue.to_string().contains("synthetic-private"));
+        assert!(safety_page(page.clone(), "fixture", 2, Some(3)).is_err());
+        assert_eq!(
+            safety_page(page, "fixture", 2, Some(5)).unwrap()["id"],
+            "fixture:2:5"
+        );
+    }
+
+    #[tokio::test]
+    async fn safety_endpoint_rejects_an_unknown_lease() {
+        let capture = Capture::new().unwrap();
+        let error = handle_request(
+            &capture,
+            json!({
+                "op":"safety","lease":"unknown","generation":capture.generation,
+                "backend_generation":0,"cursor":null
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("lease expired"));
+    }
 
     #[cfg(unix)]
     async fn log_endpoint(
