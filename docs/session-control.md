@@ -4,7 +4,7 @@
 
 下文涉及 `--ssh`、SSH 目标和 `--allow ...@github` 的示例与认证说明仅记录已退役的 SSH 接入方式，不作为当前启动命令。当前账号连接使用 `ssmcp alice@relay.example`；新建后台会话使用 `ssmcp sessions create workstation alice@relay.example`，授权步骤见[客户端账号与授权](client-accounts.md)。
 
-本页说明连接标题、客户端重载、本机后台会话及长输出读取。公开 MCP 工具为 `list`、`code_mode`、`collab`、`await`、`messages` 和 `link`；`reload`、`outputs` 是 `code_mode` 内的 JavaScript 原语。`ssmcp sessions list` 枚举本地保存会话；登录后使用 `ssmcp list` 查看账号可控的在线会话，使用 `ssmcp attach process PROCESS_ID` 进入远程聊天，其中 `PROCESS_ID` 来自 `ssmcp list`；使用 `ssmcp -i` 选择远程 Shell PTY，详见[客户端账号、授权与被控设备](client-accounts.md)。
+本页说明连接标题、客户端重载、本机后台会话及长输出读取。公开 MCP 工具依次为 `link`、`list`、`code_mode`、`collab`、`await`、`events` 和 `messages`。客户端重载通过 `code_mode` 中的 `call` 调用原生 `ssmcp.client.reload`；`outputs` 是读取输出的 JavaScript 原语。`ssmcp sessions list` 枚举本地保存会话；登录后使用 `ssmcp list` 查看账号可控的在线会话，使用 `ssmcp attach process PROCESS_ID` 进入远程聊天，其中 `PROCESS_ID` 来自 `ssmcp list`；使用 `ssmcp -i` 选择远程 Shell PTY，详见[客户端账号、授权与被控设备](client-accounts.md)。
 
 ## 用标题说明本次任务
 
@@ -54,7 +54,9 @@ return await call(clientId, "ssmcp.client.reload", {});
 
 调用返回完整 MCP 结果，先检查 `isError`，再读取 `structuredContent`。它经过现有客户端授权检查，不接受额外参数；SDK 已删除独立 `reload` 别名。[通用调用](code-mode.md#call) · [重载实现](../src/client/reload.rs)
 
-重载先确认请求，再关闭旧客户端的资源并重新执行程序。客户端检查启动入口仍可执行；有其他进行中的工具请求时，重载返回 busy。接受请求后，它返回 `accepted: true` 和 `status: "restarting"`，等待服务端回执后再开始重启。连接拥有的后台命令、同步和端口转发会随旧连接停止，原注册表及请求状态失效，不能依靠 `reload` 保留这些运行状态。客户端创建的原生子进程也会关闭；通过私有 socket 或 loopback 地址连接的既有 Pi/OpenCode 服务仍由操作者管理，ssmcp 仅断开桥接，不终止外部服务。
+重载先确认请求，再关闭旧客户端的资源并重新执行程序。客户端检查启动入口仍可执行；有其他进行中的工具请求时，重载返回 busy。接受请求后，它返回 `accepted: true` 和 `status: "restarting"`，等待服务端回执后再开始重启。连接拥有的后台命令、同步和端口转发会随旧连接停止，原注册表及请求状态失效，不能依靠 `reload` 保留这些运行状态。
+
+原生运行时关闭注册表、清理目录快照，并请求原生插件与已挂载插件清理资源；命令执行器取消自己管理的任务。插件返回的清理错误会生成相应事件，不能仅凭重载已接受就认定清理完成。[运行时清理](../src/runtime.rs) · [命令清理](../src/backend/shell.rs)
 
 Unix 使用 `exec` 替换当前进程映像。Windows 启动替代客户端，并让已关闭连接资源的旧进程等待它结束，以保留前台控制台和管道的使用关系；多次重载可能保留多个等待进程，但只有替代客户端维持新的连接。
 
@@ -145,15 +147,16 @@ ssmcp sessions status workstation --json
 | --- | --- |
 | 独立 Shell 命令 | 每个任务的 stdout、stderr 分别捕获；状态中的 artifact 标识各自输出 |
 | 交互式 PTY | 当前进程捕获的合并输出，包含提示符和终端控制字节 |
-| 超大的原生 MCP / Harness 结果 | ssmcp 实际收到的 MCP 结果 JSON，`format` 为 `mcp_tool_result_json`；是否完整以元数据为准 |
-| OpenCode HTTP / 事件流 | HTTP 正文通过 `body_artifact` 与 `body_format` 保留类型；SSE 原始流单独捕获 |
+| 进入结果护卫的超大原生 MCP 结果 | 序列化后的 MCP 结果 JSON，`format` 为 `mcp_tool_result_json`；是否完整以元数据为准 |
 | 审计事件与文件 Diff | 有界内存中的脱敏事件与文本 Diff，只能读取仍保留的内容 |
 
 PTY 的 `terminal.read` 遇到长输出时返回 `spilled: true`、`artifact` 和 `range`。`range.start`、`range.end` 标记本次请求覆盖的字节区间，`next_cursor` 用于下一次终端读取；需要正文时根据 `artifact.id` 读取内存缓冲。原生工具自己已经截断或未提供的输出不能通过护卫恢复。[PTY 捕获实现](../src/pty.rs) · [原生结果护卫](../src/runtime.rs)
 
 `exec.read` 返回两条流的独立游标，输出引用位于 `snapshot.stdout.artifact` 和 `snapshot.stderr.artifact`。滚动尾部不再包含早期字节时，可以通过仍有效的 artifact 分页读取已保留部分；预算限制、淘汰或进程退出造成的缺失不能恢复。后台输出实时进入终端，查询此前的 `read/wait` 输出不会再作为新输出打印。`start` 成功只代表已启动，最终命令结果仍看状态与退出码。[独立命令](commands.md)
 
-小的结构化返回保留原生类型。OpenCode 大 HTTP 响应保留状态与内容类型，并用 `body_format` 标识 JSON、文本或二进制；不要把所有 artifact 都当作纯文本。SSE 解析错误和原始捕获完整性分别记录。审计事件使用脱敏副本，MCP 原生返回不会为日志展示而被改写。[适配器](../src/backend/opencode.rs) · [事件缓冲](../src/backend/events.rs)
+小的结构化返回保留原生类型。进入结果护卫的超大原生返回序列化为 MCP 结果 JSON，摘要标明 `format: "mcp_tool_result_json"`；捕获超限或失败时须检查 `output_error` 和 `artifact.complete`，不能把已保留的前缀当作完整 JSON。审计事件使用脱敏副本，不会为日志展示改写原生结果正文。[结果护卫](../src/output.rs) · [运行时调用](../src/runtime.rs) · [审计副本](../src/audit.rs)
+
+该类 artifact 应在按 `next_offset` 读完并重组 `data_base64` 原始字节、确认捕获完整后再解析 JSON。`outputs.read`、`terminal.read`、`exec.read` 的读取页使用各自返回格式，运行时不再次对这些页执行结果护卫。
 
 ### 如何理解元数据
 
@@ -195,7 +198,7 @@ return await outputs.read(clientId, {
 return await outputs.stat(clientId, { id: artifactId });
 ```
 
-这些操作也能通过 `ssmcp.output.read` 和 `ssmcp.output.stat` 原生工具调用。它们按输出 ID 访问，不接受任意文件路径；工作区文件仍使用 `fs` 原语。每条连接共享一个 OutputStore，Shell、PTY、Harness、MCP 与审计的内联和 spilled 捕获都计入同一预算。读取时校验 artifact 的连接归属；同一 OS 用户的另一客户端也不能读取该连接的输出、任务或审计记录。
+这些操作也能通过 `ssmcp.output.read` 和 `ssmcp.output.stat` 原生工具调用。它们按输出 ID 访问，不接受任意文件路径；工作区文件仍使用 `fs` 原语。每条连接共享一个 OutputStore，命令流、PTY、原生 MCP 结果与审计的内联和 spilled 捕获都计入同一预算。读取时校验 artifact 的连接归属；同一 OS 用户的另一客户端也不能读取该连接的输出、任务或审计记录。
 
 ## 自动清理与容量
 
