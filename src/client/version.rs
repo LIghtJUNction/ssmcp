@@ -205,10 +205,29 @@ mod tests {
         ]
         .map(OsString::from);
         assert_eq!(request(&args).unwrap(), None);
-        let options = Options::parse(args).unwrap().unwrap();
-        assert_eq!(
-            options.harness.unwrap().arguments,
-            tail[1..].iter().map(OsString::from).collect::<Vec<_>>()
+        assert!(
+            Options::parse(args)
+                .err()
+                .unwrap()
+                .contains("third-party harness import was removed")
+        );
+        let peer = [
+            "example.test",
+            "--load-harness",
+            "ssmcp",
+            "--",
+            "--endpoint",
+            "https://peer.example/alice",
+            "--token-env",
+            "--version",
+        ]
+        .map(OsString::from);
+        assert_eq!(request(&peer).unwrap(), None);
+        assert!(
+            Options::parse(peer)
+                .err()
+                .unwrap()
+                .contains("environment variable")
         );
     }
 

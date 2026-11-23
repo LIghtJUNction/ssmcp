@@ -1215,7 +1215,6 @@ mod tests {
             "ssmcp.ui.ask",
             "ssmcp.ui.filter",
             "ssmcp.ui.get",
-            "ssmcp.ui.harness",
             "ssmcp.ui.events",
             "ssmcp.ui.listener",
             "ssmcp.ui.message",
@@ -1230,6 +1229,7 @@ mod tests {
             "ssmcp.ui.wait",
         ]);
         assert_eq!(names, expected);
+        assert!(!names.contains("ssmcp.ui.harness"));
         let schema = catalog
             .iter()
             .find(|tool| tool["name"] == "ssmcp.ui.action")
