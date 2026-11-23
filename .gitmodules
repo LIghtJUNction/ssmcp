@@ -10,3 +10,9 @@
 [submodule "zbridge"]
 	path = crates/zbridge
 	url = https://github.com/LIghtJUNction/zbridge.git
+[submodule "zi18n"]
+	path = crates/zi18n
+	url = https://github.com/LIghtJUNction/zi18n.git
+[submodule "zhex"]
+	path = crates/zhex
+	url = https://github.com/LIghtJUNction/zhex.git

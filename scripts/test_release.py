@@ -1732,6 +1732,66 @@ class ReleaseTests(unittest.TestCase):
             receipt.assert_not_called()
             upload.assert_not_called()
 
+    def add_localization_and_hex_dependencies(self):
+        versions = {"zi18n": "0.1.0", "zhex": "0.1.3"}
+        self.stub_gitlinks(*versions)
+        with (self.root / "Cargo.toml").open("a") as manifest, \
+             (self.root / "Cargo.lock").open("a") as lock:
+            manifest.write("\n[dependencies]\n")
+            for name, version in versions.items():
+                member = self.root / "crates" / name / "Cargo.toml"
+                member.parent.mkdir(parents=True)
+                member.write_text(f'[package]\nname = "{name}"\nversion = "{version}"\n'
+                                  '[features]\nstd = []\n')
+                manifest.write(f'{name} = {{ git = "{release.project_z_url(name)}", '
+                               'optional = true, default-features = false, features = ["std"] }\n')
+                lock.write(f'\n[[package]]\nname = "{name}"\nversion = "{version}"\n'
+                           f'source = "git+{release.project_z_url(name)}#{"1"*40}"\n')
+        return versions
+
+    def test_localization_and_hex_export_exact_versions_without_changing_development_sources(self):
+        versions = self.add_localization_and_hex_dependencies()
+        paths = [self.root / "Cargo.toml", self.root / "Cargo.lock"]
+        before = [path.read_bytes() for path in paths]
+        self.assertEqual(dict(release.development_dependencies(self.root)), versions)
+        expected = release.read_toml(paths[0])
+        for name, version in versions.items():
+            expected["dependencies"][name].pop("git")
+            expected["dependencies"][name]["version"] = "=" + version
+        exported = tomllib.loads(release.registry_export_manifest(self.root).decode())
+        self.assertEqual(exported, expected)
+        self.assertEqual(release.publication_packages(self.root), [("ssmcp", "0.5.0")])
+        self.assertEqual(before, [path.read_bytes() for path in paths])
+
+    def test_localization_and_hex_changed_lock_revision_blocks_export(self):
+        versions = self.add_localization_and_hex_dependencies()
+        lock = self.root / "Cargo.lock"
+        original = lock.read_text()
+        for name in versions:
+            with self.subTest(package=name):
+                lock.write_text(original.replace(
+                    f'{release.project_z_url(name)}#{"1"*40}',
+                    f'{release.project_z_url(name)}#{"3"*40}',
+                ))
+                with self.assertRaisesRegex(ValueError, name):
+                    release.registry_export_manifest(self.root)
+        lock.write_text(original)
+
+    def test_unpublished_localization_or_hex_stops_before_application_verification(self):
+        versions = self.add_localization_and_hex_dependencies()
+        for missing in versions:
+            with self.subTest(package=missing), \
+                 mock.patch.object(release, "registry_checksum",
+                                   side_effect=lambda version, package: None if package == missing else "2" * 64), \
+                 mock.patch.object(release, "release_source",
+                                   side_effect=AssertionError("source verification must not start")) as source, \
+                 mock.patch.object(release.subprocess, "run",
+                                   side_effect=AssertionError("Cargo must not run")) as cargo, \
+                 self.assertRaisesRegex(ValueError, f"publish {missing} {versions[missing]}"):
+                release.verify_crate(self.root)
+            source.assert_not_called()
+            cargo.assert_not_called()
+
     def submodule_fixture(self, nested=False):
         temporary = tempfile.TemporaryDirectory(prefix="ssmcp-source-module-")
         self.addCleanup(temporary.cleanup)
