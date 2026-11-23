@@ -1,6 +1,6 @@
 # 等待任务、协作对象与用户
 
-`await` 把等待作为一个独立的服务端操作：指定要观察的对象，服务端订阅已有通知，有结果、超时或取消时返回。调用者无需频繁查询状态。公共 `await` 直接运行在 Rust 中；`code_mode` 内的 `waitFor` 使用相同协调器，但仍占用它所在的 JavaScript 执行名额。[协调器](../src/http/await_tool.rs) · [JavaScript helper](../src/code_mode.js)
+`await` 把等待作为一个独立的服务端操作：指定要观察的对象，服务端订阅已有通知。单次调用可以短暂观察；显式设置 `lifetime_ms` 后，后台观察会独立于这次 HTTP 调用继续运行，并保留终态结果。调用者无需频繁查询状态。公共 `await` 直接运行在 Rust 中；`code_mode` 内的 `waitFor` 使用相同协调器，但仍占用它所在的 JavaScript 执行名额。[协调器](../src/http/await_tool.rs) · [JavaScript helper](../src/code_mode.js)
 
 ## 先绑定真实参与者
 
@@ -40,8 +40,65 @@
 
 最多同时选择 8 个不同目标。`any` 在一个目标就绪后返回，尚未完成观察的条目标为 `pending`；`all` 要求全部目标就绪。已观察到的权限、未知目标或其他类型错误会立即结束本次等待，并保留每个目标的位置与错误。`user_input` 和 `worker_assignment` 必须各自单独等待；`worker_result` 和 `event` 可以参与多目标观察。[参数与聚合规则](../src/http/await_tool.rs)
 
-## 超时、恢复与取消
+## 调用中断后继续等待
 
+长任务需要分别设置三个时间：
+
+| 时间 | 字段或规则 | 控制的对象 |
+|---|---|---|
+| 本次读窗口 | `window_ms`，1000–55000 毫秒 | 这次 HTTP 请求最多等待多久。窗口到期可先返回 `pending`。 |
+| 后台观察期限 | `lifetime_ms`，1000–86400000 毫秒 | 服务端观察原目标的最长时间，调用者断开不会重新计时。 |
+| 终态保留时间 | 终态记录至少保留 1800000 毫秒 | 结果产生后可供原参与者恢复、重读和确认的时间；确认后释放正文。 |
+
+例如，一个命令需要十分钟，而调用方每分钟都会中断工具请求，可以只等待一秒取得 `wait_id`，让服务端继续观察，再于之后恢复读取。同一次观察不需要保持同一条 HTTP 连接。[后台观察与缓存](../src/http/await_tool.rs)
+
+首次创建必须给出调用者生成的 `request_id`。同一身份使用相同 ID、目标、聚合模式与后台期限重试，会找回原观察；读窗口可以改变。若原请求的回执丢失，仍使用原 `request_id`。改变目标、模式或后台期限会被拒绝。
+
+```json
+{
+  "client_id": "CLIENT_ID_FROM_LIST",
+  "agent": {
+    "id": "REGISTERED_AGENT_ID",
+    "token": "PRIVATE_MEMBER_TOKEN"
+  },
+  "request_id": "my-build-observation-001",
+  "lifetime_ms": 900000,
+  "window_ms": 1000,
+  "targets": [
+    {
+      "type": "exec",
+      "job_id": "ORIGINAL_EXEC_JOB_ID"
+    }
+  ]
+}
+```
+
+收到 ID 后，恢复读取只需带原身份、`wait_id` 和读窗口：
+
+```json
+{
+  "client_id": "CLIENT_ID_FROM_LIST",
+  "agent": {
+    "id": "REGISTERED_AGENT_ID",
+    "token": "PRIVATE_MEMBER_TOKEN"
+  },
+  "wait_id": "ORIGINAL_WAIT_ID",
+  "window_ms": 1000,
+  "after": 0
+}
+```
+
+`cursor: 0` 表示还没有终态结果；`cursor: 1` 表示终态已固定。`ready`、`timed_out`、`cancelled`、权限错误和其他终态都进入同一缓存协议。处理成功前用 `after: 0` 重读；处理完成后用 `after: 1` 确认。确认可以重复，已确认的结果正文会被释放，记录仍保留原终态和时间信息。`op: "list"` 与 `op: "status"` 提供原参与者的元数据，不返回结果正文。协作收件箱或事件订阅的业务确认仍使用各自的 `ack`。[缓存状态机](../src/http/await_tool.rs)
+
+后台观察支持 `exec`、`job`、`worker_result`、`agent_status`、`agent_messages` 和 `event`。涉及领取任务的 `worker_assignment` 及用户输入 `user_input` 继续使用各自的交付协议，不能作为后台观察目标。观察任务不会调用执行、提交任务或自动重放操作的接口。
+
+后台记录绑定原账户、原成员和原客户端连接，每次读结果都会重新鉴权。ChatGPT 的 HTTP 调用重连可以沿用这些身份；换一个原生客户端连接不能接管旧记录。记录保存在当前 relay 进程内。relay 重启或原连接消失后，应核对原任务的实际状态；`unknown` 不构成重新执行的依据。
+
+终端 `/wait`、Web 与桌面的等待页面展示后台期限、读窗口、总耗时、结果状态、首次读取延迟和确认状态。耗时统计基于页面当前保留的有界样本；取消、未知状态和仍在等待的记录单独列示。首次读取时间表示服务端尝试向已授权调用返回结果的时间，不能证明模型已经处理结果或用户已经确认。新版面板通过 `wait_display_v4` 协商；旧 `v3` 连接继续接收原有的短窗口显示格式。[显示协议](../src/wire/wait_display.rs) · [运行时投影](../src/runtime/time/relay.rs)
+
+## 单次观察的超时、恢复与取消
+
+以下规则适用于没有设置 `lifetime_ms` 的单次观察和兼容窗口协议。
 公共 `await` 的 `timeout_ms` 为 1000–55000 毫秒，默认 20000；显式 `window_ms` 也接受 1000–55000 毫秒。JavaScript `waitFor` 的单次观察保持 1000 毫秒，长等待使用公共入口。[实际参数范围](../src/http/await_tool.rs) · [共享观察上限](../src/wire.rs)
 
 首次等待创建服务端 `wait_id`，用于恢复同一次观察。超时或资源忙时沿用该 ID，不再传 `targets` 或 `mode`。以下示例恢复一次 JavaScript 短观察：
