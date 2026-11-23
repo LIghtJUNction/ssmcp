@@ -679,6 +679,10 @@ class InputHistory(Composer):
         front.until(lambda shot: view(shot, "tasks") and identity in text(shot)
                     and "stats-proof" in text(shot),
                     "native Tasks displays the same tracked command")
+        # Native Tasks lists the running main PTY before completed commands.
+        front.send(DOWN)
+        front.until(lambda shot: f"› {identity} ·" in text(shot),
+                    "select the tracked native job before opening its details")
         front.send(ENTER)
         front.until(lambda shot: f"Job: {identity}" in text(shot)
                     and "complete argv · read only" in text(shot) and "stats-proof" in text(shot),
