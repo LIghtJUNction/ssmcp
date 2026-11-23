@@ -208,7 +208,7 @@ mod tests {
     fn saved_peer_arguments_roundtrip_with_native_session_metadata() {
         let arguments = [
             "--endpoint",
-            "https://peer.example/mcp/test",
+            "https://peer.example/alice",
             "--token-env",
             "SSMCP_TEST_PEER_TOKEN",
         ];
