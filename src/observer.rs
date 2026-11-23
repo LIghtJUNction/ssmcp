@@ -633,18 +633,6 @@ impl Pool {
             .unwrap_or(0);
         match result {
             Ok(value) => {
-                let backgrounds = crate::backend::cc::background_paths(value);
-                if !backgrounds.is_empty() {
-                    lease.append(b"\r\n[background command; watching its native output]\r\n");
-                    let mut state = self.state.lock().unwrap();
-                    for path in backgrounds {
-                        state
-                            .backgrounds
-                            .insert(path.to_string_lossy().into_owned(), lease.key.clone());
-                    }
-                    state.detached.insert(lease.key.clone(), lease);
-                    return;
-                }
                 if streamed == 0 {
                     if let Some(content) = value.get("content").and_then(Value::as_array) {
                         for part in content {

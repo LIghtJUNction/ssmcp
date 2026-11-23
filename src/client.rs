@@ -191,10 +191,7 @@ Usage: ssmcp username@server [options]
   --list-harnesses     List supported providers without starting them (optional --json)
   -- ARGS              Native arguments for an explicit --load-harness; never parsed as ssmcp flags
 
-The client provides native tools without another harness. Optional Codex, Claude
-Code, Pi and OpenCode bridges stay unloaded until explicitly needed.
-Use ssmcp.harnesses.load for one provider, or the local /cc, /codex and /pi commands.
---load-harness codex|claude-code preloads the protocol without submitting a model turn.
+Native tools run in SSMCP. Connect other clients through MCP, or use explicit local commands.
 --load-harness ssmcp requires -- --endpoint URL --token-env NAME [--socket PATH].
 The peer URL identifies an authenticated MCP gateway, not a device/session.
 Tools keep their native schemas and permission/approval behavior.

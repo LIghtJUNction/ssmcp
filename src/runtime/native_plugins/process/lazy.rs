@@ -61,7 +61,7 @@ pub(super) fn parse(arguments: Value) -> Result<(Provider, bool), String> {
         .iter()
         .find(|(_, name)| *name == request.provider)
         .map(|(provider, _)| *provider)
-        .ok_or("optional harness provider must be codex, claude, pi, opencode or a configured ssmcp peer")?;
+        .ok_or("third-party harness import was removed; use external tools or explicit terminal/exec. Only a configured ssmcp peer can be attached here")?;
     Ok((provider, request.refresh))
 }
 

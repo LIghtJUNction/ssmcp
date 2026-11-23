@@ -12,15 +12,10 @@ pub(crate) const HELP: &str = "\
 ssmcp [connection options] --load-harness NAME [-- native protocol arguments]
 ssmcp --list-harnesses [--json]
 
-codex                     Codex App Server (installed codex executable)
-claude, claude-code, cc    Claude Code MCP server (installed claude executable)
-pi                        Existing private SSMCP_PI_RPC_SOCKET session
-opencode                  Existing SSMCP_OPENCODE_URL + OPENCODE_PASSWORD service
 ssmcp                     Explicit authenticated MCP peer; no child ssmcp is started
 
-Only Codex/Claude accept native process arguments, and only after --.
-Selection loads a protocol/catalog. It does not send a prompt or start a model turn.
-Other providers keep their existing explicit attachment configuration.
+Third-party harness import has been removed. Run that tool externally, or use
+SSMCP terminal or exec for explicit commands. Existing saved files are retained.
 Peer arguments after --: --endpoint URL --token-env NAME [--socket /absolute/path]
 Use the peer's exact displayed MCP URL, including /USER; this names a gateway,
 not an individual device/session. The environment variable contains its OAuth bearer.
@@ -36,10 +31,12 @@ pub(crate) struct Selection {
 
 impl Selection {
     pub fn new(name: &str, arguments: Vec<OsString>) -> Result<Self, String> {
-        let name = match name {
-            "claude-code" | "cc" => "claude",
-            value => value,
-        };
+        if matches!(
+            name,
+            "codex" | "claude" | "claude-code" | "cc" | "pi" | "opencode"
+        ) {
+            return Err("built-in third-party harness import was removed; run it externally or use explicit terminal/exec. Existing session files are retained".into());
+        }
         let provider = OPTIONAL_PROVIDERS
             .iter()
             .find(|(_, canonical)| *canonical == name)
@@ -55,16 +52,7 @@ impl Selection {
                 return Err("agent arguments cannot contain NUL".into());
             }
         }
-        let peer = if provider == Provider::Peer {
-            Some(peer::Settings::parse(&arguments)?)
-        } else {
-            if !arguments.is_empty() && !matches!(provider, Provider::Codex | Provider::Claude) {
-                return Err(format!(
-                    "--load-harness {name} uses its existing attachment configuration and does not accept process arguments after --; see ssmcp --list-harnesses"
-                ));
-            }
-            None
-        };
+        let peer = Some(peer::Settings::parse(&arguments)?);
         Ok(Self {
             provider,
             arguments,
@@ -124,8 +112,8 @@ pub(super) fn dispatch(args: &[OsString]) -> Result<bool, String> {
             .map(|(_, name)| {
                 json!({
                     "name":name,
-                    "aliases":if *name == "claude" { vec!["claude-code", "cc"] } else { vec![] },
-                    "process_arguments":matches!(*name, "codex" | "claude"),
+                    "aliases":[],
+                    "process_arguments":false,
                     "model_turn_started":false,
                     "installation":"not_probed",
                 })

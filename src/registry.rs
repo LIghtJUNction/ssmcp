@@ -35,13 +35,7 @@ pub enum Provider {
     Peer,
 }
 
-pub(crate) const OPTIONAL_PROVIDERS: [(Provider, &str); 5] = [
-    (Provider::Codex, "codex"),
-    (Provider::Claude, "claude"),
-    (Provider::Pi, "pi"),
-    (Provider::OpenCode, "opencode"),
-    (Provider::Peer, "ssmcp"),
-];
+pub(crate) const OPTIONAL_PROVIDERS: [(Provider, &str); 1] = [(Provider::Peer, "ssmcp")];
 impl Provider {
     pub fn label(self) -> &'static str {
         match self {
