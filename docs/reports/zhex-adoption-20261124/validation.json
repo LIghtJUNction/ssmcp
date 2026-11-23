@@ -1,0 +1,217 @@
+{
+  "schema": 1,
+  "source": {
+    "source_commit": "d51f6b44e2a30f12a217d7378af17b934a3bcd10",
+    "source_tree": "82ed294d7d6a5dd46df44b9f595d8f0dbf974782",
+    "upstream_base": "b5fdceea9af1b14f6f178bbc1677969fd3ff73c9",
+    "hex_provider": "52515207f9d97a2580182169b611b4763366b328",
+    "migrated_calls": 55,
+    "initial_candidate_calls": 58,
+    "upstream_deleted_backend_calls": 2,
+    "retained_independent_checksum_oracles": 1,
+    "all_changes_added": 97,
+    "all_changes_removed": 186,
+    "all_rust_added": 97,
+    "all_rust_removed": 171,
+    "strict_lint_fixes_preserved_from_upstream": true,
+    "history_contract_fix_preserved_from_upstream": true
+  },
+  "checks": {
+    "fmt": {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "cwd": "/workspace/scratch/91d8c179742d/ssmcp-zhex-final",
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_seconds": 14.395785644002899,
+      "source_head": "d51f6b44e2a30f12a217d7378af17b934a3bcd10",
+      "source_status_at_start": "",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_INCREMENTAL": "0"
+    },
+    "strict-clippy": {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "-j",
+        "1",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "/workspace/scratch/91d8c179742d/ssmcp-zhex-final",
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_seconds": 185.03698153499863,
+      "source_head": "d51f6b44e2a30f12a217d7378af17b934a3bcd10",
+      "source_status_at_start": "",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_INCREMENTAL": "0"
+    },
+    "adapter-tests": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-j",
+        "1"
+      ],
+      "cwd": "/workspace/scratch/91d8c179742d/ssmcp-zhex-evidence/final-validation/hex-adapter",
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_seconds": 10.132576103998872,
+      "source_head": "d51f6b44e2a30f12a217d7378af17b934a3bcd10",
+      "source_status_at_start": "",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_INCREMENTAL": "0"
+    },
+    "desktop-locked-resolution-online": {
+      "command": [
+        "cargo",
+        "metadata",
+        "--locked",
+        "--format-version",
+        "1",
+        "--manifest-path",
+        "apps/ssmcp-desktop/Cargo.toml"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_seconds": 11.587543519002793,
+      "source_head": "d51f6b44e2a30f12a217d7378af17b934a3bcd10"
+    }
+  },
+  "adapter_source_equivalence": {
+    "source_commit": "d51f6b44e2a30f12a217d7378af17b934a3bcd10",
+    "source_path": "src/hex.rs",
+    "source_sha256": "8fa4f1b4b971cb2c661e06c5d4a2257dcccf2ba701a2079a6d7c5d78c3fd0641",
+    "verification_copy_sha256": "8fa4f1b4b971cb2c661e06c5d4a2257dcccf2ba701a2079a6d7c5d78c3fd0641",
+    "tests": "the four existing unchanged tests in the exact consumer adapter source",
+    "scope": "standalone adapter only; not the complete ssmcp test suite",
+    "provider": {
+      "name": "zhex",
+      "version": "0.1.3",
+      "source": "git+https://github.com/LIghtJUNction/zhex.git#52515207f9d97a2580182169b611b4763366b328"
+    },
+    "sha2": {
+      "name": "sha2",
+      "version": "0.11.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19",
+      "dependencies": [
+        "cfg-if",
+        "cpufeatures",
+        "digest"
+      ]
+    }
+  },
+  "cancellation_evidence": {
+    "historical_test_commit": "1fd394757c6536804a478a1928cd90a249dcbaba",
+    "current_commit": "d51f6b44e2a30f12a217d7378af17b934a3bcd10",
+    "evidence_reuse_not_rerun": true,
+    "source_files": [
+      {
+        "path": "src/backend/peer.rs",
+        "sha256": "cdbc09f389f37ecbd9f9e86dd0efe73c5e86b63b5110ca9f776f2c877b90f5ef",
+        "identical": true
+      },
+      {
+        "path": "src/client/link_metrics.rs",
+        "sha256": "e45dcd6c64d846c0eeb6ac067e7dc528c0012b4e40bd1857ac4ff1e38f8ee8a0",
+        "identical": true
+      },
+      {
+        "path": "src/client/link_metrics/portable.rs",
+        "sha256": "49ee5d2f234bcb0161194c0a4ce0431044191be8ca52c417fce91f6d2529c370",
+        "identical": true
+      },
+      {
+        "path": "src/client/link_metrics/tests.rs",
+        "sha256": "8461e1b3db195724aabcde9ffd4a31afe56491b9a9c1c80a6fc90a0b76265b65",
+        "identical": true
+      },
+      {
+        "path": "src/client/link_metrics/unix.rs",
+        "sha256": "6b2e5bbb494bef1b915e78c3c07a300d0631ace39971d4208244104c43ca43b5",
+        "identical": true
+      },
+      {
+        "path": "src/client/link_metrics/unix/tests.rs",
+        "sha256": "84c91a40d774c6d05973cafbb49ec3b61ec9745385f9eea1015ce3994fc97de2",
+        "identical": true
+      }
+    ],
+    "tokio_lock_entry": {
+      "name": "tokio",
+      "version": "1.54.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3",
+      "dependencies": [
+        "bytes",
+        "libc",
+        "mio",
+        "pin-project-lite",
+        "signal-hook-registry",
+        "socket2",
+        "tokio-macros",
+        "windows-sys 0.61.2"
+      ]
+    },
+    "observed_success_lines": [
+      "test backend::peer::tests::peer_limits_response_bytes_time_and_cancels_only_owned_requests ... ok",
+      "test client::link_metrics::transport::tests::link_metrics_observer_drop_cancels_task_and_releases_owned_socket ... ok"
+    ],
+    "historical_full_suite_receipt": "gate-repair-r3/full-tests.json",
+    "scope": "unchanged peer and link-metrics cancellation fixes only; not a claim that the full current SSMCP suite passed"
+  },
+  "desktop_graph": {
+    "package_count": 304,
+    "qrcodegen_present": false,
+    "zhex_packages": [
+      {
+        "name": "zhex",
+        "version": "0.1.3",
+        "source": "git+https://github.com/LIghtJUNction/zhex.git#52515207f9d97a2580182169b611b4763366b328"
+      }
+    ],
+    "source_commit": "d51f6b44e2a30f12a217d7378af17b934a3bcd10",
+    "command_receipt": "final-validation/desktop-locked-resolution-online.json"
+  },
+  "native_suite": {
+    "status": "not_started_lock_busy",
+    "attempts": 4,
+    "observed_exit_code": 75,
+    "shared_target": "/var/tmp/project-z-cargo-target"
+  },
+  "current_full_suite": {
+    "status": "compiler_terminated",
+    "signal": "SIGKILL",
+    "cause": "not established",
+    "source_commit": "069a85b75b38d0c56622fa33b5feb2d23b6ab546"
+  },
+  "publication": {
+    "source_main_verified": "d51f6b44e2a30f12a217d7378af17b934a3bcd10",
+    "release_created": false,
+    "runtime_updated": false
+  },
+  "archive": {
+    "url": "https://drive.google.com/file/d/1XLwLoDShmlZQ5k4lffAo-tS8lFpZWZlH/view?usp=drivesdk",
+    "name": "SSMCP-zhex-20261124-validation-evidence.tar.gz",
+    "bytes": 660000,
+    "sha256": "bcdec18407a976bc9a62a793b10a90b74d77fdaff73c46d95d2d59ca8459a1f1",
+    "files": 111
+  },
+  "documentation_integration": {
+    "upstream_base": "b2f785895075de9369f67f94529baca89bd90b04",
+    "verification_scope": "Exact code commit d51f6b44e2a30f12a217d7378af17b934a3bcd10 only; subsequent upstream code is outside these checks.",
+    "preserved_upstream": true
+  }
+}
