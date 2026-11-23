@@ -465,6 +465,7 @@ Read this client's capability manifest with call(clientId,'ssmcp.client.capabili
 Clients connect outbound over HTTPS/WebSocket or SSH. Read ssmcp://clients for the clients currently available to your identity and endpoint. \
 A client id identifies one live connection; names are labels, title is optional operator-supplied \
 task context, and cwd is its startup directory. Select the intended task by title, then dispatch by id.\n\n\
+On unexpected disconnect, try reconnecting: refresh list and schemas, verify the authorized workspace and control/pool link from a fresh invitation or the main client's /worker_pool projection. Retain valid credentials on the original connection; join and bind your own fresh credentials when it is replaced or membership expires. Preserve original claims and job/commit evidence; reconcile outcomes before fresh assignments. Keep unknown outcomes unknown; never replay uncertain work or restart models. If the link is unverified, stay available with work paused. Explicit exit and retirement requests still apply. See docs/workers.md for recovery steps.\n\n\
 Read ssmcp://clients/{id}/tools to discover native tool names and JSON schemas. \
 Follow nextUri to read the next page of the same directory snapshot. A new cursor-free \
 request discovers current native tools. Each client retains at most four snapshots within \
@@ -611,6 +612,27 @@ fn client_guide(chat_enabled: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_guides_support_reconnect_without_work_replay() {
+        for chat_enabled in [false, true] {
+            let guide = client_guide(chat_enabled);
+            for instruction in [
+                "On unexpected disconnect, try reconnecting",
+                "refresh list and schemas",
+                "verify the authorized workspace and control/pool link",
+                "Retain valid credentials on the original connection",
+                "join and bind your own fresh credentials",
+                "Preserve original claims and job/commit evidence",
+                "reconcile outcomes before fresh assignments",
+                "Keep unknown outcomes unknown; never replay uncertain work or restart models",
+                "If the link is unverified, stay available with work paused",
+                "Explicit exit and retirement requests still apply",
+            ] {
+                assert!(guide.contains(instruction), "{chat_enabled}: {instruction}");
+            }
+        }
+    }
 
     #[test]
     fn command_limits_describe_observation_windows_separately_from_execution() {

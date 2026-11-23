@@ -1,6 +1,6 @@
 # Worker sessions
 
-`ssmcp --worker 3` keeps the current window as the main chat and opens a second window with three worker slots. Use the main window to talk to the coordinating agent; use the worker window to inspect task states and per-slot logs. Each window has its own client connection and operating-system process.
+`ssmcp --worker 3` keeps the current window as the main chat and opens a second window with three worker slots. Use the main window to talk to the coordinating agent; use the worker window to follow reported agent progress and inspect task states. Logs and client resource details are available with F2. Each window has its own client connection and operating-system process.
 
 The default worker is an external agent. It actively connects to the worker window, registers with `role: "worker"`, and calls `ssmcp.worker.wait` to wait for a task. After executing an assigned task, it reports the result with `ssmcp.worker.complete` and waits again. Starting the pool creates task capacity without starting any model.
 
@@ -85,38 +85,59 @@ Reuse the same request ID while waiting or recovering a lost response. The resul
 
 Registered worker participants and idle stations are separate counts. Three newly created stations are offline until workers actually connect and wait. Read the actual station binding from the pool; an agent's display name, such as `worker#3`, does not select panel `#03`.
 
+## Reconnect after an unexpected disconnect
+
+Try to reconnect after an unexpected disconnect. Keep the existing agent conversation, original claims and task evidence while checking the current connection.
+
+1. Refresh `list` and discover current schemas. Verify the authorized workspace and the control/pool link using a fresh invitation or the main client's `/worker_pool` projection. Workers can obtain that link from the verified coordinator. A matching display name or working directory alone does not identify a replacement connection.
+2. If the original connection and membership remain valid, bind the existing private credentials and retain its wait request ID. If the client was replaced or membership expired, join and bind your own fresh credentials with the same authorized role. Keep credentials private; workers must not take over the manager role or consume control-session next-caller input.
+3. Preserve the complete original claim and its generation. Use it only while the original pool and authenticated claimant still accept it. Never edit an old claim to fit a new generation, or send it as a claim on a replacement pool. A new connection or membership starts a new wait request ID after reconciliation.
+4. Inspect retained receipts, job state/output and worktree/commit evidence where available. Report to the verified coordinator what completed, what is still running and what remains `unknown`. A lost response does not prove failure or cancellation. Keep unresolved outcomes `unknown`; joining again does not authorize repeating a command, submission, build or deployment.
+5. Resume remaining work only under a valid current claim. After a pool replacement, reconcile the old task first, then wait for a fresh assignment. Rejoining restores participation; it must not start or restart a model.
+
+If the authorized link cannot yet be verified, keep the task paused, report the blocker and retry bounded discovery while remaining available. An explicit exit or retirement request still follows the completion and release procedure above.
+
 ## Use the monitor
 
-Select a station to inspect its retained activity. Wide terminals give most of the width to the work log and keep a smaller activity column in a fixed position. Narrow terminals show a compact task summary above the full-width log. Scrolling the log does not scroll the activity column.
+Select a station to follow its **Agent progress** timeline at full width, with a compact task summary and actual state above it. The timeline shows progress reported for the authenticated task claim. Command starts and finishes do not become progress updates. Until a report arrives, it displays `Waiting for agent progress updates`. Warnings, errors, unknown outcomes and cancellation notices remain visible; command failures show their observed exit, signal or cancellation outcome with a pointer to F2 Logs.
+
+Press F2 to open the selected station's logs and client resource details. Wide terminals put a fixed activity column beside the log; narrow terminals put a compact summary above it. The default progress view keeps that space for reported work. F1 opens the monitor's own help page.
 
 | Control | Action |
 | --- | --- |
 | Left / Right or Tab / Shift+Tab | Select the previous or next worker. |
-| T | Switch between the log and full task details, including complete task and manager IDs. |
-| Enter | Expand or compact command arguments in the selected worker's log. |
-| Up / Down | Scroll the selected worker's log. |
-| Page Up / Page Down | Scroll that log by a page. |
-| Home | Show its earliest retained entry. |
-| End | Return to the latest entries and follow new activity. |
+| F2 | Switch the selected worker between progress and logs / client resource details. |
+| F1 | Open or close the monitor help page. |
+| T | Open or close the full task, including complete task and manager IDs. |
+| Enter | From progress, open logs with command text expanded; in log details, expand or compact command arguments. |
+| Esc | Close help or the current task / log detail view. |
+| Up / Down | Scroll the current progress, log or task view. |
+| Page Up / Page Down | Scroll the current view by a page. |
+| Home | Show the earliest content still retained in that view. |
+| End | Return to the latest content and follow new activity. |
 | Ctrl+Home / Ctrl+End | Select the first or last worker. |
 | Ctrl+R | Request a reload of this worker session. |
 | Ctrl+C | Close this worker window. |
 | Mouse click | Select a station from the station navigation. |
-| Mouse wheel | Scroll the selected station's log when the pointer is in the log area. |
+| Mouse wheel | Scroll the selected station's current content when the pointer is in that area. |
 
 In an attached worker window, Ctrl+R replaces the worker child while keeping the main chat, its draft, and its connection open. The replacement keeps the requested pool size, working directory, and launch arguments, but starts with a new client identity and no inherited manager or worker registrations. A standalone or headless worker follows the existing process-restart path.
 
 Reload is refused while tasks are running or queued; the worker panel shows the reason. Finish the tasks, or cancel them and wait for their acknowledgements and cleanup, before retrying. An accepted reload follows the existing connection cleanup and starts a fresh in-memory pool. It does not resume old tasks or prove that an external executor has stopped.
 
-Log rows use a muted time column, a short event label and aligned body text. Continuation lines stay under the body. RUN marks a reported command start; DONE requires an explicit exit 0; END means the finish record did not include an outcome. Warnings, failures and nonzero exit codes remain visible. Command start and finish records stay separate and preserve their observed order. Enter reveals retained command arguments; changing the view preserves the selected worker and its log anchor.
+Each worker keeps separate progress and log scroll positions. Changing worker or toggling F2 preserves those positions. A new task or station epoch resets the progress position; the station's retained diagnostic log stays available. With no active task, the timeline is labelled **Recent agent progress**. If the original log entry has expired but the latest reported text remains in the snapshot, it appears as **Latest report**, without an invented timestamp.
+
+Log details use a muted time column, a short event label and aligned body text. Continuation lines stay under the body. RUN marks a reported command start; DONE requires an explicit exit 0; END means the finish record did not include an outcome. Warnings, failures and nonzero exit codes remain visible. Command start and finish records stay separate and preserve their observed order. Enter reveals retained command arguments.
 
 Each station retains up to 64 log entries within a 16 KiB budget; an entry's text is limited to 1 KiB. Older entries drop out as new activity arrives, so Home only reaches the earliest retained entry. The monitor shows task summaries and work attributed to that station. A missing command or progress report remains explicitly unavailable. Full task results remain accessible through the authenticated `worker.result` workflow.
 
-The status column shows current and accumulated work time and the last three completed task durations when those observations are available. Resource readings identify the process they measure. An external model has no implied local PID, so its CPU and memory use cannot be inferred from the worker window. Local client measurements, their bounded line chart, and the CPU heat value refer to the worker client process and are labelled accordingly; unavailable samples remain unavailable.
+F2 details show current and accumulated work time and the last three completed task durations when those observations are available. Resource readings identify the process they measure. An external model has no implied local PID, so its CPU and memory use cannot be inferred from the worker window. Local client measurements, their bounded line chart, and the CPU heat value refer to the worker client process and are labelled accordingly; unavailable samples remain unavailable.
 
-The monitor header shows the worker process's OS PID and a compact manager binding status when space permits. Press T to read the full task and complete manager client and thread IDs. The main window's Statistics page starts with session labels, member roles, worker states and current task summaries. Press Enter to expand Diagnostics with complete session, thread, pool-generation and task IDs; Enter collapses it, and Esc returns one level. These views preserve the message recipient and management binding.
+The F2 detail header shows the worker client's OS PID and a compact manager binding status when space permits. Press T from either view to read the full task and complete manager client and thread IDs. The main window's Statistics page starts with session labels, member roles, worker states and current task summaries. Press Enter to expand Diagnostics with complete session, thread, pool-generation and task IDs; Enter collapses it, and Esc returns one level. These views preserve the message recipient and management binding.
 
 Task submission and assignment records appear in the main conversation, in operation order. Each card identifies the observed state and assigned worker, when known; expand it to read the retained summary, exact task ID, station epoch and pool generation. Repainting does not duplicate cards. These records use the conversation's existing bounded history and scroll behavior. Wait operations also keep their full conditions in expandable conversation cards. A live wait updates its existing card without adding repeated entries or changing its position. Statistics keeps concise pool counts, with complete identities in Diagnostics.
+
+[Monitor rendering and input](../src/client/terminal/worker.rs)
 
 ## Bind the main agent and manage tasks
 
@@ -268,7 +289,7 @@ The reply identifies the operation, pool generation, mode, each condition's stat
 
 ## See dispatch and waiting state
 
-The default Activity view shows a compact summary of real submissions, assignments and current waits. A **submitted** receipt means the task entered the queue; it does not identify a worker. An **assigned** observation names the task and its actual slot and epoch after a successful claim. The worker monitor shows the waiting mode, condition type, targets and elapsed time while preserving the selected station's log viewport. The conversation's expandable wait card contains the complete target list and exact identities. Statistics keeps concise pool counts; Diagnostics contains full pool and session identities.
+The default Activity view shows a compact summary of real submissions, assignments and current waits. A **submitted** receipt means the task entered the queue; it does not identify a worker. An **assigned** observation names the task and its actual slot and epoch after a successful claim. The worker monitor shows the waiting mode, condition type, targets and elapsed time while preserving the selected station's progress or log position. The conversation's expandable wait card contains the complete target list and exact identities. Statistics keeps concise pool counts; Diagnostics contains full pool and session identities.
 
 Wait cards show the requested target or an authorized, redacted task summary, the actual `ANY`, `ALL`, `SINGLE` or `CHANGE` mode, elapsed time and this call's observation budget. Long task, observer and generation IDs stay in expanded details. `Triggered` means the requested condition caused a return; `Window expired` means this observation returned without establishing completion. `Observation stopped` does not cancel execution. Missing or uncertain receipts remain `Unknown`.
 

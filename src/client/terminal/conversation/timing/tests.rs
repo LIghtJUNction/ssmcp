@@ -286,7 +286,11 @@ fn wait_cards_explain_any_all_budget_and_terminal_outcomes_without_id_noise() {
             let card = wait_card(&entry).unwrap();
             assert!(card.heading.contains("Command exits"));
             assert!(card.heading.contains(wait_mode(mode)));
-            assert!(card.heading.contains(wait_outcome(outcome)));
+            assert!(card.heading.contains(compact_wait_outcome(outcome)));
+            assert!(
+                card.detail
+                    .contains(&format!("Outcome: {}", wait_outcome(outcome)))
+            );
             assert!(!card.heading.contains(&entry.id));
             assert!(!card.heading.contains("worker_task_exact_fixture"));
             assert!(card.detail.contains(&entry.id));
@@ -332,7 +336,6 @@ fn real_wait_frames_keep_one_card_visible_and_preserve_draft_at_wide_and_narrow_
         assert!(collapsed.contains("ALL"), "{cols}: {collapsed}");
         assert!(collapsed.contains("Pending"), "{cols}: {collapsed}");
         assert_eq!(state.events.snapshot()["retained_events"], 1);
-        state.events.open();
         let original = state.events.snapshot()["events"][0]["id"].clone();
         for outcome in [
             WaitOutcome::Pending,
@@ -341,8 +344,27 @@ fn real_wait_frames_keep_one_card_visible_and_preserve_draft_at_wide_and_narrow_
             WaitOutcome::ObservationStopped,
             WaitOutcome::Unknown,
         ] {
+            state.events.back();
             state.conversation.timing_fixture =
                 Some(wait_snapshot(observed_wait(WaitMode::All, outcome)));
+            let collapsed = screen(&mut state);
+            let budget = if outcome == WaitOutcome::WindowExpired {
+                "20s/20s"
+            } else {
+                "2s/20s"
+            };
+            for visible in ["ALL", compact_wait_outcome(outcome), budget, "Command"] {
+                assert!(
+                    collapsed.contains(visible),
+                    "{cols}: {visible}: {collapsed}"
+                );
+            }
+            assert_eq!(state.events.snapshot()["retained_events"], 1);
+            assert_eq!(state.events.snapshot()["events"][0]["id"], original);
+            assert_eq!(state.events.snapshot()["events"][0]["expanded"], false);
+            assert_eq!(state.conversation.composer.text(), "KEEP_WAIT_DRAFT");
+            assert_eq!(state.conversation.composer.cursor(), cursor);
+            state.events.open();
             let rendered = screen(&mut state);
             assert!(
                 rendered.contains(wait_outcome(outcome)),

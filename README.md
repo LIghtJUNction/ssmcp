@@ -183,27 +183,27 @@ Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重
 ssmcp --worker 3
 ~~~
 
-1. 连接主窗口。若要邀请主 Agent，在主窗口输入 `/invite` 并按 Enter。复制面板中的说明并粘贴到已获准接入的主 Agent 对话。主 Agent 按说明在控制会话以 `main` 身份加入，再用自己的凭据绑定。
-2. 若需要外部 worker，先用 `ssmcp --worker 3` 启动关联池，或在已连接的主窗口用 `/worker +N` 开启席位。用 `/worker ls` 确认池在线且有空位，然后在主窗口输入 `/invite worker` 并按 Enter。把说明粘贴到每个独立、已获准接入的 worker 对话。每个 worker 用自己的凭据在池中加入并绑定为 `worker`，然后调用 `ssmcp.worker.wait` 等任务。
-3. 两个命令都会显示可滚动的本地面板并尝试复制。剪贴板不可用时手动复制，按 Esc 关闭面板。凭据由各 Agent 私下保存。池满员、离线或正在调整席位时，等状态恢复再生成 worker 邀请。
+这会创建三个初始离线的席位。默认 worker 是外部 Agent，继续使用它自己的应用和模型；SSMCP 提供任务队列、工具与回执，不启动模型。主窗口保留聊天输入，worker 窗口默认以全宽时间线展示 Agent 实际上报的进度，并显示当前任务和状态。尚无上报时明确等待；警告、错误和 `unknown` 保持可见。按 **F2** 查看日志与本机 SSMCP 资源详情，**F1** 查看帮助，**T** 查看任务全文。[监控操作](docs/workers.md#use-the-monitor)
 
-退出或重载主窗口会清理它启动的 worker 窗口。单独关闭监控窗口后，主聊天仍可使用。[Worker 接入、任务回执与窗口生命周期](docs/workers.md)
+在主窗口完成接入：
 
-这会创建三个初始离线的席位。默认 worker 是外部 Agent，继续使用它自己的应用和模型；SSMCP 提供任务队列、工具与回执，不启动模型。主窗口保留聊天输入，worker 窗口显示实际任务状态和日志。
+1. 输入 `/invite` 并按 Enter。复制面板中的说明，粘贴到已获准接入的主 Agent 对话。主 Agent 按说明在控制会话以 `main` 身份加入，再用自己的凭据绑定。
+2. 用 `/worker ls` 确认关联池在线且有空位，再输入 `/invite worker` 并按 Enter。把说明粘贴到每个独立、已获准接入的 worker 对话。每个 worker 在池中用 `collab.join` 登记为 `worker`，用自己的私有凭据绑定后调用 `ssmcp.worker.wait` 注册席位并等待任务。
+3. 两个邀请命令都会显示可滚动的本地面板并尝试复制。剪贴板不可用时手动复制，按 Esc 关闭面板。凭据由各 Agent 私下保存。池满员、离线或正在调整席位时，等状态恢复再生成 worker 邀请。
 
-在主窗口按需使用以下命令：
+之后可在主窗口查看和调整席位；普通主窗口尚无池时，`/worker +N` 会创建关联窗口：
 
 | 命令 | 作用 |
 | --- | --- |
-| `/invite` | 生成主协调者的接入说明 |
-| `/invite worker` | 生成指向关联池的外部 worker 说明 |
 | `/worker ls` | 查看席位、注册人数、工作中、待命与离线数量 |
 | `/worker +2` | 增加两个离线席位；尚无池时创建关联窗口 |
 | `/worker -1` | 请求减少一个席位，等待正在执行的任务和退役确认 |
 
-把邀请说明交给对应的 Agent。Worker 在池连接中用 `collab.join` 登记 `role: "worker"`，绑定自己的私有凭据，再调用 `ssmcp.worker.wait` 注册席位并领取任务。`registered_workers` 是已注册 worker 数，`working` 是任务执行中，`standby`／`idle` 才表示待命容量；创建席位或复制邀请不会增加待命人数。
+`registered_workers` 是已注册 worker 数，`working` 是任务执行中，`standby`／`idle` 才表示待命容量；创建席位或复制邀请不会增加待命人数。
 
-协调者派发任务后，worker 保留完整 claim，用 `ssmcp.worker.complete` 报告实际结果，再用新请求 ID 等待下一项任务；等待重试复用原 ID。取消请求不会直接释放执行中的席位，断线造成的 `unknown` 结果也不能自动重放。邀请、缩容、主窗口退出或重载的完整流程见 [Worker 指南](docs/workers.md)。
+协调者派发任务后，worker 保留完整 claim，用 `ssmcp.worker.complete` 报告实际结果，再用新请求 ID 等待下一项任务；等待重试复用原 ID。取消请求不会直接释放执行中的席位，断线造成的 `unknown` 结果也不能自动重放。
+
+退出或重载主窗口会清理它启动的 worker 窗口。单独关闭监控窗口后，主聊天仍可使用。邀请、任务回执、缩容与窗口生命周期见 [Worker 指南](docs/workers.md)。
 
 ### 主控何时等待
 

@@ -17,6 +17,7 @@ on:
         options:
           - all
           - ios
+          - linux
           - windows
           - android
   workflow_call:
@@ -26,7 +27,7 @@ on:
         required: true
         type: string
       platform:
-        description: One of all, ios, windows, android
+        description: One of all, ios, linux, windows, android
         required: false
         default: all
         type: string
@@ -43,6 +44,7 @@ jobs:
       ref: ${{ steps.inputs.outputs.ref }}
       platform: ${{ steps.inputs.outputs.platform }}
       ios: ${{ steps.clients.outputs.ios }}
+      linux: ${{ steps.clients.outputs.linux }}
       windows: ${{ steps.clients.outputs.windows }}
       android: ${{ steps.clients.outputs.android }}
     steps:
@@ -59,8 +61,8 @@ jobs:
             exit 1
           fi
           case "$REQUESTED_PLATFORM" in
-            all|ios|windows|android) ;;
-            *) echo '::error::platform must be all, ios, windows, or android.'; exit 1 ;;
+            all|ios|linux|windows|android) ;;
+            *) echo '::error::platform must be all, ios, linux, windows, or android.'; exit 1 ;;
           esac
           printf 'ref=%s\nplatform=%s\n' "${REQUESTED_REF,,}" "$REQUESTED_PLATFORM" >> "$GITHUB_OUTPUT"
 
@@ -175,7 +177,8 @@ jobs:
                                       or (not kind and name.startswith("iPhone")))):
                           continue
                       try:
-                          identifier = str(uuid.UUID(device["udid"]))
+                          identifier = device["udid"]
+                          uuid.UUID(identifier)  # Validate without rewriting simctl's exact identifier.
                       except (KeyError, ValueError, TypeError, AttributeError):
                           continue
                       candidates.append((available[runtime], state == "Booted", name,
@@ -286,6 +289,169 @@ jobs:
         with:
           name: ios-${{ needs.validate.outputs.ref }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ssmcp-gui-ci-ios
+          if-no-files-found: warn
+          retention-days: 7
+
+  linux:
+    name: Linux desktop Release and X11 window
+    needs: validate
+    if: needs.validate.outputs.linux == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      SOURCE_COMMIT: ${{ needs.validate.outputs.ref }}
+      CARGO_TERM_COLOR: never
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      - name: Record the source revision and require its lockfile
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test -f apps/ssmcp-desktop/Cargo.lock
+          evidence="$RUNNER_TEMP/ssmcp-gui-ci-linux"
+          mkdir -p "$evidence"
+          printf 'LINUX_EVIDENCE_DIR=%s\nCARGO_TARGET_DIR=%s\n' \
+            "$evidence" "$RUNNER_TEMP/ssmcp-desktop-target" >> "$GITHUB_ENV"
+          printf 'source_commit=%s\nworkflow_commit=%s\nrunner=%s/%s\n' \
+            "$SOURCE_COMMIT" "$GITHUB_WORKFLOW_SHA" "$RUNNER_OS" "$RUNNER_ARCH" \
+            > "$evidence/revision.txt"
+      - name: Install the native X11 build and window-check tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libx11-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev \
+            xvfb xauth x11-utils mesa-utils libgl1-mesa-dri fonts-noto-cjk
+      - name: Install Rust 1.100.0 for native Linux
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
+        with:
+          toolchain: 1.100.0
+          targets: x86_64-unknown-linux-gnu
+      - name: Build and test the optimized native desktop
+        id: native
+        run: |
+          set -euo pipefail
+          rustc -Vv | tee "$LINUX_EVIDENCE_DIR/rustc.log"
+          cargo -V | tee "$LINUX_EVIDENCE_DIR/cargo.log"
+          set +e
+          cargo test --manifest-path apps/ssmcp-desktop/Cargo.toml --locked --release \
+            --target x86_64-unknown-linux-gnu 2>&1 | tee "$LINUX_EVIDENCE_DIR/tests.log"
+          test_exit=${PIPESTATUS[0]}
+          cargo build --manifest-path apps/ssmcp-desktop/Cargo.toml --locked --release \
+            --target x86_64-unknown-linux-gnu 2>&1 | tee "$LINUX_EVIDENCE_DIR/build.log"
+          build_exit=${PIPESTATUS[0]}
+          set -e
+          python3 - "$test_exit" "$build_exit" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          result = {"source_commit": os.environ["SOURCE_COMMIT"], "target": "x86_64-unknown-linux-gnu",
+                    "profile": "release", "test_exit": int(sys.argv[1]), "build_exit": int(sys.argv[2])}
+          (Path(os.environ["LINUX_EVIDENCE_DIR"]) / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+          if result["test_exit"] or result["build_exit"]:
+              raise SystemExit("Linux desktop Release build or tests failed")
+          PY
+          binary="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/ssmcp-desktop"
+          test -x "$binary"
+          ldd "$binary" | tee "$LINUX_EVIDENCE_DIR/dependencies.log"
+          if grep -q 'not found' "$LINUX_EVIDENCE_DIR/dependencies.log"; then
+            echo '::error::The Linux desktop executable has unresolved runtime libraries.'
+            exit 1
+          fi
+      - name: Observe the Release executable in a real X11 window
+        id: window
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=5s 45s xvfb-run --auto-servernum \
+            --server-args='-screen 0 1280x900x24 +extension GLX -nolisten tcp' python3 - <<'PY'
+          import hashlib, json, os, re, subprocess, time
+          from pathlib import Path
+          evidence = Path(os.environ["LINUX_EVIDENCE_DIR"])
+          binary = Path(os.environ["CARGO_TARGET_DIR"]) / "x86_64-unknown-linux-gnu/release/ssmcp-desktop"
+          renderer = subprocess.run(["glxinfo", "-B"], text=True, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, timeout=10)
+          (evidence / "renderer.log").write_text(renderer.stdout)
+          if renderer.returncode or "llvmpipe" not in renderer.stdout.lower():
+              raise SystemExit("The Xvfb display must provide Mesa llvmpipe OpenGL")
+          title = "ssmcp-desktop · 本地工作台"
+          window = {"source_commit": os.environ["SOURCE_COMMIT"], "target": "x86_64-unknown-linux-gnu",
+                    "profile": "release", "backend": "x11-opengl", "renderer": "llvmpipe", "title": title,
+                    "mapped": False, "width": 0, "height": 0, "exit_after_ms": 10000,
+                    "binary_bytes": binary.stat().st_size, "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
+          started = time.monotonic()
+          deadline = started + 30
+          probe_text = ""
+          with (evidence / "window.log").open("w") as log:
+              process = subprocess.Popen([str(binary), "--exit-after-ms", "10000"], stdout=log, stderr=subprocess.STDOUT)
+              try:
+                  while process.poll() is None and time.monotonic() < deadline:
+                      try:
+                          probe = subprocess.run(["xwininfo", "-name", title, "-stats"], text=True,
+                                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=1)
+                      except subprocess.TimeoutExpired:
+                          continue
+                      probe_text = probe.stdout
+                      width = re.search(r"(?m)^\s*Width:\s*(\d+)\s*$", probe_text)
+                      height = re.search(r"(?m)^\s*Height:\s*(\d+)\s*$", probe_text)
+                      if probe.returncode == 0 and "Map State: IsViewable" in probe_text and width and height:
+                          window.update(mapped=True, width=int(width[1]), height=int(height[1]))
+                          break
+                      time.sleep(0.1)
+                  process.wait(timeout=max(0.001, deadline - time.monotonic()))
+              finally:
+                  if process.poll() is None:
+                      process.kill()
+                      process.wait(timeout=5)
+                  window.update(exit_code=process.returncode, elapsed_ms=int((time.monotonic() - started) * 1000))
+                  (evidence / "xwininfo.log").write_text(probe_text or "No mapped application window was observed.\n")
+                  (evidence / "window.json").write_text(json.dumps(window, indent=2) + "\n")
+          if not window["mapped"] or window["exit_code"] != 0 or not 10000 <= window["elapsed_ms"] < 30000:
+              raise SystemExit("The Release executable did not complete its bounded native window check")
+          PY
+      - name: Package the exact Linux Release executable tested in Xvfb
+        run: |
+          python3 scripts/release.py package-gui --platform linux --evidence "$LINUX_EVIDENCE_DIR" \
+            --binary "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/ssmcp-desktop"
+      - name: Retain the downloadable Linux Release archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ssmcp-gui-linux
+          path: dist/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+      - name: Record the validation scope
+        if: always()
+        env:
+          NATIVE_OUTCOME: ${{ steps.native.outcome }}
+          WINDOW_OUTCOME: ${{ steps.window.outcome }}
+        run: |
+          {
+            printf '### Linux desktop client\n\n- Source commit: `%s`\n' "$SOURCE_COMMIT"
+            printf -- '- Native Release build and Rust tests: %s\n' "$NATIVE_OUTCOME"
+            printf -- '- Xvfb/Mesa llvmpipe mapped window and bounded clean exit: %s\n' "$WINDOW_OUTCOME"
+            printf '%s\n' '- Scope: default X11/OpenGL backend, without a live CLI session. This is not GPU, Wayland-native or interactive session acceptance.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve Linux build, test and actual window evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: linux-${{ needs.validate.outputs.ref }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ssmcp-gui-ci-linux
           if-no-files-found: warn
           retention-days: 7
 
@@ -459,6 +625,12 @@ jobs:
           printf 'ANDROID_EVIDENCE_DIR=%s\nANDROID_AVD_HOME=%s\n' \
             "$RUNNER_TEMP/ssmcp-gui-ci-android" "$RUNNER_TEMP/ssmcp-android-avd" >> "$GITHUB_ENV"
 
+      - name: Install Linux emulator runtime libraries
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libpulse0
+
       - name: Install fixed Gradle and emulator archives on the runner
         run: |
           set -euo pipefail
@@ -496,7 +668,7 @@ jobs:
           set -euo pipefail
           sdkmanager="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           "$sdkmanager" --licenses < <(printf 'y\n%.0s' {1..100}) > "$ANDROID_EVIDENCE_DIR/licenses.log"
-          "$sdkmanager" --install 'cmdline-tools;16.0' 'platforms;android-35' \
+          "$sdkmanager" --install 'platform-tools' 'cmdline-tools;16.0' 'platforms;android-35' \
             'build-tools;35.0.0' 'system-images;android-35;google_apis;x86_64' \
             2>&1 | tee "$ANDROID_EVIDENCE_DIR/sdk-install.log"
           # SDK Manager verifies its archive metadata. Retain the resolved package
@@ -515,6 +687,9 @@ jobs:
                   output.write(f"{directory} sha256={hashlib.sha256(data).hexdigest()}\n")
                   output.write(data.decode("utf-8") + "\n")
           PY
+          export PATH="$ANDROID_SDK_ROOT/platform-tools:$PATH"
+          printf '%s\n' "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          command -v adb | tee "$ANDROID_EVIDENCE_DIR/adb-path.log"
           gradle --version 2>&1 | tee "$ANDROID_EVIDENCE_DIR/gradle-version.log"
           adb version 2>&1 | tee "$ANDROID_EVIDENCE_DIR/adb-version.log"
 

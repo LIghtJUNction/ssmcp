@@ -77,6 +77,10 @@ pub(super) struct Monitor {
     // None follows new entries. A sequence anchor keeps a paused view stable
     // when another entry arrives or the bounded ring drops its oldest entry.
     anchors: BTreeMap<usize, Option<LogAnchor>>,
+    // Each station keeps independent progress and diagnostic scroll positions.
+    details: BTreeMap<usize, bool>,
+    other_anchors: BTreeMap<usize, Option<LogAnchor>>,
+    progress_tasks: BTreeMap<usize, (u64, Option<String>)>,
     expanded_commands: BTreeMap<usize, bool>,
     task_views: BTreeMap<usize, TaskView>,
     pending_scroll: BTreeMap<usize, PendingScroll>,
@@ -85,6 +89,7 @@ pub(super) struct Monitor {
     coordination_row: usize,
     coordination_rows: usize,
     resources: metrics::Sampler,
+    help: bool,
 }
 
 #[derive(Default)]
@@ -95,6 +100,26 @@ struct TaskView {
 }
 
 impl Monitor {
+    fn showing_details(&self, slot: usize) -> bool {
+        self.details.get(&slot).copied().unwrap_or(false)
+    }
+
+    fn toggle_details(&mut self) {
+        let Some(slot) = self.selected_slot() else {
+            return;
+        };
+        if self.task_views.contains_key(&slot) {
+            self.toggle_task();
+        }
+        let current = self.anchors.get(&slot).copied().flatten();
+        let next = self.other_anchors.insert(slot, current).flatten();
+        self.anchors.insert(slot, next);
+        let details = self.details.entry(slot).or_default();
+        *details = !*details;
+        self.pending_scroll.remove(&slot);
+        self.panels.retain(|panel| panel.slot != slot);
+    }
+
     fn selected_slot(&self) -> Option<usize> {
         self.order.get(self.selected).copied()
     }
@@ -150,6 +175,9 @@ impl Monitor {
         if let Some(slot) = self.selected_slot() {
             if self.task_views.contains_key(&slot) {
                 return;
+            }
+            if !self.showing_details(slot) {
+                self.toggle_details();
             }
             let expanded = self.expanded_commands.entry(slot).or_default();
             *expanded = !*expanded;
@@ -251,6 +279,9 @@ impl Monitor {
             self.selected = 0;
             self.first = 0;
             self.anchors.clear();
+            self.details.clear();
+            self.other_anchors.clear();
+            self.progress_tasks.clear();
             self.expanded_commands.clear();
             self.task_views.clear();
             self.pending_scroll.clear();
@@ -260,6 +291,11 @@ impl Monitor {
             .and_then(|slot| self.order.iter().position(|value| *value == slot))
             .unwrap_or_else(|| self.selected.min(self.order.len().saturating_sub(1)));
         self.anchors.retain(|slot, _| self.order.contains(slot));
+        self.details.retain(|slot, _| self.order.contains(slot));
+        self.other_anchors
+            .retain(|slot, _| self.order.contains(slot));
+        self.progress_tasks
+            .retain(|slot, _| self.order.contains(slot));
         self.expanded_commands
             .retain(|slot, _| self.order.contains(slot));
         self.task_views.retain(|slot, _| self.order.contains(slot));
@@ -323,8 +359,31 @@ impl Monitor {
             output.push(Vec::new());
         }
         let slot = &snapshot.slots[self.selected];
+        if self.help {
+            output.extend(
+                monitor_help(width)
+                    .into_iter()
+                    .take(available - output.len())
+                    .map(|row| vec![row]),
+            );
+            return output;
+        }
         let activity = ActivitySummary::from(slot);
         let task_view = self.task_views.contains_key(&slot.slot);
+        let details_view = self.showing_details(slot.slot);
+        let context = (slot.epoch, slot.task_id.clone());
+        if self.progress_tasks.get(&slot.slot) != Some(&context) {
+            // A new task must not inherit a paused position from its predecessor.
+            // Diagnostic logs deliberately retain their station-wide history.
+            if details_view {
+                self.other_anchors.remove(&slot.slot);
+            } else if let Some(view) = self.task_views.get_mut(&slot.slot) {
+                view.saved_log_anchor = None;
+            } else {
+                self.anchors.remove(&slot.slot);
+            }
+            self.progress_tasks.insert(slot.slot, context);
+        }
         if let Some(view) = self.task_views.get_mut(&slot.slot) {
             if view.initialized && view.task_id != slot.task_id {
                 self.anchors.insert(
@@ -340,7 +399,7 @@ impl Monitor {
         }
         let body_top = top + output.len();
         let body_rows = available - output.len();
-        let split = width >= 96 && !task_view;
+        let split = width >= 96 && details_view && !task_view;
         let right_cols = if split {
             (width / 4).clamp(32, 38)
         } else {
@@ -354,12 +413,20 @@ impl Monitor {
         };
         let compact_budget = if split || task_view {
             0
+        } else if !details_view && body_rows >= 8 {
+            3
+        } else if details_view && body_rows >= 14 {
+            8
         } else if body_rows >= 6 {
             2
         } else {
             0
         };
-        let compact = compact_details(&activity, &self.resources, width, compact_budget);
+        let compact = if details_view {
+            compact_details(&self.resources, width, compact_budget)
+        } else {
+            progress_summary(slot, width, compact_budget)
+        };
         output.extend(compact.iter().cloned().map(|line| vec![line]));
         let log_area_row = body_top + compact.len();
         let log_area_rows = body_rows - compact.len();
@@ -368,7 +435,7 @@ impl Monitor {
         let log_rows = log_area_rows.saturating_sub(header_rows + 1);
         let entries = if task_view {
             task_lines(slot, snapshot, left_cols.saturating_sub(2).max(1))
-        } else {
+        } else if details_view {
             log_lines(
                 slot,
                 left_cols.saturating_sub(2).max(1),
@@ -377,6 +444,8 @@ impl Monitor {
                     .copied()
                     .unwrap_or(false),
             )
+        } else {
+            progress_lines(slot, left_cols.saturating_sub(2).max(1))
         };
         let keys: Vec<_> = entries.iter().map(|entry| entry.0).collect();
         let maximum = keys.len().saturating_sub(log_rows);
@@ -426,7 +495,13 @@ impl Monitor {
             let heading = (
                 PanelTone::Heading,
                 if task_view {
-                    "  Full task · T Logs".into()
+                    "  Full task · T Back".into()
+                } else if !details_view {
+                    if slot.task_id.is_some() {
+                        "  Agent progress".into()
+                    } else {
+                        "  Recent agent progress".into()
+                    }
                 } else {
                     "  Work log".into()
                 },
@@ -462,10 +537,7 @@ impl Monitor {
                     Vec::new()
                 }
             } else if log_rows == 0 {
-                vec![(
-                    PanelTone::Muted,
-                    "Enlarge terminal to view work and metrics".into(),
-                )]
+                vec![(PanelTone::Muted, "Enlarge terminal to view progress".into())]
             } else {
                 let range = if keys.is_empty() {
                     "0".into()
@@ -481,7 +553,13 @@ impl Monitor {
                     PanelTone::Muted,
                     format!(
                         "  {} {range} · {}",
-                        if task_view { "Task" } else { "Log" },
+                        if task_view {
+                            "Task"
+                        } else if details_view {
+                            "Log"
+                        } else {
+                            "Progress"
+                        },
                         if following {
                             "Live"
                         } else {
@@ -539,7 +617,32 @@ impl State {
             let Some(monitor) = self.worker.as_mut() else {
                 return;
             };
+            if monitor.help {
+                if matches!(action, Key::Help | Key::Escape) {
+                    monitor.help = false;
+                    self.dirty = true;
+                }
+                continue;
+            }
             match action {
+                Key::Help => {
+                    monitor.help = true;
+                    monitor.panels.clear();
+                }
+                Key::Layout => monitor.toggle_details(),
+                Key::Escape => {
+                    if monitor
+                        .selected_slot()
+                        .is_some_and(|slot| monitor.task_views.contains_key(&slot))
+                    {
+                        monitor.toggle_task();
+                    } else if monitor
+                        .selected_slot()
+                        .is_some_and(|slot| monitor.showing_details(slot))
+                    {
+                        monitor.toggle_details();
+                    }
+                }
                 Key::Back => monitor.select(false),
                 Key::Open => monitor.select(true),
                 Key::FocusBack => monitor.cycle(false),
@@ -615,6 +718,8 @@ impl State {
             serde_json::json!({
                 "slot":panel.slot,"row":panel.row,"col":0,"rows":panel.rows,
                 "cols":self.geometry.cols,"selected":monitor.and_then(Monitor::selected_slot)==Some(panel.slot),
+                "view":if monitor.is_some_and(|monitor| monitor.task_views.contains_key(&panel.slot)) {"task"}
+                    else if monitor.is_some_and(|monitor| monitor.showing_details(panel.slot)) {"details"} else {"progress"},
                 "logs":{"row":panel.log_row,"col":panel.log_col,"rows":panel.log_rows,"cols":panel.log_cols,"visible":panel.log_rows>0,
                     "retained_lines":panel.keys.len(),"first_line":panel.start,"following":panel.following,
                     "commands_expanded":monitor.and_then(|monitor| monitor.expanded_commands.get(&panel.slot)).copied().unwrap_or(false),
@@ -640,6 +745,7 @@ impl State {
                 serde_json::json!({"slot":tab.slot,"row":tab.row,"col":tab.col,"cols":tab.cols})
             }).collect::<Vec<_>>(),
             "selected_worker":monitor.and_then(Monitor::selected_slot),
+            "help":monitor.is_some_and(|monitor| monitor.help),
             "workers":crate::worker::display(),
         })
     }
@@ -754,9 +860,19 @@ impl State {
                     .into_iter()
                     .map(|(text, tone)| line(self, &[(tone, text)])),
             );
-            // Keep identity compact even in tall windows. T exposes the full
-            // identity with the task; the main Statistics page also retains it.
-            let identity = compact_identity(snapshot, g.cols);
+            // Machine identifiers belong to diagnostics. T still exposes the
+            // complete identity alongside the full original task.
+            let identity = if self.worker.as_ref().is_some_and(|monitor| {
+                monitor.generation.as_deref() == Some(snapshot.generation.as_str())
+                    && !monitor.help
+                    && monitor.selected_slot().is_some_and(|slot| {
+                        monitor.showing_details(slot) && !monitor.task_views.contains_key(&slot)
+                    })
+            }) {
+                compact_identity(snapshot, g.cols)
+            } else {
+                Vec::new()
+            };
             let space = height.saturating_sub(rows.len() + 2);
             let panel_reserve = if g.cols >= 96 { 14 } else { 8 };
             let identity: Vec<_> = identity
@@ -786,21 +902,48 @@ impl State {
                 self,
                 &[(PanelTone::Muted, "Waiting for worker readiness".into())],
             ));
+            if self.worker.as_ref().is_some_and(|monitor| monitor.help) {
+                rows.extend(
+                    monitor_help(usize::from(g.cols))
+                        .into_iter()
+                        .map(|row| line(self, &[row])),
+                );
+            }
         }
         rows.truncate(height.saturating_sub(1));
         rows.resize_with(height.saturating_sub(1), String::new);
+        let details = self.worker.as_ref().is_some_and(|monitor| {
+            monitor
+                .selected_slot()
+                .is_some_and(|slot| monitor.showing_details(slot))
+        });
+        let help = self.worker.as_ref().is_some_and(|monitor| monitor.help);
         let footer = if g.cols < 28 {
             "^R Reload ^C Stop"
+        } else if help {
+            "F1/Esc Back · ^R Reload · ^C Stop"
         } else if height == 1 {
             "Workers · ^R Reload · ^C Stop"
         } else if g.cols < 48 {
-            "←→ ↑↓ · T Task · ^R Reload · ^C"
+            "F2 Logs · F1 Help · ^R Reload · ^C"
         } else if g.cols < 80 {
-            "Tab Worker · T Task · Enter Cmd · ^R Reload · ^C"
+            if details {
+                "F2 Back · Enter Cmd · F1 Help · ^R Reload · ^C"
+            } else {
+                "Tab Worker · F2 Logs · F1 Help · ^R Reload · ^C"
+            }
         } else if g.cols < 104 {
-            "Tab/Shift+Tab Worker · T Task · Enter Cmd · ↑↓ Logs · ^R Reload · ^C"
+            if details {
+                "Tab Worker · F2 Progress · Enter Cmd · T Task · F1 Help · ^R Reload · ^C"
+            } else {
+                "Tab/Shift+Tab Worker · F2 Logs & metrics · T Task · F1 Help · ^R Reload · ^C"
+            }
         } else {
-            "Tab/Shift+Tab ←→ Worker · T Task · Enter Cmd · ↑↓ PgUp/PgDn · End Live · ^R Reload · ^C Stop"
+            if details {
+                "Tab/Shift+Tab ←→ Worker · F2 Progress · Enter Cmd · T Task · End Live · F1 Help · ^R Reload · ^C Stop"
+            } else {
+                "Tab/Shift+Tab ←→ Worker · F2 Logs & metrics · T Task · ↑↓ PgUp/PgDn · End Live · F1 Help · ^R Reload · ^C"
+            }
         };
         rows.push(line(self, &[(PanelTone::Muted, footer.into())]));
         Frame {
@@ -868,6 +1011,72 @@ fn identity_lines(snapshot: &Snapshot, width: u16) -> Vec<String> {
 }
 
 type LogLine = (LogAnchor, Vec<(PanelTone, String)>);
+
+fn monitor_help(width: usize) -> Vec<(PanelTone, String)> {
+    [
+        "Worker monitor · F1 / Esc Back",
+        "Tab / Shift+Tab / ← →   Choose worker",
+        "↑ ↓ / PgUp PgDn   Scroll this view",
+        "Home / End   Oldest / follow latest",
+        "F2   Progress / logs and client metrics",
+        "Enter   Open logs / expand command text",
+        "T   Full task / back",
+        "Ctrl+R Reload · Ctrl+C Stop",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, text)| {
+        (
+            if index == 0 {
+                PanelTone::Heading
+            } else {
+                PanelTone::Normal
+            },
+            clipped(text, width),
+        )
+    })
+    .collect()
+}
+
+fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelTone, String)> {
+    if budget == 0 {
+        return Vec::new();
+    }
+    let task = slot.task_id.as_ref().and(slot.task_summary.as_deref());
+    let mut rows = activity_field(
+        "Task",
+        task,
+        if slot.task_id.is_some() {
+            "Assigned · T Full task"
+        } else {
+            "No active task"
+        },
+        width,
+        budget.saturating_sub(1).max(1),
+    );
+    if rows.len() < budget {
+        let (tone, _, state) = slot_state(slot.state);
+        let elapsed = slot
+            .current_task_elapsed_ms
+            .map(|ms| format!(" · {}", duration(ms)))
+            .unwrap_or_default();
+        let reason = slot
+            .reason
+            .as_deref()
+            .map(|reason| format!(" · {}", panel::safe_text(reason)))
+            .unwrap_or_default();
+        let retiring = if slot.retire_requested {
+            " · retirement requested"
+        } else {
+            ""
+        };
+        rows.push((
+            tone,
+            clipped(&format!("{state}{elapsed}{retiring}{reason}"), width),
+        ));
+    }
+    rows
+}
 
 fn task_lines(slot: &SlotView, snapshot: &Snapshot, width: usize) -> Vec<LogLine> {
     let width = width.max(1);
@@ -1065,54 +1274,69 @@ fn wrap_log_body(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-fn log_lines(slot: &SlotView, width: usize, expanded: bool) -> Vec<LogLine> {
+fn event_lines(
+    entry: &crate::worker::SlotLog,
+    width: usize,
+    tag: &str,
+    tone: PanelTone,
+    body: &str,
+) -> Vec<LogLine> {
     let width = width.max(1);
     let mut output = Vec::new();
+    let seconds = entry.at_ms / 1000;
+    let time = if width >= 40 {
+        format!(
+            "{:02}:{:02}:{:02}  ",
+            seconds / 3600 % 24,
+            seconds / 60 % 60,
+            seconds % 60
+        )
+    } else if width >= 28 {
+        format!("{:02}:{:02}  ", seconds / 60 % 60, seconds % 60)
+    } else {
+        String::new()
+    };
+    let label = if width >= 10 && !tag.is_empty() {
+        format!("{tag:<4}  ")
+    } else {
+        String::new()
+    };
+    let indent = time.width() + label.width();
+    let body_tone = match tone {
+        PanelTone::Error | PanelTone::Warning => tone,
+        _ => PanelTone::Normal,
+    };
+    for (part, text) in wrap_log_body(body, width.saturating_sub(indent))
+        .into_iter()
+        .enumerate()
+    {
+        let parts = if part == 0 {
+            vec![
+                (PanelTone::Muted, time.clone()),
+                (tone, label.clone()),
+                (body_tone, text),
+            ]
+        } else {
+            vec![(PanelTone::Muted, " ".repeat(indent)), (body_tone, text)]
+        };
+        output.push((
+            LogAnchor {
+                sequence: entry.sequence,
+                part,
+            },
+            parts,
+        ));
+    }
+    output
+}
+
+fn log_lines(slot: &SlotView, width: usize, expanded: bool) -> Vec<LogLine> {
+    let mut output = Vec::new();
     for (index, entry) in slot.logs.iter().enumerate() {
-        let seconds = entry.at_ms / 1000;
-        let time = if width >= 40 {
-            format!(
-                "{:02}:{:02}:{:02}  ",
-                seconds / 3600 % 24,
-                seconds / 60 % 60,
-                seconds % 60
-            )
-        } else if width >= 28 {
-            format!("{:02}:{:02}  ", seconds / 60 % 60, seconds % 60)
-        } else {
-            String::new()
-        };
         let (tag, tone, body) = log_event(entry, expanded);
-        let label = if width >= 10 {
-            format!("{tag:<4}  ")
-        } else {
-            String::new()
-        };
-        let indent = time.width() + label.width();
-        let body_tone = match tone {
-            PanelTone::Error | PanelTone::Warning => tone,
-            _ => PanelTone::Normal,
-        };
-        let lines = wrap_log_body(&body, width.saturating_sub(indent));
+        let lines = event_lines(entry, width, tag, tone, &body);
         let count = lines.len();
-        for (part, text) in lines.into_iter().enumerate() {
-            let parts = if part == 0 {
-                vec![
-                    (PanelTone::Muted, time.clone()),
-                    (tone, label.clone()),
-                    (body_tone, text),
-                ]
-            } else {
-                vec![(PanelTone::Muted, " ".repeat(indent)), (body_tone, text)]
-            };
-            output.push((
-                LogAnchor {
-                    sequence: entry.sequence,
-                    part,
-                },
-                parts,
-            ));
-        }
+        output.extend(lines);
         // Breathing room belongs to this event's stable sequence. Never merge
         // start/end records: commands from the same worker may overlap.
         if width >= 48
@@ -1127,6 +1351,113 @@ fn log_lines(slot: &SlotView, width: usize, expanded: bool) -> Vec<LogLine> {
                 vec![(PanelTone::Muted, String::new())],
             ));
         }
+    }
+    output
+}
+
+fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
+    // These prefixes are written by queue::telemetry only after the exact task
+    // claim is validated. Command text is always nested under a distinct
+    // "Command started/finished: " prefix, never interpreted as agent progress.
+    let reported = |entry: &&crate::worker::SlotLog| {
+        entry.level == "info"
+            && entry.task_id.is_some()
+            && slot
+                .task_id
+                .as_ref()
+                .is_none_or(|task| entry.task_id.as_ref() == Some(task))
+            && entry.text.starts_with("Progress: ")
+    };
+    let has_progress = slot.logs.iter().any(|entry| reported(&entry));
+    let latest_retained = slot.progress.as_deref().is_some_and(|latest| {
+        slot.logs
+            .iter()
+            .filter(reported)
+            .any(|entry| entry.text.strip_prefix("Progress: ") == Some(latest))
+    });
+    let mut output = Vec::new();
+    // The latest reported text survives ordinary log retention. It has no
+    // retained event timestamp, so show it explicitly without inventing one.
+    let fallback = if !latest_retained {
+        slot.progress
+            .as_deref()
+            .map(|text| format!("Latest report · {}", panel::safe_text(text)))
+    } else {
+        None
+    };
+    let intro = fallback
+        .as_deref()
+        .or_else(|| (!has_progress).then_some("Waiting for agent progress updates"));
+    if let Some(intro) = intro {
+        let tone = if fallback.is_some() {
+            PanelTone::Normal
+        } else {
+            PanelTone::Muted
+        };
+        for (part, text) in wrap_log_body(intro, width).into_iter().enumerate() {
+            output.push((LogAnchor { sequence: 0, part }, vec![(tone, text)]));
+        }
+    }
+    for entry in &slot.logs {
+        let event = if reported(&entry) {
+            Some((
+                "",
+                PanelTone::Normal,
+                panel::safe_text(entry.text.strip_prefix("Progress: ").unwrap_or_default()),
+            ))
+        } else {
+            let (tag, tone, body) = log_event(entry, false);
+            if !matches!(tone, PanelTone::Warning | PanelTone::Error) {
+                None
+            } else if entry.text.starts_with("Command started: ")
+                || entry.text.starts_with("Command finished: ")
+            {
+                let result = entry
+                    .text
+                    .strip_prefix("Command finished: ")
+                    .and_then(|text| text.rsplit_once("; "))
+                    .map(|(_, result)| result)
+                    .filter(|result| {
+                        matches!(*result, "cancelled" | "timed out")
+                            || result
+                                .strip_prefix("exit ")
+                                .or_else(|| result.strip_prefix("signal "))
+                                .is_some_and(|code| code.parse::<i32>().is_ok())
+                    });
+                Some((
+                    tag,
+                    tone,
+                    result.map_or_else(
+                        || "Command alert · F2 Logs".into(),
+                        |result| format!("Command {result} · F2 Logs"),
+                    ),
+                ))
+            } else {
+                Some((tag, tone, body))
+            }
+        };
+        let Some((tag, tone, mut body)) = event else {
+            continue;
+        };
+        if slot.task_id.is_some() && entry.task_id.is_some() && entry.task_id != slot.task_id {
+            body = format!("Earlier task · {body}");
+        }
+        let lines = event_lines(entry, width, tag, tone, &body);
+        let count = lines.len();
+        output.extend(lines);
+        output.push((
+            LogAnchor {
+                sequence: entry.sequence,
+                part: count,
+            },
+            vec![(PanelTone::Muted, String::new())],
+        ));
+    }
+    if output
+        .last()
+        .is_some_and(|(_, parts)| parts.len() == 1 && parts[0].1.is_empty())
+    {
+        output.pop();
     }
     output
 }
@@ -1165,7 +1496,6 @@ fn columns(
 }
 
 fn compact_details(
-    activity: &ActivitySummary<'_>,
     resources: &metrics::Sampler,
     width: usize,
     budget: usize,
@@ -1173,30 +1503,60 @@ fn compact_details(
     if budget == 0 {
         return Vec::new();
     }
-    let mut rows = activity_field("Task", activity.task, "No task assigned", width, 1);
-    if budget >= 2 {
-        rows.push(detail(
-            "Current",
-            &activity
-                .current_task_elapsed_ms
-                .map(duration)
-                .unwrap_or_else(|| "No active task".into()),
-            width,
-        ));
-    }
-    if budget >= 3 {
-        rows.push(detail(
-            "Shared client CPU",
-            &cpu_text(resources.latest()),
-            width,
-        ));
-    }
-    if budget >= 4 {
+    let mut rows = vec![detail(
+        "Client CPU",
+        &format!("{} of machine", cpu_text(resources.latest())),
+        width,
+    )];
+    rows.push(detail(
+        "Client RSS",
+        &resources
+            .latest()
+            .and_then(|sample| sample.memory_bytes)
+            .map(memory)
+            .unwrap_or_else(|| "Unavailable".into()),
+        width,
+    ));
+    if budget >= 8 {
         rows.push((
             PanelTone::Muted,
             clipped("SSMCP process · agents not sampled", width),
         ));
+        rows.push((PanelTone::Normal, String::new()));
+        let samples = resources.samples();
+        for (cpu, label) in [(true, "CPU"), (false, "RSS")] {
+            let value: fn(&metrics::Sample) -> Option<f64> = if cpu {
+                |sample| sample.cpu_percent
+            } else {
+                |sample| {
+                    sample
+                        .memory_bytes
+                        .map(|bytes| bytes as f64 / (1024.0 * 1024.0))
+                }
+            };
+            if samples.iter().any(|sample| value(sample).is_some()) {
+                let (plot, upper) = resource_chart(samples, width, 1, value);
+                rows.push((
+                    PanelTone::Muted,
+                    clipped(
+                        &format!(
+                            "{label} trend · 0–{upper:.1}{}",
+                            if cpu { "% of machine" } else { " MiB" }
+                        ),
+                        width,
+                    ),
+                ));
+                rows.extend(plot.into_iter().map(|line| (PanelTone::Muted, line)));
+            } else {
+                rows.push((
+                    PanelTone::Muted,
+                    clipped(&format!("{label} trend · samples unavailable"), width),
+                ));
+                rows.push((PanelTone::Normal, String::new()));
+            }
+        }
     }
+    rows.truncate(budget);
     rows
 }
 
@@ -1749,7 +2109,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_manager_identity_is_compact_and_full_ids_remain_in_task_details() {
+    fn worker_manager_identity_and_metrics_are_in_details_not_default_progress() {
         let mut snapshot = snapshot();
         snapshot.process_id = 31415;
         assert!(identity_lines(&snapshot, 80).contains(&"Manager unbound".into()));
@@ -1777,8 +2137,9 @@ mod tests {
             .screen()
             .contents();
         assert!(!text.contains(&client));
-        assert!(text.contains("Manager attached"));
-        assert!(text.contains("OS PID 31415"));
+        assert!(!text.contains("Manager attached"));
+        assert!(!text.contains("OS PID 31415"));
+        assert!(!text.contains("CPU trend"));
         wide.keyboard(b"t", Instant::now(), false);
         let detail = screen(&wide.worker_frame(Some(&snapshot)))
             .screen()
@@ -1796,14 +2157,22 @@ mod tests {
             .screen()
             .contents();
         assert!(!text.contains(&client[..16]));
-        assert!(text.contains("Manager attached"));
+        assert!(!text.contains("Manager attached"));
         assert!(text.contains("Working 1"));
 
         let mut compact = state(30, 100, false);
         let text = screen(&compact.worker_frame(Some(&snapshot)))
             .screen()
             .contents();
+        assert!(!text.contains("Manager attached"));
+        assert!(!text.contains("CPU trend"));
+        assert!(text.contains("Recent agent progress"));
+        compact.keyboard(b"\x1bOQ", Instant::now(), false);
+        let text = screen(&compact.worker_frame(Some(&snapshot)))
+            .screen()
+            .contents();
         assert!(text.contains("Manager attached"));
+        assert!(text.contains("OS PID 31415"));
         assert!(text.contains("Activity · T Full task"));
         assert!(text.contains("CPU trend"));
         let panels = compact.worker_snapshot(true);
@@ -1978,10 +2347,12 @@ mod tests {
         let mut state = state(24, 90, false);
         let mut snapshot = populated();
         state.worker_frame(Some(&snapshot));
+        state.keyboard(b"\x1bOQ", Instant::now(), false);
+        state.worker_frame(Some(&snapshot));
         state.keyboard(b"\x1b[A", Instant::now(), false);
         state.worker_frame(Some(&snapshot));
         let first_anchor = state.worker.as_ref().unwrap().anchors[&0].unwrap();
-        state.keyboard(b"\x1b[C\x1b[A\x1b[A", Instant::now(), false);
+        state.keyboard(b"\x1b[C\x1bOQ\x1b[A\x1b[A", Instant::now(), false);
         state.worker_frame(Some(&snapshot));
         let monitor = state.worker.as_ref().unwrap();
         assert_eq!(monitor.selected_slot(), Some(1));
@@ -2013,6 +2384,8 @@ mod tests {
     fn worker_log_retention_resize_and_generation_change_keep_valid_views() {
         let mut state = state(24, 90, false);
         let mut snapshot = populated();
+        state.worker_frame(Some(&snapshot));
+        state.keyboard(b"\x1bOQ", Instant::now(), false);
         state.worker_frame(Some(&snapshot));
         state.keyboard(b"\x1b[H", Instant::now(), false);
         snapshot.slots[0].logs.drain(..30);
@@ -2052,6 +2425,7 @@ mod tests {
             Instant::now(),
             false,
         );
+        state.keyboard(b"\x1bOQ", Instant::now(), false);
         state.worker_frame(Some(&snapshot));
         let panel = &state.worker.as_ref().unwrap().panels[0];
         let (x, y) = (panel.log_col + 1, panel.log_row + 1);
@@ -2097,6 +2471,8 @@ mod tests {
         snapshot.slots[0].current_task_elapsed_ms = Some(9_000);
         snapshot.slots[0].recent_task_durations_ms = vec![2_500, 12_000, 65_000];
         snapshot.slots[0].logs[39].text = "command: check --private-fixture".into();
+        state.worker_frame(Some(&snapshot));
+        state.keyboard(b"\x1bOQ", Instant::now(), false);
         let first = state.worker_frame(Some(&snapshot));
         let panel = &state.worker.as_ref().unwrap().panels[0];
         let (row, col, width) = (panel.details_row, panel.details_col, panel.details_cols);
@@ -2140,6 +2516,233 @@ mod tests {
             .filter_map(|(_, parts)| parts.last())
             .map(|(_, text)| text.as_str())
             .collect()
+    }
+
+    #[test]
+    fn progress_projection_only_promotes_claimed_reports_and_preserves_alerts() {
+        let mut snapshot = snapshot();
+        let slot = &mut snapshot.slots[1];
+        let records = [
+            ("info", Some("task-actual"), "Progress: verified progress"),
+            ("info", Some("task-previous"), "Progress: OLD_PROGRESS"),
+            ("info", None, "Progress: UNATTRIBUTED_PROGRESS"),
+            (
+                "info",
+                Some("task-actual"),
+                "Command started: Progress: COMMAND_BODY",
+            ),
+            (
+                "info",
+                Some("task-actual"),
+                "Command finished: RAW_FAILED_COMMAND; exit 7",
+            ),
+            (
+                "warning",
+                Some("task-actual"),
+                "Cancellation requested; awaiting completion acknowledgement",
+            ),
+            (
+                "warning",
+                Some("task-previous"),
+                "Remote agent report: unknown; output 0 bytes",
+            ),
+        ];
+        slot.logs = records
+            .into_iter()
+            .enumerate()
+            .map(|(index, (level, task_id, text))| SlotLog {
+                level: level.into(),
+                task_id: task_id.map(str::to_owned),
+                text: text.into(),
+                ..log(index as u64 + 1)
+            })
+            .collect();
+        slot.progress = Some("verified progress".into());
+        for width in [1, 12, 46, 130] {
+            let lines = progress_lines(slot, width);
+            assert!(lines.iter().all(|(_, parts)| {
+                parts.iter().map(|(_, text)| text.width()).sum::<usize>() <= width
+            }));
+            if width > 1 {
+                let text = log_body(&lines);
+                for visible in [
+                    "verified progress",
+                    "Command exit 7",
+                    "Cancellation requested",
+                    "Earlier task",
+                    "unknown",
+                ] {
+                    assert!(text.contains(visible), "{width}: {text}");
+                }
+                for hidden in [
+                    "OLD_PROGRESS",
+                    "UNATTRIBUTED_PROGRESS",
+                    "COMMAND_BODY",
+                    "RAW_FAILED_COMMAND",
+                    "Latest report",
+                ] {
+                    assert!(!text.contains(hidden), "{width}: {text}");
+                }
+            }
+        }
+        slot.logs.clear();
+        let lines = progress_lines(slot, 46);
+        assert_eq!(log_body(&lines), "Latest report · verified progress");
+        assert!(
+            lines.iter().all(|(_, parts)| parts.len() == 1),
+            "retained text has no invented timestamp"
+        );
+        slot.progress = None;
+        slot.logs.push(SlotLog {
+            text: "Command started: COMMAND_ONLY".into(),
+            ..log(20)
+        });
+        assert_eq!(
+            log_body(&progress_lines(slot, 46)),
+            "Waiting for agent progress updates"
+        );
+    }
+
+    #[test]
+    fn progress_is_full_width_and_real_task_context_survives_small_frames() {
+        for (rows, cols) in [(18, 48), (28, 48), (32, 132)] {
+            for color in [false, true] {
+                let mut state = state(rows, cols, color);
+                let mut snapshot = snapshot();
+                let slot = &mut snapshot.slots[0];
+                slot.state = "working";
+                slot.task_id = Some("current-task".into());
+                slot.task_summary = Some("核对真实进度".into());
+                slot.progress = Some("已完成第一项检查".into());
+                slot.logs = vec![
+                    SlotLog {
+                        text: "Progress: 已完成第一项检查".into(),
+                        task_id: slot.task_id.clone(),
+                        ..log(1)
+                    },
+                    SlotLog {
+                        text: "Command started: RAW_COMMAND_DETAIL".into(),
+                        task_id: slot.task_id.clone(),
+                        ..log(2)
+                    },
+                ];
+                let frame = state.worker_frame(Some(&snapshot));
+                let text = screen(&frame).screen().contents();
+                assert!(
+                    text.contains("核对真实进度") && text.contains("已完成第一项检查"),
+                    "{rows}x{cols}: {text}"
+                );
+                for hidden in ["RAW_COMMAND_DETAIL", "OS PID", "CPU trend", "Work log"] {
+                    assert!(!text.contains(hidden), "{rows}x{cols}: {text}");
+                }
+                let view = state.worker_snapshot(true);
+                assert_eq!(view["worker_panels"][0]["view"], "progress");
+                assert_eq!(view["worker_panels"][0]["logs"]["cols"], cols);
+                state.keyboard(b"\x1bOQ", Instant::now(), false);
+                let text = screen(&state.worker_frame(Some(&snapshot)))
+                    .screen()
+                    .contents();
+                assert!(text.contains("RAW_COMMAND_DETAIL"), "{rows}x{cols}: {text}");
+                assert_eq!(
+                    state.worker_snapshot(true)["worker_panels"][0]["view"],
+                    "details"
+                );
+                state.keyboard(b"\x1bOQ", Instant::now(), false);
+                snapshot.slots[0].task_id = None;
+                snapshot.slots[0].state = "idle";
+                let text = screen(&state.worker_frame(Some(&snapshot)))
+                    .screen()
+                    .contents();
+                assert!(
+                    text.contains("No active task") && text.contains("Recent agent progress"),
+                    "{text}"
+                );
+                assert!(
+                    !text.contains("核对真实进度"),
+                    "a retained task summary is not a current assignment"
+                );
+                assert!(state.actions.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn progress_and_diagnostic_anchors_are_independent_across_task_changes() {
+        let mut state = state(24, 100, false);
+        let mut snapshot = populated();
+        let slot = &mut snapshot.slots[0];
+        slot.state = "working";
+        slot.task_id = Some("task-progress".into());
+        slot.logs = (1..40)
+            .map(|sequence| SlotLog {
+                task_id: Some("task-progress".into()),
+                text: if sequence % 2 == 0 {
+                    format!("Progress: update-{sequence}")
+                } else {
+                    format!("Command started: command-{sequence}")
+                },
+                ..log(sequence)
+            })
+            .collect();
+        state.worker_frame(Some(&snapshot));
+        state.keyboard(b"\x1b[H", Instant::now(), false);
+        state.worker_frame(Some(&snapshot));
+        let progress = state.worker.as_ref().unwrap().anchors[&0];
+        state.keyboard(b"\x1bOQ\x1b[5~", Instant::now(), false);
+        state.worker_frame(Some(&snapshot));
+        let logs = state.worker.as_ref().unwrap().anchors[&0];
+        assert_ne!(logs, progress);
+        state.keyboard(b"\x1bOQ", Instant::now(), false);
+        state.worker_frame(Some(&snapshot));
+        assert_eq!(state.worker.as_ref().unwrap().anchors[&0], progress);
+        state.keyboard(b"\t", Instant::now(), false);
+        state.worker_frame(Some(&snapshot));
+        assert_eq!(
+            state.worker_snapshot(true)["worker_panels"][0]["view"],
+            "progress"
+        );
+        state.keyboard(b"\x1b[Z\x1bOQ", Instant::now(), false);
+        state.worker_frame(Some(&snapshot));
+        assert_eq!(state.worker.as_ref().unwrap().anchors[&0], logs);
+        snapshot.slots[0].task_id = Some("next-task".into());
+        snapshot.slots[0].progress = None;
+        state.worker_frame(Some(&snapshot));
+        assert_eq!(state.worker.as_ref().unwrap().anchors[&0], logs);
+        state.keyboard(b"\x1bOQ", Instant::now(), false);
+        let text = screen(&state.worker_frame(Some(&snapshot)))
+            .screen()
+            .contents();
+        assert!(text.contains("Waiting for agent progress updates"));
+        assert!(!text.contains("update-"));
+        assert!(state.worker.as_ref().unwrap().panels[0].following);
+    }
+
+    #[test]
+    fn monitor_help_and_detail_keys_never_execute_inside_split_pastes() {
+        let bytes = b"\x1b[200~\x1bOP\x1bOQ\r\tt\x1b[201~";
+        for split in 0..=bytes.len() {
+            let mut state = state(18, 48, false);
+            state.worker_frame(Some(&snapshot()));
+            state.keyboard(&bytes[..split], Instant::now(), false);
+            state.keyboard(&bytes[split..], Instant::now(), false);
+            assert!(!state.worker.as_ref().unwrap().help);
+            assert!(!state.worker.as_ref().unwrap().showing_details(0));
+            assert!(state.worker.as_ref().unwrap().task_views.is_empty());
+            assert_eq!(state.worker.as_ref().unwrap().selected_slot(), Some(0));
+            state.keyboard(b"\x1bOP", Instant::now(), false);
+            let text = screen(&state.worker_frame(Some(&snapshot())))
+                .screen()
+                .contents();
+            assert!(
+                text.contains("F1 / Esc Back") && text.contains("F2"),
+                "{text}"
+            );
+            assert!(text.contains("Ctrl+R Reload") && text.contains("Ctrl+C Stop"));
+            state.keyboard(b"\x1bOP", Instant::now(), false);
+            assert!(!state.worker.as_ref().unwrap().help);
+            assert!(state.actions.is_empty());
+            assert!(state.conversation.composer.text().is_empty());
+        }
     }
 
     #[test]
@@ -2536,10 +3139,8 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let mut snapshot = populated();
         snapshot.slots[0].state = "working";
-        snapshot.slots[0].task_summary = Some(
-            "Worker layout fixture · verify readable task context and independently scrolling logs"
-                .into(),
-        );
+        snapshot.slots[0].task_summary =
+            Some("检查默认进度与日志详情，保留每个 worker 的阅读位置".into());
         snapshot.slots[0].task_text = Some(format!(
             "TASK_BEGIN 完整任务\n{}\nTASK_MIDDLE\n{}\nTASK_END",
             "检查实际布局 / inspect the real worker layout and preserve every instruction.\n"
@@ -2547,9 +3148,8 @@ mod tests {
             "保留独立日志位置 / keep independent log positions while reading task details.\n"
                 .repeat(24),
         ));
-        snapshot.slots[0].progress = Some(
-            "The isolated layout patch is ready for focused checks. Verify the tall, wide and narrow monitors, then return the source commit and visual evidence.".into(),
-        );
+        snapshot.slots[0].progress =
+            Some("默认页已显示真实进度；正在核对 48 列窗口和日志详情的切换。".into());
         snapshot.slots[0].last_command = Some(
             serde_json::json!(["python3", "-c", "print('isolated verification fixture')"])
                 .to_string(),
@@ -2579,6 +3179,7 @@ mod tests {
             ("info", "Progress: Inspecting the failed layout assertion before the next check.".into()),
             ("info", r#"Command started: ["git","diff","--check"]"#.into()),
             ("info", r#"Command finished: ["git","diff","--check"]; exit 0"#.into()),
+            ("info", "Progress: 默认页已显示真实进度；正在核对 48 列窗口和日志详情的切换。".into()),
         ];
         snapshot.slots[0].logs = records
             .into_iter()
@@ -2586,18 +3187,25 @@ mod tests {
             .map(|(index, (level, text))| SlotLog {
                 level: level.into(),
                 text,
+                task_id: Some("worker_task_layout_fixture_5".into()),
                 ..log(index as u64)
             })
             .collect();
         snapshot.slots[0].next_log_sequence = snapshot.slots[0].logs.len() as u64;
-        let mut views: Vec<_> = [(64, 112, "tall"), (32, 132, "wide"), (26, 60, "narrow")]
-            .into_iter()
-            .map(|(rows, cols, name)| {
-                let mut state = state(rows, cols, true);
-                state.worker_frame(Some(&snapshot));
-                (state, name)
-            })
-            .collect();
+        let mut views: Vec<_> = [
+            (64, 112, "tall"),
+            (32, 132, "wide"),
+            (26, 60, "narrow"),
+            (26, 48, "compact"),
+            (18, 48, "short"),
+        ]
+        .into_iter()
+        .map(|(rows, cols, name)| {
+            let mut state = state(rows, cols, true);
+            state.worker_frame(Some(&snapshot));
+            (state, name)
+        })
+        .collect();
         // Resource readings come from this test process; task and log text are fixtures.
         std::thread::sleep(Duration::from_millis(1100));
         let write = |name: &str, frame: &Frame| {
@@ -2619,13 +3227,23 @@ mod tests {
         for (mut state, name) in views.drain(..) {
             let frame = state.worker_frame(Some(&snapshot));
             write(name, &frame);
+            state.keyboard(b"\x1bOQ", Instant::now(), false);
+            let frame = state.worker_frame(Some(&snapshot));
+            write(&format!("{name}-logs-metrics"), &frame);
             if name == "wide" {
                 state.keyboard(b"\r", Instant::now(), false);
                 let frame = state.worker_frame(Some(&snapshot));
                 write("wide-command-detail", &frame);
                 state.keyboard(b"\r", Instant::now(), false);
             }
-            if matches!(name, "tall" | "narrow") {
+            state.keyboard(b"\x1bOQ", Instant::now(), false);
+            if name == "short" {
+                state.keyboard(b"\x1bOP", Instant::now(), false);
+                let frame = state.worker_frame(Some(&snapshot));
+                write("48-help", &frame);
+                state.keyboard(b"\x1bOP", Instant::now(), false);
+            }
+            if matches!(name, "tall" | "narrow" | "compact") {
                 state.keyboard(b"t", Instant::now(), false);
                 let frame = state.worker_frame(Some(&snapshot));
                 write(&format!("{name}-task-start"), &frame);
@@ -2634,6 +3252,30 @@ mod tests {
                 write(&format!("{name}-task-end"), &frame);
             }
         }
+        let slot = &mut snapshot.slots[0];
+        slot.progress = None;
+        slot.logs = vec![SlotLog {
+            text: "Command started: command text is available in the log detail".into(),
+            task_id: slot.task_id.clone(),
+            ..log(1)
+        }];
+        let mut state = state(18, 48, true);
+        write("48-waiting-progress", &state.worker_frame(Some(&snapshot)));
+        snapshot.slots[0].logs.extend([
+            SlotLog {
+                level: "warning".into(),
+                text: "Cancellation requested; awaiting completion acknowledgement".into(),
+                task_id: Some("worker_task_layout_fixture_5".into()),
+                ..log(2)
+            },
+            SlotLog {
+                level: "warning".into(),
+                text: "Remote agent report: unknown; output 0 bytes".into(),
+                task_id: Some("previous-task".into()),
+                ..log(3)
+            },
+        ]);
+        write("48-alerts", &state.worker_frame(Some(&snapshot)));
     }
     #[test]
     fn worker_full_task_view_reaches_the_end_and_restores_independent_logs() {

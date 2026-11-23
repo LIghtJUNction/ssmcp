@@ -329,7 +329,8 @@ jobs:
   finalize:
     needs: [validate, checks, build, verify_linux_runtime, gui]
     # A legacy source with no GUI clients intentionally skips the reusable job.
-    # An apps-present source must succeed on every selected native platform.
+    # An apps-present source must succeed on every native platform, including
+    # the Linux Release executable's actual Xvfb window check.
     if: >-
       ${{ !cancelled() && needs.validate.result == 'success' &&
           needs.checks.result == 'success' && needs.build.result == 'success' &&
@@ -377,7 +378,7 @@ jobs:
       - name: Verify the application source package and normalized registry graph
         if: needs.validate.outputs.publish == 'true' && needs.validate.outputs.crate_publication == 'registry'
         run: python scripts/release.py verify-crate
-      - name: Require every verified target archive and record the release manifest
+      - name: Require every CLI archive, GUI asset and source receipt
         run: |
           cp scripts/install.sh scripts/install.ps1 dist/
           if [[ "$RELEASE_CONTRACT" == git-source-v1 && "$BUILD_ONLY" == true ]]; then

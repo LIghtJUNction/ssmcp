@@ -626,6 +626,12 @@ def package(target, root=None):
 
 
 GUI_CLIENTS = {
+    "linux": {
+        "directory": "apps/ssmcp-desktop", "entry": "Cargo.toml",
+        "asset": "ssmcp-desktop-x86_64-unknown-linux-gnu-release.tar.gz",
+        "target": "x86_64-unknown-linux-gnu", "profile": "release",
+        "scope": "Native Release build and Rust tests; mapped X11/OpenGL window under Xvfb/Mesa llvmpipe. No live session interaction.",
+    },
     "windows": {
         "directory": "apps/ssmcp-desktop", "entry": "Cargo.toml",
         "asset": "ssmcp-desktop-x86_64-pc-windows-msvc-debug.zip",
@@ -686,15 +692,58 @@ def validate_android_instrumentation(text):
 def validate_gui_test_log(platform, text):
     if platform == "android":
         validate_android_instrumentation(text)
-    elif platform == "windows":
+    elif platform in {"linux", "windows"}:
         passed = re.findall(r"test result: ok\. (\d+) passed;", text)
-        if not passed or max(map(int, passed)) == 0:
-            raise ValueError("Windows Cargo log does not contain any passing native tests")
+        if not passed or max(map(int, passed)) == 0 or "test result: FAILED." in text:
+            raise ValueError(f"{platform} Cargo log does not contain a successful nonempty native test run")
     else:
         summaries = re.findall(r"Executed (\d+) tests?, with (\d+) failures", text)
         if (not summaries or max(int(count) for count, _ in summaries) == 0
                 or any(int(failed) for _, failed in summaries)):
             raise ValueError("iOS XCTest log does not contain a successful nonempty test run")
+
+
+def validate_linux_gui_window(window, source_commit):
+    expected = {"source_commit": source_commit, "target": GUI_CLIENTS["linux"]["target"],
+                "profile": "release", "backend": "x11-opengl", "renderer": "llvmpipe",
+                "title": "ssmcp-desktop · 本地工作台", "mapped": True, "exit_after_ms": 10000,
+                "exit_code": 0}
+    if (not isinstance(window, dict) or any(window.get(key) != value for key, value in expected.items())
+            or window.get("mapped") is not True
+            or any(type(window.get(key)) is not int for key in
+                   ("exit_after_ms", "exit_code", "elapsed_ms", "width", "height", "binary_bytes"))
+            or not 10000 <= window["elapsed_ms"] < 30000
+            or window["width"] <= 0 or window["height"] <= 0 or window["binary_bytes"] < 20
+            or not re.fullmatch(r"[0-9a-f]{64}", str(window.get("binary_sha256", "")))):
+        raise ValueError("Linux GUI requires a successful bounded native window receipt for this Release source")
+
+
+def validate_linux_gui_executable(stream):
+    header = stream.read(20)
+    if (len(header) < 20 or header[:6] != b"\x7fELF\x02\x01"
+            or int.from_bytes(header[18:20], "little") != 62):
+        raise ValueError("the Linux GUI build must provide an x86_64 ELF executable")
+
+
+def verify_linux_gui_archive(archive, source, window):
+    """Bind the published executable and source proof to the actual window probe."""
+    with tarfile.open(archive, "r:gz") as package:
+        members = package.getmembers()
+        expected = {"ssmcp-desktop", "README.md", "LICENSE", "build-source.json"}
+        if (len(members) != len(expected) or {member.name for member in members} != expected
+                or not all(member.isfile() for member in members)):
+            raise ValueError("Linux GUI archive must contain only the executable, instructions, license and source proof")
+        binary = package.getmember("ssmcp-desktop")
+        if binary.size != window["binary_bytes"] or binary.mode != 0o755:
+            raise ValueError("Linux GUI archive differs from the executable tested in the native window")
+        with package.extractfile(binary) as stream:
+            validate_linux_gui_executable(stream)
+        with package.extractfile(binary) as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != window["binary_sha256"]:
+                raise ValueError("Linux GUI archive differs from the executable tested in the native window")
+        with package.extractfile("build-source.json") as stream:
+            if json.load(stream) != source:
+                raise ValueError("Linux GUI archived source proof differs from the release checkout")
 
 
 def package_gui(platform, evidence, binary=None, root=None):
@@ -733,6 +782,14 @@ def package_gui(platform, evidence, binary=None, root=None):
                             if path.is_file() and not path.is_symlink()
                             and (path.suffix == ".log" or path.name == "result.json")},
                "asset": None}
+    if platform == "linux":
+        for name in ("window.json", "window.log", "xwininfo.log", "renderer.log"):
+            path = evidence / name
+            if path.is_symlink() or not path.is_file() or (name != "window.log" and not path.stat().st_size):
+                raise ValueError(f"missing Linux native window evidence: {name}")
+            receipt["evidence"][name] = digest(path)
+        receipt["window"] = json.loads((evidence / "window.json").read_text(encoding="utf-8"))
+        validate_linux_gui_window(receipt["window"], source["commit"])
     output = root / "dist"
     output.mkdir(exist_ok=True)
     if spec["asset"]:
@@ -740,19 +797,28 @@ def package_gui(platform, evidence, binary=None, root=None):
             raise ValueError("the successful build must provide a regular GUI executable")
         binary = Path(binary)
         archive = output / spec["asset"]
-        if platform == "windows":
+        if platform in {"linux", "windows"}:
             with binary.open("rb") as stream:
-                signature = stream.read(2)
-            if signature != b"MZ":
-                raise ValueError("the Windows GUI build must provide a PE executable")
+                if platform == "linux":
+                    validate_linux_gui_executable(stream)
+                elif stream.read(2) != b"MZ":
+                    raise ValueError("the Windows GUI build must provide a PE executable")
+            if platform == "linux" and (digest(binary) != receipt["window"]["binary_sha256"]
+                                         or binary.stat().st_size != receipt["window"]["binary_bytes"]):
+                raise ValueError("Linux GUI executable changed after its native window check")
             epoch = int(command("git", "show", "-s", "--format=%ct", "HEAD", cwd=root))
             with tempfile.TemporaryDirectory(prefix="ssmcp-desktop-package-") as temporary:
                 stage = Path(temporary)
-                shutil.copyfile(binary, stage / "ssmcp-desktop.exe")
+                executable = stage / ("ssmcp-desktop.exe" if platform == "windows" else "ssmcp-desktop")
+                shutil.copyfile(binary, executable)
+                if platform == "linux":
+                    executable.chmod(0o755)
                 shutil.copyfile(root / "LICENSE", stage / "LICENSE")
                 shutil.copyfile(root / spec["directory"] / "README.md", stage / "README.md")
                 (stage / "build-source.json").write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
                 write_archive(stage, archive, epoch)
+            if platform == "linux":
+                verify_linux_gui_archive(archive, source, receipt["window"])
         else:
             with zipfile.ZipFile(binary) as apk:
                 if not {"AndroidManifest.xml", "classes.dex"} <= set(apk.namelist()):
@@ -806,6 +872,11 @@ def verified_gui_receipts(root, source):
                           if artifact is not None else None)
         if receipt.get("asset") != expected_asset:
             raise ValueError(f"GUI artifact does not match its successful build: {platform}")
+        if platform == "linux":
+            validate_linux_gui_window(receipt.get("window"), source["commit"])
+            if not {"window.json", "window.log", "xwininfo.log", "renderer.log"} <= evidence.keys():
+                raise ValueError("Linux native window evidence hashes are missing")
+            verify_linux_gui_archive(artifact, expected_source, receipt["window"])
         receipts.append(receipt)
     return receipts
 
