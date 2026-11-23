@@ -187,9 +187,9 @@ fn native_limits(chat_enabled: bool) -> Value {
             "formats":["image/png","image/jpeg","image/gif","image/webp"]
         },
         "command_jobs":{
-            "default_wait_ms":null,
-            "max_wait_ms":null,
-            "max_output_read_wait_ms":60000,
+            "default_wait_ms":crate::wire::MAX_OBSERVATION_WAIT_MS,
+            "max_wait_ms":crate::wire::MAX_OBSERVATION_WAIT_MS,
+            "max_output_read_wait_ms":crate::wire::MAX_OBSERVATION_WAIT_MS,
             "default_command_timeout_ms":0,
             "max_command_timeout_ms":null,
             "max_running_per_client":32,
@@ -324,7 +324,12 @@ impl Runtime {
         manifest["thread_scope"] = json!(1);
         manifest["tool_sources"] = json!({"schema":1,"uri":crate::tool_repository::URI,"selection":"explicit authorized client; RC registered sources only"});
         manifest["chat_enabled"] = json!(self.chat_enabled());
-        manifest["timing"] = json!({"primitives_available":self.time.time_tools_enabled()});
+        manifest["timing"] = json!({
+            "primitives_available":self.time.time_tools_enabled(),
+            "required_capability":crate::wire::wait_display::TIME_CAPABILITY,
+            "max_timer_observation_ms":crate::wire::MAX_OBSERVATION_WAIT_MS,
+            "wait_display_capability":crate::wire::wait_display::CAPABILITY
+        });
         if self.chat_enabled() {
             manifest["listener"] = json!({
                 "tool":"ssmcp.ui.listener", "scope":"authenticated account and bound thread",
@@ -340,7 +345,7 @@ impl Runtime {
         manifest["code_mode"] = json!({
             "call":"call(clientId, nativeToolName, arguments)",
             "discovery":"tools.search(clientId, {query, name_prefix, include_schemas:true})",
-            "dynamic_api":"native(clientId).ssmcp.computer.version({})",
+            "dynamic_api":"call(clientId, nativeToolName, arguments)",
             "routing":"client_registry","server_provider_catalog":false
         });
         bounded(manifest)
@@ -456,7 +461,7 @@ impl Runtime {
 }
 
 const GUIDE: &str = "# Using ssmcp\n\n\
-Read this client's capability manifest through capabilities(clientId), and resources.forClient(clientId).list()/templates()/read(uri) for its current versioned resource API. After discovering a native schema, native(clientId) builds its dotted API dynamically without a relay update. call(clientId,name,args) remains supported on older relays.\n\n\
+Read this client's capability manifest with call(clientId,'ssmcp.client.capabilities',{}). Inspect isError before structuredContent. Use resources.forClient(clientId).list()/templates()/read(uri) for its current resource API. Discover schemas, then call(clientId,name,args) using the exact registered name; removed convenience namespaces have no fallback.\n\n\
 Clients connect outbound over HTTPS/WebSocket or SSH. Read ssmcp://clients for the clients currently available to your identity and endpoint. \
 A client id identifies one live connection; names are labels, title is optional operator-supplied \
 task context, and cwd is its startup directory. Select the intended task by title, then dispatch by id.\n\n\
@@ -469,7 +474,7 @@ Restart listing without a cursor if a snapshot expires or is evicted. \
 Do not invent tool names or backend arguments.\n\n\
 For multiple agents sharing one client, call the direct collab tool with action join and client_id. \
 Save its agent_id and private token, discover peers with list, send JSON payloads to an agent_id or '*' \
-and receive with wait_ms up to 30000. Receive is non-destructive; ack through next_cursor only after \
+and receive with wait_ms up to 55000. Receive is non-destructive; ack through next_cursor only after \
 processing the returned messages. Direct waits do not occupy code_mode workers. The collab.* helpers \
 inside code_mode accept clientId first and limit receive waits to 1000ms. Read ssmcp://collaboration \
 for identity binding, retry deduplication, queue bounds and the connection lifetime.\n\n\
@@ -481,41 +486,39 @@ await tools(clientId, cursor), print/console.log and an explicit return. \
 Short native results are returned unchanged. Long backend output returns artifact metadata in \
 structuredContent; inspect isError, spilled and capture completeness before claiming success. \
 Use outputs.read for raw PTY bytes or the in-memory MCP JSON of other oversized backend results.\n\n\
-SSMCP does not embed desktop or browser control. Use the standalone Zuse CLI directly for those operations. The computer namespace only manages that CLI: computer.version(clientId), computer.download(clientId,{version}), computer.install(clientId,{download_id}) and computer.uninstall(clientId,{installation_id}). Omit version to download the latest stable release for the client's platform. Downloading does not execute or install it. Installation uses only an opaque managed download_id and returns its exact path; it does not replace an external Zuse executable or add itself to PATH. Version queries prefer an existing Zuse CLI on PATH. Uninstall requires the installation_id and removes only an unchanged managed installation. These helpers return complete native MCP results; inspect isError and structuredContent. There is no browser, cua or omarchy convenience facade and no automatic control fallback.\n\n\
+Use the standalone Zuse CLI for desktop or browser automation. Discover ssmcp.computer.* schemas, then use call(clientId,'ssmcp.computer.version',{}), call(clientId,'ssmcp.computer.download',{version}), call(clientId,'ssmcp.computer.install',{download_id}) or call(clientId,'ssmcp.computer.uninstall',{installation_id}) to manage that CLI. Omit version to download the latest stable release for the client's platform. Downloading does not execute or install it. Installation uses only an opaque managed download_id and returns its exact path; it does not replace an external Zuse executable or add itself to PATH. Version queries prefer an existing Zuse CLI on PATH. Uninstall requires the installation_id and removes only an unchanged managed installation. These calls return complete native MCP results; inspect isError and structuredContent. There is no browser, cua or omarchy convenience facade and no automatic control fallback.\n\n\
 Use image(nativeResult) for visible MCP image content from a registered tool, then return only metadata. Do not print image base64. Generic image output and ui.present remain available independently of Zuse installation.\n\n\
-Use exec.run(clientId,{command:[\"cargo\",\"test\"],wait_ms:5000}) for an independent \
+Use exec.run(clientId,{command:[\"cargo\",\"test\"],wait_ms:1000}) for an independent \
 command with bounded waiting and output. It returns job_id, running, exit_code, stdout, stderr, \
-incremental cursors and a snapshot containing output artifact metadata. wait_ms is 0..60000 \
-and only limits waiting; the command keeps running when this wait expires. Set code_mode \
-timeout_ms above wait_ms. A command timeout_ms of 0, the default, has no time limit; a positive \
+incremental cursors and a snapshot containing output artifact metadata. wait_ms is 0..55000 \
+and only limits waiting; the command keeps running when this wait expires. Keep the enclosing code_mode \
+timeout within 55000 ms and reserve time for other work; use public await when only waiting remains. A command timeout_ms of 0, the default, has no time limit; a positive \
 timeout_ms terminates the process tree after that interval.\n\n\
-Use rtk.status(clientId) to check the installed RTK version. rtk.run(clientId,{command:[\"git\",\"status\"],cwd:\".\"}) \
-executes literal RTK argv and returns the same job, output and exit-code fields as exec.run. \
-rtk.start creates a background job managed through exec.read/wait/cancel. Command arguments \
-exclude the rtk prefix; compression follows RTK subcommands. RTK recall and tee hints remain \
-in output. Missing RTK fails without automatic installation or rerunning the original command.\n\n\
+Use exec.run(clientId,{command:[\"rtk\",\"--version\"],wait_ms:1000}) to inspect RTK. \
+Run literal argv such as [\"rtk\",\"git\",\"status\"] through exec.run or exec.start. \
+RTK recall and tee hints remain in output. Missing RTK returns its actual launch error; no automatic installation or replay occurs.\n\n\
 Use exec.start(clientId,options) to launch background work, exec.list(clientId) to find jobs, \
 exec.status(clientId,jobId) to inspect one, or call(clientId,\"ssmcp.exec.wait\",{job_id:jobId}) \
-for a native completion wait without a tool-level deadline. Code Mode and relay transport have separate deadlines. \
+for a native observation window of at most 55000 ms (also the default); wait_ms:0 returns immediately. A pending receipt retains the same job_id. Resume observation through public await or another bounded wait without starting the command again. Code Mode and relay transport have separate deadlines. \
 Use exec.read(clientId,jobId,{stdout_cursor,stderr_cursor,max_bytes}) to read new output. \
 Each stream has its own byte cursor. exec.cancel stops a running process tree; exec.forget \
 releases a completed job's retained state. These command jobs survive code_mode completion \
 and stop when the client disconnects or reloads. Each client permits 32 running jobs and \
 retains up to 128 records, evicting the oldest completed job when a new start needs room.\n\n\
 Use exec.parallel(clientId,[{command:[\"cargo\",\"test\"]},{command:[\"git\",\"status\"]}], \
-{concurrency:4}) for up to 32 commands and 1..8 workers. A worker retains its slot until \
-the process actually completes, including after a short initial wait. Results retain input \
-order and use fulfilled/value or rejected/reason records. Observation errors retain job_id \
-when available and stop that worker; queued commands that never launched have not_started:true. \
-Inspect each exit_code. Polls count toward the 128-call and outer timeout budgets; use \
-exec.start for long-lived services. Parallel reads default to 2048 bytes per stream.\n\n\
+{concurrency:4,wait_ms:1000}) for up to 32 commands and 1..8 slots. The entire batch shares \
+one observation budget (default 1000 ms, maximum 55000 ms), including launch latency. \
+Each launched job receives at most one wait and an immediate read. A running or unknown job \
+keeps its slot; remaining commands return not_started:true. Results preserve input order, \
+job_id, stream cursors and actual running state. Inspect every fulfilled/value or rejected/reason \
+entry. Continue original jobs with exec.read or public await; no command is implicitly cancelled or repeated.\n\n\
 Start with stdin set to pipe to accept input. exec.write(clientId,jobId,{data,close_stdin:true}) \
 writes bounded UTF-8 (or data_base64) and sends EOF only after every submitted byte was written. \
 Inspect written, remaining_bytes and timed_out before retrying only the unwritten tail. \
 Cancellation and execution deadlines interrupt blocked input without blocking other jobs.\n\n\
-Use terminal.open/list/select/close for independent interactive shells. read/write/status/resize \
+Discover registered terminal.* schemas and call exact names, such as call(clientId,'terminal.list',{}), for independent interactive shells. read/write/status/resize \
 accept terminal_id; omitting it always targets main. Up to 16 terminals keep separate cwd, \
-state, output cursors and display buffers. Select a terminal through terminal.select, or use \
+state, output cursors and display buffers. Select a terminal with call(clientId,'terminal.select',{terminal_id}), or use \
 ssmcp -i for direct interactive control. Dashboard keys belong to the composer and UI; Ctrl+O \
 opens source audit, and wheel/PageUp/PageDown scroll logs directly. Background terminals keep \
 running. Close extra terminals when done.\n\n\
@@ -524,9 +527,16 @@ ui.set(clientId,{patch,persist}) changes appearance, ui.filter(clientId,{text,le
 and ui.action(clientId,{action}) performs one navigation or configuration action. Discover \
 ssmcp.ui.* schemas for supported values. \
 Use public await to observe typed jobs, agents and messages without a JavaScript worker. \
-waitFor(clientId,args) uses that coordinator inside code_mode. Resume an observation with the \
+waitFor(clientId,args) uses one observation of at most 1000 ms inside code_mode. Resume an observation with the \
 server-issued wait_id. Cancellation only stops observation. ssmcp.ui.events paginates bounded \
 events from the current process; exit or reload clears them. Read images with ssmcp.fs.read_image, then image(result).\n\n\
+Use events.subscribe/read/wait/ack/unsubscribe/subscriptions/publish/policy for the shared event journal. \
+Each JavaScript helper dispatches once; events.wait is limited to 1000 ms. Direct public events and await \
+observe for at most 55000 ms without occupying a JavaScript worker. Keep the same wait_id across pending \
+windows, process buffered events, then acknowledge their event and await result cursors explicitly. \
+Subscriptions do not grant another client's private message audience. A coordinator can change the \
+main-thread idle-wait hint with events.policy; after independent work, observe both user input and \
+worker progress/completion. Unknown operations keep their original identity and are never automatically replayed.\n\n\
 A custom frontend can read ssmcp.audit.events for source lifecycle events and ssmcp.exec.events \
 for command output/results. Full code_mode source goes only to actual authorized target clients; \
 the client applies audit redaction before retaining source in bounded process memory. The local \
@@ -536,7 +546,7 @@ Use the code_mode controller parameter with name and/or model to identify the ca
 request preserves its own declaration; the client displays active and last controllers. Models \
 are caller-reported, while MCP clientInfo supplies only the application name. Missing models \
 display unknown. list reports controller_metadata; v4 clients require an update to display it.\n\n\
-Use await reload(clientId) after installing an updated client binary. The client acknowledges \
+Use await call(clientId,'ssmcp.client.reload',{}) after installing an updated client binary. The client acknowledges \
 the request, waits for the server's receipt, stops local background work, and executes its \
 installed entry point with the original arguments, cwd and environment. In-flight requests \
 must finish first. Call list again for the new ID. Connections reconnect using the same login or server-qualified --allow policy. Both client and server must support reload.\n\n\
@@ -601,6 +611,23 @@ fn client_guide(chat_enabled: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_limits_describe_observation_windows_separately_from_execution() {
+        let limits = native_limits(true);
+        for name in ["default_wait_ms", "max_wait_ms", "max_output_read_wait_ms"] {
+            assert_eq!(
+                limits["command_jobs"][name],
+                crate::wire::MAX_OBSERVATION_WAIT_MS
+            );
+        }
+        assert_eq!(limits["command_jobs"]["default_command_timeout_ms"], 0);
+        assert!(limits["command_jobs"]["max_command_timeout_ms"].is_null());
+        let guide = client_guide(true);
+        assert!(!guide.contains("wait_ms is 0..60000"));
+        assert!(!guide.contains("receive with wait_ms up to 30000"));
+        assert!(guide.contains("same job_id"));
+    }
 
     #[test]
     fn client_catalog_paginates_and_rejects_stale_or_changed_page_sizes() {

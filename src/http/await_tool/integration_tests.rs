@@ -70,6 +70,19 @@ impl Fixture {
             .clone()
     }
 
+    async fn events(&self, member: &Value, mut value: Value) -> Result<Value, String> {
+        value["client_id"] = json!(self.session.client_id());
+        value["agent_id"] = member["agent_id"].clone();
+        value["token"] = member["token"].clone();
+        super::super::events_tool::dispatch(
+            self.broker.clone(),
+            "mcp".into(),
+            self.token.clone(),
+            value,
+        )
+        .await
+    }
+
     async fn raw(&self, run: code_mode::AuditRun, member: &Value, value: Value) -> Value {
         code_mode::AUDIT_RUN
             .scope(
@@ -280,6 +293,341 @@ async fn windowed_await_replays_one_completed_snapshot_until_acknowledged() {
     )
     .await;
     assert!(error.unwrap_err().contains("expired"));
+}
+
+#[tokio::test]
+async fn windowed_all_keeps_ready_results_and_messages_published_between_windows() {
+    let fixture = Fixture::new().await;
+    fixture.update(&fixture.peer, "done").await;
+    let first = fixture
+        .public(
+            &fixture.member,
+            json!({"mode":"all","window_ms":1000,"targets":[
+                {"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["done"]},
+                {"type":"agent_messages"},
+            ]}),
+        )
+        .await;
+    assert_eq!(first["status"], "pending");
+    assert_eq!(first["cursor"], 0);
+    assert_eq!(first["results"][0]["status"], "ready");
+    assert_eq!(first["results"][1]["status"], "pending");
+    let id = first["wait_id"].as_str().unwrap();
+    assert_eq!(
+        *fixture.record(id).observation_state.lock().unwrap(),
+        ObservationState::Resumed
+    );
+    fixture
+        .update(&fixture.peer, "changed_after_observation")
+        .await;
+    fixture
+        .session
+        .collaboration
+        .dispatch(
+            &fixture.owner,
+            "send",
+            json!({"agent_id":fixture.peer["agent_id"],"token":fixture.peer["token"],
+                "to":fixture.member["agent_id"],"payload":{"task":"gap_result"}}),
+        )
+        .await
+        .unwrap();
+    let ready = tokio::time::timeout(
+        Duration::from_secs(2),
+        fixture.public(
+            &fixture.member,
+            json!({"wait_id":id,"window_ms":MAX_OBSERVATION_WAIT_MS,"after":0}),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["wait_id"], id);
+    assert_eq!(ready["cursor"], 1);
+    assert_eq!(ready["results"][0], first["results"][0]);
+    assert_eq!(
+        ready["results"][1]["data"]["messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        *fixture.record(id).observation_state.lock().unwrap(),
+        ObservationState::Completed
+    );
+    let replay = fixture
+        .public(&fixture.member, json!({"wait_id":id,"after":0}))
+        .await;
+    assert_eq!(replay["results"], ready["results"]);
+    let acknowledged = fixture
+        .public(&fixture.member, json!({"wait_id":id,"after":1}))
+        .await;
+    assert_eq!(acknowledged["acknowledged"], true);
+    let inbox = fixture
+        .session
+        .collaboration
+        .receive(
+            &fixture.owner,
+            fixture.member["agent_id"].as_str().unwrap(),
+            fixture.member["token"].as_str().unwrap(),
+            None,
+            32,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(inbox["acked_cursor"], 0);
+    assert_eq!(inbox["messages"], ready["results"][1]["data"]["messages"]);
+}
+
+#[tokio::test]
+async fn event_targets_keep_gap_events_and_await_ack_does_not_ack_subscriptions() {
+    let fixture = Fixture::new().await;
+    let mut subscriptions = Vec::new();
+    for name in ["first", "second"] {
+        let subscription = fixture
+            .events(
+                &fixture.member,
+                json!({"action":"subscribe","request_id":format!("subscribe_{name}"),
+                    "filter":{"kinds":[format!("custom.{name}")]}}),
+            )
+            .await
+            .unwrap();
+        subscriptions.push(subscription["subscription_id"].as_str().unwrap().to_owned());
+    }
+    fixture
+        .events(
+            &fixture.member,
+            json!({"action":"publish","request_id":"publish_first",
+                "name":"custom.first","data":{"phase":"before_window"}}),
+        )
+        .await
+        .unwrap();
+    let first = fixture
+        .public(
+            &fixture.member,
+            json!({"mode":"all","window_ms":1000,"targets":[
+                {"type":"event","subscription_id":subscriptions[0]},
+                {"type":"event","subscription_id":subscriptions[1]},
+            ]}),
+        )
+        .await;
+    assert_eq!(first["status"], "pending");
+    assert_eq!(first["results"][0]["status"], "ready");
+    assert_eq!(first["results"][1]["status"], "pending");
+    let id = first["wait_id"].as_str().unwrap();
+    fixture
+        .events(
+            &fixture.member,
+            json!({"action":"publish","request_id":"publish_second",
+                "name":"custom.second","data":{"phase":"between_windows"}}),
+        )
+        .await
+        .unwrap();
+    let ready = tokio::time::timeout(
+        Duration::from_secs(2),
+        fixture.public(
+            &fixture.member,
+            json!({"wait_id":id,"window_ms":MAX_OBSERVATION_WAIT_MS,"after":0}),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["wait_id"], id);
+    assert_eq!(ready["cursor"], 1);
+    assert_eq!(ready["results"][0], first["results"][0]);
+    for index in 0..2 {
+        assert_eq!(
+            ready["results"][index]["data"]["events"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    let replay = fixture
+        .public(&fixture.member, json!({"wait_id":id,"after":0}))
+        .await;
+    assert_eq!(replay["results"], ready["results"]);
+    let acknowledged = fixture
+        .public(&fixture.member, json!({"wait_id":id,"after":1}))
+        .await;
+    assert_eq!(acknowledged["acknowledged"], true);
+    for (index, subscription_id) in subscriptions.iter().enumerate() {
+        let unacknowledged = fixture
+            .events(
+                &fixture.member,
+                json!({"action":"read","subscription_id":subscription_id}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            unacknowledged["events"],
+            ready["results"][index]["data"]["events"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn event_source_binding_revocation_withholds_final_delivery_and_cached_replays() {
+    let fixture = Fixture::new().await;
+    let source = fixture
+        .broker
+        .test_register_identity(
+            "fixture-pool",
+            Identity {
+                provider: "github".into(),
+                subject: "42".into(),
+                login: "alice".into(),
+            },
+        )
+        .await;
+    let source_member = source
+        .collaboration
+        .dispatch(&fixture.owner, "join", json!({"name":"pool-observer"}))
+        .await
+        .unwrap();
+    let subscription = fixture
+        .events(
+            &fixture.member,
+            json!({"action":"subscribe","request_id":"subscribe_pool",
+                "filter":{"client_ids":[source.client_id()],"kinds":["custom.done"]},
+                "source_agents":[{"client_id":source.client_id(),
+                    "agent_id":source_member["agent_id"],"token":source_member["token"]}]}),
+        )
+        .await
+        .unwrap();
+    let subscription_id = subscription["subscription_id"].as_str().unwrap();
+    super::super::events_tool::dispatch(
+        fixture.broker.clone(),
+        "mcp".into(),
+        fixture.token.clone(),
+        json!({"action":"publish","client_id":source.client_id(),
+            "agent_id":source_member["agent_id"],"token":source_member["token"],
+            "request_id":"publish_pool","name":"custom.done","data":{"task":"pool_task"}}),
+    )
+    .await
+    .unwrap();
+    let run = code_mode::AuditRun::new("await pool events", None).unwrap();
+    let ready = fixture
+        .raw(
+            run.clone(),
+            &fixture.member,
+            json!({"window_ms":1000,"targets":[{"type":"event","subscription_id":subscription_id}]}),
+        )
+        .await;
+    assert_eq!(ready["status"], "ready");
+    let id = ready["wait_id"].as_str().unwrap();
+    source
+        .collaboration
+        .dispatch(
+            &fixture.owner,
+            "leave",
+            json!({"agent_id":source_member["agent_id"],"token":source_member["token"]}),
+        )
+        .await
+        .unwrap();
+    let response = finish_passive_response(
+        &fixture.report(run),
+        fixture.session.client_id(),
+        ready.clone(),
+    )
+    .await;
+    assert_eq!(response["structuredContent"]["status"], "unauthorized");
+    assert!(
+        response["structuredContent"]["results"][0]
+            .get("data")
+            .is_none()
+    );
+    for after in [0, 1] {
+        let denied = fixture
+            .public(&fixture.member, json!({"wait_id":id,"after":after}))
+            .await;
+        assert_eq!(denied["status"], "unauthorized");
+        assert!(denied["results"][0].get("data").is_none());
+    }
+    assert!(!fixture.record(id).acknowledged.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn event_target_does_not_wake_on_its_own_wait_lifecycle() {
+    let fixture = Fixture::new().await;
+    let subscription = fixture
+        .events(
+            &fixture.member,
+            json!({"action":"subscribe","request_id":"subscribe_waits", "filter":{
+                "kinds":["wait.suspended","wait.resumed"],"include_own_waits":true}}),
+        )
+        .await
+        .unwrap();
+    let subscription_id = subscription["subscription_id"].as_str().unwrap();
+    let started = std::time::Instant::now();
+    let first = fixture
+        .public(
+            &fixture.member,
+            json!({"window_ms":1000,"targets":[{"type":"event","subscription_id":subscription_id}]}),
+        )
+        .await;
+    assert_eq!(first["status"], "pending");
+    let id = first["wait_id"].as_str().unwrap();
+    let second = fixture
+        .public(&fixture.member, json!({"wait_id":id,"window_ms":1000}))
+        .await;
+    assert_eq!(second["status"], "pending");
+    assert_eq!(second["wait_id"], id);
+    assert!(started.elapsed() >= Duration::from_millis(1800));
+    let lifecycle = fixture
+        .events(
+            &fixture.member,
+            json!({"action":"read","subscription_id":subscription_id}),
+        )
+        .await
+        .unwrap();
+    let events = lifecycle["events"].as_array().unwrap();
+    assert_eq!(events.len(), 4);
+    assert!(
+        events
+            .iter()
+            .all(|event| event["data"]["origin_wait_id"] == id)
+    );
+}
+
+#[tokio::test]
+#[ignore = "real 55-second observation window"]
+async fn fifty_five_second_window_returns_pending_and_resumes_the_original_wait() {
+    let fixture = Fixture::new().await;
+    let started = std::time::Instant::now();
+    let first = tokio::time::timeout(
+        Duration::from_secs(58),
+        fixture.public(
+            &fixture.member,
+            json!({"window_ms":55_000,"targets":[
+                {"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["done"]},
+            ]}),
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(started.elapsed() >= Duration::from_secs(54));
+    assert!(started.elapsed() < Duration::from_secs(56));
+    assert_eq!(first["status"], "pending");
+    assert_eq!(first["cursor"], 0);
+    let id = first["wait_id"].as_str().unwrap();
+    fixture.update(&fixture.peer, "done").await;
+    let ready = tokio::time::timeout(
+        Duration::from_secs(2),
+        fixture.public(&fixture.member, json!({"wait_id":id,"window_ms":55_000})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ready["wait_id"], id);
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["cursor"], 1);
+    let replay = fixture
+        .public(&fixture.member, json!({"wait_id":id,"after":0}))
+        .await;
+    assert_eq!(replay["results"], ready["results"]);
 }
 
 #[tokio::test]
@@ -516,6 +864,10 @@ async fn final_delivery_timeout_or_busy_keeps_the_same_observation_resumable() {
         assert_eq!(ready["status"], "ready");
         let id = ready["wait_id"].as_str().unwrap();
         assert!(fixture.record(id).terminal.load(Ordering::Acquire));
+        assert_eq!(
+            *fixture.record(id).observation_state.lock().unwrap(),
+            ObservationState::Resumed
+        );
         let report = fixture.report(run.clone());
         let eligible = eligible_user_response(&report).await.unwrap();
         // This is the genuine post-observation/pre-commit window. A late local
@@ -523,11 +875,19 @@ async fn final_delivery_timeout_or_busy_keeps_the_same_observation_resumable() {
         run.finish_wait_state(fixture.session.client_id(), outcome, "late_wait_result");
         commit_user_response(&report, tool_result(Ok(ready.clone())), eligible);
         assert!(!fixture.record(id).terminal.load(Ordering::Acquire));
+        assert_eq!(
+            *fixture.record(id).observation_state.lock().unwrap(),
+            ObservationState::Resumed
+        );
         assert_eq!(fixture.state("reserved"), SteeringState::Queued);
         let resumed = fixture.public(&fixture.member, json!({"wait_id":id})).await;
         assert_eq!(resumed["status"], "ready");
         assert_eq!(resumed["wait_id"], id);
         assert_eq!(resumed["user_wait"][0]["status"], "received");
+        assert_eq!(
+            *fixture.record(id).observation_state.lock().unwrap(),
+            ObservationState::Completed
+        );
     }
 }
 

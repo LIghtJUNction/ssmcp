@@ -227,7 +227,7 @@ async fn real_probe_error_and_revocation_leave_the_original_response_intact() {
         .await
         .unwrap();
     assert_probe(operation);
-    assert_eq!(failed, before);
+    assert_policy_only(&failed, &before);
     let (mut fixture, report, eligible) = prepared("lead").await;
     publish_pending(&eligible[0]);
     let reply = async {
@@ -273,7 +273,7 @@ async fn actual_role_and_total_probe_deadline_gate_session_requests() {
     )
     .await
     .unwrap();
-    assert_eq!(timed_out, before);
+    assert_policy_only(&timed_out, &before);
     // The responder intentionally stayed silent. Seeing the actual queued call
     // distinguishes a bounded timeout from accidentally skipping the probe.
     let operation =
@@ -282,4 +282,40 @@ async fn actual_role_and_total_probe_deadline_gate_session_requests() {
             .unwrap();
     assert_probe(operation);
     assert_pending(&eligible[0]);
+}
+
+// A verified coordinator can receive generic wait policy even when a worker
+// probe is unavailable. The hint never manufactures a pool or changes the
+// original error/input; revoked identities above still receive no addition.
+fn assert_policy_only(after: &Value, before: &Value) {
+    let hints = after["structuredContent"]["coordination_hints"]
+        .as_array()
+        .unwrap();
+    assert_eq!(hints.len(), 1);
+    assert!(after["structuredContent"].get("worker_reminders").is_none());
+    assert!(
+        hints[0]["subscription_filter"]["client_ids"]
+            .as_array()
+            .unwrap()
+            .len()
+            == 1
+    );
+    let mut preserved = after.clone();
+    preserved["structuredContent"]
+        .as_object_mut()
+        .unwrap()
+        .remove("coordination_hints");
+    let original_content = before["content"].as_array().unwrap();
+    let content = preserved["content"].as_array_mut().unwrap();
+    assert_eq!(&content[..original_content.len()], original_content);
+    assert_eq!(content.len(), original_content.len() + 1);
+    assert!(
+        content.last().unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .contains("COORDINATOR WAIT POLICY")
+    );
+    content.truncate(original_content.len());
+    assert_eq!(&preserved, before);
+    assert!(after.to_string().len() - before.to_string().len() <= MAX_APPEND_BYTES);
 }

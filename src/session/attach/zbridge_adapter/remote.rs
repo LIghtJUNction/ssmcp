@@ -14,6 +14,14 @@ pub struct RemoteFrontend {
 }
 
 impl RemoteFrontend {
+    /// Resolve an existing saved session through the core's validated manifest.
+    /// This does not start a session, disclose its descriptor, or import a lease.
+    pub async fn connect_named(name: &str, read_only: bool) -> crate::Result<Self> {
+        let root = crate::session::session_root(false)?;
+        let (directory, _) = crate::session::load(&root, name)?;
+        Self::connect(directory, read_only).await
+    }
+
     pub async fn connect(directory: PathBuf, read_only: bool) -> crate::Result<Self> {
         let open = crate::session::ipc::request(
             &directory,

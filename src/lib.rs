@@ -10,6 +10,8 @@ pub mod code_mode;
 mod collab;
 pub mod computer;
 pub mod context;
+#[cfg(target_os = "linux")]
+pub(crate) mod events;
 pub(crate) mod hex;
 #[cfg(target_os = "linux")]
 pub mod history;

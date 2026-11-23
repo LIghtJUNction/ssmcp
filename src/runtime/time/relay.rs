@@ -166,6 +166,31 @@ mod tests {
         assert!(state.apply(frame(4, 3), now).is_err());
     }
 
+    #[test]
+    fn negotiated_event_wait_accepts_fifty_five_seconds_and_expires_locally() {
+        let mut state = State::default();
+        state.configure(true);
+        let now = Instant::now();
+        let mut snapshot = frame(1, 1);
+        snapshot.active[0].targets = vec![wait_display::Kind::Event];
+        snapshot.active[0].remaining_ms = crate::wire::MAX_OBSERVATION_WAIT_MS;
+        assert!(state.apply(snapshot, now).unwrap());
+        let entry = state.entries(now).remove(0);
+        assert_eq!(
+            entry.remaining_ms,
+            Some(crate::wire::MAX_OBSERVATION_WAIT_MS)
+        );
+        assert!(entry.label.starts_with("Relay events"));
+        assert!(
+            state
+                .entries(now + Duration::from_millis(crate::wire::MAX_OBSERVATION_WAIT_MS))
+                .is_empty()
+        );
+        let mut invalid = frame(2, 2);
+        invalid.active[0].remaining_ms = crate::wire::MAX_OBSERVATION_WAIT_MS + 1;
+        assert!(state.apply(invalid, now).is_err());
+    }
+
     #[tokio::test]
     async fn relay_projection_does_not_create_or_bind_a_conversation_and_disconnect_clears_it() {
         let clock = super::super::Clock::new().unwrap();

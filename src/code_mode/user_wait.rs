@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 20_000;
-pub(crate) const MAX_TIMEOUT_MS: u64 = 25_000;
+pub(crate) const MAX_TIMEOUT_MS: u64 = crate::wire::MAX_OBSERVATION_WAIT_MS;
 pub(crate) const ENVELOPE_RESERVE_BYTES: usize = 32 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -45,7 +45,9 @@ fn default_notify() -> bool {
 impl Arguments {
     pub(crate) fn validate(&self) -> Result<(), String> {
         if !(1_000..=MAX_TIMEOUT_MS).contains(&self.timeout_ms) {
-            return Err("user wait timeout_ms must be 1000..=25000".into());
+            return Err(format!(
+                "user wait timeout_ms must be 1000..={MAX_TIMEOUT_MS}"
+            ));
         }
         if self.finish_request_id.as_ref().is_some_and(|id| {
             self.intent != Intent::Finish
@@ -562,7 +564,7 @@ mod tests {
         assert_eq!(defaults.timeout_ms, 20_000);
         for value in [
             json!({"timeout_ms":0}),
-            json!({"timeout_ms":25001}),
+            json!({"timeout_ms":crate::wire::MAX_OBSERVATION_WAIT_MS + 1}),
             json!({"reason":"\u{1b}[31m"}),
             json!({"reason":"x".repeat(513)}),
             json!({"finish_request_id":"question_existing"}),

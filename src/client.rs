@@ -39,7 +39,7 @@ pub(crate) mod references;
 mod relay;
 pub(crate) mod reload;
 pub(crate) mod render;
-mod steering;
+pub(crate) mod steering;
 pub(crate) mod terminal;
 mod trust;
 pub(crate) mod ui;

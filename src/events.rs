@@ -25,7 +25,7 @@ const MAX_RECEIPT_BYTES: usize = 1024 * 1024;
 const MAX_READ_EVENTS: usize = 64;
 const MAX_READ_BYTES: usize = 64 * 1024;
 const MAX_WAITERS: usize = 128;
-const MAX_WAIT_MS: u64 = 55_000;
+const MAX_WAIT_MS: u64 = crate::wire::MAX_OBSERVATION_WAIT_MS;
 const MAX_SEQUENCE: u64 = (1_u64 << 53) - 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

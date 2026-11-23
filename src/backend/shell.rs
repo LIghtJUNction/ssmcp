@@ -35,7 +35,7 @@ const MAX_OUTPUT: usize = 64 * 1024;
 const COMPLETED_INLINE_BYTES: usize = 4 * 1024;
 const MAX_COMMAND_ARGS: usize = 256;
 const MAX_TITLE_CHARS: usize = 160;
-const MAX_READ_WAIT: u64 = 60_000;
+const MAX_READ_WAIT: u64 = crate::wire::MAX_OBSERVATION_WAIT_MS;
 const MAX_INPUT: usize = 32 * 1024;
 const MAX_INPUT_WAIT: u64 = 5_000;
 static NEXT_JOB: AtomicU64 = AtomicU64::new(1);
@@ -376,8 +376,8 @@ impl Shell {
             ),
             tool(
                 "ssmcp.exec.wait",
-                "Wait for this command to finish. Omit wait_ms for no tool-level deadline, set it to 0 for an immediate snapshot, or pass an explicit timeout. A wait timeout leaves the command running.",
-                json!({"job_id":{"type":"string"},"wait_ms":{"type":"integer","minimum":0}}),
+                "Observe this command for at most 55000 ms. Omitted or null wait_ms uses a 55000 ms window; 0 returns an immediate snapshot. A pending receipt keeps the original job_id and leaves the command running. Continue observing that job after the window expires; this does not change its execution timeout.",
+                json!({"job_id":{"type":"string"},"wait_ms":{"type":["integer","null"],"minimum":0,"maximum":MAX_READ_WAIT,"default":MAX_READ_WAIT}}),
                 &["job_id"],
                 true,
             ),
@@ -453,9 +453,9 @@ impl Shell {
             }
             "ssmcp.exec.wait" => {
                 let args: Wait = parse(args)?;
-                let deadline = args.wait_ms.map(wait_deadline).transpose()?;
+                let deadline = args.deadline()?;
                 let job = self.job(&args.job_id)?;
-                wait_finished(&job, deadline).await;
+                wait_finished(&job, Some(deadline)).await;
                 let mut result = job.snapshot();
                 let pending = result["running"] == true;
                 result["wait_timed_out"] = json!(pending);
@@ -1056,6 +1056,7 @@ impl Drop for Shell {
     }
 }
 fn wait_deadline(ms: u64) -> Result<Instant, String> {
+    check_wait(ms)?;
     Instant::now()
         .checked_add(Duration::from_millis(ms))
         .ok_or_else(|| "wait_ms cannot be represented by the execution clock".into())
@@ -1250,6 +1251,11 @@ struct Wait {
     job_id: String,
     wait_ms: Option<u64>,
 }
+impl Wait {
+    fn deadline(&self) -> Result<Instant, String> {
+        wait_deadline(self.wait_ms.unwrap_or(MAX_READ_WAIT))
+    }
+}
 fn default_wait() -> u64 {
     5000
 }
@@ -1324,6 +1330,82 @@ mod tests {
             #[cfg(target_os = "linux")]
             temporary_artifacts: false,
         })
+    }
+
+    #[test]
+    fn completion_wait_defaults_to_a_bounded_observation_deadline() {
+        for args in [
+            json!({"job_id":"fixture"}),
+            json!({"job_id":"fixture","wait_ms":null}),
+        ] {
+            let before = Instant::now();
+            let wait: Wait = parse(args).unwrap();
+            let deadline = wait.deadline().unwrap();
+            let after = Instant::now();
+            let window = Duration::from_millis(crate::wire::MAX_OBSERVATION_WAIT_MS);
+            assert!(deadline >= before + window && deadline <= after + window);
+        }
+        let zero: Wait = parse(json!({"job_id":"fixture","wait_ms":0})).unwrap();
+        assert!(zero.deadline().unwrap() <= Instant::now());
+        assert!(wait_deadline(crate::wire::MAX_OBSERVATION_WAIT_MS).is_ok());
+        assert!(wait_deadline(crate::wire::MAX_OBSERVATION_WAIT_MS + 1).is_err());
+    }
+
+    #[tokio::test]
+    async fn observation_limits_reject_excess_waits_without_changing_command_deadlines() {
+        let shell = Shell::new();
+        let id = start_fixture(&shell, "wait", 900_001).await;
+        for name in ["ssmcp.exec.wait", "ssmcp.exec.read"] {
+            assert!(
+                shell
+                    .call(
+                        name,
+                        json!({"job_id":id,"wait_ms":crate::wire::MAX_OBSERVATION_WAIT_MS+1})
+                    )
+                    .await
+                    .unwrap_err()
+                    .starts_with("wait_ms must be")
+            );
+        }
+        let snapshot = shell
+            .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":0}))
+            .await
+            .unwrap();
+        assert_eq!(snapshot["running"], true);
+        assert_eq!(snapshot["wait_status"], "pending");
+        assert_eq!(snapshot["timeout_ms"], 900_001);
+        assert_eq!(snapshot["timed_out"], false);
+        assert_eq!(snapshot["cancelled"], false);
+        shell
+            .call("ssmcp.exec.cancel", json!({"job_id":id}))
+            .await
+            .unwrap();
+        shell.shutdown().await;
+    }
+
+    #[test]
+    fn discovery_matches_observation_limits_and_keeps_execution_timeout_independent() {
+        let tools = Shell::tools();
+        for name in ["ssmcp.exec.wait", "ssmcp.exec.read"] {
+            let descriptor = tools.iter().find(|tool| tool["name"] == name).unwrap();
+            assert_eq!(
+                descriptor["inputSchema"]["properties"]["wait_ms"]["maximum"],
+                crate::wire::MAX_OBSERVATION_WAIT_MS
+            );
+        }
+        let start = tools
+            .iter()
+            .find(|tool| tool["name"] == "ssmcp.exec.start")
+            .unwrap();
+        assert_eq!(
+            start["inputSchema"]["properties"]["timeout_ms"]["default"],
+            0
+        );
+        assert!(
+            start["inputSchema"]["properties"]["timeout_ms"]
+                .get("maximum")
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -2102,8 +2184,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "real 61-second or 305-second isolated command completion acceptance"]
-    async fn native_completion_wait_once_beyond_sixty_seconds() {
+    #[ignore = "real 61-second or 305-second command observed through windows of at most 55 seconds"]
+    async fn native_completion_observations_stay_bounded_beyond_sixty_seconds() {
         let shell = Shell::new();
         let seconds = match std::env::var("SSMCP_TEST_NATIVE_WAIT_SECONDS").as_deref() {
             Ok("305") => 305,
@@ -2112,19 +2194,26 @@ mod tests {
         };
         let code = format!("import time; time.sleep({seconds}); print('long wait complete')");
         let id = py(&shell, &code).await;
-        let args = if seconds == 61 {
-            json!({"job_id":id})
-        } else {
-            json!({"job_id":id,"wait_ms":(seconds + 10) * 1000})
-        };
         let started = Instant::now();
-        let result = tokio::time::timeout(
-            Duration::from_secs(seconds + 20),
-            shell.call("ssmcp.exec.wait", args),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let mut windows = 0;
+        let result = loop {
+            windows += 1;
+            let result = tokio::time::timeout(
+                Duration::from_millis(MAX_READ_WAIT + 5000),
+                shell.call("ssmcp.exec.wait", json!({"job_id":id})),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(result["job_id"], id);
+            if result["running"] == false {
+                break result;
+            }
+            assert_eq!(result["wait_status"], "pending");
+            assert_eq!(result["wait_timed_out"], true);
+            assert_eq!(result["timeout_ms"], 0);
+        };
+        assert!(windows >= 2);
         assert!(started.elapsed() > Duration::from_secs(seconds - 1));
         assert_eq!(result["running"], false);
         assert_eq!(result["exit_code"], 0);

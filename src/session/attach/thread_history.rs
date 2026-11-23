@@ -13,7 +13,11 @@ pub(super) struct RecordScope {
     agent_id: Option<String>,
     kind: &'static str,
     connection: u64,
-    request_id: u64,
+    request_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recipient_agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frontend_request_id: Option<String>,
     run_id: Option<String>,
     tool: Option<String>,
     account: Option<Value>,
@@ -25,6 +29,8 @@ impl RecordScope {
         // allowance covers strings, optional JSON account fields and nodes.
         384 + self.client_id.as_ref().map_or(0, String::len)
             + self.agent_id.as_ref().map_or(0, String::len)
+            + self.recipient_agent_id.as_ref().map_or(0, String::len)
+            + self.frontend_request_id.as_ref().map_or(0, String::len)
             + self.run_id.as_ref().map_or(0, String::len)
             + self.tool.as_ref().map_or(0, String::len)
             + self.account.as_ref().map_or(0, |value| {
@@ -58,7 +64,9 @@ impl RecordScope {
                 "unattributed"
             },
             connection: call.connection(),
-            request_id: call.request_id(),
+            request_id: Some(call.request_id()),
+            recipient_agent_id: None,
+            frontend_request_id: None,
             run_id: call.run_id().map(str::to_owned),
             tool: call.native_tool().map(str::to_owned),
             account: attribution.map(|value| {
@@ -66,6 +74,28 @@ impl RecordScope {
                 "provider":value.account.provider,"subject":value.account.subject})
             }),
         })
+    }
+
+    /// Only the protected local input adapter calls this after real queue
+    /// admission. A human recipient is not an authenticated agent speaker.
+    pub(super) fn frontend_input(
+        client_id: &str,
+        target: &str,
+        connection: u64,
+        request_id: &str,
+    ) -> Self {
+        Self {
+            client_id: Some(client_id.into()),
+            agent_id: None,
+            kind: "local_human",
+            connection,
+            request_id: None,
+            recipient_agent_id: (target != "next").then(|| target.to_owned()),
+            frontend_request_id: Some(request_id.into()),
+            run_id: None,
+            tool: None,
+            account: None,
+        }
     }
 }
 
@@ -168,7 +198,9 @@ impl Selector {
         match scope {
             Some(scope) if scope.client_id.as_deref() == Some(self.client_id.as_str()) => {
                 if let Some(agent) = &self.agent_id {
-                    scope.kind == "thread" && scope.agent_id.as_ref() == Some(agent)
+                    (scope.kind == "thread" && scope.agent_id.as_ref() == Some(agent))
+                        || (scope.kind == "local_human"
+                            && scope.recipient_agent_id.as_ref() == Some(agent))
                 } else if self.main {
                     scope.kind == "main"
                 } else {
@@ -185,7 +217,7 @@ impl Selector {
 
     pub(crate) fn value(&self) -> Value {
         json!({"kind":self.kind(),"client_id":self.client_id,"agent_id":self.agent_id,
-            "provenance":"authenticated_call_scope","includes_unattributed":self.kind()=="process"})
+            "provenance":"authenticated_call_scope_or_local_input_lease","includes_unattributed":self.kind()=="process"})
     }
 }
 
@@ -276,7 +308,7 @@ fn project(frame: Value, sequence: u64, scope: Option<&RecordScope>) -> Value {
 }
 
 impl Capture {
-    fn thread_page(
+    pub(super) fn thread_page(
         &self,
         selector: &Selector,
         cursor: Option<u64>,
@@ -387,11 +419,61 @@ mod tests {
             agent_id: agent.map(str::to_owned),
             kind: if agent.is_some() { "thread" } else { "main" },
             connection: 7,
-            request_id: 9,
+            request_id: Some(9),
+            recipient_agent_id: None,
+            frontend_request_id: None,
             run_id: Some("run".into()),
             tool: None,
             account: Some(json!({"provider":"github","subject":"owner"})),
         }
+    }
+
+    #[test]
+    fn local_human_input_is_visible_to_its_recipient_without_becoming_an_agent_speaker() {
+        let capture = Capture::new().unwrap();
+        let client = "a".repeat(64);
+        let agent = format!("agent_{}", "1".repeat(32));
+        let other = format!("agent_{}", "2".repeat(32));
+        capture.push_scoped(json!({"kind":"event","value":{"type":"ssmcp.user_input","text":"explicit user request"}}),
+            Some(RecordScope::frontend_input(&client,&agent,7,"frontend-one")));
+        let page = capture
+            .thread_page(&selector(Some(&agent), false), None, None, 64)
+            .unwrap();
+        assert_eq!(page["events"].as_array().unwrap().len(), 1);
+        let source = &page["events"][0]["source"];
+        assert_eq!(source["kind"], "local_human");
+        assert!(source["agent_id"].is_null());
+        assert!(source["request_id"].is_null());
+        assert_eq!(source["recipient_agent_id"], agent);
+        assert_eq!(source["frontend_request_id"], "frontend-one");
+        assert!(
+            capture
+                .thread_page(&selector(Some(&other), false), None, None, 64)
+                .unwrap()["events"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        capture.push_scoped(json!({"kind":"event","value":{"type":"ssmcp.user_input","text":"awaiting any recipient"}}),
+            Some(RecordScope::frontend_input(&client,"next",7,"frontend-next")));
+        assert_eq!(
+            capture
+                .thread_page(&selector(Some(&agent), false), None, None, 64)
+                .unwrap()["events"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            capture
+                .thread_page(&selector(None, false), None, None, 64)
+                .unwrap()["events"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[tokio::test]

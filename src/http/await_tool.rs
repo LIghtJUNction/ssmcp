@@ -3,6 +3,7 @@
 //! changes the observed work. Completion approval targets are retired.
 use super::*;
 use crate::code_mode::user_wait::{Outcome, Recipient};
+use crate::wire::MAX_OBSERVATION_WAIT_MS;
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde::Serialize;
 use std::{
@@ -27,11 +28,12 @@ const RETAIN_FOR: Duration = Duration::from_secs(300);
 
 pub(crate) fn limits() -> Value {
     json!({"public_tool":"await","code_mode_helper":"waitFor","max_targets":MAX_TARGETS,
-        "min_wait_ms":1000,"max_wait_ms":25000,"max_records":MAX_RECORDS,
+        "min_wait_ms":1000,"max_wait_ms":MAX_OBSERVATION_WAIT_MS,"max_records":MAX_RECORDS,
         "max_records_per_actor":MAX_ACTOR_RECORDS,"retention_ms":RETAIN_FOR.as_millis(),
         "max_active_per_member":MAX_ACTIVE_PER_MEMBER,"max_active_per_connection":MAX_ACTIVE_PER_CONNECTION,
-        "modes":["any","all"],"targets":["exec","job","agent_status","agent_messages","worker_result","worker_assignment","user_input"],
+        "modes":["any","all"],"targets":["exec","job","agent_status","agent_messages","worker_result","worker_assignment","event","user_input"],
         "server_issued_wait_id":true,"cancel_changes_target":false,"acknowledges_inbox":false,
+        "acknowledges_event_subscription":false,
         "grants_completion_permission":false,"public_wait_uses_javascript_slot":false,
         "helper_uses_enclosing_javascript_slot":true})
 }
@@ -74,6 +76,11 @@ enum Target {
     AgentMessages {
         #[serde(default)]
         after: Option<u64>,
+        #[serde(default = "message_limit")]
+        limit: usize,
+    },
+    Event {
+        subscription_id: String,
         #[serde(default = "message_limit")]
         limit: usize,
     },
@@ -143,10 +150,12 @@ impl Arguments {
     pub(super) fn parse(value: Value) -> Result<Self, String> {
         let args: Self = serde_json::from_value(value).map_err(|error|
             format!("await expects client_id, typed targets or an existing wait_id, mode, timeout_ms, and optional agent credentials: {error}"))?;
-        if !identifier(&args.client_id, 64) || !(1_000..=25_000).contains(&args.timeout_ms) {
-            return Err(
-                "await client_id must come from list; timeout_ms must be 1000..=25000".into(),
-            );
+        if !identifier(&args.client_id, 64)
+            || !(1_000..=MAX_OBSERVATION_WAIT_MS).contains(&args.timeout_ms)
+        {
+            return Err(format!(
+                "await client_id must come from list; timeout_ms must be 1000..={MAX_OBSERVATION_WAIT_MS}"
+            ));
         }
         if args
             .wait_id
@@ -157,7 +166,7 @@ impl Arguments {
         }
         if args
             .window_ms
-            .is_some_and(|ms| !(1_000..=25_000).contains(&ms))
+            .is_some_and(|ms| !(1_000..=MAX_OBSERVATION_WAIT_MS).contains(&ms))
             || args.after.is_some_and(|after| after > 1)
             || (args.after.is_some() && (args.wait_id.is_none() || args.op != Op::Wait))
             || (args.window_ms.is_some() && args.op == Op::Cancel)
@@ -181,18 +190,27 @@ impl Arguments {
                     if targets[..index].contains(target) {
                         return Err("await targets must be distinct".into());
                     }
+                    if let Target::Event { subscription_id, .. } = target
+                        && targets[..index].iter().any(|other| matches!(other,
+                            Target::Event { subscription_id: previous, .. } if previous == subscription_id))
+                    {
+                        return Err("event subscriptions must be distinct within an await".into());
+                    }
                     match target {
                         Target::Exec { job_id } if !identifier(job_id, 128) => return Err("invalid execution job_id".into()),
                         Target::Job { id } if !identifier(id, 128) => return Err("invalid relay job id".into()),
                         Target::WorkerResult { task_id } if !identifier(task_id, 128) => return Err("invalid worker task_id".into()),
                         Target::WorkerAssignment { request_id } if !identifier(request_id, 128) => return Err("invalid worker request_id".into()),
-                        Target::WorkerResult { .. } | Target::WorkerAssignment { .. } if args.window_ms.is_none() || targets.len() != 1 => return Err("worker await requires window_ms and exactly one target".into()),
+                        Target::WorkerResult { .. } if args.window_ms.is_none() => return Err("worker_result await requires window_ms".into()),
+                        Target::WorkerAssignment { .. } if args.window_ms.is_none() || targets.len() != 1 => return Err("worker_assignment await requires window_ms and exactly one target".into()),
                         Target::Finish { .. } => return Err("tool_retired: await finish targets are disabled".into()),
                         Target::AgentStatus { agent_id, statuses } if !identifier(agent_id, 64)
                             || statuses.is_empty() || statuses.len() > 16
                             || statuses.iter().any(|s| s.trim().is_empty() || s.len() > 128 || s.chars().any(char::is_control)) => return Err("agent_status requires a registered agent_id and 1..=16 status strings".into()),
                         Target::AgentMessages { after, limit } if *limit == 0 || *limit > 64
                             || after.is_some_and(|cursor| cursor > (1_u64 << 53) - 1) => return Err("agent_messages requires limit 1..=64 and a valid receive cursor".into()),
+                        Target::Event { subscription_id, limit } if !identifier(subscription_id, 128)
+                            || *limit == 0 || *limit > 64 => return Err("event requires a server-issued subscription_id and limit 1..=64".into()),
                         Target::UserInput { reason: Some(reason), .. } if reason.trim().is_empty()
                             || reason.len() > 512 || reason.chars().any(char::is_control) => return Err("user_input reason must contain 1..=512 bytes without controls".into()),
                         _ => {},
@@ -285,6 +303,14 @@ impl Actor {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ObservationState {
+    Created,
+    Suspended,
+    Resumed,
+    Completed,
+}
+
 struct Record {
     id: String,
     actor: Actor,
@@ -299,6 +325,7 @@ struct Record {
     snapshot: Mutex<Option<Vec<TargetResult>>>,
     acknowledged: AtomicBool,
     snapshot_overflow: AtomicBool,
+    observation_state: Mutex<ObservationState>,
 }
 
 impl Record {
@@ -312,6 +339,76 @@ impl Record {
                 .connection
                 .upgrade()
                 .is_some_and(|session| session.is_alive())
+    }
+
+    fn has_unacknowledged_result(&self) -> bool {
+        self.windowed
+            && !self.acknowledged.load(Ordering::Acquire)
+            && !*self.cancelled.borrow()
+            && self
+                .snapshot
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .is_some_and(|results| resolved(self.mode, results) == Some(Status::Ready))
+    }
+
+    fn transition(&self, broker: &Broker, next: ObservationState, data: Value) {
+        let mut state = self
+            .observation_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let kind = match (*state, next) {
+            (
+                ObservationState::Created | ObservationState::Resumed,
+                ObservationState::Suspended,
+            ) => "wait.suspended",
+            (ObservationState::Suspended, ObservationState::Resumed) => "wait.resumed",
+            (previous, ObservationState::Completed) if previous != ObservationState::Completed => {
+                "wait.completed"
+            }
+            _ => return,
+        };
+        if *state == ObservationState::Created {
+            super::events_tool::wait_transition(
+                broker,
+                &self.actor.owner,
+                &self.actor.client_id,
+                &self.actor.agent_id,
+                &self.id,
+                "wait.started",
+                json!({"mode":self.mode,"target_count":self.targets.len()}),
+            );
+        }
+        *state = next;
+        // The synchronous hook preserves transition order without retaining a
+        // lock across an await. Replayed snapshots never enter this path.
+        super::events_tool::wait_transition(
+            broker,
+            &self.actor.owner,
+            &self.actor.client_id,
+            &self.actor.agent_id,
+            &self.id,
+            kind,
+            data,
+        );
+    }
+}
+
+struct ObservationEvents<'a> {
+    broker: &'a Broker,
+    record: &'a Record,
+}
+
+impl Drop for ObservationEvents<'_> {
+    fn drop(&mut self) {
+        // Dropping an observation future releases only observation ownership.
+        // A native operation whose response was lost keeps its actual state.
+        self.record.transition(
+            self.broker,
+            ObservationState::Resumed,
+            json!({"status":"unknown","reason":"observer_dropped"}),
+        );
     }
 }
 
@@ -363,6 +460,7 @@ impl Registry {
                 .filter(|record| {
                     !record.active.load(Ordering::Acquire)
                         && !record.awaiting_delivery()
+                        && !record.has_unacknowledged_result()
                         && record.terminal.load(Ordering::Acquire)
                         && (!actor_full || record.actor.same(&actor))
                 })
@@ -401,6 +499,7 @@ impl Registry {
             snapshot: Mutex::new(None),
             acknowledged: AtomicBool::new(false),
             snapshot_overflow: AtomicBool::new(false),
+            observation_state: Mutex::new(ObservationState::Created),
         });
         records.insert(id, record.clone());
         Ok(record)
@@ -550,6 +649,43 @@ impl Scope {
         Ok(())
     }
 
+    async fn authorize_events(&self, targets: &[Target]) -> Result<(), String> {
+        for target in targets {
+            if let Target::Event {
+                subscription_id, ..
+            } = target
+            {
+                super::events_tool::authorize_observation(
+                    &self.broker,
+                    &self.user,
+                    &self.token,
+                    self.session.client_id(),
+                    &self.binding.agent_id,
+                    &self.binding.token,
+                    subscription_id,
+                )
+                .await?;
+            }
+        }
+        for target in targets {
+            if let Target::Event {
+                subscription_id, ..
+            } = target
+            {
+                super::events_tool::authorize_observation_now(
+                    &self.broker,
+                    &self.user,
+                    &self.token,
+                    self.session.client_id(),
+                    &self.binding.agent_id,
+                    &self.binding.token,
+                    subscription_id,
+                )?;
+            }
+        }
+        self.final_authorization()
+    }
+
     async fn native(
         &self,
         name: &str,
@@ -568,13 +704,14 @@ impl Scope {
         .map_err(|_| "await_authorization_revoked".to_owned())?;
         let result = self
             .session
-            .call_with_authorization(
+            .call_with_bound_authorization(
                 Operation::CallTool {
                     name: name.into(),
                     arguments,
                 },
                 controller,
                 &authorization,
+                Some(self.binding.clone()),
             )
             .await?;
         self.final_authorization()?;
@@ -645,6 +782,7 @@ async fn observe(
     timeout_ms: u64,
     controller: Option<Controller>,
     windowed: bool,
+    wait_id: &str,
 ) -> TargetResult {
     let data = match target {
         Target::Exec { job_id } => {
@@ -709,6 +847,24 @@ async fn observe(
                 )
                 .await
         }
+        Target::Event {
+            subscription_id,
+            limit,
+        } => {
+            super::events_tool::observe(
+                &scope.broker,
+                &scope.user,
+                &scope.token,
+                scope.session.client_id(),
+                &scope.binding.agent_id,
+                &scope.binding.token,
+                subscription_id,
+                *limit,
+                timeout_ms,
+                Some(wait_id),
+            )
+            .await
+        }
         Target::Finish { .. } => Err("tool_retired: await finish targets are disabled".into()),
         Target::UserInput { reason, notify } => {
             user_wait::wait_observed(
@@ -760,12 +916,7 @@ async fn observe(
                 Status::Ready
             }
         }
-        Target::WorkerResult { .. } => match data["task"]["status"].as_str() {
-            Some("queued" | "working" | "cancelling") => Status::TimedOut,
-            Some("completed" | "failed" | "cancelled") => Status::Ready,
-            Some("unknown") => Status::UnknownTarget,
-            _ => Status::Unavailable,
-        },
+        Target::WorkerResult { .. } => worker_result_status(&data),
         Target::WorkerAssignment { .. } => match data["status"].as_str() {
             Some("waiting") => Status::TimedOut,
             Some("assigned" | "already_completed" | "retiring" | "released" | "not_accepting") => {
@@ -790,6 +941,7 @@ async fn observe(
                 Status::TimedOut
             }
         }
+        Target::Event { .. } => event_status(&data),
         Target::Finish { .. } => {
             return TargetResult::failed(
                 target,
@@ -812,6 +964,23 @@ async fn observe(
         status,
         data: Some(data),
         error: None,
+    }
+}
+
+fn worker_result_status(data: &Value) -> Status {
+    match data["task"]["status"].as_str() {
+        Some("queued" | "working" | "cancelling") => Status::TimedOut,
+        Some("completed" | "failed" | "cancelled") => Status::Ready,
+        Some("unknown") => Status::UnknownTarget,
+        _ => Status::Unavailable,
+    }
+}
+
+fn event_status(data: &Value) -> Status {
+    match (data["status"].as_str(), data["events"].as_array()) {
+        (Some("ready"), Some(events)) if !events.is_empty() => Status::Ready,
+        (Some("pending"), Some(events)) if events.is_empty() => Status::TimedOut,
+        _ => Status::Unavailable,
     }
 }
 
@@ -942,6 +1111,16 @@ pub(super) async fn wait(
         for result in &mut results {
             result.status = Status::Cancelled;
         }
+        record.transition(
+            &broker,
+            ObservationState::Resumed,
+            json!({"status":"cancelled"}),
+        );
+        record.transition(
+            &broker,
+            ObservationState::Completed,
+            json!({"status":"cancelled"}),
+        );
         return Ok(envelope(
             Some(&record.id),
             record.mode,
@@ -958,10 +1137,32 @@ pub(super) async fn wait(
     {
         return Err("observation mode and result cursor must match the original await".into());
     }
-    if (passive_window || args.after.is_some())
-        && let Some(response) = read_window_snapshot(&record, args.after)?
-    {
-        return Ok(response);
+    if passive_window || args.after.is_some() {
+        if record.terminal.load(Ordering::Acquire)
+            && let Err(error) = scope.authorize_events(&record.targets).await
+        {
+            let results = record
+                .targets
+                .iter()
+                .map(|target| {
+                    TargetResult::failed(
+                        target,
+                        Status::Unauthorized,
+                        "await_authorization_revoked",
+                        error.clone(),
+                    )
+                })
+                .collect();
+            return Ok(envelope(
+                Some(&record.id),
+                record.mode,
+                Status::Unauthorized,
+                results,
+            ));
+        }
+        if let Some(response) = read_window_snapshot(&record, args.after)? {
+            return Ok(response);
+        }
     }
     let window_ms = args.window_ms.unwrap_or(args.timeout_ms);
     let _active = match broker.awaiting.activate(&record) {
@@ -977,6 +1178,16 @@ pub(super) async fn wait(
             }
             return Ok(envelope(Some(&record.id), record.mode, status, results));
         }
+    };
+    let deadline = Instant::now() + Duration::from_millis(window_ms);
+    record.transition(
+        &broker,
+        ObservationState::Suspended,
+        json!({"window_ms":window_ms,"mode":record.mode}),
+    );
+    let _observation_events = ObservationEvents {
+        broker: &broker,
+        record: &record,
     };
     // Presentation is best effort and follows admission. It owns no native
     // slot, user-input reservation, target result or finish permission.
@@ -997,6 +1208,7 @@ pub(super) async fn wait(
                     | Target::WorkerAssignment { .. } => crate::wire::wait_display::Kind::Job,
                     Target::AgentStatus { .. } => crate::wire::wait_display::Kind::AgentStatus,
                     Target::AgentMessages { .. } => crate::wire::wait_display::Kind::AgentMessages,
+                    Target::Event { .. } => crate::wire::wait_display::Kind::Event,
                     Target::UserInput { .. } => crate::wire::wait_display::Kind::UserInput,
                     Target::Finish { .. } => crate::wire::wait_display::Kind::Finish,
                 })
@@ -1026,6 +1238,7 @@ pub(super) async fn wait(
         let scope = &scope;
         let controller = args.controller.clone();
         let windowed = record.windowed;
+        let wait_id = record.id.as_str();
         let target_timeout =
             if windowed && matches!(target, Target::UserInput { notify: false, .. }) {
                 window_ms
@@ -1035,11 +1248,10 @@ pub(super) async fn wait(
         pending.push(async move {
             (
                 index,
-                observe(scope, target, target_timeout, controller, windowed).await,
+                observe(scope, target, target_timeout, controller, windowed, wait_id).await,
             )
         });
     }
-    let deadline = Instant::now() + Duration::from_millis(window_ms);
     let mut authority = tokio::time::interval(Duration::from_secs(1));
     authority.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let status = loop {
@@ -1056,19 +1268,25 @@ pub(super) async fn wait(
             },
             _ = tokio::time::sleep_until(deadline) => break Status::TimedOut,
             _ = authority.tick() => {
-                if user_wait::authorized(&scope.broker, &scope.user, &scope.token,
-                    scope.session.client_id(), &scope.session, &scope.recipient).await.is_err() { break Status::Unauthorized; }
+                match tokio::time::timeout_at(deadline, user_wait::authorized(
+                    &scope.broker, &scope.user, &scope.token,
+                    scope.session.client_id(), &scope.session, &scope.recipient)).await {
+                    Ok(Ok(_)) => {},
+                    Ok(Err(_)) => break Status::Unauthorized,
+                    Err(_) => break Status::TimedOut,
+                }
             },
         }
     };
     drop(pending);
-    let status = if scope.final_authorization().is_err() {
+    let status = if scope.authorize_events(&record.targets).await.is_err() {
         Status::Unauthorized
     } else if *record.cancelled.borrow() {
         Status::Cancelled
     } else {
         status
     };
+    record.transition(&broker, ObservationState::Resumed, json!({"status":status}));
     for result in &mut results {
         if status == Status::Unauthorized {
             *result = TargetResult::failed(
@@ -1123,6 +1341,12 @@ pub(super) async fn wait(
             *record.snapshot.lock().unwrap_or_else(|e| e.into_inner()) = Some(retained);
         } else {
             record.terminal.store(true, Ordering::Release);
+            record.snapshot_overflow.store(true, Ordering::Release);
+            record.transition(
+                &broker,
+                ObservationState::Completed,
+                json!({"status":"unavailable","reason":"await_snapshot_overflow"}),
+            );
             let overflow = record
                 .targets
                 .iter()
@@ -1145,6 +1369,20 @@ pub(super) async fn wait(
     }
     if !matches!(status, Status::TimedOut | Status::Busy) {
         record.terminal.store(true, Ordering::Release);
+        // User input is committed later at the atomic outer response boundary.
+        // A ready reservation can still become a retryable delivery outcome.
+        if status != Status::Ready
+            || !record
+                .targets
+                .iter()
+                .any(|target| matches!(target, Target::UserInput { .. }))
+        {
+            record.transition(
+                &broker,
+                ObservationState::Completed,
+                json!({"status":status}),
+            );
+        }
     }
     if record.windowed && status == Status::TimedOut {
         for result in &mut results {
@@ -1276,7 +1514,9 @@ async fn finish_passive_response(
     let eligible = eligible_user_response(report).await.unwrap_or_default();
     // The bounded summary probe can await; withhold observation data as well as
     // notices if its account, connection or binding changed during that await.
-    if !response_authorized(report, client_id) {
+    if !response_events_authorized(report, client_id, &value).await
+        || !response_authorized(report, client_id)
+    {
         report.run.finish_wait_state(
             client_id,
             Outcome::AuthorizationRevoked,
@@ -1285,6 +1525,58 @@ async fn finish_passive_response(
         withhold(&mut value);
     }
     tool_summaries::commit_response(report, tool_result(Ok(value)), eligible)
+}
+
+async fn response_events_authorized(
+    report: &CodeRunReport,
+    client_id: &str,
+    value: &Value,
+) -> bool {
+    let subscriptions: Vec<_> = value["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|result| result["target"]["type"] == "event" && result.get("data").is_some())
+        .filter_map(|result| result["target"]["subscription_id"].as_str())
+        .collect();
+    if subscriptions.is_empty() {
+        return true;
+    }
+    let Some(binding) = report.run.binding(client_id) else {
+        return false;
+    };
+    for &subscription_id in &subscriptions {
+        if super::events_tool::authorize_observation(
+            &report.broker,
+            &report.user,
+            &report.access_token,
+            client_id,
+            &binding.agent_id,
+            &binding.token,
+            subscription_id,
+        )
+        .await
+        .is_err()
+        {
+            return false;
+        }
+    }
+    for subscription_id in subscriptions {
+        if super::events_tool::authorize_observation_now(
+            &report.broker,
+            &report.user,
+            &report.access_token,
+            client_id,
+            &binding.agent_id,
+            &binding.token,
+            subscription_id,
+        )
+        .is_err()
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn response_authorized(report: &CodeRunReport, client_id: &str) -> bool {
@@ -1382,6 +1674,17 @@ pub(super) fn commit_user_delivery(
         record
             .terminal
             .store(*record.cancelled.borrow() || !retryable, Ordering::Release);
+        if record.terminal.load(Ordering::Acquire) {
+            record.transition(
+                &report.broker,
+                ObservationState::Completed,
+                json!({"status":if *record.cancelled.borrow() {
+                    "cancelled"
+                } else {
+                    receipt["status"].as_str().unwrap_or("unknown")
+                }}),
+            );
+        }
         *record
             .delivery_run
             .lock()
@@ -1454,6 +1757,11 @@ pub(super) fn abandon_user_delivery(report: &CodeRunReport) {
             record.cancelled.send_replace(true);
             record.terminal.store(true, Ordering::Release);
             *delivery = None;
+            record.transition(
+                &report.broker,
+                ObservationState::Completed,
+                json!({"status":"cancelled","reason":"outer_response_dropped"}),
+            );
         }
     }
 }
@@ -1466,15 +1774,16 @@ pub(super) fn tool() -> Value {
                 {"type":"object","additionalProperties":false,"required":["type","request_id"],"properties":{"type":{"const":"worker_assignment"},"request_id":{"type":"string","minLength":1,"maxLength":128}}},
                 {"type":"object","additionalProperties":false,"required":["type","agent_id","statuses"],"properties":{"type":{"const":"agent_status"},"agent_id":{"type":"string","minLength":1,"maxLength":64},"statuses":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","minLength":1,"maxLength":128}}}},
                 {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"agent_messages"},"after":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":64,"default":32}}},
+                {"type":"object","additionalProperties":false,"required":["type","subscription_id"],"properties":{"type":{"const":"event"},"subscription_id":{"type":"string","minLength":1,"maxLength":128},"limit":{"type":"integer","minimum":1,"maximum":64,"default":32}}},
                 {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"user_input"},"reason":{"type":"string","minLength":1,"maxLength":512},"notify":{"type":"boolean","default":true}}},
     ]);
-    json!({"name":"await","description":"Wait on typed execution jobs, relay jobs, agent status or inbox messages, or user input without occupying a JavaScript worker. Authenticate the current participant with collab credentials. Create with targets; resume/cancel with the server-issued wait_id only. Timeout is bounded to 1000..25000ms. Cancellation stops observation only: it never kills a job or acknowledges messages. any returns when one target is ready; all requires all ready; explicit target failures return immediately with every target represented. Pending entries in an any response were not resolved. user_input must be a single-target wait. Only outer user_wait received plus matching user_messages proves user-input delivery.",
+    json!({"name":"await","description":format!("Wait on typed execution jobs, relay jobs, worker results, agent status or inbox messages, event subscriptions, or user input without occupying a JavaScript worker. Authenticate the current participant with collab credentials. Create with targets; resume/cancel with the server-issued wait_id only. Timeout is bounded to 1000..{MAX_OBSERVATION_WAIT_MS}ms. Cancellation stops observation only: it never kills a job or acknowledges messages or event subscriptions. any returns when one target is ready; all requires all ready; explicit target failures return immediately with every target represented. Pending entries in an any response were not resolved. Worker targets require window_ms; worker_assignment and user_input must each be single-target waits. Only outer user_wait received plus matching user_messages proves user-input delivery."),
         "inputSchema":{"type":"object","additionalProperties":false,"required":["client_id"],"properties":{
             "client_id":{"type":"string","minLength":1,"maxLength":64},"op":{"enum":["wait","cancel"],"default":"wait"},
             "wait_id":{"type":"string","minLength":1,"maxLength":128},"mode":{"enum":["any","all"],"default":"any"},
-            "timeout_ms":{"type":"integer","minimum":1000,"maximum":25000,"default":20000},
-            "window_ms":{"type":"integer","minimum":1000,"maximum":25000,"description":"Opt into short resumable observations. Window expiry returns pending; targets are not cancelled."},
-            "after":{"type":"integer","minimum":0,"maximum":1,"description":"On a passive resume, 0 retries the retained result and 1 acknowledges it."},
+            "timeout_ms":{"type":"integer","minimum":1000,"maximum":MAX_OBSERVATION_WAIT_MS,"default":20000},
+            "window_ms":{"type":"integer","minimum":1000,"maximum":MAX_OBSERVATION_WAIT_MS,"description":"Opt into resumable observation windows of up to 55 seconds. Window expiry returns pending; targets are not cancelled."},
+            "after":{"type":"integer","minimum":0,"maximum":1,"description":"On a resume, 0 retries the retained result and 1 acknowledges only this await snapshot. Inbox messages and event subscriptions require their own explicit acknowledgement."},
             "agent":{"type":"object","additionalProperties":false,"required":["id","token"],"properties":{"id":{"type":"string","minLength":1,"maxLength":64},"token":{"type":"string","minLength":64,"maxLength":64}}},
             "targets":{"type":"array","minItems":1,"maxItems":8,"items":{"oneOf":targets}}},"oneOf":[{"properties":{"op":{"const":"wait"}},"required":["targets"],"not":{"required":["wait_id"]}},
                 {"required":["wait_id"],"not":{"anyOf":[{"required":["targets"]},{"required":["mode"]}]}}]},

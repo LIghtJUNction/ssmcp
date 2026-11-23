@@ -25,7 +25,7 @@ const MAX_INBOX_BYTES: usize = 256 * 1024;
 const MAX_QUEUED_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RECEIVE_MESSAGES: usize = 64;
 const MAX_RECEIVE_BYTES: usize = 128 * 1024;
-const MAX_WAIT_MS: u64 = 30_000;
+const MAX_WAIT_MS: u64 = crate::wire::MAX_OBSERVATION_WAIT_MS;
 const MAX_DEDUP: usize = 128;
 const MAX_SEQUENCE: u64 = (1_u64 << 53) - 1;
 
@@ -52,6 +52,7 @@ pub(crate) fn limits() -> Value {
 pub(crate) struct Hub {
     session_id: String,
     state: Mutex<State>,
+    events: Option<Arc<crate::events::Hub>>,
 }
 
 #[derive(Default)]
@@ -88,6 +89,8 @@ struct Message {
     seq: u64,
     bytes: usize,
     value: Value,
+    sender_id: String,
+    sender_owner: String,
 }
 
 struct Attempt {
@@ -181,7 +184,7 @@ impl Agent {
 }
 
 impl State {
-    fn purge_expired(&mut self) {
+    fn purge_expired(&mut self) -> Vec<Agent> {
         let now = Instant::now();
         let expired: Vec<_> = self
             .agents
@@ -189,16 +192,17 @@ impl State {
             .filter(|(_, agent)| agent.expires <= now)
             .map(|(id, _)| id.clone())
             .collect();
-        for id in expired {
-            self.remove(&id);
-        }
+        expired
+            .into_iter()
+            .filter_map(|id| self.remove(&id))
+            .collect()
     }
 
-    fn remove(&mut self, id: &str) {
-        if let Some(agent) = self.agents.remove(id) {
-            self.queued_bytes -= agent.inbox_bytes;
-            agent.changed.send_replace(());
-        }
+    fn remove(&mut self, id: &str) -> Option<Agent> {
+        let agent = self.agents.remove(id)?;
+        self.queued_bytes -= agent.inbox_bytes;
+        agent.changed.send_replace(());
+        Some(agent)
     }
 
     fn authenticated(&mut self, owner: &str, id: &str, token: &str) -> Result<&mut Agent, String> {
@@ -224,6 +228,78 @@ impl Hub {
         Self {
             session_id: session_id.into(),
             ..Self::default()
+        }
+    }
+
+    pub(crate) fn with_events(session_id: &str, events: Arc<crate::events::Hub>) -> Self {
+        Self {
+            events: Some(events),
+            ..Self::for_session(session_id)
+        }
+    }
+
+    fn agent_event(&self, owner: &str, id: &str, kind: &str, data: Value) {
+        if let Some(events) = &self.events {
+            // The membership mutation has already committed. Journal capacity
+            // must never turn it into a failed operation that a caller retries.
+            let _ =
+                events.publish_system(owner, &self.session_id, Some(id), kind, data, None, None);
+        }
+    }
+
+    fn message_event(
+        &self,
+        kind: &str,
+        message: &Message,
+        recipient_owner: &str,
+        recipient_id: &str,
+    ) {
+        let Some(events) = &self.events else {
+            return;
+        };
+        let mut audience = vec![
+            format!("{}:{}", self.session_id, message.sender_id),
+            format!("{}:{recipient_id}", self.session_id),
+        ];
+        audience.sort();
+        audience.dedup();
+        let actor = if kind == "message.sent" {
+            &message.sender_id
+        } else {
+            recipient_id
+        };
+        let data = json!({
+            "transport":"collab", "message_id":message.value["message_id"],
+            "message_seq":message.seq, "sender_id":message.sender_id,
+            "recipient_id":recipient_id,
+            "delivery":match kind {
+                "message.sent" => "queued",
+                "message.received" => "included_in_receive_result",
+                _ => "acknowledged",
+            },
+            "read_confirmed":false
+        });
+        // Publish the same private receipt separately for the two real owners.
+        // An owner key or matching bare agent ID never widens the audience.
+        let _ = events.publish_system(
+            &message.sender_owner,
+            &self.session_id,
+            Some(actor),
+            kind,
+            data.clone(),
+            Some(audience.clone()),
+            None,
+        );
+        if recipient_owner != message.sender_owner {
+            let _ = events.publish_system(
+                recipient_owner,
+                &self.session_id,
+                Some(actor),
+                kind,
+                data,
+                Some(audience),
+                None,
+            );
         }
     }
 
@@ -301,7 +377,14 @@ impl Hub {
         if state.closed {
             return Err("collaboration session is closed; refresh clients and join again".into());
         }
-        state.purge_expired();
+        for agent in state.purge_expired() {
+            self.agent_event(
+                &agent.owner,
+                &agent.id,
+                "agent.left",
+                json!({"reason":"lease_expired"}),
+            );
+        }
         Ok(state)
     }
 
@@ -310,6 +393,12 @@ impl Hub {
         state.closed = true;
         for agent in state.agents.values() {
             agent.changed.send_replace(());
+            self.agent_event(
+                &agent.owner,
+                &agent.id,
+                "agent.left",
+                json!({"reason":"session_closed"}),
+            );
         }
         state.agents.clear();
         state.queued_bytes = 0;
@@ -370,6 +459,7 @@ impl Hub {
                 }
                 let mut state = self.locked()?;
                 let agent = state.authenticated(owner, &agent_id, &token)?;
+                let previous_status = agent.status.clone();
                 if let Some(name) = name {
                     agent.name = name;
                 }
@@ -384,6 +474,10 @@ impl Hub {
                 }
                 agent.renew();
                 agent.changed.send_replace(());
+                if previous_status != agent.status {
+                    self.agent_event(owner, &agent_id, "agent.status_changed",
+                        json!({"previous_status":previous_status,"status":agent.status,"source":"participant"}));
+                }
                 Ok(json!({"agent":agent.public(), "lease_ms":LEASE_MS}))
             }
             Request::Send {
@@ -425,6 +519,7 @@ impl Hub {
                 let mut state = self.locked()?;
                 state.authenticated(owner, &agent_id, &token)?;
                 state.remove(&agent_id);
+                self.agent_event(owner, &agent_id, "agent.left", json!({"reason":"left"}));
                 Ok(json!({"agent_id":agent_id, "left":true}))
             }
         }
@@ -476,6 +571,7 @@ impl Hub {
             waiters: Arc::new(Semaphore::new(1)),
         };
         state.agents.insert(id.clone(), agent);
+        self.agent_event(owner, &id, "agent.joined", json!({"status":"available"}));
         Ok(json!({
             "agent_id":id,
             "thread_id":id,
@@ -573,7 +669,13 @@ impl Hub {
                 ));
             }
         }
-        let message = Arc::new(Message { seq, bytes, value });
+        let message = Arc::new(Message {
+            seq,
+            bytes,
+            value,
+            sender_id: id.into(),
+            sender_owner: owner.into(),
+        });
         // All admission checks precede the first mutation: broadcasts either
         // reach every selected mailbox or change none of them.
         state.sequence = seq;
@@ -602,6 +704,14 @@ impl Hub {
             sender.dedup.pop_front();
         }
         sender.renew();
+        for target in &recipients {
+            self.message_event(
+                "message.sent",
+                &message,
+                &state.agents[target].owner,
+                target,
+            );
+        }
         Ok(receipt)
     }
 
@@ -635,6 +745,7 @@ impl Hub {
                     );
                 }
                 let mut messages = Vec::new();
+                let mut new_deliveries = Vec::new();
                 // Reserve the bounded response envelope and array separators.
                 let mut used = 1024;
                 let mut next = cursor;
@@ -647,10 +758,16 @@ impl Hub {
                     used += message.bytes + 1;
                     next = message.seq;
                     messages.push(message.value.clone());
+                    if message.seq > agent.delivered {
+                        new_deliveries.push(message.clone());
+                    }
                 }
                 if !messages.is_empty() || wait_ms == 0 || Instant::now() >= deadline {
                     agent.delivered = agent.delivered.max(next);
                     agent.renew();
+                    for message in new_deliveries {
+                        self.message_event("message.received", &message, owner, id);
+                    }
                     return Ok(json!({
                         "messages":messages,
                         "session_id":self.session_id,
@@ -735,6 +852,7 @@ impl Hub {
 
     fn ack(&self, owner: &str, id: &str, token: &str, through: u64) -> Result<Value, String> {
         let mut state = self.locked()?;
+        let mut acknowledged = Vec::new();
         let (removed_bytes, result) = {
             let agent = state.authenticated(owner, id, token)?;
             if through > agent.delivered {
@@ -751,6 +869,7 @@ impl Hub {
                     let message = agent.inbox.pop_front().expect("nonempty inbox");
                     removed_bytes += message.bytes;
                     removed += 1;
+                    acknowledged.push(message);
                 }
                 agent.acked = through;
                 agent.inbox_bytes -= removed_bytes;
@@ -766,6 +885,9 @@ impl Hub {
             )
         };
         state.queued_bytes -= removed_bytes;
+        for message in acknowledged {
+            self.message_event("message.acknowledged", &message, owner, id);
+        }
         Ok(result)
     }
 }
@@ -818,3 +940,126 @@ fn now_ms() -> u64 {
 mod await_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod lifecycle_event_tests {
+    use super::*;
+    use crate::events::{Actor, Filter};
+
+    fn member(hub: &Hub, owner: &str, name: &str) -> (String, String) {
+        let joined = hub.join(owner, name.into(), None, vec![]).unwrap();
+        (
+            joined["agent_id"].as_str().unwrap().into(),
+            joined["token"].as_str().unwrap().into(),
+        )
+    }
+
+    fn subscribe(
+        events: &crate::events::Hub,
+        owner: &str,
+        id: &str,
+        kind: &str,
+    ) -> (Actor, String) {
+        let actor = Actor {
+            owner: owner.into(),
+            client_id: "a".repeat(64),
+            agent_id: id.into(),
+        };
+        let filter: Filter = serde_json::from_value(json!({"kinds":[kind]})).unwrap();
+        let result = events
+            .subscribe(&actor, "subscription", filter, None)
+            .unwrap();
+        (actor, result["subscription_id"].as_str().unwrap().into())
+    }
+
+    #[tokio::test]
+    async fn message_commit_events_are_private_and_do_not_repeat_on_recovery() {
+        let events = Arc::new(crate::events::Hub::default());
+        let hub = Hub::with_events(&"a".repeat(64), events.clone());
+        let (sender, sender_token) = member(&hub, "owner-a", "sender");
+        let (recipient, recipient_token) = member(&hub, "owner-b", "recipient");
+        let (stranger, _) = member(&hub, "owner-b", "stranger");
+        let sent_events = subscribe(&events, "owner-a", &sender, "message.*");
+        let received_events = subscribe(&events, "owner-b", &recipient, "message.*");
+        let unrelated_events = subscribe(&events, "owner-b", &stranger, "message.*");
+        let message = || Send {
+            to: recipient.clone(),
+            payload: json!({"text":"private body"}),
+            topic: None,
+            reply_to: None,
+            idempotency_key: Some("same-request".into()),
+        };
+        let receipt = hub
+            .send("owner-a", &sender, &sender_token, message())
+            .unwrap();
+        let duplicate = hub
+            .send("owner-a", &sender, &sender_token, message())
+            .unwrap();
+        assert_eq!(receipt["message_id"], duplicate["message_id"]);
+        assert_eq!(duplicate["duplicate"], true);
+        let first = hub
+            .receive("owner-b", &recipient, &recipient_token, None, 32, 0)
+            .await
+            .unwrap();
+        let replay = hub
+            .receive("owner-b", &recipient, &recipient_token, None, 32, 0)
+            .await
+            .unwrap();
+        assert_eq!(first["messages"], replay["messages"]);
+        let through = first["next_cursor"].as_u64().unwrap();
+        hub.ack("owner-b", &recipient, &recipient_token, through)
+            .unwrap();
+        hub.ack("owner-b", &recipient, &recipient_token, through)
+            .unwrap();
+        for (actor, subscription) in [sent_events, received_events] {
+            let page = events.read(&actor, &subscription, 32).unwrap();
+            let kinds: Vec<_> = page["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|event| event["kind"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                kinds,
+                ["message.sent", "message.received", "message.acknowledged"]
+            );
+            let serialized = page.to_string();
+            assert!(!serialized.contains("private body"));
+            assert!(!serialized.contains(&sender_token));
+            assert!(!serialized.contains(&recipient_token));
+        }
+        let page = events
+            .read(&unrelated_events.0, &unrelated_events.1, 32)
+            .unwrap();
+        assert!(page["events"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn status_events_follow_real_changes_and_expiry_removal() {
+        let events = Arc::new(crate::events::Hub::default());
+        let hub = Hub::with_events(&"a".repeat(64), events.clone());
+        let (observer, _) = member(&hub, "owner", "observer");
+        let (actor, subscription) = subscribe(&events, "owner", &observer, "agent.*");
+        let (id, token) = member(&hub, "owner", "worker");
+        let update = json!({"agent_id":id,"token":token,"status":"working"});
+        hub.dispatch("owner", "update", update.clone())
+            .await
+            .unwrap();
+        hub.dispatch("owner", "update", update).await.unwrap();
+        hub.expire_lease_for_test("owner", &id);
+        hub.presence().unwrap();
+        hub.presence().unwrap();
+        let page = events.read(&actor, &subscription, 32).unwrap();
+        let entries = page["events"].as_array().unwrap();
+        let kinds: Vec<_> = entries
+            .iter()
+            .map(|event| event["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["agent.joined", "agent.status_changed", "agent.left"]
+        );
+        assert_eq!(entries[1]["data"]["previous_status"], "available");
+        assert_eq!(entries[2]["data"]["reason"], "lease_expired");
+    }
+}

@@ -17,6 +17,9 @@ pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 pub const MAX_READ: usize = 32 * 1024;
 pub const MAX_WRITE: usize = 16 * 1024;
 pub const MAX_WAIT_MS: u64 = 5_000;
+/// One observation window stays below a one-minute outer tool deadline.
+/// This never changes the lifetime or execution deadline of the observed work.
+pub const MAX_OBSERVATION_WAIT_MS: u64 = 55_000;
 pub const MAX_INFLIGHT: usize = 16;
 pub const MAX_CLIENTS_PER_USER: usize = 128;
 pub const MAX_ALLOWED_PRINCIPALS: usize = 32;

@@ -7,12 +7,15 @@ mod attribution;
 #[cfg(test)]
 mod attribution_tests;
 #[cfg(test)]
+mod event_tests;
+#[cfg(test)]
 mod execution_group;
 mod management;
 mod messaging;
 pub(crate) mod session_io;
 mod traffic;
 pub(crate) mod wait_display;
+pub(crate) mod worker_events;
 use crate::{
     identity::{GitHubConfig, Identity, IdentityProviders},
     user_policy::{TrafficError, TrafficFailure, TrafficFailureState, TrafficOutcome},
@@ -184,6 +187,7 @@ pub struct Session {
     pub(crate) peer_ports_auto: bool,
     pub(crate) collaboration: crate::collab::Hub,
     pub(crate) steering: crate::steering::Queue,
+    pub(crate) events: Arc<crate::events::Hub>,
     thread_scope: OnceCell<bool>,
     tool_source_support: OnceCell<ToolSourceSupport>,
     chat_disabled: bool,
@@ -289,8 +293,89 @@ impl Session {
             return Err("client connection is closed".into());
         }
         self.require_chat()?;
-        self.steering
-            .command(self.client_id(), self.collaboration.presence()?, command)
+        let changed = !matches!(&command, wire::SteeringCommand::Snapshot {});
+        let snapshot =
+            self.steering
+                .command(self.client_id(), self.collaboration.presence()?, command)?;
+        if changed {
+            self.publish_user_input_events(&snapshot, None);
+        }
+        Ok(snapshot)
+    }
+
+    /// The availability signal contains metadata only. Reading this signal
+    /// never reserves, delivers, or acknowledges the underlying user message.
+    fn publish_user_input_events(
+        &self,
+        snapshot: &wire::SteeringSnapshot,
+        seed: Option<(&str, &str, &str)>,
+    ) {
+        let members = self.collaboration.native_members().unwrap_or_default();
+        for message in &snapshot.messages {
+            if message.state != wire::SteeringState::Queued {
+                continue;
+            }
+            let mut recipients = std::collections::BTreeMap::<String, Vec<String>>::new();
+            if let Some((owner, agent_id, _)) = seed {
+                if message.target == "next" || message.target == agent_id {
+                    recipients
+                        .entry(owner.into())
+                        .or_default()
+                        .push(format!("{}:{agent_id}", self.client_id()));
+                }
+            } else {
+                for (owner, member) in &members {
+                    if message.target == "next" || message.target == member.agent_id {
+                        recipients.entry(owner.clone()).or_default().push(format!(
+                            "{}:{}",
+                            self.client_id(),
+                            member.agent_id
+                        ));
+                    }
+                }
+            }
+            for (owner, audience) in recipients {
+                // The publisher key is already scoped by client_id. Hash the
+                // variable identifiers so a valid long message/subscription ID
+                // cannot exceed the journal's fixed deduplication-key limit.
+                use sha2::{Digest, Sha256};
+                let fingerprint = serde_json::to_vec(&(
+                    message.id.as_str(),
+                    message.revision,
+                    seed.map(|(_, _, id)| id).unwrap_or("enqueue"),
+                ))
+                .unwrap_or_default();
+                let key = format!(
+                    "input_{}",
+                    Sha256::digest(fingerprint)
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                );
+                let _ = self.events.publish_system(
+                    &owner,
+                    self.client_id(),
+                    None,
+                    "user.input_available",
+                    serde_json::json!({"message_id":message.id,"revision":message.revision,
+                        "target":message.target,"queue_revision":snapshot.revision,
+                        "observation":if seed.is_some(){"queued_snapshot"}else{"queue_changed"}}),
+                    Some(audience),
+                    Some(&key),
+                );
+            }
+        }
+    }
+
+    pub(crate) fn seed_user_input_events(
+        &self,
+        owner: &str,
+        agent_id: &str,
+        subscription_id: &str,
+    ) {
+        if let Ok(snapshot) = self.steering_command(wire::SteeringCommand::Snapshot {}) {
+            self.publish_user_input_events(&snapshot, Some((owner, agent_id, subscription_id)));
+        }
     }
 
     /// A captured credential must remain valid across every dispatch/result wait.
@@ -696,6 +781,9 @@ pub struct Broker {
     pub public_url: String,
     pub bridges: Arc<crate::bridge::Bridges>,
     pub(crate) awaiting: crate::http::await_tool::Registry,
+    pub(crate) events: Arc<crate::events::Hub>,
+    pub(crate) event_subscriptions: crate::http::events_tool::Registry,
+    pub(crate) worker_events: worker_events::Sources,
     native_messages: crate::messaging::Hub,
     pub(crate) session_io: session_io::Hub,
     pub oauth: crate::oauth::OAuth,
@@ -762,6 +850,9 @@ impl Broker {
             public_url,
             bridges: Arc::new(crate::bridge::Bridges::default()),
             awaiting: crate::http::await_tool::Registry::default(),
+            events: Arc::default(),
+            event_subscriptions: crate::http::events_tool::Registry::default(),
+            worker_events: worker_events::Sources::default(),
             native_messages: crate::messaging::Hub::default(),
             session_io: session_io::Hub::default(),
             portal: crate::portal::Portal::default(),
@@ -883,8 +974,9 @@ impl Broker {
         let (reports, _reports_rx) = mpsc::channel(1);
         let id = generate_secret().unwrap();
         let session = Arc::new(Session {
-            collaboration: crate::collab::Hub::for_session(&id),
+            collaboration: crate::collab::Hub::with_events(&id, self.events.clone()),
             steering: crate::steering::Queue::default(),
+            events: self.events.clone(),
             peer_ports: false,
             peer_ports_auto: false,
             thread_scope: OnceCell::new(),
@@ -1017,6 +1109,8 @@ impl Broker {
             session.wait_display.close();
             self.native_messages.close_connection(session);
             session.collaboration.close();
+            session.events.close_client(session.client_id());
+            self.worker_events.close_connection(&session);
             session.steering.close();
             session.disconnect.notify_one();
         }
@@ -1318,8 +1412,9 @@ impl Broker {
         let (sender, mut requests) = mpsc::channel::<Call>(wire::MAX_INFLIGHT);
         let (reports, mut code_reports) = mpsc::channel::<wire::CodeCompletion>(wire::MAX_INFLIGHT);
         let session = Arc::new(Session {
-            collaboration: crate::collab::Hub::for_session(&client_id),
+            collaboration: crate::collab::Hub::with_events(&client_id, self.events.clone()),
             steering: crate::steering::Queue::default(),
+            events: self.events.clone(),
             thread_scope: OnceCell::new(),
             tool_source_support: OnceCell::new(),
             peer_ports,
@@ -1689,6 +1784,8 @@ impl Broker {
         session.wait_display.close();
         self.native_messages.close_connection(&session);
         session.collaboration.close();
+        session.events.close_client(session.client_id());
+        self.worker_events.close_connection(&session);
         session.steering.close();
         let mut sessions = self.sessions.write().await;
         if let Some(clients) = sessions.get_mut(&user) {
@@ -2205,9 +2302,11 @@ mod tests {
     pub(super) fn allowed_session(id: &str, secret: &str, allow: Vec<Identity>) -> Arc<Session> {
         let (sender, _rx) = mpsc::channel(1);
         let (reports, _reports_rx) = mpsc::channel(1);
+        let events = Arc::new(crate::events::Hub::default());
         Arc::new(Session {
-            collaboration: crate::collab::Hub::for_session(id),
+            collaboration: crate::collab::Hub::with_events(id, events.clone()),
             steering: crate::steering::Queue::default(),
+            events,
             peer_ports: false,
             peer_ports_auto: false,
             thread_scope: OnceCell::new(),

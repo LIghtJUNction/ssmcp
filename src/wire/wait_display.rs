@@ -4,12 +4,12 @@
 use super::ControlAttribution;
 use serde::{Deserialize, Serialize};
 
-pub const CAPABILITY: &str = "wait_display_v1";
+pub const CAPABILITY: &str = "wait_display_v2";
 /// The relay has actual time-only delivery guards, including internal probes.
-pub const TIME_CAPABILITY: &str = "time_observation_v1";
+pub const TIME_CAPABILITY: &str = "time_observation_v2";
 pub const MAX_ACTIVE: usize = 32;
 pub const MAX_TARGETS: usize = 8;
-pub const MAX_WAIT_MS: u64 = 25_000;
+pub const MAX_WAIT_MS: u64 = super::MAX_OBSERVATION_WAIT_MS;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -18,6 +18,7 @@ pub enum Kind {
     Job,
     AgentStatus,
     AgentMessages,
+    Event,
     UserInput,
     Finish,
 }
@@ -29,6 +30,7 @@ impl Kind {
             Self::Job => "job",
             Self::AgentStatus => "agent status",
             Self::AgentMessages => "agent messages",
+            Self::Event => "events",
             Self::UserInput => "user input",
             Self::Finish => "finish decision",
         }
