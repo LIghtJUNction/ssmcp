@@ -87,6 +87,9 @@ pub(crate) struct ManagerTargetView {
     pub(crate) epoch: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) revision: Option<u64>,
+    /// Bounded, redacted text from the already-authorized task, never its result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) summary: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]

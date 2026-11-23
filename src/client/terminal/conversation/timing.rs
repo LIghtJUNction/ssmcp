@@ -46,6 +46,12 @@ fn selected(snapshot: &Snapshot) -> Option<&Entry> {
 }
 
 fn clock_label(entry: &Entry) -> String {
+    if let Some(wait) = &entry.wait {
+        use crate::wire::wait_display::Outcome;
+        if wait.outcome != Outcome::Pending {
+            return wait_outcome(wait.outcome).into();
+        }
+    }
     if matches!(entry.status, Status::Elapsed | Status::Expired) {
         return format!("{} 已到期", caption(entry));
     }
@@ -126,11 +132,17 @@ fn detail(snapshot: &Snapshot) -> Option<String> {
         }
     }
     for entry in &snapshot.recent {
-        let status = match entry.status {
-            Status::Running => "运行",
-            Status::Elapsed | Status::Expired => "已到期",
-            Status::Cancelled => "已取消",
-            Status::Disconnected => "已断开",
+        let status = if let Some(wait) = &entry.wait {
+            wait_outcome(wait.outcome)
+        } else {
+            match entry.status {
+                Status::Running => "运行",
+                Status::Elapsed | Status::Expired => "已到期",
+                Status::Cancelled => "已取消",
+                Status::Disconnected => "已断开",
+                Status::Returned => "条件触发返回",
+                Status::Unknown => "结果未知",
+            }
         };
         lines.push(format!(
             "#{} · {} · {status} · 已用 {}",
@@ -186,6 +198,7 @@ impl State {
                 cancellable: false,
                 episode: None,
                 attribution: None,
+                wait: None,
             }
         }));
         snapshot
@@ -216,6 +229,231 @@ impl State {
             return Some(format!("等待 {}", duration(remaining, true)));
         }
         entry.map(clock_label)
+    }
+}
+
+fn wait_duration(ms: u64) -> String {
+    if ms > 0 && ms < 1000 {
+        format!("{ms}ms")
+    } else if ms < 60_000 {
+        format!("{}s", ms / 1000)
+    } else {
+        duration(ms, false)
+    }
+}
+
+fn wait_mode(mode: crate::wire::wait_display::Mode) -> &'static str {
+    use crate::wire::wait_display::Mode;
+    match mode {
+        Mode::Any => "ANY",
+        Mode::All => "ALL",
+        Mode::Single => "SINGLE",
+        Mode::Change => "CHANGE",
+    }
+}
+
+fn wait_outcome(outcome: crate::wire::wait_display::Outcome) -> &'static str {
+    use crate::wire::wait_display::Outcome;
+    match outcome {
+        Outcome::Pending => "Pending",
+        Outcome::Triggered => "Triggered",
+        Outcome::WindowExpired => "Window expired",
+        Outcome::ObservationStopped => "Observation stopped",
+        Outcome::Unknown => "Unknown",
+    }
+}
+
+#[derive(Clone)]
+struct WaitCard {
+    key: String,
+    heading: String,
+    detail: String,
+    entry: Entry,
+}
+
+fn wait_card(entry: &Entry) -> Option<WaitCard> {
+    use crate::wire::wait_display::{Mode, Outcome};
+    let wait = entry.wait.as_ref()?;
+    let target = wait
+        .targets
+        .first()
+        .map(String::as_str)
+        .unwrap_or("Requested condition");
+    let budget = wait
+        .window_ms
+        .map(|ms| format!("/{}", wait_duration(ms)))
+        .unwrap_or_default();
+    let heading = format!(
+        "{} · {} · {} · {}{budget}",
+        wait_mode(wait.mode),
+        if wait.targets.len() > 1 {
+            format!(
+                "{} +{}",
+                panel::fit(&panel::safe_text(target), 18),
+                wait.targets.len() - 1
+            )
+        } else {
+            panel::fit(&panel::safe_text(target), 22)
+        },
+        wait_outcome(wait.outcome),
+        wait_duration(entry.elapsed_ms)
+    );
+    let mut detail = vec![
+        match wait.mode {
+            Mode::Any => "ANY: at least one target must report ready.",
+            Mode::All if wait.operation == "ssmcp.worker.wait_for" => {
+                "ALL: every condition must be satisfied in the same observation."
+            }
+            Mode::All => "ALL: every target must report ready.",
+            Mode::Single => "SINGLE: observe only the named target.",
+            Mode::Change => "CHANGE: observe the requested capacity revision.",
+        }
+        .to_owned(),
+    ];
+    for (index, target) in wait.targets.iter().enumerate() {
+        detail.push(format!("{}. {}", index + 1, panel::safe_text(target)));
+    }
+    detail.push(format!(
+        "Elapsed {} · window limit {} · remaining {}",
+        duration(entry.elapsed_ms, false),
+        wait.window_ms
+            .map(|ms| if ms < 1000 {
+                format!("{ms}ms")
+            } else {
+                duration(ms, false)
+            })
+            .unwrap_or_else(|| "not specified".into()),
+        entry
+            .remaining_ms
+            .map(|ms| duration(ms, true))
+            .unwrap_or_else(|| "not specified".into())
+    ));
+    detail.push(match wait.outcome {
+        Outcome::Pending if entry.remaining_ms == Some(0) =>
+            "The observation budget has elapsed; the actual return is still pending.",
+        Outcome::Pending =>
+            "Observation pending. The window budget is not the task's execution deadline.",
+        Outcome::Triggered =>
+            "The requested condition triggered a return. This does not establish overall task completion.",
+        Outcome::WindowExpired =>
+            "This observation window expired. Expiry does not cancel execution or establish task completion.",
+        Outcome::ObservationStopped =>
+            "Only this observation stopped. Stopping observation does not cancel execution.",
+        Outcome::Unknown if entry.remaining_ms == Some(0) =>
+            "The local observation budget elapsed without a terminal receipt. The return remains unknown.",
+        Outcome::Unknown =>
+            "The outcome is unknown. Do not infer success, cancellation or permission to replay.",
+    }.into());
+    detail.push(format!("Operation {}", panel::safe_text(&wait.operation)));
+    detail.extend(
+        wait.references
+            .iter()
+            .map(|reference| panel::safe_text(reference)),
+    );
+    detail.push(format!(
+        "Observer ID {}{}",
+        panel::safe_text(&entry.id),
+        entry
+            .episode
+            .map(|episode| format!(" · episode {episode}"))
+            .unwrap_or_default()
+    ));
+    if let Some(attribution) = &entry.attribution {
+        if let Some(agent) = &attribution.agent {
+            detail.push(format!(
+                "Observed by {} @ {}",
+                panel::safe_text(&agent.name),
+                panel::safe_text(&attribution.account.login)
+            ));
+        }
+    }
+    if entry.cancellable {
+        detail.push(format!(
+            "/wait cancel {} stops only this observation.",
+            panel::safe_text(&entry.id)
+        ));
+    }
+    Some(WaitCard {
+        key: format!(
+            "wait-observation\0{}\0{}",
+            entry.id,
+            entry.episode.unwrap_or(0)
+        ),
+        heading,
+        detail: detail.join("\n"),
+        entry: entry.clone(),
+    })
+}
+
+/// The same bounded, stable-card replacement used by worker operations. It
+/// stores presentation only and cannot acquire, complete or replay any work.
+#[derive(Default)]
+pub(super) struct WaitFeed {
+    owner: Option<Option<crate::client::interface::history::HistoryOwner>>,
+    observed: std::collections::BTreeMap<String, WaitCard>,
+}
+
+impl WaitFeed {
+    fn update(
+        &mut self,
+        snapshot: Snapshot,
+        owner: Option<crate::client::interface::history::HistoryOwner>,
+    ) -> Vec<WaitCard> {
+        use crate::wire::wait_display::Outcome;
+        if self.owner.as_ref() != Some(&owner) {
+            self.observed.clear();
+            self.owner = Some(owner);
+        }
+        let cards: Vec<_> = snapshot
+            .active
+            .iter()
+            .chain(&snapshot.recent)
+            .filter_map(wait_card)
+            .collect();
+        let present: std::collections::BTreeSet<_> =
+            cards.iter().map(|card| card.key.clone()).collect();
+        let mut updates = Vec::new();
+        for card in cards {
+            if self.observed.get(&card.key).is_none_or(|previous| {
+                previous.heading != card.heading || previous.detail != card.detail
+            }) {
+                updates.push(card.clone());
+            }
+            self.observed.insert(card.key.clone(), card);
+        }
+        for (key, previous) in &mut self.observed {
+            if !present.contains(key)
+                && previous
+                    .entry
+                    .wait
+                    .as_ref()
+                    .is_some_and(|wait| wait.outcome == Outcome::Pending)
+            {
+                let mut ended = previous.entry.clone();
+                ended.wait.as_mut().expect("checked wait").outcome = Outcome::Unknown;
+                ended.status = Status::Unknown;
+                ended.remaining_ms = None;
+                ended.cancellable = false;
+                let card = wait_card(&ended).expect("retained wait");
+                *previous = card.clone();
+                updates.push(card);
+            }
+        }
+        while self.observed.len() > 128 {
+            self.observed.pop_first();
+        }
+        updates
+    }
+}
+
+impl State {
+    pub(super) fn chat_wait_observations(&mut self) {
+        let snapshot = self.chat_timing_snapshot();
+        let owner = crate::client::interface::history::current_owner();
+        for card in self.conversation.wait_observations.update(snapshot, owner) {
+            self.events
+                .ingest_wait_observation(&card.key, &card.heading, &card.detail);
+        }
     }
 }
 

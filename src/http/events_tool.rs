@@ -1254,6 +1254,25 @@ pub(crate) async fn dispatch(
             check_native_sources(&native_sources(&broker, &record, &sources))?;
             let mut observation =
                 DirectObservation::start(&broker, &context.actor, &subscription_id)?;
+            // The subscription and its sources have been authorized above.
+            // Display owns no event cursor, native permit or delivery authority.
+            let display = context.session.show_wait(
+                &broker,
+                crate::broker::wait_display::Request {
+                    user: &user,
+                    token: &access_token,
+                    binding: &context.binding,
+                    wait_id: &observation.id,
+                    operation: "events.wait",
+                    targets: vec![crate::wire::wait_display::Kind::Event],
+                    target_labels: vec!["Subscription events".into()],
+                    target_details: vec![format!(
+                        "Subscription ID {subscription_id}; up to {limit} matching authorized events"
+                    )],
+                    mode: crate::wire::wait_display::Mode::Single,
+                    timeout_ms: wait_ms,
+                },
+            );
             let started = Instant::now();
             let result: Result<Value, String> = async {
                 let first = broker
@@ -1295,13 +1314,20 @@ pub(crate) async fn dispatch(
                 Ok(result)
             }
             .await;
-            observation.finish(
-                result
-                    .as_ref()
-                    .ok()
-                    .and_then(|value| value["status"].as_str())
-                    .unwrap_or("error"),
-            );
+            let outcome = result
+                .as_ref()
+                .ok()
+                .and_then(|value| value["status"].as_str())
+                .unwrap_or("error");
+            observation.finish(outcome);
+            if let Some(display) = display {
+                use crate::wire::wait_display::Outcome;
+                display.finish(match outcome {
+                    "ready" => Outcome::Triggered,
+                    "pending" => Outcome::WindowExpired,
+                    _ => Outcome::Unknown,
+                });
+            }
             result?
         }
         Request::Ack {

@@ -3,10 +3,10 @@
 use super::{Broker, Session};
 use crate::{
     code_mode::RunBinding,
-    wire::wait_display::{self, Kind, Observation, Snapshot},
+    wire::wait_display::{self, Kind, Mode, Observation, Outcome, Snapshot},
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex, Weak},
     time::{Duration, Instant},
 };
@@ -17,7 +17,11 @@ pub(crate) struct Request<'a> {
     pub token: &'a str,
     pub binding: &'a RunBinding,
     pub wait_id: &'a str,
+    pub operation: &'static str,
     pub targets: Vec<Kind>,
+    pub target_labels: Vec<String>,
+    pub target_details: Vec<String>,
+    pub mode: Mode,
     pub timeout_ms: u64,
 }
 
@@ -55,6 +59,7 @@ struct Record {
     observation: Observation,
     started: Instant,
     deadline: Instant,
+    ended: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -63,6 +68,7 @@ struct State {
     episode: u64,
     closed: bool,
     active: BTreeMap<String, Record>,
+    recent: VecDeque<Record>,
 }
 
 pub(crate) struct Hub {
@@ -100,7 +106,7 @@ impl Hub {
         session: &Arc<Session>,
         request: Request<'_>,
     ) -> Option<Lease> {
-        if !self.supported || !(1_000..=wait_display::MAX_WAIT_MS).contains(&request.timeout_ms) {
+        if !self.supported || !(1..=wait_display::MAX_WAIT_MS).contains(&request.timeout_ms) {
             return None;
         }
         let authority = Authority {
@@ -126,13 +132,20 @@ impl Hub {
             wait_id: request.wait_id.into(),
             episode,
             attribution,
+            operation: request.operation.into(),
             targets: request.targets,
+            target_labels: request.target_labels,
+            target_details: request.target_details,
+            mode: request.mode,
+            outcome: Outcome::Pending,
+            window_ms: request.timeout_ms,
             elapsed_ms: 0,
             remaining_ms: request.timeout_ms,
         };
         Snapshot {
             revision: 1,
             active: vec![observation.clone()],
+            recent: vec![],
         }
         .validate()
         .ok()?;
@@ -146,6 +159,7 @@ impl Hub {
                 observation,
                 started: now,
                 deadline: now + Duration::from_millis(request.timeout_ms),
+                ended: None,
             },
         );
         self.changed(&mut state);
@@ -159,11 +173,20 @@ impl Hub {
     pub(super) fn refresh(&self, broker: &Broker, session: &Arc<Session>) {
         let now = Instant::now();
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let before = state.active.len();
+        let before = (state.active.len(), state.recent.len());
+        // A deadline is not evidence that the awaited operation returned.
+        // The owning future records its actual outcome; a receiver may show
+        // the expired observation budget while that return is still pending.
         state
             .active
-            .retain(|_, record| now < record.deadline && record.authority.valid(broker, session));
-        if before != state.active.len() {
+            .retain(|_, record| record.authority.valid(broker, session));
+        state.recent.retain(|record| {
+            record.authority.valid(broker, session)
+                && record.ended.is_some_and(|ended| {
+                    now.saturating_duration_since(ended) < Duration::from_secs(300)
+                })
+        });
+        if before != (state.active.len(), state.recent.len()) {
             self.changed(&mut state);
         }
     }
@@ -200,17 +223,42 @@ impl Hub {
         Some(Snapshot {
             revision: state.revision,
             active,
+            recent: state
+                .recent
+                .iter()
+                .map(|record| record.observation.clone())
+                .collect(),
         })
     }
 
-    fn finish(&self, wait_id: &str, episode: u64) {
+    fn finish(&self, wait_id: &str, episode: u64, outcome: Outcome) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state
             .active
             .get(wait_id)
             .is_some_and(|record| record.observation.episode == episode)
         {
-            state.active.remove(wait_id);
+            let mut record = state.active.remove(wait_id).expect("checked exact episode");
+            let now = Instant::now();
+            record.ended = Some(now);
+            record.observation.outcome = outcome;
+            record.observation.elapsed_ms =
+                now.saturating_duration_since(record.started)
+                    .as_millis()
+                    .min(u128::from(wait_display::MAX_WAIT_MS)) as u64;
+            record.observation.remaining_ms = record
+                .deadline
+                .saturating_duration_since(now)
+                .as_millis()
+                .min(u128::from(wait_display::MAX_WAIT_MS))
+                as u64;
+            if outcome == Outcome::WindowExpired {
+                record.observation.remaining_ms = 0;
+            }
+            state.recent.push_back(record);
+            while state.recent.len() > wait_display::MAX_ACTIVE {
+                state.recent.pop_front();
+            }
             self.changed(&mut state);
         }
     }
@@ -219,6 +267,7 @@ impl Hub {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.closed = true;
         state.active.clear();
+        state.recent.clear();
         self.changed(&mut state);
     }
 }
@@ -229,10 +278,18 @@ pub(crate) struct Lease {
     episode: u64,
 }
 
+impl Lease {
+    pub(crate) fn finish(self, outcome: Outcome) {
+        if let Some(hub) = self.hub.upgrade() {
+            hub.finish(&self.wait_id, self.episode, outcome);
+        }
+    }
+}
+
 impl Drop for Lease {
     fn drop(&mut self) {
         if let Some(hub) = self.hub.upgrade() {
-            hub.finish(&self.wait_id, self.episode);
+            hub.finish(&self.wait_id, self.episode, Outcome::ObservationStopped);
         }
     }
 }
@@ -290,12 +347,19 @@ mod tests {
                                 name: "fixture".into(),
                             }),
                         },
+                        operation: "await".into(),
                         targets: vec![Kind::Job],
+                        target_labels: vec!["Background job returns".into()],
+                        target_details: vec!["Requested job ID fixture".into()],
+                        mode: Mode::Any,
+                        outcome: Outcome::Pending,
+                        window_ms: 1000,
                         elapsed_ms: 0,
                         remaining_ms: 1000,
                     },
                     started: now,
                     deadline: now + Duration::from_secs(1),
+                    ended: None,
                 },
             );
             hub.changed(&mut state);

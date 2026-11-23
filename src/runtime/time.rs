@@ -3,6 +3,7 @@
 mod civil;
 mod execution;
 mod relay;
+mod wait_view;
 use super::{
     call_scope::{Source, ThreadScope},
     native_host::{Call, NativePlugin, PluginFuture},
@@ -16,7 +17,7 @@ pub(crate) use execution::ExecutionTiming;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex, OnceLock, Weak},
     time::{Duration, Instant},
 };
@@ -84,6 +85,32 @@ pub(crate) enum Status {
     Cancelled,
     Expired,
     Disconnected,
+    Returned,
+    Unknown,
+}
+
+/// A bounded display projection. This contains no receipt body or authority.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct WaitView {
+    pub operation: String,
+    pub mode: crate::wire::wait_display::Mode,
+    pub targets: Vec<String>,
+    pub references: Vec<String>,
+    pub outcome: crate::wire::wait_display::Outcome,
+    pub window_ms: Option<u64>,
+}
+
+impl WaitView {
+    fn status(&self) -> Status {
+        use crate::wire::wait_display::Outcome;
+        match self.outcome {
+            Outcome::Pending => Status::Running,
+            Outcome::Triggered => Status::Returned,
+            Outcome::WindowExpired => Status::Expired,
+            Outcome::ObservationStopped => Status::Cancelled,
+            Outcome::Unknown => Status::Unknown,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -103,6 +130,8 @@ pub(crate) struct Entry {
     pub episode: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attribution: Option<ControlAttribution>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait: Option<WaitView>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -166,6 +195,7 @@ impl Timer {
             cancellable: self.status == Status::Running,
             episode: None,
             attribution: None,
+            wait: None,
         }
     }
 }
@@ -178,24 +208,30 @@ struct Observation {
     deadline: Option<Instant>,
     cancellable: bool,
     cancel: watch::Sender<bool>,
+    view: WaitView,
+    ended: Option<Instant>,
 }
 
 impl Observation {
     fn entry(&self, now: Instant) -> Entry {
+        let through = self.ended.unwrap_or(now);
         Entry {
             id: self.id.clone(),
             kind: "observation",
             label: self.label.clone(),
-            status: Status::Running,
-            elapsed_ms: millis(now.saturating_duration_since(self.started)),
+            status: self.view.status(),
+            elapsed_ms: millis(through.saturating_duration_since(self.started)),
             remaining_ms: self
                 .deadline
-                .map(|deadline| remaining_millis(deadline, now)),
+                .map(|deadline| remaining_millis(deadline, through)),
             deadline_unix_ms: None,
-            finished_age_ms: None,
-            cancellable: self.cancellable,
+            finished_age_ms: self
+                .ended
+                .map(|ended| millis(now.saturating_duration_since(ended))),
+            cancellable: self.ended.is_none() && self.cancellable,
             episode: None,
             attribution: None,
+            wait: Some(self.view.clone()),
         }
     }
 }
@@ -208,6 +244,7 @@ struct State {
     next: u64,
     timers: BTreeMap<String, Timer>,
     observations: BTreeMap<String, Observation>,
+    finished_observations: VecDeque<Observation>,
 }
 
 impl State {
@@ -215,6 +252,10 @@ impl State {
         for timer in self.timers.values_mut() {
             timer.tick(now);
         }
+        self.finished_observations.retain(|wait| {
+            wait.ended
+                .is_some_and(|ended| now.saturating_duration_since(ended) < RETENTION)
+        });
         self.timers.retain(|_, timer| {
             timer
                 .ended
@@ -561,6 +602,8 @@ impl Clock {
                     .map(|duration| now + Duration::from_millis(duration)),
                 cancellable: spec.cancellable,
                 cancel,
+                view: spec.view,
+                ended: None,
             },
         );
         drop(state);
@@ -569,7 +612,27 @@ impl Clock {
             clock: self.clone(),
             id,
             receiver,
+            operation: name.to_owned(),
+            cursors: (
+                arguments["stdout_cursor"].as_u64().unwrap_or(0),
+                arguments["stderr_cursor"].as_u64().unwrap_or(0),
+            ),
+            finished: false,
         })
+    }
+
+    fn finish_observation(&self, id: &str, outcome: crate::wire::wait_display::Outcome) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(mut wait) = state.observations.remove(id) {
+            wait.ended = Some(Instant::now());
+            wait.view.outcome = outcome;
+            state.finished_observations.push_back(wait);
+            while state.finished_observations.len() > MAX_RECORDS {
+                state.finished_observations.pop_front();
+            }
+        }
+        drop(state);
+        changed();
     }
 
     fn snapshot(&self, owner: &Option<HistoryOwner>, now: Instant) -> Snapshot {
@@ -591,6 +654,10 @@ impl Clock {
                 snapshot.recent.push(timer.entry(now));
             }
         }
+        // The four-row timer preview must not discard actual wait receipts.
+        // Observation history already has its own count and retention bounds.
+        snapshot.recent.sort_by_key(|entry| entry.finished_age_ms);
+        snapshot.recent.truncate(4);
         snapshot.active.extend(
             state
                 .observations
@@ -601,8 +668,15 @@ impl Clock {
         // Relay observations have explicit account/agent labels and are global
         // display only. They never borrow the selected conversation's owner.
         snapshot.active.extend(state.relay.entries(now));
+        snapshot.recent.extend(state.relay.recent_entries(now));
+        snapshot.recent.extend(
+            state
+                .finished_observations
+                .iter()
+                .filter(|wait| wait.owner.visible(owner))
+                .map(|wait| wait.entry(now)),
+        );
         snapshot.recent.sort_by_key(|entry| entry.finished_age_ms);
-        snapshot.recent.truncate(4);
         snapshot
     }
 
@@ -653,6 +727,7 @@ impl Clock {
         }
         state.timers.clear();
         state.observations.clear();
+        state.finished_observations.clear();
         drop(state);
         changed();
     }
@@ -741,48 +816,34 @@ enum Request {
 struct ObservationSpec {
     timeout_ms: Option<u64>,
     cancellable: bool,
+    view: WaitView,
 }
 
 fn observation(name: &str, arguments: &Value) -> Option<ObservationSpec> {
-    if name.starts_with("ssmcp.time.") {
-        return None;
-    }
-    let (default, cancellable) = match name {
-        "ssmcp.exec.wait" => (Some(MAX_WAIT_MS), true),
-        "ssmcp.exec.read" | "terminal.read" | "ssmcp.output.read" | "ssmcp.audit.events" => {
-            (Some(0), true)
-        }
-        "ssmcp.ui.questions" if arguments["op"] == "wait" => (None, false),
-        _ if name.starts_with("ssmcp.ui.") => return None,
-        _ if name.ends_with(".wait") => (None, false),
-        _ => return None,
-    };
-    let timeout = arguments
-        .get("wait_ms")
-        .or_else(|| arguments.get("timeout_ms"));
-    // Invalid or excessive input is validated by the actual operation; the
-    // presentation hook neither invents a deadline nor changes its outcome.
-    let timeout_ms = match timeout {
-        Some(Value::Null) if name == "ssmcp.exec.wait" => default,
-        Some(value) => value.as_u64().filter(|value| *value <= MAX_DURATION_MS),
-        None => default,
-    };
-    if timeout_ms == Some(0) && (default.is_some() || arguments.get("wait_ms").is_some()) {
-        return None;
-    }
-    Some(ObservationSpec {
-        timeout_ms: timeout_ms.filter(|value| *value != 0),
-        cancellable,
-    })
+    wait_view::spec(name, arguments)
 }
 
 pub(super) struct ObservationGuard {
     clock: Arc<Clock>,
     id: String,
     receiver: watch::Receiver<bool>,
+    operation: String,
+    cursors: (u64, u64),
+    finished: bool,
 }
 
 impl ObservationGuard {
+    pub(super) fn finish(&mut self, result: &Result<Value, String>, stopped: bool) {
+        use crate::wire::wait_display::Outcome;
+        let outcome = if stopped {
+            Outcome::ObservationStopped
+        } else {
+            wait_view::outcome(&self.operation, self.cursors, result)
+        };
+        self.clock.finish_observation(&self.id, outcome);
+        self.finished = true;
+    }
+
     pub(super) async fn cancelled(&mut self) {
         if !*self.receiver.borrow() {
             let _ = self.receiver.changed().await;
@@ -792,13 +853,12 @@ impl ObservationGuard {
 
 impl Drop for ObservationGuard {
     fn drop(&mut self) {
-        self.clock
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .observations
-            .remove(&self.id);
-        changed();
+        if !self.finished {
+            self.clock.finish_observation(
+                &self.id,
+                crate::wire::wait_display::Outcome::ObservationStopped,
+            );
+        }
     }
 }
 

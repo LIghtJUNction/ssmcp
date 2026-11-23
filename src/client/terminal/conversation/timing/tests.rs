@@ -13,6 +13,7 @@ fn entry(remaining_ms: Option<u64>, elapsed_ms: u64) -> Entry {
         cancellable: true,
         episode: None,
         attribution: None,
+        wait: None,
     }
 }
 
@@ -221,5 +222,205 @@ fn mixed_width_time_labels_fit_real_frames_without_changing_draft_or_actions() {
         }
         assert_eq!(state.conversation.composer.text(), "中文 draft 不变");
         assert!(state.actions.is_empty());
+    }
+}
+
+use crate::wire::wait_display::{Mode as WaitMode, Outcome as WaitOutcome};
+
+fn observed_wait(mode: WaitMode, outcome: WaitOutcome) -> Entry {
+    let mut entry = entry(Some(18_000), 2_000);
+    entry.id = "watch_fixture_connection_0123456789abcdef_exact".into();
+    entry.kind = "relay_wait";
+    entry.label = "Owned wait fixture".into();
+    entry.episode = Some(3);
+    entry.cancellable = false;
+    entry.wait = Some(crate::runtime::time::WaitView {
+        operation: "await".into(),
+        mode,
+        targets: vec!["Command exits".into(), "Worker task result".into()],
+        references: vec!["task_id: worker_task_exact_fixture_0123456789abcdef".into()],
+        outcome,
+        window_ms: Some(20_000),
+    });
+    if outcome != WaitOutcome::Pending {
+        entry.status = match outcome {
+            WaitOutcome::Triggered => Status::Returned,
+            WaitOutcome::WindowExpired => Status::Expired,
+            WaitOutcome::ObservationStopped => Status::Cancelled,
+            _ => Status::Unknown,
+        };
+        entry.finished_age_ms = Some(0);
+        if outcome == WaitOutcome::WindowExpired {
+            entry.elapsed_ms = 20_000;
+            entry.remaining_ms = Some(0);
+        }
+    }
+    entry
+}
+
+fn wait_snapshot(entry: Entry) -> Snapshot {
+    if entry.wait.as_ref().unwrap().outcome == WaitOutcome::Pending {
+        Snapshot {
+            active: vec![entry],
+            recent: vec![],
+        }
+    } else {
+        Snapshot {
+            active: vec![],
+            recent: vec![entry],
+        }
+    }
+}
+
+#[test]
+fn wait_cards_explain_any_all_budget_and_terminal_outcomes_without_id_noise() {
+    for mode in [WaitMode::Any, WaitMode::All] {
+        for outcome in [
+            WaitOutcome::Pending,
+            WaitOutcome::Triggered,
+            WaitOutcome::WindowExpired,
+            WaitOutcome::ObservationStopped,
+            WaitOutcome::Unknown,
+        ] {
+            let entry = observed_wait(mode, outcome);
+            let card = wait_card(&entry).unwrap();
+            assert!(card.heading.contains("Command exits"));
+            assert!(card.heading.contains(wait_mode(mode)));
+            assert!(card.heading.contains(wait_outcome(outcome)));
+            assert!(!card.heading.contains(&entry.id));
+            assert!(!card.heading.contains("worker_task_exact_fixture"));
+            assert!(card.detail.contains(&entry.id));
+            assert!(card.detail.contains("window limit 00:20"));
+            assert!(card.detail.contains("Worker task result"));
+            if mode == WaitMode::Any {
+                assert!(card.detail.contains("at least one target"));
+            } else {
+                assert!(card.detail.contains("every target must report ready"));
+            }
+            match outcome {
+                WaitOutcome::WindowExpired => {
+                    assert!(
+                        card.detail
+                            .contains("does not cancel execution or establish task completion")
+                    )
+                }
+                WaitOutcome::ObservationStopped => {
+                    assert!(card.detail.contains("does not cancel execution"))
+                }
+                WaitOutcome::Unknown => assert!(card.detail.contains("Do not infer success")),
+                _ => {}
+            }
+        }
+    }
+}
+
+#[test]
+fn real_wait_frames_keep_one_card_visible_and_preserve_draft_at_wide_and_narrow_widths() {
+    for cols in [120, 48] {
+        let mut state = super::super::super::preview_state(36, cols, &Ui::default());
+        state.events.clear();
+        state.panel.tasks.clear();
+        state.conversation.composer.set_text("KEEP_WAIT_DRAFT");
+        state.conversation.composer.left();
+        let cursor = state.conversation.composer.cursor();
+        state.conversation.timing_fixture = Some(wait_snapshot(observed_wait(
+            WaitMode::All,
+            WaitOutcome::Pending,
+        )));
+        let collapsed = screen(&mut state);
+        assert!(collapsed.contains("Command exits"), "{cols}: {collapsed}");
+        assert!(collapsed.contains("ALL"), "{cols}: {collapsed}");
+        assert!(collapsed.contains("Pending"), "{cols}: {collapsed}");
+        assert_eq!(state.events.snapshot()["retained_events"], 1);
+        state.events.open();
+        let original = state.events.snapshot()["events"][0]["id"].clone();
+        for outcome in [
+            WaitOutcome::Pending,
+            WaitOutcome::WindowExpired,
+            WaitOutcome::Triggered,
+            WaitOutcome::ObservationStopped,
+            WaitOutcome::Unknown,
+        ] {
+            state.conversation.timing_fixture =
+                Some(wait_snapshot(observed_wait(WaitMode::All, outcome)));
+            let rendered = screen(&mut state);
+            assert!(
+                rendered.contains(wait_outcome(outcome)),
+                "{cols}: {rendered}"
+            );
+            assert!(rendered.contains("Command exits"), "{cols}: {rendered}");
+            assert!(
+                rendered
+                    .lines()
+                    .all(|line| line.width() <= usize::from(cols))
+            );
+            assert_eq!(state.events.snapshot()["retained_events"], 1);
+            assert_eq!(state.events.snapshot()["events"][0]["id"], original);
+            assert_eq!(state.events.snapshot()["events"][0]["expanded"], true);
+            assert_eq!(state.conversation.composer.text(), "KEEP_WAIT_DRAFT");
+            assert_eq!(state.conversation.composer.cursor(), cursor);
+            assert!(state.actions.is_empty());
+        }
+    }
+}
+
+#[test]
+fn disappearing_wait_is_unknown_and_never_left_as_a_live_pending_card() {
+    let mut feed = WaitFeed::default();
+    let first = feed.update(
+        wait_snapshot(observed_wait(WaitMode::Any, WaitOutcome::Pending)),
+        None,
+    );
+    assert_eq!(first.len(), 1);
+    let missing = feed.update(Snapshot::default(), None);
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].key, first[0].key);
+    assert!(missing[0].heading.contains("Unknown"));
+    assert!(!missing[0].heading.contains("Triggered"));
+    assert!(feed.update(Snapshot::default(), None).is_empty());
+}
+
+#[test]
+#[ignore = "export actual renderer frames using the coordinator's frozen test binary"]
+fn export_wait_observation_frames() {
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("SSMCP_WAIT_FIXTURE_DIR").expect("owned fixture output directory"),
+    );
+    std::fs::create_dir_all(&directory).unwrap();
+    for cols in [120, 48] {
+        for (name, mode, outcome) in [
+            ("pending-any", WaitMode::Any, WaitOutcome::Pending),
+            ("pending-all", WaitMode::All, WaitOutcome::Pending),
+            ("triggered", WaitMode::Any, WaitOutcome::Triggered),
+            ("window-expired", WaitMode::All, WaitOutcome::WindowExpired),
+            (
+                "observation-stopped",
+                WaitMode::Any,
+                WaitOutcome::ObservationStopped,
+            ),
+            ("unknown", WaitMode::All, WaitOutcome::Unknown),
+        ] {
+            let mut state = super::super::super::preview_state(36, cols, &Ui::default());
+            state.events.clear();
+            state.panel.tasks.clear();
+            state.conversation.composer.set_text("KEEP_WAIT_DRAFT");
+            state.conversation.timing_fixture = Some(wait_snapshot(observed_wait(mode, outcome)));
+            for expanded in [false, true] {
+                if expanded {
+                    state.events.open();
+                }
+                let frame = state.chat_frame(Instant::now());
+                let suffix = if expanded { "detail" } else { "summary" };
+                let stem = format!("wait-{name}-{cols}-{suffix}");
+                std::fs::write(directory.join(format!("{stem}.ansi")), frame.diff(None)).unwrap();
+                std::fs::write(
+                    directory.join(format!("{stem}.json")),
+                    serde_json::to_vec(&serde_json::json!({"rows":36,"cols":cols,"scenario":name,
+                        "expanded":expanded,"renderer":"conversation::chat_frame"}))
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+        }
     }
 }
