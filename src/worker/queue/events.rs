@@ -220,3 +220,115 @@ impl<T: Clone> Queue<T> {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn actor(participant: &str) -> Actor {
+        Actor {
+            provider: "github".into(),
+            subject: "42".into(),
+            participant: Some(participant.into()),
+            connection: 1,
+        }
+    }
+
+    #[test]
+    fn committed_retirement_and_release_are_ordered_without_new_work() {
+        let queue = Queue::<()>::new("generation".into(), 1).unwrap();
+        let manager = actor("manager");
+        let worker = actor("worker");
+        let client = "a".repeat(64);
+        queue.remote_ready().unwrap();
+        queue.attach(&manager, &client, 1).unwrap();
+        assert!(queue.claim_remote(&worker, 2).unwrap().is_none());
+        queue.resize_managed(&manager, &client, 0).unwrap();
+        assert!(queue.claim_remote(&worker, 3).unwrap().is_none());
+        let retirement = queue.retirement(&worker).unwrap();
+        queue.release_remote(&worker, &retirement, 4).unwrap();
+        assert!(queue.claim_remote(&worker, 5).unwrap().is_none());
+        let page = queue
+            .events(
+                &manager,
+                &client,
+                &EventRequest {
+                    after: None,
+                    limit: 128,
+                    wait_ms: 0,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            page.events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec!["worker.idle", "worker.retiring", "worker.offline"]
+        );
+        assert!(page.events.iter().all(|event| event.task_id.is_none()
+            && event.task_status.is_none()
+            && event.participant_id.as_deref() == Some("worker")));
+        let repeated = queue
+            .events(
+                &manager,
+                &client,
+                &EventRequest {
+                    after: None,
+                    limit: 128,
+                    wait_ms: 0,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&page).unwrap(),
+            serde_json::to_value(&repeated).unwrap()
+        );
+        assert!(queue.state.lock().unwrap().tasks.is_empty());
+    }
+
+    #[test]
+    fn repeated_offline_status_does_not_forge_another_transition() {
+        let queue = Queue::<()>::new("generation".into(), 1).unwrap();
+        let manager = actor("manager");
+        let client = "a".repeat(64);
+        queue.attach(&manager, &client, 1).unwrap();
+        let epoch = queue.online(0).unwrap();
+        queue.offline(0, epoch, "transport closed").unwrap();
+        queue.offline(0, epoch, "same closed transport").unwrap();
+        let page = queue
+            .events(
+                &manager,
+                &client,
+                &EventRequest {
+                    after: None,
+                    limit: 128,
+                    wait_ms: 0,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            page.events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec!["worker.idle", "worker.offline"]
+        );
+        assert!(
+            queue
+                .events(
+                    &manager,
+                    &client,
+                    &EventRequest {
+                        after: Some(EventCursor {
+                            generation: "replacement_generation".into(),
+                            seq: 0
+                        }),
+                        limit: 128,
+                        wait_ms: 0,
+                    }
+                )
+                .is_err()
+        );
+    }
+}

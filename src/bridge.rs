@@ -737,10 +737,9 @@ pub async fn dispatch(
                     token: String,
                 }
                 let binding: Binding = parse(Value::Object(args))?;
-                let agent =
-                    session
-                        .collaboration
-                        .bind(&owner, &binding.agent_id, &binding.token)?;
+                session
+                    .collaboration
+                    .bind(&owner, &binding.agent_id, &binding.token)?;
                 let run = access.audit_run.as_ref().ok_or(
                     "collab.bind is scoped to code_mode; call it at the start of each run",
                 )?;
@@ -749,7 +748,32 @@ pub async fn dispatch(
                     return Err("collaboration connection changed before binding".into());
                 }
                 run.bind(&client_id, &owner, &binding.agent_id, &binding.token)?;
-                return Ok(json!({"client_id":client_id,"agent":agent,"bound":true}));
+                let subscriptions = crate::http::events_tool::worker_subscriptions::after_bind(
+                    &broker,
+                    &access.user,
+                    &access.token,
+                    run,
+                )
+                .await;
+                let current = access.session(&client_id).await?;
+                let authorization = broker
+                    .authenticate_now(&access.user, &access.token)
+                    .ok_or("authorization changed while preparing worker subscriptions")?;
+                if !Arc::ptr_eq(&current, &session)
+                    || !authorization.permits(&session)
+                    || crate::bridge::owner(&access.user, &authorization)? != owner
+                {
+                    return Err("collaboration original scope changed after binding".into());
+                }
+                let agent =
+                    session
+                        .collaboration
+                        .bind(&owner, &binding.agent_id, &binding.token)?;
+                let mut result = json!({"client_id":client_id,"agent":agent,"bound":true});
+                if !subscriptions.is_empty() {
+                    result["worker_subscriptions"] = json!(subscriptions);
+                }
+                return Ok(result);
             }
             let result = session
                 .collaboration

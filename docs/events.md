@@ -20,9 +20,12 @@ Native worker metadata also retains its source generation, sequence and time.
 | `worker.progress` | The pool accepted a progress or activity update. |
 | `worker.completed` | The pool retained a terminal task outcome. Inspect the task status and result. |
 | `worker.idle` | A registered station became available for another task. |
+| `worker.offline` | A station actually went offline or acknowledged its retirement release. |
+| `worker.retiring` | An idle registered station entered cooperative retirement. |
 | `worker.unknown` | A task's outcome could not be established. No automatic replay follows. |
 | `agent.joined`, `agent.left` | A collaboration membership began or ended. |
 | `agent.status_changed` | An authenticated participant changed its declared status. |
+| `agent.maintenance_requested` | A bounded maintenance round became available to its exact main participant. |
 | `wait.started`, `wait.suspended`, `wait.resumed`, `wait.completed` | An observer entered, left, or completed a bounded waiting episode. |
 | `message.sent` | The message service accepted the message for its actual recipients. |
 | `message.received` | A message was included in a receive result. This does not prove reading or execution. |
@@ -47,14 +50,14 @@ The public `events` tool and the `events` code-mode helper share these actions:
 
 | Action | Purpose |
 | --- | --- |
-| `subscribe` | Create an immutable filter and return a server-issued subscription ID. |
+| `subscribe` | Create a manual subscription with an immutable filter and return its server-issued ID. |
 | `read` | Read the next retained matching page without acknowledging it. |
 | `wait` | Suspend until a matching page is available or the observation budget expires. |
 | `ack` | Explicitly acknowledge a cursor that this subscription has already delivered. |
 | `unsubscribe` | End this subscription without cancelling any underlying operation. |
-| `subscriptions` | Inspect this participant's retained subscriptions. |
+| `subscriptions` | Inspect retained subscriptions, their `automatic`, `configured` or `manual` management, and managed status. |
 | `publish` | Publish a `custom.*` event with an idempotent request ID. |
-| `policy` | Inspect or modify this participant's coordinator prompt strategy. |
+| `policy` | Inspect or configure the main participant's actual managed `enabled`/`kinds` selection and its separate advisory prompt strategy. |
 
 Subscribe with a stable `request_id`. Repeating that ID with the same filter
 recovers the same subscription; changing its meaning is an error. Omit `after`
@@ -80,6 +83,86 @@ the retained unacknowledged events. The server rejects a cursor beyond what
 that subscription has delivered. Page limits and `has_more` allow bounded
 draining without returning the entire journal.
 
+## Automatic worker subscriptions
+
+A chat-enabled participant with a verified `main`, `coordinator`, `controller`
+or `lead` role gets one managed subscription when the server can verify its
+native `/worker_pool` link and an independently authenticated participant in that
+pool. Both bindings use private credentials from the existing memberships:
+
+```javascript
+await collab.bind(poolId, poolCredentials);
+await collab.bind(controlId, controlCredentials);
+return await events.subscriptions(controlId);
+```
+
+A display name does not select a role or grant pool access. If the pool binding
+is missing, `worker_subscription.error` explains that it needs binding; the
+server does not join the pool, attach a manager or create credentials. Repeating
+a bind reuses the managed subscription and its cursor. Link discovery has one
+750 ms total budget across at most four already-bound main participants.
+
+Defaults select `task.submitted`, `worker.started`, `worker.progress`,
+`worker.completed`, `worker.idle`, `worker.offline`, `worker.retiring`,
+`worker.cancelling` and `worker.unknown`, plus `user.input_available` and the
+main's privately addressed `agent.maintenance_requested`. Main-session input
+and maintenance metadata already originate in the server journal. The separate
+pool observer reads native `ssmcp.worker.events`; it never claims work.
+
+Configure the actual managed selection through the existing helper:
+
+```javascript
+return await events.policy(controlId, {
+  patch: {
+    enabled: true,
+    kinds: ["worker.completed", "worker.offline", "worker.unknown"]
+  }
+});
+```
+
+These choices replace the default kinds exactly. A partial patch preserves
+unmentioned managed fields. Responses expose the effective `enabled`, `kinds`,
+configuration revision, source pool and subscription ID. Live managed choices
+last for the original main Session, independently of the advisory policy cache.
+Changing kinds preserves the acknowledged cursor and invalidates the earlier
+attempted-delivery ceiling; read the new selection before acknowledging it.
+Manual subscriptions keep their own filters.
+
+A matching, authorized native worker event enters the retained journal before
+it can change the existing main member to `working`. A retiring member is not
+reactivated. An existing `await` read window can wake with
+`wake_reason: "subscription_event"`, the subscription ID, and a bounded
+`worker_events` notice. If its named targets remain unfinished, the response is
+still `pending` with `continue_wait: true`; resume the same `wait_id`. For
+durable waits, the original detached observer keeps its lifetime and target
+readiness. An event wake does not complete an unrelated task or user-input wait.
+A maintenance notice does not invoke the worker-event state transition.
+
+Eligible bound responses carry at most four notices within a 16 KiB total
+growth budget. The collector shortens a page to a fitting event prefix and
+sets `next_cursor` to that prefix's final event. If one event cannot fit, a
+`read_required` receipt identifies the subscription and `read_limit: 1`.
+Use `events.read(controlId, { subscription_id, limit: 1 })` to retrieve it.
+Handle each delivered page before explicitly calling `events.ack`. A notice,
+a lost outer response or an await result does not acknowledge any event,
+consume input, or prove that an external model received it.
+
+Set `enabled: false` to pause automatic delivery and wake behavior while
+retaining the current cursor. `events.unsubscribe` explicitly ends the managed
+subscription and leaves it disabled; another bind does not recreate it. The
+original authenticated main can revoke its own managed observer even after
+the pool binding becomes unavailable, without reading or acknowledging the
+old source. To recover after that revocation, bind the live pool with separate
+valid credentials and explicitly set `enabled: true`. A fresh subscription
+gets a fresh ID; it does not inherit or reconcile the old source's cursor.
+Expired subscriptions likewise require explicit enablement to start again.
+
+All reads still require the same account, original main and source Sessions,
+and private participant bindings. Another member or a replacement connection
+cannot inherit these proofs. Gaps and unknown task outcomes remain explicit.
+This feature wakes an existing caller or supplies retained events on reconnect;
+it does not start a model or schedule an external AI turn.
+
 ## Observe in windows of at most 55 seconds
 
 Long waits belong in the public `await` or `events` tools. They suspend on the
@@ -87,7 +170,7 @@ server without occupying a JavaScript runner. Code-mode helpers remain useful
 for publication, subscription setup and short observations; a helper call does
 not make its enclosing JavaScript runner disappear.
 
-For example, create a subscription for the control session and its linked pool:
+For a separate manual subscription, select the control session and its linked pool:
 
 ```javascript
 await collab.bind(controlId, controlCredentials);
@@ -234,8 +317,9 @@ changes. Explicit event acknowledgement still does not deliver user text;
 handle `user.input_available` through the existing input-delivery path.
 See [the tool-maintenance workflow](tool-repositories.md#maintaining-workflows-with-dreaming).
 
-All policy fields change guidance without changing task ownership, access
-control or completion receipts. The hook shares its existing 750 ms probe
+`window_ms`, `strategy` and `dreaming` remain advisory. Managed `enabled` and
+`kinds` change the actual subscription; neither set of fields changes task
+ownership, access control or completion receipts. The hook shares its existing 750 ms probe
 deadline and 4 KiB response-growth budget; a suppressed or oversized hint does
 not spend the round's delivery opportunity.
 [Policy validation](../src/http/coordination_policy.rs) ·

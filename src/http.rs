@@ -1591,6 +1591,8 @@ async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value 
         Ok(eligible) => {
             let response = worker_reminders::append(report, response, &eligible).await;
             let response = prompt_hooks::append(report, response, &eligible).await;
+            let response =
+                events_tool::worker_subscriptions::append(report, response, &eligible).await;
             commit_user_response(report, response, eligible)
         }
         Err(()) => await_tool::commit_user_delivery(report, || response),

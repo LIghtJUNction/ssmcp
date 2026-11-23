@@ -449,8 +449,32 @@ pub(super) async fn wait(
     };
     let mut completed = durable.completed.subscribe();
     let done = *completed.borrow_and_update();
+    let mut worker_notice = None;
     if !done {
-        let _ = tokio::time::timeout(Duration::from_millis(window_ms), completed.changed()).await;
+        let completion =
+            tokio::time::timeout(Duration::from_millis(window_ms), completed.changed());
+        tokio::pin!(completion);
+        let workers = super::super::events_tool::worker_subscriptions::wait_for_notice(
+            &scope.broker,
+            &scope.user,
+            &scope.token,
+            &scope.session,
+            &scope.binding,
+            window_ms,
+            Some(&record.id),
+        );
+        tokio::pin!(workers);
+        tokio::select! {
+            biased;
+            _ = &mut completion => {},
+            notice = &mut workers => {
+                if notice.is_some() {
+                    worker_notice = notice;
+                } else {
+                    let _ = completion.await;
+                }
+            }
+        }
     }
     if let Err(error) = scope.authorize_events(&record.targets).await {
         return Ok(window_envelope(
@@ -466,7 +490,14 @@ pub(super) async fn wait(
         ));
     }
     authorized_now(&scope, &record.targets)?;
-    snapshot(&record, args.after)
+    let mut response = snapshot(&record, args.after)?;
+    if let Some(notice) = worker_notice {
+        // Only the caller's read window wakes. The detached observer and its
+        // original target readiness, lifetime and acknowledgement remain intact.
+        response["wake_reason"] = json!("subscription_event");
+        response["worker_subscription_id"] = notice["subscription_id"].clone();
+    }
+    Ok(response)
 }
 
 fn detached_scope(scope: &Scope) -> Result<Scope, String> {

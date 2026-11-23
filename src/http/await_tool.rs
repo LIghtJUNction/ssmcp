@@ -1452,6 +1452,18 @@ pub(super) async fn wait(
             )
         });
     }
+    let workers = super::events_tool::worker_subscriptions::wait_for_notice(
+        &scope.broker,
+        &scope.user,
+        &scope.token,
+        &scope.session,
+        &scope.binding,
+        window_ms,
+        Some(&record.id),
+    );
+    tokio::pin!(workers);
+    let mut worker_observation_open = true;
+    let mut worker_notice = None;
     let mut authority = tokio::time::interval(Duration::from_secs(1));
     authority.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let status = loop {
@@ -1465,6 +1477,13 @@ pub(super) async fn wait(
                 let Some((index, result)) = result else { break Status::TimedOut; };
                 results[index] = result;
                 if let Some(status) = resolved(record.mode, &results) { break status; }
+            },
+            notice = &mut workers, if worker_observation_open => {
+                worker_observation_open = false;
+                if let Some(notice) = notice {
+                    worker_notice = Some(notice);
+                    break Status::Pending;
+                }
             },
             _ = tokio::time::sleep_until(deadline) => break Status::TimedOut,
             _ = authority.tick() => {
@@ -1530,7 +1549,7 @@ pub(super) async fn wait(
     }
     // A retryable observation must not overwrite a concurrent cancel's terminal
     // transition. Final user-delivery retries are settled under the registry lock.
-    if passive_window && matches!(status, Status::Ready | Status::TimedOut) {
+    if passive_window && matches!(status, Status::Ready | Status::TimedOut | Status::Pending) {
         let mut retained = results.clone();
         for result in &mut retained {
             if result.status == Status::TimedOut {
@@ -1573,13 +1592,14 @@ pub(super) async fn wait(
     if let Some(display) = display {
         use crate::wire::wait_display::Outcome as DisplayOutcome;
         display.finish(match status {
+            Status::Pending if worker_notice.is_some() => DisplayOutcome::Triggered,
             Status::Ready => DisplayOutcome::Triggered,
             Status::TimedOut => DisplayOutcome::WindowExpired,
             Status::Cancelled => DisplayOutcome::ObservationStopped,
             _ => DisplayOutcome::Unknown,
         });
     }
-    if !matches!(status, Status::TimedOut | Status::Busy) {
+    if !matches!(status, Status::TimedOut | Status::Busy | Status::Pending) {
         record.terminal.store(true, Ordering::Release);
         // User input is committed later at the atomic outer response boundary.
         // A ready reservation can still become a retryable delivery outcome.
@@ -1595,6 +1615,21 @@ pub(super) async fn wait(
                 json!({"status":status}),
             );
         }
+    }
+    if let Some(notice) = worker_notice
+        && status == Status::Pending
+    {
+        let mut response = if record.windowed {
+            window_envelope(&record, Status::Pending, results, 0)
+        } else {
+            envelope(Some(&record.id), record.mode, Status::Pending, results)
+        };
+        // A subscription wake ends only this read window, including ordinary
+        // non-windowed waits. The same wait_id still has unfinished targets.
+        response["continue_wait"] = json!(true);
+        response["wake_reason"] = json!("subscription_event");
+        response["worker_subscription_id"] = notice["subscription_id"].clone();
+        return Ok(response);
     }
     if record.windowed && status == Status::TimedOut {
         for result in &mut results {
@@ -1667,7 +1702,12 @@ pub(super) async fn execute(
         return Ok(finish_passive_response(&report, &client_id, value).await);
     }
     if value["status"] != "ready" {
-        let response = commit_user_delivery(&report, || tool_result(Ok(value)));
+        let response = if value.get("worker_subscription_id").is_some() {
+            finish_passive_response(&report, &client_id, value).await
+        } else {
+            tool_result(Ok(value))
+        };
+        let response = commit_user_delivery(&report, || response);
         return Ok(user_wait::append(response, &run));
     }
     let windowed = value.get("cursor").is_some();
@@ -1724,7 +1764,16 @@ async fn finish_passive_response(
 ) -> Value {
     tool_summaries::collect(report).await;
     let eligible = eligible_user_response(report).await.unwrap_or_default();
-    // The bounded summary probe can await; withhold observation data as well as
+    let mut response = super::events_tool::worker_subscriptions::append(
+        report,
+        tool_result(Ok(value.clone())),
+        &eligible,
+    )
+    .await;
+    if let Some(notices) = response.get("worker_events") {
+        value["worker_events"] = notices.clone();
+    }
+    // The bounded summary and worker probes can await; withhold observation data as well as
     // notices if its account, connection or binding changed during that await.
     if !response_events_authorized(report, client_id, &value).await
         || !response_authorized(report, client_id)
@@ -1735,8 +1784,9 @@ async fn finish_passive_response(
             "await_authorization_revoked_at_response",
         );
         withhold(&mut value);
+        response = tool_result(Ok(value));
     }
-    tool_summaries::commit_response(report, tool_result(Ok(value)), eligible)
+    tool_summaries::commit_response(report, response, eligible)
 }
 
 async fn response_events_authorized(
@@ -1751,6 +1801,16 @@ async fn response_events_authorized(
         .filter(|result| result["target"]["type"] == "event" && result.get("data").is_some())
         .filter_map(|result| result["target"]["subscription_id"].as_str())
         .collect();
+    if let Some(id) = value["worker_subscription_id"].as_str() {
+        subscriptions.push(id);
+    }
+    subscriptions.extend(
+        value["worker_events"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|notice| notice["subscription_id"].as_str()),
+    );
     // Durable status/list receipts also recheck their declared subscriptions
     // after the final asynchronous summary probe, despite containing no bodies.
     for receipt in std::iter::once(value).chain(value["waits"].as_array().into_iter().flatten()) {
@@ -1830,6 +1890,11 @@ fn response_authorized(report: &CodeRunReport, client_id: &str) -> bool {
 }
 
 fn withhold(value: &mut Value) {
+    if let Some(object) = value.as_object_mut() {
+        object.remove("worker_events");
+        object.remove("worker_subscription_id");
+        object.remove("wake_reason");
+    }
     value["status"] = json!("unauthorized");
     value["continue_wait"] = json!(false);
     if let Some(fields) = value.as_object_mut() {
