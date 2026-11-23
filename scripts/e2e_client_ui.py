@@ -694,9 +694,8 @@ def main():
             preview.until(lambda s: "SSMCP main help" in text(s)
                           and "Write and send" in text(s), "F1 help")
             preview.send(b"\x1b[F")
-            preview.until(lambda s: "Native harnesses" in text(s)
-                          and "/pi, /cc, /codex" in text(s)
-                          and "Backend capabilities and approvals stay with the installed harness." in text(s),
+            preview.until(lambda s: "Help: Up/Down" in text(s)
+                          and "/pi, /cc, /codex" not in text(s),
                           "full help scrolled to its final commands")
             preview.send(b"\x1b[H")
             preview.until(lambda s: "SSMCP main help" in text(s)

@@ -9,7 +9,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex, Weak,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -20,7 +20,6 @@ const MAX_WINDOWS: usize = 48;
 const VIEW_TIMEOUT: Duration = Duration::from_secs(8);
 const HEARTBEAT: Duration = Duration::from_secs(6);
 const IDLE_WINDOW: Duration = Duration::from_secs(180);
-static NEXT_CALL: AtomicU64 = AtomicU64::new(1);
 
 struct View {
     bytes: VecDeque<u8>,
@@ -65,11 +64,6 @@ impl Slot {
 struct State {
     slots: Vec<Arc<Slot>>,
     active: HashMap<String, usize>,
-    provider: HashMap<String, String>,
-    streamed: HashMap<String, usize>,
-    processes: HashMap<String, String>,
-    backgrounds: HashMap<String, String>,
-    detached: HashMap<String, Lease>,
 }
 pub(crate) struct Pool {
     terminal: PathBuf,
@@ -110,10 +104,6 @@ impl Lease {
         if let Some(pool) = self.pool.upgrade() {
             let mut state = pool.state.lock().unwrap();
             state.active.remove(&self.key);
-            state.provider.remove(&self.key);
-            state.streamed.remove(&self.key);
-            state.processes.retain(|_, key| key != &self.key);
-            state.backgrounds.retain(|_, key| key != &self.key);
         }
         self.slot.view.lock().unwrap().last_used = Instant::now();
     }
@@ -161,11 +151,6 @@ impl Pool {
             state: Mutex::new(State {
                 slots: Vec::new(),
                 active: HashMap::new(),
-                provider: HashMap::new(),
-                streamed: HashMap::new(),
-                processes: HashMap::new(),
-                backgrounds: HashMap::new(),
-                detached: HashMap::new(),
             }),
             closed: AtomicBool::new(false),
             tasks: Mutex::new(Vec::new()),
@@ -465,7 +450,6 @@ impl Pool {
         let slot = {
             let mut state = self.state.lock().unwrap();
             let id = state.active.remove(&key);
-            state.streamed.remove(&key);
             id.and_then(|id| state.slots.iter().find(|slot| slot.id == id).cloned())
         };
         if let Some(slot) = slot {
@@ -474,213 +458,23 @@ impl Pool {
     }
     fn append_key(&self, key: &str, bytes: &[u8]) {
         let slot = {
-            let mut state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap();
             let Some(id) = state.active.get(key).copied() else {
                 return;
             };
-            *state.streamed.entry(key.into()).or_default() += bytes.len();
             state.slots.iter().find(|slot| slot.id == id).cloned()
         };
         if let Some(slot) = slot {
             slot.append(bytes)
         }
     }
-    pub(crate) async fn native_begin(
-        self: &Arc<Self>,
-        provider: &str,
-        name: &str,
-        args: &Value,
-    ) -> Result<Option<Lease>, String> {
-        let Some(command) = native_command(name, args) else {
-            return Ok(None);
-        };
-        let key = crate::backend::rpc::HarnessCall::current_id()
-            .map(|id| format!("native:{id}"))
-            .unwrap_or_else(|| {
-                format!("native-local:{}", NEXT_CALL.fetch_add(1, Ordering::Relaxed))
-            });
-        let cwd = args
-            .get("cwd")
-            .and_then(Value::as_str)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        let lease = self.begin(key.clone(), command, &cwd).await?;
-        self.state
-            .lock()
-            .unwrap()
-            .provider
-            .insert(key, provider.into());
-        Ok(Some(lease))
-    }
-    pub(crate) fn map_background(&self, path: &Path) {
-        if let Some(call_id) = crate::backend::rpc::HarnessCall::current_id() {
-            let key = format!("native:{call_id}");
-            let mut state = self.state.lock().unwrap();
-            if state.active.contains_key(&key) {
-                state
-                    .backgrounds
-                    .insert(path.to_string_lossy().into_owned(), key);
-            }
-        }
-    }
-    pub(crate) fn native_event(&self, provider: &str, event: &Value) {
-        if let Some(path) = event["path"].as_str()
-            && event["type"]
-                .as_str()
-                .is_some_and(|kind| kind.starts_with("background_output"))
-        {
-            let key = self.state.lock().unwrap().backgrounds.get(path).cloned();
-            if let Some(key) = key {
-                if let Some(encoded) = event["data_base64"].as_str()
-                    && let Ok(bytes) = STANDARD.decode(encoded)
-                {
-                    self.append_key(&key, &bytes);
-                }
-                if let Some(error) = event["error"].as_str() {
-                    self.append_key(
-                        &key,
-                        format!("\r\n[background output error: {error}]\r\n").as_bytes(),
-                    );
-                }
-                if event["type"] == "background_output_closed"
-                    || event["type"] == "background_output_error"
-                {
-                    let lease = {
-                        let mut state = self.state.lock().unwrap();
-                        state.backgrounds.remove(path);
-                        if state.backgrounds.values().any(|other| other == &key) {
-                            None
-                        } else {
-                            state.detached.remove(&key)
-                        }
-                    };
-                    if let Some(lease) = lease {
-                        lease.finish("background output source closed");
-                    }
-                }
-            }
-            return;
-        }
-        if provider == "shell" {
-            return;
-        }
-        if event["type"] == "ssmcp.request"
-            && let Some(call_id) = event["harness_call_id"].as_u64()
-        {
-            let request = &event["request"];
-            let process = request
-                .pointer("/params/processId")
-                .or_else(|| request.get("id"));
-            if let Some(process) = process.filter(|value| value.is_string() || value.is_number()) {
-                let key = format!("native:{call_id}");
-                let mut state = self.state.lock().unwrap();
-                if state.active.contains_key(&key) {
-                    state
-                        .processes
-                        .insert(format!("{provider}:{}", process), key);
-                }
-            }
-        }
-        let bytes = if let Some(data) = event.pointer("/params/deltaBase64").and_then(Value::as_str)
-        {
-            STANDARD.decode(data).ok()
-        } else if event["type"] == "bash_execution_update" {
-            event
-                .get("output")
-                .or_else(|| event.get("chunk"))
-                .and_then(Value::as_str)
-                .map(|s| s.as_bytes().to_vec())
-        } else {
-            None
-        };
-        let Some(bytes) = bytes else { return };
-        let key = event["harness_call_id"]
-            .as_u64()
-            .map(|id| format!("native:{id}"))
-            .or_else(|| {
-                let process = event
-                    .pointer("/params/processId")
-                    .or_else(|| event.get("id"))?;
-                self.state
-                    .lock()
-                    .unwrap()
-                    .processes
-                    .get(&format!("{provider}:{}", process))
-                    .cloned()
-            })
-            .or_else(|| {
-                let state = self.state.lock().unwrap();
-                let mut keys = state
-                    .provider
-                    .iter()
-                    .filter(|(_, label)| label.as_str() == provider)
-                    .map(|(key, _)| key);
-                let first = keys.next()?;
-                keys.next().is_none().then(|| first.clone())
-            });
-        if let Some(key) = key {
-            self.append_key(&key, &bytes)
-        }
-    }
-    pub(crate) fn native_finish(&self, lease: Lease, result: &Result<Value, String>) {
-        let streamed = self
-            .state
-            .lock()
-            .unwrap()
-            .streamed
-            .get(&lease.key)
-            .copied()
-            .unwrap_or(0);
-        match result {
-            Ok(value) => {
-                let backgrounds = crate::backend::cc::background_paths(value);
-                if !backgrounds.is_empty() {
-                    lease.append(b"\r\n[background command; watching its native output]\r\n");
-                    let mut state = self.state.lock().unwrap();
-                    for path in backgrounds {
-                        state
-                            .backgrounds
-                            .insert(path.to_string_lossy().into_owned(), lease.key.clone());
-                    }
-                    state.detached.insert(lease.key.clone(), lease);
-                    return;
-                }
-                if streamed == 0 {
-                    if let Some(content) = value.get("content").and_then(Value::as_array) {
-                        for part in content {
-                            if let Some(text) = part["text"].as_str() {
-                                lease.append(text.as_bytes());
-                                lease.append(b"\r\n")
-                            }
-                        }
-                    } else {
-                        lease.append(value.to_string().as_bytes())
-                    }
-                }
-                lease.finish(if value["isError"] == true {
-                    "provider reported an error"
-                } else {
-                    "provider call completed"
-                });
-            }
-            Err(error) => {
-                lease.append(error.as_bytes());
-                lease.finish("provider call failed");
-            }
-        }
-    }
     pub(crate) fn shutdown(&self) {
         if self.closed.swap(true, Ordering::AcqRel) {
             return;
         }
-        let detached = {
-            let mut state = self.state.lock().unwrap();
-            for slot in &state.slots {
-                slot.changed.notify_waiters();
-            }
-            std::mem::take(&mut state.detached)
-        };
-        drop(detached);
+        for slot in &self.state.lock().unwrap().slots {
+            slot.changed.notify_waiters();
+        }
     }
 }
 impl Drop for Pool {
@@ -766,37 +560,6 @@ fn display_command(command: &Value) -> String {
                 .join(" ")
         })
         .unwrap_or_else(|| visible(command.as_str().unwrap_or("command")))
-}
-fn native_command<'a>(name: &str, args: &'a Value) -> Option<&'a Value> {
-    let identity = [
-        Some(name),
-        args["method"].as_str(),
-        args["type"].as_str(),
-        args["operation_id"].as_str(),
-        args["url_path"].as_str(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(" ")
-    .to_ascii_lowercase();
-    if !["bash", "shell", "exec", "command", "powershell", "run"]
-        .iter()
-        .any(|part| identity.contains(part))
-    {
-        return None;
-    }
-    let command = |object: &'a Value| {
-        ["command", "cmd", "script"]
-            .iter()
-            .find_map(|key| object.get(*key))
-            .filter(|value| value.is_string() || value.is_array())
-    };
-    command(args).or_else(|| {
-        ["params", "args", "body", "arguments"]
-            .iter()
-            .find_map(|key| args.get(*key).and_then(command))
-    })
 }
 pub(crate) async fn viewer(directory: &Path, slot: usize) -> crate::Result<()> {
     let mut cursor = 0;

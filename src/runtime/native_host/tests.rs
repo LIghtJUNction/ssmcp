@@ -42,7 +42,9 @@ impl Drop for RunningCall {
             self.plugin.cancelled.fetch_add(1, Ordering::SeqCst);
             *self.plugin.cancelled_scope.lock().unwrap() = Some((
                 crate::observability::REQUEST_ID.try_with(Clone::clone).ok(),
-                HarnessCall::current_id(),
+                crate::runtime::call_scope::Source::capture()
+                    .call
+                    .map(|call| call.request_id()),
             ));
         }
         self.plugin.dropped.notify_one();
@@ -91,7 +93,7 @@ impl NativePlugin for Fixture {
             Ok(json!({"content":[],"structuredContent":{
                 "arguments":call.arguments, "native_name":call.native_name,
                 "request_id":crate::observability::REQUEST_ID.try_with(Clone::clone).ok(),
-                "harness_call":HarnessCall::current_id(),
+                "native_request":crate::runtime::call_scope::Source::capture().call.map(|call| call.request_id()),
             },"_meta":{"vendor":{"opaque":true}}}))
         })
     }
@@ -192,7 +194,9 @@ async fn native_plugin_pending_tasks_do_not_serialize_calls_or_lose_audit_scope(
     tokio::time::timeout(std::time::Duration::from_secs(5), plugin.entered.notified())
         .await
         .unwrap();
-    let observed = HarnessCall::new(41);
+    let observed =
+        crate::runtime::call_scope::CallScope::from_relay_for_client(1, None, 41, None, None)
+            .unwrap();
     let result = crate::observability::REQUEST_ID
         .scope(
             "source-request".into(),
@@ -205,7 +209,7 @@ async fn native_plugin_pending_tasks_do_not_serialize_calls_or_lose_audit_scope(
         .unwrap()
         .unwrap();
     assert_eq!(result["structuredContent"]["request_id"], "source-request");
-    assert_eq!(result["structuredContent"]["harness_call"], 41);
+    assert_eq!(result["structuredContent"]["native_request"], 41);
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
         host.call(&tool, json!({"same_plugin":true})),
@@ -250,7 +254,9 @@ async fn native_plugin_cancellation_drops_the_real_future_inside_its_audit_scope
     let pending_host = host.clone();
     let pending_tool = tool.clone();
     let pending = tokio::spawn(async move {
-        let observed = HarnessCall::new(73);
+        let observed =
+            crate::runtime::call_scope::CallScope::from_relay_for_client(1, None, 73, None, None)
+                .unwrap();
         crate::observability::REQUEST_ID
             .scope(
                 "cancelled-request".into(),

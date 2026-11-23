@@ -1,10 +1,11 @@
 use super::*;
 
 fn fixture(count: usize) -> Arc<Pool> {
+    static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let directory = std::env::temp_dir().join(format!(
         "ssmcp-tty-unit-{}-{}",
         std::process::id(),
-        NEXT_CALL.fetch_add(1, Ordering::Relaxed)
+        NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
     ));
     crate::platform::private_directory(&directory).unwrap();
     let pool = Arc::new(Pool {
@@ -15,11 +16,6 @@ fn fixture(count: usize) -> Arc<Pool> {
         state: Mutex::new(State {
             slots: Vec::new(),
             active: HashMap::new(),
-            provider: HashMap::new(),
-            streamed: HashMap::new(),
-            processes: HashMap::new(),
-            backgrounds: HashMap::new(),
-            detached: HashMap::new(),
         }),
         closed: AtomicBool::new(false),
         tasks: Mutex::new(Vec::new()),
@@ -66,7 +62,7 @@ async fn sequential_calls_reuse_slots_and_parallel_calls_stay_separate() {
     assert!(pool.state.lock().unwrap().active.is_empty());
 }
 #[tokio::test]
-async fn closed_interactive_terminals_release_stream_counters_and_reuse_the_slot() {
+async fn closed_interactive_terminals_release_and_reuse_the_slot() {
     let pool = fixture(1);
     let cwd = std::env::current_dir().unwrap();
     for index in 0..64 {
@@ -77,7 +73,7 @@ async fn closed_interactive_terminals_release_stream_counters_and_reuse_the_slot
             pool.state
                 .lock()
                 .unwrap()
-                .streamed
+                .active
                 .contains_key(&format!("terminal:{id}"))
         );
         pool.terminal_closed(&id);
@@ -86,7 +82,6 @@ async fn closed_interactive_terminals_release_stream_counters_and_reuse_the_slot
     }
     let state = pool.state.lock().unwrap();
     assert!(state.active.is_empty());
-    assert!(state.streamed.is_empty());
     assert_eq!(state.slots.len(), 1);
 }
 
@@ -143,40 +138,6 @@ fn launchers_keep_executable_arguments_literal() {
     assert!(validate_terminal("").is_err());
     assert!(validate_terminal("kitty\nmalicious").is_err());
 }
-#[test]
-fn native_command_detection_covers_direct_and_rpc_paths() {
-    for (tool, args) in [
-        ("claude.Bash", json!({"command":"printf hello"})),
-        ("codex.command_exec", json!({"command":["printf","hello"]})),
-        (
-            "codex.rpc",
-            json!({"method":"command/exec","params":{"command":["printf","hello"]}}),
-        ),
-        ("pi.bash", json!({"command":"printf hello"})),
-        (
-            "pi.rpc",
-            json!({"type":"bash","args":{"command":"printf hello"}}),
-        ),
-        (
-            "opencode.api",
-            json!({"operation_id":"session.shell","body":{"command":"printf hello"}}),
-        ),
-        (
-            "opencode.api",
-            json!({"method":"POST","url_path":"/session/fixture/shell","body":{"command":"printf hello"}}),
-        ),
-    ] {
-        assert!(native_command(tool, &args).is_some(), "{tool}");
-    }
-    assert!(
-        native_command(
-            "playwright.evaluate",
-            &json!({"code":"return document.title"})
-        )
-        .is_none()
-    );
-}
-
 #[cfg(target_os = "linux")]
 async fn shell(pool: &Arc<Pool>) -> Arc<crate::backend::shell::Shell> {
     let store = crate::output::OutputStore::new_connection().unwrap();
@@ -313,28 +274,21 @@ fn idle_extra_windows_retire_but_the_first_and_active_windows_remain() {
 }
 
 #[tokio::test]
-async fn native_parallel_streams_and_background_output_keep_their_own_windows() {
+async fn native_observer_leases_keep_concurrent_output_separate() {
     let pool = fixture(3);
     let cwd = std::env::current_dir().unwrap();
     let one = pool
-        .begin("native:10".into(), &json!("first"), &cwd)
+        .begin("first".into(), &json!("first"), &cwd)
         .await
         .unwrap();
     let two = pool
-        .begin("native:11".into(), &json!("second"), &cwd)
+        .begin("second".into(), &json!("second"), &cwd)
         .await
         .unwrap();
-    {
-        let mut state = pool.state.lock().unwrap();
-        state.provider.insert("native:10".into(), "codex".into());
-        state.provider.insert("native:11".into(), "codex".into());
-    }
-    for (call, process, text) in [(10, "process-A", "alpha"), (11, "process-B", "beta")] {
-        pool.native_event("codex",&json!({"type":"ssmcp.request","harness_call_id":call,"request":{"id":format!("rpc-{call}"),"method":"command/exec","params":{"processId":process}}}));
-        pool.native_event("codex",&json!({"method":"command/exec/outputDelta","params":{"processId":process,"deltaBase64":STANDARD.encode(text)}}));
-    }
+    one.append(b"alpha");
+    two.append(b"beta");
     let output = String::from_utf8(
-        pool.state.lock().unwrap().slots[0]
+        one.slot
             .view
             .lock()
             .unwrap()
@@ -346,18 +300,7 @@ async fn native_parallel_streams_and_background_output_keep_their_own_windows() 
     .unwrap();
     assert!(output.contains("alpha"));
     assert!(!output.contains("beta"));
-    let background = cwd.join("provider-task.output");
-    pool.native_finish(
-        one,
-        &Ok(json!({"structuredContent":{"backgroundOutputPath":background}})),
-    );
-    assert!(pool.state.lock().unwrap().active.contains_key("native:10"));
-    pool.native_event("claude",&json!({"type":"background_output","path":background,"data_base64":STANDARD.encode("background continued")}));
-    pool.native_event(
-        "claude",
-        &json!({"type":"background_output_closed","path":background}),
-    );
-    assert!(!pool.state.lock().unwrap().active.contains_key("native:10"));
-    assert!(pool.state.lock().unwrap().active.contains_key("native:11"));
-    drop(two);
+    one.finish("first complete");
+    assert!(!pool.state.lock().unwrap().active.contains_key("first"));
+    assert!(pool.state.lock().unwrap().active.contains_key("second"));
 }

@@ -90,9 +90,6 @@ fn subcommand_hints_cover_literal_parser_branches_without_invented_values() {
         ("/group ret", "/group retry"),
         ("/paste-retry di", "/paste-retry discard"),
         ("/invite wo", "/invite worker"),
-        ("/pi to", "/pi tools"),
-        ("/cc to", "/cc tools"),
-        ("/codex to", "/codex tools"),
     ] {
         let mut composer = draft(prefix);
         let item = composer.selected_suggestion().unwrap();
@@ -173,76 +170,13 @@ fn a_completion_that_exceeds_the_draft_limit_is_atomic() {
 }
 
 #[test]
-fn registered_tool_hints_cache_by_input_and_catalog_generation() {
-    let mut composer = draft("/cc L");
-    composer.refresh_harness_completions_with(true, |provider, prefix, known| {
-        assert_eq!((provider, prefix, known), ("cc", "L", None));
-        Ok(Some((
-            7,
-            vec![(
-                "claude.LSP".into(),
-                "Inspect the installed LSP schema".into(),
-            )],
-        )))
-    });
-    assert_eq!(
-        composer.selected_suggestion().unwrap().name,
-        "/cc claude.LSP"
-    );
-    composer.refresh_harness_completions_with(true, |_, _, known| {
-        assert_eq!(known, Some(7));
-        Ok(None)
-    });
-    assert_eq!(
-        composer.selected_suggestion().unwrap().name,
-        "/cc claude.LSP"
-    );
-    composer.accept_suggestion().unwrap();
-    assert_eq!(composer.text(), "/cc claude.LSP ");
-    assert!(composer.suggestions().is_empty());
-
-    composer.set_text("/pi ");
-    assert!(
-        composer
-            .suggestions()
-            .iter()
-            .all(|item| !item.name.contains("LSP"))
-    );
-    composer.refresh_harness_completions_with(true, |provider, prefix, known| {
-        assert_eq!((provider, prefix, known), ("pi", "", None));
-        Ok(Some((8, vec![("pi.rpc".into(), "Inspect RPC".into())])))
-    });
-    select(&mut composer, "/pi pi.rpc");
-    composer.refresh_harness_completions_with(true, |_, _, _| {
-        Ok(Some((
-            9,
-            vec![
-                ("pi.events".into(), "Inspect events".into()),
-                ("pi.rpc".into(), "Inspect RPC".into()),
-            ],
-        )))
-    });
-    assert_eq!(composer.selected_suggestion().unwrap().name, "/pi pi.rpc");
-    composer.refresh_harness_completions_with(true, |_, _, _| Err("provider disconnected".into()));
-    assert_eq!(composer.suggestions().len(), 1);
-    assert_eq!(composer.suggestions()[0].name, "/pi tools");
-}
-
-#[test]
-fn disabled_and_dismissed_menus_do_not_query_native_catalogs() {
-    let mut composer = draft("/codex ");
-    composer.refresh_harness_completions_with(false, |_, _, _| {
-        panic!("preview completion must not touch the live catalog")
-    });
-    composer.suggestions_dismissed = true;
-    composer.refresh_harness_completions_with(true, |_, _, _| {
-        panic!("dismissed completion must not touch the live catalog")
-    });
-    assert!(composer.suggestions().is_empty());
-    composer.set_text("/group ");
-    composer.refresh_harness_completions_with(true, |_, _, _| {
-        panic!("local command completion must not touch the live catalog")
-    });
+fn retired_harness_commands_have_no_tool_completions() {
+    for text in ["/cc L", "/pi ", "/codex to", "/opencode "] {
+        let mut composer = draft(text);
+        composer.refresh_completions(true);
+        assert!(composer.suggestions().is_empty(), "{text}");
+        assert_eq!(composer.text(), text);
+    }
 }
 
 #[test]
