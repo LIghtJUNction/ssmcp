@@ -180,7 +180,7 @@ Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重
 
 在交互终端运行 `ssmcp --worker 3`，主窗口保留普通聊天输入，并打开一个关联的 worker 监控窗口。三个席位初始为离线；外部 Agent 在对应的 worker 连接登记 `role: "worker"`，调用 `ssmcp.worker.wait` 等待任务，完成后提交回执并继续等待。启动席位不会自动启动模型。
 
-1. 连接主窗口。给主 Agent 输入 `/invite` 并按 Enter。复制面板中的说明并粘贴到已获准接入的主 Agent 对话。主 Agent 按说明在控制会话以 `main` 身份加入，再用自己的凭据绑定。
+1. 连接主窗口。若要邀请主 Agent，在主窗口输入 `/invite` 并按 Enter。复制面板中的说明并粘贴到已获准接入的主 Agent 对话。主 Agent 按说明在控制会话以 `main` 身份加入，再用自己的凭据绑定。
 2. 若需要外部 worker，先用 `ssmcp --worker 3` 启动关联池，或在已连接的主窗口用 `/worker +N` 开启席位。用 `/worker ls` 确认池在线且有空位，然后在主窗口输入 `/invite worker` 并按 Enter。把说明粘贴到每个独立、已获准接入的 worker 对话。每个 worker 用自己的凭据在池中加入并绑定为 `worker`，然后调用 `ssmcp.worker.wait` 等任务。
 3. 两个命令都会显示可滚动的本地面板并尝试复制。剪贴板不可用时手动复制，按 Esc 关闭面板。凭据由各 Agent 私下保存。池满员、离线或正在调整席位时，等状态恢复再生成 worker 邀请。
 
