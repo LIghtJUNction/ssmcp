@@ -87,12 +87,16 @@ impl Publication {
         *self.0.outcome.borrow() == Outcome::Recorded
     }
 
-    pub(super) fn settled(&self) -> bool {
-        !self.0.started.load(Ordering::Acquire)
-            || matches!(
-                *self.0.outcome.borrow(),
-                Outcome::Recorded | Outcome::Rejected | Outcome::Deferred
-            )
+    /// A live collector clone may still start its reserved original operation.
+    /// Only the cache's exclusive, not-started handle can be abandoned safely.
+    pub(super) fn replaceable(&self) -> bool {
+        match *self.0.outcome.borrow() {
+            Outcome::Recorded | Outcome::Rejected => true,
+            Outcome::Pending | Outcome::Deferred => {
+                !self.0.started.load(Ordering::Acquire) && Arc::strong_count(&self.0) == 1
+            }
+            Outcome::Unknown => false,
+        }
     }
 
     fn original(&self, target: &EligibleUserResponse) -> bool {

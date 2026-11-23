@@ -207,7 +207,7 @@ impl Cache {
             if pending.counts == *counts {
                 return Some(pending.clone());
             }
-            if !pending.publication.settled() {
+            if !pending.publication.replaceable() {
                 return None;
             }
             self.pending.remove(scope);
@@ -299,7 +299,7 @@ impl GuidanceCache {
             if pending.policy == *policy && pending.round_id == round_id {
                 return Some(pending.clone());
             }
-            if !pending.publication.settled() {
+            if !pending.publication.replaceable() {
                 return None;
             }
             self.pending.remove(scope);
@@ -698,14 +698,16 @@ pub(super) async fn append(
         if input_pending(target, &response) {
             continue;
         }
-        let pool = observed.iter().find_map(|(at, pool, connection)| {
-            (*at == index)
-                .then_some(connection.as_ref())
-                .flatten()
-                .filter(|session| session.is_alive() && authorization.permits(session))
-                .filter(|_| pool.counts.connected && !pool.counts.closed)
-                .map(|_| pool)
+        let live_pool = observed.iter().find(|(at, pool, connection)| {
+            *at == index
+                && connection
+                    .as_ref()
+                    .is_some_and(|session| session.is_alive() && authorization.permits(session))
+                && pool.counts.connected
+                && !pool.counts.closed
         });
+        let pool = live_pool.map(|(_, pool, _)| pool);
+        let pool_proof = live_pool.and_then(|(_, _, connection)| connection.clone());
         let Ok(policy) = coordination_policy::effective(
             &binding.owner,
             target.session.client_id(),
@@ -797,7 +799,7 @@ pub(super) async fn append(
         }
         round_proofs.push((index, pending.round_id.clone()));
         guidance_commits.push((scope, pending));
-        proofs.push((index, None));
+        proofs.push((index, pool_proof));
         with_guidance = Some(next);
     }
     // Publication is separate from model delivery and from event/human ACK.

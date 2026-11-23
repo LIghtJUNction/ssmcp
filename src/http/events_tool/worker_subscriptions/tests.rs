@@ -209,15 +209,21 @@ impl Fixture {
     async fn await_call(&self, mut args: Value) -> Value {
         args["client_id"] = json!(self.native.session.client_id());
         args["agent"] = json!({"id":self.main["agent_id"],"token":self.main["token"]});
-        crate::http::await_tool::execute(
+        let action = crate::http::await_tool::execute(
             self.native.broker.clone(),
             IDENTITY_RESOURCE.into(),
             self.native.access_token.clone(),
             crate::http::await_tool::Arguments::parse(args).unwrap(),
-        )
-        .await
-        .unwrap()["structuredContent"]
-            .clone()
+        );
+        tokio::pin!(action);
+        loop {
+            tokio::select! {
+                result = &mut action => return result.unwrap()["structuredContent"].clone(),
+                operation = self.native.native_reply_with(TestFixture::input_receipt) => {
+                    assert_eq!(operation["arguments"]["input_origin"], "worker_event");
+                }
+            }
+        }
     }
 
     fn lifecycle(&self) -> Value {

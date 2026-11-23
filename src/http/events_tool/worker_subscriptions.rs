@@ -875,7 +875,7 @@ async fn publication_authorized(
             authorize_record(&report.broker, &report.access_token, context, &record, true)
         )
         .await,
-        Ok(Ok(()))
+        Ok(Ok(_))
     )
 }
 
@@ -920,7 +920,7 @@ async fn visible_notice(
             // Only the real Hub cursor proves ACK. Unknown writes are retained
             // even past ACK; absence from a pruned event page is not no-effect.
             markers.retain(|_, marker| {
-                !marker.publication.settled()
+                !marker.publication.replaceable()
                     || marker
                         .sequence
                         .is_none_or(|sequence| sequence > acknowledged)
@@ -1064,15 +1064,19 @@ pub(in crate::http) async fn append(
     }
     // Another probe may have awaited after an earlier notice. Freeze the entire
     // delivery proof again before any retained metadata leaves this collector.
-    if authorize_run(
-        &report.broker,
-        &report.user,
-        &report.access_token,
-        &report.run,
-    )
-    .await
-    .is_err()
-    {
+    if !matches!(
+        tokio::time::timeout_at(
+            deadline,
+            authorize_run(
+                &report.broker,
+                &report.user,
+                &report.access_token,
+                &report.run
+            )
+        )
+        .await,
+        Ok(Ok(()))
+    ) {
         return response;
     }
     if proof_contexts.iter().any(|(context, entry)| {

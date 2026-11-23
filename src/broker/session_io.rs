@@ -726,7 +726,7 @@ pub(crate) struct TestFixture {
     pub(crate) session: Arc<Session>,
     pub(crate) actor: Identity,
     pub(crate) access_token: String,
-    calls: tokio::sync::mpsc::Receiver<super::Call>,
+    calls: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<super::Call>>,
     _reports: tokio::sync::mpsc::Receiver<crate::wire::CodeCompletion>,
 }
 #[cfg(test)]
@@ -763,7 +763,7 @@ impl TestFixture {
             session,
             actor,
             access_token,
-            calls,
+            calls: tokio::sync::Mutex::new(calls),
             _reports: reports_rx,
         }
     }
@@ -829,6 +829,35 @@ impl TestFixture {
     pub(crate) fn revoke_access(&self) {
         self.session.allowed().clear();
     }
+    pub(crate) async fn native_reply_with(&self, reply: impl FnOnce(&Value) -> Value) -> Value {
+        let call = self.calls.lock().await.recv().await.expect("native call");
+        let operation = serde_json::to_value(&call.operation).unwrap();
+        let result = reply(&operation);
+        let _ = call.reply.send(Ok(result));
+        operation
+    }
+
+    pub(crate) fn input_receipt(operation: &Value) -> Value {
+        assert_eq!(operation["name"], "ssmcp.ui.message");
+        let args = &operation["arguments"];
+        assert_eq!(args["kind"], "input");
+        assert!(matches!(
+            args["input_origin"].as_str(),
+            Some("system_hook" | "worker_event" | "maintenance")
+        ));
+        assert_ne!(args["finish_task"], true);
+        let id = crate::client::interface::history::request_identity(
+            args["idempotency_key"].as_str().unwrap(),
+            "generated_input",
+        )
+        .unwrap();
+        json!({"isError":false,"structuredContent":{
+            "accepted":true,"recorded":true,"shown":false,"kind":"input",
+            "input_origin":args["input_origin"],"message_id":id,
+            "completion_permission":false
+        }})
+    }
+
     pub(crate) async fn native_reply(&mut self, result: Value) -> Value {
         self.native_reply_after(result, || {}).await
     }
@@ -837,7 +866,7 @@ impl TestFixture {
         result: Value,
         before: impl FnOnce(),
     ) -> Value {
-        let call = self.calls.recv().await.expect("native call");
+        let call = self.calls.lock().await.recv().await.expect("native call");
         let operation = serde_json::to_value(&call.operation).unwrap();
         before();
         let _ = call.reply.send(Ok(result));
