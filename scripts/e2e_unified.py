@@ -799,7 +799,12 @@ class Unified(SessionFeatures):
         self.check(all(item["id"] != old_id for item in listed),
                    "the disconnected client ID cannot survive as a live route")
         stale = self.rejected("ssmcp.exec.status", {"job_id": job["job_id"]})
-        self.check(not self.call("ssmcp.exec.list")["jobs"], "reload starts with no inherited background job handles")
+        fresh_terminal = self.call("terminal.status")
+        jobs = self.call("ssmcp.exec.list")["jobs"]
+        self.check(len(jobs) == 1 and jobs[0]["job_id"] == fresh_terminal["job_id"] == "main"
+                   and jobs[0]["mode"] == "pty" and jobs[0]["pid"] == fresh_terminal["pid"]
+                   and jobs[0]["running"] and fresh_terminal["running"],
+                   "reload starts with only the replacement main PTY and no inherited background job handles")
         tools = self.tool_catalog(through_code=True)
         self.check({tool["name"]: tool for tool in tools} == self.initial_catalog,
                    "reload rebuilds the full no-Harness catalog through the new registry")
