@@ -24,7 +24,7 @@ from e2e_interactions import Interactions, digest
 
 ROWS = 32
 DRAFT = "OWNED_TIMER_DRAFT"
-CLOCK = re.compile(r"\b(Timer|Wait) (\+?)(\d+(?::\d{2}){1,2})")
+CLOCK = re.compile(r"(观察剩余|观察已用|剩余|计时|运行|等待) (\d+(?::\d{2}){1,2})")
 
 
 def clock(shot):
@@ -45,10 +45,21 @@ def clock(shot):
     if (not found or not header[:found.start()].endswith("─")
             or header[found.end():].strip()):
         return None
-    parts = [int(part) for part in found[3].split(":")]
+    label = found[1]
+    kind = {"观察剩余": "Wait", "观察已用": "Wait", "等待": "Wait",
+            "计时": "Timer", "运行": "Task"}.get(label)
+    if label == "剩余":
+        # Both task and timer deadlines use this short header. The actual
+        # footer supplies their type; it cannot establish a clock by itself.
+        footer = shot["rows"][-1].lstrip()
+        kind = "Timer" if footer.startswith("计时 · ") else (
+            "Task" if footer.startswith("任务 · ") else None)
+    if kind is None:
+        return None
+    parts = [int(part) for part in found[2].split(":")]
     seconds = parts[-1] + parts[-2] * 60 + (parts[0] * 3600 if len(parts) == 3 else 0)
-    return {"kind": found[1], "elapsed": found[2] == "+", "seconds": seconds,
-            "text": found[0], "row": row, "row_index": row_index,
+    return {"kind": kind, "elapsed": label in {"计时", "运行", "观察已用"},
+            "seconds": seconds, "text": found[0], "row": row, "row_index": row_index,
             "surface": "composer_header"}
 
 
@@ -254,13 +265,15 @@ return {rejected:native.isError === true,reason:native.content?.find(item=>item.
 
         elapsed = self.timer({"label":"Owned elapsed timer"})
         self.check(elapsed["remaining_ms"] is None, "an unknown end has no fabricated remaining deadline")
-        shot = self.quiet_until(front, lambda shot: (value := clock(shot)) is not None and value["elapsed"],
-                                "the unknown-end timer displays elapsed time")
+        shot = self.quiet_until(front, lambda shot: (value := clock(shot)) is not None
+                                and value["elapsed"] and value["kind"] in {"Task", "Timer"},
+                                "open-ended work displays elapsed time without an invented deadline")
+        elapsed_kind = clock(shot)["kind"]
         initial = clock(shot)["seconds"]
         self.quiet_until(front, lambda shot: (value := clock(shot)) is not None
                          and value["elapsed"] and value["seconds"] > initial,
                          "elapsed time advances without tool polling or keyboard activity", timeout=4)
-        self.capture_clock(front, "elapsed", "Timer", True)
+        self.capture_clock(front, "elapsed", elapsed_kind, True)
         self.timer({"op":"cancel", "timer_id":elapsed["timer_id"]})
         self.preserve_queued(queued)
 
@@ -379,8 +392,8 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
         self.check(cancelled["status"] == "cancelled" and cancelled["wait_id"] == cancelled_entry["id"],
                    "the active public waiter receives the same cancellation without replay")
         self.preserve_queued(cancel_queued)
-        self.quiet_until(front, lambda shot: clock(shot) is None,
-                         "the stopped public observation clears its live header clock")
+        self.quiet_until(front, lambda shot: (shown := clock(shot)) is None or shown["kind"] != "Wait",
+                         "the stopped observation clears its countdown while independent work may remain")
 
         pending = self.timer({"duration_ms":60_000, "label":"Disconnect clears this timer"})
         old_id = self.client_id
