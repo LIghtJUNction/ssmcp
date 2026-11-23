@@ -372,7 +372,7 @@ class Composer(Dashboard):
                    "the replacement journal cursor advances monotonically")
         serialized = json.dumps(current["events"], ensure_ascii=False)
         matches = [event for event in current["events"]
-                   if event.get("value", {}).get("message_id") == receipt["message_id"]]
+                   if journal_value(event).get("message_id") == receipt["message_id"]]
         old_matches = sum(marker in serialized for marker in forbidden)
         self.check(old_matches == 0,
                    f"post-delivery journal excludes old bodies and identities (matches={old_matches})")
@@ -703,7 +703,7 @@ class Composer(Dashboard):
         events_before = self.live_events(limit=4)
         self.check(live_receipt.get("recorded") is True
                    and live_receipt.get("storage") == "memory"
-                   and sum(event.get("value", {}).get("message_id") == live_receipt["message_id"]
+                   and sum(journal_value(event).get("message_id") == live_receipt["message_id"]
                            for event in events_before["events"]) == 1,
                    "one real live message is retained before the reload boundary")
 
@@ -812,7 +812,7 @@ class Composer(Dashboard):
             if isinstance(old_body, str) and old_body:
                 forbidden_after.add(old_body)
         for event in events_before["events"]:
-            old_value = event.get("value", {})
+            old_value = journal_value(event)
             if old_value.get("type") == "ssmcp.message":
                 for field in ("text", "message_id"):
                     old_marker = old_value.get(field)
@@ -842,7 +842,7 @@ class Composer(Dashboard):
         self.check(events_after["generation"] != events_before["generation"]
                    and events_after["scope"]["client_id"] == self.client_id
                    and events_before["scope"]["client_id"] == old_id
-                   and not any(event.get("value", {}).get("message_id") == live_receipt["message_id"]
+                   and not any(journal_value(event).get("message_id") == live_receipt["message_id"]
                                and event["value"].get("text") == live_marker
                                for event in events_after["events"])
                    and all(marker not in serialized_after for marker in forbidden_after),
@@ -937,6 +937,12 @@ class Composer(Dashboard):
                                         for path, payload in legacy_files.items()
                                     }}
         front.close()
+
+
+def journal_value(event):
+    """Only object-valued journal entries carry message fields."""
+    value = event.get("value")
+    return value if isinstance(value, dict) else {}
 
 
 def main():

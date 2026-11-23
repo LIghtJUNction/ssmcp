@@ -493,10 +493,11 @@ class ReleaseTests(unittest.TestCase):
                 "INSTRUMENTATION_RESULT: stream=SSMCP protocol and controller checks passed: fixture\n"
                 if platform == "android" else "test result: ok. 1 passed; 0 failed;\n"
                 if platform in {"linux", "windows"} else "Executed 1 test, with 0 failures (0 unexpected)\n")
-            (directory / "result.json").write_text(json.dumps({
-                "source_commit": sha, "target": spec["target"], "profile": spec["profile"],
-                "build_exit": 0, "test_exit": 0,
-            }))
+            checks = {"source_commit": sha, "target": spec["target"], "profile": spec["profile"],
+                      "build_exit": 0, "test_exit": 0}
+            if platform == "windows":
+                checks.update(cli_test_exit=0, cli_build_exit=0, native_plugin_exit=0)
+            (directory / "result.json").write_text(json.dumps(checks))
             binary = None
             # Structural fixture bytes only; these are not native acceptance tests.
             if platform == "linux":
@@ -599,12 +600,17 @@ class ReleaseTests(unittest.TestCase):
         evidence, binary = fixtures["windows"]
         result = evidence / "result.json"
         original = result.read_bytes()
-        for exit_code in (1, False, "0"):
-            receipt = json.loads(original)
-            receipt["build_exit"] = exit_code
-            result.write_text(json.dumps(receipt))
-            with self.assertRaisesRegex(ValueError, "exit receipts"):
-                release.package_gui("windows", evidence, binary, self.root)
+        for field in ("build_exit", "test_exit", "cli_test_exit", "cli_build_exit", "native_plugin_exit"):
+            for exit_code in (1, False, "0", None):
+                with self.subTest(field=field, exit_code=exit_code):
+                    receipt = json.loads(original)
+                    if exit_code is None:
+                        del receipt[field]
+                    else:
+                        receipt[field] = exit_code
+                    result.write_text(json.dumps(receipt))
+                    with self.assertRaisesRegex(ValueError, "exit receipts"):
+                        release.package_gui("windows", evidence, binary, self.root)
         result.write_bytes(original)
         with mock.patch.dict(os.environ, {"SOURCE_COMMIT": "0" * 40}):
             with self.assertRaisesRegex(ValueError, "immutable commit"):

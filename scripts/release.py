@@ -747,6 +747,16 @@ def verify_linux_gui_archive(archive, source, window):
                 raise ValueError("Linux GUI archived source proof differs from the release checkout")
 
 
+def gui_success_receipt_matches(value, platform, commit, spec):
+    expected = {"source_commit": commit, "target": spec["target"], "profile": spec["profile"],
+                "build_exit": 0, "test_exit": 0}
+    if platform == "windows":
+        expected.update(cli_test_exit=0, cli_build_exit=0, native_plugin_exit=0)
+    return value == expected and all(
+        type(value[key]) is int for key in expected if key.endswith("_exit")
+    )
+
+
 def package_gui(platform, evidence, binary=None, root=None):
     """Package successful GUI checks from this exact checkout; never publish."""
     root, evidence = Path(root or ROOT), Path(evidence)
@@ -759,9 +769,7 @@ def package_gui(platform, evidence, binary=None, root=None):
         raise ValueError("GUI source does not match the requested immutable commit")
     subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
     result = json.loads((evidence / "result.json").read_text(encoding="utf-8-sig"))
-    expected = {"source_commit": source["commit"], "target": spec["target"], "profile": spec["profile"],
-                "build_exit": 0, "test_exit": 0}
-    if result != expected or any(type(result[key]) is not int for key in ("build_exit", "test_exit")):
+    if not gui_success_receipt_matches(result, platform, source["commit"], spec):
         raise ValueError("GUI build and test exit receipts must both succeed for this source and target")
     for name in ("build.log", "tests.log"):
         path = evidence / name
@@ -852,9 +860,7 @@ def verified_gui_receipts(root, source):
                         ("profile", spec["profile"]), ("scope", spec["scope"])))):
             raise ValueError(f"GUI source or platform proof differs: {platform}")
         checks = receipt.get("checks", {})
-        if (checks != {"source_commit": source["commit"], "target": spec["target"], "profile": spec["profile"],
-                       "build_exit": 0, "test_exit": 0}
-                or any(type(checks[key]) is not int for key in ("build_exit", "test_exit"))):
+        if not gui_success_receipt_matches(checks, platform, source["commit"], spec):
             raise ValueError(f"GUI build or tests did not succeed: {platform}")
         actions = receipt.get("actions", {})
         if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", str(actions.get("repository", "")))
