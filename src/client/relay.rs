@@ -708,7 +708,7 @@ mod tests {
         );
         assert_eq!(negotiated_wait_display(false, false, &caps), None);
         assert_eq!(negotiated_wait_display(true, true, &caps[2..]), None);
-        assert!(access_capability_header(parent_offer(&parent).as_deref()).is_some());
+        assert!(access_capability_header(parent_offer(&parent)).is_some());
         restrict_to_self(&mut parent);
         assert!(!durable_wait_display_offer(&parent));
     }
