@@ -21,11 +21,14 @@ import signal
 import subprocess
 import tempfile
 import time
+import traceback
 
 from e2e_account_relay import wait_for
 from e2e_dashboard import Dashboard, sha256, text
 from e2e_client_ui import body_text, column, empty_composer_ready, left_rows, view
 
+
+COMPOSER_TIMEOUT_SECONDS = 240
 
 ESC = b"\x1b"
 UP = b"\x1b[A"
@@ -74,6 +77,9 @@ def visible_record(snapshot, request_text, status, message_id=None, *, selected=
 
 
 class Composer(Dashboard):
+    # Keep the router available for graceful stop after the scenario deadline.
+    fixture_timeout_seconds = COMPOSER_TIMEOUT_SECONDS + 30
+
     def client_environment(self, label, **options):
         environment = super().client_environment(label, **options)
         root = (self.directory / "composer-environment").resolve()
@@ -341,6 +347,34 @@ class Composer(Dashboard):
         self.check(any(item.get("type") == "text" and "USER REQUIREMENTS" in item.get("text", "")
                        and expected in item.get("text", "") for item in response["content"]),
                    "the tool response contains a conspicuous separate user-requirements text block")
+
+    def check_post_delivery_journal(self, baseline, forbidden, *, marker, limit=16):
+        # Exact-recipient input is verified at the HTTP delivery boundary. Use a
+        # separate public probe to verify that the live process journal still works.
+        receipt = self.observe("ssmcp.ui.message", {"text": marker})
+        self.check(receipt.get("recorded") is True and receipt.get("storage") == "memory"
+                   and bool(receipt.get("message_id")),
+                   "the post-delivery journal probe has a real in-memory receipt")
+        current = self.live_events(limit=limit)
+        self.check(current["generation"] == baseline["generation"],
+                   "post-delivery journal keeps the replacement process generation")
+        self.check(current["scope"] == baseline["scope"],
+                   "post-delivery journal keeps the replacement client scope")
+        self.check(current["next_cursor"] >= baseline["next_cursor"],
+                   "the replacement journal cursor advances monotonically")
+        serialized = json.dumps(current["events"], ensure_ascii=False)
+        matches = [event for event in current["events"]
+                   if event.get("value", {}).get("message_id") == receipt["message_id"]]
+        old_matches = sum(marker in serialized for marker in forbidden)
+        self.check(old_matches == 0,
+                   f"post-delivery journal excludes old bodies and identities (matches={old_matches})")
+        self.check(len(matches) == 1 and matches[0]["value"].get("type") == "ssmcp.message"
+                   and matches[0]["value"].get("text") == marker
+                   and baseline["next_cursor"] <= matches[0]["sequence"] < current["next_cursor"],
+                   "post-delivery journal contains the exact new probe inside its snapshot "
+                   f"(matching_ids={len(matches)}, events={len(current['events'])}, "
+                   f"cursor={baseline['next_cursor']}..{current['next_cursor']})")
+        return current
 
     def wait_delivered(self, front, record, request_text=None):
         request_text = request_text if request_text is not None else record["text"]
@@ -852,23 +886,15 @@ class Composer(Dashboard):
                    and final_queue["draft"] == {"text": "", "cursor": 0}
                    and final_queue["draft_context"]["parked"] is None,
                    "only the newly delivered request belongs to the fresh process queue")
-        continued_events = self.live_events(limit=4)
+        self.check_post_delivery_journal(events_after, forbidden_after,
+                                         marker="COMPOSER_POST_DELIVERY_JOURNAL_PROBE", limit=4)
         continued_state = self.ui("/display/conversation")
         continued_screen = front.until(
             lambda shot: visible_record(shot, fresh_text, "delivered", fresh["id"])
             and all(marker not in text(shot) for marker in forbidden_after),
             "the newly delivered request without old draft or message bodies",
         )
-        continued_body = json.dumps(continued_events["events"], ensure_ascii=False)
         continued_ui = json.dumps(continued_state, ensure_ascii=False)
-        self.check(continued_events["generation"] == events_after["generation"]
-                   and continued_events["scope"] == events_after["scope"]
-                   and any(event.get("value", {}).get("type") == "ssmcp.message"
-                           and event["value"].get("role") == "user"
-                           and event["value"].get("text") == fresh_text
-                           for event in continued_events["events"])
-                   and all(marker not in continued_body for marker in forbidden_after),
-                   "successful fresh delivery stays in the new event generation without old bodies or identities")
         self.check(continued_state["draft"] == {"text": "", "cursor": 0}
                    and continued_state["editing"] is None
                    and all(marker not in continued_ui and marker not in text(continued_screen)
@@ -906,10 +932,11 @@ class Composer(Dashboard):
 
 
 def main():
-    def interrupted(_signal, _frame):
-        raise TimeoutError("composer E2E interrupted; cleaning up owned processes")
+    def interrupted(signum, _frame):
+        raise TimeoutError(f"composer E2E stopped by {signal.Signals(signum).name}; cleaning up owned processes")
 
     signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGALRM, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, default=Path("target/debug"))
     parser.add_argument("--decoder", type=Path, help="defaults to BIN_DIR/examples/vt_snapshot")
@@ -931,20 +958,41 @@ def main():
                   Path(__file__).with_name("e2e_client_ui.py"))}}
     with tempfile.TemporaryDirectory(prefix="ssmcp-composer-e2e-") as directory:
         harness = Composer(Path(directory), args.bin_dir, decoder)
-        try:
-            harness.run()
-            report["status"] = "passed"
-        except Exception as error:
-            description = f"{type(error).__name__}: {error}"
+
+        def redact(description):
             for secret in [harness.secret, *harness.sensitive]:
                 if secret:
                     description = description.replace(secret, "[redacted]")
-            report["error"] = description
-            print(description, flush=True)
+            return description
+
+        try:
+            signal.setitimer(signal.ITIMER_REAL, COMPOSER_TIMEOUT_SECONDS)
+            harness.run()
+            report["status"] = "passed"
+        except Exception as error:
+            report["error"] = redact(f"{type(error).__name__}: {error}")
+            report["error_traceback"] = redact("".join(traceback.format_tb(error.__traceback__)))
+            print(report["error_traceback"] + report["error"], flush=True)
             harness.diagnostics()
         finally:
-            harness.close_frontends()
-            harness.cleanup()
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            for cleanup in (harness.close_frontends, harness.cleanup):
+                try:
+                    cleanup()
+                except Exception as error:
+                    report["status"] = "failed"
+                    message = redact(f"{cleanup.__name__}: {type(error).__name__}: {error}")
+                    report.setdefault("cleanup_errors", []).append(message)
+                    print(message, flush=True)
+            router = harness.account_gateway
+            report["router"] = {"lifetime_seconds": harness.fixture_timeout_seconds,
+                                "exit_code": router.exit_code}
+            if router.prepared and router.exit_code != 0:
+                with (harness.directory / "account-router.log").open("rb") as log:
+                    log.seek(max(0, os.fstat(log.fileno()).st_size - 4096))
+                    tail = redact(log.read().decode(errors="replace"))
+                report["router"]["log_tail"] = tail
+                print(f"Account router exit {router.exit_code}:\n{tail}", flush=True)
             report.update(checks=harness.checks, metrics=harness.metrics,
                           duration_seconds=round(time.monotonic() - started, 3))
             if args.report:

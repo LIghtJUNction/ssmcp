@@ -832,14 +832,19 @@ for line in sys.stdin:
                 "isError":false,"_native":[MARKER,null],
             }));
             assert!(peer.pending().await["requests"].as_array().unwrap().is_empty());
-            // Stderr may arrive on a different task; wait for that actual event.
+            // Stderr may arrive on a different task. Wait on the event
+            // cursor so this test does not continuously poll the ready page.
+            let mut cursor = 0;
             loop {
-                let page = peer.events.read(json!({"max_events":64})).await.unwrap();
+                let page = peer.events.read(json!({
+                    "cursor":cursor,"max_events":64,"wait_ms":1000
+                })).await.unwrap();
                 assert!(!page.to_string().contains(MARKER));
                 if page["events"].as_array().unwrap().iter().any(|entry| entry["event"]["type"] == "stderr") {
                     break;
                 }
-                tokio::task::yield_now().await;
+                assert_eq!(page["closed"], false, "fixture closed before recording stderr");
+                cursor = page["next_cursor"].as_u64().unwrap();
             }
             peer.shutdown().await;
             let page = peer.events.read(json!({"max_events":64})).await.unwrap();

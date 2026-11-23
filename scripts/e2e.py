@@ -274,8 +274,9 @@ class Harness:
         if generation is not None:
             arguments["generation"] = generation
         expected_kind = "thread" if agent_id is not None else "main" if main else "process"
-        events, seen = [], set()
-        scope = None
+        events = []
+        scope = snapshot_end = previous_sequence = None
+        # Freeze the first observed end so later activity cannot move the goal.
         # A one-event page is useful while a targeted input is pending. The
         # process journal can retain 4096 events, so 128 pages is not a complete
         # upper bound for a small-page read of this bounded window.
@@ -296,16 +297,28 @@ class Harness:
             if page.get("truncated_since_cursor") or page.get("retention_gap_possible"):
                 raise AssertionError("the private fixture lost retained events before its assertions")
             generation, scope = page["generation"], page["scope"]
+            start, next_cursor, end = page["start_cursor"], page["next_cursor"], page["end_cursor"]
+            lower = start if cursor is None else cursor
+            if (any(type(value) is not int for value in (start, next_cursor, end))
+                    or not 0 <= start <= lower <= next_cursor <= end
+                    or page["has_more"] is not (next_cursor < end)):
+                raise AssertionError("ui.events returned inconsistent journal bounds")
+            if snapshot_end is None:
+                snapshot_end = end
+            elif end < snapshot_end:
+                raise AssertionError("ui.events moved the live journal end backwards")
             for event in page["events"]:
                 sequence = event.get("sequence")
-                if not isinstance(sequence, int) or sequence in seen:
+                if (type(sequence) is not int or not lower <= sequence < next_cursor
+                        or (previous_sequence is not None and sequence <= previous_sequence)):
                     raise AssertionError("ui.events repeated or returned an invalid event sequence")
-                seen.add(sequence)
-                events.append(event)
-            next_cursor = page["next_cursor"]
-            if not page["has_more"]:
-                return {**page, "events": events}
-            if not isinstance(next_cursor, int) or (cursor is not None and next_cursor <= cursor):
+                previous_sequence = sequence
+                if sequence < snapshot_end:
+                    events.append(event)
+            if next_cursor >= snapshot_end:
+                return {**page, "next_cursor": snapshot_end, "end_cursor": snapshot_end,
+                        "has_more": False, "events": events}
+            if next_cursor <= lower:
                 raise AssertionError("ui.events did not advance its real cursor")
             cursor = next_cursor
             arguments.update(cursor=cursor, generation=generation)
@@ -725,7 +738,7 @@ class Harness:
         self.check(actual_tools == expected_tools
                    and len(catalog) == len(expected_tools)
                    and not invalid_schemas,
-                   "list discovers exact native capability names and schemas for code_mode: "
+                   "plain shell advertises exactly its native capability names and schemas: "
                    f"missing={sorted(expected_tools - actual_tools)}, "
                    f"extra={sorted(actual_tools - expected_tools)}, "
                    f"duplicates={len(catalog) - len(actual_tools)}, invalid_schemas={invalid_schemas}")

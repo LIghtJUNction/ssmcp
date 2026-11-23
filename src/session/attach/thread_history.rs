@@ -329,7 +329,7 @@ impl Capture {
         }
         Ok(
             json!({"schema_version":1,"scope":selector.value(),"generation":self.generation,
-            "events":events,"next_cursor":next,"start_cursor":start,"has_more":next<ring.next,
+            "events":events,"next_cursor":next,"start_cursor":start,"end_cursor":ring.next,"has_more":next<ring.next,
             "truncated_since_cursor":cursor.is_some()&&requested<start,
             "truncation_scope":"process_journal_window",
             "retention_gap_possible":cursor.is_some()&&requested<start,
@@ -598,6 +598,7 @@ mod tests {
         let selected = selector(Some(&agent), false);
         let first = capture.thread_page(&selected, None, None, 1).unwrap();
         let cursor = first["next_cursor"].as_u64().unwrap();
+        assert_eq!(first["end_cursor"], cursor);
         for _ in 0..20 {
             capture.push_scoped(
                 json!({"kind":"event","value":{"text":"other scope"}}),
@@ -612,6 +613,7 @@ mod tests {
             .thread_page(&selected, Some(cursor), Some(&capture.generation), 64)
             .unwrap();
         assert_eq!(next["events"].as_array().unwrap().len(), 1);
+        assert_eq!(next["end_cursor"], cursor + 21);
         assert_eq!(next["retention_gap_possible"], false);
         assert_eq!(next["truncated_since_cursor"], false);
         for _ in 0..4096 {

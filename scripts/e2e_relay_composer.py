@@ -34,6 +34,7 @@ import termios
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+from e2e_account_gateway import has_platform_consent
 from e2e_account_relay import IDENTITY, wait_for
 from e2e_composer import Composer, ENTER, LEFT, UP, editing_queue, input_text, visible_record
 from e2e_client_ui import empty_composer_ready
@@ -388,8 +389,7 @@ class RelayComposer(Composer):
             raise AssertionError("provider callback differs from the real router's issuer")
         self.sensitive.extend(value for values in parse_qs(parsed.query).values() for value in values)
         status, consent, _ = self.oauth_request(parsed.path + "?" + parsed.query, cookie=cookie)
-        self.check(status == 200 and isinstance(consent, str)
-                   and "name=decision value=allow" in consent and "fixture@github" in consent,
+        self.check(status == 200 and has_platform_consent(consent, self.origin, self.identity),
                    "the real identity exchange validates synthetic GitHub PKCE and requires explicit consent")
         status, _, headers = self.oauth_request("/oauth/authorize", "POST",
             {"transaction_id": transaction, "decision": "allow"}, cookie=cookie,
@@ -655,24 +655,17 @@ class RelayComposer(Composer):
                    and all(row["message_id"] != pending["id"] and row["text"] != pending["text"]
                            for row in self.gateway_deliveries),
                    "gateway responses deliver only the three explicit inputs, never the pre-reload pending request")
-        continued_events = self.live_events()
+        self.check_post_delivery_journal(after_events, old_context,
+                                         marker="RELAY_POST_DELIVERY_JOURNAL_PROBE")
         continued_screen = front.until(
             lambda shot: visible_record(shot, continuation["text"], "delivered", continuation["id"])
             and current_draft in input_text(shot)
             and all(marker not in text(shot) for marker in old_context),
             "the new delivered request and fresh draft without old RAM or legacy markers",
         )
-        continued_text = json.dumps(continued_events["events"], ensure_ascii=False)
-        self.check(continued_events["generation"] == after_events["generation"]
-                   and continued_events["scope"] == after_events["scope"]
-                   and any(event.get("value", {}).get("type") == "ssmcp.message"
-                           and event["value"].get("role") == "user"
-                           and event["value"].get("text") == continuation["text"]
-                           for event in continued_events["events"])
-                   and all(marker not in continued_text
-                           and marker not in json.dumps(after_composition, ensure_ascii=False)
-                           and marker not in text(continued_screen) for marker in old_context),
-                   "successful new delivery stays in the new generation without reviving old draft, pending input or history")
+        self.check(all(marker not in json.dumps(after_composition, ensure_ascii=False)
+                       and marker not in text(continued_screen) for marker in old_context),
+                   "the relay composer still excludes pre-reload bodies and identities after fresh delivery")
         # Explicit export is tested only after the new requirement has been
         # delivered. Clearing this owned draft is not the reload-freshness test.
         handoff_before = self.queue()["queue"]

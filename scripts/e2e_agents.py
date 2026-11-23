@@ -423,18 +423,16 @@ def check_cc(harness, label, tools, directory):
     expected = {**native, "name": "claude." + native["name"]}
     harness.check(next(tool for tool in tools if tool["name"] == expected["name"]) == expected,
                   "cc: native schema, annotations and vendor catalog fields are unchanged")
+    roots = harness.call("ssmcp.context.roots")["roots"]
+    workspace_roots = [root for root in roots if root["id"] == "workspace"]
+    harness.check(len(workspace_roots) == 1
+                  and workspace_roots[0]["path"] == str(directory.resolve())
+                  and workspace_roots[0]["kind"] == "workspace"
+                  and workspace_roots[0]["read_only"] is True,
+                  "cc: explicit context discovery reports the authorized fixture workspace")
     arguments = {"nested": [3, 5, 8], "spawn_child": True}
     result = full_call(harness, "claude.NativeFutureTool", arguments)
-    context = result.get("_meta", {}).get("ssmcp.context")
-    workspace = context.get("workspace") if isinstance(context, dict) else None
-    harness.check(isinstance(context, dict) and context.get("schema_version") == 1
-                   and type(context.get("revision")) is int and context["revision"] >= 1
-                   and isinstance(workspace, dict) and workspace.get("path") == str(directory.resolve())
-                   and isinstance(workspace.get("id"), str) and re.fullmatch(r"[0-9a-f]{64}", workspace["id"]),
-                   "cc: the native result includes versioned context for this fixture workspace")
-    native_result = {**result, "_meta": dict(result["_meta"])}
-    del native_result["_meta"]["ssmcp.context"]
-    harness.check(native_result == {
+    harness.check(result == {
         "content": [
             {"type": "text", "text": "native result"},
             {"type": "image", "mimeType": "image/png", "data": "AAEC"},
