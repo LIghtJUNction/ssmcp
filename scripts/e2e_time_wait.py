@@ -311,7 +311,7 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
 
         # This public Rust await executes no native operation. Its display
         # arrives through the negotiated, independent relay snapshot channel.
-        # Establish the lifecycle baseline before queueing input.
+        # Queued human input wakes the member after this explicit idle baseline.
         self.public_call("collab", self.lifecycle_update_arguments(member, "idle"))
         self.verify_clock_layout()
         public_queued = self.submit_source(front, "PUBLIC_WAIT_REQUIREMENT_STAYS_QUEUED")
@@ -320,10 +320,10 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
         current = next(agent for agent in self.public_call("collab", {
             "action": "list", "client_id": self.client_id})["agents"]
             if agent["agent_id"] == member["agent_id"])
-        self.check(current["status"] == "idle",
-                   "the exact participant is still idle before passive lifecycle observation")
+        self.check(current["status"] == "working",
+                   "queued human input wakes the exact participant before passive observation")
         target = {"type":"agent_status", "agent_id":member["agent_id"],
-                  "statuses":["working"]}
+                  "statuses":["idle"]}
         future = self.public_wait({"targets":[target], "timeout_ms":4000}, member)
         first = self.wait_timing(front, lambda entry: entry["kind"] == "relay_wait")
         self.check(first["attribution"]["agent"]["id"] == member["agent_id"]
@@ -348,7 +348,7 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
         self.capture_clock(front, "public-await", "Wait", False)
         self.preserve_queued(public_queued)
         status, updated_rpc, _ = self.rpc("tools/call", {"name":"collab",
-            "arguments": self.lifecycle_update_arguments(member, "working")}, modern=True)
+            "arguments": self.lifecycle_update_arguments(member, "idle")}, modern=True)
         if status != 200 or not isinstance(updated_rpc, dict) or "error" in updated_rpc:
             raise AssertionError("explicit collaboration update failed at the HTTP boundary")
         updated = updated_rpc["result"]
