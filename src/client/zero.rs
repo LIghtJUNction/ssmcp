@@ -408,6 +408,11 @@ impl Control {
             Operation::Status {} => Ok(self.status()),
             Operation::CallTool { name, arguments } => {
                 let value = match name.as_str() {
+                    // Negotiate helper metadata without starting a tool backend.
+                    "ssmcp.client.capabilities" => {
+                        serde_json::from_value::<Empty>(arguments).map_err(|e| e.to_string())?;
+                        Ok(recovery_capabilities())
+                    }
                     "ssmcp.007.status" => {
                         serde_json::from_value::<Empty>(arguments).map_err(|e| e.to_string())?;
                         Ok(self.status())
@@ -443,6 +448,11 @@ impl Control {
             _ => Err("007 has no terminal or execution backend; wake a full session first".into()),
         }
     }
+}
+
+fn recovery_capabilities() -> Value {
+    json!({"schema":"ssmcp.client.capabilities.v1", "client_version":env!("CARGO_PKG_VERSION"),
+        "mode":"recovery", "recovery_tools_only":true})
 }
 
 // The short-lived helper reuses saved-session lifecycle code while keeping
@@ -882,6 +892,11 @@ mod tests {
 
     #[test]
     fn recovery_has_no_generic_execution_or_identity_arguments() {
+        let metadata = recovery_capabilities();
+        assert_eq!(metadata["schema"], "ssmcp.client.capabilities.v1");
+        assert_eq!(metadata["client_version"], env!("CARGO_PKG_VERSION"));
+        assert!(metadata.get("tool_sources").is_none());
+        assert_eq!(metadata["recovery_tools_only"], true);
         let tools = catalog();
         assert_eq!(tools.len(), 6);
         for value in tools {
