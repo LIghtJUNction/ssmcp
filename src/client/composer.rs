@@ -230,18 +230,6 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         name: "/handoff",
         description: "Prepare a context file and editable handoff draft",
     },
-    SlashCommand {
-        name: "/pi",
-        description: "Inspect or call the installed Pi harness",
-    },
-    SlashCommand {
-        name: "/cc",
-        description: "Inspect or call native Claude Code tools",
-    },
-    SlashCommand {
-        name: "/codex",
-        description: "Inspect or call native Codex tools",
-    },
 ];
 
 /// Cursor coordinates are zero based and relative to `lines`.
@@ -1133,13 +1121,13 @@ mod tests {
         assert_eq!(draft.text(), "/re");
         draft.set_text("/");
         assert!(draft.move_suggestion(-1));
-        assert_eq!(draft.selected_suggestion().unwrap().name, "/codex");
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/handoff");
         assert!(
             draft
                 .rows(60, 3, &ui, true)
                 .lines
                 .iter()
-                .any(|line| line.contains("› /codex"))
+                .any(|line| line.contains("› /handoff"))
         );
         draft.insert("au");
         assert_eq!(draft.selected_suggestion().unwrap().name, "/audit");

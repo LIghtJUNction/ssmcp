@@ -4464,30 +4464,13 @@ mod tests {
     }
 
     #[test]
-    fn resume_remains_literal_in_titles_and_provider_arguments() {
+    fn resume_remains_literal_in_titles() {
         let title = Options::parse_new(
             ["--server", "https://relay.example", "--title", "resume"].map(OsString::from),
         )
         .unwrap()
         .unwrap();
         assert_eq!(title.title.as_deref(), Some("resume"));
-        let options = Options::parse_new(
-            [
-                "--server",
-                "https://relay.example",
-                "--load-harness",
-                "codex",
-                "--",
-                "resume",
-            ]
-            .map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            options.harness.unwrap().arguments,
-            vec![OsString::from("resume")]
-        );
     }
 
     #[test]

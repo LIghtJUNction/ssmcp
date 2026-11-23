@@ -189,16 +189,20 @@ mod tests {
     #[test]
     fn load_request_rejects_unknown_providers_and_extra_arguments() {
         assert_eq!(
-            parse(json!({"provider":"claude"})).unwrap(),
-            (Provider::Claude, false)
+            parse(json!({"provider":"ssmcp"})).unwrap(),
+            (Provider::Peer, false)
         );
         assert_eq!(
-            parse(json!({"provider":"codex","refresh":true})).unwrap(),
-            (Provider::Codex, true)
+            parse(json!({"provider":"ssmcp","refresh":true})).unwrap(),
+            (Provider::Peer, true)
         );
         for arguments in [
             json!({}),
             json!({"provider":"native"}),
+            json!({"provider":"codex"}),
+            json!({"provider":"claude"}),
+            json!({"provider":"pi"}),
+            json!({"provider":"opencode"}),
             json!({"provider":"playwright"}),
             json!({"provider":"codex","refresh":"true"}),
             json!({"provider":"codex","command":["other-program"]}),
