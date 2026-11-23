@@ -88,14 +88,9 @@ fn read_endpoint(path: &Path) -> Result<Endpoint> {
 }
 
 fn token() -> Result<String> {
-    use std::fmt::Write;
     let mut bytes = [0; 32];
     crate::platform::random_bytes(&mut bytes)?;
-    let mut value = String::with_capacity(64);
-    for byte in bytes {
-        write!(value, "{byte:02x}").expect("writing to String");
-    }
-    Ok(value)
+    Ok(crate::hex::encode(bytes))
 }
 
 impl Server {

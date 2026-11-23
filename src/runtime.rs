@@ -288,6 +288,10 @@ impl Runtime {
         self.backend.local_command_stats()
     }
 
+    pub(crate) async fn safety_events(&self, cursor: u64, limit: usize) -> Result<Value, String> {
+        self.files.safety_events(cursor, limit).await
+    }
+
     pub fn new(backend: Arc<Backend>, root: PathBuf) -> Result<Arc<Self>, String> {
         Self::with_context_roots(backend, root, Vec::new())
     }
@@ -1147,6 +1151,56 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[tokio::test]
+    async fn safety_attach_reads_only_the_selected_live_runtime() {
+        use crate::session::attach;
+
+        let root = ManagedCleanupRoot::new();
+        let sibling = ManagedCleanupRoot::new();
+        let runtime = root.runtime().await;
+        let other = sibling.runtime().await;
+        let endpoint = root.0.join("attach");
+        crate::platform::private_directory(&endpoint).unwrap();
+        let _server = attach::serve(endpoint.clone(), Some(runtime.clone()))
+            .await
+            .unwrap();
+        let operation = || Operation::CallTool {
+            name: "ssmcp.fs.write_text".into(),
+            arguments: json!({
+                "path":"../synthetic-private-target",
+                "text":"synthetic-private",
+                "create_parents":true
+            }),
+        };
+        assert!(other.perform(operation()).await.is_err());
+        let empty = attach::safety_at_directory(endpoint.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(empty["events"], json!([]));
+        assert!(runtime.perform(operation()).await.is_err());
+
+        let queue = attach::safety_at_directory(endpoint.clone(), None)
+            .await
+            .unwrap();
+        let event = &queue["events"][0];
+        assert_eq!(event["decision"], "deny");
+        assert!(!queue.to_string().contains("synthetic-private"));
+        let id = event["id"].as_str().unwrap();
+        assert_eq!(
+            attach::safety_at_directory(endpoint.clone(), Some(id))
+                .await
+                .unwrap(),
+            *event
+        );
+        assert!(
+            attach::safety_at_directory(endpoint, Some("expired:1:0"))
+                .await
+                .is_err()
+        );
+        runtime.shutdown().await;
+        other.shutdown().await;
     }
 
     #[tokio::test]

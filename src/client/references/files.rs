@@ -394,10 +394,7 @@ mod unix {
         pub(super) fn new(root: &Path) -> io::Result<Self> {
             let mut random = [0u8; 16];
             crate::platform::random_bytes(&mut random)?;
-            let id = random
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
+            let id = crate::hex::encode(random);
             let parent = input_directory(root)?;
             let name = CString::new(format!("files-{id}")).expect("generated ASCII name");
             let directory = create_directory(&parent, &name)?;

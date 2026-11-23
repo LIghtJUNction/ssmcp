@@ -505,7 +505,7 @@ fn private_file(path: &Path, create: bool) -> Result<File, String> {
 pub(crate) fn nonce() -> Result<String, String> {
     let mut bytes = [0_u8; 16];
     crate::platform::random_bytes(&mut bytes).map_err(|e| e.to_string())?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(crate::hex::encode(bytes))
 }
 
 fn valid_nonce(value: &str) -> Result<(), String> {

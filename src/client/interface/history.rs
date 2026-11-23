@@ -101,7 +101,7 @@ fn now_ms() -> u64 {
 fn random_id(prefix: &str) -> Result<String, String> {
     let mut bytes = [0u8; 16];
     crate::platform::random_bytes(&mut bytes).map_err(|_| "cannot create history identity")?;
-    let suffix: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let suffix: String = crate::hex::encode(bytes);
     Ok(format!("{prefix}_{suffix}"))
 }
 
@@ -155,10 +155,7 @@ pub(crate) fn request_identity(request_id: &str, text: &str) -> Result<String, S
     digest.update(b"\0");
     digest.update(text.as_bytes());
     let digest = digest.finalize();
-    let suffix: String = digest[..16]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let suffix: String = crate::hex::encode(&digest[..16]);
     Ok(format!("message_{suffix}"))
 }
 

@@ -61,10 +61,7 @@ fn store_bytes_at(
     let mut random = [0u8; 16];
     crate::platform::random_bytes(&mut random)
         .map_err(|error| format!("Could not create a unique input filename: {error}"))?;
-    let id = random
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let id = crate::hex::encode(random);
     let name = format!("{prefix}-{id}.{extension}");
     let identity = save(root, &name, bytes)
         .map_err(|error| format!("Could not save the private input in .ssmcp/inputs: {error}"))?;
@@ -225,10 +222,7 @@ mod tests {
         fn new() -> Self {
             let mut id = [0u8; 16];
             crate::platform::random_bytes(&mut id).unwrap();
-            let id = id
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
+            let id = crate::hex::encode(id);
             let root = std::env::temp_dir().join(format!("ssmcp-paste-test-{id}"));
             fs::create_dir(&root).unwrap();
             Self(root)

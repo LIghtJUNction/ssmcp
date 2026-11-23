@@ -437,29 +437,88 @@ class Dashboard(Harness):
                        f"SIGWINCH at {columns} columns updates child dimensions and sidebar visibility")
             self.check(shot["hide_cursor"], "resizing preserves audit input ownership")
 
-        first = self.run_job([sys.executable, "-c", "import time; time.sleep(12)"], timeout=20000)
-        second = self.run_job([sys.executable, "-c", "import time; time.sleep(12)"], timeout=20000)
-        front.until(lambda s: "Tasks · 2 running" in text(s), "two real simultaneous tasks")
-        self.check(first["job_id"] != second["job_id"], "two independent tasks have different identities in the live sidebar")
-        front.pump(6.1)
-
         def task_rows(snapshot):
-            side = region(snapshot, 0, 57, 76, 106)
+            side = sidebar(snapshot)
             tasks = side.split("Tasks", 1)[1] if "Tasks" in side else ""
             return re.split(r"\n\s*(?:Progress|Git|Recent commits)\b", tasks, maxsplit=1)[0]
 
-        # The frame clock can trail wall time by a refresh interval. Observe the
-        # actual label crossing six seconds instead of assuming a particular tick.
-        shot = front.until(
-            lambda snapshot: any(float(value) >= 6 for value in
-                                 re.findall(r"\b(\d+(?:\.\d+)?)s\b", task_rows(snapshot))),
-            "silent tasks displaying at least six elapsed seconds", timeout=3, cells=True)
+        def running_jobs():
+            return [job for job in self.call("ssmcp.exec.list")["jobs"] if job["running"]]
+
+        main = self.call("terminal.status")
+        baseline = running_jobs()
+        baseline_ids = {job["job_id"] for job in baseline}
+        self.check(main["running"] and baseline_ids == {main["job_id"]}
+                   and len(baseline) == 1 and baseline[0]["mode"] == "pty"
+                   and baseline[0]["pid"] == main["pid"],
+                   "the initial running inventory is the owned main PTY")
+
+        def main_visible(snapshot):
+            return re.search(rf"(?m)^\s*{re.escape(main['job_id'])} ", task_rows(snapshot)) is not None
+
+        front.until(lambda shot: f"Tasks · {len(baseline_ids)} running" in sidebar(shot)
+                    and main_visible(shot), "the owned main PTY in the sidebar", cells=True)
+        titles = ("silent-alpha", "silent-bravo")
+        first, second = [
+            self.call("ssmcp.exec.start", {
+                "title": title, "command": ["sleep", "12"],
+                "timeout_ms": 20000,
+            })
+            for title in titles
+        ]
+        fixture_ids = {first["job_id"], second["job_id"]}
+        self.check(len(fixture_ids) == 2 and fixture_ids.isdisjoint(baseline_ids),
+                   "two independent fixture tasks have distinct identities from the main PTY")
+        expected_ids = baseline_ids | fixture_ids
+        active = running_jobs()
+        self.check({job["job_id"] for job in active} == expected_ids
+                   and len(active) == len(expected_ids),
+                   "the live inventory contains exactly the main PTY and both fixture tasks")
+        # Match the renderer's short IDs to these exact native jobs, never row order.
+        labels = {}
+        for job, title in zip((first, second), titles):
+            job_id = job["job_id"]
+            match = re.fullmatch(r"[0-9a-fA-F]{32}-([0-9a-fA-F]+)", job_id)
+            if match is None:
+                raise AssertionError(f"unexpected native task identity: {job_id}")
+            labels[f"#{match.group(1)}"] = title
+        self.check(len(labels) == len(fixture_ids), "fixture tasks have distinct sidebar labels")
+
+        def fixture_rows(snapshot):
+            lines = task_rows(snapshot).splitlines()
+            return {label: (line, lines[index + 1])
+                    for index, line in enumerate(lines[:-1]) for label, title in labels.items()
+                    if line.lstrip().startswith(f"{label} ") and title in line}
+
+        front.until(lambda shot: f"Tasks · {len(expected_ids)} running" in sidebar(shot)
+                    and main_visible(shot) and set(fixture_rows(shot)) == set(labels),
+                    "the real running inventory and both fixture identities in the sidebar", cells=True)
+
+        def fixtures_elapsed(snapshot):
+            rows = fixture_rows(snapshot)
+            if set(rows) != set(labels):
+                return False
+            times = [re.match(r"\s*[·◦○]\s+(\d+(?:\.\d+)?)s\b", rows[label][1])
+                     for label in labels]
+            return all(match is not None and float(match.group(1)) >= 6 for match in times)
+
+        # Each fixture's own timer must cross six seconds; the persistent main
+        # PTY's earlier start cannot satisfy this check.
+        shot = front.until(fixtures_elapsed,
+                           "both silent fixture tasks displaying at least six elapsed seconds",
+                           timeout=10, cells=True)
         self.check("%" not in task_rows(shot),
                    "tasks silent for over six seconds show elapsed time without inventing a completion percentage")
         self.finish_job(first, front)
         self.finish_job(second, front)
-        front.until(lambda s: "Tasks · 2 running" not in text(s) and "Tasks · 1 running" not in text(s),
-                    "completed tasks leaving the active sidebar")
+        remaining = running_jobs()
+        self.check({job["job_id"] for job in remaining} == baseline_ids
+                   and len(remaining) == len(baseline),
+                   "both fixture tasks finish while the original main PTY keeps running")
+        front.until(lambda shot: f"Tasks · {len(baseline_ids)} running" in sidebar(shot)
+                    and main_visible(shot) and not fixture_rows(shot)
+                    and all(title not in task_rows(shot) for title in titles),
+                    "completed fixture tasks leave the sidebar while the main PTY remains", cells=True)
 
         # Build markers from pieces so the readable command preview cannot
         # satisfy or duplicate the stream-content assertions below.

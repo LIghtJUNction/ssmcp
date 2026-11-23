@@ -375,7 +375,7 @@ impl Shell {
         }
         let mut nonce = [0u8; 16];
         crate::platform::random_bytes(&mut nonce).map_err(|error| error.to_string())?;
-        let namespace = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+        let namespace = crate::hex::encode(nonce);
         let events = EventLog::with_output("shell", output.clone());
         Ok(Arc::new(Self {
             root,

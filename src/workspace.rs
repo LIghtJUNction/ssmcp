@@ -1,6 +1,7 @@
 //! Root-scoped files and bounded loopback TCP handles shared by every backend.
 mod audit;
 mod image;
+pub(crate) mod safety;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -58,6 +59,9 @@ struct Root {
     #[cfg(not(target_os = "linux"))]
     directory: cap_std::fs::Dir,
     audit: audit::FileAudit,
+    safety_events: Arc<crate::backend::events::EventLog>,
+    #[cfg(target_os = "linux")]
+    safety_rules: safety::Store,
 }
 struct Listener {
     socket: TcpListener,
@@ -137,6 +141,9 @@ impl Workspace {
                 path,
                 directory,
                 audit: audit::FileAudit::new(events.clone(), output),
+                safety_events: crate::backend::events::EventLog::memory_only("workspace safety"),
+                #[cfg(target_os = "linux")]
+                safety_rules: safety::Store::default(),
             }),
             events,
             handles: StdMutex::new(HashMap::new()),
@@ -280,8 +287,12 @@ impl Workspace {
         ];
         tools.push(tool(
             "ssmcp.fs.events",
-            "Read successful native file access/write audit events and complete inline diffs or output artifact references. Unknown/binary/sensitive snapshots have null line counts; external file effects are not inferred.",
-            crate::backend::events::schema()["properties"].clone(),
+            "Read successful native file access/write events and diffs. Set stream to safety to read redacted safety decisions with a separate cursor. External effects are unknown.",
+            {
+                let mut properties = crate::backend::events::schema()["properties"].clone();
+                properties["stream"] = json!({"type":"string","enum":["files","safety"],"default":"files"});
+                properties
+            },
             &[],
             true,
         ));
@@ -315,12 +326,20 @@ impl Workspace {
             .map_err(|error| error.to_string())?
     }
 
-    pub async fn perform(&self, name: &str, arguments: Value) -> Result<Value, String> {
+    pub async fn perform(&self, name: &str, mut arguments: Value) -> Result<Value, String> {
         if self.closed.load(Ordering::Acquire) {
             return Err("workspace is closed".into());
         }
         if name == "ssmcp.fs.events" {
-            return self.events.read(arguments).await;
+            let stream = arguments
+                .as_object_mut()
+                .and_then(|args| args.remove("stream"));
+            let events = match stream.as_ref().map(Value::as_str) {
+                None | Some(Some("files")) => &self.events,
+                Some(Some("safety")) => &self.root.safety_events,
+                _ => return Err("unknown filesystem event stream".into()),
+            };
+            return events.read(arguments).await;
         }
         if name.starts_with("ssmcp.fs.") {
             let root = self.root.clone();
@@ -540,6 +559,7 @@ impl Workspace {
         let mut handles = self.handles.lock().unwrap();
         self.closed.store(true, Ordering::Release);
         self.events.close();
+        self.root.safety_events.close();
         for (_, handle) in handles.drain() {
             handle.close();
         }
@@ -1143,7 +1163,7 @@ fn atomic_write(
 fn random_id() -> io::Result<String> {
     let mut bytes = [0u8; 16];
     crate::platform::random_bytes(&mut bytes)?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(crate::hex::encode(bytes))
 }
 fn modified(metadata: &std::fs::Metadata) -> String {
     #[cfg(unix)]

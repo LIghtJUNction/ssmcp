@@ -315,13 +315,7 @@ impl Hub {
         let mut random = [0u8; 16];
         crate::platform::random_bytes(&mut random)
             .map_err(|_| "native message identifier unavailable")?;
-        let message_id = format!(
-            "native_{}",
-            random
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        );
+        let message_id = format!("native_{}", crate::hex::encode(random));
         let timestamp = now_ms();
         let receipt = Receipt {
             request_id,

@@ -202,7 +202,7 @@ fn write_private_limit(path: &Path, bytes: &[u8], limit: usize) -> Result<()> {
     }
     let mut random = [0; 16];
     platform::random_bytes(&mut random)?;
-    let suffix: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    let suffix: String = crate::hex::encode(random);
     let temporary = path.with_extension(format!("tmp-{suffix}"));
     let result = (|| -> Result<()> {
         let mut options = OpenOptions::new();

@@ -273,7 +273,7 @@ impl TemporaryDirectory {
     fn new() -> Self {
         let mut random = [0; 16];
         crate::platform::random_bytes(&mut random).unwrap();
-        let name: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let name: String = crate::hex::encode(random);
         let path = std::env::temp_dir().join(format!("ssmcp-trust-test-{name}"));
         fs::create_dir(&path).unwrap();
         Self(path)

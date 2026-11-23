@@ -345,13 +345,7 @@ impl Session {
                     seed.map(|(_, _, id)| id).unwrap_or("enqueue"),
                 ))
                 .unwrap_or_default();
-                let key = format!(
-                    "input_{}",
-                    Sha256::digest(fingerprint)
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>()
-                );
+                let key = format!("input_{}", crate::hex::encode(Sha256::digest(fingerprint)));
                 let _ = self.events.publish_system(
                     &owner,
                     self.client_id(),
@@ -1916,14 +1910,9 @@ fn username(uid: u32) -> io::Result<String> {
 }
 
 fn generate_secret() -> io::Result<String> {
-    use std::fmt::Write;
     let mut bytes = [0u8; 32];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-    let mut token = String::with_capacity(64);
-    for byte in bytes {
-        write!(&mut token, "{byte:02x}").expect("String writing cannot fail");
-    }
-    Ok(token)
+    Ok(crate::hex::encode(bytes))
 }
 
 #[cfg(test)]

@@ -346,7 +346,7 @@ pub(super) fn launch(
     let mut random = [0u8; 32];
     getrandom::fill(&mut random)
         .map_err(|_| "could not create worker window identity".to_owned())?;
-    let token: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let token: String = crate::hex::encode(random);
     let mut command = launcher(executable, args)?;
     command
         .current_dir(cwd)

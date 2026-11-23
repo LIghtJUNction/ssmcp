@@ -1,24 +1,22 @@
 use super::*;
 use crate::client::interface::history as saved;
-use std::{
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::path::PathBuf;
 
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
-            "ssmcp-question-key-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        assert!(!path.exists());
-        crate::platform::private_directory(&path).unwrap();
-        Self(path)
+        let directory = std::env::temp_dir().canonicalize().unwrap();
+        loop {
+            let mut random = [0; 16];
+            crate::platform::random_bytes(&mut random).unwrap();
+            let name = crate::hex::encode(random);
+            let path = directory.join(format!("ssmcp-question-key-{}-{name}", std::process::id()));
+            match crate::platform::private_directory(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("cannot create private question fixture directory: {error}"),
+            }
+        }
     }
 }
 impl Drop for Fixture {
