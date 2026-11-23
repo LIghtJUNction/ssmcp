@@ -5,6 +5,99 @@ use crate::{
 };
 use std::{fs, os::unix::fs::symlink};
 
+#[tokio::test]
+async fn tracked_exec_failed_spawn_does_not_leave_unreported_directories() {
+    let fixture = Fixture::new();
+    let shell =
+        Shell::with_workspace(fixture.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
+    let owner = source('a', "42", 81, 1);
+    let missing = fixture.0.join("missing-executable");
+    for mut arguments in [
+        json!({"track_artifacts":true}),
+        json!({"artifact_budget_bytes":10}),
+        json!({"temporary_artifacts":true}),
+    ] {
+        arguments["command"] = json!([missing]);
+        let error = shell
+            .call_scoped("ssmcp.exec.start", arguments, owner.clone())
+            .await
+            .unwrap_err();
+        assert!(error.contains("could not start command"), "{error}");
+        assert_eq!(
+            fs::read_dir(fixture.0.join(".ssmcp/task-artifacts"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+    assert!(
+        shell.call("ssmcp.exec.list", json!({})).await.unwrap()["jobs"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let job = shell
+        .call_scoped(
+            "ssmcp.exec.start",
+            json!({"command":["/bin/true"],"track_artifacts":true}),
+            owner,
+        )
+        .await
+        .unwrap();
+    let directory = fixture
+        .0
+        .join(job["artifacts"]["directory"].as_str().unwrap());
+    let done = shell
+        .call("ssmcp.exec.wait", json!({"job_id":job["job_id"]}))
+        .await
+        .unwrap();
+    assert_eq!(done["exit_code"], 0);
+    shell
+        .call("ssmcp.exec.forget", json!({"job_id":job["job_id"]}))
+        .await
+        .unwrap();
+    shell.shutdown().await;
+    assert!(
+        directory.is_dir(),
+        "successful jobs retain their directories"
+    );
+}
+
+#[test]
+fn unstarted_artifacts_remove_only_their_own_empty_directory() {
+    let fixture = Fixture::new();
+    let tracker = artifacts::Artifacts::new(&fixture.0, 10).unwrap();
+    let path = tracker.path.clone();
+    drop(tracker);
+    assert!(!path.exists());
+
+    let tracker = artifacts::Artifacts::new(&fixture.0, 10).unwrap();
+    let kept = tracker.path.join("keep");
+    fs::write(&kept, b"owned data").unwrap();
+    drop(tracker);
+    assert_eq!(fs::read(&kept).unwrap(), b"owned data");
+}
+
+#[test]
+fn unstarted_artifacts_preserve_replaced_directory_and_symlink() {
+    let fixture = Fixture::new();
+    for use_link in [false, true] {
+        let tracker = artifacts::Artifacts::new(&fixture.0, 10).unwrap();
+        let path = tracker.path.clone();
+        let moved = path.with_extension("moved");
+        fs::rename(&path, &moved).unwrap();
+        if use_link {
+            symlink(&moved, &path).unwrap();
+        } else {
+            fs::create_dir(&path).unwrap();
+        }
+        drop(tracker);
+        assert!(moved.is_dir());
+        assert!(fs::symlink_metadata(&path).is_ok());
+    }
+}
+
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {

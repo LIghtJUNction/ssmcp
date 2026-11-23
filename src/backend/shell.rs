@@ -781,7 +781,7 @@ impl Shell {
             .transpose()?;
         let timing = ExecutionTiming { started, deadline };
         #[cfg(target_os = "linux")]
-        let artifacts = artifact_budget
+        let mut artifacts = artifact_budget
             .map(|limit| artifacts::Artifacts::new(&self.root, limit))
             .transpose()
             .map_err(|err| format!("could not prepare task artifact directory: {err}"))?;
@@ -793,6 +793,10 @@ impl Shell {
         }
         let mut process =
             Managed::spawn(&mut command).map_err(|e| format!("could not start command: {e}"))?;
+        #[cfg(target_os = "linux")]
+        if let Some(artifacts) = &mut artifacts {
+            artifacts.mark_started();
+        }
         let pid = process.child.id().ok_or("command has no process ID")?;
         let stdout: Box<dyn AsyncRead + Unpin + Send> = match pty_reader {
             Some(reader) => reader,
