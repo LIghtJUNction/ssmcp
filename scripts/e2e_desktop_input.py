@@ -12,13 +12,15 @@ import json
 import os
 from pathlib import Path
 import select
+import socket
+import struct
 import subprocess
 import tempfile
 import time
 import traceback
 
 from PIL import Image
-from Xlib import X, display
+from Xlib import X, display, xauth
 
 from e2e import wait_for
 from e2e_session_service import Sessions
@@ -213,7 +215,21 @@ class DesktopInputs(Sessions):
         for key in ("WAYLAND_DISPLAY", "WAYLAND_SOCKET", "HYPRLAND_INSTANCE_SIGNATURE"):
             self.gui_env.pop(key, None)
         os.environ["DISPLAY"] = self.gui_env["DISPLAY"]
-        os.environ["XAUTHORITY"] = self.gui_env["XAUTHORITY"]
+        # Python Xlib requires an exact FamilyLocal entry; libX11 accepts the
+        # fixture's FamilyWild entry. Retain the SAME owned display credential.
+        authority = xauth.Xauthority(self.gui_env["XAUTHORITY"])
+        entries = [entry for entry in authority.entries if entry[2] == str(self.xvfb.number).encode()
+                   and entry[3] == b"MIT-MAGIC-COOKIE-1"]
+        if len(entries) != 1:
+            raise AssertionError("the owned Xvfb credential is not unambiguous")
+        local_authority = self.directory / "python-Xauthority"
+        fields = (socket.gethostname().encode(), entries[0][2], entries[0][3], entries[0][4])
+        encoded = struct.pack("!H", xauth.FamilyLocal) + b"".join(
+            struct.pack("!H", len(field)) + field for field in fields)
+        fd = os.open(local_authority, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(encoded)
+        os.environ["XAUTHORITY"] = str(local_authority)
         self.desktop = self.spawn("desktop-window", [str(self.options.desktop_binary),
             "--session", "desktop-input-fixture", "--control", "--exit-after-ms", "60000",
             "--first-frame-receipt", str(self.artifact_dir / "first-frame.json"),

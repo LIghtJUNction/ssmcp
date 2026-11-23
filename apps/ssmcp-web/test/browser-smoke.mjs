@@ -105,10 +105,17 @@ try {
   assert.equal(await page.locator('#pairing-token').inputValue(), '');
   assert.deepEqual(await page.evaluate(() => [localStorage.length, sessionStorage.length]), [0, 0]);
 
+  async function viewport(width, height) {
+    await page.setViewportSize({ width, height });
+    await page.waitForFunction(() => {
+      const box = document.getElementById('sidebar').getBoundingClientRect();
+      return innerWidth <= 700 ? box.right <= 1 : Math.abs(box.left) <= 1;
+    });
+  }
   const layoutEvidence = [];
   assert.equal(await page.locator('.timeline-row.is-input').count(), inputCases.length);
   for (const width of [1365, 390]) {
-    await page.setViewportSize({ width, height: 1400 });
+    await viewport(width, 1600);
     const bounds = await page.locator('#timeline').boundingBox();
     for (const item of inputCases) {
       const row = page.locator('.timeline-row').filter({ has: page.getByText(item.text, { exact: true }) });
@@ -120,7 +127,7 @@ try {
       layoutEvidence.push({ width, origin: item.origin, message_id: item.id, bounds: box });
     }
   }
-  await page.setViewportSize({ width: 1365, height: 1400 });
+  await viewport(1365, 1600);
   const originalDraft = '保留原草稿🦀\n第二行回答';
   const human = inputCases[0];
   const humanRow = page.locator('.timeline-row').filter({ has: page.getByText(human.text, { exact: true }) });
@@ -154,16 +161,17 @@ try {
   if (process.env.WEB_TEST_EVIDENCE) {
     await mkdir(process.env.WEB_TEST_EVIDENCE, { recursive: false });
     for (const [label, width] of [['desktop', 1365], ['narrow', 390]]) {
-      await page.setViewportSize({ width, height: 1400 });
+      await viewport(width, 1600);
       await page.locator('#timeline-scroller').evaluate(node => { node.scrollTop = 0; });
-      await page.screenshot({ path: join(process.env.WEB_TEST_EVIDENCE, 'inputs-reply-' + label + '.png') });
+      await page.locator('#chat-text').evaluate(node => { node.scrollTop = 0; });
+      await page.screenshot({ path: join(process.env.WEB_TEST_EVIDENCE, 'inputs-reply-' + label + '.png'), animations: 'disabled' });
     }
     await writeFile(join(process.env.WEB_TEST_EVIDENCE, 'input-layout.json'), JSON.stringify({
       scope: 'Actual Chromium renderer with isolated explicit API fixture; no live account delivery claim',
       layouts: layoutEvidence, quoted_text: quotedHuman, commands_before_send: commands.length,
     }, null, 2) + '\n');
   }
-  await page.setViewportSize({ width: 1365, height: 900 });
+  await viewport(1365, 900);
   await page.locator('#timeline-scroller').evaluate(node => { node.scrollTop = node.scrollHeight; });
   await page.locator('#chat-text').fill('');
   const draft = '中文输入法草稿，仍在组合';
@@ -213,7 +221,7 @@ try {
   assert.equal(commands.filter(item => item.operation.command === 'terminal.write').length, 1);
 
   for (const width of [390, 320]) {
-    await page.setViewportSize({ width, height: 844 });
+    await viewport(width, 844);
     for (const tab of ['conversation', 'terminal', 'workers']) {
       await page.locator(`#tab-${tab}`).click();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${tab} must fit ${width}px viewport`);
