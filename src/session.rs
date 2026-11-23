@@ -907,8 +907,13 @@ fn create_private_tree(path: &Path) -> Result<()> {
     if !parent.exists() {
         create_private_tree(parent)?;
     }
-    platform::private_directory(path)?;
-    Ok(())
+    match platform::private_directory(path) {
+        Ok(()) => Ok(()),
+        // Another client may have created the shared discovery parent since
+        // our first check. Reopen only a private directory owned by this user.
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => verify_directory(path),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn verify_directory(path: &Path) -> Result<()> {

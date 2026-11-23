@@ -134,6 +134,7 @@ class LostReceipt:
 
 def run(binary, report):
     checks, processes, handles = [], [], []
+    last_overview = {}
     report.update(scope="two actual Linux local clients plus one synthetic lost-receipt endpoint",
                   installed_services_changed=False, real_credentials_used=False,
                   binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(), success=False)
@@ -162,7 +163,10 @@ def run(binary, report):
             return result
 
         def overview():
-            return json.loads(command("--json").stdout)
+            value = json.loads(command("--json").stdout)
+            last_overview.clear()
+            last_overview.update(value)
+            return value
 
         fixture = None
         try:
@@ -250,6 +254,7 @@ def run(binary, report):
             report["success"] = True
         except Exception as error:
             report["error"] = f"{type(error).__name__}: {error}".replace(str(root), "<fixture>")
+            report["last_overview"] = last_overview
             def redact_tail(value):
                 value = re.sub(r"https?://\S+", "<fixture-url>", value)
                 value = re.sub(r"\b[a-fA-F0-9]{32,}\b", "<fixture-id>", value)
