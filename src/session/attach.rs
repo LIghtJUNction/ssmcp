@@ -639,6 +639,8 @@ fn safety_page(
             "id":format!("{generation}:{backend_generation}:{sequence}"),
             "tool":event["tool"],
             "policy":event["policy"],
+            "rules_revision":event["rules_revision"],
+            "rules_state":event["rules_state"],
             "decision":event["decision"],
             "outcome":event["outcome"],
         }));

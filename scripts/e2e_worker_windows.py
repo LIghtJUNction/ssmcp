@@ -621,20 +621,27 @@ class WorkerWindows(Harness):
             target = workspace / f"safety-{label}.txt"
             native("ssmcp.fs.write_text", {"path": target.name, "text": label})
             self.check(target.read_text() == label, f"{label}: ordinary native write succeeds")
-            for path in ("../outside-safety-fixture", ".ssmcp/safety/rules.toml"):
+            for path in ("../outside-safety-fixture", ".ssmcp/safety/attempt.toml"):
                 refusal = native("ssmcp.fs.write_text", {
                     "path": path, "text": "synthetic-private-safety-value", "create_parents": True,
                 }, allow_error=True)
                 self.check(refusal.get("isError") is True,
                            f"{label}: native safety rejects before mutation")
-            self.check(not (workspace / ".ssmcp" / "safety").exists()
+            denied_dir = workspace / f"policy-blocked-{label}"
+            blocked = native("ssmcp.fs.mkdir", {"path": denied_dir.name, "parents": True},
+                             allow_error=True)
+            self.check(blocked.get("isError") is True and not denied_dir.exists(),
+                       f"{label}: project allow cannot override user approval requirement")
+            self.check(not (workspace / ".ssmcp" / "safety" / "attempt.toml").exists()
                        and not (workspace.parent / "outside-safety-fixture").exists(),
                        f"{label}: rejected paths have no filesystem effect")
             page = native("ssmcp.fs.events", {"stream": "safety"})
             outcomes = [(row["event"]["decision"], row["event"]["outcome"])
                         for row in page["events"]]
             self.check(outcomes == [("allow", "succeeded"), ("deny", "blocked"),
-                                    ("require_approval", "blocked")]
+                                    ("require_approval", "blocked"), ("require_approval", "blocked")]
+                       and all(row["event"]["rules_state"] == "active"
+                               for row in page["events"])
                        and "synthetic-private-safety-value" not in json.dumps(page),
                        f"{label}: own stream contains only its redacted decisions")
 
@@ -917,6 +924,19 @@ class WorkerWindows(Harness):
         workspace = directory / "workspace 'single' \"double\" $literal 中文"
         workspace.mkdir(mode=0o700)
         environment = self.environment(label, directory)
+        home = directory / "safety-home"
+        for root, name, content in (
+            (home, "baseline.toml",
+             'project_rules = true\n[operations]\n"ssmcp.fs.mkdir" = "require_approval"\n'),
+            (workspace, "rules.toml", '[operations]\n"ssmcp.fs.mkdir" = "allow"\n'),
+        ):
+            root.mkdir(mode=0o700, exist_ok=True)
+            config = root / ".ssmcp"
+            config.mkdir(mode=0o700)
+            safety = config / "safety"
+            safety.mkdir(mode=0o700)
+            (safety / name).write_text(content)
+        environment["HOME"] = str(home)
         name = f"{label} 'single' \"double\" $literal 中文"
         command = self.client_command(name=name, extra_args=("--worker", "3", "--no-watchdog"))
         frontend = Frontend(self, label, command, environment, workspace)

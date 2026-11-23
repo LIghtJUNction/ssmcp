@@ -174,10 +174,13 @@ impl Root {
         local_discovery: bool,
     ) -> Result<Value, String> {
         if let Some(operation) = super::safety::operation(name) {
-            let decision = super::safety::authorize(operation, &args);
+            let snapshot = self.safety_snapshot();
+            let decision = super::safety::authorize(operation, &args, snapshot);
             if !decision.is_allowed() {
                 self.safety_events
-                    .push_local_discovery(super::safety::event(operation, decision, "blocked"));
+                    .push_local_discovery(super::safety::event(
+                        operation, decision, "blocked", snapshot,
+                    ));
                 return Err("native file mutation blocked by safety policy".into());
             }
             let result = self.perform(operation, args);
@@ -187,7 +190,7 @@ impl Root {
                 "failed"
             };
             self.safety_events
-                .push_local_discovery(super::safety::event(operation, decision, outcome));
+                .push_local_discovery(super::safety::event(operation, decision, outcome, snapshot));
             return result;
         }
         let path = args.get("path").and_then(Value::as_str).map(str::to_owned);

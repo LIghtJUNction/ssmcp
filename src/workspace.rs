@@ -60,6 +60,8 @@ struct Root {
     directory: cap_std::fs::Dir,
     audit: audit::FileAudit,
     safety_events: Arc<crate::backend::events::EventLog>,
+    #[cfg(target_os = "linux")]
+    safety_rules: safety::Store,
 }
 struct Listener {
     socket: TcpListener,
@@ -140,6 +142,8 @@ impl Workspace {
                 directory,
                 audit: audit::FileAudit::new(events.clone(), output),
                 safety_events: crate::backend::events::EventLog::memory_only("workspace safety"),
+                #[cfg(target_os = "linux")]
+                safety_rules: safety::Store::default(),
             }),
             events,
             handles: StdMutex::new(HashMap::new()),
