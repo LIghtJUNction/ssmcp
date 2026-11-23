@@ -15,7 +15,7 @@ pub(crate) use listener::{
 pub(crate) use ownership::with_test_history;
 pub(crate) use ownership::{
     HistoryId, HistoryOwner, capture, current_owner, record_owned_agent, record_owned_answer,
-    record_owned_program_reply, record_owned_request, remember_visible_reply,
+    record_owned_input, record_owned_program_reply, record_owned_request, remember_visible_reply,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -51,6 +51,8 @@ pub(crate) struct Message {
     pub role: String,
     pub content: String,
     pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_origin: Option<super::messages::InputOrigin>,
     pub created_at_ms: u64,
     #[serde(default)]
     pub truncated: bool,
@@ -393,6 +395,20 @@ impl History {
         text: &str,
         identity: Option<String>,
     ) -> Result<Option<Committed>, String> {
+        self.record_owned_with_origin(owner, role, text, identity, None)
+    }
+
+    fn record_owned_with_origin(
+        &mut self,
+        owner: &HistoryOwner,
+        role: &str,
+        text: &str,
+        identity: Option<String>,
+        input_origin: Option<super::messages::InputOrigin>,
+    ) -> Result<Option<Committed>, String> {
+        if input_origin.is_some() && role != "tool" {
+            return Err("generated input must retain its non-human conversation role".into());
+        }
         let (role, kind) = role_and_kind(role)?;
         validate_content(text)?;
         let pending = self.ownership.pending(owner)?;
@@ -429,7 +445,10 @@ impl History {
                     .iter()
                     .find(|message| message.id == id)
                 {
-                    if previous.role == role && previous.content == content {
+                    if previous.role == role
+                        && previous.content == content
+                        && previous.input_origin == input_origin
+                    {
                         return Ok(None);
                     }
                     return Err(
@@ -445,6 +464,7 @@ impl History {
             role: role.into(),
             content,
             kind: kind.into(),
+            input_origin,
             created_at_ms: now_ms(),
             truncated,
         };

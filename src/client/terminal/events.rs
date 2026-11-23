@@ -610,6 +610,28 @@ impl EventView {
         }
     }
 
+    pub(crate) fn selected_reply(&self) -> Option<(String, String)> {
+        let event = self.events.iter().find(|event| {
+            Some(event.id) == self.selected
+                && event.meta.kind == Kind::Conversation
+                && event.owned_by(&self.history_selection)
+                && !event.reload_boundary
+        })?;
+        let id = event
+            .meta
+            .message_id
+            .as_ref()
+            .or(event.history_id.as_ref())?;
+        crate::client::replies::valid_message_id(id).then(|| {
+            let body = if event.meta.raw_message {
+                &event.text
+            } else {
+                conversation_body(&event.text)
+            };
+            (id.clone(), unstyled(body))
+        })
+    }
+
     fn read_groups(&self) -> Vec<read_activity::Group> {
         if self.scope != EventScope::Conversation || !self.query.is_empty() || self.level != 0 {
             return Vec::new();
@@ -861,7 +883,13 @@ impl EventView {
         self.prune();
         self.refresh_visibility();
         for message in messages {
-            self.ingest_identified_message(&message.id, &message.role, &message.content, b"");
+            self.ingest_identified_input(
+                &message.id,
+                &message.role,
+                &message.content,
+                message.input_origin,
+                b"",
+            );
         }
     }
 
@@ -1139,12 +1167,25 @@ impl EventView {
         text: &str,
         bytes: &[u8],
     ) {
+        self.ingest_identified_input(id, role, text, None, bytes);
+    }
+
+    fn ingest_identified_input(
+        &mut self,
+        id: &str,
+        role: &str,
+        text: &str,
+        origin: Option<crate::client::interface::messages::InputOrigin>,
+        bytes: &[u8],
+    ) {
         let next = self.next_id;
-        self.ingest_event(
-            "message",
-            &json!({"type":"ssmcp.message", "role":role, "text":text,"message_id":id}),
-            bytes,
-        );
+        let mut value = json!({"type":"ssmcp.message","role":role,"text":text,"message_id":id});
+        if let Some(origin) = origin {
+            value["kind"] = json!("input");
+            value["input_origin"] = json!(origin);
+            value["author"] = json!(origin.label());
+        }
+        self.ingest_event("message", &value, bytes);
         if let Some(event) = self.events.back_mut().filter(|event| event.id == next) {
             event.history_id = Some(id.to_owned());
             self.prune();
@@ -1213,7 +1254,9 @@ impl EventView {
             meta.kind = Kind::Log;
             meta.read_bookkeeping = true;
         }
-        if event["type"] == "ssmcp.message" && matches!(label, "message" | "agent" | "listener") {
+        if event["type"] == "ssmcp.user_input"
+            || event["type"] == "ssmcp.message" && matches!(label, "message" | "agent" | "listener")
+        {
             meta.history_message = true;
             meta.message_id = event["message_id"].as_str().map(str::to_owned);
             if let Some(id) = &meta.message_id
@@ -2134,25 +2177,22 @@ impl EventView {
             }
             let conversation = chat && event.meta.kind == Kind::Conversation;
             if conversation && event.image.is_none() {
-                let tone = if event.meta.user { "accent" } else { "heading" };
-                let marker = if event.meta.user { "❯" } else { "●" };
+                let input = event.meta.user || event.meta.input;
+                let tone = if input { "accent" } else { "heading" };
+                let marker = if input { "❯" } else { "●" };
                 let named_author = !event.meta.user && !event.meta.author.is_empty();
-                if named_author {
-                    rows.push((
-                        event.id,
-                        paint(
-                            &clip_plain(&format!("  {marker} {}", event.meta.author), width),
-                            tone,
-                            ui,
-                            true,
-                        ),
-                    ));
-                }
+                let content_width = if input && width >= 40 {
+                    (body_width * 4 / 5).max(1)
+                } else if input {
+                    body_width.saturating_sub(2).max(1)
+                } else {
+                    body_width
+                };
                 if event
                     .cache
                     .as_ref()
                     .is_none_or(|(cached_width, cached_palette, _)| {
-                        *cached_width != body_width || *cached_palette != palette
+                        *cached_width != content_width || *cached_palette != palette
                     })
                 {
                     let body = if event.meta.raw_message {
@@ -2160,15 +2200,49 @@ impl EventView {
                     } else {
                         conversation_body(&event.text)
                     };
-                    let lines = if event.meta.raw_message
-                        && !event.meta.user
-                        && !event.meta.plain_message
-                    {
-                        super::markdown::rows(body, body_width as u16, ui)
+                    let lines = if event.meta.raw_message && !input && !event.meta.plain_message {
+                        super::markdown::rows(body, content_width as u16, ui)
                     } else {
-                        styled_rows(body, body_width, ui.color)
+                        styled_rows(body, content_width, ui.color)
                     };
-                    event.cache = Some((body_width, palette.clone(), lines));
+                    event.cache = Some((content_width, palette.clone(), lines));
+                }
+                let body_extent = event
+                    .cache
+                    .as_ref()
+                    .unwrap()
+                    .2
+                    .iter()
+                    .map(|row| UnicodeWidthStr::width(unstyled(row).as_str()))
+                    .max()
+                    .unwrap_or(0);
+                let author_extent = if named_author {
+                    UnicodeWidthStr::width(event.meta.author.as_str()).min(content_width)
+                } else {
+                    0
+                };
+                let input_inset = if input {
+                    width.saturating_sub(indent + body_extent.max(author_extent) + 2)
+                } else {
+                    0
+                };
+                if named_author {
+                    rows.push((
+                        event.id,
+                        format!(
+                            "{}{}",
+                            " ".repeat(input_inset),
+                            paint(
+                                &clip_plain(
+                                    &format!("  {marker} {}", event.meta.author),
+                                    width.saturating_sub(input_inset)
+                                ),
+                                tone,
+                                ui,
+                                true,
+                            )
+                        ),
+                    ));
                 }
                 for (index, row) in event.cache.as_ref().unwrap().2.iter().enumerate() {
                     let prefix = if index == 0 && !named_author {
@@ -2181,7 +2255,10 @@ impl EventView {
                     } else {
                         " ".repeat(indent)
                     };
-                    rows.push((event.id, format!("{prefix}{row}")));
+                    rows.push((
+                        event.id,
+                        format!("{}{prefix}{row}", " ".repeat(input_inset)),
+                    ));
                 }
                 continue;
             }

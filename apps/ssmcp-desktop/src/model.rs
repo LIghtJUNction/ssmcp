@@ -115,11 +115,20 @@ pub struct Row {
     pub source: String,
     pub status: String,
     pub lossy: bool,
+    pub message_id: Option<String>,
+    pub input_side: bool,
+    pub input_origin: Option<String>,
 }
 
 impl Row {
     fn bytes(&self) -> usize {
-        self.kind.len() + self.text.len() + self.source.len() + self.status.len() + 96
+        self.kind.len()
+            + self.text.len()
+            + self.source.len()
+            + self.status.len()
+            + self.message_id.as_ref().map_or(0, String::len)
+            + self.input_origin.as_ref().map_or(0, String::len)
+            + 112
     }
 }
 
@@ -474,6 +483,39 @@ pub fn error_label(code: ErrorCode) -> &'static str {
     }
 }
 
+fn message_fields(value: &Value, projected: &Value) -> (Option<String>, bool, Option<String>) {
+    if !matches!(
+        value["type"].as_str(),
+        Some("ssmcp.message" | "ssmcp.user_input")
+    ) {
+        return (None, false, None);
+    }
+    let id = projected["message_id"]
+        .as_str()
+        .or_else(|| value["message_id"].as_str())
+        .filter(|id| ssmcp::client::replies::valid_message_id(id))
+        .map(str::to_owned);
+    let human = value["type"] == "ssmcp.user_input"
+        || value["role"] == "user"
+        || projected["input_origin"] == "human";
+    let input = human || value["kind"] == "input" || projected["input_side"] == true;
+    let origin = if human {
+        Some("human".into())
+    } else if input {
+        Some(
+            projected["input_origin"]
+                .as_str()
+                .or_else(|| value["input_origin"].as_str())
+                .filter(|value| value.len() <= 32)
+                .unwrap_or("system_hook")
+                .into(),
+        )
+    } else {
+        None
+    };
+    (id, input, origin)
+}
+
 pub fn event_row(event: &Event) -> Option<Row> {
     let frame = &event.value;
     if frame["kind"] == "terminal" {
@@ -493,6 +535,18 @@ pub fn event_row(event: &Event) -> Option<Row> {
     .collect::<Vec<_>>()
     .join("\n");
     let source = frame.get("source").unwrap_or(&Value::Null);
+    let (message_id, input_side, input_origin) = message_fields(value, &Value::Null);
+    let kind = if input_side {
+        "input"
+    } else if kind == "ssmcp.message" {
+        if value["kind"] == "answer" {
+            "answer"
+        } else {
+            "progress"
+        }
+    } else {
+        kind
+    };
     Some(Row {
         sequence: event.sequence,
         kind: bounded(kind, 128),
@@ -500,6 +554,9 @@ pub fn event_row(event: &Event) -> Option<Row> {
         source: source_label(source),
         status: text(value, "status", 64),
         lossy: frame["truncated"] == true,
+        message_id,
+        input_side,
+        input_origin,
     })
 }
 
@@ -549,6 +606,7 @@ pub fn conversation_page(
             return Err(BridgeError::invalid("invalid history sequence"));
         }
         last = Some(sequence);
+        let (message_id, input_side, input_origin) = message_fields(&value["value"], value);
         rows.push(Row {
             sequence,
             kind: text(value, "kind", 128),
@@ -556,6 +614,9 @@ pub fn conversation_page(
             source: source_label(&value["source"]),
             status: text(value, "status", 64),
             lossy: value["text_lossy"] == true || value["truncated"] == true,
+            message_id,
+            input_side,
+            input_origin,
         });
     }
     if more && (next >= end || previous == Some(next)) {
@@ -750,6 +811,9 @@ mod tests {
         let mut history = History::default();
         for sequence in 0..1000 {
             history.push(Row {
+                message_id: None,
+                input_side: false,
+                input_origin: None,
                 sequence: Counter(sequence),
                 kind: "event".into(),
                 text: "中".repeat(2048),

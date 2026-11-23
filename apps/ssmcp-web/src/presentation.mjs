@@ -1,7 +1,7 @@
 import { counter, compareCounters } from './protocol.mjs';
 
 const names = {
-  'ssmcp.tool_call': '工具调用', answer: '回复', progress: '进展', 'ssmcp.status': '状态',
+  'ssmcp.tool_call': '工具调用', answer: '回复', progress: '进展', input: '输入', 'ssmcp.status': '状态',
   'ssmcp.worker.started': 'Worker 开始', 'ssmcp.worker.progress': 'Worker 进展',
   'ssmcp.worker.completed': 'Worker 完成', 'ssmcp.worker.idle': 'Worker 空闲',
   'ssmcp.event': '事件', 'ssmcp.terminal': '终端输出', 'ssmcp.finish': '调用结束',
@@ -41,29 +41,71 @@ export function textProjection(value) {
   return plain(value.type ?? '事件');
 }
 
+export const inputOriginLabel = origin => ({
+  human: '用户', system_hook: '系统提示', agent_timer: '定时提示',
+  worker_event: 'Worker 事件', maintenance: '维护提示',
+}[origin] || '输入');
+export const validMessageId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+
+/** Quotes are editable draft text; the existing send receipt covers the whole text. */
+export function quoteReply(messageId, text, draft = '', maximum = 16_384) {
+  if (!validMessageId(messageId)) throw new Error('这条消息没有可引用的原始 ID。');
+  const bytes = value => new TextEncoder().encode(value).length;
+  const suffix = '\n> …（引用已截断）';
+  let quote = '> 回复消息 ' + messageId + '\n> ';
+  const reserve = bytes(draft) + bytes('\n\n') + bytes(suffix);
+  if (bytes(quote) + reserve > maximum) throw new Error('草稿空间不足，请缩短后引用。');
+  let used = 0, truncated = false;
+  const clean = plain(text, 32_768);
+  for (const char of clean) {
+    const addition = char === '\n' ? '\n> ' : char;
+    const size = bytes(char);
+    if (used + size > 2048 || bytes(quote) + bytes(addition) + reserve > maximum) {
+      truncated = true; break;
+    }
+    quote += addition; used += size;
+  }
+  if (truncated || clean.length < text.length) quote += suffix;
+  return quote + '\n\n' + draft;
+}
+
+function messageProjection(value, projected = {}) {
+  const native = ['ssmcp.message', 'ssmcp.user_input'].includes(value.type);
+  const human = native && (value.type === 'ssmcp.user_input' || value.role === 'user' || projected.input_origin === 'human');
+  const inputSide = human || native && (value.kind === 'input' || projected.input_side === true);
+  const messageId = native && validMessageId(projected.message_id ?? value.message_id)
+    ? projected.message_id ?? value.message_id : null;
+  const inputOrigin = human ? 'human' : inputSide ? projected.input_origin ?? value.input_origin ?? 'system_hook' : null;
+  return { messageId, inputSide, inputOrigin };
+}
+
 /** Identity is projected only from the authenticated envelope, never payload.source. */
 export function projectEvent(event, generation) {
   const frame = event.value ?? {};
   const value = frame.kind === 'event' ? frame.value ?? {} : frame;
   let kind = value.type ?? event.topic;
-  if (value.type === 'ssmcp.message') kind = value.kind === 'answer' ? 'answer' : 'progress';
+  const message = messageProjection(value);
+  if (message.inputSide) kind = 'input';
+  else if (value.type === 'ssmcp.message') kind = value.kind === 'answer' ? 'answer' : 'progress';
   const source = frame.source && typeof frame.source === 'object' ? frame.source : { kind: 'unattributed' };
   const text = frame.kind === 'terminal' ? decodeBase64(frame.data_base64) : textProjection(value);
   return {
     id: `event:${generation}:${event.sequence}`, generation, sequence: event.sequence,
-    kind, text, source, topic: event.topic,
+    kind, text, source, ...message, topic: event.topic,
     terminalId: frame.kind === 'terminal' ? frame.terminal_id : null,
-    title: value.tool || kindLabel(kind), status: value.status ?? value.phase ?? null,
+    title: message.inputSide ? inputOriginLabel(message.inputOrigin) : value.tool || kindLabel(kind), status: value.status ?? value.phase ?? null,
     metadata: event,
   };
 }
 
 export function projectHistory(event, generation) {
   counter(event.sequence, '对话事件序号');
+  const message = messageProjection(event.value ?? {}, event);
+  const kind = message.inputSide ? 'input' : event.kind || 'event';
   return {
     id: `event:${generation}:${event.sequence}`, generation, sequence: event.sequence,
-    kind: event.kind || 'event', text: plain(event.text), source: event.source ?? { kind: 'unattributed' },
-    title: event.value?.tool || kindLabel(event.kind || 'event'),
+    kind, ...message, text: plain(event.text), source: event.source ?? { kind: 'unattributed' },
+    title: message.inputSide ? inputOriginLabel(message.inputOrigin) : event.value?.tool || kindLabel(kind),
     status: event.status ?? event.phase ?? null, metadata: event,
   };
 }

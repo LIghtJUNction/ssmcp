@@ -20,12 +20,35 @@ pub(crate) enum Kind {
     #[default]
     Progress,
     Answer,
+    Input,
 }
 impl Kind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Progress => "progress",
             Self::Answer => "answer",
+            Self::Input => "input",
+        }
+    }
+}
+
+/// Presentation provenance only; no variant represents a human or grants consent.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InputOrigin {
+    SystemHook,
+    AgentTimer,
+    WorkerEvent,
+    Maintenance,
+}
+
+impl InputOrigin {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::SystemHook => "系统提示",
+            Self::AgentTimer => "定时提示",
+            Self::WorkerEvent => "事件提示",
+            Self::Maintenance => "维护提示",
         }
     }
 }
@@ -37,6 +60,8 @@ struct Request {
     #[serde(default)]
     kind: Kind,
     #[serde(default)]
+    input_origin: Option<InputOrigin>,
+    #[serde(default)]
     idempotency_key: Option<String>,
     #[serde(default)]
     finish_task: bool,
@@ -46,8 +71,8 @@ struct Request {
     owner: Option<super::history::HistoryOwner>,
 }
 fn parse(arguments: Value) -> Result<Request, String> {
-    let request: Request = serde_json::from_value(arguments).map_err(
-        |_| "message requires text and accepts kind, idempotency_key and boolean finish_task",
+    let mut request: Request = serde_json::from_value(arguments).map_err(
+        |_| "message requires text and accepts kind, input_origin, idempotency_key and boolean finish_task",
     )?;
     // Keep the existing Markdown/terminal-control and 16 KiB input boundary.
     super::questions::parse_message(json!({"text":request.text})).map(|_| ())?;
@@ -60,6 +85,16 @@ fn parse(arguments: Value) -> Result<Request, String> {
     {
         return Err("idempotency_key must contain 1–96 ASCII letters, digits, '_' or '-'".into());
     }
+    if request.kind == Kind::Input {
+        if request.finish_task || request.idempotency_key.is_none() {
+            return Err(
+                "generated input requires idempotency_key and cannot request Human finish".into(),
+            );
+        }
+        request.input_origin.get_or_insert(InputOrigin::SystemHook);
+    } else if request.input_origin.is_some() {
+        return Err("input_origin requires kind: input".into());
+    }
     Ok(request)
 }
 fn fingerprint(request: &Request, presentation: Option<&Presentation>) -> [u8; 32] {
@@ -69,6 +104,10 @@ fn fingerprint(request: &Request, presentation: Option<&Presentation>) -> [u8; 3
     digest.update(b"\0");
     digest.update(request.text.as_bytes());
     digest.update([u8::from(request.finish_task)]);
+    if let Some(origin) = request.input_origin {
+        digest.update(b"\0input-origin\0");
+        digest.update(serde_json::to_vec(&origin).expect("typed origin serializes"));
+    }
     if let Some(document) = presentation {
         digest.update(b"\0presentation\0");
         digest.update(serde_json::to_vec(document).expect("a typed presentation serializes"));
@@ -86,6 +125,7 @@ fn message_id() -> Result<String, String> {
 struct Receipt {
     id: String,
     kind: Kind,
+    input_origin: Option<InputOrigin>,
     recorded: bool,
     shown: bool,
     finish_task: bool,
@@ -168,6 +208,10 @@ fn response(receipt: &Receipt, duplicate: bool) -> Value {
         "terminal_active":crate::client::terminal::active(),
         "note":if duplicate {"Matching retry accepted; recorded and shown describe the first acceptance. Bounded live logs may have evicted that record."} else if receipt.shown {"Accepted for local display; this does not prove the user read it."} else {"Recorded in the original live thread, which is not currently selected."}
     });
+    if let Some(origin) = receipt.input_origin {
+        value["input_origin"] = json!(origin);
+        value["completion_permission"] = json!(false);
+    }
     if receipt.finish_task {
         value["finish_task"] = json!(true);
         value["may_finish"] = json!(false);
@@ -211,17 +255,43 @@ fn send_with_presentation(
     if let Some(receipt) = previous {
         return Ok(response(&receipt, true));
     }
-    let id = message_id()?;
-    let shown = crate::client::render::agent_message(
-        &request.text,
-        request.kind,
-        Some(&id),
-        presentation.as_ref(),
-        source,
-    )?;
+    if request.kind == Kind::Input && presentation.is_some() {
+        return Err("generated input uses the existing plain conversation message".into());
+    }
+    let id = if request.kind == Kind::Input {
+        super::history::request_identity(
+            request
+                .idempotency_key
+                .as_deref()
+                .expect("validated input identity"),
+            "generated_input",
+        )?
+    } else {
+        message_id()?
+    };
+    let (shown, duplicate) = if request.kind == Kind::Input {
+        crate::client::render::input_message(
+            &request.text,
+            &id,
+            request.input_origin.expect("validated input origin"),
+            source,
+        )?
+    } else {
+        (
+            crate::client::render::agent_message(
+                &request.text,
+                request.kind,
+                Some(&id),
+                presentation.as_ref(),
+                source,
+            )?,
+            false,
+        )
+    };
     let receipt = Receipt {
         id,
         kind: request.kind,
+        input_origin: request.input_origin,
         recorded: true,
         shown,
         finish_task: request.finish_task,
@@ -232,7 +302,7 @@ fn send_with_presentation(
         receipt.clone(),
         presentation.as_ref(),
     );
-    Ok(response(&receipt, false))
+    Ok(response(&receipt, duplicate))
 }
 
 /// Update only after publication; this also covers local harness replies.
@@ -259,12 +329,13 @@ pub(super) fn restore_copy(messages: &[super::history::Message]) {
 pub(super) fn tool() -> Value {
     json!({
         "name":"ssmcp.ui.message",
-        "description":"Display a Markdown progress report or final result to the local user with a fixed Agent label. kind is progress or answer. Progress and final replies require the authenticated conversation owner. finish_task defaults to false. Set finish_task:true to send this message and then block through the server finish approval wait (20 seconds per call, without holding the UI write lock). This requires the verified asking collab thread. Only the final outer user_wait receipt with status decided and may_finish:true after a consumed Human Yes permits ending. No, ordinary input, timeout, cancellation, disconnection and revocation keep the task active; follow completion_instruction and await ui.wait in a new tool call when approval is still required. A verified thread retains its own bounded in-memory records during this process. Replies stay with their original owner; shown is false when that thread is not selected. The returned message_id identifies the original accepted record; storage is memory. On a duplicate retry, recorded and shown describe the first acceptance. Bounded logs may evict that record while its retry receipt remains. Exit and reload clear these records. Optional idempotency_key deduplicates matching text, kind and finish_task within the last 64 retained keys of this client process; changed content with the same key is rejected. Restart clears this retry cache. /copy copies the latest visible Agent reply. shown and accepted do not prove the user read it. Use ssmcp.ui.ask for a nonblocking question and ssmcp.ui.questions to read its answer. External chat output is not intercepted.",
+        "description":"Display a Markdown progress report or final result to the local user with a fixed Agent label. kind is progress, answer or input. Generated input uses the same conversation, requires idempotency_key, accepts input_origin, and cannot request Human finish. It retains exact source ownership and does not enter the human request queue. Progress and final replies require the authenticated conversation owner. finish_task defaults to false. Set finish_task:true to send this message and then block through the server finish approval wait (20 seconds per call, without holding the UI write lock). This requires the verified asking collab thread. Only the final outer user_wait receipt with status decided and may_finish:true after a consumed Human Yes permits ending. No, ordinary input, timeout, cancellation, disconnection and revocation keep the task active; follow completion_instruction and await ui.wait in a new tool call when approval is still required. A verified thread retains its own bounded in-memory records during this process. Replies stay with their original owner; shown is false when that thread is not selected. The returned message_id identifies the original accepted record; storage is memory. On a duplicate retry, recorded and shown describe the first acceptance. Bounded logs may evict that record while its retry receipt remains. Exit and reload clear these records. Optional idempotency_key deduplicates matching text, kind, input_origin and finish_task within the last 64 retained keys of this client process; changed content with the same key is rejected. Restart clears this retry cache. /copy copies the latest visible Agent reply. shown and accepted do not prove the user read it. Use ssmcp.ui.ask for a nonblocking question and ssmcp.ui.questions to read its answer. External chat output is not intercepted.",
         "inputSchema":{
             "type":"object","required":["text"],"additionalProperties":false,
             "properties":{
                 "text":{"type":"string","minLength":1,"maxLength":16384,"description":"Markdown text, at most 16384 UTF-8 bytes. Newline and tab are the only permitted control characters."},
-                "kind":{"type":"string","enum":["progress","answer"],"default":"progress"},
+                "kind":{"type":"string","enum":["progress","answer","input"],"default":"progress"},
+                "input_origin":{"type":"string","enum":["system_hook","agent_timer","worker_event","maintenance"],"description":"Generated input provenance only. Requires kind input and never represents a human or completion approval."},
                 "finish_task":{"type":"boolean","default":false,"description":"Send the message, then require a blocking Human finish decision. False preserves ordinary message behavior. A native message ACK never authorizes ending; inspect the final outer user_wait receipt and follow its continuation instruction."},
                 "idempotency_key":{"type":"string","minLength":1,"maxLength":MAX_KEY_BYTES,"pattern":"^[A-Za-z0-9_-]+$"}
             }
@@ -284,6 +355,7 @@ mod tests {
         Receipt {
             id: format!("message_{index:032x}"),
             kind: Kind::Answer,
+            input_origin: None,
             recorded: true,
             shown: true,
             finish_task: false,
@@ -308,6 +380,29 @@ mod tests {
             assert!(parse(value).is_err());
         }
     }
+    #[test]
+    fn generated_input_cannot_impersonate_human_or_request_finish() {
+        let value = parse(json!({"text":"Check the original job", "kind":"input",
+            "input_origin":"agent_timer", "idempotency_key":"timer_1_revision_2"}))
+        .unwrap();
+        assert_eq!(value.kind, Kind::Input);
+        assert_eq!(value.input_origin, Some(InputOrigin::AgentTimer));
+        for invalid in [
+            json!({"text":"x","kind":"input"}),
+            json!({"text":"x","kind":"input","idempotency_key":"x","finish_task":true}),
+            json!({"text":"x","kind":"input","idempotency_key":"x","input_origin":"human"}),
+            json!({"text":"x","kind":"answer","input_origin":"agent_timer"}),
+        ] {
+            assert!(parse(invalid).is_err());
+        }
+        let mut other = parse(json!({"text":"Check the original job","kind":"input",
+            "input_origin":"worker_event","idempotency_key":"timer_1_revision_2"}))
+        .unwrap();
+        assert_ne!(fingerprint(&value, None), fingerprint(&other, None));
+        other.input_origin = value.input_origin;
+        assert_eq!(fingerprint(&value, None), fingerprint(&other, None));
+    }
+
     #[test]
     fn finish_task_is_explicit_boolean_and_part_of_the_message_identity() {
         let ordinary = parse(json!({"text":"Result"})).unwrap();
@@ -453,6 +548,7 @@ mod tests {
     #[test]
     fn restoring_copy_uses_assistant_history_without_replaying_user_answers() {
         let message = |role: &str, text: &str| super::super::history::Message {
+            input_origin: None,
             id: "message_00000000000000000000000000000001".into(),
             role: role.into(),
             content: text.into(),

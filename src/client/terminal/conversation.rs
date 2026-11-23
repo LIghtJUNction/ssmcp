@@ -1608,6 +1608,37 @@ impl State {
         }
     }
 
+    fn chat_reply_available(&self) -> bool {
+        !self.help
+            && !self.selection
+            && !self.raw_logs
+            && !self.conversation.logs_open
+            && self.conversation.view == View::Activity
+            && self.geometry.left >= 22
+            && self.events.selected_reply().is_some()
+    }
+
+    fn chat_reply_selected(&mut self) {
+        let Some((id, text)) = self.events.selected_reply() else {
+            return;
+        };
+        match crate::client::replies::quote_reply(
+            &id,
+            &text,
+            self.conversation.composer.text(),
+            crate::wire::MAX_USER_MESSAGE_BYTES,
+        ) {
+            Ok(draft) => {
+                self.conversation.composer.set_text(&draft);
+                self.conversation.content_focus = false;
+                self.notice = Some("已引用原消息 · 补充回复后发送，可直接编辑引用".into());
+                self.chat_persist_draft();
+            }
+            Err(error) => self.notice = Some(error),
+        }
+        self.dirty = true;
+    }
+
     fn chat_key(&mut self, key: Key) {
         self.chat_cancel_native_lookup();
         if self.sleep_key(key) {
@@ -1625,6 +1656,20 @@ impl State {
             return;
         }
         if self.selection {
+            return;
+        }
+        if let Key::Mouse {
+            button: 0,
+            x,
+            y,
+            release: false,
+        } = key
+            && self.chat_reply_available()
+            && y == prompt_top(self.geometry)
+            && x >= self.geometry.left.saturating_sub(10)
+            && x < self.geometry.left.saturating_sub(2)
+        {
+            self.chat_reply_selected();
             return;
         }
         if matches!(key, Key::InputGrow | Key::InputShrink) {
@@ -2125,6 +2170,13 @@ impl State {
                 }
                 self.dirty = true;
             }
+            return;
+        }
+        if matches!(character, 'r' | 'R')
+            && self.conversation.content_focus
+            && self.chat_reply_available()
+        {
+            self.chat_reply_selected();
             return;
         }
         if character == '\u{16}' {
@@ -3384,13 +3436,26 @@ impl State {
                 } else {
                     format!("{mode} · {context}")
                 };
+                let reply = self.chat_reply_available();
                 let clock_width = clock_label
                     .as_ref()
-                    .map_or(0, |label| label.width() as u16 + 3);
+                    .map_or(0, |label| label.width() as u16 + 3)
+                    + if reply { 11 } else { 0 };
                 let title_width = width.saturating_sub(clock_width);
                 let title = fit(&title, title_width);
                 let available = usize::from(g.left).saturating_sub(title.width() + 4);
-                let detail = if let Some(clock) = &clock_label {
+                let detail = if reply {
+                    let clock = clock_label
+                        .as_ref()
+                        .map(|clock| {
+                            fit(
+                                clock,
+                                available.saturating_sub(11).min(usize::from(u16::MAX)) as u16,
+                            )
+                        })
+                        .filter(|clock| !clock.is_empty());
+                    clock.map_or_else(|| "[R 引用]".into(), |clock| format!("{clock} · [R 引用]"))
+                } else if let Some(clock) = &clock_label {
                     fit(clock, available.min(usize::from(u16::MAX)) as u16)
                 } else if g.left == g.cols {
                     let [account, quota] = self.account.compact_rows();

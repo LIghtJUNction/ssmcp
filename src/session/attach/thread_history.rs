@@ -238,8 +238,11 @@ fn project(frame: Value, sequence: u64, scope: Option<&RecordScope>) -> Value {
     let kind = if event_type == "ssmcp.message" {
         match value["kind"].as_str() {
             Some("answer") => "answer",
+            Some("input") => "input",
             _ => "progress",
         }
+    } else if event_type == "ssmcp.user_input" {
+        "input"
     } else {
         event_type.as_str()
     };
@@ -286,6 +289,24 @@ fn project(frame: Value, sequence: u64, scope: Option<&RecordScope>) -> Value {
         "text_lossy":text_lossy,
         "unattributed":scope.is_none_or(|scope|scope.kind=="unattributed"),
         "value":value,"truncated":frame["truncated"]==true});
+    if matches!(event_type.as_str(), "ssmcp.message" | "ssmcp.user_input") {
+        if let Some(id) = value["message_id"].as_str().filter(|id| {
+            !id.is_empty()
+                && id.len() <= 128
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+        }) {
+            result["message_id"] = json!(id);
+        }
+        let human = event_type == "ssmcp.user_input" || value["role"] == "user";
+        result["input_side"] = json!(human || value["kind"] == "input");
+        if human {
+            result["input_origin"] = json!("human");
+        } else if value["kind"] == "input" {
+            result["input_origin"] = value["input_origin"].clone();
+        }
+    }
     for key in ["status", "phase", "success", "exit_code", "job_id"] {
         if let Some(field) = value.get(key).filter(|value| {
             value.is_boolean()

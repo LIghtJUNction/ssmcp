@@ -2,7 +2,7 @@ import { Gateway } from './src/gateway.mjs';
 import { BridgeClient } from './src/client.mjs';
 import { byteLength } from './src/protocol.mjs';
 import { renderWaitContent } from './src/wait-view.mjs';
-import { plain, shortId, duration, redact, mayClearDraft } from './src/presentation.mjs';
+import { plain, shortId, duration, redact, mayClearDraft, quoteReply } from './src/presentation.mjs';
 
 const $ = id => document.getElementById(id);
 const gateway = new Gateway();
@@ -160,11 +160,16 @@ function timelineFilter(row) {
   if (row.source?.kind === 'local_queue') {
     return selectedThread === 'main' || row.metadata?.target === selectedThread || row.metadata?.target?.agent_id === selectedThread;
   }
+  if (row.source?.kind === 'local_human') {
+    const recipient = row.source.recipient_agent_id;
+    return selectedThread === 'main' ? !recipient || recipient === 'next' : recipient === selectedThread;
+  }
   return selectedThread === 'main' ? row.source?.kind === 'main' : row.source?.kind === 'thread' && row.source.agent_id === selectedThread;
 }
 function sourceLabel(row) {
   if (row.kind === 'receipt' || row.kind === 'notice') return '此页面';
   if (row.source?.kind === 'local_queue') return '真实队列状态';
+  if (row.source?.kind === 'local_human') return row.source.recipient_agent_id && row.source.recipient_agent_id !== 'next' ? shortId(row.source.recipient_agent_id) : '主对话';
   if (row.source?.kind === 'worker_snapshot') return '实际 pool 快照';
   if (row.source?.kind === 'main') return '主对话';
   if (row.source?.kind === 'thread' && row.source.agent_id) {
@@ -177,12 +182,37 @@ const stateLabels = { confirmed: '回执已验证', rejected: '已拒绝', unkno
 function eventNode(row) {
   const article = element('article', `timeline-row is-${row.kind === 'notice' ? 'notice' : row.kind === 'receipt' ? 'receipt' : 'event'}`);
   article.dataset.row = row.id; article._row = row;
+  article.classList.toggle('is-input', row.inputSide === true);
   const mark = element('div', `event-mark ${row.kind === 'answer' ? 'answer' : ''}`, row.kind === 'answer' ? 's.' : row.kind === 'input' ? '↑' : row.kind === 'receipt' ? '↗' : '·');
   const body = element('div'); const heading = element('div', 'event-heading');
   heading.append(element('strong', '', row.title || row.kind), element('span', 'source', sourceLabel(row)));
   if (row.status) heading.append(element('span', `pill ${['unknown', 'confirmed', 'error', 'done'].includes(row.status) ? row.status : ''}`, row.kind === 'worker_snapshot' ? `最后观察 · ${row.status}` : row.kind === 'input' ? `队列 · ${row.status}` : stateLabels[row.status] ?? String(row.status)));
   if (row.sequence) heading.append(element('span', 'source mono', `#${row.sequence}`));
-  body.append(heading, element('div', 'event-text', plain(row.text, 16384)), metadata(row.metadata, '详细信息与原始 ID'));
+  const textNode = element('div', 'event-text', plain(row.text, 16384));
+  body.append(heading, textNode);
+  if (row.messageId) {
+    article.tabIndex = 0;
+    const reply = element('button', 'text-button reply-button', '引用回复');
+    reply.type = 'button'; reply.title = '选中消息后按 R 引用回复';
+    const insertReply = () => {
+      const selection = window.getSelection();
+      const excerpt = selection && !selection.isCollapsed && textNode.contains(selection.anchorNode)
+        && textNode.contains(selection.focusNode) ? selection.toString() : row.text;
+      try {
+        const composer = $('chat-text');
+        composer.value = quoteReply(row.messageId, excerpt, composer.value);
+        renderComposer(); composer.focus(); composer.setSelectionRange(composer.value.length, composer.value.length);
+      } catch (error) { fail(error); }
+    };
+    reply.addEventListener('click', insertReply);
+    article.addEventListener('keydown', event => {
+      if (event.target === article && event.key.toLowerCase() === 'r' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault(); insertReply();
+      }
+    });
+    body.append(reply);
+  }
+  body.append(metadata(row.metadata, '详细信息与原始 ID'));
   article.append(mark, body); return article;
 }
 function renderTimeline({ preservePage = true } = {}) {

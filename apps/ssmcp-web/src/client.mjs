@@ -153,7 +153,8 @@ export class BridgeClient {
         for (const item of body.value.items.slice(0, 32)) {
           if (typeof item.id !== 'string' || typeof item.text !== 'string') continue;
           this.timeline.put({ id: `queue:${context.generation}:${item.id}`, generation: context.generation,
-            kind: 'input', title: '输入队列', text: item.text.slice(0, 16384), status: item.uncertain ? 'unknown' : item.status,
+            kind: 'input', title: '用户', messageId: item.id, inputSide: true, inputOrigin: 'human',
+            text: item.text.slice(0, 16384), status: item.uncertain ? 'unknown' : item.status,
             source: { kind: 'local_queue' }, metadata: item });
         }
         this.emit('timeline');

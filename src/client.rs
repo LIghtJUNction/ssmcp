@@ -38,6 +38,7 @@ pub(crate) mod presentation;
 mod protocol_tests;
 mod recovery;
 pub(crate) mod references;
+pub mod replies;
 mod relay;
 pub(crate) mod reload;
 pub(crate) mod render;

@@ -52,6 +52,7 @@ struct Layout {
     expanded: bool,
     lines: Vec<String>,
     more: bool,
+    width: f32,
 }
 
 struct Pending {
@@ -84,6 +85,9 @@ pub struct Desktop {
     expanded: Option<(usize, Counter)>,
     layouts: VecDeque<Layout>,
     layout_width: f32,
+    selected_message: Option<(String, String)>,
+    message_boxes: Vec<(Rect, String, String)>,
+    reply_thread: ThreadChoice,
     thread_picker: bool,
     thread_scroll: usize,
     queue_view: bool,
@@ -114,6 +118,9 @@ impl Default for Desktop {
             expanded: None,
             layouts: VecDeque::new(),
             layout_width: 0.,
+            selected_message: None,
+            message_boxes: Vec::new(),
+            reply_thread: ThreadChoice::default(),
             thread_picker: false,
             thread_scroll: 0,
             queue_view: false,
@@ -124,11 +131,44 @@ impl Default for Desktop {
 }
 
 impl Desktop {
+    fn quote_message(&mut self, id: &str, text: &str) {
+        match ssmcp::client::replies::quote_reply(id, text, &self.composer, 4096) {
+            Ok(draft) => {
+                self.composer = draft;
+                self.local_notice = "已引用原消息；在输入框补充回复，可编辑引用。".into();
+            }
+            Err(error) => self.local_notice = error,
+        }
+    }
+
     pub fn event(&mut self, event: &NativeEvent) {
         match event {
-            NativeEvent::Move(x, y) | NativeEvent::Down(x, y) | NativeEvent::Up(x, y) => {
-                self.pointer = (*x, *y)
+            NativeEvent::Down(x, y) => {
+                self.pointer = (*x, *y);
+                if let Some((_, id, text)) = self
+                    .message_boxes
+                    .iter()
+                    .find(|(r, _, _)| *x >= r.x && *x < r.x + r.w && *y >= r.y && *y < r.y + r.h)
+                {
+                    self.selected_message = Some((id.clone(), text.clone()));
+                }
             }
+            NativeEvent::Key {
+                code,
+                control: true,
+                shift: true,
+                ..
+            } if matches!(*code, 82 | 114)
+                && self.page == Page::Conversation
+                && self.pending.is_none() =>
+            {
+                if let Some((id, text)) = self.selected_message.clone() {
+                    self.quote_message(&id, &text);
+                } else {
+                    self.local_notice = "先选择一条消息，再按 Ctrl+Shift+R 引用回复。".into();
+                }
+            }
+            NativeEvent::Move(x, y) | NativeEvent::Up(x, y) => self.pointer = (*x, *y),
             NativeEvent::Scroll(delta) if self.pointer.0 > SIDE => {
                 if self.thread_picker {
                     self.thread_scroll = if *delta > 0 {
@@ -152,6 +192,11 @@ impl Desktop {
     }
 
     pub fn sync(&mut self, view: &View) {
+        if self.reply_thread != view.thread || self.generation != view.generation {
+            self.selected_message = None;
+            self.message_boxes.clear();
+            self.reply_thread = view.thread.clone();
+        }
         if view.generation.is_some() && self.generation != view.generation {
             self.generation = view.generation.clone();
             self.layouts.clear();
@@ -765,6 +810,9 @@ impl Desktop {
         bounds: Rect,
         page: usize,
     ) {
+        if page == 0 {
+            self.message_boxes.clear();
+        }
         if history.rows.is_empty() {
             self.empty(
                 canvas,
@@ -781,11 +829,17 @@ impl Desktop {
         let mut heights = Vec::with_capacity(history.rows.len());
         let mut layouts = Vec::with_capacity(history.rows.len());
         for row in &history.rows {
+            let content_width = if row.input_side {
+                bounds.w * 0.82
+            } else {
+                bounds.w
+            };
             let expanded = self.expanded == Some((page, row.sequence));
             let existing = self.layouts.iter().find(|layout| {
                 layout.page == page
                     && layout.sequence == row.sequence
                     && layout.expanded == expanded
+                    && (layout.width - content_width).abs() <= 1.
             });
             let (lines, more) = if let Some(layout) = existing {
                 (layout.lines.clone(), layout.more)
@@ -793,12 +847,13 @@ impl Desktop {
                 let (lines, more) = wrap(
                     canvas,
                     &row.text,
-                    bounds.w - 40.,
+                    content_width - 40.,
                     15,
                     if expanded { 180 } else { 6 },
                 );
                 self.layouts.push_back(Layout {
                     sequence: row.sequence,
+                    width: content_width,
                     page,
                     expanded,
                     lines: lines.clone(),
@@ -824,12 +879,47 @@ impl Desktop {
         canvas.clip(bounds);
         for (index, row) in history.rows.iter().enumerate() {
             let h = heights[index] - 12.;
+            let row_width = if row.input_side {
+                bounds.w * 0.82
+            } else {
+                bounds.w
+            };
+            let row_x = bounds.x + bounds.w - row_width;
             if y + h >= bounds.y && y <= bounds.y + bounds.h {
-                canvas.rect(Rect::new(bounds.x, y, bounds.w, h), 10., SURFACE);
-                let kind = kind_label(&row.kind);
+                let card = Rect::new(row_x, y, row_width, h);
+                let selected = row.message_id.as_ref().is_some_and(|id| {
+                    self.selected_message
+                        .as_ref()
+                        .is_some_and(|(selected, _)| selected == id)
+                });
+                canvas.rect(card, 10., if selected { BLUE } else { LINE });
+                canvas.rect(
+                    card.inset(1.),
+                    9.,
+                    if row.input_side { BLUE_SOFT } else { SURFACE },
+                );
+                if page == 0
+                    && let Some(id) = &row.message_id
+                {
+                    let top = y.max(bounds.y);
+                    let bottom = (y + h).min(bounds.y + bounds.h);
+                    self.message_boxes.push((
+                        Rect::new(row_x, top, row_width, bottom - top),
+                        id.clone(),
+                        row.text.clone(),
+                    ));
+                }
+                let kind = match row.input_origin.as_deref() {
+                    Some("human") => "用户",
+                    Some("system_hook") => "系统提示",
+                    Some("agent_timer") => "定时提示",
+                    Some("worker_event") => "Worker 事件",
+                    Some("maintenance") => "维护提示",
+                    _ => kind_label(&row.kind),
+                };
                 canvas.text(
                     kind,
-                    bounds.x + 18.,
+                    row_x + 18.,
                     y + 13.,
                     12,
                     true,
@@ -837,16 +927,16 @@ impl Desktop {
                 );
                 canvas.ellipsis(
                     &format!("{}  {}", row.source, row.status),
-                    bounds.x + 105.,
+                    row_x + 105.,
                     y + 13.,
-                    bounds.w - 235.,
+                    row_width - 235.,
                     12,
                     false,
                     MUTED,
                 );
                 canvas.ellipsis(
                     &format!("#{}", row.sequence.0),
-                    bounds.x + bounds.w - 126.,
+                    row_x + row_width - 126.,
                     y + 13.,
                     108.,
                     11,
@@ -856,7 +946,7 @@ impl Desktop {
                 for (line_index, line) in layouts[index].0.iter().enumerate() {
                     canvas.text(
                         line,
-                        bounds.x + 18.,
+                        row_x + 18.,
                         y + 41. + line_index as f32 * 23.,
                         15,
                         false,
@@ -869,7 +959,7 @@ impl Desktop {
                         if ui.button(
                             canvas,
                             10_000 + index as u64 * 2,
-                            Rect::new(bounds.x + 10., footer_y, 64., 26.),
+                            Rect::new(row_x + 10., footer_y, 64., 26.),
                             if self.expanded == Some((page, row.sequence)) {
                                 "收起"
                             } else {
@@ -885,10 +975,28 @@ impl Desktop {
                             };
                         }
                     }
+                    if page == 0
+                        && let Some(id) = &row.message_id
+                    {
+                        use std::hash::{Hash, Hasher};
+                        let mut key = std::hash::DefaultHasher::new();
+                        ("reply", row.sequence.0, id).hash(&mut key);
+                        if ui.button(
+                            canvas,
+                            key.finish(),
+                            Rect::new(row_x + row_width - 166., footer_y, 86., 26.),
+                            "引用回复",
+                            ButtonStyle::Quiet,
+                            self.pending.is_none(),
+                        ) {
+                            self.selected_message = Some((id.clone(), row.text.clone()));
+                            self.quote_message(id, &row.text);
+                        }
+                    }
                     if ui.button(
                         canvas,
                         10_001 + index as u64 * 2,
-                        Rect::new(bounds.x + bounds.w - 70., footer_y, 60., 26.),
+                        Rect::new(row_x + row_width - 70., footer_y, 60., 26.),
                         "复制",
                         ButtonStyle::Quiet,
                         true,
@@ -899,7 +1007,7 @@ impl Desktop {
                 if row.lossy {
                     canvas.text(
                         "已截断 / 有损文本",
-                        bounds.x + bounds.w - 190.,
+                        row_x + row_width - 190.,
                         y + h - 20.,
                         10,
                         false,
@@ -915,7 +1023,7 @@ impl Desktop {
                 canvas,
                 390 + page as u64,
                 Rect::new(
-                    bounds.x + bounds.w - 114.,
+                    row_x + row_width - 114.,
                     bounds.y + bounds.h - 41.,
                     106.,
                     32.,
@@ -930,7 +1038,7 @@ impl Desktop {
         if history.omitted > 0 {
             canvas.text(
                 &format!("本窗口已省略 {} 条较早记录", history.omitted),
-                bounds.x + 6.,
+                row_x + 6.,
                 bounds.y + bounds.h - 13.,
                 10,
                 false,
