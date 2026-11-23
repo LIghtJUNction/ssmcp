@@ -8,6 +8,7 @@ pub mod control;
 pub mod gui;
 pub mod install;
 pub(crate) mod ipc;
+pub(crate) mod limits;
 pub mod service;
 #[cfg(windows)]
 pub mod windows_service;
@@ -147,6 +148,12 @@ impl Runner {
             owner,
         };
         if !runner.stop_requested() {
+            let limits = crate::client::saved_resource_limits(&runner.manifest.spec)?;
+            let unit = limits::unit_name(&runner.manifest, runner.generation.as_deref());
+            if let Err(error) = limits.verify_current(&unit) {
+                runner.record("disconnected", 0, None, None, Some(&error.to_string()))?;
+                return Err(error);
+            }
             runner.record("starting", 0, None, None, None)?;
         }
         Ok(runner)
@@ -736,6 +743,7 @@ fn status_observed(
         "phase_observed_at":state.observed_at, "attempt":state.attempt,
         "retry_after_secs":state.retry_after_secs, "last_error":state.error, "stop_requested":stopped,
         "watchdog":manifest.spec.watchdog, "reconnect_delay_secs":manifest.spec.reconnect_delay_secs,
+        "resource_limits_requested":crate::client::saved_resource_limits(&manifest.spec)?,
         "native_crash_restart_delay_secs":if manifest.spec.watchdog { Some(if manifest.supervised { manifest.spec.reconnect_delay_secs } else { native_restart_delay(manifest) }) } else { None },
         "native_crash_restart_limit":if !manifest.supervised && cfg!(windows) && manifest.spec.watchdog { Some(255) } else { None },
         "automatic_login_start":if manifest.supervised { None } else { Some(false) },
@@ -1262,41 +1270,10 @@ async fn native_available() -> Result<()> {
 }
 
 async fn native_start(directory: &Path, manifest: &Manifest) -> Result<()> {
+    crate::client::saved_resource_limits(&manifest.spec)?.require_background(true)?;
     #[cfg(target_os = "linux")]
     {
-        let mut args = vec![
-            "--user".into(),
-            "--quiet".into(),
-            "--collect".into(),
-            "--service-type=exec".into(),
-            format!("--unit={}", manifest.manager_id),
-            format!("--working-directory={}", path_text(&manifest.spec.cwd)?),
-            "--property=KillMode=control-group".into(),
-            "--property=TimeoutStopSec=15s".into(),
-            "--property=UMask=0077".into(),
-            "--property=StandardInput=null".into(),
-            "--property=StandardOutput=null".into(),
-            "--property=StandardError=journal".into(),
-            format!(
-                "--property=Restart={}",
-                if manifest.spec.watchdog {
-                    "on-failure"
-                } else {
-                    "no"
-                }
-            ),
-            format!("--property=RestartSec={}s", native_restart_delay(manifest)),
-            "--property=StartLimitIntervalSec=0".into(),
-        ];
-        for (key, value) in &manifest.environment {
-            args.push(format!("--setenv={key}={value}"));
-        }
-        args.extend([
-            "--".into(),
-            path_text(&executable(directory))?.into(),
-            "__session-run".into(),
-            manifest.spec.name.clone(),
-        ]);
+        let args = limits::native_arguments(directory, manifest)?;
         manager_command("systemd-run", &args, false).await?;
     }
     #[cfg(target_os = "macos")]

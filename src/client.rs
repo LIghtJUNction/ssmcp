@@ -167,6 +167,8 @@ Usage: ssmcp username@server [options]
   -i, --interactive    Select an authorized account session and open its terminal
   --name NAME          Display name (default: hostname-pid)
   --daemon             Start a quiet, user-owned native background service
+  --cpu-limit PERCENT  Linux background CPU quota; 100% is one CPU
+  --memory-limit SIZE  Linux background memory cap; e.g. 512MiB
   --session-control    Grant this connection local saved-session management tools
   --no-watchdog        Disable automatic reconnects (enabled by default)
   --watchdog           Enable automatic reconnects explicitly (compatibility flag)
@@ -509,6 +511,7 @@ struct Options {
     worker_window: Option<Mutex<WorkerController>>,
     list_tools: bool,
     daemon: bool,
+    resource_limits: crate::session::limits::Limits,
     session_control: bool,
     watchdog: bool,
     reconnect_delay_secs: u64,
@@ -654,6 +657,7 @@ impl Options {
         let mut worker_window_child = false;
         let mut list_tools = false;
         let mut daemon = false;
+        let mut resource_limits = crate::session::limits::Limits::default();
         let mut session_control = false;
         let mut watchdog = default_watchdog;
         let mut explicit_watchdog = None;
@@ -879,6 +883,20 @@ impl Options {
                 Some("--no-setup") => {}
                 Some("--portal") => return Err("--portal has been replaced by --server URL".into()),
                 Some("--daemon") => daemon = true,
+                Some(flag @ ("--cpu-limit" | "--memory-limit")) => {
+                    let value = args
+                        .next()
+                        .and_then(|value| value.into_string().ok())
+                        .ok_or_else(|| format!("{flag} requires a UTF-8 value"))?;
+                    resource_limits.set(flag, &value)?;
+                }
+                Some(value)
+                    if value.starts_with("--cpu-limit=")
+                        || value.starts_with("--memory-limit=") =>
+                {
+                    let (flag, value) = value.split_once('=').expect("limit assignment");
+                    resource_limits.set(flag, value)?;
+                }
                 Some("--session-control") => session_control = true,
                 Some("--watchdog" | "--no-watchdog") => {
                     let enabled = arg == "--watchdog";
@@ -1144,6 +1162,9 @@ impl Options {
                 "--list-tools is local and cannot be combined with an account destination".into(),
             );
         }
+        if !resource_limits.is_empty() && (list_tools || local_mode) {
+            return Err("resource limits require a background relay session".into());
+        }
         if list_tools && destination.is_some() {
             return Err("--list-tools is local and does not take an SSH destination".into());
         }
@@ -1205,6 +1226,7 @@ impl Options {
             worker_window: None,
             list_tools,
             daemon,
+            resource_limits,
             session_control,
             watchdog,
             reconnect_delay_secs: reconnect_delay_secs.unwrap_or(5),
@@ -1358,6 +1380,12 @@ impl Options {
             OsString::from("--shell"),
             self.shell.clone().into_os_string(),
         ]);
+        args.extend(
+            self.resource_limits
+                .arguments()
+                .into_iter()
+                .map(OsString::from),
+        );
         if self.watchdog {
             args.extend([
                 OsString::from("--watchdog"),
@@ -1469,6 +1497,7 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
     }
     let options =
         Options::parse_saved(spec)?.ok_or("saved session must contain connection options")?;
+    options.resource_limits.require_background(true)?;
     if options.worker.is_some() && options.chat.input != chat_io::Input::None {
         return Err("saved worker pools must disable chat input internally".into());
     }
@@ -1488,6 +1517,32 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
         );
     }
     Ok(())
+}
+
+/// Read limit settings without reopening context roots or resolving credentials.
+/// Values of other options and arguments after "--" are never treated as flags.
+pub(crate) fn saved_resource_limits(
+    spec: &crate::session::SessionSpec,
+) -> crate::Result<crate::session::limits::Limits> {
+    let mut limits = crate::session::limits::Limits::default();
+    let mut args = spec.args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
+        if matches!(arg.as_str(), "--cpu-limit" | "--memory-limit") {
+            let value = args
+                .next()
+                .ok_or_else(|| format!("{arg} requires a value"))?;
+            limits.set(arg, value)?;
+        } else if let Some((flag @ ("--cpu-limit" | "--memory-limit"), value)) = arg.split_once('=')
+        {
+            limits.set(flag, value)?;
+        } else if connection_option_takes_value(arg) {
+            args.next();
+        }
+    }
+    Ok(limits)
 }
 
 /// Read the chat mode of an already validated saved session without opening
@@ -1602,7 +1657,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER\nRequires a running ssmcp service.\n\n  --allow USER@SERVER  Allow a registered account on the selected relay\n  No login is needed on this controlled device; controllers must sign in.\n  Repeat --allow or comma-separate targets. Without it, a saved login selects yourself."
+            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER\nRequires a running ssmcp service.\n\n  --cpu-limit PERCENT  Linux CPU quota; 100% is one CPU\n  --memory-limit SIZE  Linux memory cap; e.g. 512MiB\n  --allow USER@SERVER  Allow a registered account on the selected relay\n  No login is needed on this controlled device; controllers must sign in.\n  Repeat --allow or comma-separate targets. Without it, a saved login selects yourself."
         );
         return Ok(());
     }
@@ -1640,6 +1695,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         return Err("Use ssmcp sessions create NAME username@server for an OAuth session".into());
     }
     options.chat.validate_saved_input()?;
+    options.resource_limits.require_background(true)?;
     apply_account(&mut options, true).await?;
     let mut spec = options.session_spec()?;
     spec.cwd = cwd;
@@ -1945,6 +2001,8 @@ fn connection_option_takes_value(option: &str) -> bool {
                 | "--public-url"
                 | "--portal"
                 | "--reconnect-delay"
+                | "--cpu-limit"
+                | "--memory-limit"
                 | "--log-format"
                 | "--ui-config"
                 | "--theme"
@@ -2261,6 +2319,9 @@ pub async fn run() -> crate::Result<()> {
     let Some(mut options) = parsed else {
         return Ok(());
     };
+    options
+        .resource_limits
+        .require_background(service.is_some() || options.daemon)?;
     let mut worker_session = if options.worker_window_child {
         Some(worker_window::child_session()?)
     } else {
@@ -5033,6 +5094,90 @@ mod tests {
             assert_eq!(restored.server, options.server);
             assert_eq!(restored.shell, options.shell);
             assert!(restored.theme.is_none());
+        }
+    }
+
+    #[test]
+    fn daemon_resource_limits_round_trip_in_saved_arguments() {
+        let options = Options::parse(
+            [
+                "--daemon",
+                "--name",
+                "limited",
+                "--input",
+                "none",
+                "--cpu-limit",
+                "0250%",
+                "--memory-limit=2GiB",
+                "--server",
+                "https://relay.example",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        let spec = options.session_spec().unwrap();
+        assert_eq!(
+            saved_resource_limits(&spec).unwrap(),
+            options.resource_limits
+        );
+        assert_eq!(
+            saved_resource_limits(&spec).unwrap().arguments(),
+            ["--cpu-limit", "250%", "--memory-limit", "2147483648"]
+        );
+        let restored = Options::parse_saved(&spec).unwrap().unwrap();
+        assert_eq!(restored.resource_limits, options.resource_limits);
+        assert!(!restored.daemon);
+        assert_eq!(
+            validate_session_spec(&spec).is_ok(),
+            cfg!(target_os = "linux")
+        );
+        assert!(
+            serde_json::to_value(&spec)
+                .unwrap()
+                .get("resource_limits")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn saved_resource_limit_scan_respects_values_and_argument_boundary() {
+        let mut spec = Options::parse(
+            ["--name", "limited", "--server", "https://relay.example"].map(OsString::from),
+        )
+        .unwrap()
+        .unwrap()
+        .session_spec()
+        .unwrap();
+        spec.args = [
+            "--title",
+            "--cpu-limit=900%",
+            "--name",
+            "--memory-limit",
+            "--context-root",
+            "/unused/metadata-only",
+            "--cpu-limit",
+            "50%",
+            "--memory-limit=64M",
+            "--",
+            "--cpu-limit=1000%",
+        ]
+        .map(str::to_owned)
+        .into();
+        assert_eq!(
+            saved_resource_limits(&spec).unwrap().arguments(),
+            ["--cpu-limit", "50%", "--memory-limit", "67108864"]
+        );
+        spec.args = ["--cpu-limit"].map(str::to_owned).into();
+        assert!(saved_resource_limits(&spec).is_err());
+        for args in [
+            vec!["--cpu-limit"],
+            vec!["--memory-limit"],
+            vec!["--cpu-limit=50", "--cpu-limit", "60"],
+            vec!["--memory-limit", "1G", "--memory-limit=2G"],
+            vec!["--list-tools", "--cpu-limit=50"],
+        ] {
+            assert!(Options::parse(args.into_iter().map(OsString::from)).is_err());
         }
     }
 

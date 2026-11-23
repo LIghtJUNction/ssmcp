@@ -297,9 +297,9 @@ impl Supervisor {
             service_epoch: self.epoch.clone(),
         };
         super::write_json(&directory.join("generation.json"), &generation)?;
-        let mut command = Command::new(super::executable(directory));
+        let mut command =
+            super::limits::managed_command(directory, manifest, &generation.generation)?;
         command
-            .args(["__session-run", name])
             .current_dir(&manifest.spec.cwd)
             .envs(&manifest.environment)
             .env("SSMCP_SESSION_GENERATION", &generation.generation)

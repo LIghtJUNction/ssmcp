@@ -376,7 +376,7 @@ fn systemd_definition(
         String::new()
     };
     Ok(format!(
-        "# {MARKER}\n[Unit]\nDescription=ssmcp client session manager\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=exec\n{owner}WorkingDirectory=~\nExecStart={} service run\nEnvironment={}\nEnvironment={}\nEnvironment={}\nRestart=on-failure\nRestartSec=5s\nKillMode=control-group\nTimeoutStopSec=20s\nUMask=0077\nStandardInput=null\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy={}\n",
+        "# {MARKER}\n[Unit]\nDescription=ssmcp client session manager\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=exec\n{owner}WorkingDirectory=~\nExecStart={} service run\nEnvironment={}\nEnvironment={}\nEnvironment={}\nRestart=on-failure\nRestartSec=5s\nKillMode=control-group\nTimeoutStopSec=20s\nUMask=0077\nStandardInput=null\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy={}\n",
         systemd_quote(executable, true)?,
         systemd_quote(&format!("HOME={home}"), false)?,
         systemd_quote(&format!("SSMCP_SESSION_HOME={state}"), false)?,
@@ -1053,6 +1053,31 @@ mod tests {
         .unwrap();
         assert!(!user.contains("User="));
         assert!(user.contains("WantedBy=default.target"));
+    }
+
+    #[test]
+    fn systemd_manager_definition_retries_crashes_without_restart_rate_lockout() {
+        for system in [true, false] {
+            let text = systemd_definition(
+                "/bin/ssmcp",
+                "alice",
+                "/home/alice",
+                "/state",
+                "/bin",
+                system,
+            )
+            .unwrap();
+            let (unit, service) = text.split_once("[Service]\n").unwrap();
+            assert!(unit.contains("StartLimitIntervalSec=0\n"));
+            assert!(service.contains("Type=exec\n"));
+            assert!(service.contains("Restart=on-failure\n"));
+            assert!(service.contains("RestartSec=5s\n"));
+            assert!(service.contains("KillMode=control-group\n"));
+            assert!(!service.contains("Restart=always\n"));
+            // Per-session limits must not constrain unrelated managed sessions.
+            assert!(!service.contains("CPUQuota="));
+            assert!(!service.contains("MemoryMax="));
+        }
     }
 
     #[test]

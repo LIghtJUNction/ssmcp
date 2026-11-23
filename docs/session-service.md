@@ -52,6 +52,31 @@ ssmcp sessions remove dev
 
 `generation` 是一次工作进程实例的标识。名字保持不变，restart 或服务恢复会生成新 generation，Broker `client_id` 也会重新生成。状态分别报告管理器状态和 Broker 连接状态：create 成功只能证明定义被接收、进程开始启动，实际连通应以 `connection_state: connected` 为准。
 
+## 后台会话的 CPU 与内存限制
+
+CPU 与内存限制通过已有的后台入口设置，保存后随同名会话的 start、restart 和故障恢复重新应用。例如：
+
+```sh
+ssmcp --daemon --name limited --input none \
+  --cpu-limit 50% --memory-limit 512MiB alice@relay.example
+
+# 已运行常驻管理服务时，也可以使用：
+ssmcp sessions create limited-managed --cwd /path/to/project --input none \
+  --cpu-limit 200% --memory-limit 1GiB alice@relay.example
+
+ssmcp sessions status limited --json
+```
+
+`--cpu-limit` 接受正整数百分比，可省略百分号。100% 表示一个 CPU 的时间额度，200% 表示最多两个 CPU 的总时间额度；它不会固定进程到某个核心。`--memory-limit` 接受正整数字节数，或 K/M/G/T、KiB/MiB/GiB/TiB 后缀，每一级按 1024 换算。零、负数、小数、溢出和重复参数会被拒绝。两项均可单独使用；前台连接和本地工具清单不接受这些参数。
+
+限制作用于每个会话的 cgroup，以及正常继承它的子进程。内存额度是整个组的合计，不是每个进程各有一份；`MemoryMax` 不包含单独的 swap 上限。内核在内存超限且无法回收时可能终止组内进程；runner 因此异常退出时仍遵循原有 watchdog 策略。[CPUQuota 与 MemoryMax 的定义](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html)
+
+Linux 上有常驻管理服务时，每个受限 runner 使用独立的 `systemd-run --user --scope`，父子进程归属和停止操作仍由现有管理器负责；管理器按 `--reconnect-delay` 重试失败的 runner。未运行常驻管理服务时，`--daemon` 沿用原有临时 systemd service，并设置 `Restart=on-failure`。安装的常驻管理服务自身也由 systemd 在异常退出后重试，间隔为 5 秒。`--no-watchdog` 禁用会话级自动重试；显式 close/stop 会保存停止意图，正常退出也不会被误判成崩溃。[同步 scope 的进程关系](https://www.freedesktop.org/software/systemd/man/latest/systemd-run.html) · [systemd 重启规则](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)
+
+资源限制要求 Linux、systemd 254 或更新版本、可连接的同用户 systemd manager，以及挂载在 `/sys/fs/cgroup` 的统一 cgroup v2。请求 CPU 或内存限制时，相应控制器必须可用并已委派；`--system` 安装的常驻管理器同样需要访问该用户的 systemd manager。程序不会自动安装服务、启用 linger 或更改控制器委派。macOS、Windows、不可用的用户 manager、旧 systemd 和缺少控制器的环境不能承诺这些限制：请求受限会话会被拒绝或启动失败，不会改为无上限运行。不指定限制时，现有平台后台路径继续可用。
+
+runner 在建立连接前检查自己是否位于预期的会话单元，并读取内核的 `cpu.max`、`memory.max`；缺失、无限制或高于请求值时停止启动。`sessions status --json` 中的 `resource_limits_requested` 仅报告保存的配置。create/daemon 返回成功表示启动请求已接收，不等同于限制已经核验；应继续检查连接状态和服务日志。启动时的检查不代表之后对内核配置的持续监控。
+
 ## 连接与分离终端
 
 ```sh
