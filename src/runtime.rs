@@ -540,6 +540,11 @@ impl Runtime {
         self.call_connection
     }
 
+    /// The registered connection identity, never an identity supplied by a GUI.
+    pub(crate) fn frontend_client_id(&self) -> Option<&str> {
+        self.client_id.get().map(String::as_str)
+    }
+
     pub(crate) fn configure_workers(
         &self,
         config: crate::worker::Config,
@@ -784,7 +789,7 @@ impl Runtime {
         if matches!(name.as_str(), "ssmcp.time.now" | "ssmcp.time.wait")
             && !self.time.time_tools_enabled()
         {
-            return Err("time_observation_not_negotiated: remote time tools require an explicit time_observation_v1 server acknowledgement; old server delivery policies still apply to hard-coded unsupported calls".into());
+            return Err("time_observation_not_negotiated: remote time tools require an explicit time_observation_v2 server acknowledgement; old server delivery policies still apply to hard-coded unsupported calls".into());
         }
         if !self.chat_enabled() && crate::wire::human_chat_tool(&name) {
             return Err(crate::wire::CHAT_DISABLED.into());

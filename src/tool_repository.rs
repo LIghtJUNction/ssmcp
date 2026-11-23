@@ -1,5 +1,6 @@
 //! Editable code-mode helpers selected on the authorized client, not the relay.
 mod git;
+mod local;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -15,15 +16,16 @@ use std::{
 pub(crate) const URI: &str = "ssmcp-client://tool-sources";
 pub(crate) const ORIGIN: &str = "https://github.com/LIghtJUNction/ssmcp-tools.git";
 const SCHEMA: &str = "ssmcp-tool-sources-v1";
-const SEED_COMMIT: &str = "785952b82332b34c7e6644788e032878fa3c824f";
+const SEED_COMMIT: &str = "f9220f59c205ac2ce3f886316762437cb0f2bb4b";
 #[cfg(any(target_os = "linux", test))]
-const SEED_SOURCE_SHA256: &str = "4558e759ba4f7b81fc6b44298d2cefeff07edcdbdbd514951a3c3dacaf491aba";
+const SEED_SOURCE_SHA256: &str = "6b4ae299a5e2706770c200c45bc52eb1cdfd3d2bfac009c8519653972942cf7d";
 const SEED: &[u8] = include_bytes!("tool_repository/official.bundle");
 const MAX_RC: usize = 64 * 1024;
 const MAX_SOURCE: usize = 128 * 1024;
 const MAX_TOTAL: usize = 192 * 1024;
 const MAX_BUNDLE: usize = 512 * 1024;
 const MAX_OVERRIDES: usize = 16;
+const MAX_SOURCES: usize = MAX_OVERRIDES + 3;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -60,10 +62,7 @@ pub(crate) struct Bundle {
 
 impl Bundle {
     pub(crate) fn validate(self) -> Result<Self, String> {
-        if self.schema != SCHEMA
-            || self.sources.is_empty()
-            || self.sources.len() > MAX_OVERRIDES + 1
-        {
+        if self.schema != SCHEMA || self.sources.is_empty() || self.sources.len() > MAX_SOURCES {
             return Err("invalid tool-source bundle schema or source count".into());
         }
         if self
@@ -74,6 +73,7 @@ impl Bundle {
             return Err("invalid tool-source RC identity".into());
         }
         let mut names = BTreeSet::new();
+        let mut source_paths = BTreeSet::new();
         let mut total = 0usize;
         for source in &self.sources {
             total = total.saturating_add(source.code.len());
@@ -85,6 +85,7 @@ impl Bundle {
                     .all(|c| c.is_ascii_alphanumeric() || b"._:-".contains(&c))
                 || !names.insert(&source.name)
                 || !path_text(&source.path)
+                || !source_paths.insert(&source.path)
                 || source.code.trim().is_empty()
                 || source.code.contains('\0')
                 || source.code.len() > MAX_SOURCE
@@ -124,6 +125,27 @@ impl Bundle {
     }
 }
 
+fn canonical_directory(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err("local tool directories require absolute paths".into());
+    }
+    for ancestor in path.ancestors() {
+        let metadata = std::fs::symlink_metadata(ancestor)
+            .map_err(|e| format!("{}: {e}", ancestor.display()))?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err("local tool directories must be real directories without symlinks".into());
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0 {
+                return Err("local tool directories must not contain reparse points".into());
+            }
+        }
+    }
+    path.canonicalize().map_err(|e| e.to_string())
+}
+
 fn path_text(value: &str) -> bool {
     !value.is_empty() && value.len() <= 4096 && !value.chars().any(char::is_control)
 }
@@ -139,14 +161,18 @@ fn digest(bytes: &[u8]) -> String {
     crate::hex::encode(Sha256::digest(bytes))
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Tools {
     #[serde(default)]
     overrides: Vec<PathBuf>,
+    #[serde(default)]
+    global: bool,
+    #[serde(default)]
+    projects: Vec<PathBuf>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Rc {
     version: u32,
@@ -161,10 +187,18 @@ struct Manifest {
     entry: PathBuf,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct Selection {
+    name: String,
+    path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
 struct Paths {
     workspace: PathBuf,
     rc: PathBuf,
     directory: PathBuf,
+    global: PathBuf,
 }
 
 /// Return the configured locations without reading the RC or initializing repositories.
@@ -196,13 +230,20 @@ impl Paths {
             workspace: workspace.canonicalize().map_err(|e| e.to_string())?,
             rc: base("XDG_CONFIG_HOME", home.join(".config"))?.join("ssmcp/ssmcprc.toml"),
             directory: base("XDG_DATA_HOME", home.join(".local/share"))?.join("ssmcp/tools"),
+            global: home.join(".ssmcp/tools"),
         })
     }
 
-    fn config(&self) -> Result<(Option<RcIdentity>, Vec<PathBuf>), String> {
+    fn read_config(&self) -> Result<(Option<RcIdentity>, Rc), String> {
         match std::fs::symlink_metadata(&self.rc) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok((None, vec![]));
+                return Ok((
+                    None,
+                    Rc {
+                        version: 1,
+                        tools: Tools::default(),
+                    },
+                ));
             }
             Err(error) => return Err(error.to_string()),
             Ok(_) => {}
@@ -211,24 +252,24 @@ impl Paths {
             .map_err(|error| format!("{}: {error}", self.rc.display()))?;
         let text = std::str::from_utf8(&bytes).map_err(|_| "ssmcprc.toml must be UTF-8")?;
         let rc: Rc = toml::from_str(text).map_err(|e| format!("invalid ssmcprc.toml: {e}"))?;
-        if rc.version != 1 || rc.tools.overrides.len() > MAX_OVERRIDES {
-            return Err("ssmcprc.toml requires version=1 and at most 16 tool overrides".into());
+        if rc.version != 1
+            || rc.tools.overrides.len() > MAX_OVERRIDES
+            || rc.tools.projects.len() > 128
+        {
+            return Err("ssmcprc.toml requires version=1, at most 16 overrides and 128 trusted project roots".into());
         }
-        let mut paths = Vec::new();
-        for path in rc.tools.overrides {
-            if path.as_os_str().is_empty() {
-                return Err("tool override paths cannot be empty".into());
-            }
-            let path = if path.is_absolute() {
-                path
-            } else {
-                self.workspace.join(path)
-            };
-            let path = path
-                .canonicalize()
-                .map_err(|e| format!("tool override {}: {e}", path.display()))?;
-            if !paths.contains(&path) {
-                paths.push(path);
+        let mut projects = BTreeSet::new();
+        for project in &rc.tools.projects {
+            if !project.is_absolute()
+                || project
+                    .components()
+                    .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+                || !path_text(&project.display().to_string())
+                || !projects.insert(project)
+            {
+                return Err(
+                    "tools.projects requires distinct absolute canonical project roots".into(),
+                );
             }
         }
         Ok((
@@ -236,8 +277,65 @@ impl Paths {
                 path: self.rc.display().to_string(),
                 sha256: digest(&bytes),
             }),
-            paths,
+            rc,
         ))
+    }
+
+    fn project(&self) -> PathBuf {
+        self.workspace.join(".ssmcp/tools")
+    }
+
+    fn selection(&self, rc: &Rc) -> Result<Vec<Selection>, String> {
+        let mut selected = Vec::new();
+        let mut paths = BTreeSet::new();
+        let mut push = |name: String, path: &Path, directory: bool| -> Result<(), String> {
+            if path.as_os_str().is_empty() {
+                return Err("tool override paths cannot be empty".into());
+            }
+            let absolute = if path.is_absolute() {
+                path.to_owned()
+            } else {
+                self.workspace.join(path)
+            };
+            let canonical = if directory {
+                canonical_directory(&absolute)
+            } else {
+                absolute.canonicalize().map_err(|e| e.to_string())
+            }
+            .map_err(|e| format!("selected {name} tool source {}: {e}", absolute.display()))?;
+            if !paths.insert(canonical.clone()) {
+                return Err(format!(
+                    "duplicate selected tool source: {}",
+                    canonical.display()
+                ));
+            }
+            selected.push(Selection {
+                name,
+                path: canonical,
+            });
+            Ok(())
+        };
+        // Keep legacy RC ordering, then give the fixed global/project layers precedence.
+        for (index, path) in rc.tools.overrides.iter().enumerate() {
+            push(format!("override:{index}"), path, false)?;
+        }
+        if rc.tools.global {
+            push("global".into(), &self.global, true)?;
+        }
+        if rc.tools.projects.iter().any(|root| root == &self.workspace) {
+            push("project".into(), &self.project(), true)?;
+        }
+        if selected.len() > MAX_SOURCES - 1 {
+            return Err(
+                "at most 16 RC overrides plus the global and project layers may be active".into(),
+            );
+        }
+        Ok(selected)
+    }
+
+    fn config(&self) -> Result<(Option<RcIdentity>, Vec<Selection>), String> {
+        let (identity, rc) = self.read_config()?;
+        Ok((identity, self.selection(&rc)?))
     }
 }
 
@@ -355,7 +453,7 @@ async fn source(name: String, path: &Path) -> Result<Source, String> {
     })
 }
 
-/// This fixed resource loads only RC-registered inputs. It accepts no caller path.
+/// This fixed resource loads only RC-registered layers. It accepts no caller path.
 pub(crate) async fn bundle(workspace: &Path) -> Result<Value, String> {
     let workspace = workspace.to_owned();
     tokio::time::timeout(
@@ -371,27 +469,31 @@ pub(crate) async fn bundle(workspace: &Path) -> Result<Value, String> {
 
 async fn bundle_owned(workspace: &Path) -> Result<Value, String> {
     let paths = Paths::current(workspace)?;
-    let (rc, overrides) = paths.config()?;
+    serde_json::to_value(load_configured(&paths).await?).map_err(|e| e.to_string())
+}
+
+async fn load_configured(paths: &Paths) -> Result<Bundle, String> {
+    let (rc, selected) = paths.config()?;
     let official = ensure_official(&paths.directory).await?;
     let mut sources = vec![source("official".into(), &official).await?];
-    for (index, path) in overrides.iter().enumerate() {
-        sources.push(source(format!("override:{index}"), path).await?);
+    for selection in &selected {
+        sources.push(source(selection.name.clone(), &selection.path).await?);
     }
-    let (after, _) = paths.config()?;
+    let (after, after_selected) = paths.config()?;
     if serde_json::to_vec(&rc).map_err(|e| e.to_string())?
         != serde_json::to_vec(&after).map_err(|e| e.to_string())?
+        || selected != after_selected
     {
-        return Err("tool RC changed during the read; start a new code-mode call".into());
+        return Err(
+            "tool RC or selected paths changed during the read; start a new code-mode call".into(),
+        );
     }
-    serde_json::to_value(
-        Bundle {
-            schema: SCHEMA.into(),
-            rc,
-            sources,
-        }
-        .validate()?,
-    )
-    .map_err(|e| e.to_string())
+    Bundle {
+        schema: SCHEMA.into(),
+        rc,
+        sources,
+    }
+    .validate()
 }
 
 /// Explicit read-only official default: fixed Git objects, never the relay's RC.
@@ -781,30 +883,51 @@ async fn update_owned(workspace: &Path, apply: bool) -> Result<Value, String> {
     }))
 }
 
-const HELP: &str = "Usage: ssmcp tools [status|check|update]\n\n\
-status  Show this client's RC, source hashes and Git state (default)\n\
-check   Fetch and inspect the official default branch; preserve working files\n\
-update  Fast-forward a clean official checkout; preserve dirty/diverged work\n\n\
+const HELP: &str = "Usage: ssmcp tools [status|paths|check|update]\n\
+       ssmcp tools init [project|global] [--git]\n\
+       ssmcp tools enable|disable [project|global]\n\n\
+status   Show selected source hashes and Git state (default)\n\
+paths    Show planned locations without reading config or initializing repositories\n\
+init     Create a local helper factory and explicitly register it in the trusted RC\n\
+enable   Register an existing manifest repository; never execute its factory here\n\
+disable  Unregister that layer without deleting its files or Git history\n\
+check    Fetch and inspect the official default branch; preserve working files\n\
+update   Fast-forward a clean official checkout; preserve dirty/diverged work\n\n\
 RC: $XDG_CONFIG_HOME/ssmcp/ssmcprc.toml\n\
+Project: <client workspace>/.ssmcp/tools (only registered project roots)\n\
+Global: $HOME/.ssmcp/tools (only when enabled)\n\
 Official: $XDG_DATA_HOME/ssmcp/tools/official\n\
-Only RC-registered overrides are loaded. Git is required, including offline bootstrap.\n";
+Load order: official, RC overrides in order, global, project. Later exports win.\n\
+Local init is offline; --git creates an independent repository without a commit or remote.\n";
 
 pub(crate) async fn run(args: Vec<OsString>) -> crate::Result<()> {
-    let command = match args.as_slice() {
-        [] => "status",
-        [arg] if arg == "-h" || arg == "--help" => {
-            print!("{HELP}");
-            return Ok(());
+    if matches!(args.as_slice(), [arg] if arg == "-h" || arg == "--help") {
+        print!("{HELP}");
+        return Ok(());
+    }
+    let local = local::parse(&args)?;
+    let command = if local.is_some() {
+        "local"
+    } else {
+        match args.as_slice() {
+            [] => "status",
+            [arg] if arg == "status" => "status",
+            [arg] if arg == "paths" => "paths",
+            [arg] if arg == "check" => "check",
+            [arg] if arg == "update" => "update",
+            _ => return Err(HELP.into()),
         }
-        [arg] if arg == "status" => "status",
-        [arg] if arg == "check" => "check",
-        [arg] if arg == "update" => "update",
-        _ => return Err(HELP.into()),
     };
     let workspace = std::env::current_dir()?;
-    let result = if command == "status" {
+    let result = if let Some(operation) = local {
+        local::manage(Paths::current(&workspace)?, operation).await?
+    } else if command == "paths" {
+        local::locations(&Paths::current(&workspace)?)
+    } else if command == "status" {
         let bundle: Bundle = serde_json::from_value(bundle(&workspace).await?)?;
-        bundle.provenance()
+        let mut identity = bundle.provenance();
+        identity["locations"] = local::locations(&Paths::current(&workspace)?);
+        identity
     } else {
         update(&workspace, command == "update").await?
     };

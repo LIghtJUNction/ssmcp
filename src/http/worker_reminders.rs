@@ -1,5 +1,9 @@
 //! Bounded coordinator hints from the controlled client's live worker pool.
-use super::{CodeRunReport, EligibleUserResponse, Operation, response_authorization};
+use super::{
+    CodeRunReport, EligibleUserResponse, Operation,
+    coordination_policy::{self, Policy},
+    response_authorization,
+};
 use crate::code_mode;
 use serde_json::{Value, json};
 use std::{
@@ -209,6 +213,67 @@ fn cache() -> &'static Mutex<Cache> {
     CACHE.get_or_init(Default::default)
 }
 
+#[derive(Default)]
+struct GuidanceCache {
+    entries: HashMap<Scope, (Policy, Instant)>,
+}
+
+impl GuidanceCache {
+    fn due(&mut self, scope: &Scope, policy: &Policy, now: Instant) -> bool {
+        if !policy.enabled {
+            self.entries.remove(scope);
+            return false;
+        }
+        self.entries.get(scope).is_none_or(|(old, emitted)| {
+            old != policy || now.saturating_duration_since(*emitted) >= REPEAT_AFTER
+        })
+    }
+
+    fn emitted(&mut self, scope: Scope, policy: Policy, now: Instant) {
+        if !self.entries.contains_key(&scope) && self.entries.len() >= MAX_CACHE_ENTRIES {
+            let oldest = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, at))| *at)
+                .map(|(key, _)| key.clone());
+            if let Some(oldest) = oldest {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.entries.insert(scope, (policy, now));
+    }
+}
+
+fn guidance_cache() -> &'static Mutex<GuidanceCache> {
+    static CACHE: OnceLock<Mutex<GuidanceCache>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn guidance(
+    control_client_id: &str,
+    agent_id: &str,
+    pool_client_id: Option<&str>,
+    policy: &Policy,
+) -> Value {
+    let mut clients = vec![control_client_id];
+    if let Some(pool) = pool_client_id.filter(|pool| *pool != control_client_id) {
+        clients.push(pool);
+    }
+    json!({
+        "schema_version":1,
+        "client_id":control_client_id,
+        "agent_id":agent_id,
+        "condition":"when_no_independent_work",
+        "policy":policy,
+        "subscription_filter":{"client_ids":clients,"kinds":policy.kinds},
+        "await_target_type":"event",
+        "message":format!(
+            "After independent work is finished, subscribe to the listed events and use the public await event target in windows of at most {} ms. Resume the same wait_id while pending. Process ready events, explicitly acknowledge their subscription cursor and the await result cursor, then start the next wait. user.input_available only wakes the observer; retrieve the actual input through ui.wait. Inspect unknown outcomes using the original operation ID. Change this advice with events action=policy.",
+            policy.window_ms
+        )
+    })
+}
+
 fn notice(control_client_id: &str, agent_id: &str, pool: &Pool) -> Value {
     let standby = pool.counts.standby();
     json!({
@@ -231,6 +296,22 @@ fn notice(control_client_id: &str, agent_id: &str, pool: &Pool) -> Value {
 }
 
 fn append_notices(response: &Value, notices: &[Value], budget: usize) -> Option<Value> {
+    append_section(
+        response,
+        notices,
+        budget,
+        "worker_reminders",
+        "WORKER AVAILABILITY",
+    )
+}
+
+fn append_section(
+    response: &Value,
+    notices: &[Value],
+    budget: usize,
+    key: &str,
+    heading: &str,
+) -> Option<Value> {
     if notices.is_empty() || notices.len() > MAX_REMINDERS {
         return None;
     }
@@ -247,10 +328,10 @@ fn append_notices(response: &Value, notices: &[Value], budget: usize) -> Option<
         .entry("structuredContent")
         .or_insert_with(|| json!({}))
         .as_object_mut()?;
-    if structured.contains_key("worker_reminders") {
+    if structured.contains_key(key) {
         return None;
     }
-    structured.insert("worker_reminders".into(), json!(notices));
+    structured.insert(key.into(), json!(notices));
     let text = notices
         .iter()
         .filter_map(|notice| notice["message"].as_str())
@@ -259,7 +340,7 @@ fn append_notices(response: &Value, notices: &[Value], budget: usize) -> Option<
     root.entry("content")
         .or_insert_with(|| json!([]))
         .as_array_mut()?
-        .push(json!({"type":"text","text":format!("WORKER AVAILABILITY\n{text}")}));
+        .push(json!({"type":"text","text":format!("{heading}\n{text}")}));
     let growth = appended
         .to_string()
         .len()
@@ -268,18 +349,15 @@ fn append_notices(response: &Value, notices: &[Value], budget: usize) -> Option<
 }
 
 /// Probe only existing coordinator targets after the JS worker has been released.
-/// Native failures and unsupported projections leave the original reply intact.
+/// Failed pool probes suppress pool hints; authenticated coordinators can still
+/// receive their configured control-session input waiting guidance.
 pub(super) async fn append(
     report: &CodeRunReport,
     response: Value,
     eligible: &[EligibleUserResponse],
 ) -> Value {
     let budget = MAX_APPEND_BYTES.min(super::delivery_budget(&response));
-    if budget < 512
-        || response
-            .pointer("/structuredContent/worker_reminders")
-            .is_some()
-    {
+    if budget < 512 {
         return response;
     }
     let deadline = tokio::time::Instant::now() + Duration::from_millis(750);
@@ -316,7 +394,18 @@ pub(super) async fn append(
         if let Ok(Ok(reply)) = result
             && let Some(pool) = pool_from_reply(&reply)
         {
-            observed.push((index, pool));
+            // A linked identifier is a hint, not permission to subscribe to it.
+            // Keep a live authorized connection for the final synchronous check.
+            let connection = tokio::time::timeout_at(
+                deadline,
+                report
+                    .broker
+                    .client(&report.user, &authorization, &pool.client_id),
+            )
+            .await
+            .ok()
+            .and_then(Result::ok);
+            observed.push((index, pool, connection));
         }
     }
 
@@ -324,8 +413,8 @@ pub(super) async fn append(
     // oversized append does not consume the reminder's next delivery opportunity.
     let mut notices = Vec::new();
     let mut appended = None;
-    for (index, pool) in observed {
-        let target = &eligible[index];
+    for (index, pool, _) in &observed {
+        let target = &eligible[*index];
         if response_authorization(report, target).is_none() || !is_coordinator(report, target) {
             continue;
         }
@@ -345,15 +434,87 @@ pub(super) async fn append(
         if !cache.due(&scope, &pool.counts, now) || notices.len() == MAX_REMINDERS {
             continue;
         }
-        notices.push(notice(target.session.client_id(), &binding.agent_id, &pool));
+        notices.push(notice(target.session.client_id(), &binding.agent_id, pool));
         let Some(next) = append_notices(&response, &notices, budget) else {
             notices.pop();
             continue;
         };
-        cache.emitted(scope, pool.counts, now);
+        cache.emitted(scope, pool.counts.clone(), now);
         appended = Some(next);
     }
-    appended.unwrap_or(response)
+    let with_workers = appended.unwrap_or_else(|| response.clone());
+    let remaining = budget.saturating_sub(
+        with_workers
+            .to_string()
+            .len()
+            .saturating_sub(response.to_string().len()),
+    );
+    let mut hints = Vec::new();
+    let mut with_guidance = None;
+    for (index, target) in eligible.iter().enumerate() {
+        if hints.len() == MAX_REMINDERS
+            || report.run.time_observation_only(target.session.client_id())
+            || !is_coordinator(report, target)
+        {
+            continue;
+        }
+        let Some(authorization) = response_authorization(report, target) else {
+            continue;
+        };
+        let binding = target
+            .binding
+            .as_ref()
+            .expect("verified coordinator binding");
+        let pool = observed.iter().find_map(|(at, pool, connection)| {
+            (*at == index)
+                .then_some(connection.as_ref())
+                .flatten()
+                .filter(|session| session.is_alive() && authorization.permits(session))
+                .filter(|_| pool.counts.connected && !pool.counts.closed)
+                .map(|_| pool.client_id.as_str())
+        });
+        let Ok(policy) = coordination_policy::effective(
+            &binding.owner,
+            target.session.client_id(),
+            &binding.agent_id,
+            None,
+        ) else {
+            continue;
+        };
+        let scope = Scope {
+            connection: Arc::as_ptr(&target.session) as usize,
+            client_id: target.session.client_id().into(),
+            owner: binding.owner.clone(),
+            agent_id: binding.agent_id.clone(),
+            pool_id: pool.unwrap_or_default().into(),
+        };
+        let now = Instant::now();
+        let mut cache = guidance_cache()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !cache.due(&scope, &policy, now) {
+            continue;
+        }
+        hints.push(guidance(
+            target.session.client_id(),
+            &binding.agent_id,
+            pool,
+            &policy,
+        ));
+        let Some(next) = append_section(
+            &with_workers,
+            &hints,
+            remaining,
+            "coordination_hints",
+            "COORDINATOR WAIT POLICY",
+        ) else {
+            hints.pop();
+            continue;
+        };
+        cache.emitted(scope, policy, now);
+        with_guidance = Some(next);
+    }
+    with_guidance.unwrap_or(with_workers)
 }
 
 #[cfg(test)]
@@ -739,5 +900,163 @@ mod tests {
         for role in ["worker", "remote-worker", "ssmcp-worker", "", "main-worker"] {
             assert!(!coordinator_role(role));
         }
+    }
+
+    #[test]
+    fn idle_wait_guidance_does_not_require_standby_workers_or_claim_main_is_idle() {
+        let mut pool = pool_from_reply(&reply()).unwrap();
+        pool.counts.idle = 0;
+        pool.counts.working = 3;
+        assert!(!pool.counts.should_remind());
+        let policy = Policy::default();
+        let hint = guidance("control", "main", Some(&pool.client_id), &policy);
+        assert_eq!(hint["condition"], "when_no_independent_work");
+        assert_eq!(
+            hint["subscription_filter"]["client_ids"],
+            json!(["control", pool.client_id])
+        );
+        assert_eq!(hint["await_target_type"], "event");
+        assert!(hint.get("status").is_none());
+        assert_eq!(
+            hint["policy"]["window_ms"],
+            crate::wire::MAX_OBSERVATION_WAIT_MS
+        );
+        assert!(hint["message"].as_str().unwrap().contains("same wait_id"));
+        assert!(hint["message"].as_str().unwrap().contains("ui.wait"));
+    }
+
+    #[test]
+    fn absent_or_unavailable_pool_leaves_a_control_only_event_subscription() {
+        let policy = Policy::default();
+        let hint = guidance("control", "main", None, &policy);
+        assert_eq!(
+            hint["subscription_filter"]["client_ids"],
+            json!(["control"])
+        );
+        let same = guidance("control", "main", Some("control"), &policy);
+        assert_eq!(
+            same["subscription_filter"]["client_ids"],
+            json!(["control"])
+        );
+        assert!(hint.to_string().find("token").is_none());
+    }
+
+    #[test]
+    fn guidance_is_throttled_but_policy_edits_take_effect_immediately() {
+        let mut cache = GuidanceCache::default();
+        let key = scope("main");
+        let now = Instant::now();
+        let policy = Policy::default();
+        assert!(cache.due(&key, &policy, now));
+        cache.emitted(key.clone(), policy.clone(), now);
+        assert!(!cache.due(&key, &policy, now + Duration::from_secs(29)));
+        assert!(cache.due(&key, &policy, now + REPEAT_AFTER));
+        let mut changed = policy.clone();
+        changed.window_ms = 1000;
+        assert!(cache.due(&key, &changed, now));
+        cache.emitted(key.clone(), changed.clone(), now);
+        changed.enabled = false;
+        assert!(!cache.due(&key, &changed, now));
+        assert!(!cache.entries.contains_key(&key));
+        changed.enabled = true;
+        assert!(cache.due(&key, &changed, now));
+    }
+
+    #[test]
+    fn guidance_cache_is_bounded_and_scoped_to_the_participant_connection() {
+        let mut cache = GuidanceCache::default();
+        let now = Instant::now();
+        let policy = Policy::default();
+        for index in 0..=MAX_CACHE_ENTRIES {
+            cache.emitted(
+                scope(&index.to_string()),
+                policy.clone(),
+                now + Duration::from_millis(index as u64),
+            );
+        }
+        assert_eq!(cache.entries.len(), MAX_CACHE_ENTRIES);
+        assert!(!cache.entries.contains_key(&scope("0")));
+        let old = scope("1");
+        assert!(!cache.due(&old, &policy, now));
+        let mut reconnected = old.clone();
+        reconnected.connection = 2;
+        assert!(cache.due(&reconnected, &policy, now));
+        let mut other_owner = old;
+        other_owner.owner = "other".into();
+        assert!(cache.due(&other_owner, &policy, now));
+    }
+
+    #[test]
+    fn availability_and_wait_guidance_share_one_bounded_reply_budget() {
+        let original =
+            json!({"isError":false,"content":[],"structuredContent":{"result":{"ready":true}}});
+        let pool = pool_from_reply(&reply()).unwrap();
+        let with_workers = append_notices(
+            &original,
+            &[notice("control", "main", &pool)],
+            MAX_APPEND_BYTES,
+        )
+        .unwrap();
+        let remaining =
+            MAX_APPEND_BYTES - (with_workers.to_string().len() - original.to_string().len());
+        let hint = guidance("control", "main", Some(&pool.client_id), &Policy::default());
+        let combined = append_section(
+            &with_workers,
+            &[hint],
+            remaining,
+            "coordination_hints",
+            "COORDINATOR WAIT POLICY",
+        )
+        .unwrap();
+        assert_eq!(
+            combined["structuredContent"]["result"],
+            original["structuredContent"]["result"]
+        );
+        assert!(combined.to_string().len() - original.to_string().len() <= MAX_APPEND_BYTES);
+        assert_eq!(
+            combined["structuredContent"]["worker_reminders"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            combined["structuredContent"]["coordination_hints"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn hints_do_not_overwrite_existing_fields_or_exceed_small_delivery_budgets() {
+        let original =
+            json!({"structuredContent":{"coordination_hints":[{"message":"already included"}]}});
+        let hint = guidance("control", "main", None, &Policy::default());
+        assert!(
+            append_section(
+                &original,
+                std::slice::from_ref(&hint),
+                MAX_APPEND_BYTES,
+                "coordination_hints",
+                "COORDINATOR WAIT POLICY"
+            )
+            .is_none()
+        );
+        assert!(
+            append_section(
+                &json!({}),
+                &[hint],
+                100,
+                "coordination_hints",
+                "COORDINATOR WAIT POLICY"
+            )
+            .is_none()
+        );
+        assert_eq!(
+            original["structuredContent"]["coordination_hints"][0]["message"],
+            "already included"
+        );
     }
 }

@@ -22,7 +22,7 @@
 
 另有 `collab.bind(clientId, {agent_id, token})` 用于把本次 `code_mode` 编排绑定到已登记成员，以接收客户端输入框中的定向用户要求。它是代码模式 helper，不是直接 `collab` 工具新增的 action。[绑定与用户要求](#绑定本次编排并接收用户要求)
 
-**持续等待消息时，直接调用公开 `collab` 工具。** 直接 `receive` 最长等待 30 秒，由 Rust 服务端处理，不占用 `code_mode` 的四个 JavaScript 执行槽。JavaScript 中的 `collab.receive` 最长等待 1 秒，适合在一次编排中收取消息。
+**持续等待消息时，直接调用公开 `collab` 工具。** 直接 `receive` 最长等待 55 秒，由 Rust 服务端处理，不占用 `code_mode` 的四个 JavaScript 执行槽。JavaScript 中的 `collab.receive` 最长等待 1 秒，适合在一次编排中收取消息。
 
 ## 加入并发现成员
 
@@ -244,7 +244,7 @@ return await collab.update("CLIENT_ID_FROM_LIST", {
 | 整个会话的逻辑排队字节 | 4 MiB，广播按每个目标邮箱分别计入 |
 | 单次收件 | 64 条，且 JSON 业务结果最多 128 KiB；默认 32 条 |
 | 同一成员并发等待 | 1 个 |
-| 直接 `collab.receive` 等待 | 0–30,000 ms |
+| 直接 `collab.receive` 等待 | 0–55,000 ms |
 | JavaScript `collab.receive` 等待 | 0–1,000 ms |
 | 发送去重窗口 | 每个发送者最近 128 次成功的新发送 |
 

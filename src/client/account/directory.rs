@@ -142,27 +142,45 @@ impl Directory {
         if self.entries.is_empty() {
             return "No controllable sessions are online.\n".into();
         }
-        let mut text = String::from("  #  TYPE     NAME / HOST                       ID\n");
+        let mut text = String::from("  #  NAME / HOST\n");
+        // Keep display order identical to the saved snapshot and selection JSON.
         for (index, entry) in self.entries.iter().enumerate() {
-            let label = if entry.target.kind == Kind::Process {
-                format!("{} · {}", safe(&entry.name), safe(&entry.hostname))
-            } else {
-                format!("  └─ {}", safe(&entry.name))
-            };
-            let kind = if entry.target.kind == Kind::Process {
-                "process"
-            } else {
-                "thread"
+            let (branch, kind) = match entry.target.kind {
+                Kind::Process => ("", "process"),
+                Kind::Thread => {
+                    let has_next_sibling = self.entries.get(index + 1).is_some_and(|next| {
+                        next.target.kind == Kind::Thread
+                            && next.target.client_id == entry.target.client_id
+                    });
+                    (
+                        if has_next_sibling {
+                            "├─ "
+                        } else {
+                            "└─ "
+                        },
+                        if entry.target.thread_id.is_none() {
+                            "main"
+                        } else {
+                            "thread"
+                        },
+                    )
+                }
             };
             text.push_str(&format!(
-                "{:>3}  {:<7}  {}  {}\n",
+                "{:>3}  {branch}{} [{kind}]",
                 index + 1,
-                kind,
-                label,
-                entry.target.id()
+                safe(&entry.name),
             ));
+            let hostname = safe(&entry.hostname);
+            if entry.target.kind == Kind::Process && !hostname.is_empty() {
+                text.push_str(&format!(" · {hostname}"));
+            }
+            text.push('\n');
         }
-        text.push_str("Numbers identify this exact list for 5 minutes. Process chat input fans out to its listed main and registered threads.\n");
+        text.push_str(
+            "Numbers identify this exact list for 5 minutes. Use ssmcp list --json for full IDs.\n",
+        );
+        text.push_str("Process chat input fans out to its listed main and registered threads.\n");
         text
     }
     pub(super) fn selection_json(&self) -> Value {
@@ -330,6 +348,59 @@ mod tests {
         json!({"id":client,"name":"process","threads":[{"id":format!("client:{client}"),"client_id":client,"thread_id":null,"name":"main","online":true,"sendable":true},{"id":format!("agent:{client}:{agent}"),"client_id":client,"thread_id":agent,"name":"same label","online":true,"sendable":true}]})
     }
     #[test]
+    fn documented_tree_renders_independent_processes_and_numbered_threads() {
+        let mut workstation = process('a', 'b');
+        workstation["name"] = json!("workstation");
+        workstation["hostname"] = json!("devbox");
+        workstation["threads"][0]["name"] = json!("Main / next unbound caller");
+        workstation["threads"][1]["name"] = json!("reviewer");
+        let mut pool = process('c', 'd');
+        pool["name"] = json!("worker-pool");
+        pool["hostname"] = json!("devbox");
+        pool["threads"][0]["name"] = json!("Main / next unbound caller");
+        pool["threads"][1]["name"] = json!("worker-a");
+        let directory = Directory::parse(&json!({"clients":[workstation,pool]})).unwrap();
+        let tree = directory.table();
+        assert!(include_str!("../../../README.md").contains(&format!("~~~text\n{tree}~~~")));
+        let selection = directory.selection_json();
+        for (index, entry) in directory.entries.iter().enumerate() {
+            assert_eq!(selection["entries"][index]["number"], json!(index + 1));
+            assert_eq!(selection["entries"][index]["id"], json!(entry.target.id()));
+            assert!(!tree.contains(&entry.target.id()));
+        }
+    }
+
+    #[test]
+    fn tree_keeps_clients_without_parent_metadata_as_independent_roots() {
+        let directory = Directory::parse(&json!({"clients":[
+            {"id":"a".repeat(64),"name":"control"},
+            {"id":"c".repeat(64),"name":"control/worker-pool","threads":[]}
+        ]}))
+        .unwrap();
+        assert!(directory.table().starts_with(
+            "  #  NAME / HOST\n  1  control [process]\n  2  control/worker-pool [process]\n"
+        ));
+        assert_eq!(
+            Directory::parse(&json!({"clients":[]})).unwrap().table(),
+            "No controllable sessions are online.\n"
+        );
+    }
+
+    #[test]
+    fn tree_rejects_thread_identity_without_its_containing_process() {
+        let mut missing_parent = process('a', 'b');
+        missing_parent["threads"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("client_id");
+        assert!(Directory::parse(&json!({"clients":[missing_parent]})).is_err());
+
+        let mut wrong_parent = process('a', 'b');
+        wrong_parent["threads"][1]["client_id"] = json!("c".repeat(64));
+        assert!(Directory::parse(&json!({"clients":[wrong_parent,process('c','d')]})).is_err());
+    }
+
+    #[test]
     fn tree_numbers_bind_process_and_thread_identity_across_reorder_and_member_addition() {
         let old =
             Directory::parse(&json!({"clients":[process('a','b'),process('c','d')]})).unwrap();
@@ -342,8 +413,19 @@ mod tests {
             created_at: 1000,
             targets: old.entries.iter().map(|e| e.target.clone()).collect(),
         };
-        let fresh =
-            Directory::parse(&json!({"clients":[process('c','d'),process('a','b')]})).unwrap();
+        let mut updated = process('a', 'b');
+        let newcomer = process('a', 'e')["threads"][1].clone();
+        updated["threads"].as_array_mut().unwrap().push(newcomer);
+        let fresh = Directory::parse(&json!({"clients":[process('c','d'),updated]})).unwrap();
+        assert_eq!(fresh.entries.len(), 7);
+        assert_eq!(
+            fresh
+                .table()
+                .lines()
+                .filter(|line| line.contains("[process]"))
+                .count(),
+            2
+        );
         assert_eq!(
             snapshot
                 .select(&c, &fresh, 3, Some(Kind::Thread), 1001)
@@ -374,5 +456,8 @@ mod tests {
         let replacement = Directory::parse(&json!({"clients":[process('a','e')]})).unwrap();
         assert!(snapshot.select(&c, &replacement, 1, None, 1001).is_err());
         assert!(fresh.exact("same label", Some(Kind::Thread)).is_err());
+        assert!(fresh.exact("process", Some(Kind::Process)).is_err());
+        let without_first = Directory::parse(&json!({"clients":[process('c','d')]})).unwrap();
+        assert!(snapshot.select(&c, &without_first, 3, None, 1001).is_err());
     }
 }

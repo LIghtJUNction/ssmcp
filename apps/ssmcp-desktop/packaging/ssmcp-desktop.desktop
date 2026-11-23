@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=SSMCP Desktop
+Name[zh_CN]=SSMCP 桌面工作台
+Comment=Observe and control existing local ssmcp sessions
+Comment[zh_CN]=观察与控制已有的本地 ssmcp 会话
+Exec=ssmcp-desktop
+Icon=ssmcp-desktop
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true

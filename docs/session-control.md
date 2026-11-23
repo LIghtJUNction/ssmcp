@@ -44,15 +44,15 @@ return matches[0];
 
 ## 用 reload 重新加载客户端
 
-`await reload(clientId)` 请求目标客户端从原启动入口重新执行，适用于已经安装新版二进制后的重载。它保留启动参数、启动目录和环境，因此 `--name`、`--title`、`--allow`、SSH 配置和其他参数会继续生效；它本身不会下载、编译或安装更新。
+`await call(clientId, "ssmcp.client.reload", {})` 请求目标客户端从原启动入口重新执行，适用于已经安装新版二进制后的重载。它保留启动参数、启动目录和环境，因此 `--name`、`--title`、`--allow`、SSH 配置和其他参数会继续生效；它本身不会下载、编译或安装更新。
 
 将新版安装到该客户端启动时使用的入口路径后，在 `code_mode` 执行：
 
 ```javascript
-return await reload(clientId);
+return await call(clientId, "ssmcp.client.reload", {});
 ```
 
-原生工具调用形式为 `await call(clientId, "ssmcp.client.reload", {})`。两种形式都经过现有客户端授权检查，不接受额外参数。[JavaScript 原语](../src/code_mode.js) · [重载实现](../src/client/reload.rs)
+调用返回完整 MCP 结果，先检查 `isError`，再读取 `structuredContent`。它经过现有客户端授权检查，不接受额外参数；SDK 已删除独立 `reload` 别名。[通用调用](code-mode.md#call) · [重载实现](../src/client/reload.rs)
 
 重载先确认请求，再关闭旧客户端的资源并重新执行程序。客户端检查启动入口仍可执行；有其他进行中的工具请求时，重载返回 busy。接受请求后，它返回 `accepted: true` 和 `status: "restarting"`，等待服务端回执后再开始重启。连接拥有的后台命令、同步和端口转发会随旧连接停止，原注册表及请求状态失效，不能依靠 `reload` 保留这些运行状态。客户端创建的原生子进程也会关闭；通过私有 socket 或 loopback 地址连接的既有 Pi/OpenCode 服务仍由操作者管理，ssmcp 仅断开桥接，不终止外部服务。
 

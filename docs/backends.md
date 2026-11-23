@@ -95,7 +95,7 @@ MCP 协议本身的 `tools/list` 返回上述五个工具，没有后续页。`c
 | `agents.list/resolve/read(clientId, options)` | 查看指令来源、根到目标的优先级和原文 |
 | `collab.join/list/update/send/receive/ack/leave(clientId, options)` | 会话内成员发现与消息交换；收件等待最多 1 秒，长等待使用公开 `collab` 工具 |
 | `context.roots(clientId)` | 查看工作区与额外只读上下文根 |
-| `await reload(clientId)` | 重启已安装的客户端入口，随后用 `list` 获取新连接 ID |
+| `await call(clientId, "ssmcp.client.reload", {})` | 重启已安装的客户端入口，随后用 `list` 获取新连接 ID |
 | `outputs.read/stat(clientId, options)` | 按转储 ID 读取长输出或查看元数据 |
 | `outputs.cleanup(clientId)` | 立即执行与自动清理相同的保留策略 |
 | `print(value)`、`console.log(value)` | 记录本次代码模式的有界日志；也支持 `console.warn`、`console.error` |
@@ -208,7 +208,7 @@ return await exec.parallel(c.id, [
 
 一次最多传入 32 项命令，`concurrency` 默认为 4，范围为 `1..=8`。结果顺序与输入一致：成功启动并完成观察的项为 `{status:"fulfilled", value:...}`，启动或观察失败的项为 `{status:"rejected", reason:...}`。其中程序非零退出仍会返回 `fulfilled`，需要检查 `value.exit_code`。某一项失败不会丢弃其他项的结果；默认每项每条流返回 2048 字节，后续按游标继续读取。
 
-`concurrency` 限制本批实际运行中的命令任务数。初次等待到期后，worker 继续观察同一任务，收到 `running:false` 后才启动下一条；内部等待最长 60 秒。观察失败会保留可取得的 `job_id`，并停止该 worker 继续启动任务；最终未启动的项目带有 `not_started:true`。内部调用仍计入 128 次原生调用和外层时限，持续服务使用 `exec.start`；外层超时后通过 `exec.list/status/read` 接管已启动任务。[helper 回归测试](../scripts/test_execution_helpers.mjs) · [多终端与后台输入](terminal-control.md)
+`concurrency` 限制本批实际运行中的命令数。批次共享一个 `wait_ms` 观察窗口，默认 1000 ms、上限 55000 ms；每个任务只等待一次并立即读取一次。已完成任务释放名额，仍在运行或状态未知的任务继续占用名额，其余项目明确返回 `not_started:true`。保留实际 `running`、原 `job_id` 和流游标。观察到期不会取消或重放命令；长任务使用 `exec.start`，再用公共 `await` 或 `exec.status/read` 观察已有任务。[helper 回归测试](../scripts/test_execution_helpers.mjs) · [多终端与后台输入](terminal-control.md)
 
 ### 交互式终端
 
@@ -241,11 +241,11 @@ PTY 最近 1 MiB 输出保存在内存中。单次读取最多 32 KiB，写入�
 
 ## 5. 更新后的客户端重载
 
-更新磁盘上的 ssmcp 后，在当前工具目录确认 `ssmcp.client.reload` 可用，再通过 `code_mode` 调用 `await reload(clientId)`。helper 返回原生重载应答；`accepted:true` 表示请求已经被接收，仍须再次调用公开 `list` 验证新连接。支持此协议的客户端会等待服务器确认应答已收取，随后停止本连接拥有的后台任务与转发、关闭原生适配器连接，并从原安装入口启动更新后的程序，保留参数、cwd、环境与允许列表。[重载握手](../src/client.rs) · [重启实现](../src/client/reload.rs)
+更新磁盘上的 ssmcp 后，在当前工具目录确认 `ssmcp.client.reload` 可用，再通过 `code_mode` 调用 `await call(clientId, "ssmcp.client.reload", {})`。检查 MCP `isError` 后从 `structuredContent` 读取原生重载应答；`accepted:true` 表示请求已经被接收，仍须再次调用公开 `list` 验证新连接。支持此协议的客户端会等待服务器确认应答已收取，随后停止本连接拥有的后台任务与转发、关闭原生适配器连接，并从原安装入口启动更新后的程序，保留参数、cwd、环境与允许列表。[重载握手](../src/client.rs) · [重启实现](../src/client/reload.rs)
 
 重载时存在未结束的内部调用会返回 busy，应先等调用完成。已返回 `job_id` 的后台任务不属于在途请求，但会在重载时被终止；先完成或取消需要保留结果的任务。`reload` 不安装新版本，也不迁移进程和会话状态；它使用当前安装路径上的程序。初次从不支持该能力的旧版升级，需要在本机普通重启一次。
 
-重连会分配新的 `client_id`，可结合 `title`、`name`、`cwd` 辨认目标，避免假定标签唯一。有效的 GitHub 身份授权可发现允许同一身份的新连接；登录码授权绑定旧连接，断线后须使用新码重新授权。结果不确定时先查 `list` 与本机日志，避免直接重复重载。[访问控制](../src/broker.rs) · [重载测试](../tests/client_reload.rs)
+重连会分配新的 `client_id`，可结合 `title`、`name`、`cwd` 辨认目标，避免假定标签唯一。有效的 GitHub 身份授权可发现允许同一身份的新连接；登录码授权绑定旧连接，断线后须使用新码重新授权。结果不确定时先查 `list` 与本机日志，避免直接重复重载。[访问控制](../src/broker.rs) · [重载测试](../tests/two_tools.rs)
 
 <a id="传输与资源边界"></a>
 

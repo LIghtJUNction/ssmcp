@@ -1763,35 +1763,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn computer_lifecycle_helpers_preserve_native_results_without_control_facades() {
+    async fn native_computer_lifecycle_calls_preserve_results_without_control_facades() {
         let _guard = TESTS.lock().await;
         let host: Host = Arc::new(|request| {
             Box::pin(async move {
                 let HostRequest::Call {
-                    name, arguments, ..
+                    client_id,
+                    name,
+                    arguments,
                 } = request
                 else {
                     return Err("unexpected fixture request".into());
                 };
+                assert_eq!(client_id, "one");
                 Ok(crate::backend::result(
-                    json!({"name":name,"arguments":arguments}),
+                    json!({"client_id":client_id,"name":name,"arguments":arguments}),
                 ))
             })
         });
         let output = trusted_execute(
             r#"return {
-                version:await computer.version('one'),
-                download:await computer.download('one',{version:'v0.3.0'}),
-                install:await computer.install('one',{download_id:'download-fixture'}),
-                uninstall:await computer.uninstall('one',{installation_id:'installation-fixture'}),
-                methods:Object.keys(computer).sort(),
-                frozen:Object.isFrozen(computer),
-                retired:[typeof browser,typeof cua,typeof omarchy,typeof computer.click],
+                version:await call('one','ssmcp.computer.version',{}),
+                download:await call('one','ssmcp.computer.download',{version:'v0.3.0'}),
+                install:await call('one','ssmcp.computer.install',{download_id:'download-fixture'}),
+                uninstall:await call('one','ssmcp.computer.uninstall',{installation_id:'installation-fixture'}),
+                retired:[typeof computer,typeof browser,typeof cua,typeof omarchy,typeof native,typeof capabilities],
                 hidden:typeof __ssmcp_image
             };"#
             .into(),
             2_000,
-            json!([]),
+            json!([{"id":"one"}]),
             host,
         )
         .await
@@ -1808,19 +1809,22 @@ mod tests {
             assert_eq!(
                 output["result"][operation],
                 crate::backend::result(json!({
+                    "client_id":"one",
                     "name":format!("ssmcp.computer.{operation}"),
                     "arguments":arguments
                 }))
             );
         }
         assert_eq!(
-            output["result"]["methods"],
-            json!(["download", "install", "uninstall", "version"])
-        );
-        assert_eq!(output["result"]["frozen"], true);
-        assert_eq!(
             output["result"]["retired"],
-            json!(["undefined", "undefined", "undefined", "undefined"])
+            json!([
+                "undefined",
+                "undefined",
+                "undefined",
+                "undefined",
+                "undefined",
+                "undefined"
+            ])
         );
         assert_eq!(output["result"]["hidden"], "undefined");
     }
@@ -1834,14 +1838,19 @@ mod tests {
             const file = await fs.read('one',{path:'data.bin',offset:8});
             const mapping = await ports.list();
             const job = await jobs.wait('job',{wait_ms:100});
-            const restarted = await reload('one');
+            const restarted = (await call('one','ssmcp.client.reload',{})).structuredContent;
             const artifact = await outputs.read('one',{id:'abc',offset:42,max_bytes:128});
             const metadata = await outputs.stat('one',{id:'abc'});
             const cleaned = await outputs.cleanup('one');
-            return {transfer,resource,file,mapping,job,restarted,artifact,metadata,cleaned,alias:sync === rsync,
+            return {transfer,resource,file,mapping,job,restarted,artifact,metadata,cleaned,
+                retired:[typeof sync,typeof reload],
                 frozen:[fs,jobs,ports,resources,outputs].every(Object.isFrozen)};
         "#).await.unwrap();
         assert_eq!(output["result"]["transfer"]["name"], "sync");
+        assert_eq!(
+            output["result"]["transfer"]["arguments"],
+            json!({"source":{"client_id":"one","path":"src"},"destination":{"client_id":"two","path":"dst"}})
+        );
         assert_eq!(
             output["result"]["resource"]["arguments"]["uri"],
             "ssmcp://guide"
@@ -1850,11 +1859,15 @@ mod tests {
         assert_eq!(output["result"]["mapping"]["name"], "ports.list");
         assert_eq!(output["result"]["job"]["arguments"]["wait_ms"], 100);
         assert_eq!(output["result"]["restarted"]["id"], "one");
+        assert_eq!(output["result"]["restarted"]["name"], "ssmcp.client.reload");
         assert_eq!(output["result"]["restarted"]["arguments"], json!({}));
         assert_eq!(output["result"]["artifact"]["arguments"]["offset"], 42);
         assert_eq!(output["result"]["metadata"]["arguments"]["id"], "abc");
         assert_eq!(output["result"]["cleaned"]["arguments"], json!({}));
-        assert_eq!(output["result"]["alias"], true);
+        assert_eq!(
+            output["result"]["retired"],
+            json!(["undefined", "undefined"])
+        );
         assert_eq!(output["result"]["frozen"], true);
         assert!(run_code("return await rsync([]);").await.is_err());
     }
@@ -1895,20 +1908,53 @@ mod tests {
     #[tokio::test]
     async fn typed_wait_helper_preserves_targets_and_uses_server_wait_identifiers() {
         let _guard = TESTS.lock().await;
-        let output = run_code(r#"
-            const observed = await waitFor('room',{client_id:'cannot-override',targets:[{type:'exec',job_id:'job-1'}],mode:'all',timeout_ms:20000});
-            const resumed = await waitFor('room',{wait_id:'await_server_id',timeout_ms:1000});
-            const cancelled = await waitFor.cancel('room','await_server_id');
-            return {observed,resumed,cancelled,frozen:Object.isFrozen(waitFor)};
-        "#).await.unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed_calls = calls.clone();
+        let host: Host = Arc::new(move |request| {
+            let calls = observed_calls.clone();
+            Box::pin(async move {
+                let HostRequest::Builtin { name, arguments } = request else {
+                    return Err("unexpected fixture request".into());
+                };
+                assert_eq!(name, "await");
+                assert_eq!(arguments["client_id"], "room");
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({"name":name,"arguments":arguments,"wait_id":"await_server_id"}))
+            })
+        });
+        let output = trusted_execute(
+            r#"
+                const rejected = [];
+                for (const args of [
+                    {client_id:'different-client'},
+                    {client_id:'different-client',op:'cancel',wait_id:'await_server_id'},
+                    {timeout_ms:20000},
+                    {timeout_ms:1000,window_ms:20000},
+                ]) {
+                    try { await waitFor('room',args); }
+                    catch (error) { rejected.push(error.message); }
+                }
+                const observed = await waitFor('room',{client_id:'room',targets:[{type:'exec',job_id:'job-1'}],mode:'all'});
+                const resumed = await waitFor('room',{wait_id:observed.wait_id,timeout_ms:1000});
+                const cancelled = await waitFor.cancel('room',resumed.wait_id);
+                return {observed,resumed,cancelled,rejected,frozen:Object.isFrozen(waitFor)};
+            "#
+            .into(),
+            2_000,
+            json!([{"id":"room"}]),
+            host,
+        )
+        .await
+        .unwrap();
         let result = &output["result"];
         assert_eq!(result["observed"]["name"], "await");
-        assert_eq!(result["observed"]["arguments"]["client_id"], "room");
         assert_eq!(
-            result["observed"]["arguments"]["targets"],
-            json!([{"type":"exec","job_id":"job-1"}])
+            result["observed"]["arguments"],
+            json!({
+                "client_id":"room","targets":[{"type":"exec","job_id":"job-1"}],
+                "mode":"all","timeout_ms":1000
+            })
         );
-        assert_eq!(result["observed"]["arguments"]["mode"], "all");
         assert_eq!(
             result["resumed"]["arguments"],
             json!({"client_id":"room","wait_id":"await_server_id","timeout_ms":1000})
@@ -1917,6 +1963,20 @@ mod tests {
             result["cancelled"]["arguments"],
             json!({"client_id":"room","op":"cancel","wait_id":"await_server_id"})
         );
+        let rejected = result["rejected"].as_array().unwrap();
+        assert_eq!(rejected.len(), 4);
+        for error in &rejected[..2] {
+            assert!(
+                error
+                    .as_str()
+                    .unwrap()
+                    .contains("must match the selected client")
+            );
+        }
+        for error in &rejected[2..] {
+            assert!(error.as_str().unwrap().contains("in code_mode"));
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
         assert_eq!(result["frozen"], true);
     }
 
@@ -1978,24 +2038,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_helpers_use_selected_client_and_preserve_generation_guard() {
+    async fn native_session_calls_use_selected_client_and_preserve_generation_guard() {
         let _guard = TESTS.lock().await;
         let output = run_code(r#"
-            const listed = await sessions.list('manager');
-            const created = await sessions.create('manager',{name:'worker',cwd:'project'});
-            const restarted = await sessions.restart('manager',{name:'worker',expected_generation:'old-generation'});
-            const closed = await sessions.close('manager',{name:'worker'});
-            return {listed,created,restarted,closed,frozen:Object.isFrozen(sessions)};
+            return {
+                list:await call('manager','ssmcp.session.list',{}),
+                create:await call('manager','ssmcp.session.create',{name:'worker',cwd:'project'}),
+                restart:await call('manager','ssmcp.session.restart',{name:'worker',expected_generation:'old-generation'}),
+                close:await call('manager','ssmcp.session.close',{name:'worker'}),
+                retired:typeof sessions
+            };
         "#).await.unwrap();
-        assert_eq!(output["result"]["listed"]["name"], "ssmcp.session.list");
-        assert_eq!(output["result"]["listed"]["id"], "manager");
-        assert_eq!(output["result"]["created"]["arguments"]["cwd"], "project");
-        assert_eq!(
-            output["result"]["restarted"]["arguments"]["expected_generation"],
-            "old-generation"
-        );
-        assert_eq!(output["result"]["closed"]["name"], "ssmcp.session.close");
-        assert_eq!(output["result"]["frozen"], true);
+        for (operation, arguments) in [
+            ("list", json!({})),
+            ("create", json!({"name":"worker","cwd":"project"})),
+            (
+                "restart",
+                json!({"name":"worker","expected_generation":"old-generation"}),
+            ),
+            ("close", json!({"name":"worker"})),
+        ] {
+            assert_eq!(
+                output["result"][operation],
+                json!({
+                    "content":[],"isError":false,
+                    "structuredContent":{
+                        "id":"manager","name":format!("ssmcp.session.{operation}"),
+                        "arguments":arguments
+                    },
+                    "_meta":{"native":true}
+                })
+            );
+        }
+        assert_eq!(output["result"]["retired"], "undefined");
     }
 
     #[tokio::test]
@@ -2151,6 +2226,7 @@ mod tests {
         let _guard = TESTS.lock().await;
         let active = Arc::new(AtomicUsize::new(0));
         let maximum = Arc::new(AtomicUsize::new(0));
+        let waits = Arc::new(AtomicUsize::new(0));
         let jobs = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
             String,
             bool,
@@ -2158,18 +2234,23 @@ mod tests {
         let host: Host = {
             let active = active.clone();
             let maximum = maximum.clone();
+            let waits = waits.clone();
             let jobs = jobs.clone();
             Arc::new(move |request| {
                 let active = active.clone();
                 let maximum = maximum.clone();
+                let waits = waits.clone();
                 let jobs = jobs.clone();
                 Box::pin(async move {
                     let HostRequest::Call {
-                        name, arguments, ..
+                        client_id,
+                        name,
+                        arguments,
                     } = request
                     else {
                         return Err("unexpected fixture request".into());
                     };
+                    assert_eq!(client_id, "one");
                     let id = arguments["job_id"].as_str().unwrap_or("").to_owned();
                     let snapshot = || {
                         let running = *jobs.lock().unwrap().get(&id).expect("observed job");
@@ -2183,38 +2264,30 @@ mod tests {
                     let result = match name.as_str() {
                         "ssmcp.exec.start" => {
                             let label = arguments["command"][0].as_str().unwrap();
-                            if label == "missing" {
-                                return Err("fixture command not found".into());
-                            }
+                            assert_ne!(label, "must-not-start");
                             let count = active.fetch_add(1, Ordering::SeqCst) + 1;
                             maximum.fetch_max(count, Ordering::SeqCst);
-                            assert!(count <= 2, "poll deadlines cannot release live job slots");
+                            assert!(
+                                count <= 2,
+                                "observation deadlines cannot release live job slots"
+                            );
                             assert!(jobs.lock().unwrap().insert(label.into(), true).is_none());
                             json!({"job_id":label,"running":true})
                         }
                         "ssmcp.exec.wait" => {
-                            if arguments["wait_ms"] == 60000 {
-                                tokio::time::sleep(Duration::from_millis(if id == "first" {
-                                    40
-                                } else {
-                                    1
-                                }))
-                                .await;
-                                assert_eq!(
-                                    jobs.lock().unwrap().insert(id.clone(), false),
-                                    Some(true)
-                                );
-                                active.fetch_sub(1, Ordering::SeqCst);
-                            } else {
-                                assert_eq!(arguments["wait_ms"], 1);
-                            }
+                            assert_eq!(id, "exit7");
+                            let wait_ms = arguments["wait_ms"].as_u64().unwrap();
+                            assert!((1..=1000).contains(&wait_ms));
+                            waits.fetch_add(1, Ordering::SeqCst);
+                            assert_eq!(jobs.lock().unwrap().insert(id.clone(), false), Some(true));
+                            active.fetch_sub(1, Ordering::SeqCst);
                             let mut waited = snapshot();
-                            waited["wait_timed_out"] = waited["running"].clone();
+                            waited["wait_timed_out"] = false.into();
                             waited
                         }
                         "ssmcp.exec.read" => {
                             assert_eq!(arguments["max_bytes"], 2048);
-                            // Reading a live job must not pretend that it has exited.
+                            // A bounded observation preserves the job's actual running state.
                             json!({"job_id":id,"stdout":id,"stderr":"","snapshot":snapshot()})
                         }
                         _ => return Err(format!("unexpected fixture tool {name}")),
@@ -2226,8 +2299,8 @@ mod tests {
         let output = trusted_execute(
             r#"
                 const results = await exec.parallel('one', [
-                    {command:['first'],wait_ms:0}, {command:['live'],wait_ms:1},
-                    {command:['exit7'],wait_ms:0}, {command:['missing'],wait_ms:0}
+                    {command:['first'],wait_ms:0}, {command:['exit7'],wait_ms:1000},
+                    {command:['live'],wait_ms:0}, {command:['must-not-start'],wait_ms:0}
                 ], {concurrency:2});
                 return {results, frozen:Object.isFrozen(exec)};
             "#
@@ -2238,24 +2311,126 @@ mod tests {
         )
         .await
         .unwrap();
-        let results = &output["result"]["results"];
-        assert_eq!(results[0]["value"]["stdout"], "first");
-        assert_eq!(results[1]["value"]["running"], false);
+        let results = output["result"]["results"].as_array().unwrap();
+        assert_eq!(results.len(), 4);
+        for (index, id, running) in [(0, "first", true), (1, "exit7", false), (2, "live", true)] {
+            assert_eq!(results[index]["status"], "fulfilled");
+            assert_eq!(results[index]["value"]["job_id"], id);
+            assert_eq!(results[index]["value"]["stdout"], id);
+            assert_eq!(results[index]["value"]["running"], running);
+            assert_eq!(
+                results[index]["value"]["snapshot"]["stdout"]["next_cursor"],
+                id.len()
+            );
+        }
+        assert_eq!(results[0]["value"]["exit_code"], Value::Null);
+        assert_eq!(results[1]["value"]["exit_code"], 7);
         assert_eq!(results[1]["value"]["wait_timed_out"], false);
-        assert_eq!(results[1]["value"]["job_id"], "live");
-        assert_eq!(results[1]["value"]["snapshot"]["stdout"]["next_cursor"], 4);
-        assert_eq!(results[2]["status"], "fulfilled");
-        assert_eq!(results[2]["value"]["exit_code"], 7);
+        assert_eq!(results[2]["value"]["exit_code"], Value::Null);
         assert_eq!(results[3]["status"], "rejected");
-        assert!(
-            results[3]["reason"]
-                .as_str()
-                .unwrap()
-                .contains("command not found")
-        );
+        assert_eq!(results[3]["not_started"], true);
+        assert!(results[3].get("job_id").is_none());
+        assert!(results[3].get("value").is_none());
         assert_eq!(output["result"]["frozen"], true);
         assert_eq!(maximum.load(Ordering::SeqCst), 2);
-        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert_eq!(active.load(Ordering::SeqCst), 2);
+        assert_eq!(waits.load(Ordering::SeqCst), 1);
+        assert_eq!(jobs.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn execution_parallel_keeps_unknown_jobs_and_rejected_starts_in_their_slots() {
+        let _guard = TESTS.lock().await;
+        for (failure, expected) in [
+            ("unknown", "completion is unknown"),
+            ("read_error", "fixture observation failed"),
+            ("native_error", "fixture native error"),
+            ("start_error", "fixture command not found"),
+        ] {
+            let starts = Arc::new(AtomicUsize::new(0));
+            let reads = Arc::new(AtomicUsize::new(0));
+            let host: Host = {
+                let starts = starts.clone();
+                let reads = reads.clone();
+                Arc::new(move |request| {
+                    let starts = starts.clone();
+                    let reads = reads.clone();
+                    Box::pin(async move {
+                        let HostRequest::Call {
+                            client_id,
+                            name,
+                            arguments,
+                        } = request
+                        else {
+                            return Err("unexpected fixture request".into());
+                        };
+                        assert_eq!(client_id, "one");
+                        match name.as_str() {
+                            "ssmcp.exec.start" => {
+                                assert_eq!(arguments["command"], json!(["uncertain"]));
+                                starts.fetch_add(1, Ordering::SeqCst);
+                                if failure == "start_error" {
+                                    return Err("fixture command not found".into());
+                                }
+                                Ok(crate::backend::result(
+                                    json!({"job_id":"uncertain","running":true}),
+                                ))
+                            }
+                            "ssmcp.exec.read" => {
+                                assert_eq!(arguments["job_id"], "uncertain");
+                                reads.fetch_add(1, Ordering::SeqCst);
+                                if failure == "read_error" {
+                                    return Err("fixture observation failed".into());
+                                }
+                                if failure == "native_error" {
+                                    return Ok(json!({
+                                        "isError":true,
+                                        "content":[{"type":"text","text":"fixture native error"}]
+                                    }));
+                                }
+                                Ok(crate::backend::result(json!({
+                                    "snapshot":{"job_id":"uncertain","running":null}
+                                })))
+                            }
+                            _ => Err(format!("unexpected fixture tool {name}")),
+                        }
+                    })
+                })
+            };
+            let output = trusted_execute(
+                r#"return await exec.parallel('one', [
+                    {command:['invalid'],max_bytes:0},
+                    {command:['uncertain'],wait_ms:0},
+                    {command:['must-not-start'],wait_ms:0}
+                ], {concurrency:1});"#
+                    .into(),
+                2_000,
+                json!([{"id":"one"}]),
+                host,
+            )
+            .await
+            .unwrap();
+            let results = output["result"].as_array().unwrap();
+            assert_eq!(results.len(), 3);
+            for index in [0, 2] {
+                assert_eq!(results[index]["status"], "rejected");
+                assert_eq!(results[index]["not_started"], true);
+                assert!(results[index].get("job_id").is_none());
+                assert!(results[index].get("value").is_none());
+            }
+            assert_eq!(results[1]["status"], "rejected");
+            assert!(results[1]["reason"].as_str().unwrap().contains(expected));
+            assert!(results[1].get("not_started").is_none());
+            assert!(results[1].get("value").is_none());
+            if failure == "start_error" {
+                assert!(results[1].get("job_id").is_none());
+                assert_eq!(reads.load(Ordering::SeqCst), 0);
+            } else {
+                assert_eq!(results[1]["job_id"], "uncertain");
+                assert_eq!(reads.load(Ordering::SeqCst), 1);
+            }
+            assert_eq!(starts.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[tokio::test]

@@ -767,7 +767,9 @@ class Unified(SessionFeatures):
     def reload_client(self):
         job, identities = self.tree("reload")
         old_id, token, pid = self.client_id, self.secret, self.client.pid
-        accepted = self.code("return await reload(%s);" % json.dumps(old_id))
+        reply = self.code('return await call(%s, "ssmcp.client.reload", {});' % json.dumps(old_id))
+        self.check(reply.get("isError") is not True, "native reload returns no MCP error")
+        accepted = reply["structuredContent"]
         self.check(accepted["accepted"] and accepted["client_id"] == old_id,
                    "reload acknowledgement arrives over the account WebSocket before the connection is replaced")
         replacement = self.reader.read(timeout=30)

@@ -442,6 +442,112 @@ impl Manager {
         })
     }
 
+    fn frontend_current(&self, client_id: &str) -> Result<(), String> {
+        let current = self
+            .disabled_chat_client_id
+            .as_deref()
+            .or(self.outbox.room_id.as_deref());
+        if current != Some(client_id) {
+            return Err(
+                "the frontend belongs to a different connection; reconnect before sending".into(),
+            );
+        }
+        Ok(())
+    }
+
+    fn frontend_metadata(&self, client_id: &str) -> Result<Value, String> {
+        self.frontend_current(client_id)?;
+        Ok(json!({"client_id":client_id,"connected":self.connected,
+            "chat_enabled":self.chat_enabled(),"supported":self.supported,
+            "can_send":self.queue_connected() && self.supported && self.ready && !self.frozen && !self.reload_requested,
+            "reloading":self.frozen || self.reload_requested}))
+    }
+
+    fn frontend_threads(
+        &self,
+        client_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value, String> {
+        let mut value = self.frontend_metadata(client_id)?;
+        if !(1..=32).contains(&limit) || offset > self.agents.len() {
+            return Err("invalid frontend thread page; limit must be 1..32".into());
+        }
+        let end = (offset + limit).min(self.agents.len());
+        value["agents"] =
+            serde_json::to_value(&self.agents[offset..end]).expect("agent projection serializes");
+        value["next_offset"] = json!(end);
+        value["has_more"] = json!(end < self.agents.len());
+        Ok(value)
+    }
+
+    fn frontend_queue(
+        &self,
+        client_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value, String> {
+        self.frontend_current(client_id)?;
+        if !(1..=32).contains(&limit) {
+            return Err("frontend queue page limit must be 1..32".into());
+        }
+        let records = self
+            .outbox
+            .records
+            .iter()
+            .filter(|record| record.room_id.as_deref() == Some(client_id))
+            .collect::<Vec<_>>();
+        if offset > records.len() {
+            return Err("frontend queue offset exceeds the current queue".into());
+        }
+        let mut items = Vec::new();
+        let mut bytes = 2048;
+        let mut next = offset;
+        for record in records.iter().skip(offset).take(limit) {
+            let item = json!({"id":record.message.id,"text":record.message.text,"target":record.message.target,
+                "status":record.status(self.queue_connected()),
+                "created_at_ms":record.message.created_at_ms.to_string(),
+                "updated_at_ms":record.message.updated_at_ms.to_string(),
+                "uncertain":record.uncertain,"retarget_required":record.retarget_required,
+                "error":record.error});
+            let size = item.to_string().len();
+            if bytes + size > 64 * 1024 {
+                break;
+            }
+            bytes += size;
+            items.push(item);
+            next += 1;
+        }
+        Ok(
+            json!({"client_id":client_id,"items":items,"next_offset":next,
+            "has_more":next < records.len(),"retention":"existing_local_outbox"}),
+        )
+    }
+
+    fn frontend_submit(
+        &mut self,
+        client_id: &str,
+        text: &str,
+        target: &str,
+    ) -> Result<Value, String> {
+        self.frontend_current(client_id)?;
+        if !self.queue_connected() || !self.supported || !self.ready || self.reload_requested {
+            return Err("chat connection is not ready; no input was admitted".into());
+        }
+        if target != "next" && !self.agents.iter().any(|agent| agent.agent_id == target) {
+            return Err(
+                "choose next or one exact current agent; GUI input cannot broadcast".into(),
+            );
+        }
+        // This is the same queued preparation/publish path as the terminal.
+        // Its target is fixed under the same manager lock; GUI drafts stay local.
+        let message_id = self.submit(text, Some(target))?;
+        Ok(
+            json!({"message_id":message_id,"status":self.request_status(&message_id),
+            "target":target,"client_id":client_id,"confirmation":"local_queue_admission"}),
+        )
+    }
+
     fn request_status(&self, id: &str) -> Option<&'static str> {
         self.outbox
             .records
@@ -1532,6 +1638,32 @@ fn bounded_error(error: &str) -> String {
 pub(super) fn snapshot() -> Value {
     with(|manager| manager.snapshot())
 }
+
+pub(crate) fn frontend_metadata(client_id: &str) -> Result<Value, String> {
+    with(|manager| manager.frontend_metadata(client_id))
+}
+
+pub(crate) fn frontend_threads(
+    client_id: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, String> {
+    with(|manager| manager.frontend_threads(client_id, offset, limit))
+}
+
+pub(crate) fn frontend_queue(
+    client_id: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, String> {
+    with(|manager| manager.frontend_queue(client_id, offset, limit))
+}
+
+pub(crate) fn frontend_submit(client_id: &str, text: &str, target: &str) -> Result<Value, String> {
+    let value = with(|manager| manager.frontend_submit(client_id, text, target))?;
+    super::interface::questions::user_input(Some(target));
+    Ok(value)
+}
 /// Poll one editor receipt without serializing the entire outbox and drafts.
 pub(super) fn request_status(id: &str) -> Option<&'static str> {
     with(|manager| manager.request_status(id))
@@ -1748,6 +1880,69 @@ pub(super) fn request_reload() -> Result<(), String> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn frontend_input_is_bound_to_current_room_and_keeps_the_terminal_draft() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect_with_chat("room_one", crate::wire::VERSION, true);
+        ready(&mut manager, &mut receiver, "room_one");
+        manager.outbox.draft.text = "unfinished terminal draft".into();
+        assert!(
+            manager
+                .frontend_submit("other_room", "must not send", "next")
+                .is_err()
+        );
+        assert!(manager.outbox.records.is_empty());
+        let receipt = manager
+            .frontend_submit("room_one", "human request", "agent_one")
+            .unwrap();
+        assert_eq!(receipt["confirmation"], "local_queue_admission");
+        assert_eq!(manager.outbox.draft.text, "unfinished terminal draft");
+        assert_eq!(manager.outbox.records.len(), 1);
+        assert_eq!(manager.outbox.records[0].message.target, "agent_one");
+        assert!(
+            manager
+                .frontend_submit("room_one", "no fabricated agent", "agent_missing")
+                .is_err()
+        );
+        assert!(
+            manager
+                .frontend_submit("room_one", "no implicit broadcast", "global")
+                .is_err()
+        );
+        assert_eq!(manager.outbox.records.len(), 1);
+        manager.connected = false;
+        assert!(
+            manager
+                .frontend_submit("room_one", "offline input", "next")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn frontend_pages_omit_other_rooms_drafts_and_keep_large_counters_exact() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect_with_chat("room_one", crate::wire::VERSION, true);
+        ready(&mut manager, &mut receiver, "room_one");
+        manager.outbox.draft.text = "private unfinished draft".into();
+        manager
+            .frontend_submit("room_one", "visible request", "next")
+            .unwrap();
+        manager.outbox.records[0].message.created_at_ms = u64::MAX;
+        let threads = manager.frontend_threads("room_one", 0, 16).unwrap();
+        assert_eq!(threads["agents"][0]["agent_id"], "agent_one");
+        assert_eq!(threads["can_send"], true);
+        let queue = manager.frontend_queue("room_one", 0, 16).unwrap();
+        assert_eq!(queue["items"][0]["created_at_ms"], u64::MAX.to_string());
+        assert!(!queue.to_string().contains("private unfinished draft"));
+        manager.outbox.records[0].room_id = Some("different_room".into());
+        assert_eq!(
+            manager.frontend_queue("room_one", 0, 16).unwrap()["items"],
+            json!([])
+        );
+        assert!(manager.frontend_queue("room_one", 0, 33).is_err());
+        assert!(manager.frontend_threads("different_room", 0, 16).is_err());
+    }
 
     fn snapshot_for(room: &str, revision: u64, messages: Vec<SteeringMessage>) -> SteeringSnapshot {
         SteeringSnapshot {

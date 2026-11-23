@@ -26,7 +26,7 @@ const MAX_TIMERS: usize = 32;
 const MAX_RECORDS: usize = 128;
 const MAX_OBSERVATIONS: usize = 128;
 const MAX_DURATION_MS: u64 = 86_400_000;
-const MAX_WAIT_MS: u64 = 25_000;
+const MAX_WAIT_MS: u64 = crate::wire::MAX_OBSERVATION_WAIT_MS;
 const RETENTION: Duration = Duration::from_secs(300);
 
 fn millis(duration: Duration) -> u64 {
@@ -297,8 +297,8 @@ impl Clock {
             && let Some(op) = object.remove("op")
         {
             match op.as_str() {
-                // Keep the existing tool name: old relays classify now/wait
-                // by exact name when negotiating time_observation_v1.
+                // Keep the stable native tool names; the negotiated capability
+                // selects the current observation and delivery contract.
                 Some("interval") => return civil::interval(arguments, civil::now_ms()?),
                 Some("now") => {}
                 _ => return Err("time.now op must be now or interval".into()),
@@ -667,7 +667,9 @@ fn receipt(entry: Entry, timed_out: bool) -> Value {
 
 fn validate_wait(wait_ms: u64) -> Result<(), String> {
     if wait_ms > MAX_WAIT_MS {
-        Err("wait_ms must be 0..=25000; reuse timer_id to continue observing".into())
+        Err(format!(
+            "wait_ms must be 0..={MAX_WAIT_MS}; reuse timer_id to continue observing"
+        ))
     } else {
         Ok(())
     }
@@ -746,7 +748,7 @@ fn observation(name: &str, arguments: &Value) -> Option<ObservationSpec> {
         return None;
     }
     let (default, cancellable) = match name {
-        "ssmcp.exec.wait" => (Some(5000), true),
+        "ssmcp.exec.wait" => (Some(MAX_WAIT_MS), true),
         "ssmcp.exec.read" | "terminal.read" | "ssmcp.output.read" | "ssmcp.audit.events" => {
             (Some(0), true)
         }
@@ -761,6 +763,7 @@ fn observation(name: &str, arguments: &Value) -> Option<ObservationSpec> {
     // Invalid or excessive input is validated by the actual operation; the
     // presentation hook neither invents a deadline nor changes its outcome.
     let timeout_ms = match timeout {
+        Some(Value::Null) if name == "ssmcp.exec.wait" => default,
         Some(value) => value.as_u64().filter(|value| *value <= MAX_DURATION_MS),
         None => default,
     };
@@ -830,13 +833,13 @@ pub(crate) fn cancel_local(id: &str) -> Result<(), String> {
 
 pub(super) fn tools() -> Vec<Value> {
     vec![
-        json!({"name":"ssmcp.time.now","description":"Read time without consuming input or acknowledging answers. Account connections require a parent offer and server Ready echo of time_observation_v1; same-process private local hosts enable it directly. Default op=now returns UTC RFC3339, Unix milliseconds, and a separate connection-local monotonic counter. op=interval takes start and optional end; each point is exactly {unix_ms: integer} or {rfc3339: string}. End defaults to a single current wall-clock sample. Returns signed end-minus-start interval_ms, absolute_ms and days/hours/minutes/seconds/milliseconds. RFC3339 requires Z or a numeric offset and exact millisecond precision; leap seconds and nonzero sub-millisecond digits are rejected. Each duration day is exactly 86400000 ms, not a calendar month or local daylight-saving day. UTC years 0000..9999 are supported. Wall-clock intervals do not set or advance monotonic timers.",
+        json!({"name":"ssmcp.time.now","description":"Read time without consuming input or acknowledging answers. Account connections require a parent offer and server Ready echo of time_observation_v2; same-process private local hosts enable it directly. Default op=now returns UTC RFC3339, Unix milliseconds, and a separate connection-local monotonic counter. op=interval takes start and optional end; each point is exactly {unix_ms: integer} or {rfc3339: string}. End defaults to a single current wall-clock sample. Returns signed end-minus-start interval_ms, absolute_ms and days/hours/minutes/seconds/milliseconds. RFC3339 requires Z or a numeric offset and exact millisecond precision; leap seconds and nonzero sub-millisecond digits are rejected. Each duration day is exactly 86400000 ms, not a calendar month or local daylight-saving day. UTC years 0000..9999 are supported. Wall-clock intervals do not set or advance monotonic timers.",
             "inputSchema":{"type":"object","additionalProperties":false,"properties":{
                 "op":{"enum":["now","interval"],"default":"now"},"start":civil::point_schema(),"end":civil::point_schema()},
                 "oneOf":[{"properties":{"op":{"const":"now"}},"not":{"anyOf":[{"required":["start"]},{"required":["end"]}]}},
                     {"required":["op","start"],"properties":{"op":{"const":"interval"}}}]},
             "annotations":{"readOnlyHint":true,"destructiveHint":false}}),
-        json!({"name":"ssmcp.time.wait","description":"Create, list, observe or cancel connection-local timers without consuming user messages, acknowledging answers or invoking a model. Account connections require time_observation_v1 at both endpoints; unnegotiated calls remain unavailable. start returns timer_id immediately unless wait_ms is supplied. Use duration_ms (0..86400000) OR deadline_unix_ms: absolute deadlines are converted once to a monotonic deadline, at most 24 hours ahead; a past deadline elapses immediately. Omit both for an elapsed timer with a 24-hour lifetime. list returns only this exact caller's active/recent timers. status(timer_id, wait_ms=0..25000) observes the existing timer; a wait timeout leaves it running. cancel stops only that timer, never an exec job. IDs are scoped to the original connection, account, participant and conversation. Disconnect/reload clears them. At most 32 running timers and 128 total retained records; finished records remain for up to five minutes. Local /wait shows current time, timers and running work. Timer expiry does not mean an exec job has completed.",
+        json!({"name":"ssmcp.time.wait","description":"Create, list, observe or cancel connection-local timers without consuming user messages, acknowledging answers or invoking a model. Account connections require time_observation_v2 at both endpoints; unnegotiated calls remain unavailable. start returns timer_id immediately unless wait_ms is supplied. Use duration_ms (0..86400000) OR deadline_unix_ms: absolute deadlines are converted once to a monotonic deadline, at most 24 hours ahead; a past deadline elapses immediately. Omit both for an elapsed timer with a 24-hour lifetime. list returns only this exact caller's active/recent timers. status(timer_id, wait_ms=0..55000) observes the existing timer; a wait timeout leaves it running. cancel stops only that timer, never an exec job. IDs are scoped to the original connection, account, participant and conversation. Disconnect/reload clears them. At most 32 running timers and 128 total retained records; finished records remain for up to five minutes. Local /wait shows current time, timers and running work. Timer expiry does not mean an exec job has completed.",
             "inputSchema":{"type":"object","additionalProperties":false,"properties":{
                 "op":{"enum":["start","status","cancel","list"],"default":"start"},"duration_ms":{"type":"integer","minimum":0,"maximum":MAX_DURATION_MS},
                 "deadline_unix_ms":{"type":"integer","minimum":civil::MIN_UNIX_MS,"maximum":civil::MAX_UNIX_MS},
@@ -861,7 +864,7 @@ impl NativePlugin for Clock {
     fn call(self: Arc<Self>, call: Call) -> PluginFuture {
         Box::pin(async move {
             if !self.time_tools_enabled() {
-                return Err("time_observation_not_negotiated: remote time tools require an explicit time_observation_v1 server acknowledgement".into());
+                return Err("time_observation_not_negotiated: remote time tools require an explicit time_observation_v2 server acknowledgement".into());
             }
             let value = match call.native_name.as_str() {
                 "ssmcp.time.now" => self.now(call.arguments),

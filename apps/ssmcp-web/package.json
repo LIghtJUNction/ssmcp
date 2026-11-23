@@ -1,0 +1,12 @@
+{
+  "name": "ssmcp-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node dev-server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "node test/browser-smoke.mjs"
+  }
+}

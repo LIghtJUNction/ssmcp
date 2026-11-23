@@ -1,6 +1,8 @@
 use super::{
-    Config, ManagerTargetView, now_ms,
-    queue::{Actor, Availability, Queue, Retirement, TaskStatus, WaitRequest, WaitSpec},
+    Config, MAX_OBSERVATION_WAIT_MS, ManagerTargetView, now_ms,
+    queue::{
+        Actor, Availability, EventRequest, Queue, Retirement, TaskStatus, WaitRequest, WaitSpec,
+    },
     remote::{self, Claimed, CommandLog, Completion, Remote, Report},
 };
 #[cfg(target_os = "linux")]
@@ -185,8 +187,8 @@ impl Pool {
     }
 
     fn resize_result(&self) -> Value {
-        let worker = self.queue.snapshot();
-        json!({"resize_pending":worker.total != worker.desired_total,"worker":worker})
+        let worker = self.queue.compact_snapshot();
+        json!({"resize_pending":worker["total"] != worker["desired_total"],"worker":worker})
     }
 
     pub(crate) fn command_started(
@@ -309,16 +311,23 @@ impl Pool {
                 true,
             ),
             tool(
+                "events",
+                "Read or wait up to 55 seconds for bounded worker lifecycle metadata recorded at state commit. Reading never consumes or acknowledges events, binds a manager, registers a station, or replays work. Omit after to read retained entries, then reuse next_cursor. A retention overflow is explicit in gap; stale generations and future cursors are rejected. Only a verified participant from this pool's account and connection can read. Bodies, commands, results and credentials are excluded; worker.completed records a confirmed task outcome, while worker.unknown remains indeterminate.",
+                json!({"after":{"type":"object","properties":{"generation":{"type":"string","minLength":1,"maxLength":128},"seq":{"type":"integer","minimum":0}},"required":["generation","seq"],"additionalProperties":false},"limit":{"type":"integer","minimum":1,"maximum":128,"default":32},"wait_ms":{"type":"integer","minimum":0,"maximum":MAX_OBSERVATION_WAIT_MS,"default":0}}),
+                json!([]),
+                true,
+            ),
+            tool(
                 "wait_available",
-                "The verified manager observes capacity or waits up to 5 seconds for it to change. Omit after for an immediate snapshot; otherwise reuse its generation and revision. Remote idle slots require real worker registration; offline capacity is not a standby agent. Counts include retiring stations until release, and desired_total shows pending resize. accepting describes new valid task admission; zero capacity, all-retiring stations, a full queue, stop or closure disable it. Revisions ignore command logs and progress. Idle slot IDs and epochs are observations, never reservations. Reconnect requires a new cursor. This wait does not consume human input or start a model.",
-                json!({"after":{"type":"object","properties":{"generation":{"type":"string"},"revision":{"type":"integer","minimum":0}},"required":["generation","revision"],"additionalProperties":false},"wait_ms":{"type":"integer","minimum":0,"maximum":5000,"default":5000}}),
+                "The verified manager observes capacity or waits up to 55 seconds for it to change. Omit after for an immediate snapshot; otherwise reuse its generation and revision. Remote idle slots require real worker registration; offline capacity is not a standby agent. Counts include retiring stations until release, and desired_total shows pending resize. accepting describes new valid task admission; zero capacity, all-retiring stations, a full queue, stop or closure disable it. Revisions ignore command logs and progress. Idle slot IDs and epochs are observations, never reservations. Reconnect requires a new cursor. This wait does not consume human input or start a model.",
+                json!({"after":{"type":"object","properties":{"generation":{"type":"string"},"revision":{"type":"integer","minimum":0}},"required":["generation","revision"],"additionalProperties":false},"wait_ms":{"type":"integer","minimum":0,"maximum":MAX_OBSERVATION_WAIT_MS,"default":5000}}),
                 json!([]),
                 true,
             ),
             tool(
                 "wait_for",
-                "The verified manager waits up to 5 seconds for any or all explicit conditions in this pool generation. task_finished means a confirmed completed, failed or cancelled result; unknown is indeterminate. worker_idle identifies the exact slot and epoch and means currently allocatable, not merely offline. Conditions are evaluated together, never accumulated across time. This observes state, reserves no slot, consumes no human input and starts no model. Cancelling this call ends only the wait. Each call gets a separate operation_id and elapsed time.",
-                json!({"generation":{"type":"string","minLength":1,"maxLength":128},"mode":{"type":"string","enum":["any","all"]},"conditions":{"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"oneOf":[{"type":"object","properties":{"type":{"const":"task_finished"},"task_id":{"type":"string","minLength":1,"maxLength":256}},"required":["type","task_id"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"worker_idle"},"slot":{"type":"integer","minimum":0,"maximum":127},"epoch":{"type":"integer","minimum":1}},"required":["type","slot","epoch"],"additionalProperties":false}]}},"wait_ms":{"type":"integer","minimum":0,"maximum":5000,"default":5000}}),
+                "The verified manager waits up to 55 seconds for any or all explicit conditions in this pool generation. task_finished means a confirmed completed, failed or cancelled result; unknown is indeterminate. worker_idle identifies the exact slot and epoch and means currently allocatable, not merely offline. Conditions are evaluated together, never accumulated across time. This observes state, reserves no slot, consumes no human input and starts no model. Cancelling this call ends only the wait. Each call gets a separate operation_id and elapsed time.",
+                json!({"generation":{"type":"string","minLength":1,"maxLength":128},"mode":{"type":"string","enum":["any","all"]},"conditions":{"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"oneOf":[{"type":"object","properties":{"type":{"const":"task_finished"},"task_id":{"type":"string","minLength":1,"maxLength":256}},"required":["type","task_id"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"worker_idle"},"slot":{"type":"integer","minimum":0,"maximum":127},"epoch":{"type":"integer","minimum":1}},"required":["type","slot","epoch"],"additionalProperties":false}]}},"wait_ms":{"type":"integer","minimum":0,"maximum":MAX_OBSERVATION_WAIT_MS,"default":5000}}),
                 json!(["generation", "mode", "conditions"]),
                 true,
             ),
@@ -345,8 +354,8 @@ impl Pool {
             ),
             tool(
                 "result",
-                "Read only your own task's result, optionally waiting at most 25 seconds. unknown/cancelling is not permission to replay effects. Workers block locally between tasks without occupying human ui.wait calls.",
-                json!({"task_id":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":25000}}),
+                "Read only your own task's result, optionally waiting at most 55 seconds. unknown/cancelling is not permission to replay effects. Workers block locally between tasks without occupying human ui.wait calls.",
+                json!({"task_id":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":MAX_OBSERVATION_WAIT_MS}}),
                 json!(["task_id"]),
                 true,
             ),
@@ -360,8 +369,8 @@ impl Pool {
         ];
         tools.extend([
             tool("wait",
-                "Register this authenticated external worker in one stable station and block up to 25 seconds for one same-account task. A timeout does not complete a task. Retry the same request_id after a lost response to recover its exact claim; use a new ID after completion. A retiring response requires stopping owned activity and acknowledging worker.release; a released response means stop waiting. No model is started. Receipts are retained for the last 128 reports.",
-                json!({"request_id":{"type":"string","minLength":1,"maxLength":128},"wait_ms":{"type":"integer","minimum":0,"maximum":25000,"default":5000}}), json!(["request_id"]), false),
+                "Register this authenticated external worker in one stable station and block up to 55 seconds for one same-account task. A timeout does not complete a task. Retry the same request_id after a lost response to recover its exact claim; use a new ID after completion. A retiring response requires stopping owned activity and acknowledging worker.release; a released response means stop waiting. No model is started. Receipts are retained for the last 128 reports.",
+                json!({"request_id":{"type":"string","minLength":1,"maxLength":128},"wait_ms":{"type":"integer","minimum":0,"maximum":MAX_OBSERVATION_WAIT_MS,"default":5000}}), json!(["request_id"]), false),
             tool("claim", "Nonblocking worker.wait. Only a verified remote participant can claim one same-account task; assigning a slot does not execute the text.",
                 json!({"request_id":{"type":"string","minLength":1,"maxLength":128}}), json!(["request_id"]), false),
             tool("complete", "Report a remote task's result using the exact claim and authenticated claimant. This records an external agent report, not independently observed OS completion. Identical retries are idempotent while retained; changed results and stale claims are rejected. After completion return to worker.wait.",
@@ -412,8 +421,10 @@ impl Pool {
         client_id: &str,
         request: WaitAvailable,
     ) -> Result<Value, String> {
-        if request.wait_ms > 5000 {
-            return Err("worker availability wait_ms must be at most 5000".into());
+        if request.wait_ms > MAX_OBSERVATION_WAIT_MS {
+            return Err(format!(
+                "worker availability wait_ms must be at most {MAX_OBSERVATION_WAIT_MS}"
+            ));
         }
         // Subscribe before the authenticated snapshot to avoid missing a change
         // between observing its revision and beginning the wait.
@@ -519,7 +530,7 @@ impl Pool {
                     json!({"status":status,"operation_id":operation.operation_id,
                     "generation":self.generation,"mode":request.mode,
                     "elapsed_ms":operation.elapsed_ms,"conditions":conditions,
-                    "worker":self.queue.snapshot()}),
+                    "worker":self.queue.compact_snapshot()}),
                 );
             }
             if matches!(
@@ -538,8 +549,10 @@ impl Pool {
         client_id: &str,
         request: Task,
     ) -> Result<Value, String> {
-        if request.wait_ms > 25_000 {
-            return Err("worker result wait_ms must be at most 25000".into());
+        if request.wait_ms > MAX_OBSERVATION_WAIT_MS {
+            return Err(format!(
+                "worker result wait_ms must be at most {MAX_OBSERVATION_WAIT_MS}"
+            ));
         }
         let mut wake = self.queue.subscribe();
         self.queue.result(actor, &request.task_id)?;
@@ -591,7 +604,45 @@ impl Pool {
                         "satisfied"
                     });
                 }
-                return Ok(json!({"task":task,"worker":self.queue.snapshot()}));
+                return Ok(json!({"task":task,"worker":self.queue.compact_snapshot()}));
+            }
+            let _ = tokio::time::timeout_at(deadline, wake.changed()).await;
+        }
+    }
+
+    async fn wait_events(
+        &self,
+        actor: &Actor,
+        client_id: &str,
+        request: EventRequest,
+    ) -> Result<Value, String> {
+        request.validate()?;
+        // Subscribe first: a commit between reading the page and waiting must
+        // remain observable even if its original RPC reply is lost.
+        let mut wake = self.queue.subscribe();
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_millis(request.wait_ms);
+        loop {
+            let page = self.queue.events(actor, client_id, &request)?;
+            let ready = !page.events.is_empty() || page.gap;
+            if ready
+                || page.closed
+                || request.wait_ms == 0
+                || tokio::time::Instant::now() >= deadline
+            {
+                let status = if ready {
+                    "events"
+                } else if page.closed {
+                    "closed"
+                } else if request.wait_ms == 0 {
+                    "empty"
+                } else {
+                    "timed_out"
+                };
+                let mut result = serde_json::to_value(page)
+                    .map_err(|error| format!("encode worker events: {error}"))?;
+                result["status"] = json!(status);
+                return Ok(result);
             }
             let _ = tokio::time::timeout_at(deadline, wake.changed()).await;
         }
@@ -603,8 +654,10 @@ impl Pool {
         request_id: &str,
         wait_ms: u64,
     ) -> Result<Value, String> {
-        if wait_ms > 25_000 {
-            return Err("worker wait_ms must be at most 25000".into());
+        if wait_ms > MAX_OBSERVATION_WAIT_MS {
+            return Err(format!(
+                "worker wait_ms must be at most {MAX_OBSERVATION_WAIT_MS}"
+            ));
         }
         let remote = self.remote()?;
         let mut wake = self.queue.subscribe();
@@ -617,35 +670,35 @@ impl Pool {
                         "text":lease.context.prepared,
                         "cancel_requested":self.queue.cancellation_requested(&lease),
                         "retire_requested":self.queue.retire_requested(&lease),
-                        "execution":"remote","worker":self.queue.snapshot(),
+                        "execution":"remote","worker":self.queue.compact_snapshot(),
                         "wait_hint":"Use your own tools to perform this task, then call worker.complete with this exact claim. Reuse this wait request_id to observe cancellation; delivery alone never completes it."}));
                 }
                 Claimed::Completed { claim, task } => {
                     return Ok(
                         json!({"status":"already_completed","claim":claim,"task":task,
-                        "completion_source":"authenticated_remote_agent","worker":self.queue.snapshot(),
+                        "completion_source":"authenticated_remote_agent","worker":self.queue.compact_snapshot(),
                         "wait_hint":"This request_id already completed. Use a new request_id for worker.wait; do not repeat the task."}),
                     );
                 }
                 Claimed::Retiring { retirement } => {
                     return Ok(json!({"status":"retiring","retirement":retirement,
-                        "execution":"remote","worker":self.queue.snapshot(),
+                        "execution":"remote","worker":self.queue.compact_snapshot(),
                         "wait_hint":"The pool requested shutdown of your station. Stop starting work, ensure your owned activity has stopped, then call worker.release with this exact retirement receipt. Do not leave before acknowledging release."}));
                 }
                 Claimed::Released { retirement } => {
                     return Ok(json!({"status":"released","retirement":retirement,
-                        "execution":"remote","worker":self.queue.snapshot(),
+                        "execution":"remote","worker":self.queue.compact_snapshot(),
                         "wait_hint":"Your station has been released. Leave your collaboration session if needed and stop calling worker.wait. No external process was automatically terminated."}));
                 }
                 Claimed::Waiting if !self.queue.accepting() => {
                     return Ok(
-                        json!({"status":"not_accepting","execution":"remote", "worker":self.queue.snapshot(),
+                        json!({"status":"not_accepting","execution":"remote", "worker":self.queue.compact_snapshot(),
                         "wait_hint":"The manager stopped this pool. Existing claimants must reuse their original request_id to acknowledge cancellation; no new tasks will be assigned."}),
                     );
                 }
                 Claimed::Waiting if wait_ms == 0 || tokio::time::Instant::now() >= deadline => {
                     return Ok(
-                        json!({"status":"waiting","execution":"remote","worker":self.queue.snapshot(),"wait_hint":remote::WAIT_HINT}),
+                        json!({"status":"waiting","execution":"remote","worker":self.queue.compact_snapshot(),"wait_hint":remote::WAIT_HINT}),
                     );
                 }
                 Claimed::Waiting => {
@@ -705,8 +758,13 @@ impl Pool {
                 source.require_owner()?;
                 let manager = self.queue.attach(&actor, &client_id, now_ms())?;
                 Ok(
-                    json!({"manager":manager,"caller_is_manager":true,"worker":self.queue.snapshot()}),
+                    json!({"manager":manager,"caller_is_manager":true,"worker":self.queue.compact_snapshot()}),
                 )
+            }
+            "ssmcp.worker.events" => {
+                let request: EventRequest = serde_json::from_value(arguments)
+                    .map_err(|error| format!("invalid worker events request: {error}"))?;
+                self.wait_events(&actor, &client_id, request).await
             }
             "ssmcp.worker.tasks" => {
                 #[derive(Deserialize)]
@@ -728,7 +786,7 @@ impl Pool {
                     request.cursor.as_deref(),
                     request.limit,
                 )?;
-                Ok(json!({"page":page,"worker":self.queue.snapshot()}))
+                Ok(json!({"page":page,"worker":self.queue.compact_snapshot()}))
             }
             "ssmcp.worker.wait_available" => {
                 let request: WaitAvailable = serde_json::from_value(arguments)
@@ -758,7 +816,7 @@ impl Pool {
                 empty_arguments(&arguments, "stop")?;
                 let changed = self.queue.stop(&actor, &client_id, now_ms())?;
                 Ok(
-                    json!({"stop_requested":true,"changed":changed,"worker":self.queue.snapshot(),
+                    json!({"stop_requested":true,"changed":changed,"worker":self.queue.compact_snapshot(),
                     "external_execution_stopped":false,
                     "wait_hint":"Inspect retained task results. A running remote task remains occupied until its original claimant reports completion; cancellation is not proof that external effects stopped."}),
                 )
@@ -789,7 +847,7 @@ impl Pool {
                     now_ms(),
                 )?;
                 Ok(
-                    json!({"task":task,"warnings":prepared.warnings,"worker":self.queue.snapshot(),
+                    json!({"task":task,"warnings":prepared.warnings,"worker":self.queue.compact_snapshot(),
                     "execution":self.execution_name(),"wait_hint":"Use worker.result for this task. Remote agents must claim and explicitly complete it; local executors return to their blocking wait after confirmed cleanup."}),
                 )
             }
@@ -807,7 +865,7 @@ impl Pool {
                 let request: Cancel = serde_json::from_value(arguments)
                     .map_err(|e| format!("invalid worker cancellation: {e}"))?;
                 Ok(
-                    json!({"task":self.queue.cancel(&actor, &request.task_id, now_ms())?,"worker":self.queue.snapshot()}),
+                    json!({"task":self.queue.cancel(&actor, &request.task_id, now_ms())?,"worker":self.queue.compact_snapshot()}),
                 )
             }
             "ssmcp.worker.wait" => {
@@ -845,7 +903,7 @@ impl Pool {
                         .complete(&self.queue, &actor, completion, now_ms())?;
                 Ok(
                     json!({"status":"recorded","claim":claim,"task":task,"duplicate":duplicate,
-                    "completion_source":"authenticated_remote_agent","worker":self.queue.snapshot(),
+                    "completion_source":"authenticated_remote_agent","worker":self.queue.compact_snapshot(),
                     "wait_hint":remote::WAIT_HINT}),
                 )
             }
@@ -857,7 +915,7 @@ impl Pool {
                         .report(&self.queue, &actor, report, now_ms())?;
                 Ok(json!({"status":"recorded","duplicate":duplicate,
                     "cancel_requested":cancel_requested,"retire_requested":retire_requested,
-                    "worker":self.queue.snapshot()}))
+                    "worker":self.queue.compact_snapshot()}))
             }
             "ssmcp.worker.release" => {
                 #[derive(Deserialize)]
@@ -871,7 +929,7 @@ impl Pool {
                     self.remote()?
                         .release(&self.queue, &actor, request.retirement, now_ms())?;
                 Ok(
-                    json!({"status":"released","duplicate":duplicate,"worker":self.queue.snapshot(),
+                    json!({"status":"released","duplicate":duplicate,"worker":self.queue.compact_snapshot(),
                     "wait_hint":"Your station is released. Leave your collaboration session if needed and stop waiting. No external process was automatically terminated."}),
                 )
             }
@@ -932,15 +990,19 @@ fn actor(source: &Source) -> Result<Actor, String> {
 
 #[cfg(test)]
 mod command_logs_tests;
+#[cfg(test)]
+mod events_tests;
+#[cfg(test)]
+mod observation_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const AVAILABILITY_CLIENT: &str =
+    pub(super) const AVAILABILITY_CLIENT: &str =
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    fn availability_pool(count: usize) -> (Arc<Pool>, Actor) {
+    pub(super) fn availability_pool(count: usize) -> (Arc<Pool>, Actor) {
         let pool = Pool::new(
             Config { count, factor: 1.0 },
             &Agent::Remote,
@@ -958,14 +1020,18 @@ mod tests {
         (pool, owner)
     }
 
-    fn availability_cursor(value: &Value) -> AvailabilityCursor {
+    pub(super) fn availability_cursor(value: &Value) -> AvailabilityCursor {
         AvailabilityCursor {
             generation: value["generation"].as_str().unwrap().into(),
             revision: value["revision"].as_u64().unwrap(),
         }
     }
 
-    fn submit_observed(pool: &Pool, owner: &Actor, key: &str) -> super::super::queue::TaskView {
+    pub(super) fn submit_observed(
+        pool: &Pool,
+        owner: &Actor,
+        key: &str,
+    ) -> super::super::queue::TaskView {
         pool.queue
             .submit_managed(
                 owner.clone(),
@@ -984,7 +1050,12 @@ mod tests {
             .unwrap()
     }
 
-    fn condition_request(pool: &Pool, mode: &str, task_ids: &[&str], wait_ms: u64) -> WaitRequest {
+    pub(super) fn condition_request(
+        pool: &Pool,
+        mode: &str,
+        task_ids: &[&str],
+        wait_ms: u64,
+    ) -> WaitRequest {
         serde_json::from_value(json!({
             "generation":pool.generation,"mode":mode,"wait_ms":wait_ms,
             "conditions":task_ids.iter().map(|task_id| json!({"type":"task_finished","task_id":task_id})).collect::<Vec<_>>()
@@ -1408,7 +1479,7 @@ mod tests {
                 AVAILABILITY_CLIENT,
                 WaitAvailable {
                     after: None,
-                    wait_ms: 5001
+                    wait_ms: MAX_OBSERVATION_WAIT_MS + 1
                 }
             )
             .await
@@ -1607,10 +1678,11 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names.len(), 15);
+        assert_eq!(names.len(), 16);
         for name in [
             "status",
             "attach",
+            "events",
             "tasks",
             "stop",
             "submit",

@@ -1,8 +1,40 @@
 use super::*;
+
 use crate::{
     runtime::call_scope::CallScope,
     wire::{ControlAccount, ControlAgent, ControlAttribution},
 };
+
+#[test]
+fn time_tools_advertise_the_negotiated_observation_window() {
+    assert_eq!(MAX_WAIT_MS, crate::wire::MAX_OBSERVATION_WAIT_MS);
+    assert!(validate_wait(MAX_WAIT_MS).is_ok());
+    assert!(validate_wait(MAX_WAIT_MS + 1).is_err());
+    let descriptors = tools();
+    let wait = descriptors
+        .iter()
+        .find(|tool| tool["name"] == "ssmcp.time.wait")
+        .unwrap();
+    assert_eq!(
+        wait["inputSchema"]["properties"]["wait_ms"]["maximum"],
+        MAX_WAIT_MS
+    );
+    for descriptor in descriptors {
+        let description = descriptor["description"].as_str().unwrap();
+        assert!(description.contains(crate::wire::wait_display::TIME_CAPABILITY));
+        assert!(!description.contains("time_observation_v1"));
+    }
+}
+
+#[test]
+fn default_execution_observation_displays_the_actual_bounded_native_wait() {
+    for arguments in [json!({}), json!({"wait_ms":null})] {
+        let spec = observation("ssmcp.exec.wait", &arguments).unwrap();
+        assert_eq!(spec.timeout_ms, Some(MAX_WAIT_MS));
+        assert!(spec.cancellable);
+    }
+    assert!(observation("ssmcp.exec.wait", &json!({"wait_ms":0})).is_none());
+}
 
 fn owner(connection: u64, subject: &str, agent: char) -> Owner {
     let attribution = ControlAttribution {
@@ -243,7 +275,7 @@ async fn bounded_wait_timeout_preserves_timer_and_local_cancel_wakes_the_same_id
             let id = first["timer_id"].as_str().unwrap();
             assert_eq!(first["status"], "running");
             assert_eq!(first["wait_timed_out"], true);
-            let pending = clock.wait(json!({"op":"status","timer_id":id,"wait_ms":25_000}));
+            let pending = clock.wait(json!({"op":"status","timer_id":id,"wait_ms":MAX_WAIT_MS}));
             tokio::pin!(pending);
             tokio::select! {
                 result = &mut pending => panic!("timer finished early: {result:?}"),
@@ -509,6 +541,14 @@ async fn remote_time_catalog_and_hard_coded_calls_fail_closed_without_negotiatio
             assert_eq!(
                 enabled["structuredContent"]["timing"]["primitives_available"],
                 true
+            );
+            assert_eq!(
+                enabled["structuredContent"]["timing"]["required_capability"],
+                crate::wire::wait_display::TIME_CAPABILITY
+            );
+            assert_eq!(
+                enabled["structuredContent"]["timing"]["max_timer_observation_ms"],
+                MAX_WAIT_MS
             );
             runtime.configure_timing(false, false).unwrap();
             let disabled = runtime.perform(capabilities()).await.unwrap();

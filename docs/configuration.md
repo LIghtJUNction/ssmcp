@@ -71,6 +71,33 @@ paid_user_monthly_traffic_bytes = 10000000000
 
 `/api/client/whoami` 的 `traffic` 返回该真实登录账号的 `used_bytes`、`limit_bytes`、`remaining_bytes`，以及下一自然月开始时刻 `reset_at`（Unix 秒）。`free_bytes` 是该档位已选中的赠送额，`paid_bytes` 只表示当月另购的流量包。只有服务器明确授予的无限额度返回 `limit_bytes: null` 与 `remaining_bytes: null`；旧服务器没有 `reset_at` 时，客户端应显示时间未知。[实际 HTTP 回归](../src/device.rs)
 
+## 本地工具来源
+
+工具来源使用独立的 `$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml`，默认
+`~/.config/ssmcp/ssmcprc.toml`。可信 RC 明确决定哪些 JavaScript helper
+会加载；项目里存在文件或 manifest 不会自动登记代码。
+
+~~~toml
+version = 1
+
+[tools]
+overrides = []
+global = true
+projects = ["/absolute/canonical/project"]
+~~~
+
+`global` 默认关闭，启用后读取 `~/.ssmcp/tools/`；`projects` 默认空列表，
+最多登记 128 个互不重复的规范绝对工作区路径，只有与当前工作区完全相同的
+条目会启用 `./.ssmcp/tools/`，不向上查找。已有 `overrides` 保留原来的
+列表顺序和相对当前工作区解析的规则，最多 16 项。
+
+加载顺序为官方、显式 overrides、全局、项目，后加载的同名导出覆盖先前导出。
+官方仓库仍位于 `$XDG_DATA_HOME/ssmcp/tools/official`，默认
+`~/.local/share/ssmcp/tools/official`。任一选中来源无效都会明确报错。
+用 `ssmcp tools init project --git` 创建并登记本地仓库；
+已有源码用 `enable` 登记，`disable` 取消登记并保留文件。
+[命令、边界与 Dreaming 维护流程](tool-repositories.md)
+
 ## 配置入口
 
 | 需求 | 文档 |
@@ -143,7 +170,7 @@ ssmcp --server https://ssmcp.lmm.best --log-format jsonl --allow alice@ssmcp.lmm
 NO_COLOR=1 ssmcp --server https://ssmcp.lmm.best --allow alice@ssmcp.lmm.best
 ```
 
-更新已安装的程序后，可以从 `code_mode` 调用 `await reload(clientId)`，让客户端从原安装入口重新启动，并保留启动参数、目录、环境和 `--allow`。先确认目录包含 `ssmcp.client.reload`；不支持该工具的旧客户端，初次升级须在本机普通重启。`accepted:true` 只是接收应答，应再调用 `list` 确认重连及新的 ID。重载会停止本连接拥有的命令任务和转发、关闭原生桥接；不会终止操作者已运行的外部 Pi/OpenCode 服务；在途调用会导致 busy 拒绝。[重载协议与回归测试](../src/client/reload.rs)
+更新已安装的程序后，可以从 `code_mode` 调用 `await call(clientId, "ssmcp.client.reload", {})`，让客户端从原安装入口重新启动，并保留启动参数、目录、环境和 `--allow`。先确认目录包含 `ssmcp.client.reload`；不支持该工具的旧客户端，初次升级须在本机普通重启。`accepted:true` 只是接收应答，应再调用 `list` 确认重连及新的 ID。重载会停止本连接拥有的命令任务和转发、关闭原生桥接；不会终止操作者已运行的外部 Pi/OpenCode 服务；在途调用会导致 busy 拒绝。[重载协议与回归测试](../src/client/reload.rs)
 
 有效的账号授权在新连接继续允许同一账号时可复用；控制请求会重新核对凭据和名单。调用方应重新发现在线设备及实际版本，不能把“程序已更新”或“重载已接收”报告为“新版本已经在线”。[重载完整说明](backends.md#9-更新后的客户端重载)
 

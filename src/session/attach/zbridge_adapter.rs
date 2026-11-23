@@ -1,6 +1,9 @@
 //! Project Z frontends use the same protected local attach authority as the
 //! terminal. A lease is a host capability, never an account or agent identity.
+mod chat;
+mod observation;
 mod remote;
+pub use observation::{EventObserver, MAX_OBSERVATION_MS};
 pub use remote::RemoteFrontend;
 
 use super::{Capture, Runtime};
@@ -20,6 +23,7 @@ pub(super) struct Guard {
     instance: u64,
     closed: AtomicBool,
     inflight: Semaphore,
+    chat_receipts: chat::Receipts,
 }
 
 impl Default for Guard {
@@ -34,6 +38,7 @@ impl Default for Guard {
             instance,
             closed: AtomicBool::new(false),
             inflight: Semaphore::new(crate::wire::MAX_INFLIGHT),
+            chat_receipts: chat::Receipts::default(),
         }
     }
 }
@@ -249,6 +254,29 @@ impl Host for BoundHost<'_> {
                 schema_version: 1,
                 description: "The current backend's actual terminal list".into(),
             });
+            if runtime.frontend_client_id().is_some() {
+                resources.push(Resource { id:id("conversation"), schema_version:1,
+                    description:"Bounded retained conversation and tool events from authenticated provenance; optional thread_id or main filter, decimal-string cursor, limit 1..64".into() });
+            }
+            if let Some(client_id) = runtime.frontend_client_id()
+                && let Ok(metadata) = crate::client::steering::frontend_metadata(client_id)
+            {
+                resources.push(Resource {
+                    id: id("threads"),
+                    schema_version: 1,
+                    description:
+                        "Actual connected agent threads and chat readiness; offset and limit 1..32"
+                            .into(),
+                });
+                resources.push(Resource { id:id("chat.queue"), schema_version:1,
+                    description:"The existing local request outbox with actual delivery states; offset and limit 1..32, at most 64 KiB per page".into() });
+                if mode == Mode::Control
+                    && metadata["chat_enabled"] == true
+                    && metadata["supported"] == true
+                {
+                    commands.push(chat::command());
+                }
+            }
             let workers = runtime.frontend_has_workers();
             if workers {
                 resources.push(Resource { id:id("workers"), schema_version:1,
@@ -331,6 +359,9 @@ impl Host for BoundHost<'_> {
                         BridgeError::new(ErrorCode::Unavailable, "this backend has no worker pool")
                     })?;
                     worker_state(snapshot, query)?
+                }
+                "threads" | "chat.queue" | "conversation" => {
+                    chat::state(self, resource.as_str(), query)?
                 }
                 _ => {
                     return Err(BridgeError::new(
@@ -447,6 +478,7 @@ impl Host for BoundHost<'_> {
                         .frontend_resize_workers(&args.pool_generation, usize::from(args.total))
                         .map_err(native)?
                 }
+                "chat.send" => chat::send(self, &runtime, arguments)?,
                 _ => {
                     return Err(BridgeError::new(
                         ErrorCode::Denied,
@@ -605,3 +637,7 @@ fn event_page(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "zbridge_adapter/gui_gateway_tests.rs"]
+mod gui_gateway_tests;

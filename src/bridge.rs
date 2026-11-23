@@ -682,6 +682,23 @@ pub async fn dispatch(
     let (_, authorization) = access.authorized().await?;
     let owner = owner(&access.user, &authorization)?;
     match name.as_str() {
+        name if name.starts_with("events.") => {
+            let mut fields = arguments
+                .as_object()
+                .cloned()
+                .ok_or("events arguments must be an object")?;
+            if fields.contains_key("action") {
+                return Err("action is selected by the events helper".into());
+            }
+            fields.insert("action".into(), json!(&name["events.".len()..]));
+            crate::http::events_tool::dispatch(
+                broker,
+                access.user,
+                access.token,
+                Value::Object(fields),
+            )
+            .await
+        }
         name if name.starts_with("messages.") => {
             let mut fields = arguments
                 .as_object()

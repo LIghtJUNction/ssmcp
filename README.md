@@ -93,7 +93,9 @@ ssmcp whoami    # 查看当前账号
 
 `link` 的候选实现调用目标客户端的图片读取工具，单图上限 400 KiB；默认 120 秒失效，首次 GET 会消费链接，HEAD 不消费。创建返回 URL、资源链接和清理 ID，不返回图片 base64。是否已部署须查看当前服务目录。[临时图片链接 API](docs/image-links.md)
 
-被控设备可以不登录，直接运行 `ssmcp --allow 用户名@中继服务器`；控制者必须登录该服务器的既有账号。显式名单仅授权列出的人，已登录客户端省略名单时仅允许自己。获准接入的 Agent 用 `collab.join` 登记会话内身份；主窗口中的 `/invite` 用于生成协作说明。[账号与授权](docs/client-accounts.md)
+由被控端用户在愿意开放的项目目录主动运行 `ssmcp --allow 用户名@中继服务器`。这里填写控制者在同一中继上已注册的用户名。被控端无需登录账号，设备接入无需服务器邀请码。控制者仍须登录该账号，MCP 应用须完成该中继的 OAuth 授权。显式名单仅允许列出的账号访问这条设备连接，既有权限检查仍然适用。已有有效登录时，省略名单只允许自己。
+
+主窗口中的 `/invite` 生成会话内工作组协作说明，Agent 通过 `collab.join` 登记会话身份。协作邀请与设备授权各自独立。[账号与授权](docs/client-accounts.md)
 
 先从 `list` 选择确切的客户端 ID，再查询工具的原始 schema：
 
@@ -180,18 +182,40 @@ Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重
 
 在交互终端运行 `ssmcp --worker 3`，主窗口保留普通聊天输入，并打开一个关联的 worker 监控窗口。三个席位初始为离线；外部 Agent 在对应的 worker 连接登记 `role: "worker"`，调用 `ssmcp.worker.wait` 等待任务，完成后提交回执并继续等待。启动席位不会自动启动模型。
 
-在主窗口输入 `/invite` 获取主 Agent 的协作说明，输入 `/invite worker` 获取指向关联任务池的 worker 说明。说明可在本地面板阅读，并尝试复制到剪贴板；已登记人数达到席位数时，worker 邀请会提示满员。用 `/worker ls` 查看实际状态，或用 `/worker +N`、`/worker -N` 调整席位数。退出或重载主窗口会清理它启动的 worker 窗口；单独关闭监控窗口后，主聊天仍可使用。[Worker 接入、任务回执与窗口生命周期](docs/workers.md)
+1. 连接主窗口。若要邀请主 Agent，在主窗口输入 `/invite` 并按 Enter。复制面板中的说明并粘贴到已获准接入的主 Agent 对话。主 Agent 按说明在控制会话以 `main` 身份加入，再用自己的凭据绑定。
+2. 若需要外部 worker，先用 `ssmcp --worker 3` 启动关联池，或在已连接的主窗口用 `/worker +N` 开启席位。用 `/worker ls` 确认池在线且有空位，然后在主窗口输入 `/invite worker` 并按 Enter。把说明粘贴到每个独立、已获准接入的 worker 对话。每个 worker 用自己的凭据在池中加入并绑定为 `worker`，然后调用 `ssmcp.worker.wait` 等任务。
+3. 两个命令都会显示可滚动的本地面板并尝试复制。剪贴板不可用时手动复制，按 Esc 关闭面板。凭据由各 Agent 私下保存。池满员、离线或正在调整席位时，等状态恢复再生成 worker 邀请。
+
+退出或重载主窗口会清理它启动的 worker 窗口。单独关闭监控窗口后，主聊天仍可使用。[Worker 接入、任务回执与窗口生命周期](docs/workers.md)
 
 已绑定的协调 Agent 可用 `ssmcp.worker.wait_available` 读取容量，或等待最多 5 秒观察容量变化。返回值区分实际空闲 worker、离线席位和等待退役的席位；可接收排队任务不代表已有空闲 worker。该接口只观察任务池，不领取人的输入或启动模型。[容量观察与游标](docs/workers.md#observe-capacity-changes)
 
 ### 从命令行连接对话与传递结果
 
-`ssmcp list` 按进程和已登记线程显示树形目录，远程 `attach` 默认连接所选对象的聊天输入与输出。进程输入发给选定目录中的主接收入口及已登记线程；线程输入只发给确切的成员 ID。数字引用最近一次列表，保留 5 分钟；显示名称不会被当成线程身份。[选择规则](docs/client-accounts.md#选择进程与线程)
+`ssmcp list` 把当前账号可控制的在线进程及其已登记线程自动组织成树。例如，两条连接各有一个登记成员时，默认输出如下；名称和主机名取自实际连接：
+
+~~~text
+  #  NAME / HOST
+  1  workstation [process] · devbox
+  2  ├─ Main / next unbound caller [main]
+  3  └─ reviewer [thread]
+  4  worker-pool [process] · devbox
+  5  ├─ Main / next unbound caller [main]
+  6  └─ worker-a [thread]
+Numbers identify this exact list for 5 minutes. Use ssmcp list --json for full IDs.
+Process chat input fans out to its listed main and registered threads.
+~~~
+
+每个 `[process]` 是一条在线客户端连接，后面显示主机名。其子项 `[main]` 是未绑定成员调用的主接收入口，`[thread]` 是通过 `collab.join` 登记的成员。不同进程各自成树；层级只表示线程登记在哪条连接上。同名进程或线程仍保留各自的编号。[目录来源](src/broker/session_io.rs)
+
+左列数字可直接用于 `attach` 和 `send`：例如 `thread 3` 只选择 reviewer，`process 1` 选择 workstation 及该次列表中的主入口和登记成员。每次 `list`（含 `--json`）保存新的五分钟编号快照；远端顺序变化不会改写已有快照的目标。需要完整进程或线程 ID 时使用 `ssmcp list --json`，在 `selection.entries` 中按 `number` 查找 `id`。显示名称不会被当成线程身份。[选择规则](docs/client-accounts.md#选择进程与线程)
+
+远程 `attach` 默认连接所选对象的聊天输入与输出：
 
 ~~~sh
 ssmcp list
-ssmcp attach thread THREAD_ID
-ssmcp send process PROCESS_ID '检查当前改动' | ssmcp wait --any
+ssmcp attach thread 3
+ssmcp send process 1 '检查当前改动' | ssmcp wait --any
 ssmcp send thread THREAD_ID '整理当前结论' |
   ssmcp wait --gather |
   ssmcp send thread NEXT_THREAD_ID --stdin
@@ -238,6 +262,28 @@ SSMCP 默认启用原生命令、文件、会话和 Zuse CLI 管理工具。第�
 - **上下文**：工作区文件、项目指令、有效技能视图和显式只读 context roots。
 
 指定已有浏览器时，先确认所选 Zuse 版本支持的连接方式和实际会话，再操作用户选定的目标。OAuth 登录、用户打开链接和已授权外部 MCP 的通用转发仍保留；它们不恢复旧内置浏览器工具。[现有浏览器连接](docs/browser-existing-session.md) · [code_mode 示例](docs/code-mode.md)
+
+### 项目与全局工具仓库
+
+`code_mode` 的 JavaScript helper 可以在本地 Git 仓库中维护。客户端按“官方 → 可信 RC 中的显式 overrides → 全局 → 项目”加载，同名导出由后者覆盖，项目 helper 的优先级最高。
+
+| 来源 | 路径 | 启用方式 |
+| --- | --- | --- |
+| 项目 | 当前工作区的 `./.ssmcp/tools/` | 在可信 RC 中登记这个规范化的绝对工作区路径 |
+| 全局 | `~/.ssmcp/tool/`，注意单数 `tool` | 在可信 RC 中启用 `tools.global` |
+| 官方 | `$XDG_DATA_HOME/ssmcp/tools/official`，默认 `~/.local/share/ssmcp/tools/official` | 使用客户端的官方源码 |
+
+~~~sh
+ssmcp tools paths
+ssmcp tools init project --git
+ssmcp tools status
+~~~
+
+`paths` 只查询位置。`init` 离线创建工厂、manifest 和 README，并明确登记来源；`--git` 创建独立本地仓库，不自动提交或连接远端。全局初始化使用 `ssmcp tools init global --git`；已有源码用 `enable project|global` 登记，`disable project|global` 停用并保留文件。普通 checkout 中出现文件不会自动启用；已启用来源损坏时调用明确失败。每次新调用的外层 `tool_sources` 回执给出实际路径、SHA-256 和 Git 状态。
+
+Dreaming 可以使用已有的执行、文件和 Git 操作维护这些工具仓库与工作流内容，检查后在新调用中验证实际源码摘要。初始化本身不会启动模型或调度器。[工具仓库、可信配置与维护流程](docs/tool-repositories.md) · [code_mode 源码回执](docs/code-mode.md#find-and-iterate-tool-implementations)
+
+其他客户端的源码入口与各端验收范围见[客户端](docs/clients.md)；HTTP 接入与配对协议见[GUI 网关](docs/gui-gateway.md)。
 
 ### 命令执行、在途去重与结果缓存
 

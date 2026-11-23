@@ -4,6 +4,9 @@ use super::{completion, ui::Ui};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+mod slash;
+#[cfg(test)]
+mod slash_tests;
 
 pub(super) const MAX_DRAFT_BYTES: usize = 16 * 1024;
 const MAX_HISTORY_ENTRIES: usize = 64;
@@ -559,16 +562,13 @@ impl Composer {
                 })
                 .collect();
         }
-        if self.text.contains('\n') {
+        let Some(query) = slash::query(&self.text, self.cursor) else {
             return Vec::new();
-        }
-        let prefix = self.text.trim_start();
-        if !prefix.starts_with('/') || prefix.chars().any(char::is_whitespace) {
-            return Vec::new();
-        }
-        SLASH_COMMANDS
+        };
+        query
+            .commands()
             .iter()
-            .filter(|command| command.name.starts_with(prefix))
+            .filter(|command| query.matches(command))
             .map(|command| Suggestion {
                 name: command.name,
                 description: command.description,
@@ -589,6 +589,13 @@ impl Composer {
 
     pub(super) fn refresh_completions(&mut self, enabled: bool) {
         self.refresh_completions_with(enabled, completion::lookup);
+    }
+
+    /// Enter keeps the existing first-word shortcut. Merely showing a secondary
+    /// menu must not select a verb or discard arguments from the actual draft.
+    pub(super) fn primary_command_suggestion(&self) -> bool {
+        let text = self.text.trim_start();
+        text.starts_with('/') && !text.chars().any(char::is_whitespace)
     }
 
     fn refresh_completions_with(
@@ -669,10 +676,10 @@ impl Composer {
             self.text = text;
             self.cursor = cursor;
         } else {
-            let text = format!("{} ", selected.name);
-            if !self.set_text(&text) {
-                return Err("Draft limit reached · 16 KiB".into());
-            }
+            let (text, cursor) = slash::apply(&self.text, self.cursor, selected.name)?;
+            self.detach_history();
+            self.text = text;
+            self.cursor = cursor;
         }
         Ok(true)
     }

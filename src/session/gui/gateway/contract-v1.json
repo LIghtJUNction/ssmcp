@@ -1,0 +1,27 @@
+{
+  "schema": "ssmcp-gui-http-v1",
+  "description": "Synthetic shared frontend fixtures. All API requests require the real gateway pairing bearer in Authorization; no credentials are included here.",
+  "prefix": "/api/gui/v1",
+  "open_request": {"request_id":"open-once","session":"fixture","read_only":true},
+  "observe_request": {"request_id":"observe","generation":"fixture-core","cursor":"9007199254740993","limit":16,"wait_ms":55000},
+  "observe_response": {
+    "schema":"ssmcp-gui-events-v1",
+    "request_id":"observe",
+    "generation":"fixture-core",
+    "page":{
+      "events":[{"sequence":"9007199254740993","topic":"ssmcp.fixture","value":{"fixture":true}}],
+      "start_cursor":"9007199254740993",
+      "next_cursor":"9007199254740994",
+      "live_cursor":"9007199254740994",
+      "retention_gap":false,
+      "has_more":false
+    }
+  },
+  "close_response":{"closed":true,"session_stopped":false,"duplicate":false},
+  "unknown_bridge_response":{
+    "version":1,
+    "id":"write-once",
+    "generation":"fixture-core",
+    "body":{"kind":"error","value":{"code":"unavailable","message":"connection ended before the native receipt","effect":"may_have_occurred"}}
+  }
+}

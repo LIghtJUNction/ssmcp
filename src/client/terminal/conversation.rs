@@ -117,9 +117,13 @@ type SidebarAgentRow = (String, PanelTone, Option<SidebarAgentIdentity>);
 #[derive(Default)]
 pub(super) struct Conversation {
     pub(super) composer: Composer,
+    idle_tips: hints::IdleTips,
     pub(super) worker_activity_rows: u16,
+    worker_assignments: worker_operations::ConversationFeed,
     #[cfg(test)]
     worker_activity_fixture: Option<Value>,
+    #[cfg(test)]
+    statistics_fixture: Option<Value>,
     pub(super) preferred_input_rows: Option<u16>,
     pub(super) view: View,
     pub(super) content_focus: bool,
@@ -1153,7 +1157,9 @@ impl State {
             self.chat_block_replacement();
             return;
         }
-        let text = if self.chat_menu_visible() {
+        let text = if self.chat_menu_visible()
+            && self.conversation.composer.primary_command_suggestion()
+        {
             self.conversation
                 .composer
                 .selected_suggestion()
@@ -1178,7 +1184,7 @@ impl State {
             return;
         }
         if self.conversation.editing.is_none() && self.chat_native_is_command(&text) {
-            match self.chat_command(&text) {
+            match self.chat_command(text.trim_start()) {
                 Ok(true) => {
                     if let Some(lookup) = &mut self.conversation.native_lookup {
                         lookup.clear_command = true;
@@ -1408,7 +1414,15 @@ impl State {
                     self.events.open();
                 }
             }
-            View::Statistics => self.canvas_move(1),
+            View::Statistics => {
+                if edit {
+                    self.conversation.detail = !self.conversation.detail;
+                    self.conversation.detail_scroll = 0;
+                    self.notice = None;
+                } else {
+                    self.canvas_move(1);
+                }
+            }
             View::Questions => {}
         }
     }
@@ -2024,7 +2038,13 @@ impl State {
             return;
         }
         if self.conversation.view == View::Statistics {
-            self.chat_change_view(View::Activity);
+            if self.conversation.detail {
+                self.conversation.detail = false;
+                self.conversation.detail_scroll = 0;
+                self.notice = None;
+            } else {
+                self.chat_change_view(View::Activity);
+            }
             return;
         }
         if self.conversation.view == View::Agents {
@@ -2635,6 +2655,7 @@ impl State {
         // Already-arrived input must win over a ready picker result, including
         // an Escape prefix whose decoding will finish on a subsequent flush.
         if !bytes.is_empty() {
+            self.conversation.idle_tips.pause();
             self.chat_cancel_native_lookup();
         }
         // Run before accepting the next input, including a real Ctrl-C after a
@@ -3017,6 +3038,12 @@ impl State {
         self.events.set_scope(events::EventScope::Conversation);
         self.conversation.logs_open = self.conversation.view == View::Logs;
         self.chat_updates();
+        if let Some(pool) = self.chat_worker_operations() {
+            for entry in self.conversation.worker_assignments.update(&pool) {
+                self.events
+                    .ingest_worker_operation(&entry.key, &entry.heading, &entry.detail);
+            }
+        }
         if self.conversation.view == View::Tasks
             && let Err(error) = self.conversation.tasks.refresh(self.preview)
         {
@@ -3184,6 +3211,11 @@ impl State {
                     || paste_hint.is_some()
                     || native_hint.is_some()
                     || update_hint.is_some();
+                let idle_hint = self.chat_idle_tip(
+                    now,
+                    connection == super::footer::Connection::Connected,
+                    priority_hint || question_attention.is_some(),
+                );
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
                 } else if self.notice.is_none() {
@@ -3202,11 +3234,16 @@ impl State {
                         self.rendered_update_notice = Some(hint);
                         return message;
                     }
+                    if let Some(hint) = idle_hint { return hint.into(); }
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
                     if self.conversation.view == View::Statistics {
-                        return "Statistics · ↑↓ / PgUp/PgDn scroll · Esc conversation · ←/→ panels".into();
+                        return if self.conversation.detail {
+                            "Diagnostics · Enter summary · Esc back · ↑↓ scroll · ←/→ panels".into()
+                        } else {
+                            "Statistics · Enter diagnostics · ↑↓ scroll · Esc conversation · ←/→ panels".into()
+                        };
                     }
                     if self.conversation.view == View::Tasks {
                         return if self.conversation.content_focus {
@@ -3748,6 +3785,143 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    fn assignment_fixture() -> Value {
+        json!({
+            "generation":"assignment-fixture",
+            "manager_operations":[
+                {"operation_id":1,"kind":"submit","state":"submitted",
+                 "task_id":"worker_task_assignment_fixture_17",
+                 "summary":"Review the worker log · 检查换行与独立滚动"},
+                {"operation_id":2,"kind":"claim","state":"assigned","slot":2,"epoch":7,
+                 "task_id":"worker_task_assignment_fixture_17",
+                 "summary":"Review the worker log · 检查换行与独立滚动"}
+            ]
+        })
+    }
+
+    #[test]
+    fn worker_assignments_belong_to_conversation_and_repaints_do_not_replay_them() {
+        for cols in [120, 48] {
+            let mut state = preview(40, cols);
+            state.events.clear();
+            state.conversation.composer.set_text("Keep this draft");
+            state.conversation.worker_activity_fixture = Some(assignment_fixture());
+            let text = display(&mut state).screen().contents();
+            assert!(
+                text.contains("Task submitted") && text.contains("Task assigned"),
+                "{text}"
+            );
+            assert!(text.contains("Worker #03") && text.contains("Review the worker log"));
+            assert_eq!(state.conversation.worker_activity_rows, 0);
+            assert_eq!(state.events.snapshot()["retained_events"], 2);
+            assert!(
+                state.events.snapshot()["tool_groups"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(!text.contains("worker_task_assignment_fixture_17"));
+            display(&mut state);
+            assert_eq!(state.events.snapshot()["retained_events"], 2);
+            assert!(worker_operations::compact(&assignment_fixture(), cols, 2).is_empty());
+            state.events.open();
+            let details = display(&mut state).screen().contents();
+            assert!(
+                details.contains("worker_task_assignment_fixture_17"),
+                "{details}"
+            );
+            assert!(details.contains("epoch 7"));
+            assert_eq!(state.conversation.composer.text(), "Keep this draft");
+            assert!(state.conversation.target.is_none());
+            // A disconnected snapshot does not fabricate a new dispatch.
+            state.conversation.worker_activity_fixture.as_mut().unwrap()["connected"] =
+                json!(false);
+            display(&mut state);
+            assert_eq!(state.events.snapshot()["retained_events"], 2);
+        }
+    }
+
+    #[test]
+    #[ignore = "writes production conversation frames to SSMCP_WORKER_SNAPSHOT_DIR"]
+    fn worker_assignment_visual_fixture() {
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("SSMCP_WORKER_SNAPSHOT_DIR").expect("snapshot output directory"),
+        );
+        std::fs::create_dir_all(&directory).unwrap();
+        for (rows, cols, name) in [
+            (32, 132, "conversation-wide"),
+            (26, 60, "conversation-narrow"),
+        ] {
+            let mut state = preview(rows, cols);
+            state.events.clear();
+            state.ui.color = true;
+            state.log_message(
+                "user",
+                "Make the worker log easier to read and show task assignments here.",
+                b"",
+            );
+            state.conversation.worker_activity_fixture = Some(assignment_fixture());
+            let frame = state.chat_frame(Instant::now());
+            std::fs::write(directory.join(format!("{name}.ansi")), frame.diff(None)).unwrap();
+            std::fs::write(
+                directory.join(format!("{name}.json")),
+                serde_json::to_vec(&json!({"rows":rows,"cols":cols})).unwrap(),
+            )
+            .unwrap();
+            state.events.open();
+            let frame = state.chat_frame(Instant::now());
+            std::fs::write(
+                directory.join(format!("{name}-detail.ansi")),
+                frame.diff(None),
+            )
+            .unwrap();
+            std::fs::write(
+                directory.join(format!("{name}-detail.json")),
+                serde_json::to_vec(&json!({"rows":rows,"cols":cols})).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn worker_wait_card_updates_in_place_and_retains_expanded_conditions() {
+        let mut state = preview(36, 100);
+        state.events.clear();
+        state
+            .conversation
+            .composer
+            .set_text("Do not replace this draft");
+        state.conversation.worker_activity_fixture = Some(json!({
+            "generation":"wait-fixture", "manager_operations":[{
+                "operation_id":7,"kind":"wait_for","state":"waiting","mode":"all",
+                "elapsed_ms":500,"wait_ms":5000,
+                "targets":[{"kind":"worker_idle","slot":1,"epoch":41}]
+            }]
+        }));
+        display(&mut state);
+        state.events.open();
+        let before = state.events.snapshot();
+        let id = before["events"][0]["id"].clone();
+        for elapsed in [1000, 2000, 3000] {
+            state.conversation.worker_activity_fixture.as_mut().unwrap()["manager_operations"][0]
+                ["elapsed_ms"] = json!(elapsed);
+            display(&mut state);
+            assert_eq!(state.events.snapshot()["retained_events"], 1);
+            assert_eq!(state.events.snapshot()["events"][0]["id"], id);
+            assert_eq!(state.events.snapshot()["events"][0]["expanded"], true);
+        }
+        state.conversation.worker_activity_fixture.as_mut().unwrap()["manager_operations"][0]["state"] =
+            json!("timed_out");
+        let text = display(&mut state).screen().contents();
+        assert!(text.contains("Timed out"), "{text}");
+        assert!(text.contains("slot 1, epoch 41"), "{text}");
+        assert_eq!(state.events.snapshot()["retained_events"], 1);
+        assert_eq!(
+            state.conversation.composer.text(),
+            "Do not replace this draft"
+        );
     }
 
     #[test]
@@ -5378,6 +5552,92 @@ mod tests {
         assert!(state.conversation.composer.cursor() > 0);
         input(&mut state, b"\x1b[H\x1b[A");
         assert_eq!(state.conversation.composer.text(), "previous request");
+    }
+
+    #[test]
+    fn slash_secondary_tab_only_inserts_and_enter_uses_the_actual_arguments() {
+        let mut state = preview(32, 100);
+        input(&mut state, b"/new a\x1b[B");
+        assert_eq!(state.conversation.composer.text(), "/new a");
+        assert!(state.chat_menu_visible());
+        input(&mut state, b"\t");
+        assert_eq!(state.conversation.composer.text(), "/new audit ");
+        assert_eq!(state.conversation.view, View::Activity);
+        assert!(state.actions.is_empty());
+        assert!(state.conversation.submitting.is_none());
+        input(&mut state, b"\r");
+        assert_eq!(state.conversation.view, View::Audit);
+        assert!(state.conversation.composer.is_empty());
+
+        let mut state = preview(32, 100);
+        input(&mut state, b"/new \x1b[B");
+        assert_eq!(
+            state
+                .conversation
+                .composer
+                .selected_suggestion()
+                .unwrap()
+                .name,
+            "/new statistics"
+        );
+        input(&mut state, b"\r");
+        assert_eq!(
+            state.conversation.view,
+            View::Activity,
+            "Enter must use the typed default command"
+        );
+        assert!(state.conversation.composer.is_empty());
+    }
+
+    #[test]
+    fn slash_secondary_local_modes_apply_only_after_explicit_enter() {
+        let mut state = preview(26, 60);
+        state.events.set_diff_mode(events::DiffMode::Single);
+        input(&mut state, b"  /diff sp\t");
+        assert_eq!(state.conversation.composer.text(), "  /diff split ");
+        assert_eq!(state.events.diff_mode(), events::DiffMode::Single);
+        assert!(state.actions.is_empty());
+        input(&mut state, b"\r");
+        assert_eq!(state.events.diff_mode(), events::DiffMode::Split);
+        assert!(state.conversation.composer.is_empty());
+        assert!(state.conversation.submitting.is_none());
+    }
+
+    #[test]
+    fn slash_secondary_menu_respects_queued_request_editing() {
+        let mut state = preview(26, 60);
+        state.conversation.composer.set_text("/plugin lo");
+        state.conversation.editing = Some("request-being-edited".into());
+        assert!(!state.chat_menu_visible());
+        input(&mut state, b"\t");
+        assert_eq!(state.conversation.composer.text(), "/plugin lo");
+        assert!(state.actions.is_empty());
+        assert!(state.conversation.submitting.is_none());
+    }
+
+    #[test]
+    #[ignore = "writes production slash completion frames to SSMCP_WORKER_SNAPSHOT_DIR"]
+    fn slash_subcommand_visual_fixture() {
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("SSMCP_WORKER_SNAPSHOT_DIR").expect("snapshot output directory"),
+        );
+        std::fs::create_dir_all(&directory).unwrap();
+        for (rows, cols, name, draft) in [
+            (32, 132, "slash-wide", "/group "),
+            (26, 60, "slash-narrow", "/plugin lo"),
+        ] {
+            let mut state = preview(rows, cols);
+            state.events.clear();
+            state.ui.color = true;
+            state.conversation.composer.set_text(draft);
+            let frame = state.chat_frame(Instant::now());
+            std::fs::write(directory.join(format!("{name}.ansi")), frame.diff(None)).unwrap();
+            std::fs::write(
+                directory.join(format!("{name}.json")),
+                serde_json::to_vec(&json!({"rows":rows,"cols":cols})).unwrap(),
+            )
+            .unwrap();
+        }
     }
 
     #[test]

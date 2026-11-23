@@ -6,7 +6,7 @@ Start with the [four lifecycle tools](computer-use.md). Query the actual executa
 
 ## Run an explicit program
 
-Use the executable path returned by `computer.version` or `computer.install`:
+Use the executable path returned by `ssmcp.computer.version` or `ssmcp.computer.install`:
 
 ```javascript
 return await exec.start(clientId, {
@@ -39,12 +39,13 @@ budgets, and forwards operations. The client owns native tool schemas,
 capability summaries, usage guides, native limits and project resources.
 
 ```javascript
-const manifest = await capabilities(clientId);
+const manifestReply = await call(clientId, "ssmcp.client.capabilities", {});
+if (manifestReply.isError) return manifestReply;
+const manifest = manifestReply.structuredContent;
 const resourcesForClient = resources.forClient(clientId);
 const firstPage = await resourcesForClient.list({limit: 2});
 const guide = await resourcesForClient.read("ssmcp-client://guide");
-const api = native(clientId);
-// Any future registered tool can use the same dynamic call path.
+// Call each discovered name with call(clientId, toolName, arguments).
 ```
 
 The manifest identifies client version, wire version, registry generation,
@@ -65,9 +66,8 @@ New client resource endpoints are:
 Unknown future resource types and extension fields pass through the generic
 route. Authorization is checked again after remote I/O. Use each client's advertised wire version and actual schemas;
 native `call()` remains the common forwarding path. A new client can expose these
-capabilities through `call()` on an older relay; the new dynamic JavaScript
-conveniences and generic relay resource URI entry points require the updated
-relay.
+capabilities through `call()` on an older relay. Generic relay resource URI entry
+points require a supporting relay.
 
 ## Source references
 
