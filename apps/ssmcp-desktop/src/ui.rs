@@ -70,6 +70,7 @@ pub struct Desktop {
     named_session: String,
     session_page: usize,
     composer: String,
+    composer_editor: crate::composer::Composer,
     terminal_input: String,
     terminal_id: String,
     rows: String,
@@ -103,6 +104,7 @@ impl Default for Desktop {
             named_session: String::new(),
             session_page: 0,
             composer: String::new(),
+            composer_editor: crate::composer::Composer::default(),
             terminal_input: String::new(),
             terminal_id: String::new(),
             rows: "24".into(),
@@ -135,13 +137,44 @@ impl Desktop {
         match ssmcp::client::replies::quote_reply(id, text, &self.composer, 4096) {
             Ok(draft) => {
                 self.composer = draft;
+                self.page = Page::Conversation;
+                self.composer_editor.focus_end(&self.composer);
                 self.local_notice = "已引用原消息；在输入框补充回复，可编辑引用。".into();
             }
             Err(error) => self.local_notice = error,
         }
     }
 
-    pub fn event(&mut self, event: &NativeEvent) {
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.composer_editor.take_clipboard()
+    }
+
+    pub fn event(&mut self, event: &NativeEvent) -> bool {
+        if matches!(
+            event,
+            NativeEvent::Key {
+                code: 82 | 114,
+                control: true,
+                shift: true,
+                ..
+            }
+        ) && self.page == Page::Conversation
+            && self.pending.is_none()
+        {
+            if let Some((id, text)) = self.selected_message.clone() {
+                self.quote_message(&id, &text);
+            } else {
+                self.local_notice = "先选择一条消息，再按 Ctrl+Shift+R 引用回复。".into();
+            }
+            return true;
+        }
+        if self.page == Page::Conversation
+            && self
+                .composer_editor
+                .event(event, &mut self.composer, self.pending.is_none())
+        {
+            return true;
+        }
         match event {
             NativeEvent::Down(x, y) => {
                 self.pointer = (*x, *y);
@@ -151,21 +184,6 @@ impl Desktop {
                     .find(|(r, _, _)| *x >= r.x && *x < r.x + r.w && *y >= r.y && *y < r.y + r.h)
                 {
                     self.selected_message = Some((id.clone(), text.clone()));
-                }
-            }
-            NativeEvent::Key {
-                code,
-                control: true,
-                shift: true,
-                ..
-            } if matches!(*code, 82 | 114)
-                && self.page == Page::Conversation
-                && self.pending.is_none() =>
-            {
-                if let Some((id, text)) = self.selected_message.clone() {
-                    self.quote_message(&id, &text);
-                } else {
-                    self.local_notice = "先选择一条消息，再按 Ctrl+Shift+R 引用回复。".into();
                 }
             }
             NativeEvent::Move(x, y) | NativeEvent::Up(x, y) => self.pointer = (*x, *y),
@@ -189,6 +207,7 @@ impl Desktop {
             }
             _ => {}
         }
+        false
     }
 
     pub fn sync(&mut self, view: &View) {
@@ -350,6 +369,9 @@ impl Desktop {
         width: f32,
         height: f32,
     ) {
+        if self.page != Page::Conversation {
+            self.composer_editor.blur();
+        }
         self.sidebar(canvas, ui, handle, view, height);
         let x = SIDE + 36.;
         let w = (width - x - 36.).max(400.);
@@ -685,7 +707,7 @@ impl Desktop {
         ) {
             self.thread_picker = !self.thread_picker;
         }
-        let history_bounds = Rect::new(bounds.x, bounds.y + 48., bounds.w, bounds.h - 175.);
+        let history_bounds = Rect::new(bounds.x, bounds.y + 48., bounds.w, bounds.h - 239.);
         if view.resource("conversation") {
             self.history(canvas, ui, &view.conversation, history_bounds, 0);
         } else {
@@ -696,7 +718,7 @@ impl Desktop {
                 "连接一个 CLI 会话后，当前能力允许的对话与线程会显示在这里。",
             );
         }
-        let y = bounds.y + bounds.h - 112.;
+        let y = bounds.y + bounds.h - 176.;
         canvas.line(
             (bounds.x, y - 15.),
             (bounds.x + bounds.w, y - 15.),
@@ -709,24 +731,26 @@ impl Desktop {
         };
         let can_send =
             self.can_command(view, "chat.send") && view.can_send && !view.reloading && exact_target;
-        ui.input(
+        self.composer_editor.draw(
             canvas,
-            302,
-            Rect::new(bounds.x, y, bounds.w - 116., 48.),
-            &mut self.composer,
-            "写下新的输入…",
-            false,
+            ui,
+            Rect::new(bounds.x, y, bounds.w - 116., 112.),
+            &self.composer,
             self.pending.is_none(),
         );
         let unknown_same = self.unknown_draft.as_ref() == Some(&self.composer);
-        if ui.button(
+        let can_submit =
+            can_send && self.pending.is_none() && !self.composer.trim().is_empty() && !unknown_same;
+        let clicked = ui.button(
             canvas,
             303,
-            Rect::new(bounds.x + bounds.w - 104., y, 104., 48.),
+            Rect::new(bounds.x + bounds.w - 104., y + 32., 104., 48.),
             "发送输入",
             ButtonStyle::Primary,
-            can_send && !self.composer.trim().is_empty() && !unknown_same,
-        ) {
+            can_submit,
+        );
+        let shortcut = self.composer_editor.take_submit();
+        if can_submit && (clicked || shortcut) {
             self.command(
                 handle,
                 view,
@@ -736,12 +760,12 @@ impl Desktop {
         }
         let target = match &view.thread {
             ThreadChoice::Agent(id) => format!("目标线程：{id}"),
-            _ => "目标：下一次接收输入的会话".into(),
+            _ => "Enter 换行 · Ctrl+Enter 发送".into(),
         };
         canvas.ellipsis(
             &target,
             bounds.x,
-            y + 61.,
+            y + 125.,
             bounds.w - 170.,
             12,
             false,
@@ -750,7 +774,7 @@ impl Desktop {
         canvas.text(
             &format!("{} / 4096 B", self.composer.len()),
             bounds.x + bounds.w - 108.,
-            y + 61.,
+            y + 125.,
             11,
             false,
             MUTED,
@@ -771,7 +795,7 @@ impl Desktop {
         canvas.ellipsis(
             hint,
             bounds.x,
-            y + 83.,
+            y + 147.,
             bounds.w,
             12,
             false,
