@@ -177,13 +177,18 @@ async fn prepared(role: &str) -> (TestFixture, CodeRunReport, Vec<EligibleUserRe
 fn publish_pending(target: &EligibleUserResponse) {
     target
         .session
-        .steering_command(wire::SteeringCommand::Publish {
-            command_id: "publish-worker-hint-fixture".into(),
-            message_id: "worker-hint-fixture".into(),
-            expected_revision: 0,
-            text: "Keep this genuine input queued during the passive worker probe.".into(),
-            target: target.binding.as_ref().unwrap().agent_id.clone(),
-        })
+        .steering
+        .command(
+            target.session.client_id(),
+            target.session.collaboration.presence().unwrap(),
+            wire::SteeringCommand::Publish {
+                command_id: "publish-worker-hint-fixture".into(),
+                message_id: "worker-hint-fixture".into(),
+                expected_revision: 0,
+                text: "Keep this genuine input queued during the passive worker probe.".into(),
+                target: target.binding.as_ref().unwrap().agent_id.clone(),
+            },
+        )
         .unwrap();
 }
 
