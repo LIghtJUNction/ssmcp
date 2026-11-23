@@ -692,6 +692,10 @@ class InputHistory(Composer):
         front.send(ESC)
         front.until(lambda shot: "Message the agent" in text(shot) and not shot["hide_cursor"],
                     "restore the editor from command details")
+        # Escape restores input focus in Tasks, not the conversation view.
+        front.send("/new chat")
+        front.send(ENTER)
+        front.until(empty_composer_ready, "conversation view for command result events")
         front.send("! exit 7")
         front.send(ENTER)
         failed = front.until(lambda shot: "command · exit 7" in text(shot),
