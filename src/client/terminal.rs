@@ -4629,7 +4629,10 @@ mod tests {
                         "{layout:?}: {bottom}"
                     );
                 }
-                assert!(bottom.contains("preview"), "{layout:?}: {bottom}");
+                assert!(
+                    bottom.contains(locale::text("connection.preview")),
+                    "{layout:?}: {bottom}"
+                );
                 assert!(!bottom.contains("电脑控制"), "{layout:?}: {bottom}");
                 assert_eq!(
                     bottom.width(),

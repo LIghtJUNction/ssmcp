@@ -308,7 +308,10 @@ mod tests {
         let line = render(notice, Some(&origin), Connection::Connected, 110, true);
         assert!(line.contains(notice), "{line}");
         assert!(
-            line.contains("connected · https://ssmcp.lmm.best"),
+            line.contains(&format!(
+                "{} · https://ssmcp.lmm.best",
+                super::super::locale::text("connection.online")
+            )),
             "{line}"
         );
         assert!(!line.contains("hidden"));
