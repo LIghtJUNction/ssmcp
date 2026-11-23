@@ -2260,6 +2260,34 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn linux_statistics_attribute_reaped_usage_and_preserve_outcomes() {
+        // wait4 includes the pre-exec RSS high-water mark inherited at fork.
+        // Other library tests can raise that floor above this fixture's 48 MiB.
+        // Keep the original accounting assertions in a fresh, isolated process.
+        const ISOLATED: &str = "SSMCP_STATISTICS_USAGE_ISOLATED";
+        if std::env::var_os(ISOLATED).as_deref() != Some(std::ffi::OsStr::new("1")) {
+            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "backend::shell::tests::linux_statistics_attribute_reaped_usage_and_preserve_outcomes",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(ISOLATED, "1")
+                .kill_on_drop(true);
+            let output = tokio::time::timeout(Duration::from_secs(30), command.output())
+                .await
+                .expect("isolated command statistics test timed out")
+                .expect("could not start isolated command statistics test");
+            assert!(
+                output.status.success(),
+                "isolated command statistics test failed: {}\nstdout:\n{}\nstderr:\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
         let shell = Shell::new();
         let light = start_fixture(&shell, "next", 0).await;
         let heavy = start_fixture(&shell, "resource-load", 0).await;
@@ -2319,7 +2347,10 @@ mod tests {
         let light = job(&light).usage.unwrap();
         let heavy = job(&heavy).usage.unwrap();
         assert!(heavy.cpu_us > light.cpu_us, "{heavy:?} versus {light:?}");
-        assert!(heavy.peak_rss_bytes >= light.peak_rss_bytes + 16 * 1024 * 1024);
+        assert!(
+            heavy.peak_rss_bytes >= light.peak_rss_bytes + 16 * 1024 * 1024,
+            "{heavy:?} versus {light:?}"
+        );
         assert_eq!(job(&cancelled).state, "cancelled");
         assert_eq!(job(&failed).state, "failed");
         assert!(job(&failed).usage.is_some());
