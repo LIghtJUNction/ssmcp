@@ -1,0 +1,9 @@
+{"file":"src/portal/guide/zh.html","conflicts":["70: <article><h3>\u9080\u8bf7</h3><p>\"workers\"</p>\n71: C:\\work\\ssmcp"],"ready":true,"count":42}
+["\u4f60\u597d","</code>",true,42,null]
+opened C:\work\ssmcp src/main.rs
+[WARN] wait for the current claim
+{"file":"src/lib.rs"} trailing-output
+~~~sh
+{"file":"src/lib.rs"}
+[ -f C:\work\ssmcp ]
+~~~

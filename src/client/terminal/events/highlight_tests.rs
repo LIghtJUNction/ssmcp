@@ -78,3 +78,91 @@ fn json_detection_requires_complete_data_without_an_explicit_language() {
     assert!(styled.contains(&paint(r#""file""#, "success", &ui, false)));
     assert!(!styled.contains(&paint(r#""file""#, "heading", &ui, false)));
 }
+
+#[test]
+#[ignore = "exports actual terminal frames to SSMCP_HIGHLIGHT_SNAPSHOT_DIR"]
+fn raw_json_visual_fixture() {
+    use crate::client::ui::Theme;
+
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("SSMCP_HIGHLIGHT_SNAPSHOT_DIR").expect("snapshot output directory"),
+    );
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = include_str!("highlight_fixture.txt");
+    std::fs::write(directory.join("input.txt"), source).unwrap();
+
+    // This is the renderer's effective NO_COLOR mode; no process-global
+    // environment is changed by a test that can share the binary with others.
+    let plain = semantic_text(
+        source,
+        &Ui {
+            color: false,
+            ..Ui::default()
+        },
+        "",
+    );
+    assert_eq!(plain.as_bytes(), source.as_bytes());
+    assert!(!plain.contains('\x1b'));
+    std::fs::write(directory.join("no-color.txt"), &plain).unwrap();
+
+    let mut frames = Vec::new();
+    for theme in [Theme::Dark, Theme::Light] {
+        for cols in [48, 120] {
+            let rows = 36;
+            let ui = Ui {
+                color: true,
+                theme,
+                ..Ui::default()
+            };
+            assert_eq!(unstyled(&semantic_text(source, &ui, "")), source);
+            let mut state = super::super::State::new(rows, cols, &ui);
+            state.preview = true;
+            state.notice = Some("Synthetic highlighting fixture".into());
+            state
+                .events
+                .ingest_conversation(format!("[AGENT] Highlighting fixture\n{source}").as_bytes());
+            state.events.open();
+            let now = std::time::Instant::now();
+            let _ = state.frame(now);
+            let frame = state.frame(now);
+            assert_eq!(
+                frame,
+                state.frame(now),
+                "same input and time must yield the same frame"
+            );
+            let stem = format!("highlight-{}-{cols}", theme.name());
+            std::fs::write(directory.join(format!("{stem}.ansi")), frame.diff(None)).unwrap();
+            std::fs::write(
+                directory.join(format!("{stem}.json")),
+                serde_json::to_vec(&json!({"rows": rows, "cols": cols})).unwrap(),
+            )
+            .unwrap();
+            frames.push(json!({
+                "stem": stem,
+                "rows": rows,
+                "cols": cols,
+                "theme": theme.name(),
+                "tones": {
+                    "heading": ui.color("heading"),
+                    "success": ui.color("success"),
+                    "blue": ui.color("blue"),
+                    "accent": ui.color("accent"),
+                    "warning": ui.color("warning")
+                }
+            }));
+        }
+    }
+    std::fs::write(
+        directory.join("fixture.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema": "ssmcp.highlight-fixture.v1",
+            "synthetic_input": true,
+            "renderer": "State::frame / EventView::render / semantic_text / Frame::diff",
+            "no_color_mode": "Ui.color=false (the renderer mode selected by NO_COLOR)",
+            "byte_preservation": true,
+            "frames": frames
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
