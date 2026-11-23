@@ -293,6 +293,7 @@ jobs:
             target/acceptance/input-history/report.json
             target/acceptance/input-history/input-history-*.json
             target/acceptance/input-history/input-history-*.txt
+            target/acceptance/native-inputs-*/
             target/acceptance/worker-windows-*/report.json
             target/acceptance/worker-windows-*/evidence/tall-paused-logs.json
             target/acceptance/worker-windows-*/evidence/*-task-start.json

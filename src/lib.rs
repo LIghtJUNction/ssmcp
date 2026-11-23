@@ -79,5 +79,5 @@ pub mod commerce;
 
 pub mod webhooks;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) mod test_process;
