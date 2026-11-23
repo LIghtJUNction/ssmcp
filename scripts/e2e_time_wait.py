@@ -336,6 +336,7 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
         # Queued human input wakes the member after this explicit idle baseline.
         self.public_call("collab", self.lifecycle_update_arguments(member, "idle"))
         self.verify_clock_layout()
+        self.replace_short(front, "")
         public_queued = self.submit_source(front, "PUBLIC_WAIT_REQUIREMENT_STAYS_QUEUED")
         self.save_draft(front)
         self.verify_clock_layout()
@@ -386,6 +387,7 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
                    "the same timed-out wait becomes ready only after its real target status changes")
 
         self.public_call("collab", self.lifecycle_update_arguments(member, "idle"))
+        self.replace_short(front, "")
         cancel_queued = self.submit_source(front, "PUBLIC_WAIT_CANCEL_STAYS_PASSIVE")
         self.save_draft(front)
         self.verify_clock_layout()
