@@ -386,6 +386,7 @@ impl Peer {
 
     /// Mark only the audit copies of this exact discovery request and response.
     /// Native JSON, unrelated notifications and stderr keep their own provenance.
+    #[cfg(test)]
     pub(crate) async fn request_discovery(&self, method: &str, params: Value) -> Response {
         self.request_with_origin(method, params, true).await
     }

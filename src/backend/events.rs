@@ -253,11 +253,6 @@ impl EventLog {
         receive
     }
 
-    pub(crate) fn map_background(&self, path: &std::path::Path) {
-        if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
-            pool.map_background(path);
-        }
-    }
     pub fn push(&self, event: Value) {
         if crate::client::render::reserved_control_event(&event) {
             return;

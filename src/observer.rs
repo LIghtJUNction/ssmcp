@@ -512,17 +512,6 @@ impl Pool {
             .insert(key, provider.into());
         Ok(Some(lease))
     }
-    pub(crate) fn map_background(&self, path: &Path) {
-        if let Some(call_id) = crate::backend::rpc::HarnessCall::current_id() {
-            let key = format!("native:{call_id}");
-            let mut state = self.state.lock().unwrap();
-            if state.active.contains_key(&key) {
-                state
-                    .backgrounds
-                    .insert(path.to_string_lossy().into_owned(), key);
-            }
-        }
-    }
     pub(crate) fn native_event(&self, provider: &str, event: &Value) {
         if let Some(path) = event["path"].as_str()
             && event["type"]
