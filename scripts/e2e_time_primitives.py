@@ -192,7 +192,13 @@ def inside(args):
                 until(sessions, lambda: "运行 00:" in divider(session, row), "running elapsed clock")
                 elapsed_frame = until_clock(sessions, session, row, "运行", lambda seconds: seconds >= 1,
                                             "running elapsed clock reaches one second", timeout=2.5)
-                state = connection.call("ssmcp.exec.status", {"job_id": job["job_id"]})
+                # The display and supervisor expose independent observations.
+                # Wait for the job's own elapsed receipt before comparing clocks.
+                def elapsed_receipt():
+                    value = connection.call("ssmcp.exec.status", {"job_id": job["job_id"]})
+                    return value if value["running"] and value["duration_ms"] >= 1000 else None
+
+                state = until(sessions, elapsed_receipt, "owned job reaches one elapsed second", timeout=2.5)
                 assert state["running"] and state["duration_ms"] >= 1000 and state["remaining_ms"] is None, state
                 assert clock_seconds(elapsed_frame, "运行") >= 1, elapsed_frame
                 native_time = [entry for entry in display(connection)["timing"]["active"] if entry["kind"] == "task"]
