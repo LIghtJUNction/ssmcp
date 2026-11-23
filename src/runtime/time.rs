@@ -994,7 +994,14 @@ impl NativePlugin for Clock {
             let value = match call.native_name.as_str() {
                 "ssmcp.time.now" => self.now(call.arguments),
                 "ssmcp.time.wait" => self.wait(call.arguments).await,
-                "ssmcp.time.prompt" => self.prompt(call.arguments),
+                "ssmcp.time.prompt" => {
+                    let source = Source::capture();
+                    tokio::task::spawn_blocking(move || {
+                        source.blocking(|| self.prompt(call.arguments))
+                    })
+                    .await
+                    .map_err(|_| "prompt worker stopped; outcome unknown".to_owned())?
+                }
                 _ => Err("unknown time primitive".into()),
             }?;
             Ok(crate::backend::result(value))

@@ -3,6 +3,7 @@
 use super::{Clock, Owner, Source, civil, millis};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use tokio::time::Instant;
 
@@ -47,6 +48,7 @@ pub(crate) struct PromptSummary {
     pub expires_at_unix_ms: i64,
     pub tick: u64,
     pub pending_count: u32,
+    pub visibility: &'static str,
     pub missed_count: u64,
     pub retention_after_ack_ms: u64,
 }
@@ -73,7 +75,7 @@ fn read_limit_default() -> usize {
     4
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
     Schedule {
@@ -230,6 +232,28 @@ impl Template {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PublicationState {
+    InFlight,
+    Published,
+    Rejected,
+    Unknown,
+}
+
+#[derive(Clone)]
+struct Publication {
+    event: Event,
+    key: String,
+    source: Source,
+    state: PublicationState,
+}
+
+impl Publication {
+    fn same_event(&self, event: &Event) -> bool {
+        self.event.event_id == event.event_id && self.event.revision == event.revision
+    }
+}
+
 struct Record {
     id: String,
     owner: Owner,
@@ -247,6 +271,8 @@ struct Record {
     missed: u64,
     last_fired_at: Option<i64>,
     pending: Option<Event>,
+    source: Option<Source>,
+    publication: Option<Publication>,
     last_ack: Option<(String, u64)>,
     retained_since: Option<Instant>,
 }
@@ -265,9 +291,42 @@ impl Record {
             expires_at_unix_ms: self.expires_at,
             tick: self.tick,
             pending_count: u32::from(self.pending.is_some()),
+            visibility: self.visibility(),
             missed_count: self.missed,
             retention_after_ack_ms: RETENTION_MS,
         }
+    }
+
+    fn visible(&self) -> bool {
+        self.pending.as_ref().is_some_and(|event| {
+            self.publication.as_ref().is_some_and(|publication| {
+                publication.state == PublicationState::Published && publication.same_event(event)
+            })
+        })
+    }
+
+    fn visibility(&self) -> &'static str {
+        if self.pending.is_none() {
+            return "none";
+        }
+        match &self.publication {
+            Some(publication) => match publication.state {
+                PublicationState::InFlight => "in_progress",
+                PublicationState::Unknown => "unknown",
+                PublicationState::Rejected => "rejected",
+                PublicationState::Published if self.visible() => "recorded",
+                PublicationState::Published => "queued",
+            },
+            None => "queued",
+        }
+    }
+
+    fn publication_ready(&self) -> bool {
+        self.source.is_some()
+            && self.pending.is_some()
+            && self.publication.as_ref().is_none_or(|publication| {
+                publication.state == PublicationState::Published && !self.visible()
+            })
     }
 
     fn finish(&mut self, status: PromptStatus, now: Instant) {
@@ -365,6 +424,9 @@ impl State {
     }
 
     fn next_wake(&self) -> Option<Instant> {
+        if self.records.values().any(Record::publication_ready) {
+            return Some(Instant::now());
+        }
         self.records
             .values()
             .filter_map(|record| match record.status {
@@ -375,6 +437,102 @@ impl State {
                     .map(|at| at + Duration::from_millis(RETENTION_MS)),
             })
             .min()
+    }
+
+    /// Reserve at most four writes before releasing the clock lock. Unknown
+    /// attempts are observed only; their identity/body/source cannot be replaced.
+    fn take_publications(&mut self, clock: &str) -> Vec<Publication> {
+        let mut batch = Vec::new();
+        for record in self
+            .records
+            .values_mut()
+            .filter(|record| record.publication_ready())
+            .take(4)
+        {
+            let event = record
+                .pending
+                .as_ref()
+                .expect("pending publication")
+                .clone();
+            let mut digest = Sha256::new();
+            digest.update(b"ssmcp.timer.input.v1\0");
+            digest.update(clock.as_bytes());
+            digest.update(b"\0");
+            digest.update(event.event_id.as_bytes());
+            digest.update(event.revision.to_le_bytes());
+            let publication = Publication {
+                event,
+                key: format!("gi_{}", crate::hex::encode(digest.finalize())),
+                source: record.source.as_ref().expect("retained source").clone(),
+                state: PublicationState::InFlight,
+            };
+            record.publication = Some(publication.clone());
+            batch.push(publication);
+        }
+        // An unknown old write cannot starve other timers or cause an immediate
+        // wake loop. Fill only the remainder of this bounded batch with reads.
+        for publication in self
+            .records
+            .values()
+            .filter_map(|record| record.publication.as_ref())
+            .filter(|publication| publication.state == PublicationState::Unknown)
+            .take(4 - batch.len())
+        {
+            batch.push(publication.clone());
+        }
+        batch
+    }
+
+    fn finish_publication(&mut self, attempt: &Publication, outcome: PublicationState) {
+        if let Some(record) = self.records.get_mut(&attempt.event.timer_id)
+            && let Some(publication) = &mut record.publication
+            && publication.key == attempt.key
+            && publication.same_event(&attempt.event)
+        {
+            // This marker describes only the original revision, even if a tick
+            // coalesced a newer pending body during display work.
+            publication.state = outcome;
+        }
+    }
+
+    fn read_events(
+        &mut self,
+        owner: &Owner,
+        timer_id: Option<&str>,
+        limit: usize,
+        visible_only: bool,
+    ) -> Result<Value, String> {
+        if !(1..=32).contains(&limit) {
+            return Err("read limit must be 1..=32".into());
+        }
+        if let Some(id) = timer_id {
+            self.owned(owner, id)?;
+        }
+        let mut deferred = 0usize;
+        let mut events: Vec<_> = self
+            .records
+            .values()
+            .filter_map(|record| {
+                if &record.owner != owner || timer_id.is_some_and(|id| id != record.id) {
+                    return None;
+                }
+                let event = record.pending.as_ref()?;
+                if visible_only && !record.visible() {
+                    deferred += 1;
+                    return None;
+                }
+                Some(event)
+            })
+            .collect();
+        events.sort_by(|a, b| {
+            a.fired_at_unix_ms
+                .cmp(&b.fired_at_unix_ms)
+                .then(a.event_id.cmp(&b.event_id))
+        });
+        let more = events.len() > limit;
+        events.truncate(limit);
+        Ok(json!({"events":events,"more":more,"ack_required":true,
+            "visibility_deferred":deferred}))
     }
 
     pub(super) fn summaries(&self, owner: &Option<super::HistoryOwner>) -> Vec<PromptSummary> {
@@ -531,6 +689,8 @@ impl State {
                     missed: 0,
                     last_fired_at: None,
                     pending: None,
+                    source: None,
+                    publication: None,
                     last_ack: None,
                     retained_since: None,
                 };
@@ -545,28 +705,7 @@ impl State {
                 json!({"schedule":self.owned(&owner, &timer_id)?.summary()})
             }
             Request::Read { timer_id, limit } => {
-                if !(1..=32).contains(&limit) {
-                    return Err("read limit must be 1..=32".into());
-                }
-                if let Some(id) = &timer_id {
-                    self.owned(&owner, id)?;
-                }
-                let mut events: Vec<_> = self
-                    .records
-                    .values()
-                    .filter(|record| {
-                        record.owner == owner && timer_id.as_ref().is_none_or(|id| id == &record.id)
-                    })
-                    .filter_map(|record| record.pending.as_ref())
-                    .collect();
-                events.sort_by(|a, b| {
-                    a.fired_at_unix_ms
-                        .cmp(&b.fired_at_unix_ms)
-                        .then(a.event_id.cmp(&b.event_id))
-                });
-                let more = events.len() > limit;
-                events.truncate(limit);
-                json!({"events":events,"more":more,"ack_required":true})
+                self.read_events(&owner, timer_id.as_deref(), limit, false)?
             }
             Request::Pause { timer_id } => {
                 let record = self.owned(&owner, &timer_id)?;
@@ -634,12 +773,18 @@ fn envelope(mut value: Value) -> Value {
 
 impl Clock {
     pub(super) fn prompt(self: &Arc<Self>, arguments: Value) -> Result<Value, String> {
+        let source = Source::capture();
+        let owner = Owner::from_source(&source);
         let request: Request = serde_json::from_value(arguments)
             .map_err(|error| format!("invalid prompt request: {error}"))?;
-        let owner = Owner::from_source(&Source::capture());
+        let read = match &request {
+            Request::Read { timer_id, limit } => Some((timer_id.clone(), *limit)),
+            _ => None,
+        };
+        let scheduling = matches!(request, Request::Schedule { .. });
         let now = Instant::now();
         let wall = civil::now_ms()?;
-        let result = {
+        let mut result = {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             if state.closed {
                 return Err(
@@ -648,14 +793,106 @@ impl Clock {
                 );
             }
             state.prompts.tick(now, wall);
-            state.prompts.request(owner, &self.id, request, now, wall)
+            let result = state
+                .prompts
+                .request(owner.clone(), &self.id, request, now, wall);
+            if scheduling
+                && let Ok(value) = &result
+                && let Some(id) = value["schedule"]["id"].as_str()
+                && let Some(record) = state.prompts.records.get_mut(id)
+                && record.source.is_none()
+            {
+                record.source = Some(source);
+            }
+            result
         };
-        // Read never acknowledges. Even an invalid operation cannot cancel the
-        // native pump or remove a prior queued event.
+        // Both entrypoints publish outside the Clock lock, through the same UI
+        // message serializer. Schedule mutation remains valid if display rejects.
+        self.publish_due();
+        if result.is_ok()
+            && let Some((timer_id, limit)) = read
+        {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            result = state
+                .prompts
+                .read_events(&owner, timer_id.as_deref(), limit, true)
+                .map(envelope);
+        }
         self.start_prompt_scheduler();
         self.prompt_changed.notify_one();
         super::changed();
         result
+    }
+
+    fn publish_due(&self) {
+        use crate::client::interface::{history, messages::InputOrigin, publish_message};
+        let batch = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            if state.closed {
+                return;
+            }
+            state.prompts.take_publications(&self.id)
+        };
+        for attempt in batch {
+            if self
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .closed
+            {
+                break;
+            }
+            let outcome = if attempt.state == PublicationState::Unknown {
+                let confirmed = attempt.source.require_owner().ok().is_some_and(|owner| {
+                    history::request_identity(&attempt.key, "generated_input")
+                        .ok()
+                        .and_then(|id| {
+                            history::recorded_input(
+                                owner,
+                                &id,
+                                &attempt.event.body,
+                                InputOrigin::AgentTimer,
+                            )
+                            .ok()
+                        })
+                        == Some(true)
+                });
+                if confirmed {
+                    PublicationState::Published
+                } else {
+                    PublicationState::Unknown
+                }
+            } else {
+                // Unwinding after a native commit cannot be called rejection.
+                // The retained attempt will only be reconciled by positive evidence.
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    publish_message(
+                        json!({"kind":"input","input_origin":"agent_timer",
+                        "idempotency_key":attempt.key,"text":attempt.event.body}),
+                        attempt.source.clone(),
+                    )
+                })) {
+                    Ok(Ok(value))
+                        if value["accepted"] == true
+                            && value["recorded"] == true
+                            && value["kind"] == "input"
+                            && value["input_origin"] == "agent_timer"
+                            && value["completion_permission"] == false =>
+                    {
+                        PublicationState::Published
+                    }
+                    // Canonical publisher Result errors occur before the input
+                    // history commit; all later display/receipt code is infallible.
+                    Ok(Err(_)) => PublicationState::Rejected,
+                    _ => PublicationState::Unknown,
+                }
+            };
+            self.state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .prompts
+                .finish_publication(&attempt, outcome);
+        }
     }
 
     fn start_prompt_scheduler(self: &Arc<Self>) {
@@ -670,30 +907,35 @@ impl Clock {
                 let Some(clock) = clock.upgrade() else {
                     break;
                 };
-                let next = {
+                // One blocking batch, never one task per timer. No Clock strong
+                // reference survives into the sleep below.
+                let next = tokio::task::spawn_blocking(move || {
                     let mut state = clock
                         .state
                         .lock()
                         .unwrap_or_else(|error| error.into_inner());
                     if state.closed {
-                        break;
+                        return None;
                     }
-                    match civil::now_ms() {
-                        Ok(wall) => {
-                            let updated = state.prompts.tick(Instant::now(), wall);
-                            let next = state.prompts.next_wake();
-                            drop(state);
-                            if updated {
-                                super::changed();
-                            }
-                            next
-                        }
-                        // A failed civil-clock read must not fabricate an actual
-                        // firing timestamp or spin continuously on an overdue tick.
-                        Err(_) => Some(Instant::now() + Duration::from_secs(1)),
+                    let Ok(wall) = civil::now_ms() else {
+                        return Some(Instant::now() + Duration::from_secs(1));
+                    };
+                    let updated = state.prompts.tick(Instant::now(), wall);
+                    drop(state);
+                    clock.publish_due();
+                    if updated {
+                        super::changed();
                     }
+                    let state = clock
+                        .state
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    state.prompts.next_wake()
+                })
+                .await;
+                let Ok(next) = next else {
+                    break;
                 };
-                drop(clock);
                 if let Some(deadline) = next {
                     tokio::select! {
                         _ = tokio::time::sleep_until(deadline) => {},
@@ -1018,20 +1260,36 @@ mod tests {
         );
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn pump_fires_without_a_reader_and_survives_the_scheduling_caller() {
         let clock = Clock::new().unwrap();
         let caller = {
             let clock = clock.clone();
             tokio::spawn(async move {
-                prompt(&clock, json!({"action":"schedule","request_id":"independent","after_ms":1000,"template":"ping"})).unwrap();
+                prompt(&clock, json!({"action":"schedule","request_id":"independent","after_ms":10,"template":"ping"})).unwrap();
                 std::future::pending::<()>().await;
             })
         };
         tokio::task::yield_now().await;
         caller.abort();
-        tokio::time::advance(Duration::from_secs(1)).await;
-        tokio::task::yield_now().await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if clock
+                    .state
+                    .lock()
+                    .unwrap()
+                    .prompts
+                    .records
+                    .values()
+                    .any(|record| record.pending.is_some())
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
         {
             let state = clock.state.lock().unwrap();
             assert_eq!(state.prompts.records.len(), 1);
@@ -1052,7 +1310,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_timer_queues_once_and_duplicate_read_does_not_acknowledge() {
+    async fn unowned_timer_retains_event_without_silent_model_delivery() {
         let clock = Clock::new().unwrap();
         let created = prompt(
             &clock,
@@ -1081,7 +1339,107 @@ mod tests {
         let first = prompt(&clock, args.clone()).unwrap();
         let retry = prompt(&clock, args).unwrap();
         assert_eq!(first, retry);
-        assert_eq!(first["events"][0]["body"], "ping");
+        assert_eq!(first["events"], json!([]));
+        assert_eq!(first["visibility_deferred"], 1);
+        let state = clock.state.lock().unwrap();
+        let record = state.prompts.records.values().next().unwrap();
+        assert_eq!(record.pending.as_ref().unwrap().body, "ping");
+        assert!(record.last_ack.is_none());
+        assert_eq!(record.visibility(), "rejected");
+        drop(state);
+        clock.close();
+    }
+
+    #[test]
+    fn publication_unknown_is_observe_only_and_cannot_ack_or_cover_a_new_revision() {
+        let now = Instant::now();
+        let mut state = State::default();
+        let original = owner(1);
+        let id = add(
+            &mut state,
+            original.clone(),
+            schedule("visible", 0, Some(1000)),
+            now,
+        );
+        state.records.get_mut(&id).unwrap().source = Some(Source::default());
+        state.tick(now, 1_000_000);
+        let attempt = state.take_publications("test").pop().unwrap();
+        assert!(attempt.key.len() <= 96);
+        let pending = serde_json::to_value(&state.records[&id].pending).unwrap();
+        let status = state.records[&id].status;
+        let tick = state.records[&id].tick;
+        state.finish_publication(&attempt, PublicationState::Unknown);
+        for _ in 0..3 {
+            let observed = state.take_publications("test");
+            assert_eq!(observed.len(), 1);
+            assert_eq!(observed[0].state, PublicationState::Unknown);
+            assert_eq!(observed[0].key, attempt.key);
+            assert_eq!(
+                state.read_events(&original, Some(&id), 4, true).unwrap()["events"],
+                json!([])
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(&state.records[&id].pending).unwrap(),
+            pending
+        );
+        assert!(state.records[&id].last_ack.is_none());
+        assert_eq!(state.records[&id].status, status);
+        assert_eq!(state.records[&id].tick, tick);
+        state.tick(now + Duration::from_secs(1), 1_001_000);
+        state.finish_publication(&attempt, PublicationState::Published);
+        assert!(!state.records[&id].visible());
+        assert_eq!(state.records[&id].pending.as_ref().unwrap().revision, 2);
+        assert!(state.records[&id].last_ack.is_none());
+        let newer = state.take_publications("test").pop().unwrap();
+        assert_ne!(newer.key, attempt.key);
+        state.finish_publication(&newer, PublicationState::Rejected);
+        assert!(state.take_publications("test").is_empty());
+        assert_eq!(state.records[&id].pending.as_ref().unwrap().revision, 2);
+    }
+
+    #[tokio::test]
+    async fn timer_publication_keeps_original_history_while_another_history_is_selected() {
+        use crate::client::interface::history;
+        let clock = Clock::new().unwrap();
+        let root = std::env::temp_dir().join(format!("ssmcp-visible-timer-{}", clock.id));
+        history::with_test_history(root.join("a"), async {
+            let source = Source::capture();
+            let owner_a = source.require_owner().unwrap().clone();
+            let created = source.clone().blocking(|| clock.prompt(json!({
+                "action":"schedule","request_id":"original","after_ms":10,"template":"original timer"
+            }))).unwrap();
+            history::with_test_history(root.join("b"), async {
+                let owner_b = Source::capture().require_owner().unwrap().clone();
+                history::record_owned_request(&owner_b, "b_message", "B stays selected").unwrap();
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    loop {
+                        if clock.state.lock().unwrap().prompts.records.values().any(Record::visible) {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                }).await.unwrap();
+                let args = json!({"action":"read","timer_id":created["schedule"]["id"]});
+                let first = source.clone().blocking(|| clock.prompt(args.clone())).unwrap();
+                let retry = source.clone().blocking(|| clock.prompt(args)).unwrap();
+                assert_eq!(first, retry);
+                assert_eq!(first["events"][0]["body"], "original timer");
+                assert_eq!(first["visibility_deferred"], 0);
+                let other = history::read(owner_b.id()).unwrap();
+                assert_eq!(other.messages.len(), 1);
+                assert_eq!(other.messages[0].content, "B stays selected");
+                assert_eq!(history::current_owner(), Some(owner_b));
+            }).await;
+            let original = history::read(owner_a.id()).unwrap();
+            assert_eq!(original.messages.len(), 1);
+            assert_eq!(original.messages[0].role, "tool");
+            assert_eq!(original.messages[0].input_origin,
+                Some(crate::client::interface::messages::InputOrigin::AgentTimer));
+            assert_eq!(original.messages[0].content, "original timer");
+            assert!(clock.state.lock().unwrap().prompts.records.values()
+                .all(|record| record.pending.is_some() && record.last_ack.is_none()));
+        }).await;
         clock.close();
     }
 
