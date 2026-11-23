@@ -24,8 +24,8 @@ Native worker metadata also retains its source generation, sequence and time.
 | `worker.retiring` | An idle registered station entered cooperative retirement. |
 | `worker.unknown` | A task's outcome could not be established. No automatic replay follows. |
 | `agent.joined`, `agent.left` | A collaboration membership began or ended. |
-| `agent.status_changed` | An authenticated participant changed its declared status. |
-| `agent.maintenance_requested` | A bounded maintenance round became available to its exact main participant. |
+| `agent.status_changed` | A real lifecycle transition occurred through an authenticated update, work, input, worker event or deadline. |
+| `agent.maintenance_requested` | A bounded maintenance request was privately addressed to its exact eligible member. |
 | `wait.started`, `wait.suspended`, `wait.resumed`, `wait.completed` | An observer entered, left, or completed a bounded waiting episode. |
 | `message.sent` | The message service accepted the message for its actual recipients. |
 | `message.received` | A message was included in a receive result. This does not prove reading or execution. |

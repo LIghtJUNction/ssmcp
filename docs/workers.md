@@ -14,6 +14,12 @@ snapshot first; a stale revision is rejected. Reconcile an unknown update
 outcome from the original state instead of replaying it.
 [Lifecycle state machine](../src/collab/lifecycle.rs)
 
+New members begin `idle` at lifecycle revision 1. The default idle interval is
+300,000 ms (configurable from 1,000 to 86,400,000); the default maintenance
+budget is 30,000 ms (configurable from 1,000 to 55,000). Configure these as
+top-level `idle_after_ms` and `maintenance_budget_ms` fields with the current
+`expected_revision`.
+
 An eligible idle deadline may request one bounded maintenance round. This
 request does not execute work or start a model. Perform only already authorized
 work, retain the returned `round_id`, and report
@@ -22,7 +28,9 @@ actual `complete`, `fail`, `cancel` or `unknown` outcome separately. A lifecycle
 status change and a maintenance outcome must use separate updates. New human
 input preempts the round; uncertain running work keeps that outcome until its
 original effects are reconciled. Generated system, timer and worker-event
-inputs remain passive.
+inputs remain passive. Budget expiry cancels an unstarted request; a running
+round becomes `unknown`. That outcome neither proves the work stopped nor
+authorizes another execution.
 [Maintenance and preemption](../src/collab/lifecycle.rs) ·
 [Visible generated inputs](../src/http/input_projection.rs)
 
@@ -33,7 +41,7 @@ task, make independent progress while dependencies run. When no useful work
 remains, block on the existing wait or event notification and retain pending
 wait IDs. This policy uses existing agents and does not require every other
 worker to be idle.
-[Optional round policy](events.md#one-optional-dreaming-round)
+[Lifecycle maintenance and advisory policy](events.md#a-bounded-lifecycle-maintenance-round)
 
 ## Start a pool
 
