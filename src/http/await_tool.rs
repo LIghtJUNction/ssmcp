@@ -950,10 +950,8 @@ pub(super) async fn wait(
     if (!record.windowed && args.window_ms.is_some()) || (args.after.is_some() && !passive_window) {
         return Err("observation mode and result cursor must match the original await".into());
     }
-    if passive_window {
-        if let Some(response) = read_window_snapshot(&record, args.after)? {
-            return Ok(response);
-        }
+    if passive_window && let Some(response) = read_window_snapshot(&record, args.after)? {
+        return Ok(response);
     }
     let window_ms = args.window_ms.unwrap_or(args.timeout_ms);
     let _active = match broker.awaiting.activate(&record) {
