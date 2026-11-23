@@ -257,6 +257,8 @@ ssmcp tools status
 
 Dreaming 可以使用已有的执行、文件和 Git 操作维护这些工具仓库与工作流内容，检查后在新调用中验证实际源码摘要。初始化本身不会启动模型或调度器。[工具仓库、可信配置与维护流程](docs/tool-repositories.md) · [code_mode 源码回执](docs/code-mode.md#find-and-iterate-tool-implementations)
 
+其他客户端的源码入口与各端验收范围见[客户端](docs/clients.md)；HTTP 接入与配对协议见[GUI 网关](docs/gui-gateway.md)。
+
 ### 命令执行、在途去重与结果缓存
 
 - **命令执行（可用）**。Code Mode 编排调用，宿主负责授权、执行和作业生命周期，原有审批仍适用。用 `exec.start` 启动后台命令并取得 `job_id`，再用 `exec.status`、`exec.read` 或 `exec.wait` 查询、读取输出或等待，用 `exec.cancel` 请求取消。原生 `ssmcp.exec.wait` 省略 `wait_ms` 时等待目标完成，显式 `wait_ms: 0` 则立即读取状态。窗口到期返回 `wait_status: "pending"`，作业继续运行。下次传入同一个 `job_id` 即可读取完成状态。命令默认没有执行期限，可设置 `timeout_ms` 终止超时进程。Code Mode 和中继调用各自仍有传输或编排期限。当前并发容量用尽时拒绝新启动，按负载接纳新命令的等待队列仍在规划中。[Code Mode 命令接口](docs/code-mode.md#exec)

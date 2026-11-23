@@ -134,6 +134,8 @@ mod tests {
                 "~/.local/share/ssmcp/tools/official",
                 "Dreaming",
                 "docs/tool-repositories.md",
+                "docs/clients.md",
+                "docs/gui-gateway.md",
                 "ssmcp tools status",
                 "ssmcp tools check",
                 "ssmcp tools update",

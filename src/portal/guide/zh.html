@@ -95,6 +95,7 @@ ssmcp tools status</code></pre>
   <p>加载顺序是官方、RC 中按序列出的 overrides、已启用全局、已登记的当前项目。项目路径必须与当前工作区完全匹配，普通 checkout 中的文件不会自行启用。选中来源损坏会中止调用；宿主原语、身份检查与原生权限仍然生效。</p>
   <h3 class="subheading">维护可复用工作流</h3>
   <p>Dreaming 可以使用已有的执行、文件与 Git 操作，维护选中的工具仓库和工作流内容。审阅、测试改动后，在新 code_mode 调用中核对实际源码摘要；初始化不会启动模型或后台调度器。可信配置与验证步骤见<a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/tool-repositories.md">工具仓库管理</a>。</p>
+  <p>Web、原生桌面、Android 与 iOS 的源码入口和各端验收范围见<a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/clients.md">客户端概览</a>；HTTP 接入与配对协议见<a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/gui-gateway.md">GUI 网关说明</a>。</p>
   <p><code>ssmcp tools check</code> 获取官方上游状态；<code>ssmcp tools update</code> 只快进清洁的官方仓库。这两个命令不更新项目或全局仓库。</p>
   <p class="note">文档随服务器构建更新，具体能力以目标客户端返回的工具 schema 为准。安装器获取已经公开的版本，新功能需要相应客户端进程。</p>
 </section>
