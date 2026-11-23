@@ -86,6 +86,7 @@ async fn default_runtime_directory_and_socket_are_private() {
 
 #[tokio::test]
 async fn active_listener_is_preserved_and_owned_stale_socket_is_recovered() {
+    if crate::test_process::isolated("client::local::socket::tests::active_listener_is_preserved_and_owned_stale_socket_is_recovered").await { return; }
     let directory = Directory::new();
     let endpoint = directory.endpoint();
     let listener = endpoint.bind().await.unwrap();

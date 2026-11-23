@@ -422,7 +422,14 @@ async fn target_reservations_wait_for_authentication_and_reject_listener_candida
         .unwrap_err();
     assert_ne!(error, UNREACHABLE);
     for address in reserved {
-        assert!(TcpListener::bind(address).await.is_ok());
+        let listener = TcpListener::bind(address).await.unwrap_or_else(|error| {
+            panic!(
+                "released candidate {address} could not be rebound: {error}; kind={:?}; errno={:?}",
+                error.kind(),
+                error.raw_os_error()
+            )
+        });
+        drop(listener);
     }
     left.shutdown().await;
     right.shutdown().await;
@@ -459,6 +466,7 @@ async fn expired_automatic_offers_release_the_reserved_sockets() {
 
 #[tokio::test]
 async fn shutdown_during_a_stalled_tls_probe_is_bounded_and_releases_every_socket() {
+    if crate::test_process::isolated("peer_port::tests::automatic::shutdown_during_a_stalled_tls_probe_is_bounded_and_releases_every_socket").await { return; }
     let app = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let target = app.local_addr().unwrap();
     let trap = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -521,7 +529,11 @@ async fn shutdown_during_a_stalled_tls_probe_is_bounded_and_releases_every_socke
         assert!(TcpListener::bind(address).await.is_ok());
     }
     drop(application_slot);
-    assert!(TcpListener::bind(application_address).await.is_ok());
+    let listener = TcpListener::bind(application_address).await.unwrap_or_else(|error| {
+        panic!("released application slot {application_address} could not be rebound: {error}; kind={:?}; errno={:?}",
+            error.kind(), error.raw_os_error())
+    });
+    drop(listener);
 }
 
 #[test]
