@@ -117,6 +117,7 @@ type SidebarAgentRow = (String, PanelTone, Option<SidebarAgentIdentity>);
 #[derive(Default)]
 pub(super) struct Conversation {
     pub(super) composer: Composer,
+    pub(super) idle_tips: hints::IdleTips,
     pub(super) worker_activity_rows: u16,
     #[cfg(test)]
     worker_activity_fixture: Option<Value>,
@@ -2639,6 +2640,7 @@ impl State {
         // Already-arrived input must win over a ready picker result, including
         // an Escape prefix whose decoding will finish on a subsequent flush.
         if !bytes.is_empty() {
+            self.conversation.idle_tips.pause();
             self.chat_cancel_native_lookup();
         }
         // Run before accepting the next input, including a real Ctrl-C after a
@@ -3188,6 +3190,11 @@ impl State {
                     || paste_hint.is_some()
                     || native_hint.is_some()
                     || update_hint.is_some();
+                let idle_hint = self.chat_idle_tip(
+                    now,
+                    connection == super::footer::Connection::Connected,
+                    priority_hint || question_attention.is_some(),
+                );
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
                 } else if self.notice.is_none() {
@@ -3206,6 +3213,7 @@ impl State {
                         self.rendered_update_notice = Some(hint);
                         return message;
                     }
+                    if let Some(hint) = idle_hint { return hint.into(); }
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
