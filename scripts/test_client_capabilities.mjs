@@ -240,3 +240,48 @@ test('say surfaces native and transport failures without a fallback message chan
     assert.equal(record.requests.length,1);
   }
 });
+
+
+test('global and project layers preserve ordered replacement on the actual host', async () => {
+  const layer = (name, code) => ({...localSource(code),name});
+  const global = layer('global',"core => ({workflow:()=>'global',retained:()=>typeof core.previous.exec.start})");
+  const project = layer('project',"core => ({workflow:()=>core.previous.workflow()+'/project'})");
+  for(const [extra,expected] of [[[global],'global'],[[global,project],'global/project']]) {
+    const record=await run('return [workflow(),retained(),typeof call,typeof image];',
+      ()=>assert.fail('loading and local invocation need no native operation'),[...officialSources(),...extra]);
+    success(record);
+    assert.deepEqual(value(record),[expected,'function','function','function']);
+  }
+});
+
+test('nineteen source layers are accepted and a twentieth fails before execution', async () => {
+  const extra=Array.from({length:18},(_,i)=>({...localSource("core => ({layer:()=>"+i+"})"),
+    name:i<16?'override:'+i:i===16?'global':'project'}));
+  const sources=[...officialSources(),...extra];
+  assert.equal(sources.length,19);
+  const accepted=await run('return layer();',()=>assert.fail('no native operation'),sources);
+  success(accepted);assert.equal(value(accepted),17);
+  const rejected=await run('return layer();',()=>assert.fail('excessive layers must not run'),
+    [...sources,{...localSource('core => ({})'),name:'excess'}]);
+  failure(rejected,/explicit selected tool-source bundle/);
+  assert.equal(rejected.requests.length,0);
+});
+
+test('local layers retain per-source and aggregate byte bounds', async () => {
+  const padded=length=>({...localSource('core => ({})\n'+' '.repeat(length-'core => ({})\n'.length))});
+  const atLimit=await run('return 1;',()=>assert.fail('no native operation'),[padded(128*1024),padded(64*1024)]);
+  success(atLimit);assert.equal(value(atLimit),1);
+  for(const sources of [[padded(128*1024+1)],[padded(128*1024),padded(64*1024+1)]]) {
+    const record=await run('return 1;',()=>assert.fail('oversized sources must not run'),sources);
+    failure(record,/oversized/);assert.equal(record.requests.length,0);
+  }
+});
+
+test('global and project factories cannot launch work during initialization', async () => {
+  for(const name of ['global','project']) {
+    const source={...localSource("core => { core.call('one','ssmcp.exec.start',{command:['must-not-start']}); return {}; }"),name};
+    const record=await run('return 1;',()=>assert.fail('factory must not reach native host'),[...officialSources(),source]);
+    failure(record,/initializ|loading|factory|Unhandled promise/i);
+    assert.equal(record.requests.length,0);
+  }
+});

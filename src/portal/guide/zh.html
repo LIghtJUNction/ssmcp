@@ -80,12 +80,22 @@
     <p>任务使用每个槽位的 SSMCP 上下文，不能假设是持久的模型原生线程，也不能依赖固定槽位。完整限制、输入上限和清理机制见<a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/workers.md">Worker 技术说明</a>。</p>
   </section>
 <section id="extensions" aria-labelledby="extensions-title">
-  <div class="section-heading"><p class="eyebrow">技术说明 · 扩展</p><h2 id="extensions-title">可编辑的工具 helper</h2></div>
-  <p><a href="https://github.com/LIghtJUNction/ssmcp-tools">ssmcp-tools</a> 保存 code_mode 的 JavaScript helper。新版客户端从本机登记的源码读取它们，回执携带实际路径、Git 状态和内容摘要；它们决定工具如何组合，调用仍经过原来的授权检查。</p>
-  <pre><code>ssmcp tools status
-ssmcp tools check
-ssmcp tools update</code></pre>
-  <p>客户端配置位于 <code>$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml</code>，默认是 <code>~/.config/ssmcp/ssmcprc.toml</code>。需要可用的 Git；更新只在清洁工作树上快进，不强制覆盖本地改动。修改 helper 不能伪造服务器身份、权限或结束批准。</p>
+  <div class="section-heading"><p class="eyebrow">技术说明 · 扩展</p><h2 id="extensions-title">项目与全局工具 helper</h2></div>
+  <p><a href="https://github.com/LIghtJUNction/ssmcp-tools">ssmcp-tools</a> 提供 code_mode 的官方 JavaScript helper。明确登记的本地仓库可以扩展或覆盖它们；每次新调用都返回实际加载的源码路径、摘要和 Git 状态。</p>
+  <div class="table-wrap"><table><thead><tr><th>来源</th><th>位置</th><th>优先级</th></tr></thead><tbody>
+    <tr><td>项目</td><td>当前工作区根目录的 <code>./.ssmcp/tools/</code></td><td>最高</td></tr>
+    <tr><td>全局</td><td><code>~/.ssmcp/tool/</code>，单数 tool</td><td>覆盖官方 helper</td></tr>
+    <tr><td>官方</td><td><code>$XDG_DATA_HOME/ssmcp/tools/official</code>，默认 <code>~/.local/share/ssmcp/tools/official</code></td><td>最先加载</td></tr>
+  </tbody></table></div>
+  <pre><code>ssmcp tools paths
+ssmcp tools init project --git
+ssmcp tools init global --git
+ssmcp tools status</code></pre>
+  <p>可信 RC 位于 <code>$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml</code>，默认是 <code>~/.config/ssmcp/ssmcprc.toml</code>。初始化离线创建并登记指定来源；<code>--git</code> 创建独立本地仓库，不自动提交或添加远端。已有目录会保留。审阅过的已有源码用 <code>ssmcp tools enable project</code> 登记，<code>ssmcp tools disable project</code> 取消登记并保留文件；全局来源把 <code>project</code> 换成 <code>global</code>。</p>
+  <p>加载顺序是官方、RC 中按序列出的 overrides、已启用全局、已登记的当前项目。项目路径必须与当前工作区完全匹配，普通 checkout 中的文件不会自行启用。选中来源损坏会中止调用；宿主原语、身份检查与原生权限仍然生效。</p>
+  <h3 class="subheading">维护可复用工作流</h3>
+  <p>Dreaming 可以使用已有的执行、文件与 Git 操作，维护选中的工具仓库和工作流内容。审阅、测试改动后，在新 code_mode 调用中核对实际源码摘要；初始化不会启动模型或后台调度器。可信配置与验证步骤见<a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/tool-repositories.md">工具仓库管理</a>。</p>
+  <p><code>ssmcp tools check</code> 获取官方上游状态；<code>ssmcp tools update</code> 只快进清洁的官方仓库。这两个命令不更新项目或全局仓库。</p>
   <p class="note">文档随服务器构建更新，具体能力以目标客户端返回的工具 schema 为准。安装器获取已经公开的版本，新功能需要相应客户端进程。</p>
 </section>
 <section id="tools" aria-labelledby="tools-title">

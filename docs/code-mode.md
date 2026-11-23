@@ -16,46 +16,70 @@ RC or overrides. An implicitly selected older client can also report
 `legacy_client_official_seed`; explicit selection and source-read errors never
 silently use a seed instead.
 
-JavaScript helper factories come from [ssmcp-tools tools.js](https://github.com/LIghtJUNction/ssmcp-tools/blob/main/tools.js),
-then only the overrides already registered in the selected client's
-`ssmcprc.toml`, in order. Later same-name exports replace earlier helpers.
-The outer `structuredContent.tool_sources` receipt identifies the actual loaded
-layers: client, mode, RC path/hash, source paths/hashes, and Git HEAD/dirty state.
-It does not identify which layer supplied each exported function. Reading the
-existing `ssmcp-client://tool-sources` client resource returns the source bundle,
-including code, and can bootstrap the official checkout; it is not a metadata-only
-probe. Use the outer receipt to inspect what this call actually loaded.
+JavaScript helper factories load in this order: the selected client's official
+[ssmcp-tools source](https://github.com/LIghtJUNction/ssmcp-tools/blob/main/tools.js),
+explicit RC overrides in their listed order, enabled global
+`~/.ssmcp/tool/`, then registered project `./.ssmcp/tools/`. Later same-name
+exports replace earlier ones; use `core.previous` when extending a namespace.
 
 The client RC is `$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml` (default
-`~/.config/ssmcp/ssmcprc.toml`); the official checkout is
-`$XDG_DATA_HOME/ssmcp/tools/official` (default `~/.local/share/ssmcp/tools/official`).
-These client configuration/data locations may be readable without being writable
-through the selected workspace's native tools. A source path or Git dirty state
-is not a write grant. Prefer a user-authorized, preconfigured override in the
-writable project; relative RC override paths resolve against the client workspace.
-Creating a file elsewhere in the project does not activate it. Do not automatically
-register or execute arbitrary workspace code, change approval policy, or broaden
-native filesystem access to reach the XDG locations.
+`~/.config/ssmcp/ssmcprc.toml`). It retains `[tools].overrides` and adds
+`global = false` and `projects = []` by default. Project roots are trusted,
+canonical absolute registrations matched against the exact client workspace;
+no parent-directory search or workspace-file autoactivation occurs. The
+official checkout remains `$XDG_DATA_HOME/ssmcp/tools/official` (default
+`~/.local/share/ssmcp/tools/official`).
 
-For an already registered writable override:
+~~~sh
+ssmcp tools paths
+ssmcp tools init project --git
+ssmcp tools enable project
+ssmcp tools disable project
+~~~
 
-1. Inspect its source and applicable project instructions through the selected
-   client's permitted native tools. Discover schemas with
+`paths` only resolves locations. `init` creates an offline factory repository
+and explicitly registers it; optional `--git` initializes an independent local
+Git repository without a commit or remote. Use `global` for the global layer.
+Existing destinations are preserved. `enable` registers reviewed existing
+sources; `disable` preserves files and can remove a broken layer.
+[Full management commands, trusted RC and Dreaming workflow](tool-repositories.md)
+
+The outer `structuredContent.tool_sources` receipt identifies the actual
+loaded layers: client, mode, RC path/hash, source paths/hashes, and Git HEAD/dirty
+state. It does not identify which layer supplied each exported function.
+Reading `ssmcp-client://tool-sources` returns the source bundle including code
+and can bootstrap the official checkout; use the outer receipt to inspect what
+this call actually loaded.
+
+These locations may be readable without being writable through the selected
+workspace's native tools. A source path or Git dirty state is not a write grant.
+Register and edit only user-authorized sources within the applicable native
+boundaries. Creating a file elsewhere in a checkout does not activate it.
+
+For a registered writable source:
+
+1. Inspect its source and project instructions through the selected client's
+   permitted native tools. Discover schemas with
    `tools.search(clientId,{query,include_schemas:true})` before native calls.
-2. Edit the helper factory and run its focused project checks in an isolated
-   fixture. Native definitions and implementations remain Rust schemas/handlers
-   in [ssmcp src](https://github.com/LIghtJUNction/ssmcp/tree/main/src), not `tools.js`;
-   discover the live client's schema rather than assuming a checkout is its build.
+2. Edit the factory and run focused checks in an isolated fixture. Native
+   definitions remain Rust schemas/handlers in
+   [ssmcp src](https://github.com/LIghtJUNction/ssmcp/tree/main/src), so use the live
+   client's schemas rather than assuming a checkout is its running build.
 3. Make a **new** `code_mode` call with the same `tool_client_id`, exercise the
-   changed helper, and compare the outer source hash and RC/Git identity with the
-   expected edit. Every call reloads registered layers. Invalid sources fail
-   explicitly; repair them rather than substituting official helpers.
+   helper, and compare the outer source hash and RC/Git identity with the edit.
 
-Factories receive the existing host API and previous helper exports. Overriding
-a helper changes orchestration only: authentication, native schemas, approvals,
-and native read/write boundaries still apply. `ssmcp tools status` also reports
-source identity but can bootstrap the official checkout; `check` fetches upstream
-state and `update` may fast-forward it, so neither is needed for local validation.
+Each call reloads registered layers. A selected source that is invalid, missing
+or changed during selection fails explicitly. The loader keeps the v1 Source
+fields and permits at most 19 sources: official + 16 overrides + global +
+project; the 128 KiB single-source and 192 KiB aggregate code limits are unchanged.
+
+Factories receive the host API and previous exports. The host-owned `call`,
+`clients`, `image`, `print` and `console` cannot be replaced, and native
+operations cannot run during factory initialization. Helper edits change
+orchestration while authentication, schemas, approvals and read/write boundaries
+remain authoritative. `ssmcp tools status` reports source identity but can
+bootstrap the official checkout; `check` fetches official upstream state and
+`update` may fast-forward it. Neither is needed for local validation.
 
 ## Working order
 

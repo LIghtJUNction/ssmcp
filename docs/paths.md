@@ -29,6 +29,8 @@ ssmcp paths --help
 
 路径计算复用对应功能的现有规则。要求绝对路径的配置项若被设为相对路径，查询也会返回原有错误；`SSMCP_UI_CONFIG` 保持 UI 的规则，可以输出相对路径。查询不会展开变量值中的 `~`、`$HOME` 或其他 Shell 表达式。`rc` 和 `tools` 沿用工具仓库对绝对 `HOME`／`USERPROFILE` 及有效工作目录的要求，即使 XDG 路径已设置也是如此；只解析工作目录身份，不加载 `ssmcprc.toml`。默认后台会话路径仅支持 Linux、macOS 和 Windows。
 
+单独查看工具的分层位置可用 `ssmcp tools paths`，其 JSON 返回 `rc`、`official`、`global`、`project` 和加载顺序。全局目录是 `~/.ssmcp/tool/`，项目目录是当前工作区的 `./.ssmcp/tools/`；该查询不读取 RC、不登记来源、不创建目录。实际加载与启停规则见[工具仓库管理](tool-repositories.md)。
+
 ## 枚举、组合与输出
 
 默认格式每行是 `名称`、一个制表符、`路径`。`--plain` 每行只输出路径，适合选择单个名称后交给另一个命令；调用者仍应按所用 Shell 的规则引用结果。

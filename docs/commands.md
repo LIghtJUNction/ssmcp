@@ -37,8 +37,15 @@ ssmcp -i --server https://relay.example --client SESSION_ID
 
 ~~~sh
 ssmcp tool --help
+ssmcp tools paths
+ssmcp tools init project --git
+ssmcp tools init global --git
+ssmcp tools enable project
+ssmcp tools disable project
 ssmcp tools status
 ~~~
+
+`init` 离线创建并登记项目或全局工具来源；`--git` 创建独立本地仓库。已有目录保留，用 `enable` 登记审阅过的源码，`disable` 停用并保留文件。省略来源时使用 `project`。`paths` 只计算位置；`status` 读取实际来源并可能初始化官方种子仓库。[可信 RC、加载优先级与 Dreaming 维护流程](tool-repositories.md)
 
 连接目标使用 `ssmcp username@server` 或 `ssmcp --server https://server`。无法识别的裸命令会报告命令或目标格式错误，并给出这些入口；显式 `--ssh` 仍给出旧连接方式已移除的迁移说明。
 

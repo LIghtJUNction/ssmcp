@@ -80,12 +80,22 @@ Explain the trend and unclear labels.</code></pre></article>
     <p>Slots keep SSMCP context, not a promised persistent model-native thread, and tasks cannot rely on slot affinity. See the <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/workers.md">worker technical guide</a> for limits and cleanup behavior.</p>
   </section>
 <section id="extensions" aria-labelledby="extensions-title">
-  <div class="section-heading"><p class="eyebrow">Technical reference · Extensions</p><h2 id="extensions-title">Editable tool helpers</h2></div>
-  <p><a href="https://github.com/LIghtJUNction/ssmcp-tools">ssmcp-tools</a> contains the JavaScript helpers for code_mode. New clients read registered local sources and return provenance with actual paths, Git state and content digests. Helpers compose calls; those calls still pass through the original authorization checks.</p>
-  <pre><code>ssmcp tools status
-ssmcp tools check
-ssmcp tools update</code></pre>
-  <p>The client RC is <code>$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml</code>, or <code>~/.config/ssmcp/ssmcprc.toml</code> by default. Git must be available. Updates fast-forward a clean worktree without overwriting local edits. Editing a helper cannot forge server identity, authorization or finish approval.</p>
+  <div class="section-heading"><p class="eyebrow">Technical reference · Extensions</p><h2 id="extensions-title">Project and global tool helpers</h2></div>
+  <p><a href="https://github.com/LIghtJUNction/ssmcp-tools">ssmcp-tools</a> supplies the official JavaScript helpers for code_mode. Explicitly registered local repositories can replace or extend them. Each new call reports the source paths, hashes and Git state it actually loaded.</p>
+  <div class="table-wrap"><table><thead><tr><th>Layer</th><th>Location</th><th>Priority</th></tr></thead><tbody>
+    <tr><td>Project</td><td><code>./.ssmcp/tools/</code> under the exact workspace root</td><td>Highest</td></tr>
+    <tr><td>Global</td><td><code>~/.ssmcp/tool/</code></td><td>Above official helpers</td></tr>
+    <tr><td>Official</td><td><code>$XDG_DATA_HOME/ssmcp/tools/official</code>, default <code>~/.local/share/ssmcp/tools/official</code></td><td>Loaded first</td></tr>
+  </tbody></table></div>
+  <pre><code>ssmcp tools paths
+ssmcp tools init project --git
+ssmcp tools init global --git
+ssmcp tools status</code></pre>
+  <p>The trusted RC is <code>$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml</code>, default <code>~/.config/ssmcp/ssmcprc.toml</code>. Initialization is offline and registers the chosen layer; <code>--git</code> creates an independent local repository without a commit or remote. Existing destinations are preserved. Use <code>ssmcp tools enable project</code> for reviewed existing source and <code>ssmcp tools disable project</code> to unregister it while retaining its files; replace <code>project</code> with <code>global</code> for that layer.</p>
+  <p>Loading follows official, ordered RC overrides, enabled global, then the registered exact project. Files in an arbitrary checkout do not activate themselves. Invalid selected sources stop the call. Host-owned calls, identity checks and native permissions remain in force.</p>
+  <h3 class="subheading">Maintain reusable workflows</h3>
+  <p>Dreaming can use existing execution, filesystem and Git operations to maintain the selected repository and its workflow files. Review and test the edit, then verify its source hash on a new code_mode call. Repository initialization creates no model or background scheduler. See <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/tool-repositories.md">tool repository management</a> for the trusted configuration and validation workflow.</p>
+  <p><code>ssmcp tools check</code> fetches official upstream state; <code>ssmcp tools update</code> only fast-forwards a clean official checkout. These commands do not update local project or global repositories.</p>
   <p class="note">This guide follows the server build. The selected client's actual tool schema defines its capabilities. Installers fetch published releases; new features need a corresponding client process.</p>
 </section>
 <section id="tools" aria-labelledby="tools-title">

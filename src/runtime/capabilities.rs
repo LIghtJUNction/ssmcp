@@ -322,7 +322,7 @@ impl Runtime {
         manifest["client_version"] = json!(env!("CARGO_PKG_VERSION"));
         manifest["wire_version"] = json!(crate::wire::VERSION);
         manifest["thread_scope"] = json!(1);
-        manifest["tool_sources"] = json!({"schema":1,"uri":crate::tool_repository::URI,"selection":"explicit authorized client; RC registered sources only"});
+        manifest["tool_sources"] = json!({"schema":1,"uri":crate::tool_repository::URI,"selection":"explicit authorized client; trusted RC registers official, ordered overrides, global ~/.ssmcp/tool and exact project .ssmcp/tools layers"});
         manifest["chat_enabled"] = json!(self.chat_enabled());
         manifest["timing"] = json!({
             "primitives_available":self.time.time_tools_enabled(),

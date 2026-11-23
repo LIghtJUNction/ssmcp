@@ -237,6 +237,26 @@ ssmcp 默认启用命令、文件、会话和 Zuse CLI 管理工具，不要求�
 
 指定已有浏览器时，先确认所选 Zuse 版本支持的连接方式和实际会话，再操作用户选定的目标。OAuth 登录、用户打开链接和已授权外部 MCP 的通用转发仍保留；它们不恢复旧内置浏览器工具。[现有浏览器连接](docs/browser-existing-session.md) · [code_mode 示例](docs/code-mode.md)
 
+### 项目与全局工具仓库
+
+`code_mode` 的 JavaScript helper 可以在本地 Git 仓库中维护。客户端按“官方 → 可信 RC 中的显式 overrides → 全局 → 项目”加载，同名导出由后者覆盖，项目 helper 的优先级最高。
+
+| 来源 | 路径 | 启用方式 |
+| --- | --- | --- |
+| 项目 | 当前工作区的 `./.ssmcp/tools/` | 在可信 RC 中登记这个规范化的绝对工作区路径 |
+| 全局 | `~/.ssmcp/tool/`，注意单数 `tool` | 在可信 RC 中启用 `tools.global` |
+| 官方 | `$XDG_DATA_HOME/ssmcp/tools/official`，默认 `~/.local/share/ssmcp/tools/official` | 使用客户端的官方源码 |
+
+~~~sh
+ssmcp tools paths
+ssmcp tools init project --git
+ssmcp tools status
+~~~
+
+`paths` 只查询位置。`init` 离线创建工厂、manifest 和 README，并明确登记来源；`--git` 创建独立本地仓库，不自动提交或连接远端。全局初始化使用 `ssmcp tools init global --git`；已有源码用 `enable project|global` 登记，`disable project|global` 停用并保留文件。普通 checkout 中出现文件不会自动启用；已启用来源损坏时调用明确失败。每次新调用的外层 `tool_sources` 回执给出实际路径、SHA-256 和 Git 状态。
+
+Dreaming 可以使用已有的执行、文件和 Git 操作维护这些工具仓库与工作流内容，检查后在新调用中验证实际源码摘要。初始化本身不会启动模型或调度器。[工具仓库、可信配置与维护流程](docs/tool-repositories.md) · [code_mode 源码回执](docs/code-mode.md#find-and-iterate-tool-implementations)
+
 ### 命令执行、在途去重与结果缓存
 
 - **命令执行（可用）**。Code Mode 编排调用，宿主负责授权、执行和作业生命周期，原有审批仍适用。用 `exec.start` 启动后台命令并取得 `job_id`，再用 `exec.status`、`exec.read` 或 `exec.wait` 查询、读取输出或等待，用 `exec.cancel` 请求取消。原生 `ssmcp.exec.wait` 省略 `wait_ms` 时等待目标完成，显式 `wait_ms: 0` 则立即读取状态。窗口到期返回 `wait_status: "pending"`，作业继续运行。下次传入同一个 `job_id` 即可读取完成状态。命令默认没有执行期限，可设置 `timeout_ms` 终止超时进程。Code Mode 和中继调用各自仍有传输或编排期限。当前并发容量用尽时拒绝新启动，按负载接纳新命令的等待队列仍在规划中。[Code Mode 命令接口](docs/code-mode.md#exec)

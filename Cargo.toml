@@ -18,6 +18,7 @@ include = [
     "/docs/workspaces.md",
     "/docs/context.md",
     "/docs/code-mode.md",
+    "/docs/tool-repositories.md",
     "/docs/finish-and-questions.md",
     "/docs/thread-listeners.md",
     "/docs/zcalld-listener.md",
