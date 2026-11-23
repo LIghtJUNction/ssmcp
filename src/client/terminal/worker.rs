@@ -2418,7 +2418,12 @@ mod tests {
             .map(|(_, text)| text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(tall.len() > compact.len() + 6);
+        assert!(tall.len() > compact.len());
+        assert!(
+            !compact
+                .iter()
+                .any(|(_, text)| { text.starts_with("Progress") || text.starts_with("Command") })
+        );
         for label in [
             "Progress",
             "Command",
