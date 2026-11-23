@@ -28,6 +28,8 @@ mod link_metrics;
 mod local;
 pub(crate) mod messaging;
 pub(crate) mod notification;
+#[cfg(all(test, unix))]
+mod output_expiry_fixture;
 mod panel;
 mod paths;
 pub(crate) mod presentation;
@@ -3141,11 +3143,23 @@ async fn connect_inner(
 ) -> crate::Result<ConnectionExit> {
     let management = session_control(options, service)?;
     let mut interrupt = interrupt_signal()?;
-    let mut terminate = terminate_signal()?;
+    let mut terminate = {
+        let signal = terminate_signal()?;
+        #[cfg(all(test, unix))]
+        {
+            output_expiry_fixture::StopSignal::new(signal)
+        }
+        #[cfg(not(all(test, unix)))]
+        {
+            signal
+        }
+    };
     let restart = reload::Restart::capture(options, service.is_some())?;
     let metadata = options.metadata()?;
     let wire_metadata = options.registration_metadata()?;
     let executable = std::env::current_exe()?;
+    #[cfg(all(test, unix))]
+    let executable = output_expiry_fixture::transport_executable(executable)?;
     transport.report_connecting();
     if options.account_compat {
         render::status(
@@ -3539,7 +3553,14 @@ async fn connect_inner(
     } else {
         None
     };
+    #[cfg(all(test, unix))]
+    let output_fixture_ready = output_expiry_fixture::runtime_ready(&backend, &client_id, attempt);
     let mut result: crate::Result<()> = 'connected: loop {
+        #[cfg(all(test, unix))]
+        if let Err(error) = &output_fixture_ready {
+            intentionally_stopped = true;
+            break Err(error.clone().into());
+        }
         if let Some(error) = worker_start_error.take() {
             intentionally_stopped = true;
             break Err(error.into());

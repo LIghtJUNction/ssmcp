@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the unified client through real local WSS, OAuth and MCP.
+"""Validate the unified client through real local account WebSocket, OAuth and MCP.
 
 Reuses e2e.py's isolated account WebSocket/PKCE harness and the session helper's
 reload reader and output pagination checks. No installed Harness is exposed to
@@ -19,6 +19,7 @@ from contextlib import ExitStack
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -27,6 +28,7 @@ import tempfile
 import time
 
 from e2e import wait_for
+from e2e_output_expiry import OutputExpiryFailure, run as verify_output_expiry
 from e2e_session_features import OUTPUT_RETAINED_BYTES, OUTPUT_RETENTION_SECS, SessionFeatures
 
 
@@ -153,6 +155,10 @@ class Unified(SessionFeatures):
         self.sections = {}
         self.current_section = "startup"
         self.evidence = []
+        self.output_expiry_evidence = None
+        self.output_expiry_record = None
+        self.output_expiry_observed = False
+        self.fixture_timeout_seconds = 240
         self.exec_cursor = 0
         self.exec_events = []
         self.streams = defaultdict(lambda: {"stdout": bytearray(), "stderr": bytearray()})
@@ -724,37 +730,42 @@ class Unified(SessionFeatures):
         self.save("cancel-timeout.json", {"cancel": result, "cancel_pids": cancel_ids, "timeout": final, "timeout_pids": timeout_ids})
 
     def expiration(self):
-        artifact = self.artifact_metadata(self.expiring_artifact)
-        if not artifact["complete"]:
-            raise AssertionError("the required expiration fixture is not a completed memory output")
-        # The retired test accelerated a file's mtime; it did not wait 24 hours.
-        # RAM output has no file timestamp or supported public clock/TTL override.
-        # Do not substitute metadata, fresh cleanup, reload or a unit-test claim
-        # for this required public-path expiry and automatic-cleanup observation.
-        outcome = {
-            "status": "not_exercised", "required": True, "artifact": artifact,
-            "public_path_expiry_observed": False, "automatic_cleanup_observed": False,
-            "retention_secs": artifact["retention_secs"],
-            "original_overall_default_seconds": 240, "retired_case_wait_seconds": 5,
-            "reason": "The retired mtime-aging fixture has no supported bounded equivalent through the RAM output API: "
-                      "its 900-second TTL exceeds the original 240-second suite and 5-second expiry observation bounds, "
-                      "and the public API has no clock or TTL override. Natural wall-clock waiting was not the old "
-                      "86400-second policy's test method and is not a new acceptance requirement.",
-            "mechanism_evidence": None, "mechanism_evidence_status": "pending_same_commit_ci",
-            "related_mechanism_test": "output::tests::expired_outputs_fail_instead_of_returning_a_successful_eof",
-            "mechanism_boundary": "The existing Rust fixture changes a real RAM entry's expiry timestamp; "
-                                  "only an actual named pass on the same frozen commit can establish that mechanism. "
-                                  "It does not establish public-path expiry or an automatic janitor sweep.",
-        }
-        self.save("automatic-expiration.json", outcome)
-        return outcome
+        # The helper owns one real client, ages its exact completed RAM entry,
+        # and waits for the unmodified timer before any public output query.
+        try:
+            outcome = verify_output_expiry(self, timeout_seconds=75.0)
+        except OutputExpiryFailure as error:
+            self.output_expiry_evidence = error.evidence
+            try:
+                self.output_expiry_record = self.save("automatic-expiration.json", error.evidence)
+            except Exception as evidence_error:
+                error.evidence.setdefault("evidence_write_errors", []).append(
+                    self.scrub(f"{type(evidence_error).__name__}: {evidence_error}"))
+            raise
+        self.output_expiry_evidence = outcome
+        if (not isinstance(outcome, dict)
+                or outcome.get("schema") != "ssmcp.public-output-expiry.v1"
+                or outcome.get("status") != "passed"
+                or outcome.get("clock_mode") != "fixture_timestamp"
+                or outcome.get("public_path_expiry_observed") is not True
+                or outcome.get("automatic_cleanup_observed") is not True
+                or outcome.get("timer_witness", {}).get("origin") != "timer"
+                or outcome.get("cleanup", {}).get("stopped_acknowledged") is not True
+                or outcome.get("cleanup", {}).get("reaped") is not True
+                or outcome.get("cleanup", {}).get("forced") is not False
+                or outcome.get("cleanup", {}).get("exit_code") != 0
+                or outcome.get("cleanup", {}).get("errors") != []):
+            raise AssertionError("public output expiry did not return complete timer and cleanup evidence")
+        self.output_expiry_observed = True
+        self.output_expiry_record = self.save("automatic-expiration.json", outcome)
+        # Successful stages return None; keep Unified.run's fail-closed contract.
 
     def reload_client(self):
         job, identities = self.tree("reload")
         old_id, token, pid = self.client_id, self.secret, self.client.pid
         accepted = self.code("return await reload(%s);" % json.dumps(old_id))
         self.check(accepted["accepted"] and accepted["client_id"] == old_id,
-                   "reload acknowledgement arrives over WSS before the connection is replaced")
+                   "reload acknowledgement arrives over the account WebSocket before the connection is replaced")
         replacement = self.reader.read(timeout=30)
         self.validate_connection_record(replacement)
         self.check(self.client.pid == pid and self.client.poll() is None and replacement["client_id"] != old_id
@@ -831,12 +842,12 @@ class Unified(SessionFeatures):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, default=Path("target/debug"))
-    parser.add_argument("--timeout", type=float, default=240, help="overall test deadline in seconds")
+    parser.add_argument("--timeout", type=float, default=240, help="main scenario deadline in seconds; cleanup is separately bounded")
     parser.add_argument("--report", type=Path, default=Path("target/acceptance/unified.json"))
     parser.add_argument("--evidence-dir", type=Path)
     parser.add_argument("--revision", default="unspecified", help="immutable revision used to build these binaries")
     args = parser.parse_args()
-    if not sys.platform.startswith("linux") or args.timeout <= 0:
+    if not sys.platform.startswith("linux") or not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("this real account/process-identity acceptance suite requires Linux and a positive timeout")
     args.report = args.report.resolve()
     evidence = (args.evidence_dir or args.report.with_name(args.report.stem + "-evidence")).resolve()
@@ -846,13 +857,16 @@ def main():
               "transport": "real local account WebSocket + OAuth PKCE + HTTP MCP + independent processes + PTY",
               "model_calls_attempted": 0, "installed_harnesses_exposed": [],
               "timeout_seconds": args.timeout, "coverage_complete": False, "coverage_gaps": [],
-              "mechanism_evidence": None, "mechanism_evidence_status": "pending_same_commit_ci",
+              "mechanism_evidence": None, "mechanism_evidence_status": "not_observed",
               "scope": "no-Harness unified runtime; installed native Harness discovery/approval needs its separate acceptance runs"}
     def expired(_signum, _frame):
         raise TimeoutError(f"unified acceptance exceeded its {args.timeout:g}-second deadline")
     previous = signal.signal(signal.SIGALRM, expired)
     with tempfile.TemporaryDirectory(prefix="ssmcp-unified-e2e-") as temporary:
         harness = Unified(Path(temporary), args.bin_dir, evidence)
+        # Use the existing router-fixture lifetime knob; preparation and the
+        # real 60-second sweep remain inside the original body deadline.
+        harness.fixture_timeout_seconds = max(30, min(1800, math.ceil(args.timeout)))
         try:
             signal.setitimer(signal.ITIMER_REAL, args.timeout)
             report["binaries"] = {name: {"path": str((args.bin_dir / name).resolve()),
@@ -909,6 +923,12 @@ def main():
                 report["cleanup_errors"] = cleanup_errors
                 failure = failure or AssertionError("; ".join(cleanup_errors))
             report.update({"checks": harness.checks, "sections": harness.sections, "evidence": harness.evidence,
+                           "account_router_lifetime_seconds": harness.fixture_timeout_seconds,
+                           "mechanism_evidence": harness.output_expiry_evidence,
+                           "mechanism_evidence_file": harness.output_expiry_record,
+                           "mechanism_evidence_status": (
+                               "observed_local_public_path" if harness.output_expiry_observed
+                               else "failed" if harness.output_expiry_evidence is not None else "not_observed"),
                            "coverage_complete": report["status"] == "passed",
                            "coverage_gaps": [{"section": name, "status": section["status"],
                                               "reason": section["reason"]}
