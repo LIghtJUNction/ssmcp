@@ -56,21 +56,19 @@ ssmcp-desktop --directory /absolute/private/session-directory
 
 要求 Rust / Cargo **1.100 或更新版本**，以及完整 ssmcp 仓库。应用使用独立 Cargo 工作区，以 `path = "../.."` 复用 CLI 的真实连接实现。
 
-| 依赖 | 固定方式 |
+| 依赖 | 来源和记录 |
 | --- | --- |
-| zgpui | manifest 的 git `rev` 固定为 `d34c41f79ddab343e7468c5192885a82ca487687` |
-| zbridge | 与 ssmcp、zgpui 共用 `https://github.com/LIghtJUNction/zbridge.git` 来源；应用 lockfile 应锁到 `1cfeb5b1f11c26c35cf7456c9b8b60d1f2d5d8de` |
+| zgpui | 使用 Git 默认分支；应用 lockfile 记录本轮验证的确切提交 |
+| zbridge | 与 ssmcp、zgpui 共用 `https://github.com/LIghtJUNction/zbridge.git` 来源；应用 lockfile 与根 crate 保持同一提交 |
 | ssmcp | 同一源码 checkout 的根 crate |
 
-不要再添加第二个 rev 来源的 zbridge 依赖。同一协议 crate 的不同 Cargo source 会生成不同的 Rust 类型，破坏 `RemoteFrontend` 与 `BridgeModel` 的直接互操作。
+内部跨仓库依赖的 manifest 不写 version、branch、tag 或 rev。尤其要保持 zbridge 的规范 Git 来源一致：同一协议 crate 的不同 Cargo source 会生成不同的 Rust 类型，破坏 `RemoteFrontend` 与 `BridgeModel` 的直接互操作。
 
-首次集成且依赖已经缓存时，在仓库根目录以主项目锁文件为起点补齐应用依赖。这样保留既有 Git 依赖的精确提交，无需依赖缓存中的远端默认分支引用：
+上游变更公开后，在仓库根目录刷新应用的独立锁文件，并核对它与根 crate 使用同一组内部来源：
 
 ```sh
-cp Cargo.lock apps/ssmcp-desktop/Cargo.lock
-cargo update --manifest-path apps/ssmcp-desktop/Cargo.toml --workspace --offline
-cargo update --manifest-path apps/ssmcp-desktop/Cargo.toml --offline \
-  -p zbridge --precise 1cfeb5b1f11c26c35cf7456c9b8b60d1f2d5d8de
+cargo update --manifest-path apps/ssmcp-desktop/Cargo.toml
+cargo metadata --manifest-path apps/ssmcp-desktop/Cargo.toml --locked --format-version 1
 ```
 
 随后保留 `apps/ssmcp-desktop/Cargo.lock`，正常构建使用 `--locked`。生成 lockfile 不代表构建或验收已经通过。

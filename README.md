@@ -236,6 +236,8 @@ ssmcp context use here
 | 运行本地命令 | `!pwd`、`!cargo test`；输出与退出码回到会话 |
 | 查看任务 | `/tasks`；`/tasks cancel JOB_ID` 停止指定命令任务 |
 | 回答问题 | **Shift + ↑** 打开待答问题，保留普通草稿 |
+| 邀请协作者 | `/invite` 生成主 Agent 说明；`/invite worker` 生成关联 worker 池的接入说明 |
+| 管理 worker 席位 | `/worker ls` 查看状态；`/worker +N`、`/worker -N` 调整席位数 |
 | 查看原生工具 | 通过 MCP 工具目录或 `ssmcp --list-tools` 查看 |
 | 浏览工具输出 | 默认显示状态与最多两行已脱敏结果；点击 `Click expand` 或选中后按 Enter 展开 |
 | 查看成员事件 | 在成员列表右键点击进程或线程，查看当前进程保留的对应事件；Esc 返回 |
@@ -409,7 +411,7 @@ SSMCP 默认启用原生命令、文件、会话和 Zuse CLI 管理工具。第�
 
 `ssmcp local --socket` 提供默认路径的本机 HTTP/MCP Unix socket，`--socket PATH` 可指定私有路径。时间工具支持当前 UTC、跨时区时间差和倒计时，终端直接显示运行时长与剩余时间，`/wait` 可查看详情。[本机连接](docs/local-mode.md) · [时间原语](docs/time-primitives.md)
 
-- **开发工具**：Codex、Claude Code、Pi、OpenCode；能力以当前成功注册的目录为准。
+- **外部开发工具**：通过各自独立的 MCP 客户端接入，或显式从本地终端运行。
 - **桌面与浏览器**：直接运行独立 Zuse CLI，通过通用 `exec` 传递 argv、管理任务和读取结果。`computer` 原生工具只提供版本查询、下载、安装、卸载；没有内置动作代理或隐藏 fallback。[Zuse 工作流](docs/computer-use.md) · [Windows 安装范围](docs/windows-browser-setup.md)
 - **上下文**：工作区文件、项目指令、有效技能视图和显式只读 context roots。
 
