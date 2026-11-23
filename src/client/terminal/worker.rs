@@ -340,9 +340,9 @@ impl Monitor {
         }
         let body_top = top + output.len();
         let body_rows = available - output.len();
-        let split = width >= 80 && !task_view;
+        let split = width >= 96 && !task_view;
         let right_cols = if split {
-            (width * 2 / 5).clamp(32, 56)
+            (width / 4).clamp(32, 38)
         } else {
             width
         };
@@ -354,8 +354,6 @@ impl Monitor {
         };
         let compact_budget = if split || task_view {
             0
-        } else if body_rows >= 9 {
-            4
         } else if body_rows >= 6 {
             2
         } else {
@@ -369,7 +367,7 @@ impl Monitor {
         let log_row = log_area_row + header_rows;
         let log_rows = log_area_rows.saturating_sub(header_rows + 1);
         let entries = if task_view {
-            task_lines(slot, left_cols.saturating_sub(2).max(1))
+            task_lines(slot, snapshot, left_cols.saturating_sub(2).max(1))
         } else {
             log_lines(
                 slot,
@@ -435,8 +433,8 @@ impl Monitor {
             );
             output.push(if split {
                 columns(
-                    heading,
-                    Some((PanelTone::Heading, "Task and metrics · T Full task".into())),
+                    vec![heading],
+                    Some((PanelTone::Muted, "Activity · T Full task".into())),
                     left_cols,
                     gap,
                 )
@@ -446,10 +444,12 @@ impl Monitor {
         }
         for offset in 0..log_area_rows.saturating_sub(header_rows) {
             let left = if offset < log_rows {
-                if let Some((_, tone, text)) = entries.get(start + offset) {
-                    (*tone, format!("  {text}"))
+                if let Some((_, parts)) = entries.get(start + offset) {
+                    let mut row = vec![(PanelTone::Muted, "  ".into())];
+                    row.extend(parts.iter().cloned());
+                    row
                 } else if offset == 0 && entries.is_empty() {
-                    (
+                    vec![(
                         PanelTone::Muted,
                         format!(
                             "  {}",
@@ -457,15 +457,15 @@ impl Monitor {
                                 slot.reason.as_deref().unwrap_or("No work reported yet")
                             )
                         ),
-                    )
+                    )]
                 } else {
-                    (PanelTone::Normal, String::new())
+                    Vec::new()
                 }
             } else if log_rows == 0 {
-                (
+                vec![(
                     PanelTone::Muted,
                     "Enlarge terminal to view work and metrics".into(),
-                )
+                )]
             } else {
                 let range = if keys.is_empty() {
                     "0".into()
@@ -477,7 +477,7 @@ impl Monitor {
                         keys.len()
                     )
                 };
-                (
+                vec![(
                     PanelTone::Muted,
                     format!(
                         "  {} {range} · {}",
@@ -488,12 +488,12 @@ impl Monitor {
                             "Paused · End to follow"
                         }
                     ),
-                )
+                )]
             };
             output.push(if split {
                 columns(left, details.get(offset).cloned(), left_cols, gap)
             } else {
-                vec![left]
+                left
             });
         }
         self.panels.push(WorkerPanel {
@@ -671,9 +671,20 @@ impl State {
                     PanelTone::Warning,
                     format!("● Working {}", snapshot.working),
                 ),
-                (PanelTone::Error, format!("× Offline {}", snapshot.offline)),
                 (
-                    PanelTone::Warning,
+                    if snapshot.offline == 0 {
+                        PanelTone::Muted
+                    } else {
+                        PanelTone::Error
+                    },
+                    format!("× Offline {}", snapshot.offline),
+                ),
+                (
+                    if snapshot.retiring == 0 {
+                        PanelTone::Muted
+                    } else {
+                        PanelTone::Warning
+                    },
                     format!("◌ Retiring {}", snapshot.retiring),
                 ),
                 (PanelTone::Accent, format!("Σ Total {}", snapshot.total)),
@@ -730,7 +741,7 @@ impl State {
                     super::worker_operations::compact(
                         &pool,
                         g.cols,
-                        height.saturating_sub(rows.len() + 10).min(3),
+                        height.saturating_sub(rows.len() + 10).min(1),
                     )
                 })
                 .unwrap_or_default();
@@ -743,26 +754,15 @@ impl State {
                     .into_iter()
                     .map(|(text, tone)| line(self, &[(tone, text)])),
             );
-            let identity = identity_lines(snapshot, g.cols);
+            // Keep identity compact even in tall windows. T exposes the full
+            // identity with the task; the main Statistics page also retains it.
+            let identity = compact_identity(snapshot, g.cols);
             let space = height.saturating_sub(rows.len() + 2);
-            // Preserve the existing task, resource and log viewport before
-            // spending spare rows on full IDs. Small monitors keep their work.
-            let panel_reserve = if g.cols >= 80 { 20 } else { 10 };
-            let identity = if identity.len() + panel_reserve <= space {
-                identity
-            } else {
-                [
-                    format!("OS PID {}", snapshot.process_id),
-                    if snapshot.manager.is_some() {
-                        "Manager attached · enlarge for IDs".into()
-                    } else {
-                        "Manager unbound".into()
-                    },
-                ]
+            let panel_reserve = if g.cols >= 96 { 14 } else { 8 };
+            let identity: Vec<_> = identity
                 .into_iter()
-                .take(space.saturating_sub(panel_reserve).min(2))
-                .collect()
-            };
+                .take(space.saturating_sub(panel_reserve))
+                .collect();
             rows.extend(
                 identity
                     .into_iter()
@@ -816,6 +816,26 @@ impl State {
     }
 }
 
+fn compact_identity(snapshot: &Snapshot, width: u16) -> Vec<String> {
+    let manager = if snapshot.manager.is_some() {
+        "Manager attached"
+    } else {
+        "Manager unbound"
+    };
+    let text = format!("OS PID {} · {manager} · T Details", snapshot.process_id);
+    if text.width() <= usize::from(width) {
+        vec![text]
+    } else {
+        vec![
+            clipped(
+                &format!("OS PID {}", snapshot.process_id),
+                usize::from(width),
+            ),
+            clipped(manager, usize::from(width)),
+        ]
+    }
+}
+
 fn identity_lines(snapshot: &Snapshot, width: u16) -> Vec<String> {
     let mut text = vec![format!("OS PID {}", snapshot.process_id)];
     if let Some(manager) = &snapshot.manager {
@@ -847,22 +867,50 @@ fn identity_lines(snapshot: &Snapshot, width: u16) -> Vec<String> {
     output
 }
 
-fn task_lines(slot: &SlotView, width: usize) -> Vec<(LogAnchor, PanelTone, String)> {
-    let text = slot
-        .task_text
-        .as_deref()
-        .or(slot.task_summary.as_deref())
-        .unwrap_or("No task assigned");
+type LogLine = (LogAnchor, Vec<(PanelTone, String)>);
+
+fn task_lines(slot: &SlotView, snapshot: &Snapshot, width: usize) -> Vec<LogLine> {
+    let width = width.max(1);
+    let mut metadata = vec![format!(
+        "Task ID {}",
+        slot.task_id.as_deref().unwrap_or("unassigned")
+    )];
+    metadata.extend(identity_lines(
+        snapshot,
+        width.min(u16::MAX as usize) as u16,
+    ));
     let mut output = Vec::new();
-    for paragraph in text.split('\n') {
-        for text in wrap_activity(&panel::safe_text(paragraph), width.max(1), usize::MAX) {
+    for text in metadata {
+        for text in wrap_activity(&panel::safe_text(&text), width, usize::MAX) {
             output.push((
                 LogAnchor {
                     sequence: 0,
                     part: output.len(),
                 },
-                PanelTone::Normal,
-                text,
+                vec![(PanelTone::Muted, text)],
+            ));
+        }
+    }
+    output.push((
+        LogAnchor {
+            sequence: 0,
+            part: output.len(),
+        },
+        vec![(PanelTone::Muted, String::new())],
+    ));
+    let text = slot
+        .task_text
+        .as_deref()
+        .or(slot.task_summary.as_deref())
+        .unwrap_or("No task assigned");
+    for paragraph in text.split('\n') {
+        for text in wrap_activity(&panel::safe_text(paragraph), width, usize::MAX) {
+            output.push((
+                LogAnchor {
+                    sequence: 0,
+                    part: output.len(),
+                },
+                vec![(PanelTone::Normal, text)],
             ));
         }
     }
@@ -938,60 +986,145 @@ fn command_log_summary(text: &str) -> String {
     text.to_owned()
 }
 
-fn log_lines(slot: &SlotView, width: usize, expanded: bool) -> Vec<(LogAnchor, PanelTone, String)> {
-    let mut output = Vec::new();
-    for entry in &slot.logs {
-        let seconds = entry.at_ms / 1000;
-        let text = panel::safe_text(&format!(
-            "{:02}:{:02}:{:02} {} {}",
-            seconds / 3600 % 24,
-            seconds / 60 % 60,
-            seconds % 60,
-            entry.level,
-            if expanded {
-                entry.text.clone()
-            } else {
-                command_log_summary(&entry.text)
+fn log_event(entry: &crate::worker::SlotLog, expanded: bool) -> (&'static str, PanelTone, String) {
+    let text = if expanded {
+        entry.text.clone()
+    } else {
+        command_log_summary(&entry.text)
+    };
+    let (tag, tone, body) = if let Some(command) = text.strip_prefix("Command started: ") {
+        ("RUN", PanelTone::Accent, command)
+    } else if let Some(command) = text.strip_prefix("Command finished: ") {
+        // Only an explicit result suffix is evidence of success. An inline
+        // script containing "exit 0" or a missing outcome never becomes DONE.
+        let outcome = command.rsplit_once("; ").map(|(_, outcome)| outcome);
+        let (tag, tone) = match outcome {
+            Some("exit 0") => ("DONE", PanelTone::Success),
+            Some("cancelled") => ("STOP", PanelTone::Warning),
+            Some("timed out") => ("FAIL", PanelTone::Error),
+            Some(outcome)
+                if outcome
+                    .strip_prefix("exit ")
+                    .or_else(|| outcome.strip_prefix("signal "))
+                    .is_some_and(|code| code.parse::<i32>().is_ok()) =>
+            {
+                ("FAIL", PanelTone::Error)
             }
-        ));
-        let tone = match entry.level.as_str() {
-            "error" => PanelTone::Error,
-            "warning" | "warn" => PanelTone::Warning,
-            _ => PanelTone::Normal,
+            _ => ("END", PanelTone::Muted),
         };
-        let mut row = String::new();
+        (tag, tone, command)
+    } else if let Some(progress) = text.strip_prefix("Progress: ") {
+        ("NOTE", PanelTone::Accent, progress)
+    } else if text.starts_with("Task ") {
+        ("TASK", PanelTone::Accent, text.as_str())
+    } else {
+        ("INFO", PanelTone::Muted, text.as_str())
+    };
+    let (tag, tone) = match entry.level.as_str() {
+        "error" => ("FAIL", PanelTone::Error),
+        "warning" | "warn" => ("WARN", PanelTone::Warning),
+        _ => (tag, tone),
+    };
+    (tag, tone, panel::safe_text(body))
+}
+
+fn wrap_log_body(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rest = text;
+    let mut lines = Vec::new();
+    while !rest.is_empty() {
         let mut used = 0;
-        let mut part = 0;
-        for character in text.chars() {
+        let mut end = 0;
+        let mut word_end = 0;
+        for (index, character) in rest.char_indices() {
             let cells = character.width().unwrap_or(0);
-            if used + cells > width && !row.is_empty() {
-                output.push((
-                    LogAnchor {
-                        sequence: entry.sequence,
-                        part,
-                    },
-                    tone,
-                    std::mem::take(&mut row),
-                ));
-                part += 1;
-                used = 0;
+            if used + cells > width {
+                break;
             }
-            if cells > width {
-                row.push('…');
-                used += 1;
-            } else {
-                row.push(character);
-                used += cells;
+            used += cells;
+            end = index + character.len_utf8();
+            if character.is_whitespace() {
+                word_end = end;
             }
         }
-        if !row.is_empty() {
+        if end == 0 {
+            // A full-width glyph cannot fit a one-cell viewport.
+            lines.push("…".into());
+            rest = &rest[rest.chars().next().unwrap().len_utf8()..];
+            continue;
+        }
+        if end < rest.len() && word_end > 0 {
+            end = word_end;
+        }
+        lines.push(rest[..end].to_owned());
+        rest = &rest[end..];
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn log_lines(slot: &SlotView, width: usize, expanded: bool) -> Vec<LogLine> {
+    let width = width.max(1);
+    let mut output = Vec::new();
+    for (index, entry) in slot.logs.iter().enumerate() {
+        let seconds = entry.at_ms / 1000;
+        let time = if width >= 40 {
+            format!(
+                "{:02}:{:02}:{:02}  ",
+                seconds / 3600 % 24,
+                seconds / 60 % 60,
+                seconds % 60
+            )
+        } else if width >= 28 {
+            format!("{:02}:{:02}  ", seconds / 60 % 60, seconds % 60)
+        } else {
+            String::new()
+        };
+        let (tag, tone, body) = log_event(entry, expanded);
+        let label = if width >= 10 {
+            format!("{tag:<4}  ")
+        } else {
+            String::new()
+        };
+        let indent = time.width() + label.width();
+        let body_tone = match tone {
+            PanelTone::Error | PanelTone::Warning => tone,
+            _ => PanelTone::Normal,
+        };
+        let lines = wrap_log_body(&body, width.saturating_sub(indent));
+        let count = lines.len();
+        for (part, text) in lines.into_iter().enumerate() {
+            let parts = if part == 0 {
+                vec![
+                    (PanelTone::Muted, time.clone()),
+                    (tone, label.clone()),
+                    (body_tone, text),
+                ]
+            } else {
+                vec![(PanelTone::Muted, " ".repeat(indent)), (body_tone, text)]
+            };
             output.push((
                 LogAnchor {
                     sequence: entry.sequence,
                     part,
                 },
-                tone,
-                row,
+                parts,
+            ));
+        }
+        // Breathing room belongs to this event's stable sequence. Never merge
+        // start/end records: commands from the same worker may overlap.
+        if width >= 48
+            && index + 1 < slot.logs.len()
+            && (count > 1 || matches!(tag, "TASK" | "FAIL" | "WARN"))
+        {
+            output.push((
+                LogAnchor {
+                    sequence: entry.sequence,
+                    part: count,
+                },
+                vec![(PanelTone::Muted, String::new())],
             ));
         }
     }
@@ -1009,17 +1142,22 @@ fn slot_state(state: &str) -> (PanelTone, &'static str, &'static str) {
 }
 
 fn columns(
-    left: (PanelTone, String),
+    left: Vec<(PanelTone, String)>,
     right: Option<(PanelTone, String)>,
     left_cols: usize,
     gap: usize,
 ) -> Vec<(PanelTone, String)> {
-    let left_text = wrap_activity(&left.1, left_cols, 1)
-        .into_iter()
-        .next()
-        .unwrap_or_default();
-    let padding = left_cols.saturating_sub(left_text.width()) + gap;
-    let mut parts = vec![(left.0, left_text), (PanelTone::Muted, " ".repeat(padding))];
+    let mut used = 0;
+    let mut parts = Vec::new();
+    for (tone, text) in left {
+        let text = clipped(&text, left_cols.saturating_sub(used));
+        used += text.width();
+        parts.push((tone, text));
+    }
+    parts.push((
+        PanelTone::Muted,
+        " ".repeat(left_cols.saturating_sub(used) + gap),
+    ));
     if let Some(right) = right {
         parts.push(right);
     }
@@ -1074,7 +1212,7 @@ fn station_details(
         activity.task,
         "No task assigned",
         width,
-        (2 + extra / 8).min(8),
+        (2 + extra / 16).min(3),
     );
     rows.resize_with(rows.len().max(2), || (PanelTone::Normal, String::new()));
     rows.push(detail(
@@ -1086,42 +1224,35 @@ fn station_details(
         width,
     ));
     rows.push(detail("Total", &duration(activity.total_work_ms), width));
-    let recent = activity.recent_task_durations_ms.iter().take(3);
-    if budget >= 38 && !activity.recent_task_durations_ms.is_empty() {
-        rows.push((PanelTone::Heading, clipped("Recent tasks", width)));
-        for (index, elapsed) in recent.enumerate() {
-            rows.push(detail(
-                &format!("#{}", index + 1),
-                &duration(*elapsed),
-                width,
-            ));
-        }
-    } else {
-        let recent = recent.map(|elapsed| duration(*elapsed)).collect::<Vec<_>>();
-        rows.push(detail(
-            "Last 3",
-            &if recent.is_empty() {
-                "No completed tasks".into()
-            } else {
-                recent.join(" / ")
-            },
-            width,
-        ));
-    }
+    let recent = activity
+        .recent_task_durations_ms
+        .iter()
+        .take(3)
+        .map(|elapsed| duration(*elapsed))
+        .collect::<Vec<_>>();
+    rows.push(detail(
+        "Last 3",
+        &if recent.is_empty() {
+            "No completed tasks".into()
+        } else {
+            recent.join(" / ")
+        },
+        width,
+    ));
     if budget >= 24 && activity.progress.is_some() {
         rows.extend(activity_field(
             "Progress",
             activity.progress,
             "",
             width,
-            (extra / 3).clamp(2, 8),
+            (extra / 6).clamp(2, 3),
         ));
     }
     if budget >= 28
         && let Some(command) = activity.command
     {
         let summary = command_summary(command);
-        rows.extend(activity_field("Command", Some(&summary), "", width, 3));
+        rows.extend(activity_field("Command", Some(&summary), "", width, 2));
     }
     rows.push((PanelTone::Normal, String::new()));
     rows.push((
@@ -1154,14 +1285,14 @@ fn station_details(
     } else {
         0
     };
-    let chart_rows = remaining.saturating_sub(memory_rows + 2).min(8);
+    let chart_rows = remaining.saturating_sub(memory_rows + 2).min(3);
     rows.push((
         PanelTone::Muted,
         clipped(&format!("CPU trend · {valid} samples"), width),
     ));
     if valid > 0 && chart_rows > 0 {
         let (plot, upper) = resource_chart(samples, width, chart_rows, |sample| sample.cpu_percent);
-        rows.extend(plot.into_iter().map(|line| (PanelTone::Accent, line)));
+        rows.extend(plot.into_iter().map(|line| (PanelTone::Muted, line)));
         rows.push((
             PanelTone::Muted,
             clipped(&format!("Scale 0–{upper:.1}% of machine"), width),
@@ -1196,14 +1327,14 @@ fn station_details(
             let (plot, upper) = resource_chart(
                 samples,
                 width,
-                remaining.saturating_sub(3).min(6),
+                remaining.saturating_sub(3).min(3),
                 |sample| {
                     sample
                         .memory_bytes
                         .map(|bytes| bytes as f64 / (1024.0 * 1024.0))
                 },
             );
-            rows.extend(plot.into_iter().map(|line| (PanelTone::Success, line)));
+            rows.extend(plot.into_iter().map(|line| (PanelTone::Muted, line)));
             rows.push((
                 PanelTone::Muted,
                 clipped(&format!("Scale 0–{upper:.1} MiB"), width),
@@ -1613,7 +1744,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_manager_identity_is_explicit_without_abbreviating_ids_or_hiding_active_work() {
+    fn worker_manager_identity_is_compact_and_full_ids_remain_in_task_details() {
         let mut snapshot = snapshot();
         snapshot.process_id = 31415;
         assert!(identity_lines(&snapshot, 80).contains(&"Manager unbound".into()));
@@ -1640,8 +1771,15 @@ mod tests {
         let text = screen(&wide.worker_frame(Some(&snapshot)))
             .screen()
             .contents();
-        assert!(text.contains(&client) && text.contains(thread));
+        assert!(!text.contains(&client));
+        assert!(text.contains("Manager attached"));
         assert!(text.contains("OS PID 31415"));
+        wide.keyboard(b"t", Instant::now(), false);
+        let detail = screen(&wide.worker_frame(Some(&snapshot)))
+            .screen()
+            .contents();
+        assert!(detail.contains(&client) && detail.contains(thread));
+        wide.keyboard(b"t", Instant::now(), false);
         snapshot.stopping = true;
         let text = screen(&wide.worker_frame(Some(&snapshot)))
             .screen()
@@ -1661,7 +1799,7 @@ mod tests {
             .screen()
             .contents();
         assert!(text.contains("Manager attached"));
-        assert!(text.contains("Task and metrics"));
+        assert!(text.contains("Activity · T Full task"));
         assert!(text.contains("CPU trend"));
         let panels = compact.worker_snapshot(true);
         assert_eq!(panels["worker_panels"][0]["details"]["visible"], true);
@@ -1991,6 +2129,14 @@ mod tests {
         assert!(text.contains("Shared client PID"));
     }
 
+    fn log_body(lines: &[LogLine]) -> String {
+        lines
+            .iter()
+            .filter_map(|(_, parts)| parts.last())
+            .map(|(_, text)| text.as_str())
+            .collect()
+    }
+
     #[test]
     fn worker_log_wrapping_preserves_text_and_sanitizes_controls_and_secrets() {
         let mut snapshot = populated();
@@ -2001,15 +2147,76 @@ mod tests {
         }];
         let lines = log_lines(&snapshot.slots[0], 20, false);
         assert!(lines.len() > 1);
-        assert!(lines.iter().all(|(_, _, text)| text.width() <= 20));
-        let text: String = lines.iter().map(|(_, _, text)| text.as_str()).collect();
+        assert!(
+            lines.iter().all(|(_, parts)| parts
+                .iter()
+                .map(|(_, text)| text.width())
+                .sum::<usize>()
+                <= 20)
+        );
+        let text = log_body(&lines);
         assert!(text.contains("visible ending END"));
         assert!(text.contains("[redacted]"));
         assert!(!text.contains("fixture-secret"));
         assert!(!text.contains('\x1b'));
         assert!(!text.contains('\r'));
         assert!(!text.contains('\n'));
-        assert!(lines.iter().all(|(key, _, _)| key.sequence == 7));
+        assert!(lines.iter().all(|(key, _)| key.sequence == 7));
+    }
+
+    #[test]
+    fn worker_log_columns_preserve_interleaved_commands_results_and_unicode() {
+        let mut snapshot = populated();
+        let records = [
+            ("info", r#"Command started: ["sh","-c","echo ok; exit 0"]"#),
+            ("info", r#"Command started: ["cargo","test","--lib"]"#),
+            (
+                "error",
+                r#"Command finished: ["cargo","test","--lib"]; exit 7"#,
+            ),
+            ("info", r#"Command finished: ["sh","-c","echo ok; exit 0"]"#),
+            (
+                "info",
+                r#"Command finished: ["git","diff","--check"]; exit 0"#,
+            ),
+            (
+                "info",
+                "Progress: 检查中英文长正文，保留顺序与每条日志的稳定锚点 visible END",
+            ),
+        ];
+        snapshot.slots[0].logs = records
+            .iter()
+            .enumerate()
+            .map(|(index, (level, text))| SlotLog {
+                level: (*level).into(),
+                text: (*text).into(),
+                ..log(index as u64)
+            })
+            .collect();
+        for width in [1, 8, 18, 30, 60, 100] {
+            let lines = log_lines(&snapshot.slots[0], width, false);
+            assert!(lines.iter().all(|(_, spans)| {
+                spans.iter().map(|(_, text)| text.width()).sum::<usize>() <= width
+            }));
+            assert!(lines.windows(2).all(|pair| pair[0].0 < pair[1].0));
+            let sequences: std::collections::BTreeSet<_> =
+                lines.iter().map(|line| line.0.sequence).collect();
+            assert_eq!(sequences, (0..6).collect());
+            assert!(log_body(&lines).contains("exit 7"));
+            if width >= 18 {
+                assert!(log_body(&lines).contains("visible END"));
+                assert!(
+                    lines
+                        .iter()
+                        .filter(|(key, spans)| key.part > 0 && spans.len() > 1)
+                        .all(|(_, spans)| spans[0].1.trim().is_empty())
+                );
+            }
+        }
+        assert_eq!(log_event(&snapshot.slots[0].logs[0], false).0, "RUN");
+        assert_eq!(log_event(&snapshot.slots[0].logs[2], false).0, "FAIL");
+        assert_eq!(log_event(&snapshot.slots[0].logs[3], false).0, "END");
+        assert_eq!(log_event(&snapshot.slots[0].logs[4], false).0, "DONE");
     }
 
     #[test]
@@ -2216,7 +2423,7 @@ mod tests {
             "Progress",
             "Command",
             "[inline script]",
-            "Recent tasks",
+            "Last 3",
             "RSS trend",
         ] {
             assert!(text.contains(label), "{text}");
@@ -2244,8 +2451,8 @@ mod tests {
         let compact = log_lines(&snapshot.slots[0], 32, false);
         let full = log_lines(&snapshot.slots[0], 32, true);
         assert!(compact.len() < full.len());
-        let compact: String = compact.iter().map(|(_, _, text)| text.as_str()).collect();
-        let full: String = full.iter().map(|(_, _, text)| text.as_str()).collect();
+        let compact = log_body(&compact);
+        let full = log_body(&full);
         assert!(compact.contains("[inline script]") && compact.contains("exit 0"));
         assert!(!compact.contains("FULL_COMMAND_END"));
         assert!(full.contains("FULL_COMMAND_END"));
@@ -2339,18 +2546,39 @@ mod tests {
         snapshot.slots[0].current_task_elapsed_ms = Some(42_000);
         snapshot.slots[0].total_work_ms = 184_000;
         snapshot.slots[0].recent_task_durations_ms = vec![18_000, 63_000, 21_000];
-        snapshot.slots[0].logs[37].text = format!(
-            "Command started: {}",
-            serde_json::json!([
-                "python3",
-                "-c",
-                format!("{} COMMAND_END", "inspect_layout(); ".repeat(50))
-            ])
-        );
-        snapshot.slots[0].logs[38].text =
-            "Progress: Layout inspection completed in the private fixture".into();
-        snapshot.slots[0].logs[39].text =
-            "Command finished: [\"git\",\"diff\",\"--check\"]; exit 0".into();
+        snapshot.idle = 0;
+        snapshot.working = 2;
+        snapshot.slots[0].task_id = Some("worker_task_layout_fixture_5".into());
+        let command = serde_json::json!([
+            "python3",
+            "-c",
+            format!("{} COMMAND_END", "inspect_layout(); ".repeat(50))
+        ])
+        .to_string();
+        let records = [
+            ("info", "Task assigned".to_owned()),
+            ("info", "Progress: Inspecting the monitor layout and independent scroll positions.".to_owned()),
+            ("info", r#"Command started: ["rg","-n","LogAnchor","src/client/terminal/worker.rs"]"#.into()),
+            ("info", r#"Command finished: ["rg","-n","LogAnchor","src/client/terminal/worker.rs"]; exit 0"#.into()),
+            ("info", format!("Command started: {command}")),
+            ("info", "Progress: 检查中英文续行对齐，任务详情与日志位置保持独立。".into()),
+            ("info", format!("Command finished: {command}; exit 0")),
+            ("info", r#"Command started: ["cargo","test","--lib","client::terminal::worker"]"#.into()),
+            ("error", r#"Command finished: ["cargo","test","--lib","client::terminal::worker"]; exit 7"#.into()),
+            ("info", "Progress: Inspecting the failed layout assertion before the next check.".into()),
+            ("info", r#"Command started: ["git","diff","--check"]"#.into()),
+            ("info", r#"Command finished: ["git","diff","--check"]; exit 0"#.into()),
+        ];
+        snapshot.slots[0].logs = records
+            .into_iter()
+            .enumerate()
+            .map(|(index, (level, text))| SlotLog {
+                level: level.into(),
+                text,
+                ..log(index as u64)
+            })
+            .collect();
+        snapshot.slots[0].next_log_sequence = snapshot.slots[0].logs.len() as u64;
         let mut views: Vec<_> = [(64, 112, "tall"), (32, 132, "wide"), (26, 60, "narrow")]
             .into_iter()
             .map(|(rows, cols, name)| {
