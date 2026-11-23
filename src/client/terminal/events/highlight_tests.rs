@@ -118,9 +118,13 @@ fn raw_json_visual_fixture() {
             let mut state = super::super::State::new(rows, cols, &ui);
             state.preview = true;
             state.notice = Some("Synthetic highlighting fixture".into());
-            state
-                .events
-                .ingest_conversation(format!("[AGENT] Highlighting fixture\n{source}").as_bytes());
+            // Exercise the real tool-output path. Agent conversation prose
+            // intentionally goes through Markdown, not semantic_text.
+            state.events.ingest_event(
+                "res",
+                &json!({"type":"tool_result","call_id":"highlight-fixture"}),
+                format!("[RES] Highlighting fixture\n{source}").as_bytes(),
+            );
             state.events.open();
             let now = std::time::Instant::now();
             let _ = state.frame(now);
@@ -157,7 +161,7 @@ fn raw_json_visual_fixture() {
         serde_json::to_vec_pretty(&json!({
             "schema": "ssmcp.highlight-fixture.v1",
             "synthetic_input": true,
-            "renderer": "State::frame / EventView::render / semantic_text / Frame::diff",
+            "renderer": "State::frame / EventView::render (tool_result) / semantic_text / Frame::diff",
             "no_color_mode": "Ui.color=false (the renderer mode selected by NO_COLOR)",
             "byte_preservation": true,
             "frames": frames
