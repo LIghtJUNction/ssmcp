@@ -95,6 +95,10 @@ Human chat instructions apply to selected clients with `chat_enabled:true`. Disa
 
 Progress and final replies use `say` / `ssmcp.ui.message` or `ssmcp.ui.present`, with the original conversation owner and idempotency checks. Use `ssmcp.ui.reply` for progress or a result tied to an authenticated thread input. Responses omit forced continuation, conversation reminders and end-consent instructions. [Response delivery](../src/http.rs) · [Message submission](../src/client/interface/messages.rs)
 
+## Reconnect after an unexpected disconnect
+
+Try to reconnect after an unexpected disconnect. Refresh `list` and schemas, then verify the authorized workspace and control/pool link using a fresh invitation or the main client's `/worker_pool` projection. Reuse valid credentials on the original connection; join and bind your own fresh credentials when it is replaced or membership expires. Preserve original claims and job/commit evidence, and reconcile outcomes before fresh assignments. Keep unresolved outcomes `unknown`; never replay uncertain work or restart models. If the link is unverified, stay available with work paused. Explicit exit and retirement requests still apply. See [worker recovery](workers.md#reconnect-after-an-unexpected-disconnect).
+
 ## Helper contracts
 
 The following details are loaded on demand. Client schemas and native permissions remain authoritative.

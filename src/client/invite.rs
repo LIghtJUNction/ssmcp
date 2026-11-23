@@ -169,6 +169,7 @@ fn render(role: &str, control_id: &str, cwd: &str, pool: Option<&Value>) -> Resu
             "You are an external worker; do not start a model. Read `ssmcp://guide`, `AGENTS.md`, and `docs/workers.md`. Discover current pool schemas. Use `collab.join` with `role: \"worker\"` and `collab.bind` on the worker pool with your own private credentials. Await assignments with `ssmcp.worker.wait`; preserve each claim unchanged. Report actual outcomes with `ssmcp.worker.complete`, then wait again using a new request ID. Reuse wait IDs on retries. On an exit request, complete any current claim, call `ssmcp.worker.release` using its current schema, and stop. Do not attach/submit, consume control-session next-caller input, or replay `unknown` work."
         }
     });
+    prompt.push_str("\nOn unexpected disconnect, try reconnecting: refresh `list` and schemas, verify the authorized workspace/control/pool link, and rejoin/bind your own fresh credentials if needed. Reconcile saved claims, commits and job outcomes before fresh assignments. Preserve `unknown`; never replay uncertain work or restart models.");
     Ok(prompt)
 }
 
@@ -287,7 +288,7 @@ mod tests {
     fn prompts_are_bounded_and_do_not_include_credentials() {
         for role in ["", "worker"] {
             let prompt = render(role, CONTROL_ID, "/project with spaces", Some(&pool())).unwrap();
-            assert!(prompt.split_whitespace().count() <= 160);
+            assert!(prompt.split_whitespace().count() <= 200);
             assert!(prompt.contains("ssmcp://guide"));
             assert!(prompt.contains("AGENTS.md"));
             assert!(prompt.contains("docs/workers.md"));
@@ -296,6 +297,23 @@ mod tests {
             assert!(prompt.contains("Workspace: \"/project with spaces\"."));
             for private in ["token", "DO_NOT_DISCLOSE", "ALSO_PRIVATE"] {
                 assert!(!prompt.contains(private));
+            }
+        }
+    }
+
+    #[test]
+    fn invitations_attempt_reconnect_and_reconcile_before_new_work() {
+        for role in ["", "worker"] {
+            let prompt = render(role, CONTROL_ID, "/project", Some(&pool())).unwrap();
+            for instruction in [
+                "On unexpected disconnect, try reconnecting",
+                "refresh `list` and schemas",
+                "verify the authorized workspace/control/pool link",
+                "rejoin/bind your own fresh credentials if needed",
+                "Reconcile saved claims, commits and job outcomes before fresh assignments",
+                "Preserve `unknown`; never replay uncertain work or restart models",
+            ] {
+                assert!(prompt.contains(instruction), "{role:?}: {instruction}");
             }
         }
     }

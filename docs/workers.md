@@ -85,6 +85,18 @@ Reuse the same request ID while waiting or recovering a lost response. The resul
 
 Registered worker participants and idle stations are separate counts. Three newly created stations are offline until workers actually connect and wait. Read the actual station binding from the pool; an agent's display name, such as `worker#3`, does not select panel `#03`.
 
+## Reconnect after an unexpected disconnect
+
+Try to reconnect after an unexpected disconnect. Keep the existing agent conversation, original claims and task evidence while checking the current connection.
+
+1. Refresh `list` and discover current schemas. Verify the authorized workspace and the control/pool link using a fresh invitation or the main client's `/worker_pool` projection. Workers can obtain that link from the verified coordinator. A matching display name or working directory alone does not identify a replacement connection.
+2. If the original connection and membership remain valid, bind the existing private credentials and retain its wait request ID. If the client was replaced or membership expired, join and bind your own fresh credentials with the same authorized role. Keep credentials private; workers must not take over the manager role or consume control-session next-caller input.
+3. Preserve the complete original claim and its generation. Use it only while the original pool and authenticated claimant still accept it. Never edit an old claim to fit a new generation, or send it as a claim on a replacement pool. A new connection or membership starts a new wait request ID after reconciliation.
+4. Inspect retained receipts, job state/output and worktree/commit evidence where available. Report to the verified coordinator what completed, what is still running and what remains `unknown`. A lost response does not prove failure or cancellation. Keep unresolved outcomes `unknown`; joining again does not authorize repeating a command, submission, build or deployment.
+5. Resume remaining work only under a valid current claim. After a pool replacement, reconcile the old task first, then wait for a fresh assignment. Rejoining restores participation; it must not start or restart a model.
+
+If the authorized link cannot yet be verified, keep the task paused, report the blocker and retry bounded discovery while remaining available. An explicit exit or retirement request still follows the completion and release procedure above.
+
 ## Use the monitor
 
 Select a station to inspect its retained activity. Wide terminals give most of the width to the work log and keep a smaller activity column in a fixed position. Narrow terminals show a compact task summary above the full-width log. Scrolling the log does not scroll the activity column.
