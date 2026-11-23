@@ -12,7 +12,7 @@
 <body>
   <div class="shell">
     <aside class="sidebar" id="sidebar" aria-label="会话导航">
-      <a class="brand" href="./" aria-label="SSMCP 工作台"><span class="brand-mark" aria-hidden="true">s.</span><strong>ssmcp</strong><span class="tag">WEB</span></a>
+      <a class="brand" href="./" aria-label="SSMCP 工作台"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="currentColor" aria-hidden="true" focusable="false"><rect x="5" y="7" width="2" height="18" rx="1"/><rect x="5" y="7" width="7" height="2" rx="1"/><rect x="5" y="23" width="7" height="2" rx="1"/><rect x="25" y="7" width="2" height="18" rx="1"/><rect x="20" y="7" width="7" height="2" rx="1"/><rect x="20" y="23" width="7" height="2" rx="1"/><rect x="11" y="15" width="10" height="2" rx="1"/></svg></span><strong>ssmcp</strong><span class="tag">WEB</span></a>
       <div class="nav-heading"><span>会话</span><button class="icon-button" id="refresh-sessions" title="刷新会话目录" aria-label="刷新会话目录">↻</button></div>
       <div id="session-list" class="session-list"><p class="quiet">认证后显示本机真实会话。</p></div>
       <div class="pagination" id="session-pagination" hidden><button class="text-button" id="sessions-prev">上一页</button><button class="text-button" id="sessions-next">下一页</button></div>
@@ -55,11 +55,18 @@
         </div>
         <div class="timeline-scroller" id="timeline-scroller" tabindex="0" aria-label="对话与事件时间线">
           <div class="welcome" id="welcome">
-            <span class="welcome-glyph" aria-hidden="true">[ _ ]</span>
-            <h2>让工作，清晰可见。</h2>
-            <p>连接正在运行的 SSMCP 会话。<br>对话、终端和 worker 进展，在同一处查看。</p>
-            <button class="primary" id="welcome-connect">连接本机网关 <span aria-hidden="true">↗</span></button>
-            <p class="tiny">没有演示数据。连接后展示 CLI 的真实状态。</p>
+            <div class="welcome-intro">
+              <span class="welcome-glyph" aria-hidden="true"><svg viewBox="0 0 32 32" fill="currentColor" aria-hidden="true" focusable="false"><rect x="5" y="7" width="2" height="18" rx="1"/><rect x="5" y="7" width="7" height="2" rx="1"/><rect x="5" y="23" width="7" height="2" rx="1"/><rect x="25" y="7" width="2" height="18" rx="1"/><rect x="20" y="7" width="7" height="2" rx="1"/><rect x="20" y="23" width="7" height="2" rx="1"/><rect x="11" y="15" width="10" height="2" rx="1"/></svg></span>
+              <h2>让工作，清晰可见。</h2>
+              <p class="welcome-copy">连接正在运行的 SSMCP 会话。<br>对话、终端和 worker 进展，在同一处查看。</p>
+              <button class="primary" id="welcome-connect">连接本机网关 <span aria-hidden="true">↗</span></button>
+            </div>
+            <ul class="welcome-overview" aria-label="工作区内容">
+              <li><span class="welcome-number" aria-hidden="true">01</span><h3>对话与事件</h3><p>查看当前会话可用的消息与记录。</p></li>
+              <li><span class="welcome-number" aria-hidden="true">02</span><h3>终端</h3><p>读取实际输出，显式发送输入。</p></li>
+              <li><span class="welcome-number" aria-hidden="true">03</span><h3>Workers</h3><p>了解已有工作池的状态与进展。</p></li>
+            </ul>
+            <p class="tiny welcome-footnote">没有演示数据。连接后展示 CLI 的真实状态。</p>
           </div>
           <div class="timeline-empty" id="timeline-empty" hidden><h2>等待新的事件</h2><p>当前保留窗口内还没有可显示的对话。<br>连接和观察状态显示在上方。</p></div>
           <div class="timeline-paging" id="timeline-paging" hidden><button class="text-button" id="timeline-older">更早的记录</button><span id="timeline-page-label" class="tiny"></span><button class="text-button" id="timeline-newer">较新的记录</button></div>

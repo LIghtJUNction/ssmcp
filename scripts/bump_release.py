@@ -71,7 +71,7 @@ def tag_commit(root, tag):
 
 
 def version_commit(root, baseline, tag):
-    git(root, "add", "--", "Cargo.toml", "Cargo.lock")
+    git(root, "add", "--", *(path.as_posix() for path in release.application_version_files(root)))
     tree = git(root, "write-tree")
     # Commit identity is deliberately derived from the frozen baseline, not the
     # runner clock or run_attempt. A retry creates the identical Git object.
@@ -111,7 +111,7 @@ def prepare(level, baseline, root=None, *, custom_version=None,
         "sha": None, "tag_prepared": False,
     }
     if dry_run:
-        # Exercise the same two-file replacement validation without writing it.
+        # Exercise the same version-file replacement validation without writing it.
         if new != old:
             release.bump(level, root, custom_version=custom_version, dry_run=True)
         # In particular, do not fetch, stage, create a commit, move any ref or tag.

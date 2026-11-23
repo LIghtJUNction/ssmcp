@@ -347,7 +347,7 @@ impl Gateway {
         }
     }
 
-    fn connection(self: &Arc<Self>, id: &str) -> Result<Arc<dyn Connection>, BridgeError> {
+    fn connection(self: &Arc<Self>, id: &str) -> Result<(Arc<dyn Connection>, bool), BridgeError> {
         self.prune();
         let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
         let connection = data.connections.get_mut(id).ok_or_else(|| {
@@ -363,7 +363,7 @@ impl Gateway {
             ));
         }
         connection.used = Instant::now();
-        Ok(connection.core.clone())
+        Ok((connection.core.clone(), connection.read_only))
     }
 }
 
@@ -558,7 +558,7 @@ async fn open(State(state): State<Arc<Gateway>>, request: Request) -> Result<Res
         flight.settled = true;
         connected?;
     }
-    let core = state.connection(&connection_id)?;
+    let (core, _) = state.connection(&connection_id)?;
     let request = BridgeRequest {
         version: zbridge::VERSION,
         id: input.request_id,
@@ -581,8 +581,20 @@ async fn bridge(
 ) -> Result<Json<BridgeResponse>, ApiError> {
     let request: BridgeRequest = input(request).await?;
     request.validate()?;
-    let core = state.connection(&id)?;
+    let (core, read_only) = state.connection(&id)?;
     let command = request.operation.is_command();
+    if command && read_only {
+        // This denial happens before native dispatch, so its effect is known.
+        return Ok(Json(BridgeResponse {
+            version: zbridge::VERSION,
+            id: request.id,
+            generation: request.operation.generation().cloned(),
+            body: ResponseBody::Error(BridgeError::new(
+                ErrorCode::Denied,
+                "attach frontend is read-only",
+            )),
+        }));
+    }
     let result = timeout(NATIVE_DEADLINE, core.request(request.clone()))
         .await
         .map_err(|_| unavailable("native request deadline elapsed"))
@@ -609,7 +621,7 @@ async fn events(
     request: Request,
 ) -> Result<Json<Value>, ApiError> {
     let input: ObserveRequest = input(request).await?;
-    let core = state.connection(&id)?;
+    let (core, _) = state.connection(&id)?;
     let mut observer = EventObserver::new(input.generation.clone(), input.cursor);
     let page = observer
         .wait_with(

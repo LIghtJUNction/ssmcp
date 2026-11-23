@@ -19,12 +19,22 @@ struct Scope {
     agent_id: String,
 }
 
+/// A single explicitly requested advisory maintenance round, not an execution grant.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Dreaming {
+    pub round_id: String,
+    pub repository: String,
+    pub budget_ms: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub(super) struct Policy {
     pub enabled: bool,
     pub window_ms: u64,
     pub kinds: Vec<String>,
     pub strategy: Option<String>,
+    pub dreaming: Option<Dreaming>,
 }
 
 impl Default for Policy {
@@ -41,6 +51,7 @@ impl Default for Policy {
             .map(str::to_owned)
             .to_vec(),
             strategy: None,
+            dreaming: None,
         }
     }
 }
@@ -52,6 +63,7 @@ struct Patch {
     window_ms: Option<u64>,
     kinds: Option<Vec<String>>,
     strategy: Option<String>,
+    dreaming: Option<Dreaming>,
 }
 
 impl Patch {
@@ -111,10 +123,30 @@ impl Patch {
                     .into(),
             );
         }
+        if let Some(round) = &patch.dreaming {
+            if round.round_id.is_empty()
+                || round.round_id.len() > 128
+                || !round
+                    .round_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+            {
+                return Err("Dreaming round_id must contain 1..=128 ASCII letters, digits, underscores or hyphens".into());
+            }
+            if !matches!(round.repository.as_str(), "project" | "global") {
+                return Err("Dreaming repository must be project or global".into());
+            }
+            if !(1_000..=crate::wire::MAX_OBSERVATION_WAIT_MS).contains(&round.budget_ms) {
+                return Err(format!(
+                    "Dreaming budget_ms must be 1000..={}",
+                    crate::wire::MAX_OBSERVATION_WAIT_MS
+                ));
+            }
+        }
         Ok(patch)
     }
 
-    fn apply(self, policy: &mut Policy, clear_strategy: bool) {
+    fn apply(self, policy: &mut Policy, clear_strategy: bool, clear_dreaming: bool) {
         if let Some(enabled) = self.enabled {
             policy.enabled = enabled;
         }
@@ -130,6 +162,11 @@ impl Patch {
         } else if let Some(strategy) = self.strategy {
             let strategy = strategy.trim();
             policy.strategy = (!strategy.is_empty()).then(|| strategy.to_owned());
+        }
+        if clear_dreaming {
+            policy.dreaming = None;
+        } else if let Some(round) = self.dreaming {
+            policy.dreaming = Some(round);
         }
     }
 }
@@ -164,7 +201,10 @@ impl Registry {
             let clear_strategy = patch
                 .and_then(|value| value.get("strategy"))
                 .is_some_and(Value::is_null);
-            parsed.apply(&mut policy, clear_strategy);
+            let clear_dreaming = patch
+                .and_then(|value| value.get("dreaming"))
+                .is_some_and(Value::is_null);
+            parsed.apply(&mut policy, clear_strategy, clear_dreaming);
             self.entries.insert(scope, (policy.clone(), now));
         } else if let Some((_, touched)) = self.entries.get_mut(&scope) {
             *touched = now;
@@ -219,6 +259,7 @@ pub(crate) fn policy(
         "window_ms": policy.window_ms,
         "kinds": policy.kinds,
         "strategy": policy.strategy,
+        "dreaming": policy.dreaming,
         "advisory": true,
         "retention_ms": RETAIN_FOR.as_millis(),
         "max_policies": MAX_POLICIES,
@@ -268,6 +309,95 @@ mod tests {
             .unwrap();
         assert!(restored.enabled);
         assert_eq!(restored.strategy, None);
+    }
+
+    #[test]
+    fn dreaming_round_is_explicit_and_partial_updates_preserve_it() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        assert!(
+            registry
+                .access(scope("main"), None, now)
+                .unwrap()
+                .dreaming
+                .is_none()
+        );
+        let patch = json!({"dreaming":{
+            "round_id":"tools-round-1","repository":"project","budget_ms":1000
+        }});
+        let first = registry.access(scope("main"), Some(&patch), now).unwrap();
+        assert_eq!(first.dreaming.as_ref().unwrap().budget_ms, 1000);
+        assert!(
+            registry
+                .access(scope("worker"), None, now)
+                .unwrap()
+                .dreaming
+                .is_none()
+        );
+        let edited = registry
+            .access(scope("main"), Some(&json!({"window_ms":4000})), now)
+            .unwrap();
+        assert_eq!(edited.dreaming, first.dreaming);
+        let repeated = registry.access(scope("main"), Some(&patch), now).unwrap();
+        assert_eq!(repeated, edited);
+        let cleared = registry
+            .access(scope("main"), Some(&json!({"dreaming":null})), now)
+            .unwrap();
+        assert!(cleared.dreaming.is_none());
+        assert_eq!(cleared.window_ms, 4000);
+        let global = registry
+            .access(
+                scope("main"),
+                Some(&json!({"dreaming":{
+                    "round_id":"tools-round-2","repository":"global",
+                    "budget_ms":crate::wire::MAX_OBSERVATION_WAIT_MS
+                }})),
+                now,
+            )
+            .unwrap();
+        assert_eq!(global.dreaming.as_ref().unwrap().repository, "global");
+    }
+
+    #[test]
+    fn invalid_dreaming_rounds_preserve_the_previous_policy() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let round = json!({"round_id":"round-1","repository":"project","budget_ms":1000});
+        let previous = registry
+            .access(scope("main"), Some(&json!({"dreaming":round})), now)
+            .unwrap();
+        let mut invalid = vec![json!({}), json!(false)];
+        for (field, value) in [
+            ("round_id", json!("")),
+            ("round_id", json!("r".repeat(129))),
+            ("round_id", json!("round 1")),
+            ("round_id", json!("维护")),
+            ("repository", json!("official")),
+            ("repository", json!("/arbitrary/path")),
+            ("budget_ms", json!(999)),
+            ("budget_ms", json!(crate::wire::MAX_OBSERVATION_WAIT_MS + 1)),
+            ("budget_ms", json!(-1)),
+            ("budget_ms", json!("1000")),
+            ("extra", json!(true)),
+        ] {
+            let mut candidate = round.clone();
+            candidate[field] = value;
+            invalid.push(candidate);
+        }
+        for candidate in invalid {
+            assert!(
+                registry
+                    .access(
+                        scope("main"),
+                        Some(&json!({
+                            "window_ms":2000,"dreaming":candidate
+                        })),
+                        now
+                    )
+                    .is_err()
+            );
+            assert_eq!(registry.access(scope("main"), None, now).unwrap(), previous);
+        }
     }
 
     #[test]

@@ -924,15 +924,22 @@ impl Runtime {
                 _ => Err("provider is not mounted in the native plugin host".into()),
             }
         };
+        let mut observation_stopped = false;
         let outcome = if let Some(waiting) = observation.as_mut() {
             tokio::select! {
                 biased;
-                _ = waiting.cancelled() => Err("native wait observation cancelled; the underlying job was not cancelled".into()),
+                _ = waiting.cancelled() => {
+                    observation_stopped = true;
+                    Err("native wait observation cancelled; the underlying job was not cancelled".into())
+                },
                 outcome = dispatched => outcome,
             }
         } else {
             dispatched.await
         };
+        if let Some(waiting) = observation.as_mut() {
+            waiting.finish(&outcome, observation_stopped);
+        }
         drop(observation);
         if control {
             self.audit

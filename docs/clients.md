@@ -82,9 +82,17 @@ Android 与 iOS 都使用系统证书校验，拒绝带凭据、额外路径或�
 
 断开操作释放的是前端连接。成功回执应明确后台会话继续运行；如果回执在网络中丢失，就保留释放结果待确认。读取事件、暂停观察或切换页面本身都不会领取 worker 任务，也不会确认消息已读。[连接释放实现](../src/session/attach/zbridge_adapter/remote.rs) · [事件语义](events.md)
 
-## 继续对话：目标与来源是两件事
+## 继续对话：阅读范围与发送目标
 
-**查看哪条线程，是阅读范围；把输入发给谁，是发送目标。** 「全部来源」「主会话」和具体线程用于筛选历史。发送时则由界面明确选择 `next` 或当前真实存在的一个 agent，CLI 的图形输入入口不接受隐式广播。
+历史范围决定显示哪些记录，发送目标决定本次输入交给谁。各端当前的控件关系如下；桌面和移动端切换线程时，也会改变下一次提交的接收目标。
+
+| 客户端 | 阅读范围 | 下一次提交的发送目标 |
+| --- | --- | --- |
+| Web | 「整个会话」「主对话」或具体线程 | 用独立的「接收方」选择器指定 `next` 或当前 agent；切换阅读范围不会改变接收方。[Web 控件](../apps/ssmcp-web/app.mjs) |
+| Windows / Linux 桌面 | 「全部来源」「主会话」或具体 agent 线程 | 共用线程选择器：选择具体线程时发给该 agent；选择「全部来源」或「主会话」时发给 `next`。输入框下方显示当前目标。[桌面映射](../apps/ssmcp-desktop/src/model.rs) · [桌面控件](../apps/ssmcp-desktop/src/ui.rs) |
+| Android / iOS | `next` 显示共享会话记录，具体 agent 显示对应线程；当前没有独立的主会话筛选 | 共用线程与目标选择器：`next` 交给下一位合格接收者，具体线程交给该 agent。[Android 控件](../apps/ssmcp-android/app/src/main/java/dev/ssmcp/mobile/MainActivity.kt) · [iOS 控件](../apps/ssmcp-ios/SSMCP/ContentView.swift) |
+
+CLI 的图形输入入口只接受 `next` 或当前真实存在的一个 agent，不接受隐式广播。两种发送目标的含义如下：
 
 | 发送目标 | 含义 |
 | --- | --- |

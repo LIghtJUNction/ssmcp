@@ -1254,6 +1254,25 @@ pub(crate) async fn dispatch(
             check_native_sources(&native_sources(&broker, &record, &sources))?;
             let mut observation =
                 DirectObservation::start(&broker, &context.actor, &subscription_id)?;
+            // The subscription and its sources have been authorized above.
+            // Display owns no event cursor, native permit or delivery authority.
+            let display = context.session.show_wait(
+                &broker,
+                crate::broker::wait_display::Request {
+                    user: &user,
+                    token: &access_token,
+                    binding: &context.binding,
+                    wait_id: &observation.id,
+                    operation: "events.wait",
+                    targets: vec![crate::wire::wait_display::Kind::Event],
+                    target_labels: vec!["Subscription events".into()],
+                    target_details: vec![format!(
+                        "Subscription ID {subscription_id}; up to {limit} matching authorized events"
+                    )],
+                    mode: crate::wire::wait_display::Mode::Single,
+                    timeout_ms: wait_ms,
+                },
+            );
             let started = Instant::now();
             let result: Result<Value, String> = async {
                 let first = broker
@@ -1295,13 +1314,20 @@ pub(crate) async fn dispatch(
                 Ok(result)
             }
             .await;
-            observation.finish(
-                result
-                    .as_ref()
-                    .ok()
-                    .and_then(|value| value["status"].as_str())
-                    .unwrap_or("error"),
-            );
+            let outcome = result
+                .as_ref()
+                .ok()
+                .and_then(|value| value["status"].as_str())
+                .unwrap_or("error");
+            observation.finish(outcome);
+            if let Some(display) = display {
+                use crate::wire::wait_display::Outcome;
+                display.finish(match outcome {
+                    "ready" => Outcome::Triggered,
+                    "pending" => Outcome::WindowExpired,
+                    _ => Outcome::Unknown,
+                });
+            }
             result?
         }
         Request::Ack {
@@ -1448,7 +1474,12 @@ pub(crate) fn tool() -> Value {
             variant("policy",json!({"patch":{"type":"object","additionalProperties":false,"properties":{
                 "enabled":{"type":"boolean"},"window_ms":{"type":"integer","minimum":1000,"maximum":crate::wire::MAX_OBSERVATION_WAIT_MS},
                 "kinds":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string"}},
-                "strategy":{"type":["string","null"],"maxLength":512}
+                "strategy":{"type":["string","null"],"maxLength":512},
+                "dreaming":{"type":["object","null"],"additionalProperties":false,
+                    "required":["round_id","repository","budget_ms"],"properties":{
+                    "round_id":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,128}$"},
+                    "repository":{"type":"string","enum":["project","global"]},
+                    "budget_ms":{"type":"integer","minimum":1000,"maximum":crate::wire::MAX_OBSERVATION_WAIT_MS}}}
             }}}), &[])
         ]},
         "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}

@@ -1,7 +1,7 @@
 //! Bounded coordinator hints from the controlled client's live worker pool.
 use super::{
     CodeRunReport, EligibleUserResponse, Operation,
-    coordination_policy::{self, Policy},
+    coordination_policy::{self, Dreaming, Policy},
     response_authorization,
 };
 use crate::code_mode;
@@ -59,6 +59,13 @@ impl Counts {
             && self.desired_total == self.total
             && self.queued == 0
             && self.standby() != 0
+    }
+
+    fn quiet(&self) -> bool {
+        self.should_remind()
+            && self.working == 0
+            && self.offline == 0
+            && self.standby() == self.total
     }
 }
 
@@ -215,32 +222,41 @@ fn cache() -> &'static Mutex<Cache> {
 
 #[derive(Default)]
 struct GuidanceCache {
-    entries: HashMap<Scope, (Policy, Instant)>,
+    entries: HashMap<Scope, (Policy, Instant, Option<String>)>,
 }
 
 impl GuidanceCache {
-    fn due(&mut self, scope: &Scope, policy: &Policy, now: Instant) -> bool {
-        if !policy.enabled {
-            self.entries.remove(scope);
-            return false;
-        }
-        self.entries.get(scope).is_none_or(|(old, emitted)| {
-            old != policy || now.saturating_duration_since(*emitted) >= REPEAT_AFTER
-        })
+    fn due(&self, scope: &Scope, policy: &Policy, now: Instant) -> bool {
+        policy.enabled
+            && self.entries.get(scope).is_none_or(|(old, emitted, _)| {
+                old != policy || now.saturating_duration_since(*emitted) >= REPEAT_AFTER
+            })
     }
 
-    fn emitted(&mut self, scope: Scope, policy: Policy, now: Instant) {
+    fn dreaming_due(&self, scope: &Scope, round: &Dreaming) -> bool {
+        self.entries
+            .get(scope)
+            .is_none_or(|(_, _, emitted)| emitted.as_deref() != Some(&round.round_id))
+    }
+
+    fn emitted(&mut self, scope: Scope, policy: Policy, now: Instant, round_id: Option<String>) {
+        // Ordinary wait reminders and temporary disabling do not rearm a round.
+        let round_id = round_id.or_else(|| {
+            self.entries
+                .get(&scope)
+                .and_then(|(_, _, previous)| previous.clone())
+        });
         if !self.entries.contains_key(&scope) && self.entries.len() >= MAX_CACHE_ENTRIES {
             let oldest = self
                 .entries
                 .iter()
-                .min_by_key(|(_, (_, at))| *at)
+                .min_by_key(|(_, (_, at, _))| *at)
                 .map(|(key, _)| key.clone());
             if let Some(oldest) = oldest {
                 self.entries.remove(&oldest);
             }
         }
-        self.entries.insert(scope, (policy, now));
+        self.entries.insert(scope, (policy, now, round_id));
     }
 }
 
@@ -254,24 +270,71 @@ fn guidance(
     agent_id: &str,
     pool_client_id: Option<&str>,
     policy: &Policy,
+    round: Option<&Dreaming>,
 ) -> Value {
     let mut clients = vec![control_client_id];
     if let Some(pool) = pool_client_id.filter(|pool| *pool != control_client_id) {
         clients.push(pool);
     }
+    // Custom worker filters must never remove the operator's wake-up signal.
+    let mut kinds = policy.kinds.clone();
+    if !kinds
+        .iter()
+        .any(|kind| kind == "user.input_available" || kind == "user.*")
+    {
+        kinds.push("user.input_available".into());
+    }
+    let maintenance = round.map_or_else(String::new, |round| {
+        format!(
+            " Dreaming round {}: after authorized work is finished, allow at most {} ms for one {} tool/workflow improvement. Reuse this round ID and original receipts; cancellation, timeout or unknown never starts another round. Yield to new user input. Use a detached worktree, validate and retain a reviewable diff without overwriting dirty files.",
+            round.round_id, round.budget_ms, round.repository
+        )
+    });
     json!({
         "schema_version":1,
         "client_id":control_client_id,
         "agent_id":agent_id,
         "condition":"when_no_independent_work",
         "policy":policy,
-        "subscription_filter":{"client_ids":clients,"kinds":policy.kinds},
+        "dreaming_round":round,
+        "subscription_filter":{"client_ids":clients,"kinds":kinds},
         "await_target_type":"event",
         "message":format!(
-            "After independent work is finished, subscribe to the listed events and use the public await event target in windows of at most {} ms. Resume the same wait_id while pending. Process ready events, explicitly acknowledge their subscription cursor and the await result cursor, then start the next wait. user.input_available only wakes the observer; retrieve the actual input through ui.wait. Inspect unknown outcomes using the original operation ID. Change this advice with events action=policy.",
-            policy.window_ms
+            "After independent work is finished, subscribe to the listed events and use the public await event target in windows of at most {} ms. Resume the same wait_id while pending. Process ready events, explicitly acknowledge their subscription cursor and the await result cursor, then start the next wait. user.input_available only wakes the observer; retrieve the actual input through ui.wait. Inspect unknown outcomes using the original operation ID. Change this advice with events action=policy.{}",
+            policy.window_ms, maintenance
         )
     })
+}
+
+fn input_pending(target: &EligibleUserResponse, response: &Value) -> bool {
+    if response["structuredContent"]["user_messages"]
+        .as_array()
+        .is_some_and(|messages| !messages.is_empty())
+    {
+        return true;
+    }
+    let agent_id = target
+        .binding
+        .as_ref()
+        .map(|binding| binding.agent_id.as_str());
+    // This is a bounded observation only: no reserve, claim, acknowledgement,
+    // subscription, or user-input text enters the advisory hint.
+    target
+        .session
+        .steering
+        .command(
+            target.session.client_id(),
+            Vec::new(),
+            crate::wire::SteeringCommand::Snapshot {},
+        )
+        .map_or(true, |snapshot| {
+            snapshot.messages.iter().any(|message| {
+                matches!(
+                    message.state,
+                    crate::wire::SteeringState::Queued | crate::wire::SteeringState::Editing
+                ) && (message.target == "next" || Some(message.target.as_str()) == agent_id)
+            })
+        })
 }
 
 fn notice(control_client_id: &str, agent_id: &str, pool: &Pool) -> Value {
@@ -465,13 +528,16 @@ pub(super) async fn append(
             .binding
             .as_ref()
             .expect("verified coordinator binding");
+        if input_pending(target, &response) {
+            continue;
+        }
         let pool = observed.iter().find_map(|(at, pool, connection)| {
             (*at == index)
                 .then_some(connection.as_ref())
                 .flatten()
                 .filter(|session| session.is_alive() && authorization.permits(session))
                 .filter(|_| pool.counts.connected && !pool.counts.closed)
-                .map(|_| pool.client_id.as_str())
+                .map(|_| pool)
         });
         let Ok(policy) = coordination_policy::effective(
             &binding.owner,
@@ -486,20 +552,27 @@ pub(super) async fn append(
             client_id: target.session.client_id().into(),
             owner: binding.owner.clone(),
             agent_id: binding.agent_id.clone(),
-            pool_id: pool.unwrap_or_default().into(),
+            pool_id: pool.map_or("", |pool| pool.client_id.as_str()).into(),
         };
         let now = Instant::now();
         let mut cache = guidance_cache()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if !cache.due(&scope, &policy, now) {
+        let round = policy.dreaming.as_ref().filter(|round| {
+            policy.enabled
+                && response["isError"] != true
+                && pool.is_some_and(|pool| pool.counts.quiet())
+                && cache.dreaming_due(&scope, round)
+        });
+        if !cache.due(&scope, &policy, now) && round.is_none() {
             continue;
         }
         hints.push(guidance(
             target.session.client_id(),
             &binding.agent_id,
-            pool,
+            pool.map(|pool| pool.client_id.as_str()),
             &policy,
+            round,
         ));
         let Some(next) = append_section(
             &with_workers,
@@ -511,7 +584,8 @@ pub(super) async fn append(
             hints.pop();
             continue;
         };
-        cache.emitted(scope, policy, now);
+        let round_id = round.map(|round| round.round_id.clone());
+        cache.emitted(scope, policy, now, round_id);
         with_guidance = Some(next);
     }
     with_guidance.unwrap_or(with_workers)
@@ -909,7 +983,7 @@ mod tests {
         pool.counts.working = 3;
         assert!(!pool.counts.should_remind());
         let policy = Policy::default();
-        let hint = guidance("control", "main", Some(&pool.client_id), &policy);
+        let hint = guidance("control", "main", Some(&pool.client_id), &policy, None);
         assert_eq!(hint["condition"], "when_no_independent_work");
         assert_eq!(
             hint["subscription_filter"]["client_ids"],
@@ -928,17 +1002,101 @@ mod tests {
     #[test]
     fn absent_or_unavailable_pool_leaves_a_control_only_event_subscription() {
         let policy = Policy::default();
-        let hint = guidance("control", "main", None, &policy);
+        let hint = guidance("control", "main", None, &policy, None);
         assert_eq!(
             hint["subscription_filter"]["client_ids"],
             json!(["control"])
         );
-        let same = guidance("control", "main", Some("control"), &policy);
+        let same = guidance("control", "main", Some("control"), &policy, None);
         assert_eq!(
             same["subscription_filter"]["client_ids"],
             json!(["control"])
         );
         assert!(hint.to_string().find("token").is_none());
+    }
+
+    #[test]
+    fn custom_wait_filters_preserve_the_user_input_wakeup() {
+        let mut policy = Policy {
+            kinds: vec!["worker.completed".into()],
+            ..Policy::default()
+        };
+        let hint = guidance("control", "main", None, &policy, None);
+        assert_eq!(
+            hint["subscription_filter"]["kinds"],
+            json!(["worker.completed", "user.input_available"])
+        );
+        assert_eq!(policy.kinds, ["worker.completed"]);
+        policy.kinds = vec!["user.*".into(), "custom.finished".into()];
+        let hint = guidance("control", "main", None, &policy, None);
+        assert_eq!(hint["subscription_filter"]["kinds"], json!(policy.kinds));
+        policy.kinds = (0..16)
+            .map(|index| format!("custom.event{index}"))
+            .collect();
+        let hint = guidance("control", "main", None, &policy, None);
+        assert_eq!(
+            hint["subscription_filter"]["kinds"]
+                .as_array()
+                .unwrap()
+                .len(),
+            17
+        );
+        assert_eq!(policy.kinds.len(), 16);
+    }
+
+    #[test]
+    fn dreaming_requires_a_quiet_observed_pool() {
+        let initial = reply();
+        assert!(pool_from_reply(&initial).unwrap().counts.quiet());
+        for changes in [
+            json!({"idle":2,"working":1}),
+            json!({"idle":2,"offline":1,"registered_workers":2}),
+            json!({"queued":1}),
+            json!({"stopping":true}),
+            json!({"connected":false}),
+            json!({"desired_total":2}),
+        ] {
+            let mut changed = initial.clone();
+            changed["structuredContent"]["value"]
+                .as_object_mut()
+                .unwrap()
+                .extend(changes.as_object().unwrap().clone());
+            assert!(!pool_from_reply(&changed).unwrap().counts.quiet());
+        }
+    }
+
+    #[test]
+    fn dreaming_rounds_are_not_rearmed_by_wait_reminders_or_disabling() {
+        let mut cache = GuidanceCache::default();
+        let key = scope("main");
+        let now = Instant::now();
+        let mut policy = Policy {
+            dreaming: Some(Dreaming {
+                round_id: "round-1".into(),
+                repository: "project".into(),
+                budget_ms: 1000,
+            }),
+            ..Policy::default()
+        };
+        let round = policy.dreaming.as_ref().unwrap();
+        assert!(cache.dreaming_due(&key, round));
+        cache.emitted(
+            key.clone(),
+            policy.clone(),
+            now,
+            Some(round.round_id.clone()),
+        );
+        assert!(cache.due(&key, &policy, now + REPEAT_AFTER));
+        assert!(!cache.dreaming_due(&key, round));
+        cache.emitted(key.clone(), policy.clone(), now + REPEAT_AFTER, None);
+        assert!(!cache.dreaming_due(&key, round));
+        policy.enabled = false;
+        assert!(!cache.due(&key, &policy, now + REPEAT_AFTER));
+        policy.enabled = true;
+        policy.dreaming.as_mut().unwrap().budget_ms = 2000;
+        assert!(!cache.dreaming_due(&key, policy.dreaming.as_ref().unwrap()));
+        policy.dreaming.as_mut().unwrap().round_id = "round-2".into();
+        assert!(cache.dreaming_due(&key, policy.dreaming.as_ref().unwrap()));
     }
 
     #[test]
@@ -948,18 +1106,19 @@ mod tests {
         let now = Instant::now();
         let policy = Policy::default();
         assert!(cache.due(&key, &policy, now));
-        cache.emitted(key.clone(), policy.clone(), now);
+        cache.emitted(key.clone(), policy.clone(), now, None);
         assert!(!cache.due(&key, &policy, now + Duration::from_secs(29)));
         assert!(cache.due(&key, &policy, now + REPEAT_AFTER));
         let mut changed = policy.clone();
         changed.window_ms = 1000;
         assert!(cache.due(&key, &changed, now));
-        cache.emitted(key.clone(), changed.clone(), now);
+        cache.emitted(key.clone(), changed.clone(), now, None);
         changed.enabled = false;
         assert!(!cache.due(&key, &changed, now));
-        assert!(!cache.entries.contains_key(&key));
+        assert!(cache.entries.contains_key(&key));
         changed.enabled = true;
-        assert!(cache.due(&key, &changed, now));
+        assert!(!cache.due(&key, &changed, now));
+        assert!(cache.due(&key, &changed, now + REPEAT_AFTER));
     }
 
     #[test]
@@ -972,6 +1131,7 @@ mod tests {
                 scope(&index.to_string()),
                 policy.clone(),
                 now + Duration::from_millis(index as u64),
+                None,
             );
         }
         assert_eq!(cache.entries.len(), MAX_CACHE_ENTRIES);
@@ -999,7 +1159,13 @@ mod tests {
         .unwrap();
         let remaining =
             MAX_APPEND_BYTES - (with_workers.to_string().len() - original.to_string().len());
-        let hint = guidance("control", "main", Some(&pool.client_id), &Policy::default());
+        let hint = guidance(
+            "control",
+            "main",
+            Some(&pool.client_id),
+            &Policy::default(),
+            None,
+        );
         let combined = append_section(
             &with_workers,
             &[hint],
@@ -1033,7 +1199,7 @@ mod tests {
     fn hints_do_not_overwrite_existing_fields_or_exceed_small_delivery_budgets() {
         let original =
             json!({"structuredContent":{"coordination_hints":[{"message":"already included"}]}});
-        let hint = guidance("control", "main", None, &Policy::default());
+        let hint = guidance("control", "main", None, &Policy::default(), None);
         assert!(
             append_section(
                 &original,

@@ -638,7 +638,7 @@ pub enum Frame {
     CodeModeFinished {
         completion: CodeCompletion,
     },
-    /// Only sent after explicit wait_display_v1 offer/echo negotiation. This
+    /// Only sent after explicit wait_display_v3 offer/echo negotiation. This
     /// is display metadata, never a native call, queue receipt or permission.
     WaitDisplay {
         snapshot: wait_display::Snapshot,

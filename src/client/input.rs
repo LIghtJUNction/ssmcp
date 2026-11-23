@@ -768,7 +768,7 @@ mod platform {
 
         #[tokio::test]
         async fn monitor_input_never_writes_cycles_or_drains_keys_to_a_hidden_pty() {
-            let terminals = Terminals::new(
+            let terminals = Terminals::with_terminal(
                 Path::new("/bin/sh"),
                 std::env::current_dir().unwrap(),
                 crate::output::OutputStore::new_connection().unwrap(),
@@ -921,7 +921,7 @@ mod platform {
             let (keyboard, source) = pair();
             let saved = attributes(source.as_raw_fd()).unwrap();
             dimensions(&source, 47, 132);
-            let terminals = Terminals::new(
+            let terminals = Terminals::with_terminal(
                 Path::new("/bin/sh"),
                 std::env::current_dir().unwrap(),
                 crate::output::OutputStore::new_connection().unwrap(),
@@ -964,7 +964,7 @@ mod platform {
 
         #[tokio::test]
         async fn f7_in_one_input_chunk_routes_text_before_and_after_to_different_shells() {
-            let terminals = Terminals::new(
+            let terminals = Terminals::with_terminal(
                 Path::new("/bin/sh"),
                 std::env::current_dir().unwrap(),
                 crate::output::OutputStore::new_connection().unwrap(),
@@ -996,7 +996,7 @@ mod platform {
         #[tokio::test]
         async fn exited_selected_pty_keeps_local_f7_usable_without_replaying_failed_input() {
             let (keyboard, source) = pair();
-            let terminals = Terminals::new(
+            let terminals = Terminals::with_terminal(
                 Path::new("/bin/sh"),
                 std::env::current_dir().unwrap(),
                 crate::output::OutputStore::new_connection().unwrap(),

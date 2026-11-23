@@ -405,6 +405,17 @@ impl Fixture {
                                     "job_id":"exec_capacity_fixture","running":false,"exit_code":0
                                 }})
                             }
+                            "ssmcp.worker.events" => {
+                                // The existing subscription adapter observes native
+                                // lifecycle metadata even for a custom-event filter.
+                                json!({"structuredContent":{
+                                    "generation":"pool_one","events":[],
+                                    "next_cursor":{"generation":"pool_one","seq":0},
+                                    "oldest_seq":1,"latest_seq":0,"gap":false,
+                                    "has_more":false,"closed":false,"stopping":false,
+                                    "status":"empty"
+                                }})
+                            }
                             "ssmcp.ui.finish" => {
                                 state.finish_operations.push(arguments.clone());
                                 assert_eq!(arguments["request_id"], state.view["id"]);

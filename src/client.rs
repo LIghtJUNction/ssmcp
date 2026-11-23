@@ -12,6 +12,7 @@ mod computer_control;
 mod config;
 mod connection_context;
 pub(crate) mod context_memory;
+mod environment;
 
 #[cfg(test)]
 mod account_compat_tests;
@@ -2088,6 +2089,12 @@ fn tool_repository_arguments(args: &[OsString]) -> Option<&[OsString]> {
     matches!(command.to_str(), Some("tool" | "tools")).then_some(arguments)
 }
 
+/// Read and validate literal startup defaults without mutating process-global
+/// state. The CLI applies this plan before its async runtime or workers exist.
+pub fn startup_environment() -> crate::Result<Vec<(OsString, OsString)>> {
+    environment::startup()
+}
+
 pub async fn run() -> crate::Result<()> {
     if let Some(result) = crate::worker::child_entry().await {
         return result;
@@ -2230,7 +2237,12 @@ pub async fn run() -> crate::Result<()> {
             runner.record("stopped", 0, None, None, None)?;
             return Ok(());
         }
-        std::env::set_current_dir(&runner.spec().cwd)?;
+        // Native service launchers already set the recorded working directory.
+        // Startup PATH was prepared there before Tokio; changing cwd now would
+        // silently bind its project bin to a different workspace.
+        if std::env::current_dir()?.canonicalize()? != runner.spec().cwd.canonicalize()? {
+            return Err("saved session was launched outside its recorded working directory; start it through ssmcp sessions or its configured service".into());
+        }
         args = runner.spec().args.iter().map(OsString::from).collect();
         Some(runner)
     } else {

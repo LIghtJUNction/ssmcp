@@ -1066,6 +1066,128 @@ fn read_window_snapshot(record: &Record, after: Option<u64>) -> Result<Option<Va
     )))
 }
 
+fn display_text(text: &str, maximum: usize) -> String {
+    let clean: String = text
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    let redacted = crate::audit::event(json!(clean));
+    let text = redacted.as_str().unwrap_or("[redacted]");
+    if text.len() <= maximum {
+        return text.to_owned();
+    }
+    let mut end = maximum.saturating_sub(3);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
+/// Read public member metadata only through the existing authenticated observer
+/// API. Other references are the caller's declared identifiers, not claims that
+/// those objects exist or are accessible. Never inspect result or inbox bodies.
+async fn display_targets(scope: &Scope, targets: &[Target]) -> (Vec<String>, Vec<String>) {
+    let mut labels = Vec::new();
+    let mut details = Vec::new();
+    for target in targets {
+        let (label, detail) = match target {
+            Target::Exec { job_id } => (
+                "Command exits".into(),
+                format!("Requested execution job ID {job_id}"),
+            ),
+            Target::Job { id } => (
+                "Background job returns".into(),
+                format!("Requested background job ID {id}"),
+            ),
+            Target::WorkerResult { task_id } => (
+                "Worker task result".into(),
+                format!("Requested task ID {task_id}"),
+            ),
+            Target::WorkerAssignment { request_id } => (
+                "Worker assignment or retirement".into(),
+                format!("Assignment request ID {request_id}"),
+            ),
+            Target::AgentStatus { agent_id, statuses } => {
+                let public = scope
+                    .session
+                    .collaboration
+                    .wait_status(
+                        &scope.binding.owner,
+                        &scope.binding.agent_id,
+                        &scope.binding.token,
+                        agent_id,
+                        statuses,
+                        0,
+                    )
+                    .await
+                    .ok();
+                let name = public
+                    .as_ref()
+                    .and_then(|value| value["agent"]["name"].as_str());
+                let label = name
+                    .map(|name| format!("{name}: requested status"))
+                    .unwrap_or_else(|| "Requested member status".into());
+                (
+                    label,
+                    format!(
+                        "Requested member ID {agent_id}; status must equal one of: {}",
+                        statuses.join(" | ")
+                    ),
+                )
+            }
+            Target::AgentMessages { after, limit } => (
+                "Observer inbox messages".into(),
+                format!(
+                    "New messages after {}; return limit {limit}. Message bodies are not displayed.",
+                    after
+                        .map(|cursor| cursor.to_string())
+                        .unwrap_or_else(|| "the observer's current inbox cursor".into())
+                ),
+            ),
+            Target::Event {
+                subscription_id,
+                limit,
+            } => {
+                let authorized = super::events_tool::authorize_observation_now(
+                    &scope.broker,
+                    &scope.user,
+                    &scope.token,
+                    scope.session.client_id(),
+                    &scope.binding.agent_id,
+                    &scope.binding.token,
+                    subscription_id,
+                )
+                .is_ok();
+                (
+                    "Subscription events".into(),
+                    if authorized {
+                        format!(
+                            "Authorized subscription ID {subscription_id}; return limit {limit}. Event bodies are not displayed."
+                        )
+                    } else {
+                        "Subscription details unavailable until authorization is established."
+                            .into()
+                    },
+                )
+            }
+            Target::UserInput { notify, .. } => (
+                "Requested user input".into(),
+                format!("Wait for user input; notification requested: {notify}."),
+            ),
+            Target::Finish { .. } => ("Finish decision".into(), String::new()),
+        };
+        labels.push(display_text(&label, 256));
+        details.push(display_text(&detail, 4096));
+    }
+    (labels, details)
+}
+
 pub(super) async fn wait(
     broker: Arc<Broker>,
     user: String,
@@ -1179,6 +1301,7 @@ pub(super) async fn wait(
             return Ok(envelope(Some(&record.id), record.mode, status, results));
         }
     };
+    let (target_labels, target_details) = display_targets(&scope, &record.targets).await;
     let deadline = Instant::now() + Duration::from_millis(window_ms);
     record.transition(
         &broker,
@@ -1191,13 +1314,14 @@ pub(super) async fn wait(
     };
     // Presentation is best effort and follows admission. It owns no native
     // slot, user-input reservation, target result or finish permission.
-    let _display = scope.session.show_wait(
+    let display = scope.session.show_wait(
         &scope.broker,
         crate::broker::wait_display::Request {
             user: &scope.user,
             token: &scope.token,
             binding: &scope.binding,
             wait_id: &record.id,
+            operation: "await",
             targets: record
                 .targets
                 .iter()
@@ -1213,6 +1337,12 @@ pub(super) async fn wait(
                     Target::Finish { .. } => crate::wire::wait_display::Kind::Finish,
                 })
                 .collect(),
+            target_labels,
+            target_details,
+            mode: match record.mode {
+                Mode::Any => crate::wire::wait_display::Mode::Any,
+                Mode::All => crate::wire::wait_display::Mode::All,
+            },
             timeout_ms: window_ms,
         },
     );
@@ -1359,6 +1489,9 @@ pub(super) async fn wait(
                     )
                 })
                 .collect();
+            if let Some(display) = display {
+                display.finish(crate::wire::wait_display::Outcome::Unknown);
+            }
             return Ok(envelope(
                 Some(&record.id),
                 record.mode,
@@ -1366,6 +1499,15 @@ pub(super) async fn wait(
                 overflow,
             ));
         }
+    }
+    if let Some(display) = display {
+        use crate::wire::wait_display::Outcome as DisplayOutcome;
+        display.finish(match status {
+            Status::Ready => DisplayOutcome::Triggered,
+            Status::TimedOut => DisplayOutcome::WindowExpired,
+            Status::Cancelled => DisplayOutcome::ObservationStopped,
+            _ => DisplayOutcome::Unknown,
+        });
     }
     if !matches!(status, Status::TimedOut | Status::Busy) {
         record.terminal.store(true, Ordering::Release);

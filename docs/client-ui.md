@@ -267,7 +267,21 @@ No 表示继续工作；只有本机真实用户的 Yes 才能让原提问线程
 
 交互运行 `ssmcp --worker N` 时，当前窗口保留聊天输入，另一个窗口显示关联任务池。主窗口的 `ssmcp.ui.get` 投影 `/worker_pool` 提供实际 worker 客户端 ID、OS PID、连接状态、席位状态、排队数和已登记 worker 人数；其 `manager` 仅包含已绑定管理者的 `client_id` 与 `thread_id`，未绑定时为 `null`。外部 worker 登记并开始等待前，席位显示离线；创建席位本身不会启动模型。
 
-在主窗口使用 `/invite` 生成协调 Agent 的接入提示，使用 `/invite worker` 生成关联池的 worker 提示。提示显示在本地可滚动面板，同时尝试复制到剪贴板。满员时显示 `Worker stations are fully staffed.`，不再生成额外邀请。邀请只提供接入信息；外部 agent 仍须实际连接、登记并主动等待。
+独立 worker 监控窗口默认以全宽 **Agent progress** 时间线展示当前任务的真实进度上报，上方保留简短任务摘要和实际状态。没有进度上报时显示 `Waiting for agent progress updates`，命令启动和结束日志不会替代进度。警告、错误、取消提示与 `unknown` 仍在默认页显示；命令失败保留实际退出码、信号或取消结果，完整命令在日志详情查看。
+
+以下按键用于独立 worker 监控窗口：
+
+| 按键 | 作用 |
+| --- | --- |
+| F2 | 在当前 worker 的进度页与日志、资源详情之间切换 |
+| F1 | 打开或关闭监控帮助；Esc 也可关闭 |
+| T | 查看任务全文及完整任务、管理者身份，再按一次返回 |
+| Enter | 从进度页打开日志并展开命令；日志详情内切换命令展开状态 |
+| Esc | 关闭当前帮助、任务或日志详情 |
+
+Tab / Shift+Tab 或 ← / → 切换 worker，↑ / ↓、PgUp / PgDn 和滚轮浏览当前内容，Home 到最早保留内容，End 恢复跟随。各 worker 分别保存进度与日志阅读位置；新任务或站位代次会重置进度位置，日志历史仍按保留上限保存。无活动任务时标题为 **Recent agent progress**；只剩最近上报文本时显示 **Latest report**，不补造时间。PID 和资源指标放在 F2 详情，描述本机 SSMCP 客户端进程。[监控实现](../src/client/terminal/worker.rs) · [完整监控操作](workers.md#use-the-monitor)
+
+在主窗口输入 `/invite` 或 `/invite worker` 并按 Enter，分别生成协调 Agent 或关联池 worker 的接入提示。提示显示在本地可滚动面板，同时尝试复制到剪贴板。满员时显示 `Worker stations are fully staffed.`，不再生成额外邀请。邀请只提供接入信息；外部 agent 仍须实际连接、登记并主动等待。
 
 `/worker ls` 显示当前关联池，`/worker +N` 增加席位，`/worker -N` 请求减少席位。缩容先处理离线和空闲席位；执行中的任务继续遵守原领取者的完成与取消确认规则。监控面板和主窗口都以实际池状态刷新。[Worker 接入、任务与清理](workers.md)
 

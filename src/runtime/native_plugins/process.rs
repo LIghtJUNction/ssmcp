@@ -21,7 +21,6 @@ use std::{
 };
 
 pub struct Process {
-    terminal: Arc<Terminals>,
     observer: Option<Arc<crate::observer::Pool>>,
     shell: Arc<shell::Shell>,
     pub(crate) registry: Arc<Registry>,
@@ -82,8 +81,7 @@ impl Process {
         if let Some(observer) = &observer {
             output.set_observer(observer);
         }
-        let terminal = Terminals::new(shell_path, root.clone(), output.clone())?;
-        let shell = shell::Shell::with_workspace(root, output.clone())?;
+        let shell = shell::Shell::with_terminal(shell_path, root, output.clone())?;
         let registry = Registry::new();
         registry.replace(
             Provider::Terminal,
@@ -93,7 +91,6 @@ impl Process {
         registry.replace(Provider::Ui, crate::client::interface::tools())?;
         registry.replace(Provider::Harnesses, lazy::tools())?;
         let backend = Arc::new(Self {
-            terminal,
             observer,
             shell,
             registry,
@@ -171,10 +168,10 @@ impl Process {
         pending.await
     }
     pub fn terminal(&self) -> Arc<Terminal> {
-        self.terminal.primary()
+        self.shell.primary()
     }
     pub fn terminals(&self) -> Arc<Terminals> {
-        self.terminal.clone()
+        self.shell.clone()
     }
 
     async fn refresh(&self, provider: Provider, name: &str) -> Result<Value, String> {
@@ -286,7 +283,23 @@ impl Process {
                 if self.closed.load(Ordering::Acquire) {
                     return Err("client connection is closed".into());
                 }
-                self.terminal.primary().perform(operation).await.map(result)
+                let (name, arguments) = match operation {
+                    Operation::Read {
+                        cursor,
+                        max_bytes,
+                        wait_ms,
+                    } => (
+                        "terminal.read",
+                        json!({"cursor":cursor,"max_bytes":max_bytes,"wait_ms":wait_ms}),
+                    ),
+                    Operation::Write { data } => ("terminal.write", json!({"data":data})),
+                    Operation::Resize { rows, cols } => {
+                        ("terminal.resize", json!({"rows":rows,"cols":cols}))
+                    }
+                    Operation::Status {} => ("terminal.status", json!({})),
+                    _ => return Err("not a terminal operation".into()),
+                };
+                self.shell.call(name, arguments).await.map(result)
             }
         }
     }
@@ -318,14 +331,10 @@ impl Process {
         self.registry
             .validate_route(&id, provider, generation, &native_name)?;
         match provider {
-            Provider::Ui => crate::client::interface::call(&native_name, arguments, &self.terminal)
+            Provider::Ui => crate::client::interface::call(&native_name, arguments, &self.shell)
                 .await
                 .map(result),
-            Provider::Terminal => self
-                .terminal
-                .call(&native_name, arguments)
-                .await
-                .map(result),
+            Provider::Terminal => self.shell.call(&native_name, arguments).await.map(result),
             Provider::Exec => self
                 .shell
                 .call_scoped(
@@ -379,7 +388,6 @@ impl Process {
             .into_values()
             .map(|driver| async move { driver.shutdown().await });
         tokio::join!(
-            self.terminal.shutdown(),
             self.shell.shutdown(),
             futures_util::future::join_all(futures)
         );
@@ -443,12 +451,22 @@ fn terminal_tools() -> Value {
         }
     ]);
     for tool in tools.as_array_mut().unwrap() {
+        let preferred = match tool["name"].as_str().unwrap() {
+            "terminal.read" => "ssmcp.exec.read",
+            "terminal.write" => "ssmcp.exec.write",
+            "terminal.resize" => "ssmcp.exec.resize",
+            _ => "ssmcp.exec.status",
+        };
+        tool["description"] = json!(format!(
+            "Compatibility entry point; prefer {preferred} with the same job_id. {}",
+            tool["description"].as_str().unwrap()
+        ));
         if tool["inputSchema"].get("properties").is_none() {
             tool["inputSchema"]["properties"] = json!({});
         }
         tool["inputSchema"]["properties"]["terminal_id"] = json!({
             "type":"string","minLength":1,"maxLength":128,"default":"main",
-            "description":"Independent terminal ID from terminal.open/list. Omission always selects main, even when the local view changes."
+            "description":"PTY job_id from exec.list or compatibility terminal.open/list. Omission always selects the protected main job, even when the local view changes."
         });
     }
     tools
