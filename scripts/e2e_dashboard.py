@@ -437,29 +437,46 @@ class Dashboard(Harness):
                        f"SIGWINCH at {columns} columns updates child dimensions and sidebar visibility")
             self.check(shot["hide_cursor"], "resizing preserves audit input ownership")
 
-        first = self.run_job([sys.executable, "-c", "import time; time.sleep(12)"], timeout=20000)
-        second = self.run_job([sys.executable, "-c", "import time; time.sleep(12)"], timeout=20000)
-        front.until(lambda s: "Tasks · 2 running" in text(s), "two real simultaneous tasks")
-        self.check(first["job_id"] != second["job_id"], "two independent tasks have different identities in the live sidebar")
-        front.pump(6.1)
-
         def task_rows(snapshot):
             side = region(snapshot, 0, 57, 76, 106)
             tasks = side.split("Tasks", 1)[1] if "Tasks" in side else ""
             return re.split(r"\n\s*(?:Progress|Git|Recent commits)\b", tasks, maxsplit=1)[0]
 
-        # The frame clock can trail wall time by a refresh interval. Observe the
-        # actual label crossing six seconds instead of assuming a particular tick.
-        shot = front.until(
-            lambda snapshot: any(float(value) >= 6 for value in
-                                 re.findall(r"\b(\d+(?:\.\d+)?)s\b", task_rows(snapshot))),
-            "silent tasks displaying at least six elapsed seconds", timeout=3, cells=True)
+        front.until(lambda shot: "Tasks · 1 running" in text(shot)
+                    and re.search(r"(?m)^\s*main ", task_rows(shot)),
+                    "the existing main PTY in the sidebar", cells=True)
+        titles = ("silent-alpha", "silent-bravo")
+        first, second = [
+            self.call("ssmcp.exec.start", {
+                "title": title, "command": [sys.executable, "-c", "import time; time.sleep(12)"],
+                "timeout_ms": 20000,
+            })
+            for title in titles
+        ]
+        front.until(lambda shot: "Tasks · 3 running" in text(shot)
+                    and all(title in task_rows(shot) for title in titles),
+                    "two real simultaneous tasks alongside the main PTY", cells=True)
+        self.check(first["job_id"] != second["job_id"], "two independent tasks have different identities in the live sidebar")
+
+        def both_tasks_elapsed(snapshot):
+            rows = task_rows(snapshot)
+            for title in titles:
+                row = re.search(rf"{title}[^\n]*\n[^\n]*?\b(\d+(?:\.\d+)?)s\b", rows)
+                if row is None or float(row[1]) < 6:
+                    return False
+            return True
+
+        # Observe both fixture clocks, since main's clock is already older.
+        shot = front.until(both_tasks_elapsed, "both silent tasks displaying at least six elapsed seconds",
+                           timeout=10, cells=True)
         self.check("%" not in task_rows(shot),
                    "tasks silent for over six seconds show elapsed time without inventing a completion percentage")
         self.finish_job(first, front)
         self.finish_job(second, front)
-        front.until(lambda s: "Tasks · 2 running" not in text(s) and "Tasks · 1 running" not in text(s),
-                    "completed tasks leaving the active sidebar")
+        front.until(lambda shot: "Tasks · 1 running" in text(shot)
+                    and re.search(r"(?m)^\s*main ", task_rows(shot))
+                    and all(title not in task_rows(shot) for title in titles),
+                    "completed tasks leaving only the main PTY in the active sidebar", cells=True)
 
         # Build markers from pieces so the readable command preview cannot
         # satisfy or duplicate the stream-content assertions below.

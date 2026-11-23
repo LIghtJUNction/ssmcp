@@ -1,22 +1,17 @@
 use super::*;
 use crate::client::interface::history as saved;
-use std::{
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::path::PathBuf;
 
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
-            "ssmcp-question-key-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        assert!(!path.exists());
+        let mut random = [0_u8; 16];
+        crate::platform::random_bytes(&mut random).unwrap();
+        let suffix = random.map(|byte| format!("{byte:02x}")).join("");
+        let path = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("ssmcp-question-key-{suffix}"));
         crate::platform::private_directory(&path).unwrap();
         Self(path)
     }
