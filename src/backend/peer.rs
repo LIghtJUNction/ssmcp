@@ -880,13 +880,19 @@ mod tests {
             .contains("1 MiB")
         );
         assert_eq!(server.state.requests.lock().unwrap().len(), before);
-        // Consume the earlier slow request's notification before waiting on this one.
-        server.state.entered.notified().await;
+        // Under load the 20 ms request can expire before its handler starts.
+        // A fresh fixture gives cancellation its own readiness notification.
+        peer.shutdown().await;
+        drop(server);
+        let server = Server::start("healthy").await;
+        let peer = server.peer().await;
         let pending = tokio::spawn({
             let peer = peer.clone();
             async move { peer.request("slow", json!({}), CALL_TIMEOUT).await }
         });
-        server.state.entered.notified().await;
+        timeout(Duration::from_secs(2), server.state.entered.notified())
+            .await
+            .expect("cancellation fixture did not enter its slow handler");
         peer.shutdown().await;
         assert!(
             timeout(Duration::from_secs(1), pending)

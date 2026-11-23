@@ -110,16 +110,23 @@ async fn link_metrics_observer_drop_cancels_task_and_releases_owned_socket() {
     let task = observe(Some(prepared), receiver, move |_| {
         let _ = &signal;
     });
+    let completion = task.abort_handle();
     let observer = Observer {
         generation: u64::MAX,
         task: Some(task),
     };
     tokio::task::yield_now().await;
     drop(observer);
-    timeout(Duration::from_secs(2), ended)
-        .await
-        .unwrap()
-        .unwrap();
+    timeout(Duration::from_secs(2), async {
+        ended.await.unwrap();
+        // The callback's destructor can run before the socket's destructor.
+        // Cancellation is complete only after the entire task future is gone.
+        while !completion.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     assert!(reporter.send(&sample(0, 0, 0).encode()).is_err());
 }
 
