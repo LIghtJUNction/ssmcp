@@ -17,6 +17,7 @@ use tokio::process::Command;
 
 mod attach;
 mod chat;
+pub(crate) mod device_identity;
 mod directory;
 pub(super) mod login;
 mod send;
@@ -302,6 +303,18 @@ pub(super) fn resolve_server(explicit: Option<&str>) -> Result<String> {
 pub(super) async fn credentials(server: Option<&str>) -> Result<Option<Credential>> {
     let server = resolve_server(server)?;
     load_at(&state_root()?, Some(&server), false)
+}
+
+pub(super) fn recovery_credential_stamp(server: &str) -> Result<Option<(String, String)>> {
+    let server = normalize_server(server)?;
+    Ok(
+        load_at(&state_root()?, Some(&server), true)?.map(|credential| {
+            (
+                credential.subject.unwrap_or(credential.principal),
+                crate::wire::device_address::credential_key(&credential.token),
+            )
+        }),
+    )
 }
 
 #[derive(Clone)]

@@ -495,6 +495,57 @@ pub async fn start_saved(name: &str) -> Result<Value> {
     status_from(&directory, &manifest).await
 }
 
+/// Recovery differs from an explicit Start: it never clears a stop request,
+/// never replaces a definition, and never restarts an already active manager.
+pub(crate) async fn recover_saved(name: &str, expected_definition_id: &str) -> Result<Value> {
+    crate::wire::device_address::decode::<32>(expected_definition_id)?;
+    let root = session_root(false)?;
+    if load(&root, name)?.1.supervised {
+        return service::request(
+            json!({"op":"recover","name":name,"expected_definition_id":expected_definition_id}),
+        )
+        .await;
+    }
+    let guard = lock(&root.join("manage.lock"), true)?;
+    let (directory, manifest) = load(&root, name)?;
+    if manifest.supervised {
+        drop(guard);
+        return service::request(
+            json!({"op":"recover","name":name,"expected_definition_id":expected_definition_id}),
+        )
+        .await;
+    }
+    check_recovery_definition(&directory, expected_definition_id)?;
+    if native_status(&manifest).await?.active {
+        let mut value = status_from(&directory, &manifest).await?;
+        value["recovery_state"] = json!("already_active");
+        return Ok(value);
+    }
+    let run = lock(&directory.join("run.lock"), true)?;
+    verify_snapshot(&directory, &manifest)?;
+    clear_auth(&directory)?;
+    write_management_state(&directory, "starting", None)?;
+    drop(run);
+    native_start(&directory, &manifest).await?;
+    let mut value = status_from(&directory, &manifest).await?;
+    value["recovery_state"] = json!("start_requested");
+    Ok(value)
+}
+
+fn check_recovery_definition(directory: &Path, expected: &str) -> Result<()> {
+    crate::wire::device_address::decode::<32>(expected)?;
+    if existing_definition_id(directory)?.as_deref() != Some(expected) {
+        return Err("recovery identity mismatch; the saved definition is missing, replaced or not previously verified".into());
+    }
+    match fs::symlink_metadata(directory.join("stop.requested")) {
+        Ok(_) => Err(
+            "recovery stopped: an explicit stop request must not be cleared automatically".into(),
+        ),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub async fn stop(name: &str) -> Result<Value> {
     let root = session_root(false)?;
     if load(&root, name)?.1.supervised {
@@ -675,6 +726,7 @@ fn status_observed(
     };
     Ok(json!({
         "name":manifest.spec.name, "cwd":manifest.spec.cwd,
+        "definition_id":existing_definition_id(directory)?,
         "manager":if manifest.supervised { "ssmcp-service" } else { manager_name() },
         "supervised":manifest.supervised, "generation":native.generation,
         "manager_id":manifest.manager_id, "manager_state":native.state, "manager_active":native.active,
@@ -745,6 +797,37 @@ fn public_connection(value: &Value) -> Value {
         }
     }
     crate::audit::event(Value::Object(public))
+}
+
+/// A saved definition's identity is independent of its display name, executable
+/// PID and connection generation. Removing/recreating the definition gets a new ID.
+pub(crate) fn definition_id(directory: &Path) -> Result<String> {
+    let _guard = lock(&directory.join("definition-id.lock"), false)?;
+    if let Some(id) = existing_definition_id(directory)? {
+        return Ok(id);
+    }
+    let mut bytes = [0; 32];
+    platform::random_bytes(&mut bytes)?;
+    let id = crate::wire::device_address::encode(&bytes);
+    write_json(&directory.join("definition-id.json"), &id)?;
+    Ok(id)
+}
+
+fn existing_definition_id(directory: &Path) -> Result<Option<String>> {
+    match read_json::<String>(&directory.join("definition-id.json")) {
+        Ok(id) => {
+            crate::wire::device_address::decode::<32>(&id)?;
+            Ok(Some(id))
+        }
+        Err(error)
+            if error
+                .downcast_ref::<io::Error>()
+                .is_some_and(|e| e.kind() == io::ErrorKind::NotFound) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub(crate) fn state_path() -> Result<PathBuf> {
@@ -1542,6 +1625,60 @@ fn windows_start_script(directory: &Path, manifest: &Manifest) -> Result<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_definition_survives_reconnect_but_not_replacement_or_explicit_stop() {
+        let directory = temporary();
+        assert_eq!(existing_definition_id(&directory).unwrap(), None);
+        // Reading an old definition never creates an identity that could be
+        // mistaken for an identity retained by a disconnected controller.
+        assert!(check_recovery_definition(&directory, &"a".repeat(64)).is_err());
+        assert!(!directory.join("definition-id.json").exists());
+        let id = definition_id(&directory).unwrap();
+        assert_eq!(definition_id(&directory).unwrap(), id);
+        check_recovery_definition(&directory, &id).unwrap();
+        assert!(check_recovery_definition(&directory, &"b".repeat(64)).is_err());
+        write_json(
+            &directory.join("stop.requested"),
+            &json!({"requested_at":0}),
+        )
+        .unwrap();
+        let stopped = check_recovery_definition(&directory, &id)
+            .unwrap_err()
+            .to_string();
+        assert!(stopped.contains("explicit stop"));
+        assert!(directory.join("stop.requested").exists());
+        assert_eq!(
+            existing_definition_id(&directory).unwrap(),
+            Some(id.clone())
+        );
+        std::fs::remove_file(directory.join("stop.requested")).unwrap();
+        std::fs::remove_file(directory.join("definition-id.json")).unwrap();
+        assert_ne!(definition_id(&directory).unwrap(), id);
+        assert!(check_recovery_definition(&directory, &id).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_cannot_ignore_a_stop_marker_symlink() {
+        let directory = temporary();
+        let id = definition_id(&directory).unwrap();
+        std::os::unix::fs::symlink("missing", directory.join("stop.requested")).unwrap();
+        assert!(
+            check_recovery_definition(&directory, &id)
+                .unwrap_err()
+                .to_string()
+                .contains("explicit stop")
+        );
+        assert!(
+            std::fs::symlink_metadata(directory.join("stop.requested"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     fn spec() -> SessionSpec {
         SessionSpec {

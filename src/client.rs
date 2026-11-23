@@ -36,6 +36,7 @@ mod paths;
 pub(crate) mod presentation;
 #[cfg(test)]
 mod protocol_tests;
+mod recovery;
 pub(crate) mod references;
 mod relay;
 pub(crate) mod reload;
@@ -168,7 +169,7 @@ Usage: ssmcp username@server [options]
   --session-control    Grant this connection local saved-session management tools
   --no-watchdog        Disable automatic reconnects (enabled by default)
   --watchdog           Enable automatic reconnects explicitly (compatibility flag)
-  --reconnect-delay N  Seconds between retries, 1..=3600 (default 5)
+  --reconnect-delay N  Initial retry delay, 1..=3600 seconds (default 5; bounded exponential backoff)
   --title TITLE        Session title in the header and agent list (max 512 UTF-8 bytes)
   --allow USER@SERVER  Allow only these registered relay accounts to control this device
                        Repeat or comma-separate; at most 32 accounts
@@ -2410,6 +2411,7 @@ pub async fn run() -> crate::Result<()> {
         return Ok(());
     }
     let mut attempt = 0u64;
+    let mut reconnect_failures = 0u32;
     let mut reauthenticated = false;
     loop {
         if options.worker_window_child && worker_window::child_stop_requested() {
@@ -2477,6 +2479,7 @@ pub async fn run() -> crate::Result<()> {
             runner.record("starting", attempt, None, None, None)?;
         }
         let mut registered = false;
+        let connection_started = tokio::time::Instant::now();
         let result = match connect(
             &options,
             &ui,
@@ -2566,6 +2569,15 @@ pub async fn run() -> crate::Result<()> {
             }
             return result.map(|_| ());
         }
+        if registered && connection_started.elapsed() >= Duration::from_secs(150) {
+            reconnect_failures = 0;
+        }
+        let mut jitter = [0];
+        crate::platform::random_bytes(&mut jitter)?;
+        let retry_delay =
+            recovery::delay(options.reconnect_delay_secs, reconnect_failures, jitter[0]);
+        reconnect_failures = reconnect_failures.saturating_add(1);
+        let retry_seconds = retry_delay.as_millis().div_ceil(1000) as u64;
         if let Some(runner) = &service {
             if runner.stop_requested() {
                 runner.record("stopped", attempt, None, None, None)?;
@@ -2574,7 +2586,7 @@ pub async fn run() -> crate::Result<()> {
             runner.record(
                 "reconnecting",
                 attempt,
-                Some(options.reconnect_delay_secs),
+                Some(retry_seconds),
                 None,
                 error.as_deref(),
             )?;
@@ -2587,12 +2599,12 @@ pub async fn run() -> crate::Result<()> {
             "Progress",
             &format!(
                 "Disconnected; retrying in {}s (attempt {}). Stop with Ctrl-C or ssmcp sessions stop NAME.",
-                options.reconnect_delay_secs,
+                retry_seconds,
                 attempt.saturating_add(1)
             ),
         );
         tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(options.reconnect_delay_secs)) => {},
+            _ = tokio::time::sleep(retry_delay) => {},
             _ = worker_parent_stopped(&options) => return Ok(()),
             _ = interrupt.recv() => {
                 if let Some(runner) = &service { runner.record("stopped", attempt, None, None, None)?; }
@@ -3213,6 +3225,21 @@ async fn connect_inner(
             _ = worker_parent_stopped(options) => {},
         }
     };
+    let routing_session_key = if !options.account_compat
+        && matches!(
+            &transport,
+            Transport::Account {
+                credential: Some(_),
+                ..
+            }
+        ) {
+        Some(match service {
+            Some(runner) => crate::session::definition_id(runner.directory())?,
+            None => account::device_identity::process_session_key()?,
+        })
+    } else {
+        None
+    };
     let mut metric_channel = None;
     let chat_enabled = options.worker.is_none() && options.chat.input != chat_io::Input::None;
     let registration = register_transport(
@@ -3222,6 +3249,9 @@ async fn connect_inner(
         registered,
         || {
             let mut command = transport.command(&executable);
+            if let Some(key) = &routing_session_key {
+                command.env(account::device_identity::SESSION_ENV, key);
+            }
             if options.account_compat {
                 relay::restrict_to_self(&mut command);
             }

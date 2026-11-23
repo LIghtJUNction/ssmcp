@@ -1,5 +1,6 @@
 //! Account credentials and controlled WebSocket peers. Anonymous devices carry
 //! explicit account ACLs; remote control still requires a verified login.
+pub(crate) mod routing;
 mod session_io;
 use crate::{
     broker::{Authorization, Broker, IDENTITY_RESOURCE},
@@ -418,6 +419,7 @@ impl From<Registration> for DevicePeer {
 #[derive(Clone)]
 pub(crate) struct Registration {
     pub identity: Identity,
+    pub device_identity: Option<wire::device_address::Identity>,
     pub username: String,
     /// Capability accepted from this authenticated login registration.
     pub session_access: bool,
@@ -574,6 +576,7 @@ async fn authenticate(
         return Err(problem(Problem::Unauthorized));
     }
     Ok(Registration {
+        device_identity: None,
         identity: Identity {
             provider: "github".into(),
             subject: account.subject,
@@ -617,6 +620,10 @@ pub fn routes() -> Router<Arc<Broker>> {
         .route("/api/client/logout", post(logout))
         .route("/api/client/sessions", get(sessions))
         .route("/api/client/connect", get(connect))
+        .route(
+            wire::device_address::CHALLENGE_PATH,
+            post(routing::challenge),
+        )
         .route("/api/client/call", post(call_tool))
         .route("/api/client/io", post(session_io::request))
 }
@@ -720,7 +727,9 @@ async fn sessions(
         .into_iter()
         .map(|s| session_io::directory(&broker, &s, &actor))
         .collect();
-    Ok(Json(json!({"clients":clients})))
+    Ok(Json(
+        json!({"clients":clients,"device_sessions":broker.device_routes.inventory(IDENTITY_RESOURCE,&authorization)}),
+    ))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -788,11 +797,27 @@ async fn connect(
         ));
     }
     // A malformed or revoked credential is never silently treated as anonymous.
-    let account = if headers.contains_key(header::AUTHORIZATION) {
+    let mut account = if headers.contains_key(header::AUTHORIZATION) {
         Some(authenticate(&broker, &headers, true).await?)
     } else {
         None
     };
+    let mut proofs = headers.get_all(wire::device_address::PROOF_HEADER).iter();
+    if let Some(header) = proofs.next() {
+        if proofs.next().is_some() {
+            return Err(problem(Problem::Invalid));
+        }
+        let registration = account
+            .as_mut()
+            .ok_or_else(|| problem(Problem::Unauthorized))?;
+        let proof = header.to_str().map_err(|_| problem(Problem::Invalid))?;
+        registration.device_identity = Some(
+            broker
+                .device_routes
+                .verify(registration, broker.public_url.trim_end_matches('/'), proof)
+                .map_err(problem)?,
+        );
+    }
     let session_access = session_access_requested(&headers);
     let control_attribution = capability_requested(&headers, wire::CONTROL_ATTRIBUTION_CAPABILITY);
     if account.is_none() && (!session_access || !control_attribution) {
@@ -836,7 +861,9 @@ async fn socket_bridge(broker: Arc<Broker>, peer: DevicePeer, socket: WebSocket)
     let (mut sender, mut receiver) = socket.split();
     let pumps = async move {
         let inbound = async move {
-            while let Some(Ok(message)) = receiver.next().await {
+            while let Ok(Some(Ok(message))) =
+                tokio::time::timeout(Duration::from_secs(75), receiver.next()).await
+            {
                 let data = match message {
                     Message::Binary(data) => data,
                     Message::Text(text) => text.as_bytes().to_vec().into(),
@@ -860,7 +887,7 @@ async fn socket_bridge(broker: Arc<Broker>, peer: DevicePeer, socket: WebSocket)
                 let frame = loop {
                     tokio::select! {
                         frame = &mut next => break frame,
-                        _ = ping.tick() => if sender.send(Message::Ping(Vec::new().into())).await.is_err() {
+                        _ = ping.tick() => if !matches!(tokio::time::timeout(Duration::from_secs(15), sender.send(Message::Ping(Vec::new().into()))).await, Ok(Ok(()))) {
                             return;
                         },
                     }
@@ -871,7 +898,14 @@ async fn socket_bridge(broker: Arc<Broker>, peer: DevicePeer, socket: WebSocket)
                             break;
                         };
                         data.push(b'\n');
-                        if sender.send(Message::Binary(data.into())).await.is_err() {
+                        if !matches!(
+                            tokio::time::timeout(
+                                Duration::from_secs(15),
+                                sender.send(Message::Binary(data.into()))
+                            )
+                            .await,
+                            Ok(Ok(()))
+                        ) {
                             break;
                         }
                     }
@@ -2858,4 +2892,5 @@ mod tests {
         server.abort();
         let _ = server.await;
     }
+    include!("device/routing_acceptance.rs");
 }

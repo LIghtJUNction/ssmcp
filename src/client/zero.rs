@@ -46,7 +46,7 @@ Usage:
   ssmcp 007 sessions [list|status|start|close|restart|remove] [NAME]
 
 007 keeps one authenticated connection without loading tools or a terminal.
-Remote tools: ssmcp.007.status/list/wake/close/remove.
+Remote tools: ssmcp.007.status/list/recover/wake/close/remove.
 wake is idempotent for an existing name. recovery=true starts a new session from
 the preserved recovery executable. Use a new name to start an upgraded client.
 The recovery service and its sessions have independent systemd lifetimes.
@@ -217,6 +217,27 @@ struct Wake {
     recovery: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Recover {
+    name: String,
+    expected_device_id: String,
+    expected_definition_id: String,
+}
+
+impl Recover {
+    fn validate(&self) -> Result<()> {
+        crate::session::validate_name(&self.name)?;
+        let device = self
+            .expected_device_id
+            .strip_prefix("dev_")
+            .ok_or("expected_device_id must be an exact dev_ ID")?;
+        crate::wire::device_address::decode::<32>(device)?;
+        crate::wire::device_address::decode::<32>(&self.expected_definition_id)?;
+        Ok(())
+    }
+}
+
 struct Control {
     config: Config,
     root: PathBuf,
@@ -353,6 +374,33 @@ impl Control {
         .await
     }
 
+    async fn recover(&self, input: Recover) -> Result<Value> {
+        input.validate()?;
+        let actual = account::device_identity::verified_device_id(&self.config.server).await?;
+        if actual != input.expected_device_id {
+            return Err("recovery device/account mismatch; no session was started".into());
+        }
+        // The helper checks the definition and stop marker again under the same
+        // management lock used by close/remove/start. No list-then-start race.
+        let mut value = self
+            .command(
+                &self.root.join("ssmcp"),
+                &[
+                    "007".into(),
+                    "__sessions".into(),
+                    "recover".into(),
+                    input.name.into(),
+                    input.expected_definition_id.into(),
+                ],
+                None,
+            )
+            .await?;
+        value["reused"] = true.into();
+        value["executable_preserved"] = true.into();
+        value["task_replay"] = json!("never");
+        Ok(value)
+    }
+
     async fn perform(&self, operation: Operation) -> std::result::Result<Value, String> {
         operation.validate()?;
         match operation {
@@ -373,6 +421,10 @@ impl Control {
                     "ssmcp.007.wake" => {
                         let input = serde_json::from_value(arguments).map_err(|e| e.to_string())?;
                         self.wake(input).await
+                    }
+                    "ssmcp.007.recover" => {
+                        let input = serde_json::from_value(arguments).map_err(|e| e.to_string())?;
+                        self.recover(input).await
                     }
                     "ssmcp.007.close" | "ssmcp.007.remove" => {
                         let input: Named =
@@ -406,6 +458,9 @@ async fn session_helper(args: &[OsString]) -> Result<()> {
         .map(|arg| arg.to_str().ok_or("session arguments must be UTF-8"))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let value = match args.as_slice() {
+        ["recover", name, expected] => {
+            compact_status(crate::session::recover_saved(name, expected).await?, true)
+        }
         ["list"] => Value::Array(
             crate::session::list()
                 .await?
@@ -442,6 +497,8 @@ fn compact_status(value: Value, include_cwd: bool) -> Value {
         "manager_active",
         "manager_pid",
         "generation",
+        "definition_id",
+        "recovery_state",
         "connection_state",
         "phase",
         "version",
@@ -481,6 +538,8 @@ fn catalog() -> Vec<Value> {
     [
         ("status", "Inspect this minimal recovery connection.", json!({"type":"object","additionalProperties":false,"properties":{}}), true),
         ("list", "List only this 007 service's saved sessions, with actual connection state.", json!({"type":"object","additionalProperties":false,"properties":{}}), true),
+        ("recover", "Recover only a previously verified saved definition on the exact device/account. Rechecks current authorization and refuses replaced definitions or explicit stop requests. An active manager is observed, never restarted. Wait for actual connected state, reconcile original task IDs, and never replay unknown outcomes. A timeout requires inspection before any further mutation.",
+            json!({"type":"object","additionalProperties":false,"properties":{"name":name,"expected_device_id":{"type":"string","pattern":"^dev_[0-9a-f]{64}$"},"expected_definition_id":{"type":"string","pattern":"^[0-9a-f]{64}$"}},"required":["name","expected_device_id","expected_definition_id"]}), false),
         ("wake", "Start a full session; repeated names reuse the existing session. cwd stays inside the configured workspace. recovery=true requires a new name and uses the preserved executable. Wait for connection_state=connected before using it.",
             json!({"type":"object","additionalProperties":false,"properties":{"name":name,"cwd":{"type":"string","maxLength":4096},"recovery":{"type":"boolean","default":false}},"required":["name"]}), false),
         ("close", "Stop one saved 007 session and preserve its definition. Leaves the recovery link and other sessions running.", named.clone(), false),
@@ -516,7 +575,7 @@ async fn send(socket: &mut Socket, frame: Frame) -> Result<()> {
 async fn connect(control: Arc<Control>) -> Result<()> {
     let credential = account::credentials(Some(&control.config.server))
         .await?
-        .ok_or("007 needs a valid saved account; authorize ssmcp in a terminal")?;
+        .ok_or_else(|| super::relay::failure(super::relay::AUTH_EXPIRED.into()))?;
     let mut url = reqwest::Url::parse(&credential.server)?;
     let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
     url.set_scheme(scheme).map_err(|_| "invalid relay scheme")?;
@@ -526,6 +585,16 @@ async fn connect(control: Arc<Control>) -> Result<()> {
         .map_err(|_| "invalid saved credential")?;
     authorization.set_sensitive(true);
     request.headers_mut().insert("authorization", authorization);
+    let session_key = crate::session::definition_id(&control.root)?;
+    let proof =
+        account::device_identity::proof_header(&credential.server, &credential.token, &session_key)
+            .await?;
+    if let Some(proof) = &proof {
+        request.headers_mut().insert(
+            crate::wire::device_address::PROOF_HEADER,
+            HeaderValue::from_str(proof).map_err(|_| "invalid recovery device proof")?,
+        );
+    }
     let configuration = WebSocketConfig::default()
         .read_buffer_size(4096)
         .write_buffer_size(1024)
@@ -543,9 +612,15 @@ async fn connect(control: Arc<Control>) -> Result<()> {
     )
     .await
     .map_err(|_| "007 connection timed out")?
-    .map_err(
-        |_| "007 encrypted connection failed; check network, trust and account authorization",
-    )?;
+    .map_err(|error| -> crate::Error {
+        if matches!(&error, tokio_tungstenite::tungstenite::Error::Http(response)
+            if matches!(response.status().as_u16(),401|403))
+        {
+            super::relay::failure(super::relay::AUTH_EXPIRED.into())
+        } else {
+            "007 encrypted connection failed; check network and server trust".into()
+        }
+    })?;
     drop(credential);
     send(
         &mut socket,
@@ -578,13 +653,18 @@ async fn connect(control: Arc<Control>) -> Result<()> {
                     Message::Pong(_) => None,
                     Message::Text(text) => Some(serde_json::from_slice(text.as_bytes())?),
                     Message::Binary(bytes) => Some(serde_json::from_slice(&bytes)?),
-                    Message::Close(_) => return Err("007 relay closed".into()),
+                    Message::Close(reason) => return Err(if reason.is_some_and(|reason|u16::from(reason.code)==4001) {
+                        super::relay::failure(super::relay::AUTH_EXPIRED.into())
+                    } else { "007 relay closed".into() }),
                     _ => return Err("unexpected 007 transport frame".into()),
                 };
                 // Pings during registration cannot postpone its deadline forever.
                 if ready { deadline = Instant::now() + IDLE_TIMEOUT; }
                 match frame {
-                    Some(Frame::Ready { client_id, .. }) if !ready => {
+                    Some(Frame::Ready { client_id, capabilities, .. }) if !ready => {
+                        if proof.is_some() && !capabilities.iter().any(|c|c==crate::wire::device_address::CAPABILITY) {
+                            return Err("server did not acknowledge recovery device identity".into());
+                        }
                         if client_id.len() != 64 || !client_id.bytes().all(|c| c.is_ascii_hexdigit()) {
                             return Err("invalid 007 registration".into());
                         }
@@ -605,7 +685,9 @@ async fn connect(control: Arc<Control>) -> Result<()> {
                         // Source-audit observation must not start a runtime or interrupt recovery.
                         completion.validate()?;
                     }
-                    Some(Frame::Reject { message }) => return Err(format!("007 registration rejected: {}", safe_error(&message)).into()),
+                    Some(Frame::Reject { message }) => return Err(if message==super::relay::AUTH_EXPIRED {
+                        super::relay::failure(message)
+                    } else { format!("007 registration rejected: {}",safe_error(&message)).into() }),
                     Some(_) => return Err("unexpected 007 protocol frame".into()),
                     None => {}
                 }
@@ -651,10 +733,7 @@ fn safe_error(message: &str) -> String {
 }
 
 fn backoff(attempt: u32, entropy: u8) -> Duration {
-    let base = 1u64 << attempt.min(6);
-    Duration::from_millis(
-        ((base.min(60) * 1000) + (base.min(60) * u64::from(entropy) * 1000 / 1024)).min(60_000),
-    )
+    super::recovery::delay(1, attempt, entropy)
 }
 
 async fn run() -> Result<()> {
@@ -670,7 +749,28 @@ async fn run() -> Result<()> {
     let mut terminated = crate::platform::terminate_signal()?;
     let mut attempt = 0u32;
     let mut previous_error = String::new();
+    let mut authorization_block: Option<Option<(String, String)>> = None;
     loop {
+        let credential_stamp = account::recovery_credential_stamp(&control.config.server)
+            .ok()
+            .flatten();
+        if let Some(previous) = &authorization_block {
+            if !super::recovery::renewed_same_account(previous.as_ref(), credential_stamp.as_ref())
+            {
+                record(
+                    &control.root,
+                    json!({"state":"authorization_required","pid":std::process::id(),
+                    "resume_condition":"original_account_explicitly_reauthorized","task_replay":"never"}),
+                );
+                tokio::select! {
+                    _ = interrupted.recv() => break,
+                    _ = terminated.recv() => break,
+                    _ = tokio::time::sleep(Duration::from_secs(15)) => continue,
+                }
+            }
+            authorization_block = None;
+            attempt = 0;
+        }
         record(
             &control.root,
             json!({"state":"connecting","pid":std::process::id(),"last_error":previous_error}),
@@ -683,6 +783,17 @@ async fn run() -> Result<()> {
         };
         if started.elapsed() >= IDLE_TIMEOUT * 2 {
             attempt = 0;
+        }
+        if result.as_ref().err().is_some_and(|error| {
+            error
+                .downcast_ref::<super::relay::PermanentFailure>()
+                .is_some_and(|failure| failure.0 == super::relay::AUTH_EXPIRED)
+        }) {
+            authorization_block = Some(credential_stamp);
+            eprintln!(
+                "ssmcp 007: authorization required; recovery paused until the original account is explicitly reauthorized"
+            );
+            continue;
         }
         let message = result
             .err()
@@ -718,6 +829,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn recover_requires_both_previously_observed_exact_identities() {
+        let valid = json!({"name":"work","expected_device_id":format!("dev_{}","a".repeat(64)),"expected_definition_id":"b".repeat(64)});
+        serde_json::from_value::<Recover>(valid.clone())
+            .unwrap()
+            .validate()
+            .unwrap();
+        for missing in ["name", "expected_device_id", "expected_definition_id"] {
+            let mut input = valid.clone();
+            input.as_object_mut().unwrap().remove(missing);
+            assert!(serde_json::from_value::<Recover>(input).is_err());
+        }
+        for key in ["command", "cwd", "force", "account", "client_id", "replay"] {
+            let mut input = valid.clone();
+            input[key] = json!("unexpected");
+            assert!(serde_json::from_value::<Recover>(input).is_err());
+        }
+        for (field, value) in [
+            ("name", "../work"),
+            ("expected_device_id", "work@host.local"),
+            ("expected_definition_id", "unknown"),
+        ] {
+            let mut input = valid.clone();
+            input[field] = json!(value);
+            assert!(
+                serde_json::from_value::<Recover>(input)
+                    .unwrap()
+                    .validate()
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn recovery_errors_are_redacted_bounded_and_cannot_control_a_terminal() {
         let error = format!(
             "Authorization: Bearer raw-access-value\n{}\u{1b}[2J",
@@ -739,7 +883,7 @@ mod tests {
     #[test]
     fn recovery_has_no_generic_execution_or_identity_arguments() {
         let tools = catalog();
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 6);
         for value in tools {
             assert!(value["name"].as_str().unwrap().starts_with("ssmcp.007."));
             assert_eq!(value["inputSchema"]["additionalProperties"], false);

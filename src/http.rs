@@ -505,6 +505,10 @@ enum Action {
 #[serde(deny_unknown_fields)]
 struct ListArguments {
     #[serde(default)]
+    device_id: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
     client_id: Option<String>,
     #[serde(default)]
     cursor: Option<String>,
@@ -763,8 +767,9 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
             Ok(Action::Await(arguments))
         }
         "list" => {
-            let arguments: ListArguments = serde_json::from_value(arguments)
-                .map_err(|_| Fault::params("list accepts only client_id and cursor strings"))?;
+            let arguments: ListArguments = serde_json::from_value(arguments).map_err(|_| {
+                Fault::params("list accepts client_id/cursor or exact device_id/session_id strings")
+            })?;
             if arguments
                 .client_id
                 .as_ref()
@@ -777,6 +782,26 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
             {
                 return Err(Fault::params(
                     "client_id must be 1..=64 bytes; cursor is at most 128 bytes and requires client_id",
+                ));
+            }
+            let valid_address = |value: &str, prefix: &str| {
+                value
+                    .strip_prefix(prefix)
+                    .is_some_and(|suffix| crate::wire::device_address::decode::<32>(suffix).is_ok())
+            };
+            if arguments
+                .device_id
+                .as_deref()
+                .is_some_and(|v| !valid_address(v, "dev_"))
+                || arguments
+                    .session_id
+                    .as_deref()
+                    .is_some_and(|v| !valid_address(v, "ses_"))
+                || (arguments.session_id.is_some() && arguments.device_id.is_none())
+                || (arguments.device_id.is_some() && arguments.client_id.is_some())
+            {
+                return Err(Fault::params(
+                    "use an exact dev_ ID and optional ses_ ID from list; stable address lookup cannot be combined with client_id",
                 ));
             }
             Ok(Action::List(arguments))
@@ -894,11 +919,37 @@ async fn list(
         return Ok(page);
     }
     let sessions = broker.clients(user, authorization).await?;
+    let matches = |address: Option<&crate::wire::device_address::Address>| {
+        arguments
+            .device_id
+            .as_ref()
+            .is_none_or(|device| address.is_some_and(|a| &a.device_id == device))
+            && arguments
+                .session_id
+                .as_ref()
+                .is_none_or(|session| address.is_some_and(|a| &a.session_id == session))
+    };
     let clients: Vec<_> = sessions
         .iter()
+        .filter(|session| matches(session.info().routing.as_ref()))
         .map(|session| client_info(session))
         .collect();
-    Ok(json!({"clients":clients,"code_mode":usage()}))
+    let inventory: Vec<_> = broker
+        .device_routes
+        .inventory(user, authorization)
+        .into_iter()
+        .filter(|entry| {
+            arguments
+                .device_id
+                .as_deref()
+                .is_none_or(|id| entry["routing"]["device_id"].as_str() == Some(id))
+                && arguments
+                    .session_id
+                    .as_deref()
+                    .is_none_or(|id| entry["routing"]["session_id"].as_str() == Some(id))
+        })
+        .collect();
+    Ok(json!({"clients":clients,"device_sessions":inventory,"code_mode":usage()}))
 }
 
 struct CodeRunReport {
@@ -1991,9 +2042,11 @@ pub(crate) fn tool_definitions() -> Value {
         temporary_links::tool_definition(),
         {
             "name":"list",
-            "description":"List live clients authorized for this identity and endpoint. Select by task title/name, then dispatch by id. client_id returns that client's full native schemas; follow nextCursor. Prefer tools.search in code_mode for targeted discovery.",
+            "description":"List live clients authorized for this identity and endpoint, with signed device/session addresses when supported. Display aliases are not DNS names or authority. Filter exact device_id/session_id, then dispatch by the returned current client id. Retained offline owner inventory is descriptive and cannot execute. client_id returns that client's full native schemas; follow nextCursor. Prefer tools.search in code_mode for targeted discovery.",
             "inputSchema":{"type":"object","properties":{
                 "client_id":{"type":"string","minLength":1,"maxLength":64},
+                "device_id":{"type":"string","pattern":"^dev_[0-9a-f]{64}$","description":"Exact verified device ID from list; filters discovery and never executes or broadcasts."},
+                "session_id":{"type":"string","pattern":"^ses_[0-9a-f]{64}$","description":"Exact stable session ID; requires device_id. Refresh the returned live client ID and schemas before dispatch."},
                 "cursor":{"type":"string","maxLength":128}
             },"additionalProperties":false},
             "annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}

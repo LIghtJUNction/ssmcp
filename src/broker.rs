@@ -798,6 +798,7 @@ pub struct Broker {
     pub(crate) user_policy_updates: tokio::sync::Mutex<()>,
     sessions: RwLock<HashMap<String, HashMap<String, Arc<Session>>>>,
     admission: Arc<admission::Admission>,
+    pub(crate) device_routes: crate::device::routing::Hub,
 }
 
 impl Broker {
@@ -865,6 +866,7 @@ impl Broker {
             user_policy_updates: tokio::sync::Mutex::new(()),
             sessions: RwLock::new(HashMap::new()),
             admission: Arc::default(),
+            device_routes: crate::device::routing::Hub::default(),
         }
     }
 
@@ -993,6 +995,7 @@ impl Broker {
             allow: Mutex::new(Vec::new()),
             public_url: self.public_url.clone(),
             info: ClientInfo {
+                routing: None,
                 id: id.clone(),
                 name: "test".into(),
                 title: None,
@@ -1370,6 +1373,9 @@ impl Broker {
                 .as_ref()
                 .is_some_and(|p| p.peer_ports_auto && !p.peer_ports);
         let mut capabilities = Vec::new();
+        if registration.is_some_and(|r| r.device_identity.is_some()) {
+            capabilities.push(wire::device_address::CAPABILITY.into());
+        }
         if peer_ports {
             capabilities.push(wire::peer_port::CAPABILITY.into());
         }
@@ -1410,51 +1416,55 @@ impl Broker {
         let client_id = generate_secret()?;
         let (sender, mut requests) = mpsc::channel::<Call>(wire::MAX_INFLIGHT);
         let (reports, mut code_reports) = mpsc::channel::<wire::CodeCompletion>(wire::MAX_INFLIGHT);
-        let session = Arc::new(Session {
-            collaboration: crate::collab::Hub::with_events(&client_id, self.events.clone()),
-            steering: crate::steering::Queue::default(),
-            events: self.events.clone(),
-            thread_scope: OnceCell::new(),
-            tool_source_support: OnceCell::new(),
-            peer_ports,
-            peer_ports_auto,
-            chat_disabled,
-            tool_summary_advertised: AtomicBool::new(false),
-            io_reply_advertised: AtomicBool::new(false),
-            thread_events_advertised: AtomicBool::new(false),
-            login: Mutex::new((!restricted).then(|| LoginCode {
-                value: login_code.clone(),
-                expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
-            })),
-            identity_required: !allow.is_empty(),
-            locally_owned_peer: is_device,
-            allow: Mutex::new(allow),
-            public_url: self.public_url.clone(),
-            info: ClientInfo {
-                id: client_id.clone(),
-                name: metadata.name,
-                title: metadata.title,
-                mode,
-                cwd: metadata.cwd,
-                hostname: metadata.hostname,
-            },
-            sender,
-            reports,
-            wait_display: wait_display::Hub::new(wait_display_supported),
-            slots: Semaphore::new(wire::MAX_INFLIGHT),
-            alive: AtomicBool::new(true),
-            ssh_user: user.clone(),
-            owner_subject: owner,
-            owner_identity: registration
-                .as_ref()
-                .map(|registration| registration.identity.clone()),
-            connected_at: crate::management::now(),
-            audit: self.management.as_ref().map(|state| state.audit.clone()),
-            disconnect: Notify::new(),
-            closed: AtomicBool::new(false),
-            closed_notify: Notify::new(),
-            traffic_failure: Mutex::new(None),
-        });
+        let session =
+            Arc::new(Session {
+                collaboration: crate::collab::Hub::with_events(&client_id, self.events.clone()),
+                steering: crate::steering::Queue::default(),
+                events: self.events.clone(),
+                thread_scope: OnceCell::new(),
+                tool_source_support: OnceCell::new(),
+                peer_ports,
+                peer_ports_auto,
+                chat_disabled,
+                tool_summary_advertised: AtomicBool::new(false),
+                io_reply_advertised: AtomicBool::new(false),
+                thread_events_advertised: AtomicBool::new(false),
+                login: Mutex::new((!restricted).then(|| LoginCode {
+                    value: login_code.clone(),
+                    expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
+                })),
+                identity_required: !allow.is_empty(),
+                locally_owned_peer: is_device,
+                allow: Mutex::new(allow),
+                public_url: self.public_url.clone(),
+                info: ClientInfo {
+                    routing: registration.and_then(|r| r.device_identity.as_ref()).map(
+                        |identity| identity.address(&client_id, &metadata.name, &metadata.hostname),
+                    ),
+                    id: client_id.clone(),
+                    name: metadata.name,
+                    title: metadata.title,
+                    mode,
+                    cwd: metadata.cwd,
+                    hostname: metadata.hostname,
+                },
+                sender,
+                reports,
+                wait_display: wait_display::Hub::new(wait_display_supported),
+                slots: Semaphore::new(wire::MAX_INFLIGHT),
+                alive: AtomicBool::new(true),
+                ssh_user: user.clone(),
+                owner_subject: owner,
+                owner_identity: registration
+                    .as_ref()
+                    .map(|registration| registration.identity.clone()),
+                connected_at: crate::management::now(),
+                audit: self.management.as_ref().map(|state| state.audit.clone()),
+                disconnect: Notify::new(),
+                closed: AtomicBool::new(false),
+                closed_notify: Notify::new(),
+                traffic_failure: Mutex::new(None),
+            });
         {
             let mut sessions = self.sessions.write().await;
             if sessions
@@ -1481,6 +1491,19 @@ impl Broker {
                     &mut writer,
                     &Frame::Reject {
                         message: "could not allocate a unique client ID; reconnect".into(),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+            if let Some(subject) = session.owner_subject.as_deref()
+                && let Err(message) = self.device_routes.connected(subject, &user, &session.info)
+            {
+                drop(sessions);
+                wire::write_frame(
+                    &mut writer,
+                    &Frame::Reject {
+                        message: message.into(),
                     },
                 )
                 .await?;
@@ -1781,6 +1804,7 @@ impl Broker {
         drop(writer);
         session.alive.store(false, Ordering::Release);
         session.wait_display.close();
+        self.device_routes.disconnected(&session.info);
         self.native_messages.close_connection(&session);
         session.collaboration.close();
         session.events.close_client(session.client_id());
@@ -2323,6 +2347,7 @@ mod tests {
             allow: Mutex::new(allow),
             public_url: "https://ssmcp.example".into(),
             info: ClientInfo {
+                routing: None,
                 id: id.into(),
                 name: "same display name".into(),
                 title: None,

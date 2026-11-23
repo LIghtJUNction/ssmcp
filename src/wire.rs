@@ -5,6 +5,7 @@ use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
 mod attribution;
+pub mod device_address;
 pub mod messages;
 pub mod openai;
 pub mod versions;
@@ -369,6 +370,8 @@ impl Controller {
 /// Public discovery information. IDs identify a connection, not a display name.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClientInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<device_address::Address>,
     pub id: String,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

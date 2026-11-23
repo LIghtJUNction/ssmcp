@@ -69,6 +69,7 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
         .arg("__relay")
         .env("SSMCP_RELAY_SERVER", server)
         .env_remove("SSMCP_RELAY_TOKEN")
+        .env_remove(super::account::device_identity::SESSION_ENV)
         .env_remove(super::link_metrics::ENV)
         .env_remove(super::link_metrics::ID_ENV)
         .env(
@@ -251,6 +252,33 @@ pub(super) async fn run() -> crate::Result<()> {
         authorization.set_sensitive(true);
         request.headers_mut().insert("authorization", authorization);
     }
+    let proof = if let (Some(token), Ok(session_key)) = (
+        &token,
+        std::env::var(super::account::device_identity::SESSION_ENV),
+    ) {
+        match super::account::device_identity::proof_header(&server, token, &session_key).await {
+            Ok(proof) => proof,
+            Err(error) if error.downcast_ref::<PermanentFailure>().is_some() => {
+                write_frame(
+                    &mut tokio::io::stdout(),
+                    &Frame::Reject {
+                        message: error.to_string(),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
+    if let Some(proof) = &proof {
+        request.headers_mut().insert(
+            crate::wire::device_address::PROOF_HEADER,
+            HeaderValue::from_str(proof).map_err(|_| "invalid device proof header")?,
+        );
+    }
     // The parent, not just this helper, must understand the optional Ready fields.
     // This also supports an old running client that starts a newer relay after update.
     // Older servers ignore the HTTP offer and keep the strict v7 Ready shape.
@@ -345,8 +373,10 @@ pub(super) async fn run() -> crate::Result<()> {
     let mut heartbeat = tokio::time::interval(Duration::from_secs(25));
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let result = async {
+        let mut inbound_deadline = tokio::time::Instant::now() + Duration::from_secs(75);
         loop {
             tokio::select! {
+                _ = tokio::time::sleep_until(inbound_deadline) => return Err("relay heartbeat expired; rediscover the original session before retrying any operation".into()),
                 frame = frames.recv() => {
                     match frame {
                         Some(Ok(Some(frame))) => {
@@ -360,6 +390,7 @@ pub(super) async fn run() -> crate::Result<()> {
                     }
                 }
                 message = incoming.next() => {
+                    inbound_deadline = tokio::time::Instant::now() + Duration::from_secs(75);
                     let frame = match message {
                         Some(Ok(message @ (Message::Text(_) | Message::Binary(_)))) => {
                             application_frame(message, &mut metrics)?
@@ -380,6 +411,10 @@ pub(super) async fn run() -> crate::Result<()> {
                         Some(Err(error)) => return Err(format!("relay disconnected: {error}").into()),
                     };
                     if let Some(frame) = frame {
+                        if proof.is_some() && matches!(&frame, Frame::Ready { capabilities, .. }
+                            if !capabilities.iter().any(|c|c==crate::wire::device_address::CAPABILITY)) {
+                            return Err("server did not acknowledge the signed device identity; connection was not accepted".into());
+                        }
                         timeout(Duration::from_secs(15), write_frame(&mut stdout, &frame))
                             .await.map_err(|_| "local relay output timed out")??;
                     }

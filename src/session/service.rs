@@ -140,6 +140,10 @@ enum Request {
     Start {
         name: String,
     },
+    Recover {
+        name: String,
+        expected_definition_id: String,
+    },
     Restart {
         name: String,
         expected_generation: Option<String>,
@@ -510,6 +514,25 @@ impl Supervisor {
                 super::remove_file(&directory.join("stop.requested"))?;
                 self.start_worker(&directory, &manifest)?;
                 self.status(&directory, &manifest)
+            }
+            Request::Recover {
+                name,
+                expected_definition_id,
+            } => {
+                let _guard = super::lock(&self.root.join("manage.lock"), true)?;
+                let (directory, manifest) = self.load(&name)?;
+                super::check_recovery_definition(&directory, &expected_definition_id)?;
+                self.reap(&name).await?;
+                let mut status = self.status(&directory, &manifest)?;
+                if status["manager_active"] == true {
+                    status["recovery_state"] = json!("already_active");
+                    return Ok(status);
+                }
+                super::verify_snapshot(&directory, &manifest)?;
+                self.start_worker(&directory, &manifest)?;
+                let mut status = self.status(&directory, &manifest)?;
+                status["recovery_state"] = json!("start_requested");
+                Ok(status)
             }
             Request::Restart {
                 name,
