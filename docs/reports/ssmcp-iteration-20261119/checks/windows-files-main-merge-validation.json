@@ -1,0 +1,15 @@
+{
+  "pr": 99,
+  "head": "0dc0ce992721ab52c38ca1976b007ed4fb3703c3",
+  "merge": "3e84fe481fa49fc7093e880ff213909e46df35a6",
+  "main": "3e84fe481fa49fc7093e880ff213909e46df35a6",
+  "tree": "cf9bec28a1d5ebfe18be87f483b2881ae6a8cad6",
+  "pr_tree": "cf9bec28a1d5ebfe18be87f483b2881ae6a8cad6",
+  "tree_identical": true,
+  "parents": [
+    "c57fb6d7a25cb5967811180cfc77214ade63c0d2"
+  ],
+  "local_source": "4fac84fb4f263196f02b8d693bc4de36f552e0c9",
+  "local_gate": "fmt, strict Clippy and frozen lib tests: 3 passed, 0 failed, 0 ignored",
+  "actual_windows_gate": "pending next official release"
+}

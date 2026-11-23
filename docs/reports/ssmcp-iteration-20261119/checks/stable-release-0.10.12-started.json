@@ -1,0 +1,87 @@
+{
+  "status": "official_release_in_progress",
+  "schema_version": 1,
+  "dispatch": {
+    "schema_version": 1,
+    "workflow": "bump.yml",
+    "workflow_id": 419889347,
+    "source_commit_before_bump": "571a9879d804b406d699e3f06ee439833922f5d0",
+    "current_version": "0.10.11",
+    "expected_tag": "v0.10.12",
+    "inputs": {
+      "level": "patch",
+      "dry_run": "false",
+      "publish": "true"
+    },
+    "submitted_at": "2026-11-19T19:45:25.686834+00:00",
+    "status": "accepted",
+    "previous_bump_run_ids": [
+      44563358031,
+      44505637914,
+      44478969002,
+      44476647458,
+      44364579996
+    ],
+    "v0_10_11_tag_before": {
+      "sha": "e88b03c98fe849e1abe402d9fb078cb18e128f6f",
+      "type": "tag",
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/tags/e88b03c98fe849e1abe402d9fb078cb18e128f6f"
+    },
+    "retry_attempted": false,
+    "exit_code": 0,
+    "completed_at": "2026-11-19T19:45:28.081490+00:00"
+  },
+  "bump_run": {
+    "id": 44601617428,
+    "run_attempt": 1,
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "success",
+    "head_branch": "main",
+    "head_sha": "571a9879d804b406d699e3f06ee439833922f5d0",
+    "created_at": "2026-11-19T19:45:27Z",
+    "updated_at": "2026-11-19T19:45:56Z",
+    "html_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44601617428"
+  },
+  "observed_at": "2026-11-19T19:45:57.119785+00:00",
+  "immutable_tag": {
+    "ref": "refs/tags/v0.10.12",
+    "object": {
+      "sha": "ea3a4baebcc3bb2eb66c27b8c641d6b51469e4ee",
+      "type": "tag",
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/tags/ea3a4baebcc3bb2eb66c27b8c641d6b51469e4ee"
+    },
+    "target": {
+      "sha": "c57fb6d7a25cb5967811180cfc77214ade63c0d2",
+      "type": "commit",
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/commits/c57fb6d7a25cb5967811180cfc77214ade63c0d2"
+    }
+  },
+  "version_commit": {
+    "sha": "c57fb6d7a25cb5967811180cfc77214ade63c0d2",
+    "parents": [
+      "571a9879d804b406d699e3f06ee439833922f5d0"
+    ],
+    "changed_files": [
+      "Cargo.lock",
+      "Cargo.toml"
+    ]
+  },
+  "source_parent_matches_authorized_main": true,
+  "version_only_commit": true,
+  "release_runs": [
+    {
+      "id": 44601683739,
+      "run_attempt": 1,
+      "event": "workflow_dispatch",
+      "status": "in_progress",
+      "conclusion": null,
+      "head_branch": "main",
+      "head_sha": "c57fb6d7a25cb5967811180cfc77214ade63c0d2",
+      "created_at": "2026-11-19T19:45:52Z",
+      "updated_at": "2026-11-19T19:45:58Z",
+      "html_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44601683739"
+    }
+  ],
+  "old_failed_tag_unchanged": true
+}

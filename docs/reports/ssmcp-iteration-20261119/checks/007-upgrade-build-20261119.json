@@ -1,0 +1,111 @@
+{
+  "date": "2026-11-19",
+  "source": "21ea0acc365b413dfa237387960b7441ab1ba529",
+  "input_007_head": "92e6c83f41b1105bf17a579aabe8baa048c296d8",
+  "base_validated_source": "a7f9077d92b093dbc90d1cd09cfb666fa55468af",
+  "steps": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 2.103,
+      "test_results": []
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 61.073,
+      "test_results": []
+    },
+    {
+      "name": "lib-build",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 96.675,
+      "test_results": []
+    },
+    {
+      "name": "007-unit",
+      "command": [
+        "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/ssmcp-lib-tests",
+        "client::zero::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.02,
+      "test_results": [
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 1361 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "saved-session-unit",
+      "command": [
+        "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/ssmcp-lib-tests",
+        "session::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.295,
+      "test_results": [
+        "test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 1327 filtered out; finished in 0.29s"
+      ]
+    },
+    {
+      "name": "cli-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bins"
+      ],
+      "exit_code": 0,
+      "seconds": 68.553,
+      "test_results": []
+    }
+  ],
+  "binaries": {
+    "ssmcp-lib-tests": {
+      "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/ssmcp-lib-tests",
+      "sha256": "c9e5a10776af44fe9d500adbde2e14aad92da55a4b6859c199df74f3099784dd",
+      "size": 261879816
+    },
+    "bin/ssmcp": {
+      "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/bin/ssmcp",
+      "sha256": "354c1a7697f346cadc1f90428b0ce8fb1ba0fb6dd531873b3a38b7f16f3bf6ec",
+      "size": 181164328
+    },
+    "bin/ssmcpd": {
+      "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/bin/ssmcpd",
+      "sha256": "8eabf905ca7bf859f64299ccad4a66aa15a0f47be4f6d89ba4f2b2f0a4f447c3",
+      "size": 135174088
+    },
+    "bin/code-mode.js": {
+      "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/bin/code-mode.js",
+      "sha256": "6e169387073dfb5919f6714658ac28781cfe04c7e5800ada690c0c67fed3d4d0",
+      "size": 41662
+    }
+  },
+  "scope": "Isolated build and targeted tests; no live service changes or model calls",
+  "all_planned_gates_passed": true
+}

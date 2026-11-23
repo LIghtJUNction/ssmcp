@@ -1,0 +1,209 @@
+{
+  "schema_version": 1,
+  "scope": "Official v0.10.11 release failure and isolated fixture fix; no deployment occurred",
+  "source_commit": "bbd43d5f77da833bb22e34c20a67b311de606fae",
+  "source_parent": "d60ef8d29f8aa949d8fc90063148f8a76caaf7ba",
+  "tag": {
+    "ref": "refs/tags/v0.10.11",
+    "object": {
+      "sha": "e88b03c98fe849e1abe402d9fb078cb18e128f6f",
+      "type": "tag",
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/tags/e88b03c98fe849e1abe402d9fb078cb18e128f6f"
+    },
+    "target": {
+      "sha": "bbd43d5f77da833bb22e34c20a67b311de606fae",
+      "type": "commit",
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/commits/bbd43d5f77da833bb22e34c20a67b311de606fae"
+    }
+  },
+  "release_run": {
+    "id": 44563443850,
+    "attempt": 1,
+    "status": "completed",
+    "conclusion": "failure",
+    "updated_at": "2026-11-19T16:25:43Z",
+    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44563443850"
+  },
+  "job_summary": {
+    "success": 14,
+    "failure": 1,
+    "skipped": 4
+  },
+  "jobs": [
+    {
+      "id": 135698686675,
+      "name": "validate",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135699026654,
+      "name": "Build aarch64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135699026766,
+      "name": "Build x86_64-pc-windows-msvc",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135699026786,
+      "name": "Build x86_64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135699026807,
+      "name": "Build x86_64-apple-darwin",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135699026850,
+      "name": "Build aarch64-apple-darwin",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135699027025,
+      "name": "Build aarch64-pc-windows-msvc",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135699029179,
+      "name": "checks / linux (ubuntu-24.04)",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Run cargo test --workspace --locked"
+      ]
+    },
+    {
+      "id": 135699029428,
+      "name": "checks / Client (windows-2025)",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135699029491,
+      "name": "checks / linux (ubuntu-24.04-arm)",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135699029530,
+      "name": "checks / Client (windows-11-arm)",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135699029790,
+      "name": "checks / Client (macos-15)",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135699029888,
+      "name": "checks / Client (macos-15-intel)",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135706184699,
+      "name": "Verify installed server x86_64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135706184975,
+      "name": "Verify installed server aarch64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135707665011,
+      "name": "finalize",
+      "status": "completed",
+      "conclusion": "skipped",
+      "failed_steps": []
+    },
+    {
+      "id": 135707665027,
+      "name": "publish_release",
+      "status": "completed",
+      "conclusion": "skipped",
+      "failed_steps": []
+    },
+    {
+      "id": 135707665077,
+      "name": "publish_crates",
+      "status": "completed",
+      "conclusion": "skipped",
+      "failed_steps": []
+    },
+    {
+      "id": 135707666305,
+      "name": "deploy_server",
+      "status": "completed",
+      "conclusion": "skipped",
+      "failed_steps": []
+    }
+  ],
+  "failure": {
+    "job_id": 135699029179,
+    "step": "Run cargo test --workspace --locked",
+    "test": "native_requests_wait_for_an_explicit_response",
+    "operation": "Create a Claude adapter fixture directory before starting the protocol fixture",
+    "error": "AlreadyExists (OS error 17)",
+    "source_location": "tests/cc_backend.rs:23",
+    "log_excerpt": [
+      "2026-11-19T16:17:50.8753414Z thread 'native_requests_wait_for_an_explicit_response' (13183) panicked at tests/cc_backend.rs:23:36:",
+      "2026-11-19T16:17:50.8754047Z called `Result::unwrap()` on an `Err` value: Os { code: 17, kind: AlreadyExists, message: \"File exists\" }",
+      "2026-11-19T16:17:50.8755531Z test result: FAILED. 4 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.05s"
+    ],
+    "cause_assessment": "The fixture uses process ID and a clock value without a per-call uniqueness guard; repeated clock ticks can select the same directory.",
+    "product_assertions_failed": false
+  },
+  "fix": {
+    "pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/92",
+    "commit": "0060b69d7f7b6feec47124794b390e375bcc33ab",
+    "file": "tests/cc_backend.rs",
+    "source_sha256": "5fbd3d16cbb85bb65f0ec9c4f1a9c4ae5bb06366978b6650feb8379fce51c956",
+    "approach": "Append a process-local atomic sequence and retain exclusive directory creation.",
+    "regression": "Force the same clock tick for two directories; verify independent writes and cleanup.",
+    "rustfmt_check_exit_code": 0,
+    "git_diff_check_exit_code": 0,
+    "compiled_validation": "pending coordinated validation"
+  },
+  "release_asset_publication": "Skipped; release lookup for v0.10.11 returned HTTP 404",
+  "crates_publication": "Skipped",
+  "production_deployment": "Skipped",
+  "production_after_failure": {
+    "observed_at": "2026-11-19T16:29:23.812815+00:00",
+    "exit_code": 0,
+    "read_only": true,
+    "service_active": true,
+    "version": "ssmcpd 0.10.10",
+    "sha256": "c0dd811b8fd51aea45c80ff22c771c1a205d8fc8dfb24f977a6fc97bccf13b79"
+  },
+  "workflow_retried": false,
+  "tag_moved": false,
+  "recorded_at": "2026-11-19T16:33:34.980414+00:00"
+}

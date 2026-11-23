@@ -1,0 +1,208 @@
+{
+  "baseline": {
+    "source": "acfdc0e6d9ff93cea809022d46372f3a962e52b7",
+    "steps": [
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 6.523,
+        "test_results": []
+      },
+      {
+        "name": "lib-build",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--lib",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "exit_code": 0,
+        "seconds": 436.571,
+        "test_results": []
+      },
+      {
+        "name": "force-listener",
+        "command": [
+          "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/ssmcp-lib-tests",
+          "force_listener_",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "seconds": 0.035,
+        "test_results": [
+          "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 1310 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "name": "listener-observation",
+        "command": [
+          "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/ssmcp-lib-tests",
+          "ui_observation_retains_source_audit_without_claiming_user_requirements",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "seconds": 0.004,
+        "test_results": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1319 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "name": "interface-all",
+        "command": [
+          "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/ssmcp-lib-tests",
+          "client::interface::",
+          "--test-threads=1"
+        ],
+        "exit_code": 101,
+        "seconds": 3.858,
+        "test_results": [
+          "test result: FAILED. 60 passed; 1 failed; 0 ignored; 0 measured; 1259 filtered out; finished in 3.85s"
+        ]
+      },
+      {
+        "name": "runtime-all",
+        "command": [
+          "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/ssmcp-lib-tests",
+          "runtime::",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "seconds": 0.485,
+        "test_results": [
+          "test result: ok. 41 passed; 0 failed; 1 ignored; 0 measured; 1278 filtered out; finished in 0.48s"
+        ]
+      },
+      {
+        "name": "terminal-all",
+        "command": [
+          "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/ssmcp-lib-tests",
+          "client::terminal::",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "seconds": 12.594,
+        "test_results": [
+          "test result: ok. 226 passed; 0 failed; 1 ignored; 0 measured; 1093 filtered out; finished in 12.59s"
+        ]
+      },
+      {
+        "name": "client-build",
+        "command": [
+          "cargo",
+          "build",
+          "--locked",
+          "--bins",
+          "--example",
+          "vt_snapshot"
+        ],
+        "exit_code": 0,
+        "seconds": 95.162,
+        "test_results": []
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 79.948,
+        "test_results": []
+      }
+    ],
+    "binaries": {
+      "ssmcp-lib-tests": {
+        "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/ssmcp-lib-tests",
+        "sha256": "e17a759d91793e00312e2a45b21f03857288c7bcb965bf4e8d815dadf289228d",
+        "size": 254729424
+      },
+      "bin/ssmcp": {
+        "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/bin/ssmcp",
+        "sha256": "8746870aa02bbce1652778a7220e33b12044e6126c1d106943a1457ece9d5a9b",
+        "size": 160933072
+      },
+      "bin/ssmcpd": {
+        "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/bin/ssmcpd",
+        "sha256": "81b8e0340e3583e8206a8d71ababcceb37d682eb2dfafdf1c2d15075433926c3",
+        "size": 131496520
+      },
+      "bin/examples/vt_snapshot": {
+        "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/bin/examples/vt_snapshot",
+        "sha256": "de98418dd3f8c5c7f1b2b6861689e497517f3a9b3d827e7160990314d12e4a28",
+        "size": 6472160
+      },
+      "bin/code-mode.js": {
+        "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/bin/code-mode.js",
+        "sha256": "9212d207e5441e2ba3d38e22ce1e15a09b6b143241e439d9e86b2e615250cf7f",
+        "size": 41337
+      }
+    },
+    "binary_source": "acfdc0e6d9ff93cea809022d46372f3a962e52b7",
+    "input_heads": [
+      "7438e615e2a5f4d777a499adffbda275ac09067b",
+      "35f761b717fad83bfb2dd01082a330f08acecfbc"
+    ],
+    "all_planned_gates_passed": false
+  },
+  "catalog_final": {
+    "source": "9dcc3118ff004a9151014cd4eb18966db94126a2",
+    "force_head": "5d6f213298279716ca1e81eb04e44f3e63322fed",
+    "product_binary_source": "acfdc0e6d9ff93cea809022d46372f3a962e52b7",
+    "product_change_since_baseline": false,
+    "steps": [
+      {
+        "name": "fmt",
+        "exit_code": 0,
+        "seconds": 1.85,
+        "test_results": []
+      },
+      {
+        "name": "lib-build",
+        "exit_code": 0,
+        "seconds": 11.148,
+        "test_results": []
+      },
+      {
+        "name": "interface-all",
+        "exit_code": 0,
+        "seconds": 3.073,
+        "test_results": [
+          "test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 1259 filtered out; finished in 3.06s"
+        ]
+      },
+      {
+        "name": "force-listener",
+        "exit_code": 0,
+        "seconds": 0.016,
+        "test_results": [
+          "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 1310 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "name": "listener-observation",
+        "exit_code": 0,
+        "seconds": 0.004,
+        "test_results": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1319 filtered out; finished in 0.00s"
+        ]
+      }
+    ],
+    "lib_sha256": "9107e4dc8eb79bea9d9bea9e59c8c629a57a7698e07585350b4e70954a9495ee",
+    "all_gates_passed": true,
+    "production_cli_sha256": "8746870aa02bbce1652778a7220e33b12044e6126c1d106943a1457ece9d5a9b"
+  }
+}
+

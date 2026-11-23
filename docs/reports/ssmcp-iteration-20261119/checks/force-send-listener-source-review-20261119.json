@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "kind": "read_only_source_review",
+  "repository": "LIghtJUNction/ssmcp",
+  "pull_request": 93,
+  "head": "35f761b717fad83bfb2dd01082a330f08acecfbc",
+  "base": "bbd43d5f77da833bb22e34c20a67b311de606fae",
+  "github_blob_match": true,
+  "blocking_findings": [],
+  "resolved_findings": [
+    {
+      "id": "SEND-LEADING-WHITESPACE",
+      "previous_head": "61a81a62ffb6bd8a8d01f90fae83ddc820007f30",
+      "severity": "functional",
+      "symptom": "A draft beginning with whitespace followed by /send was recognized by chat_submit, but chat_command returned Ok(false) and the submit branch returned silently.",
+      "resolution": "Both paths now use the same strict body() parser. It strips leading whitespace only while locating the command, requires an exact /send boundary, removes one separator character, and preserves all remaining body bytes. Empty/whitespace-only bodies receive explicit usage feedback.",
+      "evidence": [
+        "src/client/terminal/conversation/listener.rs:7-15",
+        "src/client/terminal/conversation.rs:425-430",
+        "src/client/terminal/conversation.rs:776-783"
+      ]
+    },
+    {
+      "id": "OFFERED-RECEIPT-WORDING",
+      "severity": "wording",
+      "symptom": "The earlier unknown-state detail implied the listener had received the message even though offered is set before the transport response is confirmed.",
+      "resolution": "The current detail says delivery was attempted and no receiving acknowledgement arrived; it makes no receipt or execution claim.",
+      "evidence": [
+        "src/client/interface/listener.rs:120-135"
+      ]
+    }
+  ],
+  "verified_source_contracts": [
+    {
+      "topic": "exclusive_lease",
+      "conclusion": "One process-local hub is bound to the currently active Broker connection ID plus epoch. open/read/pending/ACK state transitions use one mutex; only one lease and one outstanding delivery are admitted."
+    },
+    {
+      "topic": "connection_invalidation",
+      "conclusion": "steering connect/disconnect resets the listener hub, revokes its lease and completes pending delivery as failed or unknown. Stale Target snapshots must match both connection ID/epoch and current listener ID; read/ACK/close require the current secret."
+    },
+    {
+      "topic": "secret_handling",
+      "conclusion": "The credential uses the exact token key, which the existing audit redactor recognizes. Lease has no Debug or Serialize implementation; snapshots omit token and pending original/expanded body. Error messages do not echo credentials. The focused audit test checks both native request arguments and MCP structured/text result copies."
+    },
+    {
+      "topic": "read_and_ack",
+      "conclusion": "A second simultaneous read is rejected; cancellation releases the matching read flag. Repeated reads return the same delivery ID until final ACK. Identical duplicate ACK returns the remembered receipt, while conflicting or expired ACK is rejected. ACK and expiry commit one terminal receipt under the same mutex."
+    },
+    {
+      "topic": "unknown_result",
+      "conclusion": "An unread expired delivery is failed; an offered delivery without a valid ACK is unknown. Neither state automatically republishes or requeues the message. A later ACK cannot change that terminal result."
+    },
+    {
+      "topic": "draft_integrity",
+      "conclusion": "Accepted receipts clear input only when the full original InputStamp still matches, including revision, text, cursor, view, target and editing identity. New text, same text edited again, and recipient changes remain intact. Rejected/failed/unknown preserve the draft."
+    },
+    {
+      "topic": "no_fallback_or_model_start",
+      "conclusion": "No listener is checked before reference preparation. Force-send exits its own command path and never invokes steering submit. Exact-agent selection and queued-message editing are explicitly rejected. The implementation contains no model start; accepted means program receipt only."
+    },
+    {
+      "topic": "ordinary_queue_isolation",
+      "conclusion": "The existing code_mode UI-observation exclusion applies to ssmcp.ui.listener; the existing observation regression list now names it explicitly."
+    }
+  ],
+  "tests_in_source": [
+    "force_listener_registration_is_exclusive_and_audit_redacts_the_credential",
+    "force_listener_repeated_reads_and_ack_keep_one_delivery_identity",
+    "force_listener_cancelled_read_releases_the_exclusive_waiter",
+    "force_listener_reconnect_and_expiry_reject_old_tokens_and_targets",
+    "force_listener_unknown_failure_and_rejection_never_replay_automatically",
+    "force_listener_ack_racing_timeout_commits_one_terminal_receipt",
+    "force_listener_command_parser_preserves_the_body_and_reports_empty_input",
+    "force_listener_accepted_receipt_clears_only_the_unchanged_draft",
+    "force_listener_failure_and_unknown_preserve_references_and_draft_revision",
+    "force_listener_does_not_reroute_an_exact_agent_or_edit_a_queued_request"
+  ],
+  "focused_test_count": 10,
+  "existing_regression_extended": "ui_observation_retains_source_audit_without_claiming_user_requirements",
+  "validation_boundary": {
+    "cargo_run_by_reviewer": false,
+    "models_invoked_by_reviewer": false,
+    "source_only": true,
+    "runtime_tests_and_actual_pty": "Owned by root after the shared candidate build; not claimed as executed in this review.",
+    "author_reported_checks": "native rustfmt and git diff --check passed"
+  },
+  "file_git_blob_sha1": {
+    "src/client/composer.rs": "f1179d46b5aa252a33f46a5354f23d1f6a199bea",
+    "src/client/interface.rs": "b7aedce04fe8fb13fe3b6f6bdf63c47cf0687c1b",
+    "src/client/interface/listener.rs": "91187378126fc0690af51d5a9b6d0862e8e207e4",
+    "src/client/steering.rs": "96560ebe036470187f3b43f15c55fa605c846d61",
+    "src/client/terminal/conversation.rs": "7fe5c6e70602055dbbadb8ee18ead2215adb8ecf",
+    "src/client/terminal/conversation/listener.rs": "5d5d8c936167114b80304a5b9f693e861148e801",
+    "src/code_mode.rs": "dd42b0ce4028e41dce16f4fdd58e0481f6605c1b"
+  }
+}

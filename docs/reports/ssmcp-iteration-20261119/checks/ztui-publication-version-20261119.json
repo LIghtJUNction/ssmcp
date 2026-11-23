@@ -1,0 +1,37 @@
+{
+  "source_commit": "9d6fc61355499a08142ae2e981b4c3f86cf4a717",
+  "integration_commit": "740cfe51450c20dfda3ecaf31a64217d1ccfdc0f",
+  "registry_observation": {
+    "package": "ztui-core",
+    "max_version": "0.1.1",
+    "checksum": "dbbf4e7f39def4366d02cad1a64893bc3b505701fee172d3df7245675114e502"
+  },
+  "new_version": "0.1.2",
+  "manifest_dependency_lock_agree": true,
+  "release_safeguard_exit_code": 0,
+  "duration_seconds": 3.223,
+  "changed_paths": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates/ztui/Cargo.toml"
+  ],
+  "pr": "https://github.com/LIghtJUNction/ssmcp/pull/83",
+  "registry_endpoint": "https://crates.io/api/v1/crates/ztui-core",
+  "locked_build_pending": false,
+  "final_source_commit": "a37e963067eb08cc60451efbaa485df6b8572b29",
+  "merge_commit": "cc964b67d920f5ffd3a2527a05d81810be44d0b6",
+  "locked_build": {
+    "integration_commit": "68e52bdd3ea779ee65d32d50db77678e0a6d1dc7",
+    "commands": [
+      "cargo test --locked --lib --no-run --message-format=json",
+      "cargo build --locked --bins --example vt_snapshot"
+    ],
+    "exit_codes": [
+      0,
+      0
+    ],
+    "fixture_sha256": "a1e5d20cc43b24a2945e9ad459fb1d0ae3595a5370d62e01bc02aaf858527380",
+    "client_sha256": "0f43f7ba01c8d092e14b3d91d29831d1505d5b31c0dc240b0bcdbfd43eb8c418"
+  },
+  "README_dependency_example_updated": true
+}

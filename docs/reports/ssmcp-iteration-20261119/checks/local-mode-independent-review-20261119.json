@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-19",
+  "repository": "LIghtJUNction/ssmcp",
+  "reviewer": "authorization_review",
+  "review_type": "independent read-only focused source review",
+  "first_checkpoint": "b62dfefbb927b59ae8037b622785cbfdc9a188b1",
+  "final_reviewed_checkpoint": "fe7bb3e9e643985039b2fa64eddef90e1ee359be",
+  "branch": "feat/local-client-mode-20261119",
+  "immutable_evidence": {
+    "base": "7438e615e2a5f4d777a499adffbda275ac09067b",
+    "first_changed_blobs": [
+      {
+        "path": "src/broker.rs",
+        "sha": "264a00ca1fa9a65c50e5a0b4632711244e35756d"
+      },
+      {
+        "path": "src/client.rs",
+        "sha": "2db2faea1111aa0d5ef3df5fc9f53e958dc48a9b"
+      },
+      {
+        "path": "src/client/local.rs",
+        "sha": "d1156807eed95721690ebdd7de3541bb7bf19369"
+      },
+      {
+        "path": "src/client/terminal.rs",
+        "sha": "84a125b9e50c8c67856515fb7a87b299837a8939"
+      },
+      {
+        "path": "src/http.rs",
+        "sha": "1c0a5d71774bf5cec97a3d2b64e3f26a15f948e9"
+      },
+      {
+        "path": "src/identity.rs",
+        "sha": "b973a7a1370e3f1b215201f5473734613b54e5da"
+      },
+      {
+        "path": "src/oauth.rs",
+        "sha": "d793fba6ed13ead54d7d8113509a34cc8ed0473a"
+      }
+    ],
+    "followup_changed_blobs": [
+      {
+        "path": "src/client.rs",
+        "sha": "74152b4f0449ce33c00ec2a2b3f82d569f3e86bd"
+      },
+      {
+        "path": "src/client/account/status.rs",
+        "sha": "8aba4fe2a024b90c56b0fc547dadc9d14c0a889e"
+      },
+      {
+        "path": "src/client/local.rs",
+        "sha": "cbd04b22ddf6b4e3a18a9d6b0779c89b7033c391"
+      },
+      {
+        "path": "src/client/terminal.rs",
+        "sha": "f6637cde69026609158d13bcf9e2964a35c1ee97"
+      },
+      {
+        "path": "src/client/terminal/conversation/login.rs",
+        "sha": "a767ae7c4522966c67ba470a10688888bb9916e3"
+      },
+      {
+        "path": "src/client/terminal/footer.rs",
+        "sha": "8ae5d87b2ac9e948a3846ba0459c4fc2fe6f2f6c"
+      }
+    ]
+  },
+  "scope": [
+    "Local authentication and unchanged remote policy",
+    "Exact Host and Origin validation across OAuth and MCP",
+    "Private Unix socket and matching effective UID",
+    "Foreground host/client shutdown and replacement lifecycle",
+    "Local UI account command routing and absence of automatic remote account dependencies"
+  ],
+  "findings": [
+    {
+      "id": "local-login-route",
+      "status": "fixed",
+      "found_at": "b62dfefbb927b59ae8037b622785cbfdc9a188b1",
+      "fixed_at": "fe7bb3e9e643985039b2fa64eddef90e1ee359be",
+      "description": "start_local disabled account/guide probes but /login still entered the existing default remote account login task.",
+      "evidence": [
+        "src/client/terminal.rs::Session::start_local/start_with_account",
+        "src/client/terminal/conversation/login.rs::State::chat_login",
+        "src/client/account/login.rs::Task::start using Arguments::default"
+      ],
+      "resolution": "AccountStatus::Local is initialized by start_local; chat_login rejects before starting a task and explains the current MCP URL plus one-use login code. Focused test preserves the draft and verifies no login task or queued action."
+    }
+  ],
+  "conclusions": [
+    "Local listener accepts only literal loopback binds. Optional NAME.local HTTPS origin requires an explicit fixed loopback port for an existing TLS proxy.",
+    "Both ends of the Unix stream compare peer credentials to the effective UID. A random private directory and socket use modes 0700 and 0600; validation rejects symlinks/exposed permissions.",
+    "local_router layers exact single Host and exact present Origin checks over all local OAuth and MCP routes; account, enrollment and commerce routes are not mounted.",
+    "Only explicit local factories can disable GitHub providers or use the non-Secure loopback cookie. Existing remote identity construction remains HTTPS and existing OAuth constructors keep Secure cookies.",
+    "MCP access still uses one-use connection-code OAuth, PKCE/resource checks and a live connection-bound authorization; HTTP loopback access alone is not authorization.",
+    "Local parsing does not select or persist a default remote account. Account probes, guide probes and remote logout targets are absent for local mode.",
+    "Host cleanup is awaited before watchdog replacement/reexec, signals and closes owned broker connections, aborts bounded owned tasks if needed, and removes only the recorded private socket directory.",
+    "The /login routing finding is closed by the final checkpoint. No other blocking source issue found within this focused review."
+  ],
+  "limits": [
+    "Source review only; no Cargo, actual login, deployment or workflow dispatch performed by this reviewer.",
+    "The final local candidate still requires root's unified compilation and real isolated OAuth/PTY/termination validation.",
+    "Pure local mode is currently Linux foreground mode; NAME.local resolution, certificates and TLS proxy are explicitly user-provided rather than automatically configured.",
+    "The loopback origin and local same-UID trust boundary do not make notification acceptance evidence of user consent."
+  ],
+  "remaining_source_review_blockers": []
+}

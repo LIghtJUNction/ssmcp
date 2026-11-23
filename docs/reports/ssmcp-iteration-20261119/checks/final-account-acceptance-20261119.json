@@ -1,0 +1,163 @@
+{
+  "schema": "ssmcp.integrated-account-acceptance.v1",
+  "binary_source": "2f0886a3035b134bd9ccd961185d22caa165edd9",
+  "final_script_head": "cb6327169dda234cca35cede1bfbf06ea43c3ab9",
+  "rust_terminal": {
+    "binary_source": "2f0886a3035b134bd9ccd961185d22caa165edd9",
+    "test_script_head": "f5a8e8ac71636ea8e7b72486479cef69f3dc7f40",
+    "all_compiled_rust_sources_unchanged": true,
+    "renderer_blob": "b379f540ae4f999c088556fc463975f715a2fe4f",
+    "terminal_exit_code": 0,
+    "duration_seconds": 12.306,
+    "summary": [
+      "test result: ok. 211 passed; 0 failed; 0 ignored; 0 measured; 1062 filtered out; finished in 12.26s"
+    ]
+  },
+  "results": [
+    {
+      "name": "core",
+      "exit_code": 0,
+      "duration_seconds": 4.472,
+      "pass_lines": 125
+    },
+    {
+      "name": "account-relay",
+      "exit_code": 0,
+      "duration_seconds": 4.934,
+      "pass_lines": 39
+    },
+    {
+      "name": "session-features",
+      "exit_code": 0,
+      "duration_seconds": 6.431,
+      "pass_lines": 47
+    },
+    {
+      "name": "providers",
+      "exit_code": 0,
+      "duration_seconds": 17.659,
+      "pass_lines": 475
+    },
+    {
+      "name": "unified-fixture-tests",
+      "exit_code": 0,
+      "duration_seconds": 0.166,
+      "pass_lines": 0,
+      "check_count": 4
+    },
+    {
+      "name": "unified",
+      "exit_code": 0,
+      "duration_seconds": 21.161,
+      "pass_lines": 105
+    },
+    {
+      "name": "computer-use",
+      "exit_code": 0,
+      "duration_seconds": 16.905,
+      "pass_lines": 68
+    },
+    {
+      "name": "dashboard",
+      "exit_code": 0,
+      "duration_seconds": 24.815,
+      "pass_lines": 80
+    },
+    {
+      "name": "client-ui",
+      "exit_code": 0,
+      "duration_seconds": 7.48,
+      "pass_lines": 0,
+      "check_count": 56,
+      "report_sha256": "3b176376300b4e098da9e1b4003d1e462cba3735deb33f10da101699373f24fc",
+      "scope": "production compositor with sample events, isolated PTY; no live connection"
+    },
+    {
+      "name": "canvas-logs",
+      "exit_code": 0,
+      "duration_seconds": 9.789,
+      "pass_lines": 0,
+      "check_count": 67,
+      "report_sha256": "183fe1a740c617e74921554a62d918fe9e8c08637ac0ecb116adcf6c4ca07dc0",
+      "scope": null
+    },
+    {
+      "name": "composer",
+      "exit_code": 0,
+      "duration_seconds": 19.153,
+      "pass_lines": 82
+    },
+    {
+      "name": "questions",
+      "exit_code": 0,
+      "duration_seconds": 8.992,
+      "pass_lines": 42
+    },
+    {
+      "name": "input-history",
+      "exit_code": 0,
+      "duration_seconds": 17.104,
+      "pass_lines": 119
+    },
+    {
+      "name": "presentations",
+      "exit_code": 0,
+      "duration_seconds": 5.928,
+      "pass_lines": 57
+    },
+    {
+      "name": "context-memory",
+      "exit_code": 0,
+      "check_count": 71,
+      "script_head": "cb6327169dda234cca35cede1bfbf06ea43c3ab9",
+      "report_sha256": "cc65adc77d9540d486a7cb312c585818ebea0b8eba0e095eea1f12700e24bc4a"
+    },
+    {
+      "name": "file-paste",
+      "exit_code": 0,
+      "duration_seconds": 15.048,
+      "pass_lines": 145
+    },
+    {
+      "name": "relay-composer",
+      "exit_code": 0,
+      "duration_seconds": 6.779,
+      "pass_lines": 45
+    },
+    {
+      "name": "session-service",
+      "exit_code": 0,
+      "duration_seconds": 51.872,
+      "pass_lines": 91
+    }
+  ],
+  "all_final_cases_passed": true,
+  "earlier_attempts_retained": true,
+  "notes": [
+    "The initial UI attempts could not find the frozen decoder in bin/examples; the same decoder bytes were copied to that path before retry.",
+    "Device-only reload preserves the account OAuth grant. Context and managed-session fixtures were corrected without changing compiled Rust.",
+    "These local results apply to frozen source 2f0886a, not the earlier production v0.10.10 tag.",
+    "New request-queue and read-activity presentation fixes are outside this frozen source and require a separate focused build."
+  ],
+  "report_digests": {
+    "script-and-terminal-validation.json": "4bcde1ece367e36cca84b51831cfb5b82a67985ded778c8b0a169d263cf5c9e3",
+    "acceptance-results.json": "2d1dd2df4e706948c1761796615f25601a95fbd8bb574ade7943f56f2c0a1ec2",
+    "account-relay.json": "5094beee136d739898f58bf135d684a6f102dec66e69cebd3da8c94f1744e553",
+    "unified.json": "f0d09287270883027d7b086b309bb6df1175a0102e869823a6e0d7164f171cd8",
+    "computer-use.json": "e4f9bfb65404b01175bec1891c6f247d1f0857f06b1b21115c52e9aa04ef91d5",
+    "canvas-logs.json": "183fe1a740c617e74921554a62d918fe9e8c08637ac0ecb116adcf6c4ca07dc0",
+    "session-service.json": "c22ef2a85bb091981741e7490b7c73777856ea75a67e3dd8d8b1719a906e1c5d",
+    "dashboard.json": "0173b72454a821091e2a077e8ae1e628b3504d75fe95e43f159f27630879d8e9",
+    "acceptance-ui-and-sessions.json": "fadb0eec96c20fd6b54bf9ecd88f3b5420d3bf2f9d723d930074923859bfa8e1",
+    "composer.json": "ed577aa3394861570b19ed88f44262fbfeede2129dc4378a95ba8eb3772928a8",
+    "questions.json": "3c12f48fe3fa82fe05a7949e59eae49bce20931c3e4f898bf04cfc3855df029b",
+    "presentations.json": "3d97c22b5b236b8a1d90fe01f9c9ec9e353006e26b03fafd09670b8a672a67a1",
+    "file-paste.json": "b521262073a6c4e94e351ab800c7ac1ed0901528401cb82aebc191f160aa4a8d",
+    "relay-composer.json": "a6958877020e99cf510dff14a891b7176b97936a7d42fb371ee4bb5057d489d8",
+    "attach-live-frame.json": "dfa5014990194d7f269bc6ad775d591d9dd2dd93c050a31905e13db045ef44a5",
+    "attach-checks.json": "7ac655967f71b5e4112a3b2393eff557e19922e9a5c0407dae5d3c5474f24658",
+    "attach-session-frame.json": "8cca8d7ae08a1a69b60ee016358675a89d07c338e2b7846fac1415bb6ee509ef",
+    "context-memory-fixed.json": "cc65adc77d9540d486a7cb312c585818ebea0b8eba0e095eea1f12700e24bc4a",
+    "client-ui/ui-smoke.json": "3b176376300b4e098da9e1b4003d1e462cba3735deb33f10da101699373f24fc"
+  }
+}

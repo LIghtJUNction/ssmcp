@@ -1,0 +1,18 @@
+{
+  "tested_source": "21ea0acc365b413dfa237387960b7441ab1ba529",
+  "merged_main": "571a9879d804b406d699e3f06ee439833922f5d0",
+  "product_scope": [
+    "src",
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates",
+    ".gitmodules"
+  ],
+  "changed_product_files": [
+    "src/client.rs"
+  ],
+  "only_additive_global_help_change": true,
+  "tested_src_tree": "9aec405a283269935a6dda9b88eda51d06afed95",
+  "merged_src_tree": "8c0b81c06dec82edcc2deb54c7fb791fc07d146f",
+  "diff": "diff --git a/src/client.rs b/src/client.rs\nindex 1cd2347..72c2255 100644\n--- a/src/client.rs\n+++ b/src/client.rs\n@@ -110,5 +110,5 @@ Usage: ssmcp username@server [options]\n        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]\n        ssmcp ui <show|check|init|preview> [--ui-config FILE]\n-       ssmcp 007 <install|run|start|stop|status|uninstall|sessions> [options]\n+       ssmcp 007 <install|upgrade|run|start|stop|status|uninstall|sessions> [options]\n \n   --server URL         Relay for this command; overrides config and last login"
+}

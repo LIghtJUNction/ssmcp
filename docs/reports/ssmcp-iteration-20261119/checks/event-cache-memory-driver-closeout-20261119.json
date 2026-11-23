@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-19",
+  "candidate": "EventView explicit read-group collapse cache release",
+  "status": "candidate_not_implemented_after_reachability_probe",
+  "valid_ab_comparison": false,
+  "memory_goal_met": null,
+  "driver": {
+    "branch": "test/event-cache-memory-20261119",
+    "head": "31a923db11ed209fb308a055585b974908cf95ce",
+    "file": "scripts/e2e_event_cache_memory.py",
+    "final_sha256": "e2543e82f9fae426c21e5d7f95af108d9917756a3b91e212718641e6ca3185f8",
+    "executed_sha256": "669c04953945f2877a43dd778c329fb900962399d6dc534f2d65324cfa14d235",
+    "executed_bytes": 11830,
+    "functional_run_source": "c7f9f8d1f6916ab88b96029d8255b4cd1fc57080 plus SIGTERM cleanup handler; final checkpoint also ensures router cleanup if frontend close raises",
+    "final_checkpoint_py_compile": true
+  },
+  "smoke_provenance": {
+    "source": "d4b0558a2cc89fee6cb8b314161a947073cc717f",
+    "build": [
+      {
+        "name": "client-build",
+        "command": [
+          "cargo",
+          "build",
+          "--locked",
+          "--bins",
+          "--example",
+          "vt_snapshot"
+        ],
+        "exit_code": 0,
+        "seconds": 70.72,
+        "test_results": []
+      }
+    ],
+    "binaries": {
+      "ssmcp-lib-tests": {
+        "path": "<native-repo>/.worktrees/plugin-two-layer-20261119/.local/frozen-native-plugins/ssmcp-lib-tests",
+        "sha256": "f2bc0ed8d9a334e9d4f44cf3fa6e0ee318bf13d2068baae1cd69f60bb186cf7e",
+        "size": 251193752
+      },
+      "bin/ssmcp": {
+        "path": "<native-repo>/.worktrees/plugin-two-layer-20261119/.local/frozen-native-plugins/bin/ssmcp",
+        "sha256": "a6bb622ffaf74bdad2f4e26ed726daf8919d6b6d700346f2d3c4471c2920ee9c",
+        "size": 158280360
+      },
+      "bin/examples/vt_snapshot": {
+        "path": "<native-repo>/.worktrees/plugin-two-layer-20261119/.local/frozen-native-plugins/bin/examples/vt_snapshot",
+        "sha256": "ec5bcae1602d160e3b399480ca32187d08876df773aa97663d98a7b9863d26d9",
+        "size": 6472144
+      }
+    },
+    "source_files": {
+      "src/client/render.rs": "417ac7696ac3019b3e19404d92f35f3bb5f749b76314d26f901432e41053dec4",
+      "src/client/terminal/events.rs": "454bcfe214cd8a0245b918fbf7a726458b4ec8bebbb443f14de2bdb97c60aad0",
+      "src/client/terminal/events/read_activity.rs": "ce71750c5793ecea59b695d7d244a0cba18cd6e8138bdc510931a68027e523cf",
+      "src/workspace/audit.rs": "726a2d4c6c6d1b1846b3ae6cf629b563e0e222ed08a7c081490d54fc8218303c"
+    }
+  },
+  "evidence": {
+    "path": "event-cache-real-pty-probe12-20261119.json",
+    "sha256": "383ed0a0a29df896e0f088cadbc4c07e813d888d94c6c3acfa721e8433f345d1",
+    "native_job": "852dabbb074f1b69f3b315fe4c158125-34f",
+    "checks": 33,
+    "cleanup_confirmed": true
+  },
+  "finding": {
+    "scope": "ordinary native skill discovery rendered in real Conversation read group",
+    "actual_member_text_bytes": 720,
+    "actual_member_text_lines": 12,
+    "document_bytes": 24576,
+    "file_body_in_read_event": false,
+    "all_scope_not_reached_by_logs_ui": true,
+    "changes_to_product": false
+  },
+  "interpretation": [
+    "The single-binary run proves the UI path and data-retention contract; it cannot measure an optimization benefit.",
+    "Real skill read events in this scenario retain path summaries rather than file content. No synthetic large retained body was injected.",
+    "The observed PSS variation across expand/fold phases does not establish cache savings. No A/B candidate was built.",
+    "PSS and private memory were measured for the actual frontend PID and its owned process tree; RSS high-water values are labeled separately.",
+    "No extra large-path workload was added solely to make a small candidate look beneficial."
+  ],
+  "summary": {
+    "passed": true,
+    "cleanup": true,
+    "checks": 33,
+    "cli_sha256": "a6bb622ffaf74bdad2f4e26ed726daf8919d6b6d700346f2d3c4471c2920ee9c",
+    "phases": {
+      "before_scan": {
+        "retained_bytes": null,
+        "retained_lines": null,
+        "median": {
+          "parent": {
+            "pss_kib": 22681,
+            "private_kib": 12964,
+            "swap_pss_kib": 0
+          },
+          "owned_tree": {
+            "pss_kib": 36742,
+            "private_kib": 16652,
+            "swap_pss_kib": 0
+          }
+        }
+      },
+      "initial_folded": {
+        "retained_bytes": 720,
+        "retained_lines": 12,
+        "median": {
+          "parent": {
+            "pss_kib": 23053,
+            "private_kib": 13240,
+            "swap_pss_kib": 0
+          },
+          "owned_tree": {
+            "pss_kib": 37386,
+            "private_kib": 17104,
+            "swap_pss_kib": 0
+          }
+        }
+      },
+      "expanded": {
+        "retained_bytes": 720,
+        "retained_lines": 12,
+        "median": {
+          "parent": {
+            "pss_kib": 23021,
+            "private_kib": 13208,
+            "swap_pss_kib": 0
+          },
+          "owned_tree": {
+            "pss_kib": 37354,
+            "private_kib": 17072,
+            "swap_pss_kib": 0
+          }
+        }
+      },
+      "folded": {
+        "retained_bytes": 720,
+        "retained_lines": 12,
+        "median": {
+          "parent": {
+            "pss_kib": 23037,
+            "private_kib": 13224,
+            "swap_pss_kib": 0
+          },
+          "owned_tree": {
+            "pss_kib": 37370,
+            "private_kib": 17088,
+            "swap_pss_kib": 0
+          }
+        }
+      },
+      "reexpanded": {
+        "retained_bytes": 720,
+        "retained_lines": 12,
+        "median": {
+          "parent": {
+            "pss_kib": 23045,
+            "private_kib": 13232,
+            "swap_pss_kib": 0
+          },
+          "owned_tree": {
+            "pss_kib": 37378,
+            "private_kib": 17096,
+            "swap_pss_kib": 0
+          }
+        }
+      }
+    }
+  }
+}

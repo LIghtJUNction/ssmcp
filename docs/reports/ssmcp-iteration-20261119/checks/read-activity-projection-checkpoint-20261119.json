@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "repository": "LIghtJUNction/ssmcp",
+  "branch": "feat/read-activity-summary",
+  "base": "8699401e6d595809d30781322dc4705c0559459b",
+  "head": "40f01e1c6ff9b20b3c1fd163308b903cb46df51c",
+  "scope": "Conversation display projection of at least three successful read events; original records remain unchanged",
+  "files": [
+    {
+      "path": "src/context.rs",
+      "sha256": "85013fd260c885c3c501261430d695b498ac034994e0cd4a3627f42483154600"
+    },
+    {
+      "path": "src/client/terminal/events.rs",
+      "sha256": "454bcfe214cd8a0245b918fbf7a726458b4ec8bebbb443f14de2bdb97c60aad0"
+    },
+    {
+      "path": "src/client/terminal/events/correlation.rs",
+      "sha256": "b428505cf52f29e98ef3d1078a2d88e820b65239c38b9f0fe00e0a8814a05f3e"
+    },
+    {
+      "path": "src/client/terminal/events/read_activity.rs",
+      "sha256": "ce71750c5793ecea59b695d7d244a0cba18cd6e8138bdc510931a68027e523cf"
+    }
+  ],
+  "validation": {
+    "phase": "post-integration review",
+    "source": "68e52bdd3ea779ee65d32d50db77678e0a6d1dc7",
+    "compile": "completed in the coordinated integrated build",
+    "projection_tests_passed": 7,
+    "context_tests_passed": 8,
+    "actual_cli_checks": {
+      "core": 125,
+      "session_features": 47,
+      "unified": 105,
+      "context_memory": 71
+    },
+    "historical_checkpoint": "The original pending-state declaration is preserved in original_checkpoint_validation.",
+    "scope_note": "This result is for the listed source. The preview images are synthetic test fixtures and are not screenshots of a deployed user session."
+  },
+  "native_scan_evidence": {
+    "filesystem_reads": "actual Context::perform skills.list with private OutputStore and temporary fixture files",
+    "discovery_events": "source-matched Runtime success bookkeeping; both batched and interleaved order tested",
+    "producer": "src/runtime.rs skills.list success branch; source inspected via native read-only"
+  },
+  "identity_policy": "Read source and explicit identity metadata must match. Controller request boundaries split groups. Concurrent active requests disable anonymous read grouping.",
+  "transparent_bookkeeping": "Only successful native skills.list discovered or skills.view discovery.completed with invoked=false and no explicit caller/execution fields; member IDs and counts include only reads.",
+  "preview_env": "SSMCP_READ_ACTIVITY_PREVIEW_DIR",
+  "preview_files": "read-activity-{120,48}-{collapsed,expanded}.{ansi,txt,json}",
+  "deferred_to_parent": [
+    "cargo fmt integration",
+    "cargo test --locked --lib --no-run",
+    "client::terminal::",
+    "context::",
+    "final binary build and preview inspection"
+  ],
+  "pr": "https://github.com/LIghtJUNction/ssmcp/pull/85",
+  "merge_commit": "dbacc142adbf226459cf920ee503090e94390415",
+  "root_review": {
+    "new_projection_tests_passed": 7,
+    "context_tests_passed": 8,
+    "actual_cli_checks": {
+      "core": 125,
+      "session_features": 47,
+      "unified": 105,
+      "context_memory": 71
+    },
+    "visual_review": [
+      "read-activity-collapsed-120.png",
+      "read-activity-expanded-48.png"
+    ],
+    "binary_source": "68e52bdd3ea779ee65d32d50db77678e0a6d1dc7"
+  },
+  "original_checkpoint_validation": {
+    "rustfmt": "passed; Rust 1.100.0, edition 2024, skip_children=true",
+    "compile": "pending parent unified build",
+    "tests": "8 new read_activity_ tests written; not yet run"
+  }
+}

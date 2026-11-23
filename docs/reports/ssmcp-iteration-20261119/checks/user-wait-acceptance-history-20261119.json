@@ -1,0 +1,52 @@
+{
+  "date": "2026-11-19",
+  "attempts": [
+    {
+      "classification": "initial real footer-priority product failure",
+      "status": "failed",
+      "checks": 28,
+      "binary_sha256": "bacaf6d922223a50e559829ed71b7a0dca4b8cb986e67730d0ab8a791b5df39d",
+      "script_sha256": "3cbb8c59cbef82d94b9456ca614604bf16f945a573726a567998481cc4911baa",
+      "error": "AssertionError: timed out waiting for mixed-episode finish intent remains visible in the footer\nclient pid=3895942 returncode=None stdout_bytes=0 pty_bytes=44799\nOwned terminal snapshot:\n  ssmcp  /  workspace                                                                                     conversation\n  \u276f This requirement is only for the exact synthetic agent.\n  1 queued \u00b7 /queue\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u8d26\u53f7  \u672a\u767b\u5f55 \u00b7 \u672c\u6708\u5269\u4f59  \u672a\u77e5\n\u276f Unsubmitted draft @\"\u8d44\u6599/\u7b49\u5f85 \u754c.txt\"\n      keep indentation\n Enter send \u00b7 Ctrl+J newline \u00b7 Tab browse                                    connected \u00b7 https://relay-composer.example\nOwned terminal tail:\n                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  1 queued \u00b7 /queue\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u8d26\u53f7  \u672a\u767b\u5f55 \u00b7 \u672c\u6708\u5269\u4f59  \u672a\u77e5   To Next caller \u00b7 Enter sends \u00b7 \u2190 at draft start switches agent              connected \u00b7 https://relay-composer.example  @ files \u00b7 $ skills \u00b7 / commands \u00b7 F1 help                                   connected \u00b7 https://relay-composer.example \u276f Unsubmitted draft @\"\u8d44\u6599/\u7b49\u5f85 \u754c.txt\"                                                                                       keep indentation                                                                                                   Enter send \u00b7 Ctrl+J newline \u00b7 Tab browse                                    connected \u00b7 https://relay-composer.example ",
+      "report_sha256": "fe93320c02ff26b49f4671ff4b7279a438a698fced88f7762af1fc1cd12145d2"
+    },
+    {
+      "classification": "functional pass before multiline visual correction",
+      "status": "passed",
+      "checks": 119,
+      "binary_sha256": "13b57fe65c65f1f15492029e529503cadae66feca037f70404f717f2649ae866",
+      "script_sha256": "9ff5139a0416badc66fb5fd85722088f4459e59e6172ce2508032bbe27970040",
+      "error": null,
+      "report_sha256": "9988b3b2db31bd654dd416c92f415a3afe0fe0feafb45dff2b8b6c8929694597"
+    },
+    {
+      "classification": "fixture synchronized join response with an asynchronous native roster",
+      "status": "failed",
+      "checks": 19,
+      "binary_sha256": "e156eb24ff27b03f305cf75d40a7d710c280537b255c9fe15263506dbc9df8f8",
+      "script_sha256": "9ff5139a0416badc66fb5fd85722088f4459e59e6172ce2508032bbe27970040",
+      "error": "StopIteration: ",
+      "report_sha256": "8277c25b9c4bd8b288faa71225ed9527ee06816e77006fd2b3756c32ff008ae0"
+    },
+    {
+      "classification": "fixture expected an unwrapped substring on a correctly wrapped 48-column screen",
+      "status": "failed",
+      "checks": 81,
+      "binary_sha256": "e156eb24ff27b03f305cf75d40a7d710c280537b255c9fe15263506dbc9df8f8",
+      "script_sha256": "d241b0b4b3aa2f32f301d4bd5964372d07169a8b8de00b97b13ac96257210a1e",
+      "error": "AssertionError: timed out waiting for the real timeout in /wait details\nclient pid=89568 returncode=None stdout_bytes=0 pty_bytes=70476\nOwned terminal snapshot:\n  ssmcp  /  workspace             conversation\n  \u25cf User wait\n      \u5f53\u524d\u6ca1\u6709\u7a0b\u5e8f\u5728\u7b49\u5f85\u4f60\u7684\u8f93\u5165\n      \u6700\u8fd1\u7684\u672c\u673a\u7b49\u5f85\u7ed3\u679c\uff1a\n      #wait_59efc4d09c53b4dc903c8b28defd3086dac4\n      592c81a0df5ab65bcf6dc6b118c4 \u00b7 \u672c\u8f6e\u7b49\u5f85\u8d85\n      \u65f6\n      #wait_039a7970d537b136ad088a23ef42efb66537\n      bdc89475123be26f5bdde66b79cf \u00b7 \u6d88\u606f\u5df2\u5c31\u7eea\n      \uff0c\u7b49\u5f85\u63d0\u4ea4\n      #wait_59a345da02c29999418a14e80305f31c33e2\n      639ab855cf25d253f969df4ef959 \u00b7 \u7b49\u5f85\u5df2\u53d6\u6d88\n      \uff0c\u4f1a\u8bdd\u7ee7\u7eed\n      #wait_9d360387db44f91a635a23761c685cc0d459\n      488d3a85bb144185536abff1b028 \u00b7 \u7b49\u5f85\u5df2\u53d6\u6d88\n      \uff0c\u4f1a\u8bdd\u7ee7\u7eed\n      \u53d6\u6d88\u53ea\u7ed3\u675f\u7b49\u5f85\uff1b\u4f60\u7684\u6d88\u606f\u4ecd\u6309\u961f\u5217\u72b6\u6001\u5904\u7406\n  1 queued \u00b7 /queue\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u672c\u6708\u5269\u4f59  \u672a\u77e5\n\u276f /wait\n\u203a /wait  \u67e5\u770b\u7528\u6237\u7b49\u5f85\uff1b/wait cancel <\u552f\u4e00\u7f16\u53f7>\n \u7b49\u5f85\u72b6\u6001\u5df2\u663e\u793a \u00b7 /wait cancel <\u552f\u4e00\u7f16\u53f7> \u53ef\u53d6\u2026\nOwned terminal tail:\n;237m                                                  \u276f The real Enter key submits exactly this auth    enticated requirement.                        1 queued \u00b7 /queue\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u672c\u6708\u5269\u4f59  \u672a\u77e5  \u276f Unsubmitted draft @\"\u8d44\u6599/\u7b49\u5f85 \u754c.txt\"               keep indentation                                                                               connected \u00b7 https://relay-composer.example \u276f /wait                                         \u203a /wait  \u67e5\u770b\u7528\u6237\u7b49\u5f85\uff1b/wait cancel <\u552f\u4e00\u7f16\u53f7>                                                    \u25cf User wait                                         \u5f53\u524d\u6ca1\u6709\u7a0b\u5e8f\u5728\u7b49\u5f85\u4f60\u7684\u8f93\u5165                                                                      \u6700\u8fd1\u7684\u672c\u673a\u7b49\u5f85\u7ed3\u679c\uff1a                            #wait_59efc4d09c53b4dc903c8b28defd3086dac4      592c81a0df5ab65bcf6dc6b118c4 \u00b7 \u672c\u8f6e\u7b49\u5f85\u8d85       \u65f6                                              #wait_039a7970d537b136ad088a23ef42efb66537      bdc89475123be26f5bdde66b79cf \u00b7 \u6d88\u606f\u5df2\u5c31\u7eea       \uff0c\u7b49\u5f85\u63d0\u4ea4                                      #wait_59a345da02c29999418a14e80305f31c33e2      639ab855cf25d253f969df4ef959 \u00b7 \u7b49\u5f85\u5df2\u53d6\u6d88       \uff0c\u4f1a\u8bdd\u7ee7\u7eed                                      #wait_9d360387db44f91a635a23761c685cc0d459      488d3a85bb144185536abff1b028 \u00b7 \u7b49\u5f85\u5df2\u53d6\u6d88       \uff0c\u4f1a\u8bdd\u7ee7\u7eed                                      \u53d6\u6d88\u53ea\u7ed3\u675f\u7b49\u5f85\uff1b\u4f60\u7684\u6d88\u606f\u4ecd\u6309\u961f\u5217\u72b6\u6001\u5904\u7406   \u7b49\u5f85\u72b6\u6001\u5df2\u663e\u793a \u00b7 /wait cancel <\u552f\u4e00\u7f16\u53f7> \u53ef\u53d6\u2026 ",
+      "report_sha256": "9f5e174ac7a49d3d4951af62cca7085a1a3978d02880d69a91c8535a3620d7c2"
+    },
+    {
+      "classification": "final formal acceptance",
+      "status": "passed",
+      "checks": 119,
+      "binary_sha256": "e156eb24ff27b03f305cf75d40a7d710c280537b255c9fe15263506dbc9df8f8",
+      "script_sha256": "997096ffae1d2b5e3e495e2cb41df58124833f619eeda182e380ad0cd7c400f1",
+      "error": null,
+      "report_sha256": "8850f9ed93958df335eb968b78a2ef30b4ff7d2d7280d8dc7afe8139ea644f1d"
+    }
+  ],
+  "non_acceptance_diagnostics": "Two earlier diagnostic-only attempts are retained separately and are not counted as formal passes.",
+  "final_omitted_checks": []
+}

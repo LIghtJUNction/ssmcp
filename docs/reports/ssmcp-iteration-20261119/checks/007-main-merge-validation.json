@@ -1,0 +1,34 @@
+{
+  "repository": "LIghtJUNction/ssmcp",
+  "branch": "feat/007-recovery-upgrade-20261119",
+  "head": "606ab07638352cf8e2bcb58aff3512ceeb0af757",
+  "tree": "0df98a83dfe29e644afd6269d5cfba542f4a9ac0",
+  "parents": [
+    "729c287bfa130c043d99bf80a2f4f91705dba40c",
+    "87f1eedd2feda8dba9af0c32aa87e4d474904dde"
+  ],
+  "verification": {
+    "merge_conflicts": [],
+    "protected_007_files_unchanged": [
+      "scripts/e2e_007.py",
+      "scripts/e2e_007_upgrade.py",
+      "src/client/zero.rs",
+      "src/client/zero/install.rs",
+      "src/client/zero/install/upgrade.rs"
+    ],
+    "new_content_paths": [
+      "docs/007.md",
+      "src/client.rs"
+    ],
+    "help_line": "ssmcp 007 <install|upgrade|run|start|stop|status|uninstall|sessions> [options]",
+    "docs_sha256": "8972913b8d29c7c4da696ad9577d3471e3e2f43403f410d6c14626bc4e18ed6c",
+    "diff_check_exit": 0,
+    "diff_check_output": ""
+  },
+  "schema_version": 1,
+  "pull_request": 98,
+  "checkpoint_scope": "Merge main, copy reviewed documentation, add upgrade to full CLI help",
+  "cargo_or_tests_run_for_this_checkpoint": false,
+  "production_modified": false,
+  "release_dispatched": false
+}

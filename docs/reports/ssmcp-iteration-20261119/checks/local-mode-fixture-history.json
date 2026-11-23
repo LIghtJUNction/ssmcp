@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "scope": "isolated actual local CLI/OAuth/PTY fixture diagnosis",
+  "original_reports_preserved": "local-mode-attempts",
+  "product_changes_claimed_tested_by_attempt_6": [
+    "local foreground host and transport",
+    "explicit local terminal status and login guard",
+    "loopback browser OAuth",
+    "native file/exec/user wait and cleanup"
+  ],
+  "later_changes_pending_new_candidate": [
+    "bundled private runner",
+    "explicit local consent view"
+  ],
+  "attempts": [
+    {
+      "attempt": 0,
+      "stage": "before CLI or browser start",
+      "status": "failed",
+      "cause": "fixture used bin/vt_snapshot; decoder is bin/examples/vt_snapshot"
+    },
+    {
+      "attempt": 1,
+      "status": "failed",
+      "cause": "shared account Frontend piped stdout; ordinary TTY connection log was not emitted"
+    },
+    {
+      "attempt": 2,
+      "status": "failed",
+      "cause": "fixture typed before connected raw terminal takeover"
+    },
+    {
+      "attempt": 3,
+      "status": "failed",
+      "cause": "authorization-code replay negative case revoked the access-token family before subsequent MCP calls"
+    },
+    {
+      "attempt": 4,
+      "status": "failed",
+      "cause": "isolated PATH did not include installed Node needed by embedded local MCP host"
+    },
+    {
+      "attempt": 5,
+      "status": "failed",
+      "cause": "isolated PATH still omitted installed Bubblewrap and prlimit sandbox prerequisites"
+    },
+    {
+      "attempt": 6,
+      "status": "passed",
+      "checks": 38,
+      "source": "9d7ed0c4871072ed97c71e285da3ac49bb3b4ed2",
+      "script_commit": "1bfc11d44ccf13e94b1b033b4260ed92026ca15c",
+      "runtime_note": "external matching runner supplied; bundled-runner fix is a subsequent candidate"
+    }
+  ],
+  "release_dispatched": false,
+  "production_changed": false,
+  "sensitive_evidence_excluded": [
+    "tokens",
+    "one-time login codes",
+    "raw PTY",
+    "authenticated screenshots",
+    "private system paths"
+  ],
+  "historical_snapshot_note": "The pending fields describe the state after attempt 6, before the final a7 candidate. Original attempt directories are retained separately and are not part of this public bundle.",
+  "superseded_by": "local-mode-a7f9077-validation.json"
+}

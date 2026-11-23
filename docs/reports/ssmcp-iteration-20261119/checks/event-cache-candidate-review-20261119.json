@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "subject": "Reachability and retained-body review of the folded EventView cache candidate",
+  "decision": "Do not implement or merge the proposed cache patch on this evidence.",
+  "memory_goal": "Unresolved; no demonstrated process-memory reduction.",
+  "product_patch_created": false,
+  "candidate_built": false,
+  "valid_ab_comparison": false,
+  "source_review_commit": "7438e615e2a5f4d777a499adffbda275ac09067b",
+  "proposed_file_ownership": [
+    "src/client/terminal/events.rs"
+  ],
+  "source_findings": [
+    {
+      "file": "src/client/terminal/conversation.rs",
+      "finding": "The production activity view sets EventScope::Conversation before calling EventView::render. The Logs view renders the raw VT log, not the EventView All-scope detail branch."
+    },
+    {
+      "file": "src/workspace/audit.rs",
+      "finding": "Native file-read audit events retain path, offsets and byte counts, not file bodies."
+    },
+    {
+      "file": "src/client/render.rs",
+      "finding": "Ordinary file-read and skill-read display branches emit one-line path summaries. This is not a universal bound on all interleaved pending renderer text."
+    },
+    {
+      "file": "src/client/terminal/events/read_activity.rs",
+      "finding": "Read details retain the full safe source and path and remove the existing summary heading. The real measured read records contain no document bodies."
+    },
+    {
+      "file": "src/client/terminal/events.rs",
+      "finding": "Expanded read-group members retain derived row caches after folding. The identified behavior is real, but this probe does not show a large resident body or a physical-memory benefit from changing it."
+    }
+  ],
+  "probe": {
+    "file": "event-cache-real-pty-probe12-20261119.json",
+    "sha256": "383ed0a0a29df896e0f088cadbc4c07e813d888d94c6c3acfa721e8433f345d1",
+    "measurement": "single-binary-real-PTY-reachability-probe",
+    "cli_sha256": "a6bb622ffaf74bdad2f4e26ed726daf8919d6b6d700346f2d3c4471c2920ee9c",
+    "fixture_sha256": "f2bc0ed8d9a334e9d4f44cf3fa6e0ee318bf13d2068baae1cd69f60bb186cf7e",
+    "decoder_sha256": "ec5bcae1602d160e3b399480ca32187d08876df773aa97663d98a7b9863d26d9",
+    "passed": true,
+    "checks": 33,
+    "cleanup_confirmed": true,
+    "documents": 12,
+    "document_bytes_each": 2048,
+    "terminal": {
+      "rows": 58,
+      "cols": 106
+    },
+    "phases": {
+      "before_scan": {
+        "parent_median_pss_kib": 22681,
+        "owned_tree_median_pss_kib": 36742,
+        "parent_median_private_kib": 12964,
+        "samples": 7,
+        "read_group_count": 0,
+        "expanded": null,
+        "member_retained_bytes": 0,
+        "member_retained_lines": 0
+      },
+      "initial_folded": {
+        "parent_median_pss_kib": 23053,
+        "owned_tree_median_pss_kib": 37386,
+        "parent_median_private_kib": 13240,
+        "samples": 7,
+        "read_group_count": 12,
+        "expanded": false,
+        "member_retained_bytes": 720,
+        "member_retained_lines": 12
+      },
+      "expanded": {
+        "parent_median_pss_kib": 23021,
+        "owned_tree_median_pss_kib": 37354,
+        "parent_median_private_kib": 13208,
+        "samples": 7,
+        "read_group_count": 12,
+        "expanded": true,
+        "member_retained_bytes": 720,
+        "member_retained_lines": 12
+      },
+      "folded": {
+        "parent_median_pss_kib": 23037,
+        "owned_tree_median_pss_kib": 37370,
+        "parent_median_private_kib": 13224,
+        "samples": 7,
+        "read_group_count": 12,
+        "expanded": false,
+        "member_retained_bytes": 720,
+        "member_retained_lines": 12
+      },
+      "reexpanded": {
+        "parent_median_pss_kib": 23045,
+        "owned_tree_median_pss_kib": 37378,
+        "parent_median_private_kib": 13232,
+        "samples": 7,
+        "read_group_count": 12,
+        "expanded": true,
+        "member_retained_bytes": 720,
+        "member_retained_lines": 12
+      }
+    }
+  },
+  "interpretation": [
+    "The same unmodified CLI produced all phases. Phase differences are not a baseline-versus-candidate comparison.",
+    "Twelve 2048-byte documents produced only 720 retained display bytes across twelve read records.",
+    "The four loaded-state foreground PSS medians span 32 KiB. This does not establish savings from a cache patch.",
+    "No event, archive, history, retention limit or production configuration was changed.",
+    "The initial Logs/All measurement idea was rejected after tracing actual production callers.",
+    "Freeing an internal Vec allocation would not by itself prove lower RSS or PSS; an appropriate same-profile A/B would still be required for such a claim."
+  ],
+  "scope_limits": [
+    "This ordinary twelve-document workload does not prove a global upper bound for every legal long path or interleaved renderer state.",
+    "No increased workload or synthetic retained file body was used to manufacture an optimization claim.",
+    "This record is a diagnostic decision, not completion of the user request for lower steady-state memory."
+  ]
+}

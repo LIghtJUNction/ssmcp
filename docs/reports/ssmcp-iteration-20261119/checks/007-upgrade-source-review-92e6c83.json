@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "status": "source_review_only_finding_closed",
+  "source": "92e6c83f41b1105bf17a579aabe8baa048c296d8",
+  "previous_source": "50336d405e707044b2bcdb6ef78b1b46955689e4",
+  "file": "src/client/zero/install/upgrade.rs",
+  "blob_sha1": "a12a18d22e3c20f2e57b5e03d5e89c479e50e588",
+  "sha256": "9de1a21fae61c4018106c48d780a4db942d525ab3893538a2b40a78abe4c4f47",
+  "provenance": "Primary file matched immutable GitHub blob and SHA256. Immutable diff from the prior review changes only upgrade.rs.",
+  "findings": [
+    {
+      "id": "loaded-unit-identity-before-stop",
+      "status": "closed_in_source",
+      "concrete_case": "Custom XDG unit A must not authorize stop of another installation B resolved by the user's manager.",
+      "resolution": [
+        "Read the manager's actual absolute FragmentPath, DropInPaths and NeedDaemonReload.",
+        "Read that real fragment with the existing O_NOFOLLOW, owner, regular-file, bound, marker and root checks; require exact content equality to the validated installation definition, including its single expected ExecStart.",
+        "Reject missing/other loaded configuration, any drop-in, pending reload, active service without a verifiable MainPID, or an active process whose /proc/PID/exe inode differs from the expected recovery image.",
+        "Revalidate before the first stop, on successful candidate health, and before rollback stop; do not rely solely on the invoking process's XDG_CONFIG_HOME."
+      ],
+      "remaining_execution_gate": "Independent private-manager fixture should prove foreign fragment/root and foreign active PID rejection before any stop/start action. This review did not execute it."
+    }
+  ],
+  "confirmed_preserved": [
+    "Separate private backup is retained after both success and rollback; only owned staging file is removed.",
+    "Target identity and backup digest checks remain before activation/restore; replacement is atomic rename with fsync.",
+    "Success requires changed MainPID, fresh matching state.pid/observed_at, connected registration and candidate executable identity.",
+    "Shared install.lock serializes mutations while upgrade does not hold the service lifetime run.lock.",
+    "No saved-session definitions, snapshots, units, Config.client/cwd/server or recovery unit definition are rewritten by upgrade.",
+    "Failure report distinguishes binary restoration, restart and confirmed connected state."
+  ],
+  "validation_limits": [
+    "Source review only; no Cargo or tests run by this reviewer.",
+    "No upgrade command, real systemd manager, online 007 configuration, credentials or existing session mutated.",
+    "The latest planned acceptance uses a private manager substitute with real 007/session processes and gateway observations; it does not install or control any real unit."
+  ],
+  "primary_reviewed_at": "2026-11-19",
+  "followup_delivered_to": [
+    "/root",
+    "/root/authorization_review"
+  ]
+}

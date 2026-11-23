@@ -1,0 +1,46 @@
+{
+  "schema": "ssmcp.007.live-readonly-summary.v1",
+  "captured_at": "2026-11-19T22:07:43.817858+00:00",
+  "read_only": true,
+  "service_mutations": 0,
+  "service_state": {
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "SubState": "running",
+    "UnitFileState": "enabled",
+    "NeedDaemonReload": "no"
+  },
+  "connection_state": "connected",
+  "versions": {
+    "command": "0.10.13",
+    "running": "0.10.13",
+    "running_wire": 7,
+    "saved": "0.10.13"
+  },
+  "version_from_running_image": "0.10.13",
+  "saved_image_sha256": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+  "running_image_sha256": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+  "running_matches_saved": true,
+  "service_pid_stable": true,
+  "known_wire5_image_match": false,
+  "wire_version_directly_observed": 7,
+  "saved_sessions": 10,
+  "loaded_session_units": 0,
+  "active_session_units": 0,
+  "session_snapshots_matching_manifest": 10,
+  "existing_image_backups": 1,
+  "saved_sessions_sha256": "808d88b7663bc14173a3c07e97c17fdfe0d5463ec6c434c815da28144ec45d83",
+  "existing_backups_sha256": "48583c56559d6e56f49fc997416421dbe33b7daa17de0be6dac96fbfe16042b7",
+  "preserved_config_and_unit_sha256": "9ea154bc9dc16f99aef6c3428239b16efdf5beee25b0d373f3c7aabca1cc68aa",
+  "collector_sha256": "f02627363794249d757e16d92c9500c0bbac1a1b28b30e24392537a1f156017d",
+  "comparison": {
+    "config_and_unit_preserved": true,
+    "saved_session_files_preserved": true,
+    "saved_session_count_before": 10,
+    "saved_session_count_after": 10,
+    "saved_session_process_identities_preserved": true,
+    "existing_backups_preserved": true,
+    "recovery_process_changed": true,
+    "recovery_image_changed": true
+  }
+}

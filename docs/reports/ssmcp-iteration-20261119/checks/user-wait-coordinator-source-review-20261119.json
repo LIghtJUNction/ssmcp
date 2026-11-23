@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-19",
+  "repository": "LIghtJUNction/ssmcp",
+  "reviewer": "authorization_review",
+  "review_type": "source review and verification provenance",
+  "coordinator": {
+    "head": "27279596347871f5e15654770da1d7635a1a78fc",
+    "branch": "feat/wait-user-primitive-20261119",
+    "parent_tested_head": "1a8e92f09fcedc70fc726b850f0a1f009fcf4405",
+    "followup_changes": [
+      "Preserve native disconnected, authorization_revoked, binding_invalid and superseded terminal states instead of generic cancellation.",
+      "Extend existing HTTP native-completion table with disconnected result.",
+      "Synchronize canonical docs/code-mode.md with the actual ui.wait contract."
+    ]
+  },
+  "ui": {
+    "head": "aa28385d325432af5e55606de44bad8e1793665d",
+    "reviewed_delta_from": "e6586338fa2d57a215f3ef54e75fb674c4a29459",
+    "conclusion": "No remaining blocking issue in the reviewed source delta.",
+    "details": [
+      "finish ACK reads status and notification from the same completed record while locked; a late finish cannot overwrite cancellation or timeout.",
+      "Unknown wait IDs return null status; native received is rejected and ready does not grant user-message delivery.",
+      "At most four active registrations, bounded 32-completion history and registration generation protect replacement connections.",
+      "Local UI cancellation does not reenter terminal invalidation while holding the display lock.",
+      "Mixed waiting episodes retain individual exact wait IDs and make finish intent visible."
+    ]
+  },
+  "reviewed_coordinator_boundaries": [
+    "Real owner, exact live client and valid captured collaboration binding determine eligible user messages; display controller fields do not.",
+    "Queue reservation excludes competing waiters and ordinary claims, retains exact revisions, and releases synchronously on cancellation/drop.",
+    "Final response reauthenticates synchronously after asynchronous recipient collection; no await intervenes before each queue commit.",
+    "Authorization decisions across independent stores are not claimed to be one global transaction; queue revision and claim are atomic under the queue lock.",
+    "Only outer user_wait entries with received and matching attached user_messages represent a committed response; ready alone has no body.",
+    "Production HTTP native answer hook runs after reauthorization and accepts only successful nonduplicate native answer receipts.",
+    "Explicit wait intent and accepted native kind:answer can inject the reminder; arbitrary external assistant final responses cannot be intercepted.",
+    "Notification reports preserve user_seen:null and never assert a person read the notification."
+  ],
+  "verification": {
+    "source": "232db1fbe3b1e73435c50490c8d2f2b671a5b5c3",
+    "scope": "coordinator on main plus 1a8; native UserWait UI, notification and local gateway not included",
+    "owner": "root",
+    "passed": {
+      "user_wait": 16,
+      "steering": 31,
+      "ui_observation": 1
+    },
+    "fmt_exit_code": 0,
+    "library_build_exit_code": 0,
+    "library_sha256": "7ba489b3e50b9a0b102751154227f0ae480f01ff95c491a275adddc88f1ef2e9",
+    "raw_report": "wait-coordinator-validation-20261119.json",
+    "raw_report_sha256": "1cfce0a7911a85c975775e8c77df3055bdfcfc1fc5334ce2e0d4654fd41c1201",
+    "followup_rustfmt_exit_code": 0,
+    "followup_runtime_tests": "Not independently run; root will include 2727959 and final UI in the next unified build.",
+    "reviewer_started_cargo": false
+  },
+  "guide_review": {
+    "file": "docs/code-mode.md",
+    "writing_skill": "Master-cai/Research-Paper-Writing-Skills/research-paper-writing/SKILL.md",
+    "outline": [
+      "When and how to wait",
+      "Authenticated recipient and notification scope",
+      "Authoritative response receipt",
+      "Ending-intent hook and its limits"
+    ],
+    "questions_answered": {
+      "contribution": "Documents the new callable helper and response semantics instead of promising control over external models.",
+      "clarity": "Signature and defaults precede lifecycle details; each paragraph has one responsibility.",
+      "evidence": "Behavior claims map to the coordinator and production native-answer path; test counts identify the exact tested checkpoint.",
+      "evaluation": "Source review and executed coordinator tests are kept separate from pending native UI and full end-to-end checks.",
+      "design": "Authority remains server-side; native ready and agent-supplied fields cannot grant consent."
+    }
+  },
+  "remaining_source_review_blockers": []
+}

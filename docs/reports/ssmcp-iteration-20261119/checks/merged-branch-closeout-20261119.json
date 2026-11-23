@@ -1,0 +1,49 @@
+{
+  "checked_at": "2026-11-19T18:21:53.862867+00:00",
+  "repository": "LIghtJUNction/ssmcp",
+  "main": "46c646351e225b045f300e2ea2e24c3ad04739bc",
+  "method": "atomic delete guarded by exact expected-head leases",
+  "deleted": [
+    {
+      "branch": "feat/readable-request-queue-20261119",
+      "previous_head": "7d6a0036734621c9cb231c002b59570662247e52"
+    },
+    {
+      "branch": "fix/reference-menu-mouse-20261119",
+      "previous_head": "302bd2b3e02b593aa6f6c04195fd26376b0c9ffa"
+    },
+    {
+      "branch": "fix/owner-unlimited-quota-20261119",
+      "previous_head": "db1113208176b512fafd59e0f14b711b1cd29165"
+    },
+    {
+      "branch": "fix/cc-fixture-unique-directories-20261119",
+      "previous_head": "0060b69d7f7b6feec47124794b390e375bcc33ab"
+    },
+    {
+      "branch": "feat/force-send-listener-20261119",
+      "previous_head": "5d6f213298279716ca1e81eb04e44f3e63322fed"
+    },
+    {
+      "branch": "refactor/desktop-zplugin-20261119",
+      "previous_head": "f399425966bfeee6b147a9391ec440ecd0a51610"
+    },
+    {
+      "branch": "refactor/native-plugin-core-20261119",
+      "previous_head": "455de1e0d96816026543b31e00be207c1d8922ed"
+    },
+    {
+      "branch": "refactor/zplugin-native-host-20261119",
+      "previous_head": "bd9efdcd379b79594f15d7d6720f6bfea7d5477b"
+    }
+  ],
+  "remote_absence_verified": true,
+  "worktrees_deleted": [],
+  "preserved": [
+    "integrate/native-plugins-20261119",
+    "perf/exec-guardian-address-space",
+    "test/event-cache-memory-20261119",
+    "all existing worktrees",
+    "all active feature branches"
+  ]
+}

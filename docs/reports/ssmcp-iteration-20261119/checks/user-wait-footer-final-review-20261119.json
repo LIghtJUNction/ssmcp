@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "repository": "LIghtJUNction/ssmcp",
+  "pr": 95,
+  "base": "aa28385d325432af5e55606de44bad8e1793665d",
+  "reviewed_head": "a1f01d546f1019f0079f0cb11e2fd05ee03b926e",
+  "mode": "independent source review; no Cargo or product changes",
+  "result": "No product blocker found; final a1f01 follow-up changes only the cfg(test) frame assertions.",
+  "changed_files": [
+    {
+      "path": "docs/user-wait.md",
+      "changes": 6
+    },
+    {
+      "path": "scripts/e2e_user_wait.py",
+      "changes": 395
+    },
+    {
+      "path": "src/client/terminal/conversation.rs",
+      "changes": 4
+    },
+    {
+      "path": "src/client/terminal/conversation/user_wait.rs",
+      "changes": 84
+    }
+  ],
+  "product_diff": [
+    {
+      "path": "src/client/terminal/conversation.rs",
+      "detail": "Use an eligible user-wait hint before ordinary contextual hints. Existing notice and scroll hints still have higher priority."
+    },
+    {
+      "path": "src/client/terminal/conversation/user_wait.rs",
+      "detail": "Suppress wait hints for help, selection, logs, non-Activity views, detail, content focus, a visible completion menu or loading references; ordinary empty/nonempty editor hints no longer suppress an active wait. Real preview mode still suppresses live waits."
+    }
+  ],
+  "boundaries": [
+    {
+      "case": "errors/action notices",
+      "evidence": "notice.clone().or(scroll_hint).unwrap_or_else(...) selects the notice before evaluating wait/contextual fallbacks."
+    },
+    {
+      "case": "reference/command menu",
+      "evidence": "chat_menu_visible() suppresses the wait hint; unchanged contextual hints select Completion."
+    },
+    {
+      "case": "reference loading",
+      "evidence": "composer.completion_loading() suppresses the wait hint; unchanged contextual hints select Loading."
+    },
+    {
+      "case": "content viewing",
+      "evidence": "content_focus/detail/other views suppress the wait hint; existing browsing controls remain selected."
+    },
+    {
+      "case": "ordinary nonempty draft",
+      "evidence": "Draft contextual hints no longer veto wait. The footer code only reads composer state; the frame regression retains exact draft text and indentation."
+    },
+    {
+      "case": "authentication and delivery",
+      "evidence": "No coordinator, native wait state machine, reservation, authorization or acknowledgment code changes in aa283..4de."
+    }
+  ],
+  "tests": {
+    "added_frame_test": "user_wait_real_frame_keeps_wait_visible_with_a_draft_and_preserves_specific_controls",
+    "snapshot": "cfg(test) local fixture only; no process-global connection state injection",
+    "widths": [
+      120,
+      48
+    ],
+    "known_pending_test_correction": "Resolved in a1f01d546f1019f0079f0cb11e2fd05ee03b926e. At both widths the actual selected /wait menu entry must be visible and wait hint must yield. Contextual hint functions must select the correct controls. Full menu/content shortcut text remains required in the 120-column frame; narrow frames must not show the wait hint. Draft equality remains asserted.",
+    "executed_by_this_reviewer": false,
+    "latest_delta_scope": "Only src/client/terminal/conversation/user_wait.rs inside #[cfg(test)] mod tests; production Rust before that test module is unchanged."
+  },
+  "runner_review": {
+    "exact_receipt": "For received, compares exact client_id and all (message_id, revision) references with attached user_messages.",
+    "queue_projection": "ui.queue reads a local mirror refreshed by the client's 1-second steering poll. The runner waits at most the existing 8-second observation budget for the exact record ID and committed revision to become delivered; it does not resubmit.",
+    "footer_check": "Formal runner retains actual waiting-footer visibility checks.",
+    "diagnostic": "Independently read report.json: status=non_acceptance_diagnostic, diagnostic_status=passed, 119 checks, and the omitted mixed-episode footer assertion named explicitly. Separate provenance marks NON-ACCEPTANCE. This is not formal acceptance of the fixed footer.",
+    "diagnostic_provenance": {
+      "path": "<retained-terminal-evidence>/user-wait-non-acceptance-diagnostics/user-wait-protocol-status-diagnostic-ee0d5eb3",
+      "report_sha256": "cb47884f8441d04639101ac2da6b497654ed62485c4a9a3ca5cc2760cd5ea1a4",
+      "provenance_sha256": "6547560092050f89eacbfa016f802de062e2cb9fb8146bf01da30d5e7dc4b322",
+      "provenance_keys": [
+        "purpose",
+        "omitted_check",
+        "formal_script_unchanged",
+        "formal_first_attempt",
+        "binary_source",
+        "original_script_source",
+        "hashes",
+        "notify",
+        "models_invoked"
+      ],
+      "provenance_marks_non_acceptance": true,
+      "report_status": "non_acceptance_diagnostic",
+      "diagnostic_status": "passed",
+      "known_failure_omitted": "mixed-episode finish intent remains visible in the footer",
+      "checks": 119,
+      "binary_sha256": "bacaf6d922223a50e559829ed71b7a0dca4b8cb986e67730d0ab8a791b5df39d",
+      "script_sha256": "15f59a63084add0c5577ac0884e4c5494c6afbcfd8fb9f8e9ab8b6432ca468fe"
+    }
+  },
+  "parent_reported_validation": {
+    "integration_source": "9d7ed0c4871072ed97c71e285da3ac49bb3b4ed2",
+    "strict_all_target_clippy": "passed, 61.7 seconds",
+    "context_helpers": "2 ignored-by-default tests explicitly executed in the real Node/bwrap environment: 2 passed, no model invocation",
+    "scope_note": "These parent-reported results are separate from this source review and do not substitute for the pending formal real-PTY acceptance."
+  },
+  "product_reviewed_head": "4de90fd73c05c56e83b8533a532f7a04471e60a3"
+}
