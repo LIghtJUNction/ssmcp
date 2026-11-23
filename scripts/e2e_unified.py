@@ -321,8 +321,8 @@ class Unified(SessionFeatures):
     def catalog(self):
         for modern in (False, True):
             status, result, _ = self.rpc("tools/list", modern=modern)
-            self.check(status == 200 and [t["name"] for t in result["result"]["tools"]] == ["link", "list", "code_mode", "collab", "await", "messages"],
-                       f"public MCP exposes exactly link/list/code_mode/collab/await/messages (modern={modern})")
+            self.check(status == 200 and [t["name"] for t in result["result"]["tools"]] == ["link", "list", "code_mode", "collab", "await", "events", "messages"],
+                       f"public MCP exposes exactly link/list/code_mode/collab/await/events/messages (modern={modern})")
         harness_names = {"codex", "claude", "pi", "opencode"}
         provider_names = harness_names | {"ssmcp"}
         discovery = self.call("ssmcp.harnesses.list")
@@ -595,17 +595,30 @@ class Unified(SessionFeatures):
         self.oauth_login(credentials)
         self.sibling_token = self.secret
         self.secret, self.oauth_grant = token, grant
-        self.check(self.call("terminal.status", client_id=self.sibling_id, secret=self.sibling_token)["running"],
+        sibling_terminal = self.call("terminal.status", client_id=self.sibling_id, secret=self.sibling_token)
+        self.check(sibling_terminal["running"] and sibling_terminal["job_id"] == "main",
                    "the sibling is authorized and online before testing its per-client resource boundary")
         denied = {}
         for tool in ("ssmcp.output.read", "ssmcp.output.stat"):
             denied[tool] = self.rejected(tool, {"id": self.retained_artifact["id"]}, client_id=self.sibling_id, secret=self.sibling_token)
         denied["job"] = self.rejected("ssmcp.exec.status", {"job_id": self.concurrent_jobs[0]["job_id"]}, client_id=self.sibling_id, secret=self.sibling_token)
-        self.check(not self.call("ssmcp.exec.list", client_id=self.sibling_id, secret=self.sibling_token)["jobs"],
-                   "a separate client cannot list or address the first client's tasks")
+        jobs = self.call("ssmcp.exec.list", client_id=self.sibling_id, secret=self.sibling_token)["jobs"]
+        self.check(len(jobs) == 1 and jobs[0]["job_id"] == "main" and jobs[0]["mode"] == "pty"
+                   and jobs[0]["pid"] == sibling_terminal["pid"] and jobs[0]["running"],
+                   "a separate client lists only its own running main PTY and cannot address the first client's tasks")
         for tool in ("ssmcp.exec.events", "ssmcp.fs.events", "ssmcp.audit.events"):
             rows, _ = self.events(tool, client_id=self.sibling_id, secret=self.sibling_token)
             isolated = not rows
+            if tool == "ssmcp.exec.events":
+                events = [row["event"] for row in rows]
+                starts = [event for event in events if event["type"] == "exec.started"]
+                isolated = (
+                    len(starts) == 1
+                    and starts[0]["pid"] == sibling_terminal["pid"]
+                    and starts[0]["cwd"] == str(sibling_workspace.resolve())
+                    and all(event["job_id"] == "main"
+                            and event["type"] in {"exec.started", "exec.stdout"} for event in events)
+                )
             if tool == "ssmcp.audit.events":
                 self.save("sibling-audit-events.jsonl", rows, jsonl=True)
                 # Every code-mode event must still belong to this sibling's run.
@@ -786,7 +799,12 @@ class Unified(SessionFeatures):
         self.check(all(item["id"] != old_id for item in listed),
                    "the disconnected client ID cannot survive as a live route")
         stale = self.rejected("ssmcp.exec.status", {"job_id": job["job_id"]})
-        self.check(not self.call("ssmcp.exec.list")["jobs"], "reload starts with no inherited background job handles")
+        fresh_terminal = self.call("terminal.status")
+        jobs = self.call("ssmcp.exec.list")["jobs"]
+        self.check(len(jobs) == 1 and jobs[0]["job_id"] == fresh_terminal["job_id"] == "main"
+                   and jobs[0]["mode"] == "pty" and jobs[0]["pid"] == fresh_terminal["pid"]
+                   and jobs[0]["running"] and fresh_terminal["running"],
+                   "reload starts with only the replacement main PTY and no inherited background job handles")
         tools = self.tool_catalog(through_code=True)
         self.check({tool["name"]: tool for tool in tools} == self.initial_catalog,
                    "reload rebuilds the full no-Harness catalog through the new registry")

@@ -1503,16 +1503,38 @@ mod managed_file_integration_tests {
     async fn ordinary_overwrite_keeps_new_content_without_a_false_creation_record() {
         let scratch = Scratch::new();
         let workspace = scratch.workspace();
-        workspace.perform(
-            "ssmcp.fs.write_text",
+        // The portable writer lock is shared with other fixtures. A busy
+        // result is returned before any filesystem mutation and can be retried.
+        async fn write(workspace: &Workspace, arguments: Value) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                match workspace
+                    .perform("ssmcp.fs.write_text", arguments.clone())
+                    .await
+                {
+                    Ok(_) => return,
+                    Err(error)
+                        if cfg!(not(target_os = "linux"))
+                            && error == "workspace is busy; retry the file operation"
+                            && Instant::now() < deadline =>
+                    {
+                        tokio::task::yield_now().await;
+                    }
+                    Err(error) => panic!("fixture write failed: {error}"),
+                }
+            }
+        }
+        write(
+            &workspace,
             json!({"path":".ssmcp/tmp/replaced.txt","text":"old temporary content","temporary":true,"create_parents":true}),
-        ).await.unwrap();
+        ).await;
         let before = managed_files::list(&scratch.0).unwrap();
         assert_eq!(before.len(), 1);
-        workspace.perform(
-            "ssmcp.fs.write_text",
+        write(
+            &workspace,
             json!({"path":".ssmcp/tmp/replaced.txt","text":"new user content","overwrite":true}),
-        ).await.unwrap();
+        )
+        .await;
         let after = managed_files::list(&scratch.0).unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(before[0].id, after[0].id);

@@ -450,11 +450,16 @@ impl Shell {
         let events = self.events.clone();
         let source = creator.clone();
         let event_id = args.id.clone();
+        let live = args.live;
         let output_event: crate::pty::OutputEvent = Arc::new(move |offset, bytes| {
-            events.push_scoped(json!({"type":"exec.stdout","job_id":event_id,
+            let event = json!({"type":"exec.stdout","job_id":event_id,
                 "method":"command/exec/outputDelta","params":{"deltaBase64":STANDARD.encode(bytes),
-                    "stream":"stdout","processId":event_id,"offset":offset,"next_offset":offset+bytes.len() as u64}}),
-                source.clone());
+                    "stream":"stdout","processId":event_id,"offset":offset,"next_offset":offset+bytes.len() as u64}});
+            if live {
+                events.push_live_terminal_bytes(event, source.clone());
+            } else {
+                events.push_scoped(event, source.clone());
+            }
         });
         crate::client::terminal::register_session(
             &args.id,
