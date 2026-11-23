@@ -122,6 +122,13 @@ impl CommandPanel {
 }
 
 impl Event {
+    fn is_worker_operation(&self) -> bool {
+        self.meta
+            .keys
+            .iter()
+            .any(|key| key.starts_with("worker-operation\0"))
+    }
+
     fn set_chat_expanded(&mut self, expanded: bool) -> bool {
         if self.chat_expanded == expanded {
             return false;
@@ -261,6 +268,7 @@ impl Event {
         let mut source = false;
         let mut result = false;
         let mut count = 0;
+        let preview_lines = if self.is_worker_operation() { 1 } else { 2 };
         for line in plain.lines() {
             let mut text = heading(line);
             if self.meta.diff && (text.starts_with("[DIFF]") || text.starts_with("@@ ")) {
@@ -315,7 +323,7 @@ impl Event {
             }
             result = true;
             count += 1;
-            if first.len() < 2 {
+            if first.len() < preview_lines {
                 first.push(text);
             }
             if last.len() == 2 {

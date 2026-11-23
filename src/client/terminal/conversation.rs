@@ -3790,6 +3790,13 @@ mod tests {
             assert!(text.contains("Worker #03") && text.contains("Review the worker log"));
             assert_eq!(state.conversation.worker_activity_rows, 0);
             assert_eq!(state.events.snapshot()["retained_events"], 2);
+            assert!(
+                state.events.snapshot()["tool_groups"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(!text.contains("worker_task_assignment_fixture_17"));
             display(&mut state);
             assert_eq!(state.events.snapshot()["retained_events"], 2);
             assert!(worker_operations::compact(&assignment_fixture(), cols, 2).is_empty());

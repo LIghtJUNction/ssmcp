@@ -52,6 +52,8 @@ pub(super) fn groups(events: &VecDeque<Event>, owned: impl Fn(&Event) -> bool) -
         let event = &events[index];
         owned(event)
             && event.meta.kind == Kind::Tool
+            // Local coordination observations retain their own task/wait headings.
+            && !event.is_worker_operation()
             && event.image.is_none()
             && !event.reload_boundary
     };

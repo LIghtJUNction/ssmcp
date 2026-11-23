@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn statistics_keeps_pool_counts_without_coordination_history() {
         let linked = json!({
-            "client_id":"linked-pool", "process_id":42, "total":3, "idle":1,
+            "connected":true, "client_id":"linked-pool", "process_id":42, "total":3, "idle":1,
             "working":2,"offline":0,"desired_total":3,"registered_workers":3,
             "retiring":0,"queued":1,"generation":"pool",
             "manager_operations":[{"operation_id":1,"kind":"claim","state":"assigned",
