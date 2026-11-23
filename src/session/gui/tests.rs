@@ -101,7 +101,9 @@ pub(crate) async fn exercise_gateway_fixture(
     assert_eq!(error.code, zbridge::ErrorCode::Denied);
     assert_eq!(error.effect, Effect::None);
     let detached: Value = client
-        .delete(format!("{url}/api/gui/v1/connections/{readonly_connection}"))
+        .delete(format!(
+            "{url}/api/gui/v1/connections/{readonly_connection}"
+        ))
         .bearer_auth(TOKEN)
         .send()
         .await
