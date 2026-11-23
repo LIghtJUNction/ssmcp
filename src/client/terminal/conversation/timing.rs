@@ -358,14 +358,14 @@ fn wait_card(entry: &Entry) -> Option<WaitCard> {
             .map(|episode| format!(" · episode {episode}"))
             .unwrap_or_default()
     ));
-    if let Some(attribution) = &entry.attribution {
-        if let Some(agent) = &attribution.agent {
-            detail.push(format!(
-                "Observed by {} @ {}",
-                panel::safe_text(&agent.name),
-                panel::safe_text(&attribution.account.login)
-            ));
-        }
+    if let Some(attribution) = &entry.attribution
+        && let Some(agent) = &attribution.agent
+    {
+        detail.push(format!(
+            "Observed by {} @ {}",
+            panel::safe_text(&agent.name),
+            panel::safe_text(&attribution.account.login)
+        ));
     }
     if entry.cancellable {
         detail.push(format!(
