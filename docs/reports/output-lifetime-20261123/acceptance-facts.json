@@ -1,0 +1,589 @@
+{
+  "schema": "ssmcp.output-lifetime.acceptance.v1",
+  "date_utc": "2026-11-23",
+  "repository": "LIghtJUNction/ssmcp",
+  "status": "passed",
+  "scope": [
+    "RAM output lifetime and public reads",
+    "registered managed-file startup, periodic and reload lifecycle",
+    "deterministic test-only expiry observation"
+  ],
+  "policy": {
+    "retention_seconds": 900,
+    "timer_period_seconds": 60,
+    "expiry_scenario_seconds": 75,
+    "unified_body_seconds": 240,
+    "python_cleanup_seconds": 20,
+    "rust_cleanup_seconds": 15
+  },
+  "published_increments": [
+    {
+      "commit": "9971c038ed4b04c60d5f6e0d27b2fa07a3567fa6",
+      "purpose": "cross-UID RAM-output fixture",
+      "local_candidate": "35b13571a14fa1cf1e1a7340f18ff64a7738dc08",
+      "tree": "be98b5a78d19731435c5f225f385a0dde48583c8",
+      "evidence": {
+        "output_unit_passed": 16,
+        "real_dual_uid_pty_checks_passed": 20,
+        "collection_note": "The first wrapper exited 1 after all 20 product checks passed because its sudo-owned report was unreadable. A separate recovery read the exact report, checked source and output identities, and recorded successful collection without rerunning the tests."
+      }
+    },
+    {
+      "commit": "8c882e8fcbc467ad28874f170fe0bec44bd91415",
+      "purpose": "RAM session acceptance and platform-address consent assertion",
+      "local_candidate": "cb3336dc1c1eaf4dd22f7c817412d666677aa47e",
+      "tree": "5951058856acdfd8f6aae9f10107bcf6966ca185",
+      "evidence": {
+        "session_checks_passed": 53,
+        "consent_unit_passed": 1,
+        "bytes_paged": 1179809,
+        "pages": 37,
+        "sha256": "6a05edcc0d4b406ab43f8a867323f5efe5bb61a7db5fb5feabeab682aa91c642"
+      }
+    },
+    {
+      "commit": "272364807d8a726d5fab81ec94825f69ddd4c44e",
+      "purpose": "public expiry fixture, historical immediate-aging version",
+      "local_candidate": "cb7fad24cfc9b74bc0b7669c7892f889e1d1a9d9",
+      "tree": "6db118629f6cfe9e031ab1de18a7983855cf7466",
+      "evidence": {
+        "rust_passed": 23,
+        "helper_python_passed": 16,
+        "unified_python_passed": 7,
+        "historical_focused_checks_passed": 26,
+        "historical_focused_seconds": 64.859
+      }
+    },
+    {
+      "commit": "be1bacfb70a296a0f1182fa1e4999e5636143ad9",
+      "purpose": "restore registered managed-file cleanup lifecycle",
+      "local_candidate": "799dd927f6138ed1905f9318cd1f9c90859dcc9b",
+      "tree": "4a528cfbda9ce7f1421ed9cc053de873cfede8aa",
+      "evidence": {
+        "targeted_rust_passed": 70,
+        "first_nine_original_unified_stages_passed": true,
+        "full_unified_status": "failed",
+        "checks_recorded": 95,
+        "failure_stage": "automatic_expiration"
+      }
+    },
+    {
+      "commit": "d0fb4460b119b277423114fa65845acd2dc6e350",
+      "purpose": "defer test-only timestamp mutation until real timer sweep; strict protocol and regression checks",
+      "local_candidate": "6484273dd62e37b3817723af0176a71c8a9c81e8",
+      "tree": "b4c808e0596bdb3a904598ee6011d590cfe90991",
+      "evidence": {
+        "rust_targeted_passed": 73,
+        "helper_python_passed": 19,
+        "unified_python_passed": 8,
+        "unified_checks_passed": 114,
+        "unified_stages_passed": 12,
+        "real_dual_uid_pty_checks_passed": 20
+      }
+    }
+  ],
+  "preserved_failures": [
+    {
+      "stage": "consent assertion",
+      "finding": "Expected obsolete fixture@github instead of actual platform account address",
+      "resolution": "Correct exact escaped expected address while retaining OAuth decisions and binding checks"
+    },
+    {
+      "stage": "client_isolation",
+      "source": "cb7fad24cfc9b74bc0b7669c7892f889e1d1a9d9",
+      "status": "failed",
+      "checks_recorded": 76,
+      "finding": "Missing startup cleanup audit because runtime hooks had been removed",
+      "resolution": "Restore managed-file lifecycle; keep original acceptance assertion"
+    },
+    {
+      "stage": "automatic_expiration",
+      "source": "799dd927f6138ed1905f9318cd1f9c90859dcc9b",
+      "status": "failed",
+      "checks_recorded": 95,
+      "finding": "No actual timer-origin removal witness under immediate-aging fixture",
+      "precise_deleting_event_identified": false,
+      "resolution": "Defer test-only target timestamp mutation until the unchanged real timer holds the store lock"
+    }
+  ],
+  "deferred_protocol": {
+    "schema_version": 1,
+    "aging_point": "timer_sweep_before_expiry",
+    "armed": {
+      "deferred": true,
+      "original_expires_at_unix": [
+        "target",
+        "fresh",
+        "active"
+      ],
+      "old_expires_at_unix": "original target",
+      "new_expires_at_unix": "must be absent"
+    },
+    "timer_removed": {
+      "aging_point": "timer_sweep_before_expiry",
+      "old_expires_at_unix": "original target",
+      "new_expires_at_unix": "max(timer_now_unix-1,0)",
+      "timer_now_unix": "actual timer timestamp"
+    },
+    "evidence": {
+      "aging_deferred": true,
+      "aging_point": "timer_sweep_before_expiry",
+      "observed_after_arm_seconds": "from control request to actual timer witness"
+    },
+    "scope": "actual unchanged 60-second timer and common removal algorithm; target timestamp changed at timer lock; not an already-expired waiting interval or natural 900-second TTL observation"
+  },
+  "limits": {
+    "natural_900_second_wait_observed": false,
+    "natural_300_second_managed_scan_wait_observed": false,
+    "tls_end_to_end_observed": false,
+    "formal_release_created": false,
+    "installed": false,
+    "external_models_started": false,
+    "installed_native_harness_acceptance_exercised": false
+  },
+  "validation_notes": {
+    "strict_clippy_exit_code": 0,
+    "cargo_manifest_warning": "unused dependency qrcodegen",
+    "warning_scope": "Cargo manifest diagnostic; -D warnings Clippy command returned success",
+    "production_ttl_changed": false,
+    "production_timer_period_changed": false
+  },
+  "current_candidate": {
+    "local_commit": "6484273dd62e37b3817723af0176a71c8a9c81e8",
+    "tree": "b4c808e0596bdb3a904598ee6011d590cfe90991",
+    "remote_parent": "be1bacfb70a296a0f1182fa1e4999e5636143ad9",
+    "source_files": {
+      "src/client.rs": {
+        "bytes": 219596,
+        "sha256": "0a279d9e0b1e750faf8cb2ac33834be3c3c5e62efb0e9a72151328c9e6769c5b"
+      },
+      "src/runtime.rs": {
+        "bytes": 59138,
+        "sha256": "20954308150827102bc6239474e2ada5300fd5bfe7379a13577a1db1b8221db8"
+      },
+      "src/output.rs": {
+        "bytes": 74758,
+        "sha256": "60f10fe03658b720d66e7d516b73912ed35f5d2b99fd40a42cfa53c9644e1752"
+      },
+      "src/client/output_expiry_fixture.rs": {
+        "bytes": 24503,
+        "sha256": "fcd69c34a0d8e9d73617e0f66d6eeb34df6c056e47cff126193fc9ff82a99140"
+      },
+      "scripts/e2e_output_expiry.py": {
+        "bytes": 40511,
+        "sha256": "6d11560e2f6ebb62835b5e63ac19615ee10f06ff7b4dc99c0ded27c30e277682"
+      },
+      "scripts/test_e2e_output_expiry.py": {
+        "bytes": 25208,
+        "sha256": "cdb8be43c645da923f50acae945792af13f4b43c3b0dd3e9a24880bb1a9f9ef2"
+      },
+      "scripts/e2e_unified.py": {
+        "bytes": 57043,
+        "sha256": "c4d57d5dc78daf9cf8436312ab67102cdd4a6bb8cb45817f1796884579d08de7"
+      },
+      "scripts/test_e2e_unified.py": {
+        "bytes": 7962,
+        "sha256": "8caf0bf34829cc15233c0b73ec492c414ea1c1640be6ede73b781099370a7251"
+      }
+    },
+    "published_commit": "d0fb4460b119b277423114fa65845acd2dc6e350"
+  },
+  "validation": {
+    "fmt_passed": true,
+    "strict_clippy_passed": true,
+    "rust_targeted_passed": 73,
+    "rust_groups": {
+      "output-units": {
+        "passed": 23,
+        "ignored": 1,
+        "summary": "test result: ok. 23 passed; 0 failed; 1 ignored; 0 measured; 2271 filtered out; finished in 0.04s"
+      },
+      "expiry-client-units": {
+        "passed": 3,
+        "ignored": 1,
+        "summary": "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 2291 filtered out; finished in 0.00s"
+      },
+      "managed-files-units": {
+        "passed": 21,
+        "ignored": 0,
+        "summary": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 2274 filtered out; finished in 0.02s"
+      },
+      "managed-workspace-units": {
+        "passed": 6,
+        "ignored": 0,
+        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 2289 filtered out; finished in 0.02s"
+      },
+      "reload-units": {
+        "passed": 9,
+        "ignored": 0,
+        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 2286 filtered out; finished in 0.00s"
+      },
+      "runtime-units": {
+        "passed": 10,
+        "ignored": 0,
+        "summary": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 2285 filtered out; finished in 0.13s"
+      },
+      "managed-scan-join": {
+        "passed": 1,
+        "ignored": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2294 filtered out; finished in 0.00s"
+      }
+    },
+    "python": {
+      "python-expiry": 19,
+      "python-unified": 8
+    },
+    "binaries": {
+      "ssmcp": {
+        "path": "/var/tmp/project-z-cargo-target/debug/ssmcp",
+        "bytes": 239716112,
+        "sha256": "638b939ce5997c4c6fd64d88989b6c7ac8fe466a856389019fd5d731d8ddf51d"
+      },
+      "ssmcpd": {
+        "path": "/var/tmp/project-z-cargo-target/debug/ssmcpd",
+        "bytes": 172531120,
+        "sha256": "109be58c5384c0f2e87958c800a9df19585d20a306b37604cce28e49086063ba"
+      },
+      "library_fixture": {
+        "path": "/var/tmp/project-z-cargo-target/debug/build/ssmcp/2792da3e5a630a4f/out/ssmcp-2792da3e5a630a4f",
+        "bytes": 378636392,
+        "sha256": "94147cac952a247ab47683bf81f61df269fcf8584e59cf4fb3566ece07593c77"
+      }
+    },
+    "full_unified_status": "passed",
+    "unified": {
+      "status": "passed",
+      "checks": 114,
+      "sections": {
+        "account_oauth": {
+          "status": "passed",
+          "duration_seconds": 1.545
+        },
+        "catalog_no_harness": {
+          "status": "passed",
+          "duration_seconds": 0.373
+        },
+        "concurrent_execution": {
+          "status": "passed",
+          "duration_seconds": 2.592
+        },
+        "utf8_transport": {
+          "status": "passed",
+          "duration_seconds": 0.724
+        },
+        "output_storage": {
+          "status": "passed",
+          "duration_seconds": 11.489
+        },
+        "file_skill_audit": {
+          "status": "passed",
+          "duration_seconds": 13.296
+        },
+        "client_isolation": {
+          "status": "passed",
+          "duration_seconds": 1.621
+        },
+        "cancel_timeout": {
+          "status": "passed",
+          "duration_seconds": 3.248
+        },
+        "native_parent_exit": {
+          "status": "passed",
+          "duration_seconds": 0.203
+        },
+        "automatic_expiration": {
+          "status": "passed",
+          "duration_seconds": 63.656
+        },
+        "reload": {
+          "status": "passed",
+          "duration_seconds": 1.322
+        },
+        "disconnect": {
+          "status": "passed",
+          "duration_seconds": 0.219
+        }
+      },
+      "duration_seconds": 100.876,
+      "failure": null,
+      "cleanup_errors": null,
+      "coverage_complete": true,
+      "coverage_gaps": [],
+      "remaining_observed_processes": [],
+      "mechanism_evidence_status": "observed_local_public_path",
+      "expiry": {
+        "status": "passed",
+        "failure": null,
+        "aging_point": "timer_sweep_before_expiry",
+        "aging_deferred": true,
+        "observed_after_arm_seconds": 58.986,
+        "timer_witness": {
+          "aging_point": "timer_sweep_before_expiry",
+          "controls": {
+            "active": {
+              "active": true,
+              "id": "8c85f0eef9af9ad0e4383d78e9059872",
+              "present": true
+            },
+            "fresh": {
+              "active": false,
+              "id": "d8b01a58f7552ef642cb6aa3498b0023",
+              "present": true
+            }
+          },
+          "event": "timer_removed",
+          "new_expires_at_unix": 1795409018,
+          "old_expires_at_unix": 1795409859,
+          "origin": "timer",
+          "removed": {
+            "bytes": 1200,
+            "id": "b1f39571e71801527842b442a6cbdb4c",
+            "sha256": "ed48a4a1d311d38f972e479f37bb69f4f4e4d76fc26d224587f34a49d344603e"
+          },
+          "schema_version": 1,
+          "timer_now_unix": 1795409019
+        },
+        "public_path_expiry_observed": true,
+        "automatic_cleanup_observed": true,
+        "scenario_duration_seconds": 63.632,
+        "cleanup": {
+          "budget_seconds": 20,
+          "stopped_acknowledged": true,
+          "forced": false,
+          "exit_code": 0,
+          "reaped": true,
+          "errors": [],
+          "scope_observed_before_stop": true,
+          "remaining_instances": [],
+          "all_observed_instances_gone": true,
+          "duration_seconds": 0.024,
+          "observed_instance_count": 11,
+          "observed_instance_roles": {
+            "output_expiry_fixture": 1,
+            "output_expiry_descendant": 4,
+            "output_expiry_supervisor": 3,
+            "output_expiry_command": 3
+          }
+        }
+      }
+    },
+    "unified_scope": {
+      "schema": "ssmcp.unified-acceptance.v1",
+      "revision": "6484273dd62e37b3817723af0176a71c8a9c81e8",
+      "scope": "no-Harness unified runtime; installed native Harness discovery/approval needs its separate acceptance runs",
+      "transport": "real local account WebSocket + OAuth PKCE + HTTP MCP + independent processes + PTY",
+      "model_calls_attempted": 0,
+      "installed_harnesses_exposed": [],
+      "timeout_seconds": 240
+    },
+    "multi_user": {
+      "schema_version": 1,
+      "fixture_sha256": "94147cac952a247ab47683bf81f61df269fcf8584e59cf4fb3566ece07593c77",
+      "uids": [
+        65534,
+        65533
+      ],
+      "tests": [
+        {
+          "name": "fixture binary copy has the source checksum",
+          "passed": true
+        },
+        {
+          "name": "fixture selector output::tests::per_user_output_fixture exists exactly once (found 1)",
+          "passed": true
+        },
+        {
+          "name": "fixture selector client::terminal::tests::physical_output_multi_user_fixture exists exactly once (found 1)",
+          "passed": true
+        },
+        {
+          "name": "UID 65534 reads its complete paginated in-memory artifact",
+          "passed": true
+        },
+        {
+          "name": "UID 65533 reads its complete paginated in-memory artifact",
+          "passed": true
+        },
+        {
+          "name": "the two live UIDs created different actual output IDs",
+          "passed": true
+        },
+        {
+          "name": "UID 65534 rejects the live peer's actual ID through read and stat",
+          "passed": true
+        },
+        {
+          "name": "UID 65533 rejects the live peer's actual ID through read and stat",
+          "passed": true
+        },
+        {
+          "name": "UID 65534 completes exactly one fixture after the release barrier",
+          "passed": true
+        },
+        {
+          "name": "UID 65533 completes exactly one fixture after the release barrier",
+          "passed": true
+        },
+        {
+          "name": "legacy parent and existing user data are unchanged",
+          "passed": true
+        },
+        {
+          "name": "RAM output succeeds without changing the foreign-owned legacy root",
+          "passed": true
+        },
+        {
+          "name": "in-memory outputs create no legacy artifact files or directories",
+          "passed": true
+        },
+        {
+          "name": "same PTY executes exactly one passing fixture",
+          "passed": true
+        },
+        {
+          "name": "same PTY preserves the parent's descriptor flags",
+          "passed": true
+        },
+        {
+          "name": "foreign-owned inherited PTY accepts independent display writes",
+          "passed": true
+        },
+        {
+          "name": "different PTY executes exactly one passing fixture",
+          "passed": true
+        },
+        {
+          "name": "different PTY preserves the parent's descriptor flags",
+          "passed": true
+        },
+        {
+          "name": "different controlling PTY is rejected without display writes",
+          "passed": true
+        },
+        {
+          "name": "all owned temporary files and PTYs are cleaned up",
+          "passed": true
+        }
+      ],
+      "success": true,
+      "elapsed_seconds": 1.083
+    },
+    "process_completion": {
+      "native_job": "2bfac62651c6a21ef468f209e61157c5-93a",
+      "exit_code": 0,
+      "stdout_eof": true,
+      "stderr_eof": true,
+      "source_and_binary_pins_unchanged": true,
+      "full_source_tree_equal_to_published": true
+    },
+    "armed": {
+      "active": {
+        "bytes": 1200,
+        "id": "8c85f0eef9af9ad0e4383d78e9059872",
+        "sha256": "1156a9f70c34295ad4f28435fcf4a1114624e98d949bd200d75493e333dd15d5"
+      },
+      "aging_point": "timer_sweep_before_expiry",
+      "deferred": true,
+      "event": "armed",
+      "fresh": {
+        "bytes": 1200,
+        "id": "d8b01a58f7552ef642cb6aa3498b0023",
+        "sha256": "638e15dbd138d59ed69b04a49b738cd2d7a2c68735656bb26d88b832058536e8"
+      },
+      "old_expires_at_unix": 1795409859,
+      "original_expires_at_unix": {
+        "active": 1795409860,
+        "fresh": 1795409860,
+        "target": 1795409859
+      },
+      "schema_version": 1,
+      "target": {
+        "bytes": 1200,
+        "id": "b1f39571e71801527842b442a6cbdb4c",
+        "sha256": "ed48a4a1d311d38f972e479f37bb69f4f4e4d76fc26d224587f34a49d344603e"
+      }
+    },
+    "public_outputs": {
+      "public_before": {
+        "target": {
+          "id": "b1f39571e71801527842b442a6cbdb4c",
+          "bytes": 1200,
+          "sha256": "ed48a4a1d311d38f972e479f37bb69f4f4e4d76fc26d224587f34a49d344603e",
+          "complete": true,
+          "expires_at_unix": 1795409859,
+          "read_bytes": 1200,
+          "read_sha256": "ed48a4a1d311d38f972e479f37bb69f4f4e4d76fc26d224587f34a49d344603e"
+        },
+        "fresh": {
+          "id": "d8b01a58f7552ef642cb6aa3498b0023",
+          "bytes": 1200,
+          "sha256": "638e15dbd138d59ed69b04a49b738cd2d7a2c68735656bb26d88b832058536e8",
+          "complete": true,
+          "expires_at_unix": 1795409860,
+          "read_bytes": 1200,
+          "read_sha256": "638e15dbd138d59ed69b04a49b738cd2d7a2c68735656bb26d88b832058536e8"
+        },
+        "active": {
+          "id": "8c85f0eef9af9ad0e4383d78e9059872",
+          "bytes": 1200,
+          "sha256": "1156a9f70c34295ad4f28435fcf4a1114624e98d949bd200d75493e333dd15d5",
+          "complete": false,
+          "expires_at_unix": 1795409860,
+          "read_bytes": 1200,
+          "read_sha256": "1156a9f70c34295ad4f28435fcf4a1114624e98d949bd200d75493e333dd15d5"
+        }
+      },
+      "public_controls_after": {
+        "fresh": {
+          "id": "d8b01a58f7552ef642cb6aa3498b0023",
+          "bytes": 1200,
+          "sha256": "638e15dbd138d59ed69b04a49b738cd2d7a2c68735656bb26d88b832058536e8",
+          "complete": true,
+          "expires_at_unix": 1795409860,
+          "read_bytes": 1200,
+          "read_sha256": "638e15dbd138d59ed69b04a49b738cd2d7a2c68735656bb26d88b832058536e8"
+        },
+        "active": {
+          "id": "8c85f0eef9af9ad0e4383d78e9059872",
+          "bytes": 1200,
+          "sha256": "1156a9f70c34295ad4f28435fcf4a1114624e98d949bd200d75493e333dd15d5",
+          "complete": false,
+          "expires_at_unix": 1795409860,
+          "read_bytes": 1200,
+          "read_sha256": "1156a9f70c34295ad4f28435fcf4a1114624e98d949bd200d75493e333dd15d5"
+        }
+      },
+      "active_completed": {
+        "id": "8c85f0eef9af9ad0e4383d78e9059872",
+        "bytes": 1200,
+        "sha256": "1156a9f70c34295ad4f28435fcf4a1114624e98d949bd200d75493e333dd15d5",
+        "complete": true,
+        "expires_at_unix": 1795409920,
+        "read_bytes": 1200,
+        "read_sha256": "1156a9f70c34295ad4f28435fcf4a1114624e98d949bd200d75493e333dd15d5"
+      },
+      "public_unavailable": [
+        {
+          "detail": "Error: output is unavailable in this connection; it may have expired or been evicted",
+          "name": "ssmcp.output.read",
+          "rejected": true
+        },
+        {
+          "detail": "Error: output is unavailable in this connection; it may have expired or been evicted",
+          "name": "ssmcp.output.stat",
+          "rejected": true
+        }
+      ],
+      "scope_flags": {
+        "natural_900_seconds_observed": false,
+        "tls_handshake_exercised": false,
+        "optional_provider_invocations": [],
+        "retention_secs": 900,
+        "sweep_interval_secs": 60,
+        "scenario_timeout_seconds": 75
+      }
+    }
+  },
+  "published_functional_commit": "d0fb4460b119b277423114fa65845acd2dc6e350",
+  "local_evidence_directory": "~/.local/state/work-maintainer/ssmcp-output-lifetime-20261123/deferred-expiry/"
+}
