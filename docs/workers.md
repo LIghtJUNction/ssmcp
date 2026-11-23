@@ -4,6 +4,22 @@
 
 The default worker is an external agent. It actively connects to the worker window, registers with `role: "worker"`, and calls `ssmcp.worker.wait` to wait for a task. After executing an assigned task, it reports the result with `ssmcp.worker.complete` and waits again. Starting the pool creates task capacity without starting any model.
 
+## Dreaming while dependencies run
+
+Use waiting time for a bounded piece of already authorized work. The coordinator
+can put a small review, failure diagnosis or documentation correction into the
+normal queue while another task builds or waits on an external result. A worker
+must obtain its real claim before starting that work; an idle station does not
+grant authority to modify files.
+
+Within a claim, complete independent useful steps while a dependency runs.
+Report the actual result through `ssmcp.worker.complete`. When no useful work
+remains, use a blocking `ssmcp.worker.wait` or event notification, preserving
+the original wait ID while pending. A timeout or `unknown` receipt never grants
+permission to repeat effects. Dreaming uses existing agents, tasks and receipts.
+The [optional round policy](events.md#one-optional-dreaming-round) limits one
+maintenance round; it does not require every other worker to be idle.
+
 ## Start a pool
 
 Start the main chat and its worker window with one command:

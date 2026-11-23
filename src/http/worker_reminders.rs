@@ -60,13 +60,6 @@ impl Counts {
             && self.queued == 0
             && self.standby() != 0
     }
-
-    fn quiet(&self) -> bool {
-        self.should_remind()
-            && self.working == 0
-            && self.offline == 0
-            && self.standby() == self.total
-    }
 }
 
 struct Pool {
@@ -286,7 +279,7 @@ fn guidance(
     }
     let maintenance = round.map_or_else(String::new, |round| {
         format!(
-            " Dreaming round {}: after authorized work is finished, allow at most {} ms for one {} tool/workflow improvement. Reuse this round ID and original receipts; cancellation, timeout or unknown never starts another round. Yield to new user input. Use a detached worktree, validate and retain a reviewable diff without overwriting dirty files.",
+            " Dreaming round {}: spend at most {} ms on one already-authorized {} improvement while the main task waits. Queue it via worker.submit for standby workers with real claims. Keep this round ID and original receipts; timeout, cancellation or unknown never starts another round. Yield to user input. Use a detached worktree; validate and retain a reviewable diff without overwriting dirty files.",
             round.round_id, round.budget_ms, round.repository
         )
     });
@@ -300,7 +293,7 @@ fn guidance(
         "subscription_filter":{"client_ids":clients,"kinds":kinds},
         "await_target_type":"event",
         "message":format!(
-            "After independent work is finished, subscribe to the listed events and use the public await event target in windows of at most {} ms. Resume the same wait_id while pending. Process ready events, explicitly acknowledge their subscription cursor and the await result cursor, then start the next wait. user.input_available only wakes the observer; retrieve the actual input through ui.wait. Inspect unknown outcomes using the original operation ID. Change this advice with events action=policy.{}",
+            "Continue authorized work, including bounded chores while dependencies run (Dreaming); queue independent chores for standby workers. Otherwise subscribe to listed events and use public await event windows of at most {} ms. Resume the same wait_id. Acknowledge subscription and await result cursors after processing. user.input_available wakes you; ui.wait delivers its text. Inspect unknown outcomes by original operation ID. Use events action=policy to change this guidance.{}",
             policy.window_ms, maintenance
         )
     })
@@ -561,7 +554,7 @@ pub(super) async fn append(
         let round = policy.dreaming.as_ref().filter(|round| {
             policy.enabled
                 && response["isError"] != true
-                && pool.is_some_and(|pool| pool.counts.quiet())
+                && pool.is_some_and(|pool| pool.counts.should_remind())
                 && cache.dreaming_due(&scope, round)
         });
         if !cache.due(&scope, &policy, now) && round.is_none() {
@@ -1045,15 +1038,28 @@ mod tests {
     }
 
     #[test]
-    fn dreaming_requires_a_quiet_observed_pool() {
+    fn dreaming_uses_real_standby_capacity_while_other_workers_are_busy() {
         let initial = reply();
-        assert!(pool_from_reply(&initial).unwrap().counts.quiet());
         for changes in [
+            json!({}),
             json!({"idle":2,"working":1}),
             json!({"idle":2,"offline":1,"registered_workers":2}),
+        ] {
+            let mut changed = initial.clone();
+            changed["structuredContent"]["value"]
+                .as_object_mut()
+                .unwrap()
+                .extend(changes.as_object().unwrap().clone());
+            assert!(pool_from_reply(&changed).unwrap().counts.should_remind());
+        }
+        for changes in [
+            json!({"idle":0,"working":3}),
+            json!({"idle":0,"offline":3,"registered_workers":0}),
             json!({"queued":1}),
             json!({"stopping":true}),
+            json!({"closed":true}),
             json!({"connected":false}),
+            json!({"idle":2,"retiring":1}),
             json!({"desired_total":2}),
         ] {
             let mut changed = initial.clone();
@@ -1061,7 +1067,7 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .extend(changes.as_object().unwrap().clone());
-            assert!(!pool_from_reply(&changed).unwrap().counts.quiet());
+            assert!(!pool_from_reply(&changed).unwrap().counts.should_remind());
         }
     }
 

@@ -9,7 +9,7 @@ use std::{
 };
 
 const MAX_RECEIPTS: usize = 128;
-pub(super) const WAIT_HINT: &str = "Call ssmcp.worker.wait again to block for more work. A timeout is only an idle wait; it does not finish a task. Do not repeat effects after an uncertain result.";
+pub(super) const WAIT_HINT: &str = "While dependencies run, do bounded authorized chores within your claim (Dreaming). Without a claim, propose a chore for the coordinator queue before starting effects. Otherwise use worker notifications or ssmcp.worker.wait with a blocking wait up to 55000 ms. Reuse the original request_id while pending; use a new ID after confirmed completion. Timeout does not finish a task. Inspect unknown outcomes without replay.";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

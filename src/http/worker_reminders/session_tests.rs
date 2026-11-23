@@ -391,13 +391,15 @@ async fn input_arriving_during_probe_preempts_dreaming_without_consuming_it() {
 }
 
 #[tokio::test]
-async fn busy_pool_does_not_spend_the_round_before_it_becomes_quiet() {
+async fn busy_pool_preserves_the_round_until_a_real_standby_worker_is_available() {
     let (mut fixture, report, eligible) = prepared("main").await;
     configure_dreaming(&eligible[0]);
-    let quiet = quiet_pool_reply(&fixture).await;
-    let mut busy = quiet.clone();
-    busy["structuredContent"]["value"]["idle"] = json!(2);
-    busy["structuredContent"]["value"]["working"] = json!(1);
+    let mut available = quiet_pool_reply(&fixture).await;
+    available["structuredContent"]["value"]["idle"] = json!(2);
+    available["structuredContent"]["value"]["working"] = json!(1);
+    let mut busy = available.clone();
+    busy["structuredContent"]["value"]["idle"] = json!(0);
+    busy["structuredContent"]["value"]["working"] = json!(3);
     let before = successful();
     let (blocked, operation) = tokio::time::timeout(Duration::from_secs(2), async {
         tokio::join!(
@@ -410,12 +412,12 @@ async fn busy_pool_does_not_spend_the_round_before_it_becomes_quiet() {
     assert_probe(operation);
     assert!(blocked["structuredContent"]["coordination_hints"][0]["dreaming_round"].is_null());
 
-    // The ordinary wait hint above was cached, but becoming quiet can offer
+    // The ordinary wait hint above was cached, but real standby capacity offers
     // the unspent explicit round without waiting for the thirty-second throttle.
     let (ready, operation) = tokio::time::timeout(Duration::from_secs(2), async {
         tokio::join!(
             append(&report, before.clone(), &eligible),
-            fixture.native_reply(quiet)
+            fixture.native_reply(available)
         )
     })
     .await

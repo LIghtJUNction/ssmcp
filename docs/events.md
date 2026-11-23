@@ -204,11 +204,19 @@ or grant permission to edit it.
 The existing response hook can return `coordination_hints[].dreaming_round`
 when the selected round has not been offered in its current cache entry, no
 relevant input is pending, the response is not an error, and the linked pool is
-both authorized and observed fully idle. Busy, queued, offline, retiring,
-stopping, disconnected or unavailable pool state suppresses the round. This
-observation is not a reservation of capacity or proof that earlier uncertain
-effects have stopped. The caller must still have no independent authorized
-work left and must reconcile known task and job receipts before starting.
+authorized and has a real standby worker with no queued task. Other workers
+may still be busy; an offline station is never counted as available capacity.
+A fully occupied, retiring, resizing, stopping, disconnected or unavailable pool
+suppresses the round. This observation neither reserves capacity nor resolves
+uncertain effects. Reconcile original receipts before assigning work.
+
+During a main-task dependency wait, use the round for one bounded, already
+authorized chore: inspect a completed test's failure, verify a pending patch,
+or improve the current task's documentation. Submit independent chores through
+the existing worker queue and let workers obtain real claims. Within a current
+claim, a worker may finish other authorized steps while one dependency runs.
+When no useful authorized work remains, block on notifications with the existing
+event or worker wait contract; repeatedly polling status creates no progress.
 
 The last offered round ID is retained in the existing bounded hint cache.
 Ordinary wait reminders, changing the same round's budget, and temporarily
