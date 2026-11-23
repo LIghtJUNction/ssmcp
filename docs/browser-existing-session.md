@@ -4,7 +4,7 @@
 
 ## 先确认接口与目标
 
-1. 用 `ssmcp computer version --json` 或 `computer.version(clientId)` 读取实际 CLI 版本与路径。
+1. 用 `ssmcp computer version --json` 或 `call(clientId, "ssmcp.computer.version", {})` 读取实际 CLI 版本与路径。
 2. 通过通用 exec 读取该程序的 `--help` 和 `schema`，确认支持的浏览器操作。
 3. 使用操作者明确提供或已观察到的调试端点。不要猜端口、读取扩展令牌，或因连接失败而自动打开另一个 profile。
 4. 在同一 Zuse 进程里读取真实标签页目录，再选择用户指定的页面；页面 ID 来自该次目录，不能复用旧 SSMCP 的 target ID。

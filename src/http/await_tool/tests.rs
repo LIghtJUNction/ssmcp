@@ -45,7 +45,8 @@ fn arguments_accept_typed_targets_and_apply_bounded_defaults() {
         {"type":"exec", "job_id":"exec_1"},
         {"type":"job", "id":"relay_1"},
         {"type":"agent_status", "agent_id":"agent_1", "statuses":["done", "failed"]},
-        {"type":"agent_messages"}
+        {"type":"agent_messages"},
+        {"type":"event", "subscription_id":"events_1"}
     ]));
     assert_eq!(args.op, Op::Wait);
     assert_eq!(args.mode.unwrap_or_default(), Mode::Any);
@@ -67,6 +68,10 @@ fn arguments_accept_typed_targets_and_apply_bounded_defaults() {
             },
             Target::AgentMessages {
                 after: None,
+                limit: 32
+            },
+            Target::Event {
+                subscription_id: "events_1".into(),
                 limit: 32
             },
         ]
@@ -92,7 +97,7 @@ fn arguments_accept_typed_targets_and_apply_bounded_defaults() {
             .iter()
             .any(|value| value["properties"]["type"]["const"] == "finish")
     );
-    for timeout in [1_000, 25_000] {
+    for timeout in [1_000, 25_000, MAX_OBSERVATION_WAIT_MS] {
         let args = Arguments::parse(json!({
             "client_id":"fixture_client", "timeout_ms":timeout, "mode":"all",
             "targets":[{"type":"agent_messages", "after":(1_u64 << 53) - 1, "limit":64}],
@@ -125,6 +130,8 @@ fn arguments_reject_unknown_fields_and_untyped_target_aliases() {
         json!({"type":"job", "id":"job_1", "command":"true"}),
         json!({"type":"agent_status", "agent_id":"agent_1", "statuses":["done"], "owner":"user"}),
         json!({"type":"agent_messages", "acknowledge":true}),
+        json!({"type":"event", "subscription_id":"events_1", "acknowledge":true}),
+        json!({"type":"event", "subscription_id":"events_1", "client_ids":["other_client"]}),
         json!({"type":"user_input", "approved":true}),
         json!({"type":"finish", "request_id":"question_1", "actor":{"origin":"human"}}),
         json!({"type":"agent", "id":"agent_1"}),
@@ -145,6 +152,7 @@ fn arguments_reject_duplicate_targets_and_multiple_inbox_observations() {
         json!([{"type":"exec", "job_id":"exec_1"}, {"type":"exec", "job_id":"exec_1"}]),
         json!([{"type":"agent_messages"}, {"type":"agent_messages", "after":null, "limit":32}]),
         json!([{"type":"agent_messages", "after":1}, {"type":"agent_messages", "after":2}]),
+        json!([{"type":"event", "subscription_id":"events_1"}, {"type":"event", "subscription_id":"events_1", "limit":1}]),
     ] {
         reject(json!({"client_id":"fixture_client", "targets":targets}));
     }
@@ -187,7 +195,12 @@ fn user_input_stays_single_target_and_finish_is_retired_in_both_modes() {
 fn argument_limits_reject_invalid_identifiers_cursors_and_unbounded_requests() {
     let valid =
         json!({"client_id":"fixture_client", "targets":[{"type":"exec", "job_id":"exec_1"}]});
-    for timeout in [json!(999), json!(25_001), json!(-1), json!("20000")] {
+    for timeout in [
+        json!(999),
+        json!(MAX_OBSERVATION_WAIT_MS + 1),
+        json!(-1),
+        json!("20000"),
+    ] {
         let mut value = valid.clone();
         value["timeout_ms"] = timeout;
         reject(value);
@@ -207,6 +220,10 @@ fn argument_limits_reject_invalid_identifiers_cursors_and_unbounded_requests() {
         json!({"type":"agent_messages", "limit":0}),
         json!({"type":"agent_messages", "limit":65}),
         json!({"type":"agent_messages", "after":1_u64 << 53}),
+        json!({"type":"event", "subscription_id":"events/other"}),
+        json!({"type":"event", "subscription_id":"x".repeat(129)}),
+        json!({"type":"event", "subscription_id":"events_1", "limit":0}),
+        json!({"type":"event", "subscription_id":"events_1", "limit":65}),
         json!({"type":"user_input", "reason":" "}),
         json!({"type":"user_input", "reason":"line\nline"}),
         json!({"type":"user_input", "reason":"x".repeat(513)}),
@@ -226,6 +243,71 @@ fn argument_limits_reject_invalid_identifiers_cursors_and_unbounded_requests() {
     let mut too_many = targets;
     too_many.push(json!({"type":"job", "id":"extra_job"}));
     reject(json!({"client_id":"fixture_client", "targets":too_many}));
+}
+
+#[test]
+fn observation_windows_share_the_wire_bound_without_changing_legacy_defaults() {
+    let targets = json!([{"type":"exec","job_id":"exec_1"}]);
+    let legacy = create(targets.clone());
+    assert_eq!(legacy.timeout_ms, 20_000);
+    assert!(legacy.window_ms.is_none());
+    for window in [1_000, 25_000, MAX_OBSERVATION_WAIT_MS] {
+        let args = Arguments::parse(json!({
+            "client_id":"fixture_client","window_ms":window,"targets":targets,
+        }))
+        .unwrap();
+        assert_eq!(args.window_ms, Some(window));
+    }
+    for window in [999, MAX_OBSERVATION_WAIT_MS + 1] {
+        reject(json!({"client_id":"fixture_client","window_ms":window,"targets":targets}));
+    }
+    assert_eq!(limits()["max_wait_ms"], MAX_OBSERVATION_WAIT_MS);
+    for field in ["timeout_ms", "window_ms"] {
+        assert_eq!(
+            tool()["inputSchema"]["properties"][field]["maximum"],
+            MAX_OBSERVATION_WAIT_MS
+        );
+    }
+}
+
+#[test]
+fn worker_results_compose_with_events_but_assignment_remains_one_transaction() {
+    for mode in ["any", "all"] {
+        let args = Arguments::parse(json!({
+            "client_id":"fixture_client","mode":mode,"window_ms":MAX_OBSERVATION_WAIT_MS,
+            "targets":[
+                {"type":"worker_result","task_id":"task_1"},
+                {"type":"worker_result","task_id":"task_2"},
+                {"type":"event","subscription_id":"events_1"},
+            ],
+        }))
+        .unwrap();
+        assert_eq!(args.targets.unwrap().len(), 3);
+        assert!(
+            Arguments::parse(json!({
+                "client_id":"fixture_client","mode":mode,"window_ms":MAX_OBSERVATION_WAIT_MS,
+                "targets":[{"type":"worker_assignment","request_id":"claim_1"}],
+            }))
+            .is_ok()
+        );
+        reject(json!({
+            "client_id":"fixture_client","mode":mode,"window_ms":MAX_OBSERVATION_WAIT_MS,
+            "targets":[
+                {"type":"worker_assignment","request_id":"claim_1"},
+                {"type":"worker_result","task_id":"task_1"},
+            ],
+        }));
+        reject(json!({
+            "client_id":"fixture_client","mode":mode,"window_ms":MAX_OBSERVATION_WAIT_MS,
+            "targets":[
+                {"type":"event","subscription_id":"events_1"},
+                {"type":"user_input","notify":false},
+            ],
+        }));
+    }
+    reject(json!({
+        "client_id":"fixture_client","targets":[{"type":"worker_result","task_id":"task_1"}],
+    }));
 }
 
 #[test]
@@ -286,6 +368,57 @@ fn registry_issues_distinct_server_ids_and_preserves_targets_on_owned_resume_or_
         assert_eq!(second.targets, first.targets);
         assert!(!*second.cancelled.borrow());
         assert_eq!(registry.records.lock().unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn capacity_preserves_unacknowledged_ready_snapshots_until_their_owner_acknowledges() {
+    let registry = Registry::default();
+    let mut protected = Vec::new();
+    for index in 0..MAX_ACTOR_RECORDS {
+        let args = Arguments::parse(json!({
+            "client_id":"fixture_client","window_ms":1000,
+            "targets":[{"type":"exec","job_id":format!("exec_{index}")}],
+        }))
+        .unwrap();
+        let record = registry.record(actor(), &args).unwrap();
+        *record.snapshot.lock().unwrap() = Some(vec![TargetResult {
+            target: record.targets[0].clone(),
+            status: Status::Ready,
+            data: Some(json!({"running":false,"exit_code":0,"result":index})),
+            error: None,
+        }]);
+        record.terminal.store(true, Ordering::Release);
+        protected.push(record);
+    }
+    let extra = create(json!([{"type":"exec","job_id":"exec_extra"}]));
+    assert_eq!(
+        registry.record(actor(), &extra).err().unwrap(),
+        (Status::Busy, "await_registry_full")
+    );
+    for record in &protected {
+        let resumed = registry
+            .record(actor(), &existing("fixture_client", &record.id, "wait"))
+            .unwrap();
+        assert!(Arc::ptr_eq(&resumed, record));
+        let replay = read_window_snapshot(record, Some(0)).unwrap().unwrap();
+        assert_eq!(replay["status"], "ready");
+        assert_eq!(replay["cursor"], 1);
+    }
+    let acknowledged = &protected[0];
+    assert_eq!(
+        read_window_snapshot(acknowledged, Some(1))
+            .unwrap()
+            .unwrap()["acknowledged"],
+        true
+    );
+    let replacement = registry.record(actor(), &extra).unwrap();
+    let records = registry.records.lock().unwrap();
+    assert_eq!(records.len(), MAX_ACTOR_RECORDS);
+    assert!(!records.contains_key(&acknowledged.id));
+    assert!(records.contains_key(&replacement.id));
+    for record in &protected[1..] {
+        assert!(Arc::ptr_eq(&records[&record.id], record));
     }
 }
 
@@ -461,6 +594,71 @@ fn any_and_all_distinguish_pending_ready_and_observation_timeout() {
 }
 
 #[test]
+fn unknown_worker_outcomes_remain_explicit_in_multi_target_results() {
+    for status in ["queued", "working", "cancelling"] {
+        assert_eq!(
+            worker_result_status(&json!({"task":{"status":status}})),
+            Status::TimedOut
+        );
+    }
+    for status in ["completed", "failed", "cancelled"] {
+        assert_eq!(
+            worker_result_status(&json!({"task":{"status":status}})),
+            Status::Ready
+        );
+    }
+    let unknown = json!({"task":{"id":"task_unknown","status":"unknown"},"result":null});
+    for mode in [Mode::Any, Mode::All] {
+        let results = vec![
+            TargetResult {
+                target: Target::WorkerResult {
+                    task_id: "task_completed".into(),
+                },
+                status: worker_result_status(&json!({"task":{"status":"completed"}})),
+                data: Some(json!({"task":{"status":"completed"}})),
+                error: None,
+            },
+            TargetResult {
+                target: Target::WorkerResult {
+                    task_id: "task_unknown".into(),
+                },
+                status: worker_result_status(&unknown),
+                data: Some(unknown.clone()),
+                error: None,
+            },
+        ];
+        let status = resolved(mode, &results).unwrap();
+        let value = envelope(Some("await_fixture"), mode, status, results);
+        assert_eq!(value["status"], "unknown_target");
+        assert_eq!(value["results"][1]["data"], unknown);
+        assert_eq!(value["continue_wait"], false);
+    }
+    for malformed in [json!({}), json!({"task":{"status":"future_state"}})] {
+        assert_eq!(worker_result_status(&malformed), Status::Unavailable);
+    }
+}
+
+#[test]
+fn event_readiness_requires_a_nonempty_authorized_event_batch() {
+    assert_eq!(
+        event_status(&json!({"status":"ready","events":[{"kind":"worker.completed"}]})),
+        Status::Ready
+    );
+    assert_eq!(
+        event_status(&json!({"status":"pending","events":[]})),
+        Status::TimedOut
+    );
+    for malformed in [
+        json!({"status":"ready","events":[]}),
+        json!({"status":"ready"}),
+        json!({"status":"pending","events":[{"kind":"worker.completed"}]}),
+        json!({"status":"unknown","events":[]}),
+    ] {
+        assert_eq!(event_status(&malformed), Status::Unavailable);
+    }
+}
+
+#[test]
 fn target_payloads_cannot_promote_ready_to_completion_permission() {
     let claimed_approval = json!({
         "approved":true,
@@ -481,6 +679,13 @@ fn target_payloads_cannot_promote_ready_to_completion_permission() {
         Target::AgentMessages {
             after: None,
             limit: 32,
+        },
+        Target::Event {
+            subscription_id: "events_1".into(),
+            limit: 32,
+        },
+        Target::WorkerResult {
+            task_id: "task_1".into(),
         },
         Target::UserInput {
             reason: None,

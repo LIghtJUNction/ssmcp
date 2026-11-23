@@ -4,6 +4,9 @@ use super::{completion, ui::Ui};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+mod slash;
+#[cfg(test)]
+mod slash_tests;
 
 pub(super) const MAX_DRAFT_BYTES: usize = 16 * 1024;
 const MAX_HISTORY_ENTRIES: usize = 64;
@@ -270,6 +273,9 @@ pub(super) struct Composer {
     saved_draft: Option<(String, usize)>,
     suggestion_index: usize,
     suggestions_dismissed: bool,
+    harness_input: Option<(u64, usize, bool)>,
+    harness_generation: Option<u64>,
+    harness_commands: Vec<(String, String)>,
     reference_query: Option<completion::Query>,
     reference_input: Option<(u64, usize, bool)>,
     reference_version: Option<completion::Version>,
@@ -575,22 +581,31 @@ impl Composer {
                 })
                 .collect();
         }
-        if self.text.contains('\n') {
+        let Some(query) = slash::query(&self.text, self.cursor) else {
             return Vec::new();
-        }
-        let prefix = self.text.trim_start();
-        if !prefix.starts_with('/') || prefix.chars().any(char::is_whitespace) {
-            return Vec::new();
-        }
-        SLASH_COMMANDS
+        };
+        let mut suggestions: Vec<_> = query
+            .commands()
             .iter()
-            .filter(|command| command.name.starts_with(prefix))
+            .filter(|command| query.matches(command))
             .map(|command| Suggestion {
                 name: command.name,
                 description: command.description,
                 reference: false,
             })
-            .collect()
+            .collect();
+        if query.provider().is_some()
+            && self.harness_input == Some((self.revision, self.cursor, true))
+        {
+            suggestions.extend(self.harness_commands.iter().map(|(name, description)| {
+                Suggestion {
+                    name,
+                    description,
+                    reference: false,
+                }
+            }));
+        }
+        suggestions
     }
 
     pub(super) fn selected_suggestion(&self) -> Option<Suggestion<'_>> {
@@ -604,7 +619,63 @@ impl Composer {
     }
 
     pub(super) fn refresh_completions(&mut self, enabled: bool) {
+        self.refresh_harness_completions_with(
+            enabled,
+            super::interface::harness::completion_candidates,
+        );
         self.refresh_completions_with(enabled, completion::lookup);
+    }
+
+    fn refresh_harness_completions_with(
+        &mut self,
+        enabled: bool,
+        lookup: impl FnOnce(
+            &str,
+            &str,
+            Option<u64>,
+        )
+            -> Result<Option<super::interface::harness::CompletionCatalog>, String>,
+    ) {
+        let input = (self.revision, self.cursor, enabled);
+        if self.harness_input != Some(input) {
+            self.harness_input = Some(input);
+            self.harness_generation = None;
+            self.harness_commands.clear();
+        }
+        if !enabled || self.suggestions_dismissed {
+            return;
+        }
+        let Some(query) = slash::query(&self.text, self.cursor) else {
+            return;
+        };
+        let Some(provider) = query.provider() else {
+            return;
+        };
+        let selected = self.selected_suggestion().map(|item| item.name.to_owned());
+        match lookup(provider, query.prefix, self.harness_generation) {
+            Ok(Some((generation, commands))) => {
+                self.harness_generation = Some(generation);
+                self.harness_commands = commands
+                    .into_iter()
+                    .map(|(name, description)| (format!("{} {name}", query.command), description))
+                    .collect();
+                self.suggestion_index = selected
+                    .and_then(|name| self.suggestions().iter().position(|item| item.name == name))
+                    .unwrap_or(0);
+            }
+            Ok(None) => {}
+            Err(_) => {
+                self.harness_generation = None;
+                self.harness_commands.clear();
+            }
+        }
+    }
+
+    /// Enter keeps the existing first-word shortcut. Merely showing a secondary
+    /// menu must not select a verb or discard arguments from the actual draft.
+    pub(super) fn primary_command_suggestion(&self) -> bool {
+        let text = self.text.trim_start();
+        text.starts_with('/') && !text.chars().any(char::is_whitespace)
     }
 
     fn refresh_completions_with(
@@ -685,10 +756,10 @@ impl Composer {
             self.text = text;
             self.cursor = cursor;
         } else {
-            let text = format!("{} ", selected.name);
-            if !self.set_text(&text) {
-                return Err("Draft limit reached · 16 KiB".into());
-            }
+            let (text, cursor) = slash::apply(&self.text, self.cursor, selected.name)?;
+            self.detach_history();
+            self.text = text;
+            self.cursor = cursor;
         }
         Ok(true)
     }

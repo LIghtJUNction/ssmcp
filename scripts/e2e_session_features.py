@@ -281,8 +281,10 @@ class SessionFeatures(Harness):
                 self.secret, self.oauth_grant = primary_token, primary_grant
 
         old_id, old_token, pid = self.client_id, self.secret, self.client.pid
-        code = "return await reload(%s);" % json.dumps(old_id)
-        accepted = self.public_call("code_mode", {"code": code})["result"]
+        code = 'return await call(%s, "ssmcp.client.reload", {});' % json.dumps(old_id)
+        reply = self.public_call("code_mode", {"code": code})["result"]
+        self.check(reply.get("isError") is not True, "native reload returns no MCP error")
+        accepted = reply["structuredContent"]
         self.check(accepted.get("accepted") is True
                    and accepted["client_id"] == old_id
                    and accepted["oauth_login_required"] is False,

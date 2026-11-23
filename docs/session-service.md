@@ -86,27 +86,33 @@ ssmcp sessions create manager --cwd /path/to/projects \
 通过公开 list 选择它的唯一 client ID，再调用：
 
 ```javascript
-const inventory = await sessions.list(managerClientId);
-const created = await sessions.create(managerClientId, {
+const inventoryReply = await call(managerClientId, "ssmcp.session.list", {});
+if (inventoryReply.isError) return inventoryReply;
+const inventory = inventoryReply.structuredContent;
+const created = await call(managerClientId, "ssmcp.session.create", {
   name: "worker",
   cwd: "project-a",
   title: "Run project checks",
   watchdog: true,
   reconnect_delay_secs: 5
 });
-const current = await sessions.status(managerClientId, { name: "worker" });
-await sessions.restart(managerClientId, {
+if (created.isError) return {inventory, created};
+const currentReply = await call(managerClientId, "ssmcp.session.status", {name:"worker"});
+if (currentReply.isError) return currentReply;
+const restarted = await call(managerClientId, "ssmcp.session.restart", {
   name: "worker",
-  expected_generation: current.generation
+  expected_generation: currentReply.structuredContent.generation
 });
-const replacement = await sessions.status(managerClientId, { name: "worker" });
-await sessions.close(managerClientId, {
+if (restarted.isError) return restarted;
+const replacement = await call(managerClientId, "ssmcp.session.status", {name:"worker"});
+if (replacement.isError) return replacement;
+return await call(managerClientId, "ssmcp.session.close", {
   name: "worker",
-  expected_generation: replacement.generation
+  expected_generation: replacement.structuredContent.generation
 });
 ```
 
-`inventory.sessions` 是会话数组。便捷入口依赖新版服务端的 code_mode 脚本；原生形式保持为 `call(managerClientId, "ssmcp.session.create", {...})`，返回 MCP structuredContent。工具名为 `ssmcp.session.list/status/create/restart/close`。公开 MCP 提供 `list`、`code_mode`、`collab`、`await` 和 `messages`；会话管理通过 `code_mode` 调用，`collab` 用于在线客户端内的成员通信。[Agent 协作](agent-collaboration.md)
+`inventory.sessions` 是结构化正文中的会话数组。当前 SDK 已删除 `sessions` 便捷入口；使用精确原生名称调用，检查 `isError` 后读取 `structuredContent`。工具名为 `ssmcp.session.list/status/create/restart/close`。公开 MCP 提供 `list`、`code_mode`、`collab`、`await` 和 `messages`；会话管理通过 `code_mode` 调用，`collab` 用于在线客户端内的成员通信。[Agent 协作](agent-collaboration.md)
 
 新建会话继承管理连接的连接目标、配置和账号允许列表；原子参数不允许替换身份或传入任意启动 argv。cwd 必须是该连接工作区内的现有目录，拒绝父级遍历和越界符号链接。子会话默认不继承 session-control 授权。带 `expected_generation` 的操作在串行管理事务中检查实例是否变化，避免基于旧状态关闭新进程。
 

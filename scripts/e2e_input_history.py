@@ -26,8 +26,8 @@ import time
 import zlib
 
 from e2e_account_relay import wait_for
-from e2e_composer import Composer, DOWN, ENTER, ESC, HOME, RIGHT
-from e2e_client_ui import column, empty_composer_ready, view
+from e2e_composer import Composer, DOWN, ENTER, ESC, HOME, RIGHT, conversation_question_banner
+from e2e_client_ui import column, empty_composer_ready, prompt_text, view
 from e2e_dashboard import sha256, text
 
 
@@ -434,7 +434,7 @@ class InputHistory(Composer):
                    and receipt["kind"] == "progress" and duplicate["duplicate"]
                    and duplicate["message_id"] == receipt["message_id"],
                    "an idempotent native reply preserves its ID and is recorded in memory only once")
-        events_before = self.live_events(limit=1)
+        events_before = self.live_events()
         self.check(sum(event.get("value", {}).get("message_id") == receipt["message_id"]
                        for event in events_before["events"]) == 1,
                    "the ui.message receipt identifies exactly one live event")
@@ -468,7 +468,9 @@ class InputHistory(Composer):
         self.check(state["target"] == target and {item["id"] for item in after["queue"]} == before
                    and self.record(after, message_id=pending["id"])["status"] == "queued",
                    "handoff preserves the recipient and pending delivery without submitting another request")
-        added = self.live_events(limit=1, cursor=events_before["next_cursor"],
+        # A one-event page produces observer events faster than it scans the
+        # aggregate journal. Keep the same scope, frozen end, and gap checks.
+        added = self.live_events(limit=8, cursor=events_before["next_cursor"],
                                  generation=events_before["generation"])
         self.check(self.observe("ssmcp.ui.questions", {"id": question["id"]})["question"]["state"] == "pending"
                    and not any(event.get("value", {}).get("message_id") == receipt["message_id"]
@@ -573,9 +575,13 @@ class InputHistory(Composer):
         self.agents(front)
         self.highlight_recipient(front)
         front.send(ENTER)
-        front.until(empty_composer_ready, "the next-caller composer before restart")
+        front.until(lambda shot: empty_composer_ready(shot) or (
+            shot["alternate_screen"] and conversation_question_banner(shot)
+            and "Message the agent" in prompt_text(shot) and not shot["hide_cursor"]
+        ), "the next-caller composer before restart")
         selected = self.ui("/display/conversation")
-        self.check(selected["target"] == "next" and selected["native_recipient"] is None,
+        self.check(selected["target"] == "next" and selected["native_recipient"] is None
+                   and selected["canvas"]["columns"][selected["canvas"]["active"]] == "conversation",
                    "the restart fixture selects the exact next-caller route")
         pending_text = "LIVE_PENDING_MUST_NOT_REDELIVER 界"
         pending = self.submit_source(front, pending_text)
@@ -731,9 +737,16 @@ class InputHistory(Composer):
                    "input setup selects the exact local member rather than a native namesake")
         first_reference, first_source = self.reference_scenarios(front, member)
         retained = self.record(self.queue(), message_id=first_reference["id"])
-        self.check(retained["status"] == "delivered" and retained["text"] == first_source
-                   and retained["target"] == member["agent_id"],
-                   "the delivered queue record retains the original reference text and exact recipient")
+        original, separator, encoded = retained["text"].partition(REFERENCE_BEGIN)
+        self.check(retained["status"] == "delivered"
+                   and retained["target"] == member["agent_id"]
+                   and retained["delivery"]["agent_id"] == member["agent_id"],
+                   "the queue records delivery to the exact authenticated recipient")
+        self.check(original == first_source and separator and encoded.endswith(REFERENCE_END),
+                   "the delivered queue record retains the original reference text and its expansion")
+        references = json.loads(encoded[:-len(REFERENCE_END)])
+        self.check(references["source_sha256"] == hashlib.sha256(first_source.encode()).hexdigest(),
+                   "the expanded queue record is bound to the original reference text")
         self.paste_scenario(front, member)
         self.attachment_handoff_scenario(front, member)
         self.copy_and_help(front)

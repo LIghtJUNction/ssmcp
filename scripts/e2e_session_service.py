@@ -121,8 +121,10 @@ class Sessions(Harness):
         self.create("manager", control=True)
         manager = self.connected("manager")
         self.authenticate_manager(manager)
-        listed = self.public_call("code_mode", {"code": f"return await sessions.list({json.dumps(self.client_id)});"})["result"]
-        self.check(isinstance(listed.get("sessions"), list) and any(item["name"] == "manager" for item in listed["sessions"]), "sessions helper dispatches through authenticated MCP")
+        reply = self.public_call("code_mode", {"code": 'return await call(%s, "ssmcp.session.list", {});' % json.dumps(self.client_id)})["result"]
+        self.check(reply.get("isError") is not True, "native session inventory returns no MCP error")
+        listed = reply["structuredContent"]
+        self.check(isinstance(listed.get("sessions"), list) and any(item["name"] == "manager" for item in listed["sessions"]), "session inventory dispatches through authenticated call")
 
         discovery = self.public_call("code_mode", {"code": """
 const found = [];

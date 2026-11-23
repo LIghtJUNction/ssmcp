@@ -303,7 +303,7 @@ async function run(frame) {
     __ssmcp_clients: clients,
   }), { name: 'ssmcp-code-mode', codeGeneration: { strings: false, wasm: false } });
   new vm.Script(bootstrap, { filename: 'ssmcp-api.js' }).runInContext(context, { timeout: 2000 });
-  if (!Array.isArray(frame.tool_sources) || !frame.tool_sources.length || frame.tool_sources.length > 17) {
+  if (!Array.isArray(frame.tool_sources) || !frame.tool_sources.length || frame.tool_sources.length > 19) {
     throw new Error('code_mode requires an explicit selected tool-source bundle');
   }
   let sourceBytes = 0;

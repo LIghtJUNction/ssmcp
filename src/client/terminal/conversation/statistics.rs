@@ -56,6 +56,225 @@ fn linked_manager_thread(linked: &Value) -> Option<&str> {
         .filter(|id| !id.is_empty())
 }
 
+// Summaries are display labels only. Exact identities remain in diagnostics.
+fn compact(text: &str, width: u16) -> String {
+    let safe = panel::safe_text(text);
+    let width = usize::from(width);
+    if safe.width() <= width {
+        return safe;
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut result = String::new();
+    let mut used = 0;
+    for character in safe.chars() {
+        let cells = character.width().unwrap_or(0);
+        if used + cells > width - 1 {
+            break;
+        }
+        result.push(character);
+        used += cells;
+    }
+    result.push('…');
+    result
+}
+
+fn summary_rows(
+    data: &Value,
+    audit: &Value,
+    workers: Option<&crate::worker::Snapshot>,
+    linked: Option<&Value>,
+    context: &str,
+    width: u16,
+) -> Vec<(String, PanelTone)> {
+    let mut output = Vec::new();
+    let mut push = |text: &str, tone| output.push((compact(text, width), tone));
+    let connected = data["connected"] == true;
+    let bound = connected && data["session_id"].as_str().is_some_and(|id| !id.is_empty());
+    let members: Vec<_> = data["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|_| bound)
+        .filter(|agent| agent["agent_id"].as_str().is_some_and(|id| !id.is_empty()))
+        .collect();
+    let pending = items(data, "queue")
+        .iter()
+        .filter(|entry| Receipt::from_entry(entry).pending())
+        .count();
+    let calls = ToolCounts::from_audit(audit);
+    push("Statistics", PanelTone::Heading);
+    push(&format!("Session{context}"), PanelTone::Normal);
+    push(
+        if data["preview"] == true {
+            "Preview · sample data"
+        } else if bound {
+            "Connected"
+        } else if connected {
+            "Connected · identity unavailable"
+        } else {
+            "Disconnected"
+        },
+        PanelTone::Muted,
+    );
+    push(
+        &format!("Members {} · Pending input {pending}", members.len()),
+        PanelTone::Normal,
+    );
+    push("", PanelTone::Normal);
+    push("Tool calls · retained in this window", PanelTone::Muted);
+    push(
+        &format!(
+            "Running {} · Succeeded {} · Failed {}",
+            calls.running, calls.succeeded, calls.failed
+        ),
+        PanelTone::Normal,
+    );
+    if calls.unknown > 0 {
+        push(
+            &format!("Outcome unknown {}", calls.unknown),
+            PanelTone::Muted,
+        );
+    }
+    push("", PanelTone::Normal);
+    if let Some(workers) = workers {
+        push("Worker pool", PanelTone::Heading);
+        push(
+            &format!(
+                "Workers {} · Working {} · Idle {}",
+                workers.total, workers.working, workers.idle
+            ),
+            PanelTone::Normal,
+        );
+        push(
+            &format!(
+                "Queued {} · Offline {} · Retiring {}",
+                workers.queued, workers.offline, workers.retiring
+            ),
+            PanelTone::Muted,
+        );
+        if workers.closed {
+            push("Closed", PanelTone::Muted);
+        } else if workers.stopping {
+            push("Task intake stopped", PanelTone::Muted);
+        }
+        for slot in workers.slots.iter().take(6) {
+            let task = if slot.task_id.is_some() {
+                slot.task_summary
+                    .as_deref()
+                    .unwrap_or("Task summary unavailable")
+            } else {
+                "No active task"
+            };
+            push(
+                &format!("#{:02} · {} · {task}", slot.slot + 1, slot.state),
+                PanelTone::Normal,
+            );
+        }
+        if workers.slots.len() > 6 {
+            push(
+                &format!(
+                    "{} more stations · Enter diagnostics",
+                    workers.slots.len() - 6
+                ),
+                PanelTone::Muted,
+            );
+        }
+    } else if let Some(linked) = linked.filter(|pool| pool["connected"] == true) {
+        push("Linked worker pool", PanelTone::Heading);
+        let count = |key: &str| {
+            linked[key]
+                .as_u64()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "unavailable".into())
+        };
+        push(
+            &format!(
+                "Workers {} · Working {} · Idle {}",
+                count("total"),
+                count("working"),
+                count("idle")
+            ),
+            PanelTone::Normal,
+        );
+        push(
+            &format!(
+                "Queued {} · Offline {} · Retiring {}",
+                count("queued"),
+                count("offline"),
+                count("retiring")
+            ),
+            PanelTone::Muted,
+        );
+        if linked["closed"] == true {
+            push("Closed", PanelTone::Muted);
+        } else if linked["stopping"] == true {
+            push("Task intake stopped", PanelTone::Muted);
+        }
+        let slots = linked["slots"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+        for slot in slots.iter().take(6) {
+            let number = slot["slot"]
+                .as_u64()
+                .and_then(|n| n.checked_add(1))
+                .map(|n| format!("#{n:02}"))
+                .unwrap_or_else(|| "Worker".into());
+            let state = slot["state"].as_str().unwrap_or("unavailable");
+            let task = if slot["task_id"].as_str().is_some() {
+                slot["task_summary"]
+                    .as_str()
+                    .unwrap_or("Task summary unavailable")
+            } else {
+                "No active task"
+            };
+            push(&format!("{number} · {state} · {task}"), PanelTone::Normal);
+        }
+        if slots.len() > 6 {
+            push(
+                &format!("{} more stations · Enter diagnostics", slots.len() - 6),
+                PanelTone::Muted,
+            );
+        }
+    } else {
+        push("No worker pool connected", PanelTone::Muted);
+    }
+    if !members.is_empty() {
+        push("", PanelTone::Normal);
+        push("Members", PanelTone::Heading);
+        for (index, member) in members.iter().take(8).enumerate() {
+            let id = member["agent_id"].as_str().unwrap_or("");
+            let name = member["name"]
+                .as_str()
+                .filter(|name| !name.is_empty() && *name != id)
+                .unwrap_or("Unnamed");
+            let role = member["role"]
+                .as_str()
+                .filter(|role| !role.is_empty())
+                .unwrap_or("role unavailable");
+            let status = member["status"]
+                .as_str()
+                .filter(|status| !status.is_empty())
+                .unwrap_or("status unavailable");
+            push(
+                &format!("{}. {name} · {role} · {status}", index + 1),
+                PanelTone::Normal,
+            );
+        }
+        if members.len() > 8 {
+            push(
+                &format!("{} more members · Enter diagnostics", members.len() - 8),
+                PanelTone::Muted,
+            );
+        }
+    }
+    push("", PanelTone::Normal);
+    push(
+        "Enter diagnostics · full IDs and pool details",
+        PanelTone::Muted,
+    );
+    output
+}
+
 fn rows(
     data: &Value,
     audit: &Value,
@@ -78,7 +297,8 @@ fn rows(
         .and_then(|workers| workers.manager.as_ref())
         .filter(|manager| Some(manager.client_id.as_str()) == client_id)
         .map(|manager| manager.thread_id.as_str());
-    push("Statistics", PanelTone::Heading);
+    push("Diagnostics", PanelTone::Heading);
+    push("Enter summary · Esc back", PanelTone::Muted);
     if data["preview"] == true {
         push("Preview · sample data", PanelTone::Muted);
     }
@@ -141,6 +361,8 @@ fn rows(
     );
     push("", PanelTone::Normal);
     if let Some(workers) = workers {
+        push("Pool generation", PanelTone::Muted);
+        push(&workers.generation, PanelTone::Normal);
         push(
             &format!(
                 "Workers {} · Idle {} · Working {} · Offline {}",
@@ -171,6 +393,11 @@ fn rows(
         push("Worker session ID", PanelTone::Muted);
         push(
             linked["client_id"].as_str().unwrap_or("unavailable"),
+            PanelTone::Normal,
+        );
+        push("Pool generation", PanelTone::Muted);
+        push(
+            linked["generation"].as_str().unwrap_or("unavailable"),
             PanelTone::Normal,
         );
         let count = |key: &str| {
@@ -225,10 +452,57 @@ fn rows(
     } else {
         push("No worker pool connected", PanelTone::Muted);
     }
-    let local_operations = workers.and_then(|workers| serde_json::to_value(workers).ok());
-    if let Some(pool) = local_operations.as_ref().or(linked) {
-        for (text, tone) in worker_operations::full(pool) {
-            push(&text, tone);
+    if let Some(workers) = workers {
+        for slot in &workers.slots {
+            push("", PanelTone::Normal);
+            push(
+                &format!(
+                    "#{:02} · {} · epoch {}",
+                    slot.slot + 1,
+                    slot.state,
+                    slot.epoch
+                ),
+                PanelTone::Heading,
+            );
+            push("Task ID", PanelTone::Muted);
+            push(slot.task_id.as_deref().unwrap_or("none"), PanelTone::Normal);
+            if slot.task_id.is_some() {
+                push(
+                    slot.task_summary
+                        .as_deref()
+                        .unwrap_or("Task summary unavailable"),
+                    PanelTone::Normal,
+                );
+            }
+        }
+    } else if let Some(linked) = linked {
+        for slot in linked["slots"].as_array().into_iter().flatten() {
+            let number = slot["slot"]
+                .as_u64()
+                .and_then(|n| n.checked_add(1))
+                .map(|n| format!("#{n:02}"))
+                .unwrap_or_else(|| "Worker".into());
+            push("", PanelTone::Normal);
+            push(
+                &format!(
+                    "{number} · {}",
+                    slot["state"].as_str().unwrap_or("unavailable")
+                ),
+                PanelTone::Heading,
+            );
+            push("Task ID", PanelTone::Muted);
+            push(
+                slot["task_id"].as_str().unwrap_or("none"),
+                PanelTone::Normal,
+            );
+            if slot["task_id"].as_str().is_some() {
+                push(
+                    slot["task_summary"]
+                        .as_str()
+                        .unwrap_or("Task summary unavailable"),
+                    PanelTone::Normal,
+                );
+            }
         }
     }
     output
@@ -351,19 +625,46 @@ impl State {
         let linked = (!self.preview && workers.is_none())
             .then(crate::client::worker_window::linked_monitor_snapshot)
             .flatten();
-        let mut rows = rows(
-            data,
-            &self.audit.snapshot(),
-            workers.as_ref(),
-            linked.as_ref(),
-            std::process::id(),
-            self.geometry.left,
-        );
-        let commands = (!self.preview)
-            .then(crate::client::interface::harness::local_runtime)
-            .and_then(Result::ok)
-            .map(|(runtime, _)| runtime.local_command_stats());
-        rows.extend(command_rows(commands, self.geometry.left));
+        #[cfg(test)]
+        let data = self
+            .conversation
+            .statistics_fixture
+            .as_ref()
+            .unwrap_or(data);
+        let linked = linked.as_ref();
+        #[cfg(test)]
+        let linked = self
+            .conversation
+            .worker_activity_fixture
+            .as_ref()
+            .or(linked);
+        let audit = self.audit.snapshot();
+        let mut rows = if self.conversation.detail {
+            rows(
+                data,
+                &audit,
+                workers.as_ref(),
+                linked,
+                std::process::id(),
+                self.geometry.left,
+            )
+        } else {
+            summary_rows(
+                data,
+                &audit,
+                workers.as_ref(),
+                linked,
+                &self.context_label,
+                self.geometry.left,
+            )
+        };
+        if !self.conversation.detail {
+            let commands = (!self.preview)
+                .then(crate::client::interface::harness::local_runtime)
+                .and_then(Result::ok)
+                .map(|(runtime, _)| runtime.local_command_stats());
+            rows.extend(command_rows(commands, self.geometry.left));
+        }
         let maximum = rows.len().saturating_sub(usize::from(height));
         self.conversation.detail_scroll = self.conversation.detail_scroll.min(maximum);
         rows.into_iter()
@@ -377,6 +678,211 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn density_fixture() -> (Value, Value) {
+        let session = "c".repeat(64);
+        let pool = "w".repeat(64);
+        let manager = format!("agent_{}", "a".repeat(32));
+        let data = json!({
+            "connected":true,"preview":true,"session_id":session,
+            "agents":[
+                {"agent_id":manager,"name":"Coordinator","role":"coordinator","status":"active"},
+                {"agent_id":format!("agent_{}", "b".repeat(32)),"name":"Layout reviewer","role":"worker","status":"working"}
+            ],"queue":[]
+        });
+        let linked = json!({
+            "connected":true,"client_id":pool,"generation":"g".repeat(32),"process_id":42,
+            "manager":{"client_id":pool,"thread_id":manager},
+            "total":3,"desired_total":3,"registered_workers":3,"retiring":0,
+            "working":2,"idle":1,"offline":0,"queued":1,
+            "slots":[
+                {"slot":0,"state":"working","epoch":1,"task_id":"exact-layout-task","task_summary":"Review narrow terminal layout"},
+                {"slot":1,"state":"idle","epoch":1,"task_id":null,"task_summary":"Old finished task should stay out of the current summary"},
+                {"slot":2,"state":"working","epoch":2,"task_id":"exact-parser-task","task_summary":"Verify slash command arguments"}
+            ]
+        });
+        (data, linked)
+    }
+
+    #[test]
+    fn statistics_summary_shows_names_states_and_tasks_without_diagnostic_ids() {
+        let (data, linked) = density_fixture();
+        let summary = summary_rows(&data, &json!({}), None, Some(&linked), " · ssmcp", 100);
+        let text = summary
+            .iter()
+            .map(|(line, _)| line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for expected in [
+            "Session · ssmcp",
+            "Members 2",
+            "Coordinator · coordinator · active",
+            "Layout reviewer · worker · working",
+            "#01 · working · Review narrow terminal layout",
+            "#02 · idle · No active task",
+            "Enter diagnostics",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        for hidden in [
+            data["session_id"].as_str().unwrap(),
+            linked["client_id"].as_str().unwrap(),
+            linked["generation"].as_str().unwrap(),
+            data["agents"][0]["agent_id"].as_str().unwrap(),
+            "exact-layout-task",
+            "Old finished task",
+        ] {
+            assert!(!text.contains(hidden), "{hidden}\n{text}");
+        }
+        for width in [1, 4, 20, 48, 60] {
+            let lines = summary_rows(
+                &data,
+                &json!({}),
+                None,
+                Some(&linked),
+                " · 中文工作区",
+                width,
+            );
+            assert!(
+                lines
+                    .iter()
+                    .all(|(text, _)| text.width() <= usize::from(width))
+            );
+        }
+    }
+
+    #[test]
+    fn statistics_diagnostics_keep_exact_ids_and_never_show_a_disconnected_link() {
+        let (mut data, mut linked) = density_fixture();
+        for width in [20, 48, 100] {
+            let text = rows(&data, &json!({}), None, Some(&linked), 42, width)
+                .into_iter()
+                .map(|(line, _)| line)
+                .collect::<Vec<_>>()
+                .join("");
+            for exact in [
+                data["session_id"].as_str().unwrap(),
+                linked["client_id"].as_str().unwrap(),
+                linked["generation"].as_str().unwrap(),
+                data["agents"][0]["agent_id"].as_str().unwrap(),
+                "exact-layout-task",
+                "exact-parser-task",
+            ] {
+                assert!(text.contains(exact), "diagnostics lost {exact}");
+            }
+        }
+        data["connected"] = json!(false);
+        linked["connected"] = json!(false);
+        let text = summary_rows(&data, &json!({}), None, Some(&linked), "", 100)
+            .into_iter()
+            .map(|(line, _)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Members 0"));
+        assert!(text.contains("No worker pool connected"));
+        assert!(!text.contains("Coordinator") && !text.contains("Review narrow"));
+        let missing = json!({"connected":true,"client_id":"pool"});
+        let text = summary_rows(&data, &json!({}), None, Some(&missing), "", 120)
+            .into_iter()
+            .map(|(line, _)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Workers unavailable"));
+        assert!(!text.contains("Workers 0"));
+    }
+
+    #[test]
+    fn statistics_enter_and_escape_toggle_diagnostics_without_changing_the_draft() {
+        let mut state = crate::client::terminal::preview_state(32, 120, &Ui::default());
+        let (data, linked) = density_fixture();
+        state.conversation.statistics_fixture = Some(data);
+        state.conversation.worker_activity_fixture = Some(linked);
+        state.conversation.target = Some("chosen-recipient".into());
+        state.conversation.composer.set_text("保留 this draft");
+        state.conversation.composer.home();
+        let before = state.chat_saved_draft();
+        state.chat_change_view(View::Statistics);
+        assert!(!state.conversation.detail);
+        state.chat_character('\r');
+        assert!(state.conversation.detail);
+        let data = state.chat_data();
+        let text = state.chat_statistics_rows(&data, 100).join("\n");
+        assert!(text.contains("Diagnostics"));
+        assert!(text.contains(&"c".repeat(64)));
+        state.chat_character('\r');
+        assert!(!state.conversation.detail);
+        assert_eq!(state.chat_saved_draft(), before);
+        state.chat_character('\r');
+        state.conversation.detail_scroll = 1000;
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.view, View::Statistics);
+        assert!(!state.conversation.detail);
+        assert_eq!(state.conversation.detail_scroll, 0);
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.view, View::Activity);
+        assert_eq!(state.chat_saved_draft(), before);
+        assert!(state.conversation.submitting.is_none());
+        assert!(state.actions.is_empty());
+    }
+
+    #[test]
+    #[ignore = "writes production statistics frames to SSMCP_WORKER_SNAPSHOT_DIR"]
+    fn statistics_density_visual_fixture() {
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("SSMCP_WORKER_SNAPSHOT_DIR").expect("snapshot output directory"),
+        );
+        std::fs::create_dir_all(&directory).unwrap();
+        for (rows, cols, name) in [(32, 132, "statistics-wide"), (26, 60, "statistics-narrow")] {
+            let mut state = crate::client::terminal::preview_state(rows, cols, &Ui::default());
+            let (data, linked) = density_fixture();
+            state.conversation.statistics_fixture = Some(data);
+            state.conversation.worker_activity_fixture = Some(linked);
+            state.ui.color = true;
+            state.set_context("/tmp/ssmcp", Some("UI review"));
+            state.chat_change_view(View::Statistics);
+            for suffix in ["", "-detail", "-detail-end"] {
+                if suffix == "-detail" {
+                    state.chat_character('\r');
+                }
+                if suffix == "-detail-end" {
+                    state.chat_key(Key::End);
+                }
+                let frame = state.chat_frame(Instant::now());
+                std::fs::write(
+                    directory.join(format!("{name}{suffix}.ansi")),
+                    frame.diff(None),
+                )
+                .unwrap();
+                std::fs::write(
+                    directory.join(format!("{name}{suffix}.json")),
+                    serde_json::to_vec(&json!({"rows":rows,"cols":cols})).unwrap(),
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn statistics_keeps_pool_counts_without_coordination_history() {
+        let linked = json!({
+            "connected":true, "client_id":"linked-pool", "process_id":42, "total":3, "idle":1,
+            "working":2,"offline":0,"desired_total":3,"registered_workers":3,
+            "retiring":0,"queued":1,"generation":"pool",
+            "manager_operations":[{"operation_id":1,"kind":"claim","state":"assigned",
+                "task_id":"task-belongs-in-conversation","summary":"Inspect the layout",
+                "slot":2,"epoch":7}]
+        });
+        let text = rows(&json!({}), &json!({}), None, Some(&linked), 42, 100)
+            .into_iter()
+            .map(|row| row.0)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Workers 3 · Idle 1 · Working 2"));
+        assert!(text.contains("Queued tasks 1"));
+        assert!(!text.contains("Coordinator activity"));
+        assert!(!text.contains("task-belongs-in-conversation"));
+        assert!(!text.contains("Inspect the layout"));
+    }
 
     fn worker(client: &str, thread: &str) -> crate::worker::Snapshot {
         crate::worker::Snapshot {
@@ -422,7 +928,8 @@ mod tests {
         assert!(text.contains("Workers 2 · Idle 1 · Working 1 · Offline 0"));
         assert!(text.contains("Manager thread ID\nagent_verified_manager"));
         assert!(text.contains("Registered session threads\nhighlighted-recipient"));
-        assert!(!text.contains("pool-not-a-session-id"));
+        assert!(text.contains("Pool generation\npool-not-a-session-id"));
+        assert!(!text.contains("Session process ID\npool-not-a-session-id"));
         for data in [
             json!({"connected":false,"session_id":client}),
             json!({"connected":true,"session_id":"another-client"}),

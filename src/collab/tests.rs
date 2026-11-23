@@ -749,7 +749,7 @@ async fn invalid_inputs_do_not_create_members_or_enqueue_messages() {
     for arguments in [
         json!({"limit":0}),
         json!({"limit":65}),
-        json!({"wait_ms":30_001}),
+        json!({"wait_ms":crate::wire::MAX_OBSERVATION_WAIT_MS + 1}),
         json!({"after":1}),
     ] {
         assert!(

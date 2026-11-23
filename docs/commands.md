@@ -37,8 +37,15 @@ ssmcp -i --server https://relay.example --client SESSION_ID
 
 ~~~sh
 ssmcp tool --help
+ssmcp tools paths
+ssmcp tools init project --git
+ssmcp tools init global --git
+ssmcp tools enable project
+ssmcp tools disable project
 ssmcp tools status
 ~~~
+
+`init` 离线创建并登记项目或全局工具来源；`--git` 创建独立本地仓库。已有目录保留，用 `enable` 登记审阅过的源码，`disable` 停用并保留文件。省略来源时使用 `project`。`paths` 只计算位置；`status` 读取实际来源并可能初始化官方种子仓库。[可信 RC、加载优先级与 Dreaming 维护流程](tool-repositories.md)
 
 连接目标使用 `ssmcp username@server` 或 `ssmcp --server https://server`。无法识别的裸命令会报告命令或目标格式错误，并给出这些入口；显式 `--ssh` 仍给出旧连接方式已移除的迁移说明。
 
@@ -178,7 +185,7 @@ return await exec.start(clientId, {
 return await exec.wait(clientId, jobId, { wait_ms: 5000 });
 ```
 
-`wait_ms` 控制这次请求等待多久，取值 0–60000 毫秒，默认 5000。到期仍在运行时，返回 `running: true` 和 `wait_timed_out: true`，任务继续执行。不要为了继续等待重新启动命令；再次调用 `wait` 或 `read`。
+`exec.wait` 的 `wait_ms` 控制这次观察，取值 0–55000 毫秒，helper 默认 1000。原生上限以所选客户端实际 schema 为准。到期仍在运行时，返回 `running: true` 和 `wait_timed_out: true`，任务继续执行。不要为了继续等待重新启动命令；再次调用 `wait` 或 `read`。
 
 `timeout_ms` 是进程的执行期限，取值 0–900000 毫秒。默认 0 表示没有执行期限；非零期限到达后停止受管理的进程树，并记录 `timed_out`。服务端 `code_mode` 的 `timeout_ms` 是另一层编排预算：编排结束不代表此前启动的本机进程结束。为单次长等待预留足够的编排预算，或者使用多次短等待。
 
@@ -220,7 +227,7 @@ return await exec.parallel(clientId, [
 
 结果按输入顺序排列，每项为 `{status:"fulfilled", value:...}` 或 `{status:"rejected", reason:...}`。一个启动失败不会抹掉其他项的结果。fulfilled 表示助手正常返回，是否构建成功仍需检查 `value.running` 和 `value.exit_code`。
 
-一次最多提交 32 项，`concurrency` 为 1–8，默认 4，限制这次调用实际运行中的命令数。单次等待到期时，任务继续占用名额，直到明确结束才启动下一项。客户端另有 32 个同时运行任务的硬上限，容量不足时在创建进程前报错。
+一次最多提交 32 项，`concurrency` 为 1–8，默认 4，限制本批实际运行的命令数。批次选项 `wait_ms` 默认 1000 ms、上限 55000 ms，是所有项共享的观察窗口；单项等待还受其自身 `wait_ms` 限制。每个已启动任务最多等待一次并立即读取一次，运行中任务保留名额并随结果返回，不在 JS 内循环等到完成。窗口耗尽或所有名额被运行中、未知任务占用时，剩余项为 `not_started:true`。客户端独立的容量限制仍按实际 schema 执行。
 
 命令选项类型、`wait_ms` 或 `max_bytes` 在本地校验失败时，该项返回 `rejected` 和 `not_started:true`，同一 worker 继续执行后续合法项；这类错误不会发送原生命令。
 
@@ -230,17 +237,17 @@ return await exec.parallel(clientId, [
 
 ## RTK 的异步错误处理
 
-`rtk.start` 和 `rtk.run` 始终返回 Promise，本地参数错误也可由 `.catch(...)` 或混合的 `Promise.allSettled(...)` 处理。例如，下面的第二项用空命令演示本地参数错误：
+通过通用 `exec.start/run` 执行 RTK，并把 `"rtk"` 写入 argv。它们返回 Promise，本地参数错误可由 `.catch(...)` 或 `Promise.allSettled(...)` 处理。下面第二项用 `null` 演示本地对象校验错误；原生命令校验仍由客户端负责：
 
 ```javascript
 const results = await Promise.allSettled([
-  rtk.run(clientId, { command: ["git", "status", "--short"] }),
-  rtk.start(clientId, { command: [] }),
+  exec.run(clientId, { command: ["rtk", "git", "status", "--short"] }),
+  exec.start(clientId, null),
   exec.run(clientId, { command: ["git", "diff", "--stat"] })
 ]);
 return results.map(result => result.status === "fulfilled"
   ? result
-  : { status: result.status, error: result.reason.message });
+  : { status: result.status, error: result.reason.message, job_id: result.reason.job_id ?? null });
 ```
 
 每项分别返回 fulfilled 或 rejected；已经启动的合法项保留独立结果，不因其他项的参数错误而丢失。助手不自动重试命令。
@@ -280,7 +287,7 @@ return await outputs.read(clientId, {
 
 ## 重载与故障恢复
 
-安装新版二进制后，在 `code_mode` 中调用 `return await reload(clientId)`。客户端确认重载请求、等待服务端确认，再停止后台任务、原生工具和转发，重新启动原入口。调用 `list` 找到新的客户端 ID，再用一个无副作用的状态请求确认连接可用。[重载协议](session-control.md)
+安装新版二进制后，在 `code_mode` 中调用 `return await call(clientId, "ssmcp.client.reload", {})`。客户端确认重载请求、等待服务端确认，再停止后台任务、原生工具和转发，重新启动原入口。调用 `list` 找到新的客户端 ID，再用一个无副作用的状态请求确认连接可用。[重载协议](session-control.md)
 
 命令启动成功后若等待或读取失败，助手错误信息会携带已启动的任务 ID。先用 `exec.status`、`exec.read` 或 `exec.list` 检查已有工作，再决定是否重试。`exec.*` 管理命令进程，`jobs.*` 管理 rsync 同步；两类任务使用不同接口。
 

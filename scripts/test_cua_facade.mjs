@@ -58,7 +58,7 @@ function run(code, reply) {
 const result = record => record.frames.find(frame => frame.type === 'result')?.value;
 const error = record => record.frames.find(frame => frame.type === 'error')?.message;
 
-test('computer routes only Zuse lifecycle operations through the native bridge', async () => {
+test('exact native calls route Zuse lifecycle operations through the bridge', async () => {
   const commands = [
     ['version', {}],
     ['download', {}],
@@ -69,7 +69,7 @@ test('computer routes only Zuse lifecycle operations through the native bridge',
   const record = await run(`
     const answers = [];
     for (const [name, args] of ${JSON.stringify(commands)}) {
-      answers.push(await computer[name]('one', args));
+      answers.push(await call('one', 'ssmcp.computer.' + name, args));
     }
     return answers;
   `, request => ({
@@ -95,28 +95,19 @@ test('computer routes only Zuse lifecycle operations through the native bridge',
   });
 });
 
-test('retired embedded control facades are absent and cannot dispatch a fallback', async () => {
+test('removed helper exports and retired controls cannot dispatch a fallback', async () => {
   const record = await run(`
     return {
-      methods: Object.keys(computer).sort(),
-      frozen: Object.isFrozen(computer),
-      browser: typeof browser,
-      cua: typeof cua,
-      omarchy: typeof omarchy,
-      actions: ['status', 'toggle', 'desktop_start', 'screenshot', 'click', 'key', 'type']
-        .map(name => typeof computer[name]),
+      removed: [typeof sync, typeof native, typeof capabilities, typeof computer,
+        typeof reload, typeof sessions, typeof rtk, typeof terminal],
+      browser: typeof browser, cua: typeof cua, omarchy: typeof omarchy,
       hidden: typeof __ssmcp_host
     };
-  `, () => { throw new Error('retired facades must not send a native request'); });
+  `, () => { throw new Error('removed helpers must not send a native request'); });
   assert.equal(record.exitCode, 0, record.stderr || error(record));
   assert.deepEqual(result(record), {
-    methods: ['download', 'install', 'uninstall', 'version'],
-    frozen: true,
-    browser: 'undefined',
-    cua: 'undefined',
-    omarchy: 'undefined',
-    actions: Array(7).fill('undefined'),
-    hidden: 'undefined',
+    removed:Array(8).fill('undefined'),
+    browser:'undefined',cua:'undefined',omarchy:'undefined',hidden:'undefined',
   });
   assert.deepEqual(record.requests, []);
 });
@@ -156,9 +147,9 @@ test('native errors remain observable and failed images are not displayed', asyn
   assert(!record.frames.some(frame => frame.type === 'image'));
 });
 
-test('computer preserves transport failures without starting any fallback', async () => {
+test('native Zuse calls preserve transport failures without starting any fallback', async () => {
   const record = await run(`
-    try { await computer.install('one', {download_id:'download-fixture'}); }
+    try { await call('one', 'ssmcp.computer.install', {download_id:'download-fixture'}); }
     catch (error) { return {reason:error.message}; }
     throw new Error('expected a native transport error');
   `, () => ({ ok: false, error: 'client disconnected' }));

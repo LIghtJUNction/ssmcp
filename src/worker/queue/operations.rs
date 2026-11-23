@@ -1,6 +1,6 @@
 //! Actual manager calls, separate from capacity changes and task authority.
 use super::{Actor, Queue, SlotState, State, TaskStatus, TaskView, require_manager, telemetry};
-use crate::worker::{ManagerOperationView, ManagerTargetView};
+use crate::worker::{MAX_OBSERVATION_WAIT_MS, ManagerOperationView, ManagerTargetView};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -88,8 +88,13 @@ impl WaitRequest {
         {
             return Err("worker wait_for generation is invalid".into());
         }
-        if self.wait_ms > 5000 || self.conditions.is_empty() || self.conditions.len() > 128 {
-            return Err("worker wait_for requires 1..128 conditions and wait_ms 0..5000".into());
+        if self.wait_ms > MAX_OBSERVATION_WAIT_MS
+            || self.conditions.is_empty()
+            || self.conditions.len() > 128
+        {
+            return Err(format!(
+                "worker wait_for requires 1..128 conditions and wait_ms 0..{MAX_OBSERVATION_WAIT_MS}"
+            ));
         }
         let unique: BTreeSet<_> = self.conditions.iter().collect();
         if unique.len() != self.conditions.len() {

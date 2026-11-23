@@ -21,7 +21,7 @@
 }
 ```
 
-`waitFor(clientId, options)` 使用相同的 `targets`、`mode`、`timeout_ms` 和 `wait_id`。外层 `code_mode` 超时应留出返回余量；不要将 helper 的存在解释为旧 relay 已获得新接口。公共工具和 helper 都来自已安装的 relay；`exec` 目标还依赖客户端对应的原生工具，缺失时明确返回 `unavailable`。[公共目录](../src/http.rs) · [能力说明](../src/runtime/capabilities.rs)
+`waitFor(clientId, options)` 使用相同的目标和身份字段，但只做一次 1000 ms 的短观察；默认 `timeout_ms:1000`，显式 `window_ms` 也只能是 1000。长等待使用公共 `await`，避免占用 JavaScript 名额。外层 `code_mode` 超时仍须留出返回余量；不要将 helper 的存在解释为旧 relay 已获得新接口。公共工具和 helper 都来自已安装的 relay；`exec` 目标还依赖客户端对应的原生工具，缺失时明确返回 `unavailable`。[公共目录](../src/http.rs) · [能力说明](../src/runtime/capabilities.rs)
 
 ## 可等待的对象
 
@@ -29,25 +29,30 @@
 |---|---|---|
 | `exec` | `job_id` | 原生执行已结束；结果保留真实 `exit_code`、`exit_signal`、取消标记和输出游标，非零退出码不会被改成成功。 |
 | `job` | `id` | 现有 relay 同步任务已离开启动、运行或收尾状态；原始 `state`、错误和清理信息仍返回。 |
+| `worker_result` | `task_id` | 原任务处于 `completed`、`failed` 或 `cancelled`，保留真实输出与错误；`unknown` 返回 `unknown_target`，应先核对原任务效果。 |
+| `worker_assignment` | `request_id` | 原生等待返回 `assigned`、`already_completed`、`retiring`、`released` 或 `not_accepting`；按实际状态处理，原样保留分派的完整 `claim`。 |
 | `agent_status` | `agent_id`、`statuses` | 该已登记成员当前声明的状态匹配指定字符串；状态由该 agent 自己报告，不证明用户验收。 |
 | `agent_messages` | 可选 `after`、`limit` | 当前绑定成员的收件箱已有消息；返回原始来源与游标，不自动确认消息。 |
+| `event` | `subscription_id`，可选 `limit` | 订阅已有匹配事件，返回原始来源与游标；处理后显式调用 `events.ack`。保留缺口和权限错误按原状态处理。 |
 | `user_input` | 可选 `reason`、`notify` | 已收到可供最终响应交付的用户输入；真正交付以外层 `user_wait.status: "received"` 和匹配的 `user_messages` 为准。 |
 
 执行任务复用原生通知，relay 任务复用任务通知，协作状态与消息复用成员 watch。等待期间每秒仅复核没有对应通知的 OAuth 与成员权限；对象状态不靠循环短查询推进。[执行等待](../src/backend/shell.rs) · [relay 任务](../src/bridge.rs) · [协作通知](../src/collab.rs)
 
-最多同时选择 8 个不同目标。`any` 在一个目标就绪后返回，尚未完成观察的条目标为 `pending`；`all` 要求全部目标就绪。已观察到的权限、未知目标或其他类型错误会立即结束本次等待，并保留每个目标的位置与错误。`user_input` 必须单独等待，避免把用户交付混进多个对象的竞争中。[参数与聚合规则](../src/http/await_tool.rs)
+最多同时选择 8 个不同目标。`any` 在一个目标就绪后返回，尚未完成观察的条目标为 `pending`；`all` 要求全部目标就绪。已观察到的权限、未知目标或其他类型错误会立即结束本次等待，并保留每个目标的位置与错误。`user_input` 和 `worker_assignment` 必须各自单独等待；`worker_result` 和 `event` 可以参与多目标观察。[参数与聚合规则](../src/http/await_tool.rs)
 
 ## 超时、恢复与取消
 
-`timeout_ms` 为 1000–25000，默认 20000。首次等待创建随机的服务端 `wait_id`；它标识观察记录，不是执行任务 ID。超时或资源忙时，带返回的 `wait_id` 恢复，不再传 `targets` 或 `mode`：
+公共 `await` 的 `timeout_ms` 为 1000–55000 毫秒，默认 20000；显式 `window_ms` 也接受 1000–55000 毫秒。JavaScript `waitFor` 的单次观察保持 1000 毫秒，长等待使用公共入口。[实际参数范围](../src/http/await_tool.rs) · [共享观察上限](../src/wire.rs)
+
+首次等待创建服务端 `wait_id`，用于恢复同一次观察。超时或资源忙时沿用该 ID，不再传 `targets` 或 `mode`。以下示例恢复一次 JavaScript 短观察：
 
 ```javascript
-return await waitFor(clientId, {wait_id: previous.wait_id, timeout_ms: 20000});
+return await waitFor(clientId, {wait_id: previous.wait_id, timeout_ms: 1000});
 ```
 
-首次传入 `window_ms: 20000` 可启用短窗口协议。窗口到期返回 `pending`，同一个 `wait_id` 可继续观察原目标。作业、任务分派和待交付输入继续由各自的有界队列持有，窗口结束不取消它们。普通结果就绪时返回 `cursor: 1`。处理前用 `after: 0` 重读同一结果，应用成功后用 `after: 1` 确认。确认可重复，逾期游标与超出 128 KiB 的结果会显式报错。协作收件箱仍应单独执行 `collab.ack`。用户输入仍由外层交付事务提交。短窗口的外层回执返回 `await_delivery_cursor`，公共 `await` 的响应也返回 `cursor: 1`。响应丢失时用 `after: 0` 重读已交付的同一消息及版本，按 `message_id` 和 `revision` 去重，处理后用 `after: 1` 确认。重读不会领取下一条输入。Code Mode 的 `waitFor` 重试将已交付消息放在目标数据的 `replayed_user_messages`；首次交付仍以外层 `user_messages` 为准。
+公共 `await` 首次传入 `window_ms: 20000` 可启用窗口协议；在 JS 的 `waitFor` 中使用 `window_ms: 1000`。窗口到期返回 `pending`，同一个 `wait_id` 可继续观察原目标。作业、任务分派和待交付输入继续由各自的有界队列持有，窗口结束不取消它们。普通结果就绪时返回 `cursor: 1`。处理前用 `after: 0` 重读同一结果，应用成功后用 `after: 1` 确认。确认可重复，逾期游标与超出 128 KiB 的结果会显式报错。协作收件箱仍应单独执行 `collab.ack`。用户输入仍由外层交付事务提交。短窗口的外层回执返回 `await_delivery_cursor`，公共 `await` 的响应也返回 `cursor: 1`。响应丢失时用 `after: 0` 重读已交付的同一消息及版本，按 `message_id` 和 `revision` 去重，处理后用 `after: 1` 确认。重读不会领取下一条输入。Code Mode 的 `waitFor` 重试将已交付消息放在目标数据的 `replayed_user_messages`；首次交付仍以外层 `user_messages` 为准。
 
-`worker_assignment` 接受该 worker 的 `request_id`，同一个观察持续使用该 ID。 `worker_result` 接受原任务的 `task_id`，并保留原生结果的终态。两个目标都要求独立等待，并继续由原生 worker 权限检查约束。
+两个 worker 目标首次等待时都必须提供 `window_ms`，并沿用原生 worker 的权限检查。`worker_assignment` 接受该 worker 的 `request_id`，必须单独等待；等待与重试保留同一 ID，完成原 `claim` 后再用新 ID 领取下一项任务。`worker_result` 接受提交者拥有的原任务 `task_id`，可以与其他观察目标组合。结果为 `unknown` 时先核对已发生的效果，禁止自动重新执行。[worker 生命周期](workers.md#remote-claim-and-completion)
 
 只有原账户、原客户端连接和原成员能恢复或取消该记录。调用者不能指定一个新 `wait_id` 来创建记录，也不能取消同账户下其他成员的等待。每条记录最多同时有一个活动等待；普通观察每成员最多四个、每连接最多三十二个，不占用户输入的等待名额。只有 `user_input` 沿用客户端已有的四个用户等待名额，记录数量与保留时间也有明确上限。空闲记录最多保留五分钟，已结束记录在容量压力下可提前回收。已预留用户输入但尚待最终交付的记录会受保护，直到真实交付结算或外层调用取消；最终结果仍是超时或资源忙时，原 ID 继续可恢复。`ssmcp://limits` 返回当前数值。[记录和容量](../src/http/await_tool.rs)
 

@@ -20,6 +20,9 @@ pub(crate) use pool::Pool;
 pub(crate) use pool::TaskContext;
 pub(crate) use remote::CommandLog;
 
+/// Maximum time spent observing one worker request; queued work outlives the call.
+pub(crate) const MAX_OBSERVATION_WAIT_MS: u64 = crate::wire::MAX_OBSERVATION_WAIT_MS;
+
 use serde::Serialize;
 use std::sync::{Mutex, OnceLock};
 

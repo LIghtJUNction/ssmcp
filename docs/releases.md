@@ -62,7 +62,7 @@ irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 
 & ([scriptblock]::Create((irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1))) -Version vX.Y.Z -InstallDir "$env:LOCALAPPDATA\ssmcp\bin" -NoModifyPath
 ```
 
-两套脚本也接受 `SSMCP_VERSION` 和 `SSMCP_INSTALL_DIR` 环境变量。Windows 更新时会先保留旧可执行文件；系统暂时不允许删除正在使用的旧程序时，脚本会显示保留位置。安装器更新磁盘上的程序，不改变已经连接的进程；在原入口更新后可按[会话控制](session-control.md)调用 `reload(clientId)`，或退出并重启。连接通过 HTTPS/WSS；账号与设备授权步骤见[首次连接](onboarding.md)。
+两套脚本也接受 `SSMCP_VERSION` 和 `SSMCP_INSTALL_DIR` 环境变量。Windows 更新时会先保留旧可执行文件；系统暂时不允许删除正在使用的旧程序时，脚本会显示保留位置。安装器更新磁盘上的程序，不改变已经连接的进程；在原入口更新后可按[会话控制](session-control.md)调用 `call(clientId, "ssmcp.client.reload", {})`，或退出并重启。连接通过 HTTPS/WSS；账号与设备授权步骤见[首次连接](onboarding.md)。
 
 ## Windows：PowerShell 安装预编译客户端
 

@@ -72,10 +72,10 @@ impl Connection {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Preview => "preview · sample data",
-            Self::Disconnected => "disconnected",
-            Self::QueueUpdate => "server update required for queue",
-            Self::Connected => "connected",
+            Self::Preview => super::locale::text("connection.preview"),
+            Self::Disconnected => super::locale::text("connection.offline"),
+            Self::QueueUpdate => super::locale::text("connection.queue_update"),
+            Self::Connected => super::locale::text("connection.online"),
         }
     }
 

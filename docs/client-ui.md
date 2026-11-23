@@ -45,7 +45,7 @@ ssmcp ui preview --static --rows 36 --cols 120 --theme light
 
 默认目标为 `Next caller`，即下一次实际访问本客户端、且仍有授权的 `code_mode` 调用方。使用 `/sessions` 或 `/message` 显式打开收件人选择器，再选择确切成员。初始对话列左侧是统计页，查看统计不会更改消息目标。要求只附加到符合目标的响应，不广播给全部成员。
 
-自定义界面刷新 `ssmcp.ui.*`、查询工具目录，或调用 `capabilities(clientId)` 与 `resources.forClient(clientId)` 的 `list/templates/read` 时，默认不领取这些要求，避免界面轮询抢先消耗队列。后两者对应 `ssmcp.client.capabilities` 和 `ssmcp.resources.list/templates/read` 四个观测原语，原生调用仍记录源码审计。显式通过 `collab.bind` 绑定成员的编排仍可领取符合目标的要求。
+自定义界面刷新 `ssmcp.ui.*`、查询工具目录，或调用 `call(clientId, "ssmcp.client.capabilities", {})` 与 `resources.forClient(clientId)` 的 `list/templates/read` 时，默认不领取这些要求，避免界面轮询抢先消耗队列。后两者对应 `ssmcp.client.capabilities` 和 `ssmcp.resources.list/templates/read` 四个观测原语，原生调用仍记录源码审计。显式通过 `collab.bind` 绑定成员的编排仍可领取符合目标的要求。
 
 `/queue` 打开队列。内容区中 ↑/↓ 选择记录，Enter 请求取回尚未交付的要求，I 只读查看详情，Esc 返回列表，Delete 取消可撤回的待交付项。取回获得服务器确认后，文字进入输入框，修改后按 Enter 重新提交同一条要求。输入框与内容区通过 Tab 或 Shift-Tab 切换。
 
@@ -726,7 +726,7 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.queue", {
 
 | 前端需要的数据或动作 | 接口 |
 | --- | --- |
-| 客户端版本、能力与资源目录 | `capabilities(clientId)`、`resources.forClient(clientId)` |
+| 客户端版本、能力与资源目录 | `call(clientId, "ssmcp.client.capabilities", {})`、`resources.forClient(clientId)` |
 | 配置、面板活动与当前显示状态 | `ssmcp.ui.get` |
 | 调整和筛选内置界面 | `ssmcp.ui.set`、`ssmcp.ui.action`、`ssmcp.ui.filter` |
 | 用户要求、草稿和交付队列 | `ssmcp.ui.queue` |
