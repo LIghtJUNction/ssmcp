@@ -17,11 +17,27 @@ class ProtocolTests(unittest.TestCase):
             name: {"id": letter * 32, "bytes": 1200, "sha256": letter * 64}
             for name, letter in (("target", "a"), ("fresh", "b"), ("active", "c"))
         }
+        self.metadata = {
+            name: {**descriptor, "expires_at_unix": 100 + index}
+            for index, (name, descriptor) in enumerate(self.expected.items())
+        }
+
+    def armed(self):
+        return {
+            "schema_version": 1, "event": "armed", "binding": self.binding,
+            **self.expected, "deferred": True, "aging_point": expiry.AGING_POINT,
+            "original_expires_at_unix": {
+                name: item["expires_at_unix"] for name, item in self.metadata.items()
+            },
+            "old_expires_at_unix": self.metadata["target"]["expires_at_unix"],
+        }
 
     def witness(self):
         return {
             "schema_version": 1, "event": "timer_removed", "binding": self.binding,
             "origin": "timer", "removed": self.expected["target"],
+            "aging_point": expiry.AGING_POINT, "old_expires_at_unix": 100,
+            "timer_now_unix": 75, "new_expires_at_unix": 74,
             "controls": {
                 "fresh": {"id": self.expected["fresh"]["id"], "present": True, "active": False},
                 "active": {"id": self.expected["active"]["id"], "present": True, "active": True},
@@ -77,8 +93,8 @@ class ProtocolTests(unittest.TestCase):
             peer.close()
 
     def test_timer_witness_rejects_read_origin_other_store_and_wrong_controls(self):
-        self.assertEqual(expiry._timer_removed(self.witness(), self.binding, self.expected),
-                         self.witness())
+        self.assertEqual(expiry._timer_removed(
+            self.witness(), self.binding, self.expected, self.armed()), self.witness())
         corruptions = [
             lambda value: value.update(origin="read"),
             lambda value: value["binding"].update(store_id="ffff"),
@@ -97,7 +113,7 @@ class ProtocolTests(unittest.TestCase):
             corrupt(value)
             with self.subTest(value=value):
                 with self.assertRaises(AssertionError):
-                    expiry._timer_removed(value, self.binding, self.expected)
+                    expiry._timer_removed(value, self.binding, self.expected, self.armed())
 
     def test_ready_and_age_require_original_pid_policy_and_target_timestamp(self):
         ready = {"schema_version": 1, "event": "ready", "binding": self.binding,
@@ -109,14 +125,79 @@ class ProtocolTests(unittest.TestCase):
         altered["retention_secs"] = 1
         with self.assertRaises(AssertionError):
             expiry._binding(altered, 123)
-        armed = {"schema_version": 1, "event": "armed", "binding": self.binding,
-                 **self.expected, "old_expires_at_unix": 100, "new_expires_at_unix": 0}
-        self.assertEqual(expiry._armed(armed, self.binding, self.expected,
-                                      {"expires_at_unix": 100}), armed)
+        armed = self.armed()
+        self.assertEqual(expiry._armed(armed, self.binding, self.expected, self.metadata), armed)
         changed = copy.deepcopy(armed)
         changed["old_expires_at_unix"] = 101
         with self.assertRaises(AssertionError):
-            expiry._armed(changed, self.binding, self.expected, {"expires_at_unix": 100})
+            expiry._armed(changed, self.binding, self.expected, self.metadata)
+
+
+    def test_arm_requires_deferred_aging_and_unchanged_original_expiries(self):
+        self.assertEqual(expiry._armed(
+            self.armed(), self.binding, self.expected, self.metadata), self.armed())
+        corruptions = [
+            lambda value: value.pop("deferred"),
+            lambda value: value.update(deferred=False),
+            lambda value: value.update(deferred=1),
+            lambda value: value.update(aging_point="arm"),
+            lambda value: value.update(new_expires_at_unix=0),
+            lambda value: value.update(original_expires_at_unix={"target": 100}),
+            lambda value: value["original_expires_at_unix"].update(extra=103),
+            lambda value: value["original_expires_at_unix"].update(target=99),
+            lambda value: value["original_expires_at_unix"].update(fresh=100),
+            lambda value: value["original_expires_at_unix"].update(active=101),
+            lambda value: value["original_expires_at_unix"].update(active=True),
+            lambda value: value["original_expires_at_unix"].update(active=102.0),
+            lambda value: value["original_expires_at_unix"].update(active=1 << 64),
+        ]
+        for corrupt in corruptions:
+            value = copy.deepcopy(self.armed())
+            corrupt(value)
+            with self.subTest(value=value):
+                with self.assertRaises(AssertionError):
+                    expiry._armed(value, self.binding, self.expected, self.metadata)
+
+    def test_timer_witness_requires_matching_aging_point_and_exact_u64_timestamp(self):
+        zero = self.witness()
+        zero.update(timer_now_unix=0, new_expires_at_unix=0)
+        self.assertEqual(expiry._timer_removed(
+            zero, self.binding, self.expected, self.armed()), zero)
+        corruptions = [
+            lambda value: value.pop("aging_point"),
+            lambda value: value.update(aging_point="arm"),
+            lambda value: value.update(old_expires_at_unix=101),
+            lambda value: value.update(old_expires_at_unix=True),
+            lambda value: value.pop("timer_now_unix"),
+            lambda value: value.update(timer_now_unix=True),
+            lambda value: value.update(timer_now_unix=-1),
+            lambda value: value.update(timer_now_unix=75.0),
+            lambda value: value.update(timer_now_unix=1 << 64),
+            lambda value: value.pop("new_expires_at_unix"),
+            lambda value: value.update(new_expires_at_unix=True),
+            lambda value: value.update(new_expires_at_unix=-1),
+            lambda value: value.update(new_expires_at_unix=73),
+            lambda value: value.update(new_expires_at_unix=75),
+            lambda value: value.update(new_expires_at_unix=74.0),
+            lambda value: value.update(new_expires_at_unix=1 << 64),
+            lambda value: value.update(timer_now_unix=101, new_expires_at_unix=100),
+        ]
+        for corrupt in corruptions:
+            value = copy.deepcopy(self.witness())
+            corrupt(value)
+            with self.subTest(value=value):
+                with self.assertRaises(AssertionError):
+                    expiry._timer_removed(value, self.binding, self.expected, self.armed())
+
+    def test_arm_rejects_changed_artifact_descriptors_before_timer(self):
+        for name in self.expected:
+            for field, replacement in (("id", "d" * 32), ("bytes", 1199),
+                                       ("sha256", "d" * 64)):
+                with self.subTest(name=name, field=field):
+                    value = copy.deepcopy(self.armed())
+                    value[name][field] = replacement
+                    with self.assertRaises(AssertionError):
+                        expiry._armed(value, self.binding, self.expected, self.metadata)
 
 
 class OutcomeTests(unittest.TestCase):

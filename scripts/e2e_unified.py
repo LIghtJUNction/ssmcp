@@ -730,8 +730,8 @@ class Unified(SessionFeatures):
         self.save("cancel-timeout.json", {"cancel": result, "cancel_pids": cancel_ids, "timeout": final, "timeout_pids": timeout_ids})
 
     def expiration(self):
-        # The helper owns one real client, ages its exact completed RAM entry,
-        # and waits for the unmodified timer before any public output query.
+        # The helper binds three real outputs and defers the target's timestamp
+        # change until the unchanged timer holds the store lock before its sweep.
         try:
             outcome = verify_output_expiry(self, timeout_seconds=75.0)
         except OutputExpiryFailure as error:
@@ -747,9 +747,14 @@ class Unified(SessionFeatures):
                 or outcome.get("schema") != "ssmcp.public-output-expiry.v1"
                 or outcome.get("status") != "passed"
                 or outcome.get("clock_mode") != "fixture_timestamp"
+                or outcome.get("aging_point") != "timer_sweep_before_expiry"
+                or outcome.get("aging_deferred") is not True
+                or outcome.get("armed", {}).get("deferred") is not True
+                or outcome.get("armed", {}).get("aging_point") != "timer_sweep_before_expiry"
                 or outcome.get("public_path_expiry_observed") is not True
                 or outcome.get("automatic_cleanup_observed") is not True
                 or outcome.get("timer_witness", {}).get("origin") != "timer"
+                or outcome.get("timer_witness", {}).get("aging_point") != "timer_sweep_before_expiry"
                 or outcome.get("cleanup", {}).get("stopped_acknowledged") is not True
                 or outcome.get("cleanup", {}).get("reaped") is not True
                 or outcome.get("cleanup", {}).get("forced") is not False

@@ -2,8 +2,9 @@
 
 The caller owns the prepared AccountGateway, OAuth grant and overall alarm.
 This helper never runs Cargo, starts a model, extends that alarm, or exposes a
-production clock override.  Only the private ignored Rust fixture may age the
-completed target.  Its timer witness must arrive before another output access.
+production clock override.  The private ignored Rust fixture arms the exact
+completed target without aging it; the real timer ages and removes it under
+the same store lock.  Its witness must arrive before another output access.
 """
 
 import hashlib
@@ -30,6 +31,7 @@ SCENARIO_SECONDS = 75.0
 CLEANUP_SECONDS = 20.0
 RETENTION_SECONDS = 900
 SWEEP_SECONDS = 60
+AGING_POINT = "timer_sweep_before_expiry"
 PAYLOADS = {"target": b"T\n" * 600, "fresh": b"F\n" * 600, "active": b"A\n" * 600}
 OUTPUT_PROGRAM = """\
 import json, os, pathlib, sys, time
@@ -234,21 +236,38 @@ def _descriptor(metadata):
     return {field: metadata[field] for field in ("id", "bytes", "sha256")}
 
 
-def _armed(value, binding, expected, target_metadata):
+def _armed(value, binding, expected, metadata):
     _event(value, "armed", binding)
-    _check(all(value.get(name) == metadata for name, metadata in expected.items()),
-           "age acknowledgement changed a selected output descriptor")
-    old, new = value.get("old_expires_at_unix"), value.get("new_expires_at_unix")
-    _check(type(old) is int and old == target_metadata["expires_at_unix"]
-           and type(new) is int and 0 <= new < old and new <= time.time(),
-           "age acknowledgement did not expire only the completed target timestamp")
+    _check(all(value.get(name) == descriptor for name, descriptor in expected.items()),
+           "arm acknowledgement changed a selected output descriptor")
+    _check(value.get("deferred") is True and value.get("aging_point") == AGING_POINT
+           and "new_expires_at_unix" not in value,
+           "arm acknowledgement did not defer aging until the real timer sweep")
+    original = value.get("original_expires_at_unix")
+    actual = {name: item["expires_at_unix"] for name, item in metadata.items()}
+    _check(isinstance(original, dict) and set(original) == set(expected)
+           and all(type(stamp) is int and 0 <= stamp <= (1 << 64) - 1
+                   for stamp in original.values())
+           and original == actual,
+           "arm acknowledgement changed an original output expiry timestamp")
+    old = value.get("old_expires_at_unix")
+    _check(type(old) is int and old == original["target"],
+           "arm acknowledgement changed the completed target's original expiry")
     return value
 
 
-def _timer_removed(value, binding, expected):
+def _timer_removed(value, binding, expected, armed):
     _event(value, "timer_removed", binding)
     _check(value.get("origin") == "timer" and value.get("removed") == expected["target"],
            "output removal was not an exact timer-origin target witness")
+    old, new, now = (value.get(name) for name in
+                     ("old_expires_at_unix", "new_expires_at_unix", "timer_now_unix"))
+    _check(value.get("aging_point") == AGING_POINT
+           and all(type(stamp) is int and 0 <= stamp <= (1 << 64) - 1
+                   for stamp in (old, new, now))
+           and old == armed["original_expires_at_unix"]["target"]
+           and new == max(now - 1, 0) and new < old,
+           "timer witness did not age the exact target at the real sweep timestamp")
     controls = value.get("controls")
     _check(isinstance(controls, dict)
            and controls.get("fresh") == {
@@ -649,6 +668,7 @@ def run(harness, timeout_seconds=SCENARIO_SECONDS):
     deadline = Deadline(timeout_seconds)
     evidence = {"schema": "ssmcp.public-output-expiry.v1", "status": "running",
                 "clock_mode": "fixture_timestamp", "retention_secs": RETENTION_SECONDS,
+                "aging_point": AGING_POINT, "aging_deferred": True,
                 "sweep_interval_secs": SWEEP_SECONDS, "scenario_timeout_seconds": timeout_seconds,
                 "transport": "owned loopback HTTP/WS account, OAuth, public code_mode and native output",
                 "natural_900_seconds_observed": False, "tls_handshake_exercised": False,
@@ -742,15 +762,15 @@ def run(harness, timeout_seconds=SCENARIO_SECONDS):
         expected = {name: _descriptor(value) for name, value in metadata.items()}
         harness.check(True, "public exec and output reads verify completed target, fresh and real active captures")
 
-        age_started = time.monotonic()
+        arm_started = time.monotonic()
         control.send({"schema_version": 1, "op": "age", "binding": binding, **expected}, deadline)
-        armed = _armed(control.receive(deadline), binding, expected, metadata["target"])
+        armed = _armed(control.receive(deadline), binding, expected, metadata)
         evidence["armed"] = armed
-        # No public call, output allocation, read/stat or manual cleanup belongs
-        # between age and this passive, exact timer-origin witness.
-        witness = _timer_removed(control.receive(deadline), binding, expected)
+        # The helper makes no public output access or cleanup call while
+        # passively waiting. Only the real timer ages the armed target.
+        witness = _timer_removed(control.receive(deadline), binding, expected, armed)
         evidence["timer_witness"] = witness
-        evidence["observed_after_age_seconds"] = round(time.monotonic() - age_started, 3)
+        evidence["observed_after_arm_seconds"] = round(time.monotonic() - arm_started, 3)
         evidence["automatic_cleanup_observed"] = True
         _check(process.poll() is None, "fixture disconnected before public expiry verification")
         unavailable = _request(harness, deadline, lambda: harness.output_unavailable(

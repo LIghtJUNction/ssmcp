@@ -839,12 +839,23 @@ pub(crate) mod expiry_fixture {
         pub active: Artifact,
     }
 
+    const AGING_POINT: &str = "timer_sweep_before_expiry";
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+    pub(crate) struct OriginalExpiries {
+        pub target: u64,
+        pub fresh: u64,
+        pub active: u64,
+    }
+
     #[derive(Debug, Serialize)]
     pub(crate) struct Armed {
         #[serde(flatten)]
         pub artifacts: Artifacts,
+        pub deferred: bool,
+        pub aging_point: &'static str,
+        pub original_expires_at_unix: OriginalExpiries,
         pub old_expires_at_unix: u64,
-        pub new_expires_at_unix: u64,
     }
 
     #[derive(Debug, Serialize)]
@@ -863,12 +874,17 @@ pub(crate) mod expiry_fixture {
     #[derive(Debug, Serialize)]
     pub(crate) struct Witness {
         pub origin: &'static str,
+        pub aging_point: &'static str,
+        pub old_expires_at_unix: u64,
+        pub new_expires_at_unix: u64,
+        pub timer_now_unix: u64,
         pub removed: Artifact,
         pub controls: Controls,
     }
 
     pub(super) struct Probe {
         artifacts: Artifacts,
+        original_expires_at_unix: OriginalExpiries,
         sender: oneshot::Sender<Result<Witness, String>>,
     }
 
@@ -910,7 +926,26 @@ pub(crate) mod expiry_fixture {
         Ok(entry)
     }
 
-    /// Age only a previously completed exact ID. This never invokes expiry.
+    fn check_original_entry(
+        state: &State,
+        expected: &Artifact,
+        active: bool,
+        expires_at_unix: u64,
+    ) -> Result<(), String> {
+        if check_entry(state, expected, active)?
+            .metadata
+            .expires_at_unix
+            != expires_at_unix
+        {
+            return Err(format!(
+                "exact fixture artifact {} expiry changed after arming",
+                expected.id
+            ));
+        }
+        Ok(())
+    }
+
+    /// Freeze exact completed target and control identities without aging or expiry.
     pub(crate) fn arm(
         store: &OutputStore,
         artifacts: Artifacts,
@@ -931,54 +966,88 @@ pub(crate) mod expiry_fixture {
         if store.policy.retention_secs != RETENTION_SECS {
             return Err("public expiry fixture requires the unchanged retention policy".into());
         }
-        let current = now();
-        let old_expires_at_unix = check_entry(&state, &artifacts.target, false)?
-            .metadata
-            .expires_at_unix;
-        if old_expires_at_unix <= current
-            || check_entry(&state, &artifacts.fresh, false)?
+        let original_expires_at_unix = OriginalExpiries {
+            target: check_entry(&state, &artifacts.target, false)?
                 .metadata
-                .expires_at_unix
-                <= current
-        {
-            return Err("completed fixture outputs must be fresh before aging".into());
+                .expires_at_unix,
+            fresh: check_entry(&state, &artifacts.fresh, false)?
+                .metadata
+                .expires_at_unix,
+            active: check_entry(&state, &artifacts.active, true)?
+                .metadata
+                .expires_at_unix,
+        };
+        let current = now();
+        if original_expires_at_unix.target <= current || original_expires_at_unix.fresh <= current {
+            return Err("completed fixture outputs must be fresh before arming".into());
         }
-        check_entry(&state, &artifacts.active, true)?;
-        let new_expires_at_unix = current.saturating_sub(1);
         let (sender, receiver) = oneshot::channel();
-        // All identity checks finish before this one test-only metadata mutation.
-        state
-            .entries
-            .get_mut(&artifacts.target.id)
-            .expect("validated under this lock")
-            .metadata
-            .expires_at_unix = new_expires_at_unix;
         state.expiry_probe_used = true;
         state.expiry_probe = Some(Probe {
             artifacts: artifacts.clone(),
+            original_expires_at_unix,
             sender,
         });
         Ok((
             Armed {
                 artifacts,
-                old_expires_at_unix,
-                new_expires_at_unix,
+                deferred: true,
+                aging_point: AGING_POINT,
+                original_expires_at_unix,
+                old_expires_at_unix: original_expires_at_unix.target,
             },
             receiver,
         ))
     }
 
     /// Called only by the existing real 60-second sleeper (and direct unit tests).
-    /// The callback receives the Entry actually removed by the shared algorithm.
+    /// Revalidation, deferred aging and actual removal share one store lock and time.
     pub(super) fn timer_sweep(store: &OutputStore) {
         let mut state = store
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let current = now();
+        let new_expires_at_unix = current.saturating_sub(1);
         let probe = state.expiry_probe.take();
+        let prepared = probe.as_ref().map(|probe| -> Result<(), String> {
+            for (artifact, active, expires_at_unix) in [
+                (
+                    &probe.artifacts.target,
+                    false,
+                    probe.original_expires_at_unix.target,
+                ),
+                (
+                    &probe.artifacts.fresh,
+                    false,
+                    probe.original_expires_at_unix.fresh,
+                ),
+                (
+                    &probe.artifacts.active,
+                    true,
+                    probe.original_expires_at_unix.active,
+                ),
+            ] {
+                check_original_entry(&state, artifact, active, expires_at_unix)?;
+            }
+            if probe.original_expires_at_unix.target <= current
+                || probe.original_expires_at_unix.fresh <= current
+            {
+                return Err("completed fixture outputs are no longer fresh at timer sweep".into());
+            }
+            // Late audit/capture writes before this lock see the original fresh
+            // target. Only this real timer tick performs the test-only mutation.
+            state
+                .entries
+                .get_mut(&probe.artifacts.target.id)
+                .expect("all three originals validated under this lock")
+                .metadata
+                .expires_at_unix = new_expires_at_unix;
+            Ok(())
+        });
         let expected = probe.as_ref().map(|probe| &probe.artifacts.target);
         let mut removed = None;
+        // Preserve ordinary cleanup even when observation preflight fails.
         state.expire_observed(current, |id, entry| {
             if expected.is_some_and(|expected| expected.id == id) {
                 removed = Some(
@@ -994,20 +1063,43 @@ pub(crate) mod expiry_fixture {
                 );
             }
         });
-        let outcome = probe.map(|probe| {
+        let outcome = probe.zip(prepared).map(|(probe, prepared)| {
             let result = (|| {
-                let removed = removed.ok_or("timer did not remove the exact aged artifact; another path may have removed it")??;
+                prepared?;
+                let removed = removed.ok_or("timer did not remove the exact aged artifact")??;
                 if removed != probe.artifacts.target {
                     return Err("timer removed bytes differ from the armed artifact".into());
                 }
-                check_entry(&state, &probe.artifacts.fresh, false)?;
-                check_entry(&state, &probe.artifacts.active, true)?;
+                check_original_entry(
+                    &state,
+                    &probe.artifacts.fresh,
+                    false,
+                    probe.original_expires_at_unix.fresh,
+                )?;
+                check_original_entry(
+                    &state,
+                    &probe.artifacts.active,
+                    true,
+                    probe.original_expires_at_unix.active,
+                )?;
                 Ok(Witness {
                     origin: "timer",
+                    aging_point: AGING_POINT,
+                    old_expires_at_unix: probe.original_expires_at_unix.target,
+                    new_expires_at_unix,
+                    timer_now_unix: current,
                     removed,
                     controls: Controls {
-                        fresh: Control { id: probe.artifacts.fresh.id, present: true, active: false },
-                        active: Control { id: probe.artifacts.active.id, present: true, active: true },
+                        fresh: Control {
+                            id: probe.artifacts.fresh.id,
+                            present: true,
+                            active: false,
+                        },
+                        active: Control {
+                            id: probe.artifacts.active.id,
+                            present: true,
+                            active: true,
+                        },
                     },
                 })
             })();
@@ -1069,13 +1161,38 @@ pub(crate) mod expiry_fixture {
                     active_capture,
                 }
             }
+
+            fn expiries(&self) -> OriginalExpiries {
+                let state = self.store.state.lock().unwrap();
+                OriginalExpiries {
+                    target: state.entries[&self.artifacts.target.id]
+                        .metadata
+                        .expires_at_unix,
+                    fresh: state.entries[&self.artifacts.fresh.id]
+                        .metadata
+                        .expires_at_unix,
+                    active: state.entries[&self.artifacts.active.id]
+                        .metadata
+                        .expires_at_unix,
+                }
+            }
         }
 
         #[test]
         fn timer_witness_binds_actual_removed_bytes_and_preserved_controls() {
             let fixture = Fixture::new();
+            let originals = fixture.expiries();
             let (armed, mut received) = arm(&fixture.store, fixture.artifacts.clone()).unwrap();
-            assert!(armed.old_expires_at_unix > armed.new_expires_at_unix);
+            assert_eq!(fixture.expiries(), originals);
+            let encoded = serde_json::to_value(&armed).unwrap();
+            assert_eq!(encoded["deferred"], true);
+            assert_eq!(encoded["aging_point"], "timer_sweep_before_expiry");
+            assert_eq!(
+                encoded["original_expires_at_unix"],
+                json!({"target":originals.target,"fresh":originals.fresh,"active":originals.active})
+            );
+            assert_eq!(encoded["old_expires_at_unix"], originals.target);
+            assert!(encoded.get("new_expires_at_unix").is_none());
             assert!(matches!(
                 received.try_recv(),
                 Err(oneshot::error::TryRecvError::Empty)
@@ -1083,6 +1200,13 @@ pub(crate) mod expiry_fixture {
             timer_sweep(&fixture.store);
             let witness = received.try_recv().unwrap().unwrap();
             assert_eq!(witness.origin, "timer");
+            assert_eq!(witness.aging_point, "timer_sweep_before_expiry");
+            assert_eq!(witness.old_expires_at_unix, originals.target);
+            assert_eq!(
+                witness.new_expires_at_unix,
+                witness.timer_now_unix.saturating_sub(1)
+            );
+            assert!(witness.new_expires_at_unix < witness.old_expires_at_unix);
             assert_eq!(witness.removed, fixture.artifacts.target);
             assert_eq!(witness.controls.fresh.id, fixture.artifacts.fresh.id);
             assert!(!witness.controls.fresh.active);
@@ -1091,8 +1215,61 @@ pub(crate) mod expiry_fixture {
             let state = fixture.store.state.lock().unwrap();
             assert!(!state.entries.contains_key(&fixture.artifacts.target.id));
             assert_eq!(
+                state.entries[&fixture.artifacts.fresh.id]
+                    .metadata
+                    .expires_at_unix,
+                originals.fresh
+            );
+            assert_eq!(
+                state.entries[&fixture.artifacts.active.id]
+                    .metadata
+                    .expires_at_unix,
+                originals.active
+            );
+            assert_eq!(
                 state.used_bytes,
                 fixture.artifacts.fresh.bytes + fixture.artifacts.active.bytes
+            );
+        }
+
+        #[test]
+        fn late_audit_push_keeps_the_armed_target_fresh_until_the_timer() {
+            let fixture = Fixture::new();
+            let audit =
+                crate::backend::events::EventLog::with_output("audit", fixture.store.clone());
+            let originals = fixture.expiries();
+            let (_, mut received) = arm(&fixture.store, fixture.artifacts.clone()).unwrap();
+            let before = fixture.store.state.lock().unwrap().used_bytes;
+            // These real EventLog writes append to a Capture in this same store,
+            // exercising room()/expiry for late completion and summary records.
+            audit.push_control(json!({
+                "type":"ssmcp.code_mode","phase":"finished",
+                "run_id":"expiry-fixture-run","success":true,"status":"completed","duration_ms":54
+            }));
+            audit.push_control(json!({
+                "type":"ssmcp.code_mode","phase":"call-finished","scope":"native-call",
+                "run_id":"expiry-fixture-run","request_id":1,"tool":"ssmcp.ui.tool_summary",
+                "success":true,"duration_ms":1
+            }));
+            assert!(fixture.store.state.lock().unwrap().used_bytes > before);
+            assert_eq!(fixture.expiries(), originals);
+            assert!(matches!(
+                received.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            timer_sweep(&fixture.store);
+            let witness = received.try_recv().unwrap().unwrap();
+            assert_eq!(witness.removed, fixture.artifacts.target);
+            assert_eq!(witness.old_expires_at_unix, originals.target);
+            assert_eq!(witness.aging_point, "timer_sweep_before_expiry");
+            assert!(
+                !fixture
+                    .store
+                    .state
+                    .lock()
+                    .unwrap()
+                    .entries
+                    .contains_key(&fixture.artifacts.target.id)
             );
         }
 
@@ -1101,6 +1278,18 @@ pub(crate) mod expiry_fixture {
             for read in [false, true] {
                 let fixture = Fixture::new();
                 let (_, mut received) = arm(&fixture.store, fixture.artifacts.clone()).unwrap();
+                // Arrange an independently expired entry, then let the real
+                // non-timer path delete it. The observer must never rebase it.
+                fixture
+                    .store
+                    .state
+                    .lock()
+                    .unwrap()
+                    .entries
+                    .get_mut(&fixture.artifacts.target.id)
+                    .unwrap()
+                    .metadata
+                    .expires_at_unix = now().saturating_sub(1);
                 if read {
                     assert!(
                         fixture
@@ -1114,6 +1303,15 @@ pub(crate) mod expiry_fixture {
                 } else {
                     assert_eq!(fixture.store.cleanup().unwrap()["removed_artifacts"], 1);
                 }
+                assert!(
+                    !fixture
+                        .store
+                        .state
+                        .lock()
+                        .unwrap()
+                        .entries
+                        .contains_key(&fixture.artifacts.target.id)
+                );
                 assert!(matches!(
                     received.try_recv(),
                     Err(oneshot::error::TryRecvError::Empty)
@@ -1124,7 +1322,7 @@ pub(crate) mod expiry_fixture {
                         .try_recv()
                         .unwrap()
                         .unwrap_err()
-                        .contains("did not remove the exact aged artifact")
+                        .contains("is absent from this store")
                 );
             }
         }
@@ -1153,11 +1351,95 @@ pub(crate) mod expiry_fixture {
         #[test]
         fn repeat_aging_and_changed_active_control_do_not_produce_success() {
             let mut fixture = Fixture::new();
+            let originals = fixture.expiries();
             let (_, mut received) = arm(&fixture.store, fixture.artifacts.clone()).unwrap();
             assert!(arm(&fixture.store, fixture.artifacts.clone()).is_err());
             fixture.active_capture.finish().unwrap();
             timer_sweep(&fixture.store);
             assert!(received.try_recv().unwrap().is_err());
+            assert_eq!(
+                fixture.store.state.lock().unwrap().entries[&fixture.artifacts.target.id]
+                    .metadata
+                    .expires_at_unix,
+                originals.target
+            );
+        }
+
+        #[test]
+        fn changing_any_original_expiry_rejects_the_probe_without_aging() {
+            for index in 0..3 {
+                let fixture = Fixture::new();
+                let (_, mut received) = arm(&fixture.store, fixture.artifacts.clone()).unwrap();
+                let ids = [
+                    &fixture.artifacts.target.id,
+                    &fixture.artifacts.fresh.id,
+                    &fixture.artifacts.active.id,
+                ];
+                fixture
+                    .store
+                    .state
+                    .lock()
+                    .unwrap()
+                    .entries
+                    .get_mut(ids[index])
+                    .unwrap()
+                    .metadata
+                    .expires_at_unix += 1;
+                let changed = fixture.expiries();
+                timer_sweep(&fixture.store);
+                assert!(
+                    received
+                        .try_recv()
+                        .unwrap()
+                        .unwrap_err()
+                        .contains("expiry changed after arming")
+                );
+                assert_eq!(fixture.expiries(), changed);
+            }
+        }
+
+        #[test]
+        fn rejected_probe_still_runs_ordinary_timer_expiry() {
+            let fixture = Fixture::new();
+            let mut other = fixture.store.capture("unrelated-expired-output");
+            other.push(b"unrelated retained bytes\n").unwrap();
+            other.spill().unwrap();
+            other.finish().unwrap();
+            let other_id = other.metadata().unwrap().id;
+            drop(other);
+            let originals = fixture.expiries();
+            let (_, mut received) = arm(&fixture.store, fixture.artifacts.clone()).unwrap();
+            {
+                let mut state = fixture.store.state.lock().unwrap();
+                state
+                    .entries
+                    .get_mut(&fixture.artifacts.active.id)
+                    .unwrap()
+                    .metadata
+                    .expires_at_unix += 1;
+                state
+                    .entries
+                    .get_mut(&other_id)
+                    .unwrap()
+                    .metadata
+                    .expires_at_unix = now().saturating_sub(1);
+            }
+            timer_sweep(&fixture.store);
+            assert!(received.try_recv().unwrap().is_err());
+            let state = fixture.store.state.lock().unwrap();
+            assert!(!state.entries.contains_key(&other_id));
+            assert_eq!(
+                state.entries[&fixture.artifacts.target.id]
+                    .metadata
+                    .expires_at_unix,
+                originals.target
+            );
+            assert_eq!(
+                state.used_bytes,
+                fixture.artifacts.target.bytes
+                    + fixture.artifacts.fresh.bytes
+                    + fixture.artifacts.active.bytes
+            );
         }
     }
 }

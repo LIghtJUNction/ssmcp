@@ -392,6 +392,8 @@ async fn observe(
                 Some(Request::Age {schema_version, binding, target, fresh, active}) => {
                     check_binding(schema_version, &binding, &exact)?;
                     if armed { return Err("fixture age is one-shot".into()); }
+                    // This request freezes all three identities and original expiries.
+                    // The real timer performs deferred aging and reports its actual time.
                     let (receipt, receiver) = expiry_fixture::arm(&ready.store,
                         expiry_fixture::Artifacts {target, fresh, active})?;
                     armed = true;

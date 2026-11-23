@@ -90,8 +90,10 @@ class ExpiryIntegrationTests(unittest.TestCase):
     def evidence(self):
         return {"schema": "ssmcp.public-output-expiry.v1", "status": "passed",
                 "clock_mode": "fixture_timestamp",
+                "aging_point": "timer_sweep_before_expiry", "aging_deferred": True,
+                "armed": {"deferred": True, "aging_point": "timer_sweep_before_expiry"},
                 "public_path_expiry_observed": True, "automatic_cleanup_observed": True,
-                "timer_witness": {"origin": "timer"},
+                "timer_witness": {"origin": "timer", "aging_point": "timer_sweep_before_expiry"},
                 "cleanup": {"stopped_acknowledged": True, "reaped": True,
                             "forced": False, "exit_code": 0, "errors": []}}
 
@@ -116,6 +118,23 @@ class ExpiryIntegrationTests(unittest.TestCase):
             with self.subTest(evidence=evidence):
                 harness = self.harness()
                 with patch("e2e_unified.verify_output_expiry", return_value=evidence):
+                    with self.assertRaises(AssertionError):
+                        Unified.expiration(harness)
+                self.assertFalse(harness.output_expiry_observed)
+
+    def test_immediate_or_unstaged_aging_evidence_cannot_pass(self):
+        evidence = self.evidence()
+        cases = [
+            {**evidence, "aging_deferred": False},
+            {**evidence, "aging_point": "at_arm"},
+            {**evidence, "armed": {**evidence["armed"], "deferred": False}},
+            {**evidence, "timer_witness": {**evidence["timer_witness"], "aging_point": "at_arm"}},
+            {key: value for key, value in evidence.items() if key != "aging_point"},
+        ]
+        for outcome in cases:
+            with self.subTest(outcome=outcome):
+                harness = self.harness()
+                with patch("e2e_unified.verify_output_expiry", return_value=outcome):
                     with self.assertRaises(AssertionError):
                         Unified.expiration(harness)
                 self.assertFalse(harness.output_expiry_observed)
