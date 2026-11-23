@@ -51,6 +51,68 @@ pub(crate) async fn exercise_gateway_fixture(
         axum::serve(listener, app).await.unwrap();
     });
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    // Exercise the real RemoteFrontend path that used to return a local
+    // Denied error and have the HTTP transport incorrectly make it uncertain.
+    let readonly: Value = client
+        .post(format!("{url}/api/gui/v1/connections"))
+        .bearer_auth(TOKEN)
+        .json(&json!({
+            "request_id":"private-readonly-open",
+            "session":"private-attach-fixture",
+            "read_only":true
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let readonly_connection = readonly["connection_id"].as_str().unwrap();
+    let readonly_command = Request {
+        version: zbridge::VERSION,
+        id: Id::new("private-readonly-command").unwrap(),
+        operation: Operation::Command {
+            generation: serde_json::from_value(readonly["capabilities"]["generation"].clone())
+                .unwrap(),
+            command: Id::new("terminal.write").unwrap(),
+            arguments: json!({"terminal_id":"main","data":""}),
+        },
+    };
+    let denied: Response = client
+        .post(format!(
+            "{url}/api/gui/v1/connections/{readonly_connection}/bridge"
+        ))
+        .bearer_auth(TOKEN)
+        .json(&readonly_command)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    denied.validate_for(&readonly_command).unwrap();
+    let ResponseBody::Error(error) = denied.body else {
+        panic!("readonly native attachment accepted a command")
+    };
+    assert_eq!(error.code, zbridge::ErrorCode::Denied);
+    assert_eq!(error.effect, Effect::None);
+    let detached: Value = client
+        .delete(format!("{url}/api/gui/v1/connections/{readonly_connection}"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detached["closed"], true);
+    assert_eq!(detached["session_stopped"], false);
     let open =
         json!({"request_id":"private-open","session":"private-attach-fixture","read_only":false});
     let opened: Value = client
