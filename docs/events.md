@@ -292,7 +292,7 @@ before each start or outcome update and use that revision as
 `expected_revision`; a stale revision requires reconciliation. New user input
 preempts further maintenance, and the native budget deadline ends the round.
 Do not infer an outcome from a timer, elapsed budget or a repeated hint.
-[Lifecycle updates and maintenance receipts](workers.md#agent-lifecycle)
+[Lifecycle updates and maintenance receipts](workers.md#member-lifecycle-and-bounded-maintenance)
 
 During a dependency wait, a suitable chore might inspect an existing failure,
 review a pending patch or improve the current task's documentation. When no

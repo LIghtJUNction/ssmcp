@@ -72,7 +72,7 @@ return { client_id: clientId, ...joined };
 return await collab.list("CLIENT_ID_FROM_LIST");
 ~~~
 
-公开资料包含 `agent_id`、`name`、`role`、`status`、`capabilities`、加入时间、最近活动时间和租约到期时间。新成员的状态为 `idle`，生命周期版本为 1；状态只接受 `working`、`idle`、`offline`、`dreaming` 和 `retiring`，并随实际工作、输入、维护期限与退休过程转换。角色和能力仍是协调资料。名称允许重复，消息目标始终使用 `agent_id`。[生命周期与版本条件更新](workers.md#agent-lifecycle)
+公开资料包含 `agent_id`、`name`、`role`、`status`、`capabilities`、加入时间、最近活动时间和租约到期时间。新成员的状态为 `idle`，生命周期版本为 1；状态只接受 `working`、`idle`、`offline`、`dreaming` 和 `retiring`，并随实际工作、输入、维护期限与退休过程转换。角色和能力仍是协调资料。名称允许重复，消息目标始终使用 `agent_id`。[生命周期与版本条件更新](workers.md#member-lifecycle-and-bounded-maintenance)
 
 ## 绑定本次编排并接收用户要求
 
