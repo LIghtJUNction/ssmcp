@@ -551,7 +551,7 @@ async fn local_composer_delivers_at_response_boundary_and_exact_targets_require_
         (
             "ssmcp.client.capabilities",
             format!(
-                "const manifest = await capabilities({}); return manifest.structuredContent;",
+                "const manifest = await call({}, 'ssmcp.client.capabilities'); return manifest.structuredContent;",
                 json!(target)
             ),
         ),
@@ -912,7 +912,7 @@ async fn reload_returns_its_ack_after_native_disconnect_and_revokes_the_old_toke
     let execution = server
         .call(
             "code_mode",
-            json!({"code":format!("return await reload({});", json!(original_id))}),
+            json!({"code":format!("return (await call({}, 'ssmcp.client.reload')).structuredContent;", json!(original_id))}),
         )
         .await;
     let ack = &execution["result"];
@@ -960,7 +960,7 @@ async fn reload_rejects_unavailable_client_ids_and_invalid_tokens_before_native_
         .call(
             "code_mode",
             json!({"code":format!(
-                "if (typeof reload !== 'function') throw new Error('missing reload primitive'); const errors = []; for (const id of {}) {{ try {{ await reload(id); errors.push(null); }} catch (error) {{ errors.push(error.message); }} }} return errors;",
+                "const errors = []; for (const id of {}) {{ try {{ await call(id, 'ssmcp.client.reload'); errors.push(null); }} catch (error) {{ errors.push(error.message); }} }} return errors;",
                 json!([stale_id, missing_id])
             )}),
         )
@@ -979,7 +979,7 @@ async fn reload_rejects_unavailable_client_ids_and_invalid_tokens_before_native_
         .bearer_auth("invalid-reload-access-token")
         .header("MCP-Protocol-Version", "2025-11-25")
         .json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
-            "name":"code_mode","arguments":{"code":format!("return await reload({});", json!(live_id))}
+            "name":"code_mode","arguments":{"code":format!("return (await call({}, 'ssmcp.client.reload')).structuredContent;", json!(live_id))}
         }}))
         .send()
         .await
