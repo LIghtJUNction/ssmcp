@@ -611,6 +611,33 @@ class WorkerWindows(Harness):
             raise AssertionError(f"{name} returned a native error: {native}")
         return native["structuredContent"]
 
+    def native_file_safety(self, workspace, parent, worker, manager):
+        sessions = ((parent, self.coordinators[parent["id"]], "parent"),
+                    (worker, manager, "worker"))
+        for client, participant, label in sessions:
+            def native(name, arguments, *, allow_error=False):
+                return self.bound(client["id"], participant, name, arguments, allow_error=allow_error)
+
+            target = workspace / f"safety-{label}.txt"
+            native("ssmcp.fs.write_text", {"path": target.name, "text": label})
+            self.check(target.read_text() == label, f"{label}: ordinary native write succeeds")
+            for path in ("../outside-safety-fixture", ".ssmcp/safety/rules.toml"):
+                refusal = native("ssmcp.fs.write_text", {
+                    "path": path, "text": "synthetic-private-safety-value", "create_parents": True,
+                }, allow_error=True)
+                self.check(refusal.get("isError") is True,
+                           f"{label}: native safety rejects before mutation")
+            self.check(not (workspace / ".ssmcp" / "safety").exists()
+                       and not (workspace.parent / "outside-safety-fixture").exists(),
+                       f"{label}: rejected paths have no filesystem effect")
+            page = native("ssmcp.fs.events", {"stream": "safety"})
+            outcomes = [(row["event"]["decision"], row["event"]["outcome"])
+                        for row in page["events"]]
+            self.check(outcomes == [("allow", "succeeded"), ("deny", "blocked"),
+                                    ("require_approval", "blocked")]
+                       and "synthetic-private-safety-value" not in json.dumps(page),
+                       f"{label}: own stream contains only its redacted decisions")
+
     def execute_fixture_command(self, client_id, participant):
         command = [sys.executable, "-c", "print('WINDOW_COMMAND_OK')"]
         code = "return await exec.run(%s, %s);" % (
@@ -902,6 +929,7 @@ class WorkerWindows(Harness):
                    f"{label}: only the parent exposes human chat")
         self.coordinators[parent["id"]] = self.join(parent["id"], "parent-coordinator")
         manager = self.join(worker["id"], "window-manager")
+        self.native_file_safety(workspace, parent, worker, manager)
         state = self.bound(worker["id"], manager, "ssmcp.worker.status")
         self.check(state["worker"]["total"] == 3 and state["worker"]["offline"] == 3
                    and state["worker"]["idle"] == 0,

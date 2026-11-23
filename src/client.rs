@@ -2109,7 +2109,7 @@ pub async fn run() -> crate::Result<()> {
         return Ok(());
     }
     if args.first().and_then(|arg| arg.to_str()) == Some("safety") {
-        return crate::workspace::safety::run(&args[1..]);
+        return crate::workspace::safety::run(&args[1..]).await;
     }
     if let Some(output) = paths::output(&args)? {
         print!("{output}");

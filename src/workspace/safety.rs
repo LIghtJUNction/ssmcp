@@ -90,16 +90,27 @@ pub(super) fn event(operation: &'static str, verdict: Verdict, outcome: &'static
     })
 }
 
-pub(crate) fn run(args: &[OsString]) -> crate::Result<()> {
-    match args {
-        [] => (),
-        [status] if status == "status" => (),
-        [inspect, _] if inspect == "inspect" => {
+pub(crate) async fn run(args: &[OsString]) -> crate::Result<()> {
+    let (event, session) = match args {
+        [] => (None, None),
+        [status] if status == "status" => (None, None),
+        [local, session] if local == "--local" => (None, session.to_str()),
+        [inspect, event, local, session] if inspect == "inspect" && local == "--local" => (
+            Some(event.to_str().ok_or("invalid safety event ID")?),
+            session.to_str(),
+        ),
+        _ => {
             return Err(
-                "live event inspection requires the owning session's ssmcp.fs.events tool".into(),
+                "usage: ssmcp safety [status | --local NAME | inspect EVENT_ID --local NAME]"
+                    .into(),
             );
         }
-        _ => return Err("usage: ssmcp safety [status | inspect EVENT_ID]".into()),
+    };
+    if args.len() > 1 {
+        let name = session.ok_or("invalid local session name")?;
+        let result = crate::session::attach::safety(name, event).await?;
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
     }
     println!(
         "{}",
