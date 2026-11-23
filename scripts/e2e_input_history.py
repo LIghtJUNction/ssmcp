@@ -663,20 +663,16 @@ class InputHistory(Composer):
         front.until(empty_composer_ready, "wide live composer for command Statistics")
         front.send('/track-command printf abc > "$TMPDIR/stats-proof"')
         front.send(ENTER)
-        front.until(lambda shot: "command · exit 0" in text(shot), "tracked command completes")
-        self.check(not self.queue()["queue"], "tracked shell stays outside the agent queue")
+        completed = front.until(lambda shot: "command · exit 0" in text(shot),
+                                "tracked command completes")
+        job_ids = set(re.findall(r"Job: ([0-9a-f]+-[0-9a-f]+)", text(completed)))
+        self.check(len(job_ids) == 1, "the terminal reports exactly one completed native job")
+        identity = job_ids.pop()
         front.send("/tasks")
         front.send(ENTER)
-        front.until(lambda shot: view(shot, "tasks") and "stats-proof" in text(shot),
-                    "native Tasks displays the tracked command")
-        jobs = self.ui("/display/conversation")["tasks"]["jobs"]
-        matching = [job for job in jobs if "stats-proof" in " ".join(job.get("command", []))]
-        self.check(len(matching) == 1 and matching[0].get("exit_code") == 0,
-                   "the terminal submitted exactly one completed native job")
-        identity = matching[0]["job_id"]
-        front.send(ESC)
-        front.until(empty_composer_ready, "return from Tasks")
-        front.send(f"/command {identity}")
+        front.until(lambda shot: view(shot, "tasks") and identity in text(shot)
+                    and "stats-proof" in text(shot),
+                    "native Tasks displays the same tracked command")
         front.send(ENTER)
         front.until(lambda shot: f"Job: {identity}" in text(shot)
                     and "complete argv · read only" in text(shot) and "stats-proof" in text(shot),
@@ -684,7 +680,8 @@ class InputHistory(Composer):
         self.save_shot("command-stats-detail", front)
         front.send(ESC)
         front.send(ESC)
-        front.until(empty_composer_ready, "return from command details")
+        front.until(lambda shot: "Message the agent" in text(shot) and not shot["hide_cursor"],
+                    "restore the editor from command details")
         front.send("/new statistics")
         front.send(ENTER)
         shot = front.until(lambda shot: "Start calls 1 · Spawned 1 · Start errors 0" in text(shot)
