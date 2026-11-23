@@ -43,7 +43,7 @@ frontend_socket = "/run/ssmcp-frontend/render.sock"
 ssmcp-frontend --socket /absolute/private-directory/render.sock
 ```
 
-核心和 worker 使用同一服务 UID。连接双方核验 Unix peer credentials；父目录逐级用 no-follow 描述符打开，拒绝符号链接、非预期所有者和不安全权限。worker 的单写锁防止两个进程抢占同一个 socket；正常退出只移除自己创建的 inode。配置不迁移或删除现有用户 socket。[私有路径实现](../src/portal/frontend/socket.rs)
+核心和 worker 使用同一服务 UID。连接双方核验 Unix peer credentials；父目录逐级用 no-follow 描述符打开，拒绝符号链接、非预期所有者和不安全权限。worker 的单写锁防止两个进程抢占同一个 socket；正常退出只移除自己创建的 inode。配置不迁移或删除现有用户 socket。[私有路径实现](../src/local_socket.rs)
 
 ## 只更新公共前端
 

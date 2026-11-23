@@ -579,8 +579,8 @@ using the explicit bridge workflow documented by the project before transferring
 or forwarding ports. An ordinary resource read never executes arbitrary commands or reads \
 arbitrary files.\n\n\
 File synchronization copies directory contents between two existing workspace-relative \
-directories. Create a missing destination with fs.mkdir first. rsync(options), also named \
-sync(options), defaults to dry_run=true and delete=false; set dry_run=false to write. \
+directories. Create a missing destination with fs.mkdir first. rsync(options) defaults \
+to dry_run=true and delete=false; set dry_run=false to write. \
 Swap source and destination for the reverse direction. This is not simultaneous conflict \
 reconciliation. Sync returns a job id; use jobs.wait/status and jobs.cancel to observe or stop it.\n\n\
 Read ssmcp-client://limits for this client's native budgets and ssmcp://limits for relay budgets. Use bounded reads and paginate; \

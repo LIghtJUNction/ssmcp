@@ -101,7 +101,7 @@ The following details are loaded on demand. Client schemas and native permission
 
 ### collab
 
-Join a live client session with collab.join(clientId,{name,role?,capabilities?}), save agent_id and private token, discover collab.list(clientId), send JSON with collab.send(clientId,{agent_id,token,to,payload,idempotency_key?}); to:'*' broadcasts to current peers. collab.receive returns messages and next_cursor; collab.ack(clientId,{agent_id,token,through:next_cursor}) releases processed messages. update renews presence; leave ends participation. All helpers take clientId first. Direct public collab accepts action and client_id and supports wait_ms<=30000; JS receive is limited to 1000ms. Read ssmcp://collaboration for limits and delivery semantics.
+Join a live client session with collab.join(clientId,{name,role?,capabilities?}), save agent_id and private token, discover collab.list(clientId), send JSON with collab.send(clientId,{agent_id,token,to,payload,idempotency_key?}); to:'*' broadcasts to current peers. collab.receive returns messages and next_cursor; collab.ack(clientId,{agent_id,token,through:next_cursor}) releases processed messages. update renews presence; leave ends participation. All helpers take clientId first. Direct public collab accepts action and client_id and supports wait_ms<=55000; JS receive is limited to 1000ms. Read ssmcp://collaboration for limits and delivery semantics.
 
 ### events
 
