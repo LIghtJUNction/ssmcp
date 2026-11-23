@@ -1018,6 +1018,12 @@ pub(super) async fn wait(
         let scope = &scope;
         let controller = args.controller.clone();
         let windowed = record.windowed;
+        let target_timeout =
+            if windowed && matches!(target, Target::UserInput { notify: false, .. }) {
+                window_ms
+            } else {
+                target_timeout
+            };
         pending.push(async move {
             (
                 index,
