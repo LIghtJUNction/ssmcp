@@ -538,16 +538,20 @@ class DurableWait(Harness):
 
     def visible_prompt(self, event):
         """Read a finite original-thread journal snapshot; never publish or ACK."""
-        cursor, generation, end = None, None, None
-        rows = []
+        cursor = getattr(self, "visible_input_cursor", None)
+        generation = getattr(self, "visible_input_generation", None)
+        end = None
+        rows = list(getattr(self, "visible_input_rows", []))
         for _ in range(32):
             arguments = {"action": "thread", "client_id": self.client_id,
                          "agent_id": self.member["agent_id"], "limit": 8}
             if cursor is not None:
                 arguments.update(cursor=cursor, generation=generation)
             page = self.native("ssmcp.ui.events", arguments)
+            if end is None:
+                end = page["end_cursor"]
             if generation is None:
-                generation, end = page["generation"], page["end_cursor"]
+                generation = page["generation"]
             if (page["generation"] != generation or page.get("retention_gap_possible")
                     or not isinstance(page.get("events"), list)):
                 raise AssertionError("original Input journal changed generation or lost retained evidence")
@@ -556,7 +560,12 @@ class DurableWait(Harness):
                 raise AssertionError("native Input journal returned another caller scope")
             self.check(all(not item.get("user_messages") for item in mappings(self.last_public_reply)),
                        "visible Input observation does not create or claim human input")
-            rows.extend(row for row in page["events"] if row["sequence"] < end)
+            rows.extend(row for row in page["events"] if row["sequence"] < end
+                        and isinstance(row.get("value"), dict)
+                        and row["value"].get("type") == "ssmcp.message"
+                        and row["value"].get("kind") == "input")
+            if len(rows) > 256:
+                raise AssertionError("visible Input evidence exceeded its bounded retained record count")
             next_cursor = page["next_cursor"]
             if next_cursor >= end:
                 break
@@ -565,6 +574,9 @@ class DurableWait(Harness):
             cursor = next_cursor
         else:
             raise AssertionError("original Input journal exceeded bounded finite-page observation")
+        self.visible_input_cursor = end
+        self.visible_input_generation = generation
+        self.visible_input_rows = rows
         matches = [row for row in rows if isinstance(row.get("value"), dict)
                    and row["value"].get("type") == "ssmcp.message"
                    and row["value"].get("kind") == "input"
@@ -674,12 +686,20 @@ class DurableWait(Harness):
         latest_visible = self.visible_prompt(latest)
         self.check(latest_visible["record"]["message_id"] != previous_visible["record"]["message_id"],
                    "a newer coalesced timer revision has its own native Input identity")
-        stale_outer = self.native_reply("ssmcp.time.prompt", {
-            "action": "ack", "timer_id": repeat_id, "event_id": previous["event_id"],
-            "revision": previous["revision"]})
+        stale_arguments = {"action": "ack", "timer_id": repeat_id,
+                           "event_id": previous["event_id"], "revision": previous["revision"]}
+        stale_code = "await collab.bind(%s, %s); return await call(%s, %s, %s);" % (
+            json.dumps(self.client_id),
+            json.dumps({"agent_id": self.member["agent_id"], "token": self.member["token"]}),
+            json.dumps(self.client_id), json.dumps("ssmcp.time.prompt"), json.dumps(stale_arguments))
+        # call() propagates the native rejection to the outer MCP error envelope.
+        # Inspect that exact rejection, then verify the unchanged original event.
+        stale_outer = self.response("code_mode", {"code": stale_code, "timeout_ms": 10000})
         stale = stale_outer.get("result", {})
-        self.check(stale.get("isError") is True and "stale_prompt_ack" in json.dumps(stale),
-                   "stale revision ACK is explicitly rejected")
+        self.check(stale.get("isError") is True and any(
+                       item.get("type") == "text" and item.get("text", "").startswith("stale_prompt_ack:")
+                       for item in stale.get("content", [])),
+                   "stale revision ACK returns its exact propagated native rejection")
         retained = self.read_prompt(repeat_id)
         self.check(retained == latest, "stale ACK preserves the complete newer pending revision")
         exact = self.ack_prompt(latest)
