@@ -1715,7 +1715,7 @@ fn station_details(
 fn detail(label: &str, value: &str, width: usize) -> (PanelTone, String) {
     (
         PanelTone::Normal,
-        clipped(&format!("{label:<10}{value}"), width),
+        clipped(&format!("{label:<9} {value}"), width),
     )
 }
 
@@ -2825,6 +2825,49 @@ mod tests {
         assert_eq!(log_event(&snapshot.slots[0].logs[2], false).0, "FAIL");
         assert_eq!(log_event(&snapshot.slots[0].logs[3], false).0, "END");
         assert_eq!(log_event(&snapshot.slots[0].logs[4], false).0, "DONE");
+    }
+
+    #[test]
+    fn worker_compact_metrics_keep_labels_separate_at_narrow_sizes() {
+        let resources = metrics::Sampler::default();
+        for (width, budget) in [(60, 8), (48, 8), (48, 2)] {
+            let rows = compact_details(&resources, width, budget);
+            assert_eq!(rows[0].1, "Client CPU Unavailable of machine");
+            assert_eq!(rows[1].1, "Client RSS Unavailable");
+            assert!(rows.len() <= budget);
+            assert!(rows.iter().all(|(_, text)| text.width() <= width));
+            for (label, value, expected) in [
+                (
+                    "Client CPU",
+                    "0.1% of machine",
+                    "Client CPU 0.1% of machine",
+                ),
+                (
+                    "Client CPU",
+                    "Sampling… of machine",
+                    "Client CPU Sampling… of machine",
+                ),
+                ("Client RSS", "34.7 MiB", "Client RSS 34.7 MiB"),
+                ("CPU", "0.1% of machine", "CPU       0.1% of machine"),
+                ("RSS", "34.7 MiB", "RSS       34.7 MiB"),
+            ] {
+                assert_eq!(detail(label, value, width).1, expected);
+            }
+        }
+        for (rows, cols) in [(26, 60), (26, 48), (18, 48)] {
+            for color in [true, false] {
+                let mut state = state(rows, cols, color);
+                let snapshot = populated();
+                state.worker_frame(Some(&snapshot));
+                state.keyboard(b"\x1bOQ", Instant::now(), false);
+                let text = screen(&state.worker_frame(Some(&snapshot)))
+                    .screen()
+                    .contents();
+                assert!(text.contains("Client CPU "), "{rows}x{cols}: {text}");
+                assert!(text.contains("Client RSS "), "{rows}x{cols}: {text}");
+                assert!(text.contains("Work log"), "{rows}x{cols}: {text}");
+            }
+        }
     }
 
     #[test]
