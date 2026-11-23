@@ -55,6 +55,7 @@ jobs:
       deploy_server: ${{ steps.deployment.outputs.deploy_server }}
       release_contract: ${{ steps.publication.outputs.release_contract }}
       crate_publication: ${{ steps.publication.outputs.crate_publication }}
+      gui_clients: ${{ steps.gui_sources.outputs.required }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -68,6 +69,18 @@ jobs:
       - name: Validate the tag, versions, main ancestry and pinned submodules
         id: tag
         run: python scripts/release.py validate --event
+      - name: Detect GUI source independently of legacy tag outputs
+        id: gui_sources
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          required = any(Path(path).exists() for path in (
+              "apps/ssmcp-desktop", "apps/ssmcp-android", "apps/ssmcp-ios",
+          ))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"required={str(required).lower()}\n")
+          PY
       - name: Select the verified source and crate publication contract
         id: publication
         env:
@@ -193,6 +206,14 @@ jobs:
     with:
       ref: ${{ needs.validate.outputs.sha }}
 
+  gui:
+    needs: validate
+    if: needs.validate.outputs.gui_clients == 'true' && (needs.validate.outputs.publish == 'true' || needs.validate.outputs.build_only == 'true')
+    uses: ./.github/workflows/gui-clients.yml
+    with:
+      ref: ${{ needs.validate.outputs.sha }}
+      platform: all
+
   build:
     needs: validate
     if: needs.validate.outputs.publish == 'true' || needs.validate.outputs.build_only == 'true'
@@ -306,8 +327,17 @@ jobs:
             --archive /usr/local/libexec/ssmcp-runtime-test/release.tar.gz
 
   finalize:
-    needs: [validate, checks, build, verify_linux_runtime]
-    if: needs.validate.outputs.publish == 'true' || needs.validate.outputs.build_only == 'true'
+    needs: [validate, checks, build, verify_linux_runtime, gui]
+    # A legacy source with no GUI clients intentionally skips the reusable job.
+    # An apps-present source must succeed on every native platform, including
+    # the Linux Release executable's actual Xvfb window check.
+    if: >-
+      ${{ !cancelled() && needs.validate.result == 'success' &&
+          needs.checks.result == 'success' && needs.build.result == 'success' &&
+          needs.verify_linux_runtime.result == 'success' &&
+          ((needs.validate.outputs.gui_clients == 'true' && needs.gui.result == 'success') ||
+           (needs.validate.outputs.gui_clients != 'true' && needs.gui.result == 'skipped')) &&
+          (needs.validate.outputs.publish == 'true' || needs.validate.outputs.build_only == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -348,7 +378,7 @@ jobs:
       - name: Verify the application source package and normalized registry graph
         if: needs.validate.outputs.publish == 'true' && needs.validate.outputs.crate_publication == 'registry'
         run: python scripts/release.py verify-crate
-      - name: Require every verified target archive and record the release manifest
+      - name: Require every CLI archive, GUI asset and source receipt
         run: |
           cp scripts/install.sh scripts/install.ps1 dist/
           if [[ "$RELEASE_CONTRACT" == git-source-v1 && "$BUILD_ONLY" == true ]]; then

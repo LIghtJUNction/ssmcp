@@ -24,7 +24,7 @@ impl Workspace {
         Self(path)
     }
     fn terminals(&self) -> Arc<Terminals> {
-        Terminals::new(
+        Terminals::with_terminal(
             Path::new("/bin/sh"),
             self.0.clone(),
             OutputStore::new_connection().unwrap(),

@@ -23,6 +23,25 @@
 
 以上表格是构建目标，不表示对所有旧操作系统版本都完成了运行验证。Linux GNU 产物由 Ubuntu 22.04 构建，安装基线为 glibc 2.35 或更新版本；完整 Linux 集成检查另在 Ubuntu 24.04 运行。这些产物没有承诺 musl 静态链接或兼容更旧的 glibc，需要不同系统基线时可在目标机器从源码编译。[GitHub runner 列表](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 
+### 原生 GUI 客户端
+
+包含 `apps/` 客户端的源码还必须通过独立的 [GUI clients 工作流](../.github/workflows/gui-clients.yml)。它接受完整源码 commit，发布流程以 `platform: all` 调用；Linux 桌面、Windows 桌面、Android 和 iOS 中任何必需检查失败，`finalize` 都不能继续。没有 GUI 源码的历史标签保留原来的 CLI 发布范围。
+
+| 客户端 | 发布附件 | 构建与验证范围 |
+| --- | --- | --- |
+| Linux x86_64 桌面 | `ssmcp-desktop-x86_64-unknown-linux-gnu-release.tar.gz` | Ubuntu 22.04 上的原生 Release 构建、Rust 测试，以及 Xvfb/Mesa llvmpipe 下的真实 X11/OpenGL 窗口 |
+| Windows x86_64 桌面 | `ssmcp-desktop-x86_64-pc-windows-msvc-debug.zip` | 原生 MSVC Debug 构建与 Rust 测试；此 CI job 不启动交互窗口 |
+| Android | `ssmcp-android-debug.apk` | Debug APK；API 35 x86_64 模拟器上运行实际自定义 Instrumentation，协议与控制器测试使用注入网关 |
+| iOS | `ssmcp-gui-ios.json` 验证收据 | 未签名 simulator 构建与 XCTest；没有可安装到真机的 IPA |
+
+三个可下载程序附件各有独立 `.sha256` 文件。四个平台另附 `ssmcp-gui-<platform>.json`，记录源码 commit、根树与应用树、发布版本、target、实际构建 profile、测试退出状态、Actions run/attempt、工作流 commit 和证据摘要；它们也进入 `release-manifest.json` 与 `SHA256SUMS`。[资产与收据校验](../scripts/release.py)
+
+Linux 的窗口门使用同一次 `--locked --release --target x86_64-unknown-linux-gnu` 构建输出，真实运行 `--exit-after-ms 10000`。检查必须观察到可见的应用窗口，并在 30 秒内正常退出；外层 Xvfb 进程也有退出时限。发布器在打包和最终聚合时都核对窗口回执中的二进制 SHA-256、大小与归档内可执行文件，检查归档内源码身份和可执行权限。仅有编译成功、旧 Debug 二进制或 `--help` 输出不能满足这道门。
+
+Linux 归档包含 `ssmcp-desktop`、`README.md`、`LICENSE` 和 `build-source.json`。在下载目录核对对应 `.sha256` 后，解压到独立目录，使用与已有 CLI 会话相同的用户运行 `./ssmcp-desktop`。运行需要 X11、可用 GLX/OpenGL、FreeType、Fontconfig 及覆盖中文的系统字体；Wayland 桌面需通过 XWayland。此次附件使用默认 OpenGL 后端，`linux-software` 后端可按[桌面构建说明](../apps/ssmcp-desktop/README.md)从源码构建。CLI 的安装脚本继续只安装 `ssmcp`，不安装这些 GUI 附件。
+
+窗口门证明这个 Release 文件能够创建真实窗口并正常退出；它不验证硬件 GPU、人工视觉交互或连接运行中会话后的命令效果。构建和原始窗口日志保留在 `linux-<source commit>-<run attempt>` Actions artifact 中。平台、profile 和验收范围以对应附件收据为准。
+
 ## 从 crates.io 安装客户端
 
 安装 Rust 工具链后，选择已经在 crates.io 发布的版本。只运行客户端时显式指定 `--bin ssmcp`，避免安装仅用于 Linux 网关的 daemon：
@@ -196,11 +215,11 @@ python3 scripts/release.py validate --build-only
 
 ### 正式发布顺序
 
-validate 检查 tag、manifest、lockfile、main ancestry、工作区与子模块身份。checks 复用已有 CI；build 矩阵保留 Linux、macOS、Windows 各 x86_64/ARM64 的优化构建、可执行文件冒烟及安装器检查。finalize 在完整检查与六个构建成功后生成 verified-source 收据，记录源码提交、树、manifest、锁文件、递归子模块、工具链和完整依赖图。它校验六平台归档、各自的摘要文件和两份安装脚本，再生成 SHA256SUMS 与 release-manifest.json，共 16 个公开附件。源码收据留在独立的 Actions artifact 中。
+validate 检查 tag、manifest、lockfile、main ancestry、工作区与子模块身份。checks 复用已有 CI；build 矩阵保留 Linux、macOS、Windows 各 x86_64/ARM64 的优化构建、可执行文件冒烟及安装器检查。finalize 在完整检查、六个 CLI 构建及源码中包含的 GUI 客户端检查成功后生成 verified-source 收据，记录源码提交、树、manifest、锁文件、递归子模块、工具链和完整依赖图。基础 CLI 发布有六平台归档、各自的摘要文件、两份安装脚本、SHA256SUMS 与 release-manifest.json，共 16 个公开附件；包含本文四个平台 GUI 客户端时，另有三个程序附件、三个摘要文件和四份 GUI 收据，总计 26 个。源码收据留在独立的 Actions artifact 中。
 
 checks 在各原生 runner 上先显式构建 native_plugin_fixture 动态库，再单独执行精确的 native_plugin_runtime_contract ignored 测试。测试本身不会启动 Cargo，缺少预构建制品不会被当作通过。
 
-Windows 正式 build job 继续执行 SSMCP 安装、更新和下载失败恢复检查。安装器只安装 SSMCP；旧浏览器依赖 bootstrap/smoke 与对应证据步骤已退役，不再下载安装 Node.js、Playwright 或 Chromium。Zuse CLI 的下载、安装与卸载由独立生命周期工具管理，具体权限与资产合同见[Zuse CLI 指南](computer-use.md)。六个平台构建、源码与依赖验证及 16 件公开附件的完整性要求继续保留。[实际工作流](../.github/workflows/release.yml)
+Windows CLI 正式 build job 继续执行 SSMCP 安装、更新和下载失败恢复检查。安装器只安装 SSMCP；旧浏览器依赖 bootstrap/smoke 与对应证据步骤已退役，不再下载安装 Node.js、Playwright 或 Chromium。Zuse CLI 的下载、安装与卸载由独立生命周期工具管理，具体权限与资产合同见[Zuse CLI 指南](computer-use.md)。最终聚合根据固定源码列出必需 CLI 与 GUI 附件，拒绝缺件、额外文件、错误 profile、源码不符或摘要变化。[实际工作流](../.github/workflows/release.yml)
 
 GitHub 发布任务从固定源码重新核对 verified-source 与所有附件。它先创建或找回 draft，读取实际附件大小和摘要，全部一致后才公开。重跑只复用相同内容的附件，发现不同内容时保留 draft 或既有发布。release-manifest.json 记录实际源码、依赖图、附件摘要，以及 registry 发布决策。已冻结的旧标签仍可从 main 显式指定标签重试，使用其原有验证协议。[发布流程](../.github/workflows/release.yml) · [发布校验与回归](../scripts/test_release.py)
 
@@ -219,7 +238,7 @@ GitHub 发布任务从固定源码重新核对 verified-source 与所有附件�
 | 声明 | 所需证据 |
 | --- | --- |
 | 发布流程已经配置 | 本仓库 workflow、脚本及本机回归 |
-| 固定源码已通过官方构建 | 对应 commit 和子模块的 checks、六平台 build、finalize 结果 |
+| 固定源码已通过官方构建 | 对应 commit 和子模块的 checks、六平台 CLI build、适用 GUI 检查与 finalize 结果 |
 | 二进制已正式发布 | GitHub Release 附件、大小与 SHA-256 |
 | crates 包已发布 | crates.io 精确版本、未撤回状态与匹配 checksum |
 | 已安装或已部署 | 目标机器上的安装/服务版本与独立回执 |

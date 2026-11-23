@@ -160,26 +160,60 @@ selection cause explicit errors.
 
 ## Maintaining workflows with Dreaming
 
-Dreaming can use the existing authenticated execution, filesystem and Git
-operations to maintain a selected local tool repository. This is a workflow
-over those operations; initializing a repository creates no scheduler, model
-process or automatic task loop.
+Dreaming uses the existing authenticated execution, task, filesystem and Git
+operations to maintain an authorized local tool repository. An optional
+[coordinator policy](events.md#one-optional-dreaming-round) names one round, its
+project or global layer, and a budget of at most 55 seconds. The response hook
+offers that round only when its observed input and pool conditions permit it.
+Neither setting the policy nor initializing a repository launches a model or
+performs maintenance.
 
-1. Inspect `ssmcp tools paths` and the current source receipt. Choose the
-   project or global layer that the user authorized you to maintain, then
-   initialize or enable that exact repository if needed.
-2. Read its instructions, manifest, helper source and Git status. Add reusable
-   helpers and ordinary workflow files. Keep initialization free of operations;
-   helpers should preserve real job IDs, incomplete output and errors.
-3. Run focused checks in an isolated fixture. Inspect any existing `unknown`
-   execution through its recorded identity instead of replaying it. Review the
-   source diff and commit reviewed text when the workflow calls for a commit.
-   Keep private credentials, large outputs and generated binaries out of Git.
-4. Make a new `code_mode` call for the same authorized client and compare the
-   outer source hash and Git state with the intended revision. Invoke the helper
-   explicitly and report the native outcome.
+1. Inspect `ssmcp tools paths`, the current source receipt and the selected
+   repository's instructions, manifest, source and Git status. Confirm that the
+   task authorizes this exact layer. Resolve earlier uncertain task or command
+   outcomes from their original receipts before admitting another operation.
+   Keep the same round ID and any existing task request ID on retries.
+2. Create a detached draft from the tool repository's committed revision. Keep
+   the active checkout and all of its dirty or untracked files intact. A
+   detached worktree needs an existing commit; if none exists, first arrange a
+   reviewed starting revision under the task's authorization. The policy does
+   not create commits, enable layers or repair configuration implicitly.
+3. Make one small helper or workflow improvement and run focused checks in an
+   isolated fixture. Keep factory initialization free of operations and preserve
+   real job IDs, incomplete output and errors. Limit each command to the
+   remaining round budget. Between short steps, process user and worker events;
+   new user input or an expired budget stops admission of further work.
+4. Preserve the draft path, base revision, source diff and actual job outcomes.
+   Use the existing cancellation path for owned work when required, then inspect
+   the same job identity. An unconfirmed cancellation or lost response remains
+   uncertain; do not create a new task or repeat the command to obtain a cleaner
+   result. The existing worker claim and completion protocol remains unchanged.
+5. Review the text diff and commit it when the task authorizes a commit. Integrate
+   the reviewed changes deliberately through Git, preserving concurrent local
+   work. Keep the draft until review is complete. After integration, make a new
+   `code_mode` call for the same authorized client and compare its outer source
+   hash and Git state with the intended revision. Invoke the helper explicitly
+   and report the native outcome.
 
-Additional workflow files are ordinary repository content. Only the manifest's
-selected factory is loaded, and only returned helpers invoked by the caller
-perform operations. The existing native schemas, authorization and approval
-rules continue to govern those operations.
+For a selected repository that already has a committed revision, preparation
+can use ordinary Git operations:
+
+~~~sh
+git -C "$tool_repo" status --short
+git -C "$tool_repo" worktree add --detach "$round_worktree" HEAD
+git -C "$round_worktree" diff --check
+git -C "$round_worktree" diff
+~~~
+
+Choose a new draft path and inspect the exact base revision before editing.
+The detached draft is not automatically selected by the helper loader. A dirty
+active checkout is not reset, cleaned or overwritten to install the draft.
+Keep credentials, large logs and generated binaries outside the text commit.
+
+Round budgets and input-preemption instructions are obligations of the external
+coordinator, not a background execution service. Reuse existing event waits
+between rounds instead of a polling loop. A cache reminder is not an execution
+receipt, and policy expiry, timeout, cancellation or `unknown` does not schedule
+another round. Additional workflow files remain ordinary repository content;
+only the manifest's selected factory is loaded, and only helpers explicitly
+invoked by the caller perform operations.

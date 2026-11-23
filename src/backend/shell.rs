@@ -3,16 +3,19 @@
 mod artifact_tests;
 #[cfg(target_os = "linux")]
 mod artifacts;
+#[cfg(all(test, target_os = "linux"))]
+mod pty_tests;
 
 use super::{events::EventLog, process::Managed};
 use crate::output::{Capture, OutputStore};
 use crate::runtime::time::ExecutionTiming;
+use crate::{pty::Terminal, wire::Operation};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, VecDeque},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Stdio,
     sync::{
         Arc, Mutex,
@@ -133,6 +136,25 @@ impl InputMode {
     }
 }
 
+#[derive(Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum Mode {
+    Pipes,
+    Pty,
+}
+
+struct PtyStart {
+    id: String,
+    command: Vec<String>,
+    title: Option<String>,
+    cwd: PathBuf,
+    env: HashMap<String, String>,
+    timeout_ms: u64,
+    size: Option<(u16, u16)>,
+    live: bool,
+    compatibility_limit: bool,
+}
+
 struct State {
     running: bool,
     usage: Option<super::process::ResourceUsage>,
@@ -167,6 +189,7 @@ struct Job {
     observation: Mutex<Option<crate::observer::Lease>>,
     output_mode: &'static str,
     tty_slot: Option<usize>,
+    terminal: Option<Arc<Terminal>>,
     #[cfg(target_os = "linux")]
     artifacts: Option<Mutex<artifacts::Artifacts>>,
     #[cfg(target_os = "linux")]
@@ -180,7 +203,7 @@ impl Job {
     }
     fn snapshot_locked(&self, state: &State) -> Value {
         let through = state.finished.unwrap_or_else(Instant::now).into_std();
-        json!({"job_id":self.id,"id":self.id,"pid":self.pid,"pid_role":PID_ROLE,"command":self.command,"title":self.title,"cwd":self.cwd,
+        json!({"job_id":self.id,"id":self.id,"pid":self.pid,"pid_role":if self.terminal.is_some() {"command"} else {PID_ROLE},"command":self.command,"title":self.title,"cwd":self.cwd,
             "state":if state.running {"running"} else if state.cancelled {"cancelled"} else if state.timed_out {"timed_out"} else if state.error.is_some() {"failed"} else {"completed"},
             "running":state.running,"exit_code":state.exit_code,"exit_signal":state.exit_signal,"cancelled":state.cancelled,
             "timed_out":state.timed_out,"error":state.error,
@@ -188,9 +211,11 @@ impl Job {
             "timeout_ms":self.timing.timeout_ms(),
             "remaining_ms":if state.running {self.timing.remaining_ms(through)} else {None},
             "deadline_clock":"monotonic",
+            "mode":if self.terminal.is_some() {"pty"} else {"pipes"},
             "output_mode":self.output_mode,"tty_slot":self.tty_slot,
             "stdin":self.input_snapshot(state),
-            "stdout":state.stdout.metadata(),"stderr":state.stderr.metadata()})
+            "stdout":self.terminal.as_ref().map_or_else(|| state.stdout.metadata(), |terminal| terminal.output_snapshot()),
+            "stderr":state.stderr.metadata()})
     }
     fn snapshot(&self) -> Value {
         self.snapshot_locked(&self.state())
@@ -227,8 +252,9 @@ impl Job {
     }
 
     fn input_snapshot(&self, state: &State) -> Value {
-        json!({"mode":self.input_mode.label(),"open":state.stdin_open,
-            "bytes_written":state.stdin_written})
+        json!({"mode":if self.terminal.is_some() {"pty"} else {self.input_mode.label()},
+            "open":state.stdin_open,
+            "bytes_written":self.terminal.as_ref().map_or(state.stdin_written, |terminal| terminal.input_bytes())})
     }
     fn stop_input(&self) {
         self.state().stdin_open = false;
@@ -283,6 +309,7 @@ pub(crate) struct LocalCommandRow {
 #[derive(Default)]
 struct Registry {
     jobs: HashMap<String, Arc<Job>>,
+    selected: String,
     closed: bool,
     local_calls: u64,
     local_spawned: u64,
@@ -296,6 +323,13 @@ impl Registry {
         let Some(_job) = self.jobs.remove(id) else {
             return false;
         };
+        if _job.terminal.is_some() {
+            if self.selected == id {
+                self.selected = "main".into();
+                crate::client::terminal::select_session("main");
+            }
+            crate::client::terminal::close_session(id);
+        }
         #[cfg(target_os = "linux")]
         if _job.temporary_artifacts {
             if self.retired_temporary.len() == MAX_RETAINED
@@ -320,6 +354,7 @@ pub struct Shell {
     slots: Arc<Semaphore>,
     events: Arc<EventLog>,
     observer: Option<Arc<crate::observer::Pool>>,
+    interactive_shell: Option<PathBuf>,
 }
 impl Shell {
     pub fn new() -> Arc<Self> {
@@ -344,12 +379,507 @@ impl Shell {
         Ok(Arc::new(Self {
             root,
             observer: output.observer(),
+            interactive_shell: None,
             output,
             namespace,
             registry: Mutex::new(Registry::default()),
             slots: Arc::new(Semaphore::new(MAX_JOBS)),
             events,
         }))
+    }
+    pub fn with_terminal(
+        shell: &Path,
+        root: PathBuf,
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        if !shell.is_absolute() {
+            return Err("shell must be an absolute path".into());
+        }
+        let mut manager = Self::with_workspace(root, output)?;
+        Arc::get_mut(&mut manager).unwrap().interactive_shell = Some(shell.to_path_buf());
+        let job = manager.spawn_pty(
+            PtyStart {
+                id: "main".into(),
+                command: interactive_command(shell),
+                title: Some("main".into()),
+                cwd: manager.root.clone(),
+                env: HashMap::new(),
+                timeout_ms: 0,
+                size: None,
+                live: true,
+                compatibility_limit: false,
+            },
+            crate::runtime::call_scope::Source::capture(),
+        )?;
+        manager.registry().selected = job.id.clone();
+        Ok(manager)
+    }
+
+    fn next_job_id(&self) -> String {
+        format!(
+            "{}-{:x}",
+            self.namespace,
+            NEXT_JOB.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
+    fn spawn_pty(
+        &self,
+        args: PtyStart,
+        creator: crate::runtime::call_scope::Source,
+    ) -> Result<Arc<Job>, String> {
+        let permit = self.slots.clone().try_acquire_owned().map_err(|_| {
+            format!("at most {MAX_JOBS} commands may run at once; wait or cancel an existing job")
+        })?;
+        let started = std::time::Instant::now();
+        let deadline = (args.timeout_ms != 0)
+            .then(|| {
+                started
+                    .checked_add(Duration::from_millis(args.timeout_ms))
+                    .ok_or("timeout_ms cannot be represented by the execution clock")
+            })
+            .transpose()?;
+        let timing = ExecutionTiming { started, deadline };
+        let mut registry = self.registry();
+        if registry.closed {
+            return Err("shell command manager is closed".into());
+        }
+        if args.compatibility_limit
+            && registry
+                .jobs
+                .values()
+                .filter(|job| job.terminal.is_some())
+                .count()
+                >= crate::terminals::MAX_TERMINALS
+        {
+            return Err(format!(
+                "at most {} terminal jobs may be retained; close an existing terminal",
+                crate::terminals::MAX_TERMINALS
+            ));
+        }
+        if registry.jobs.contains_key(&args.id) {
+            return Err("job ID already exists".into());
+        }
+        let evicted = if registry.jobs.len() >= MAX_RETAINED {
+            registry
+                .jobs
+                .values()
+                .filter(|job| job.id != "main" && !job.state().running)
+                .min_by_key(|job| job.timing.started)
+                .map(|job| job.id.clone())
+        } else {
+            None
+        };
+        let events = self.events.clone();
+        let source = creator.clone();
+        let event_id = args.id.clone();
+        let output_event: crate::pty::OutputEvent = Arc::new(move |offset, bytes| {
+            events.push_scoped(json!({"type":"exec.stdout","job_id":event_id,
+                "method":"command/exec/outputDelta","params":{"deltaBase64":STANDARD.encode(bytes),
+                    "stream":"stdout","processId":event_id,"offset":offset,"next_offset":offset+bytes.len() as u64}}),
+                source.clone());
+        });
+        crate::client::terminal::register_session(
+            &args.id,
+            args.title.as_deref().unwrap_or(&args.id),
+        );
+        let terminal = match Terminal::spawn_job(
+            crate::pty::JobConfig {
+                command: &args.command,
+                cwd: &args.cwd,
+                env: &args.env,
+                id: &args.id,
+                size: args.size,
+                live: args.live,
+                output_event: Some(output_event),
+            },
+            self.output.clone(),
+        ) {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                crate::client::terminal::close_session(&args.id);
+                return Err(format!("could not start PTY command: {error}"));
+            }
+        };
+        let (cancel, mut cancel_rx) = watch::channel(false);
+        let (input_stopped, _) = watch::channel(false);
+        let mut stderr = Output::new(&self.output, format!("job:{}:stderr", args.id));
+        stderr.finish(None);
+        let job = Arc::new(Job {
+            creator,
+            id: args.id.clone(),
+            pid: terminal.pid(),
+            command: args.command,
+            title: args.title,
+            cwd: args.cwd,
+            timing,
+            state: Mutex::new(State {
+                running: true,
+                #[cfg(target_os = "linux")]
+                tree_reaped: false,
+                exit_code: None,
+                exit_signal: None,
+                cancelled: false,
+                timed_out: false,
+                error: None,
+                finished: None,
+                stdin_open: true,
+                stdin_written: 0,
+                stdout: Output::new(&self.output, format!("job:{}:unused", args.id)),
+                stderr,
+            }),
+            changed: terminal.changed(),
+            cancel,
+            input_mode: InputMode::Null,
+            stdin: AsyncMutex::new(None),
+            input_stopped,
+            observation: Mutex::new(None),
+            output_mode: "pty",
+            tty_slot: None,
+            terminal: Some(terminal.clone()),
+            #[cfg(target_os = "linux")]
+            artifacts: None,
+            #[cfg(target_os = "linux")]
+            temporary_artifacts: false,
+        });
+        if let Some(id) = evicted {
+            registry.forget(&id);
+        }
+        registry.jobs.insert(job.id.clone(), job.clone());
+        drop(registry);
+        let worker_command =
+            crate::worker::native_command_started(&job.creator, &job.id, &job.command);
+        let mut started = job.snapshot();
+        started["type"] = json!("exec.started");
+        self.events
+            .push_execution(started, job.creator.clone(), timing);
+        let events = self.events.clone();
+        let worker = job.clone();
+        tokio::spawn(async move {
+            let outcome = tokio::select! {
+                biased;
+                _ = cancel_rx.changed() => (None, true, false, None, None),
+                result = async {
+                    if let Some(deadline) = timing.deadline {
+                        timeout_at(deadline.into(), terminal.wait_exit()).await
+                    } else { Ok(terminal.wait_exit().await) }
+                } => match result {
+                    Ok(Ok((code, signal))) => (code, false, false, None, signal),
+                    Ok(Err(error)) => (None, false, false, Some(error.to_string()), None),
+                    Err(_) => (None, false, true, None, None),
+                }
+            };
+            worker.stop_input();
+            terminal.shutdown().await;
+            {
+                let mut state = worker.state();
+                drop(permit);
+                state.running = false;
+                state.exit_code = outcome.0;
+                state.cancelled = outcome.1;
+                state.timed_out = outcome.2;
+                state.error = outcome.3;
+                state.exit_signal = outcome.4;
+                state.finished = Some(Instant::now());
+            }
+            let status = if outcome.1 {
+                "cancelled".to_owned()
+            } else if outcome.2 {
+                "timed out".to_owned()
+            } else if let Some(error) = &worker.state().error {
+                format!("failed: {error}")
+            } else if let Some(code) = outcome.0 {
+                format!("exit {code}")
+            } else if let Some(signal) = outcome.4 {
+                format!("signal {signal}")
+            } else {
+                "finished without a reported exit status".into()
+            };
+            if let Some(command) = worker_command {
+                command.finish(&status);
+            }
+            let mut snapshot = worker.snapshot();
+            snapshot["type"] = json!("exec.exited");
+            events.push_scoped(snapshot, worker.creator.clone());
+            worker.changed.notify_waiters();
+        });
+        Ok(job)
+    }
+
+    pub fn get(&self, id: &str) -> Result<Arc<Terminal>, String> {
+        self.job(id)?
+            .terminal
+            .clone()
+            .ok_or_else(|| "job is not a PTY".into())
+    }
+
+    pub fn primary(&self) -> Arc<Terminal> {
+        self.get("main")
+            .expect("main terminal exists until shutdown")
+    }
+
+    pub fn selected(&self) -> Arc<Terminal> {
+        let registry = self.registry();
+        registry
+            .jobs
+            .get(&registry.selected)
+            .and_then(|job| job.terminal.clone())
+            .expect("selected terminal exists")
+    }
+
+    pub fn cycle(&self) -> Result<(), String> {
+        let mut registry = self.registry();
+        if registry.closed {
+            return Err("shell command manager is closed".into());
+        }
+        let mut ids: Vec<_> = registry
+            .jobs
+            .values()
+            .filter(|job| job.terminal.is_some())
+            .map(|job| job.id.clone())
+            .collect();
+        ids.sort();
+        if ids.is_empty() {
+            return Err("no terminal jobs".into());
+        }
+        let current = ids
+            .iter()
+            .position(|id| id == &registry.selected)
+            .unwrap_or(0);
+        registry.selected = ids[(current + 1) % ids.len()].clone();
+        crate::client::terminal::select_session(&registry.selected);
+        Ok(())
+    }
+
+    pub async fn resize_all(&self, rows: u16, cols: u16) -> Result<(), String> {
+        let jobs: Vec<_> = self
+            .registry()
+            .jobs
+            .values()
+            .filter(|job| job.terminal.is_some())
+            .cloned()
+            .collect();
+        for job in jobs {
+            let terminal = job.terminal.as_ref().unwrap();
+            let running = job.state().running;
+            if running
+                && let Err(error) = terminal.perform(Operation::Resize { rows, cols }).await
+                && terminal.perform(Operation::Status {}).await?["running"] == true
+            {
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    async fn terminal_snapshot(&self, job: &Job) -> Result<Value, String> {
+        let terminal = job.terminal.as_ref().ok_or("job is not a PTY")?;
+        let mut result = terminal.perform(Operation::Status {}).await?;
+        result["running"] = json!(job.state().running);
+        result["job_id"] = json!(job.id);
+        result["terminal_id"] = json!(job.id);
+        result["name"] = json!(job.title.as_deref().unwrap_or(&job.id));
+        result["cwd"] = json!(job.cwd);
+        result["cwd_kind"] = json!("startup");
+        result["selected"] = json!(self.registry().selected == job.id);
+        Ok(result)
+    }
+
+    async fn terminal_call(&self, name: &str, args: Value) -> Result<Value, String> {
+        match name {
+            "terminal.open" => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Open {
+                    name: Option<String>,
+                    cwd: Option<PathBuf>,
+                    #[serde(default)]
+                    select: bool,
+                }
+                let args: Open = parse(args)?;
+                if args.name.as_ref().is_some_and(|name| {
+                    name.trim().is_empty() || name.len() > 128 || name.chars().any(char::is_control)
+                }) {
+                    return Err(
+                        "terminal name must contain 1..=128 UTF-8 bytes and no control characters"
+                            .into(),
+                    );
+                }
+                let shell = self
+                    .interactive_shell
+                    .as_ref()
+                    .ok_or("connection has no interactive shell")?;
+                let requested = args.cwd.unwrap_or_else(|| self.root.clone());
+                let cwd = if requested.is_absolute() {
+                    requested
+                } else {
+                    self.root.join(requested)
+                }
+                .canonicalize()
+                .map_err(|error| format!("invalid terminal cwd: {error}"))?;
+                if !cwd.is_dir() || !cwd.starts_with(&self.root) {
+                    return Err("terminal cwd must be an existing directory inside the authorized workspace".into());
+                }
+                if self
+                    .registry()
+                    .jobs
+                    .values()
+                    .filter(|job| job.terminal.is_some())
+                    .count()
+                    >= crate::terminals::MAX_TERMINALS
+                {
+                    return Err(format!(
+                        "at most {} terminal jobs may be retained; close an existing terminal",
+                        crate::terminals::MAX_TERMINALS
+                    ));
+                }
+                let job = self.spawn_pty(
+                    PtyStart {
+                        id: self.next_job_id(),
+                        command: interactive_command(shell),
+                        title: args.name,
+                        cwd,
+                        env: HashMap::new(),
+                        timeout_ms: 0,
+                        size: None,
+                        live: true,
+                        compatibility_limit: true,
+                    },
+                    crate::runtime::call_scope::Source::capture(),
+                )?;
+                if args.select {
+                    let mut registry = self.registry();
+                    if registry.closed || !registry.jobs.contains_key(&job.id) {
+                        return Err("terminal was closed before selection".into());
+                    }
+                    registry.selected = job.id.clone();
+                    crate::client::terminal::select_session(&job.id);
+                }
+                self.terminal_snapshot(&job).await
+            }
+            "terminal.list" => {
+                empty(args)?;
+                let (mut jobs, selected) = {
+                    let registry = self.registry();
+                    (
+                        registry
+                            .jobs
+                            .values()
+                            .filter(|job| job.terminal.is_some())
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                        registry.selected.clone(),
+                    )
+                };
+                jobs.sort_by(|a, b| a.id.cmp(&b.id));
+                let mut terminals = Vec::with_capacity(jobs.len());
+                for job in jobs {
+                    terminals.push(self.terminal_snapshot(&job).await?);
+                }
+                Ok(
+                    json!({"terminals":terminals,"selected":selected,"default_terminal_id":"main",
+                    "max_terminals":crate::terminals::MAX_TERMINALS}),
+                )
+            }
+            "terminal.select" => {
+                let id = terminal_id(args)?;
+                let job = self.job(&id)?;
+                if job.terminal.is_none() {
+                    return Err("job is not a PTY".into());
+                }
+                {
+                    let mut registry = self.registry();
+                    if registry.closed || !registry.jobs.contains_key(&id) {
+                        return Err("terminal was closed before selection".into());
+                    }
+                    registry.selected = id.clone();
+                    crate::client::terminal::select_session(&id);
+                }
+                self.terminal_snapshot(&job).await
+            }
+            "terminal.close" => {
+                let id = terminal_id(args)?;
+                protect_main(&id)?;
+                let job = self.registry().jobs.get(&id).cloned();
+                if let Some(job) = &job {
+                    if job.terminal.is_none() {
+                        return Err("job is not a PTY".into());
+                    }
+                    job.cancel.send_replace(true);
+                    wait_finished(job, Some(Instant::now() + Duration::from_secs(8))).await;
+                    if job.state().running {
+                        return Err(
+                            "terminal cleanup is still pending; observe the original job_id".into(),
+                        );
+                    }
+                    self.registry().forget(&id);
+                }
+                Ok(
+                    json!({"job_id":id,"terminal_id":id,"closed":job.is_some(),"selected":self.registry().selected}),
+                )
+            }
+            _ => {
+                let mut args = args
+                    .as_object()
+                    .cloned()
+                    .ok_or("terminal arguments must be an object")?;
+                let id = match args.remove("terminal_id") {
+                    None => "main".to_owned(),
+                    Some(Value::String(id)) if valid_terminal_id(&id) => id,
+                    _ => {
+                        return Err(
+                            "terminal_id must be a nonempty string of at most 128 bytes".into()
+                        );
+                    }
+                };
+                let job = self.job(&id)?;
+                let terminal = job.terminal.as_ref().ok_or("job is not a PTY")?;
+                let operation = crate::backend::terminal_operation(name, Value::Object(args))?;
+                let mut result = terminal.perform(operation).await?;
+                if result.get("running").is_some() {
+                    result["running"] = json!(job.state().running);
+                }
+                result["job_id"] = json!(id);
+                result["terminal_id"] = json!(id);
+                Ok(result)
+            }
+        }
+    }
+
+    pub fn management_tools() -> Vec<Value> {
+        let id = json!({"terminal_id":{"type":"string","minLength":1,"maxLength":128}});
+        vec![
+            tool(
+                "terminal.open",
+                "Compatibility entry point. On Linux prefer ssmcp.exec.start with mode:'pty' and explicit interactive-shell argv. This creates one job in the shared exec registry; terminal_id and job_id identify the same physical PTY. Existing portable terminals remain supported here.",
+                json!({"name":{"type":"string","minLength":1,"maxLength":128},
+                    "cwd":{"type":"string","description":"Existing directory inside this client's workspace; defaults to the workspace root."},
+                    "select":{"type":"boolean","default":false,"description":"Mark this terminal as selected for interactive frontends. The built-in dashboard remains an audit interface and keeps keyboard input for navigation."}}),
+                &[],
+                false,
+            ),
+            tool(
+                "terminal.list",
+                "Compatibility terminal-only view of ssmcp.exec.list, including selection for existing interactive frontends. terminal_id equals job_id; calls without terminal_id target the protected main job.",
+                json!({}),
+                &[],
+                true,
+            ),
+            tool(
+                "terminal.select",
+                "Compatibility selection control for existing interactive frontends. This changes the selected PTY job in the shared exec registry without starting another process; exec.write with the job_id provides explicit input.",
+                id.clone(),
+                &["terminal_id"],
+                false,
+            ),
+            tool(
+                "terminal.close",
+                "Compatibility combined cancel-and-forget for one additional PTY job. Prefer exec.cancel then exec.forget. Repeated closes are harmless; the main job ends only with the client connection.",
+                id,
+                &["terminal_id"],
+                false,
+            ),
+        ]
     }
     fn registry(&self) -> std::sync::MutexGuard<'_, Registry> {
         self.registry.lock().unwrap_or_else(|e| e.into_inner())
@@ -370,7 +900,7 @@ impl Shell {
         vec![
             tool(
                 "ssmcp.exec.start",
-                "Start an independent argv command immediately and return job_id. Supply a short title describing the purpose of complex inline scripts; it labels the command without changing execution. Commands run concurrently, survive code_mode completion, and stop when this client disconnects or reloads. No model is invoked. With --tty on Unix, output_mode is pty and stdout contains the combined terminal stream; stdin remains null or pipe.",
+                "Start an independent argv command immediately and return job_id. Supply a short title describing the purpose of complex inline scripts; it labels the command without changing execution. Commands run concurrently, survive code_mode completion, and stop when this client disconnects or reloads. No model is invoked. mode:'pty' starts a real Linux controlling terminal for stdin/stdout/stderr with merged output; mode:'pipes' forces pipes. Omitted mode preserves legacy --tty output observation. Native macOS/Windows terminals remain available through the compatibility interface; explicit exec PTY currently requires Linux.",
                 json!({"command":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":MAX_COMMAND_ARGS},
                     "title":{"type":"string","minLength":1,"maxLength":MAX_TITLE_CHARS,"description":"Optional display-only purpose, such as Check deployment status. At most 160 Unicode characters; surrounding whitespace is trimmed, blank titles and control or line-separator characters are rejected. Does not change argv, cwd, permissions or job identity."},
                     "cwd":{"type":"string","description":"Existing directory inside the authorized workspace; relative paths and the default resolve from that workspace."},
@@ -378,7 +908,10 @@ impl Shell {
                     "track_artifacts":{"type":"boolean","default":false,"description":format!("Enable Linux task artifact tracking for a verified Agent. Sets the job's TMPDIR and SSMCP_ARTIFACT_DIR. Default soft limit when enabled: {DEFAULT_ARTIFACT_BUDGET_BYTES} logical bytes.")},
                     "artifact_budget_bytes":{"type":"integer","minimum":1,"description":"Custom logical-byte soft limit. Providing a positive value also enables tracking for compatibility."},
                     "temporary_artifacts":{"type":"boolean","default":false,"description":"Enable tracking for disposable, task-exclusive artifacts eligible for bounded shutdown cleanup. Omit to keep artifacts after close or reload."},
-                    "stdin":{"enum":["null","pipe"],"type":"string","default":"null","description":"null delivers EOF immediately; pipe enables bounded exec.write input and explicit close_stdin."},
+                    "mode":{"type":"string","enum":["pipes","pty"],"description":"Explicit pipes or full controlling PTY. Omission preserves legacy observation. PTY currently requires Linux."},
+                    "rows":{"type":"integer","minimum":1,"maximum":1000,"description":"Initial PTY rows; only with mode:pty."},
+                    "cols":{"type":"integer","minimum":1,"maximum":1000,"description":"Initial PTY columns; only with mode:pty."},
+                    "stdin":{"enum":["null","pipe"],"type":"string","default":"null","description":"Pipe jobs only: null delivers EOF immediately; pipe enables exec.write and close_stdin. Omit stdin entirely for mode:pty."},
                     "timeout_ms":{"type":"integer","minimum":0,"default":0,"description":"0 means no execution deadline. A nonzero deadline terminates the command."}}),
                 &["command"],
                 false,
@@ -406,7 +939,7 @@ impl Shell {
             ),
             tool(
                 "ssmcp.exec.read",
-                "Read incremental stdout/stderr and an atomic status snapshot. Each stream has its own byte cursor; base64 preserves exact bytes. Live streams use bounded tails; completed streams read full saved output until artifact retention expires. Artifacts are also accessible through outputs.read.",
+                "Read incremental stdout/stderr and an atomic status snapshot. Each stream has its own byte cursor; base64 preserves exact bytes. Live streams use bounded tails. Completed pipe streams read their saved capture until retention expires; PTY pages always read their bounded raw-byte buffer without the legacy spill cursor jump. PTY stdout contains merged output and stderr_cursor must stay 0. Artifacts are also accessible through outputs.read.",
                 json!({"job_id":{"type":"string"},"stdout_cursor":{"type":"integer","minimum":0,"default":0},
                     "stderr_cursor":{"type":"integer","minimum":0,"default":0},"max_bytes":{"type":"integer","minimum":1,"maximum":32768,"default":16384},
                     "wait_ms":{"type":"integer","minimum":0,"maximum":MAX_READ_WAIT,"default":0}}),
@@ -415,13 +948,22 @@ impl Shell {
             ),
             tool(
                 "ssmcp.exec.write",
-                "Write UTF-8 data or base64 bytes to a job started with stdin:'pipe'. Returns exact written byte count; retry only the remaining bytes after a timeout. close_stdin sends EOF only after all supplied bytes are written. Writes are serialized per job; cancellation and deadlines interrupt blocked writers.",
+                "Write UTF-8 data or base64 bytes to a pipe or Linux PTY job. PTYs reject close_stdin before writing any bytes. Returns exact written byte count; retry only the remaining bytes after a timeout. close_stdin sends EOF only after all supplied bytes are written. Writes are serialized per job; cancellation and deadlines interrupt blocked writers.",
                 json!({"job_id":{"type":"string","minLength":1,"maxLength":128},
                     "data":{"type":"string","maxLength":MAX_INPUT},
                     "data_base64":{"type":"string","maxLength":MAX_INPUT.div_ceil(3)*4},
                     "close_stdin":{"type":"boolean","default":false},
                     "wait_ms":{"type":"integer","minimum":0,"maximum":MAX_INPUT_WAIT,"default":MAX_INPUT_WAIT}}),
                 &["job_id"],
+                false,
+            ),
+            tool(
+                "ssmcp.exec.resize",
+                "Resize a running PTY job, updating its native terminal dimensions and foreground SIGWINCH on Unix.",
+                json!({"job_id":{"type":"string","minLength":1,"maxLength":128},
+                    "rows":{"type":"integer","minimum":1,"maximum":1000},
+                    "cols":{"type":"integer","minimum":1,"maximum":1000}}),
+                &["job_id", "rows", "cols"],
                 false,
             ),
             tool(
@@ -523,6 +1065,9 @@ impl Shell {
         args: Value,
         creator: crate::runtime::call_scope::Source,
     ) -> Result<Value, String> {
+        if name.starts_with("terminal.") {
+            return self.terminal_call(name, args).await;
+        }
         match name {
             "ssmcp.exec.start" => {
                 let local = creator.call.is_none();
@@ -567,6 +1112,25 @@ impl Shell {
                     return Err("max_bytes must be 1..=32768".into());
                 }
                 let job = self.job(&args.job_id)?;
+                if let Some(terminal) = &job.terminal {
+                    if args.stderr_cursor != 0 {
+                        return Err(
+                            "PTY stderr is merged into stdout; stderr_cursor must be 0".into()
+                        );
+                    }
+                    let page = terminal
+                        .read_page(args.stdout_cursor, args.max_bytes, args.wait_ms)
+                        .await?;
+                    let snapshot = job.snapshot();
+                    return Ok(
+                        json!({"job_id":job.id,"running":snapshot["running"],"exit_code":snapshot["exit_code"],
+                        "stdout":page["text"],"stdout_base64":page["data_base64"],
+                        "stdout_cursor":page["next_cursor"],"stdout_truncated":page["truncated"],
+                        "stdout_eof":page["output_eof"] == true && page["next_cursor"] == snapshot["stdout"]["next_cursor"],
+                        "stderr":"","stderr_base64":"","stderr_cursor":0,"stderr_truncated":false,"stderr_eof":true,
+                        "snapshot":snapshot}),
+                    );
+                }
                 wait_output(&job, args.stdout_cursor, args.stderr_cursor, args.wait_ms).await?;
                 // Archive reads can touch disk. Keep their atomic output/status
                 // snapshot on a blocking worker without holding a guard across await.
@@ -586,8 +1150,29 @@ impl Shell {
                 .await
                 .map_err(|error| format!("could not read command output: {error}"))?
             }
+            "ssmcp.exec.resize" => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Resize {
+                    job_id: String,
+                    rows: u16,
+                    cols: u16,
+                }
+                let args: Resize = parse(args)?;
+                let job = self.job(&args.job_id)?;
+                let terminal = job.terminal.as_ref().ok_or("job is not a PTY")?;
+                let mut result = terminal
+                    .perform(Operation::Resize {
+                        rows: args.rows,
+                        cols: args.cols,
+                    })
+                    .await?;
+                result["job_id"] = json!(job.id);
+                Ok(result)
+            }
             "ssmcp.exec.cancel" => {
                 let args: Id = parse(args)?;
+                protect_main(&args.job_id)?;
                 let job = self.job(&args.job_id)?;
                 if job.state().running {
                     job.cancel.send_replace(true);
@@ -597,6 +1182,7 @@ impl Shell {
             }
             "ssmcp.exec.forget" => {
                 let args: Id = parse(args)?;
+                protect_main(&args.job_id)?;
                 let mut registry = self.registry();
                 if registry.closed {
                     return Err("shell command manager is closed".into());
@@ -651,6 +1237,19 @@ impl Shell {
             return Err(format!("stdin is limited to {MAX_INPUT} bytes per write"));
         }
         let job = self.job(&args.job_id)?;
+        if let Some(terminal) = &job.terminal {
+            if args.close_stdin {
+                return Err("close_stdin is not supported for a PTY; no input was written".into());
+            }
+            let (written, timed_out, error) = terminal.write_counted(&data, args.wait_ms).await;
+            let result = job.write_result(written, data.len(), timed_out, error);
+            self.events.push_scoped(
+                json!({"type":"exec.stdin","job_id":job.id,
+                "written":written,"closed":result["closed"],"timed_out":timed_out}),
+                job.creator.clone(),
+            );
+            return Ok(result);
+        }
         if job.input_mode != InputMode::Pipe {
             return Err("stdin is disabled; start the job with stdin:'pipe'".into());
         }
@@ -743,12 +1342,36 @@ impl Shell {
             track_artifacts: bool,
             #[serde(default)]
             temporary_artifacts: bool,
-            #[serde(default)]
-            stdin: InputMode,
+            stdin: Option<InputMode>,
+            mode: Option<Mode>,
+            rows: Option<u16>,
+            cols: Option<u16>,
             #[serde(default)]
             timeout_ms: u64,
         }
         let args: Start = parse(args)?;
+        let stdin = args.stdin.unwrap_or_default();
+        if args.mode == Some(Mode::Pty) {
+            if !cfg!(target_os = "linux") {
+                return Err("explicit exec PTY mode requires Linux exact-count input; native portable terminals remain available through terminal.open".into());
+            }
+            if args.stdin.is_some() {
+                return Err("PTY mode owns stdin; omit the pipe/null stdin option".into());
+            }
+            if args.artifact_budget_bytes.is_some()
+                || args.track_artifacts
+                || args.temporary_artifacts
+            {
+                return Err("task artifact supervision currently requires pipes mode".into());
+            }
+            if args.rows.is_some_and(|n| n == 0 || n > 1000)
+                || args.cols.is_some_and(|n| n == 0 || n > 1000)
+            {
+                return Err("PTY rows and cols must be 1..=1000".into());
+            }
+        } else if args.rows.is_some() || args.cols.is_some() {
+            return Err("rows and cols require mode:'pty'".into());
+        }
         let title = job_title(args.title)?;
         let artifact_budget = args.artifact_budget_bytes.or_else(|| {
             (args.track_artifacts || args.temporary_artifacts)
@@ -806,6 +1429,33 @@ impl Shell {
         if !cwd.is_dir() || !cwd.starts_with(&self.root) {
             return Err("cwd must be an existing directory inside the authorized workspace".into());
         }
+        if args.mode == Some(Mode::Pty) {
+            let id = self.next_job_id();
+            if let Some(pool) = &self.observer {
+                pool.terminal_begin(&id, &cwd).await?;
+            }
+            let started = self.spawn_pty(
+                PtyStart {
+                    id: id.clone(),
+                    command: args.command,
+                    title,
+                    cwd,
+                    env: args.env.unwrap_or_default(),
+                    timeout_ms: args.timeout_ms,
+                    size: Some((args.rows.unwrap_or(24), args.cols.unwrap_or(80))),
+                    live: true,
+                    compatibility_limit: false,
+                },
+                creator,
+            );
+            if started.is_err()
+                && let Some(pool) = &self.observer
+            {
+                pool.terminal_closed(&id);
+            }
+            let job = started?;
+            return Ok(job.snapshot());
+        }
         let store = &self.output;
         // Reserve capacity before spawning: rejected requests must never run commands.
         let permit = self.slots.clone().try_acquire_owned().map_err(|_| {
@@ -829,7 +1479,7 @@ impl Shell {
             registry
                 .jobs
                 .values()
-                .filter(|job| !job.state().running)
+                .filter(|job| job.id != "main" && !job.state().running)
                 .min_by_key(|job| job.timing.started)
                 .map(|job| job.id.clone())
         } else {
@@ -839,7 +1489,7 @@ impl Shell {
         command
             .args(&args.command[1..])
             .current_dir(&cwd)
-            .stdin(if args.stdin == InputMode::Pipe {
+            .stdin(if stdin == InputMode::Pipe {
                 Stdio::piped()
             } else {
                 Stdio::null()
@@ -849,7 +1499,9 @@ impl Shell {
         let pty_reader: Option<Box<dyn AsyncRead + Unpin + Send>> = {
             #[cfg(unix)]
             {
-                if let Some(lease) = &observation {
+                if args.mode.is_none()
+                    && let Some(lease) = &observation
+                {
                     let (reader, stdout, stderr) = crate::observer::pty::Output::open(lease)
                         .map_err(|error| format!("could not open command PTY: {error}"))?;
                     command
@@ -930,7 +1582,7 @@ impl Shell {
             )
         };
         let (cancel, cancel_rx) = watch::channel(false);
-        let (input_stopped, _) = watch::channel(args.stdin != InputMode::Pipe);
+        let (input_stopped, _) = watch::channel(stdin != InputMode::Pipe);
         let job = Arc::new(Job {
             creator,
             id: id.clone(),
@@ -950,19 +1602,20 @@ impl Shell {
                 timed_out: false,
                 error: None,
                 finished: None,
-                stdin_open: args.stdin == InputMode::Pipe,
+                stdin_open: stdin == InputMode::Pipe,
                 stdin_written: 0,
                 stdout: Output::new(store, format!("job:{id}:stdout")),
                 stderr: Output::new(store, format!("job:{id}:stderr")),
             }),
             changed: Arc::new(Notify::new()),
             cancel,
-            input_mode: args.stdin,
+            input_mode: stdin,
             stdin: AsyncMutex::new(process.child.stdin.take()),
             input_stopped,
             observation: Mutex::new(observation),
             output_mode,
             tty_slot,
+            terminal: None,
             #[cfg(target_os = "linux")]
             artifacts: artifacts.map(Mutex::new),
             #[cfg(target_os = "linux")]
@@ -1107,6 +1760,9 @@ impl Shell {
         };
         for job in &jobs {
             job.cancel.send_replace(true);
+            if job.terminal.is_some() {
+                crate::client::terminal::close_session(&job.id);
+            }
         }
         let deadline = Instant::now() + Duration::from_secs(8);
         let waits = jobs.iter().map(|job| wait_finished(job, Some(deadline)));
@@ -1170,6 +1826,52 @@ impl Shell {
             },
         }
     }
+}
+
+fn protect_main(id: &str) -> Result<(), String> {
+    if id == "main" {
+        Err("main is the connection terminal; disconnect the client to close it".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn valid_terminal_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
+}
+
+fn terminal_id(args: Value) -> Result<String, String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Id {
+        terminal_id: String,
+    }
+    let args: Id = parse(args)?;
+    if !valid_terminal_id(&args.terminal_id) {
+        return Err("invalid terminal_id".into());
+    }
+    Ok(args.terminal_id)
+}
+
+fn interactive_command(shell: &Path) -> Vec<String> {
+    let mut command = vec![shell.to_string_lossy().into_owned()];
+    #[cfg(unix)]
+    command.push("-i".into());
+    #[cfg(windows)]
+    {
+        let name = shell
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if matches!(name.as_str(), "bash" | "zsh" | "sh" | "fish") {
+            command.push("-i".into());
+        }
+        if matches!(name.as_str(), "powershell" | "pwsh") {
+            command.push("-NoLogo".into());
+        }
+    }
+    command
 }
 
 fn exit_signal(status: &std::process::ExitStatus) -> Option<i32> {
@@ -1464,6 +2166,7 @@ mod tests {
             observation: Mutex::new(None),
             output_mode: "pipes",
             tty_slot: None,
+            terminal: None,
             #[cfg(target_os = "linux")]
             artifacts: None,
             #[cfg(target_os = "linux")]

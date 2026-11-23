@@ -1,0 +1,794 @@
+name: GUI clients
+
+# Manual/reusable checks of one immutable source revision. This workflow does
+# not deploy, production-sign, publish a release, or exercise a live ssmcp connection.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Full 40-character source commit SHA
+        required: true
+        type: string
+      platform:
+        description: Native client checks to run
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - ios
+          - linux
+          - windows
+          - android
+  workflow_call:
+    inputs:
+      ref:
+        description: Full 40-character source commit SHA
+        required: true
+        type: string
+      platform:
+        description: One of all, ios, linux, windows, android
+        required: false
+        default: all
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate requested revision
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      ref: ${{ steps.inputs.outputs.ref }}
+      platform: ${{ steps.inputs.outputs.platform }}
+      ios: ${{ steps.clients.outputs.ios }}
+      linux: ${{ steps.clients.outputs.linux }}
+      windows: ${{ steps.clients.outputs.windows }}
+      android: ${{ steps.clients.outputs.android }}
+    steps:
+      - name: Require an exact commit and a supported platform
+        id: inputs
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+          REQUESTED_PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$REQUESTED_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo '::error::ref must be a full 40-character commit SHA, not a branch or tag.'
+            exit 1
+          fi
+          case "$REQUESTED_PLATFORM" in
+            all|ios|linux|windows|android) ;;
+            *) echo '::error::platform must be all, ios, linux, windows, or android.'; exit 1 ;;
+          esac
+          printf 'ref=%s\nplatform=%s\n' "${REQUESTED_REF,,}" "$REQUESTED_PLATFORM" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ steps.inputs.outputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      - name: Require every requested application to exist at this revision
+        id: clients
+        env:
+          REQUESTED_PLATFORM: ${{ inputs.platform }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "scripts")
+          import release
+          clients = release.gui_clients(Path.cwd())
+          requested = os.environ["REQUESTED_PLATFORM"]
+          if not clients or (requested != "all" and requested not in clients):
+              raise ValueError("the requested revision does not contain the selected GUI client")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              for platform in release.GUI_CLIENTS:
+                  selected = platform in clients and requested in ("all", platform)
+                  output.write(f"{platform}={str(selected).lower()}\n")
+          PY
+
+  ios:
+    name: iOS simulator build and XCTest
+    needs: validate
+    if: needs.validate.outputs.ios == 'true'
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      SOURCE_COMMIT: ${{ needs.validate.outputs.ref }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+
+      - name: Record the source revision and Xcode project
+        run: |
+          set -euo pipefail
+          IOS_EVIDENCE_DIR="$RUNNER_TEMP/ssmcp-gui-ci-ios"
+          IOS_DERIVED_DATA="$RUNNER_TEMP/ssmcp-ios-derived-data"
+          printf 'IOS_EVIDENCE_DIR=%s\nIOS_DERIVED_DATA=%s\n' \
+            "$IOS_EVIDENCE_DIR" "$IOS_DERIVED_DATA" >> "$GITHUB_ENV"
+          mkdir -p "$IOS_EVIDENCE_DIR"
+          actual_commit="$(git rev-parse HEAD)"
+          if [[ "$actual_commit" != "$SOURCE_COMMIT" ]]; then
+            echo '::error::The checked-out commit does not match the requested commit.'
+            exit 1
+          fi
+          printf 'source_commit=%s\nworkflow_commit=%s\nrunner=%s/%s\n' \
+            "$actual_commit" "$GITHUB_WORKFLOW_SHA" "$RUNNER_OS" "$RUNNER_ARCH" \
+            > "$IOS_EVIDENCE_DIR/revision.txt"
+          xcodebuild -version 2>&1 | tee "$IOS_EVIDENCE_DIR/xcode-version.log"
+          xcodebuild -showsdks 2>&1 | tee "$IOS_EVIDENCE_DIR/xcode-sdks.log"
+          xcodebuild -list -project apps/ssmcp-ios/SSMCP.xcodeproj \
+            2>&1 | tee "$IOS_EVIDENCE_DIR/xcode-project.log"
+
+      - name: Select an installed iPhone simulator
+        id: simulator
+        run: |
+          set -euo pipefail
+          xcrun simctl list devices available --json > "$IOS_EVIDENCE_DIR/devices.json"
+          xcrun simctl list runtimes --json > "$IOS_EVIDENCE_DIR/runtimes.json"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import uuid
+          from pathlib import Path
+
+          def select_simulator(devices, runtimes):
+              available = {}
+              for runtime in runtimes.get("runtimes", []):
+                  identifier = runtime.get("identifier", "")
+                  version = runtime.get("version", "")
+                  if (runtime.get("isAvailable") is True
+                          and identifier.startswith("com.apple.CoreSimulator.SimRuntime.iOS-")
+                          and re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", version)):
+                      parts = tuple(int(part) for part in version.split("."))
+                      if parts >= (16,):
+                          available[identifier] = parts
+              candidates = []
+              for runtime, entries in devices.get("devices", {}).items():
+                  if runtime not in available:
+                      continue
+                  for device in entries:
+                      kind = device.get("deviceTypeIdentifier", "")
+                      name = device.get("name", "")
+                      state = device.get("state", "")
+                      if (device.get("isAvailable") is not True
+                              or state not in ("Booted", "Shutdown")
+                              or not (kind.startswith("com.apple.CoreSimulator.SimDeviceType.iPhone")
+                                      or (not kind and name.startswith("iPhone")))):
+                          continue
+                      try:
+                          identifier = device["udid"]
+                          uuid.UUID(identifier)  # Validate without rewriting simctl's exact identifier.
+                      except (KeyError, ValueError, TypeError, AttributeError):
+                          continue
+                      candidates.append((available[runtime], state == "Booted", name,
+                                         identifier, runtime, state))
+              if not candidates:
+                  raise SystemExit("No available iPhone simulator with iOS 16 or newer is installed.")
+              _, _, name, identifier, runtime, state = max(candidates)
+              return {"udid": identifier, "name": name, "runtime": runtime, "state": state}
+
+          evidence = Path(os.environ["IOS_EVIDENCE_DIR"])
+          selected = select_simulator(
+              json.loads((evidence / "devices.json").read_text()),
+              json.loads((evidence / "runtimes.json").read_text()),
+          )
+          (evidence / "simulator.json").write_text(json.dumps(selected, indent=2) + "\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"udid={selected['udid']}\nstate={selected['state']}\n")
+          print(json.dumps(selected, indent=2))
+          PY
+
+      - name: Boot the selected simulator
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+          SIMULATOR_STATE: ${{ steps.simulator.outputs.state }}
+        run: |
+          set -euo pipefail
+          if [[ "$SIMULATOR_STATE" != 'Booted' ]]; then
+            xcrun simctl boot "$SIMULATOR_UDID"
+          fi
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b \
+            2>&1 | tee "$IOS_EVIDENCE_DIR/simulator-boot.log"
+
+      - name: Build the app and tests without signing
+        id: build
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -euo pipefail
+          xcodebuild -project apps/ssmcp-ios/SSMCP.xcodeproj -scheme SSMCP \
+            -configuration Debug -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath "$IOS_DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build-for-testing \
+            2>&1 | tee "$IOS_EVIDENCE_DIR/build.log"
+
+      - name: Run XCTest on the selected simulator
+        id: tests
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -euo pipefail
+          xcodebuild -project apps/ssmcp-ios/SSMCP.xcodeproj -scheme SSMCP \
+            -configuration Debug -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath "$IOS_DERIVED_DATA" \
+            -resultBundlePath "$IOS_EVIDENCE_DIR/ios-tests.xcresult" \
+            -parallel-testing-enabled NO -only-testing:SSMCPTests \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test-without-building \
+            2>&1 | tee "$IOS_EVIDENCE_DIR/tests.log"
+
+      - name: Record and package successful simulator checks
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          evidence = Path(os.environ["IOS_EVIDENCE_DIR"])
+          (evidence / "result.json").write_text(json.dumps({
+              "source_commit": os.environ["SOURCE_COMMIT"],
+              "target": "ios-simulator", "profile": "debug",
+              "build_exit": 0, "test_exit": 0,
+          }) + "\n")
+          PY
+          python3 scripts/release.py package-gui --platform ios --evidence "$IOS_EVIDENCE_DIR"
+
+      - name: Retain the iOS simulator verification receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ssmcp-gui-ios
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Record the validation scope
+        if: always()
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+        run: |
+          {
+            printf '### iOS client\n\n'
+            printf -- '- Source commit: `%s`\n' "$SOURCE_COMMIT"
+            printf -- '- Simulator Debug build: %s\n' "$BUILD_OUTCOME"
+            printf -- '- XCTest: %s\n' "$TEST_OUTCOME"
+            printf -- '- Scope: simulator compilation and protocol tests; physical-device UI and live gateway behavior are separate checks.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Shut down the simulator
+        if: always() && steps.simulator.outputs.udid != ''
+        continue-on-error: true
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: xcrun simctl shutdown "$SIMULATOR_UDID"
+
+      - name: Preserve iOS logs and XCTest results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ios-${{ needs.validate.outputs.ref }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ssmcp-gui-ci-ios
+          if-no-files-found: warn
+          retention-days: 7
+
+  linux:
+    name: Linux desktop Release and X11 window
+    needs: validate
+    if: needs.validate.outputs.linux == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      SOURCE_COMMIT: ${{ needs.validate.outputs.ref }}
+      CARGO_TERM_COLOR: never
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      - name: Record the source revision and require its lockfile
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test -f apps/ssmcp-desktop/Cargo.lock
+          evidence="$RUNNER_TEMP/ssmcp-gui-ci-linux"
+          mkdir -p "$evidence"
+          printf 'LINUX_EVIDENCE_DIR=%s\nCARGO_TARGET_DIR=%s\n' \
+            "$evidence" "$RUNNER_TEMP/ssmcp-desktop-target" >> "$GITHUB_ENV"
+          printf 'source_commit=%s\nworkflow_commit=%s\nrunner=%s/%s\n' \
+            "$SOURCE_COMMIT" "$GITHUB_WORKFLOW_SHA" "$RUNNER_OS" "$RUNNER_ARCH" \
+            > "$evidence/revision.txt"
+      - name: Install the native X11 build and window-check tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libx11-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev \
+            xvfb xauth x11-utils mesa-utils libgl1-mesa-dri fonts-noto-cjk
+      - name: Install Rust 1.100.0 for native Linux
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
+        with:
+          toolchain: 1.100.0
+          targets: x86_64-unknown-linux-gnu
+      - name: Build and test the optimized native desktop
+        id: native
+        run: |
+          set -euo pipefail
+          rustc -Vv | tee "$LINUX_EVIDENCE_DIR/rustc.log"
+          cargo -V | tee "$LINUX_EVIDENCE_DIR/cargo.log"
+          set +e
+          cargo test --manifest-path apps/ssmcp-desktop/Cargo.toml --locked --release \
+            --target x86_64-unknown-linux-gnu 2>&1 | tee "$LINUX_EVIDENCE_DIR/tests.log"
+          test_exit=${PIPESTATUS[0]}
+          cargo build --manifest-path apps/ssmcp-desktop/Cargo.toml --locked --release \
+            --target x86_64-unknown-linux-gnu 2>&1 | tee "$LINUX_EVIDENCE_DIR/build.log"
+          build_exit=${PIPESTATUS[0]}
+          set -e
+          python3 - "$test_exit" "$build_exit" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          result = {"source_commit": os.environ["SOURCE_COMMIT"], "target": "x86_64-unknown-linux-gnu",
+                    "profile": "release", "test_exit": int(sys.argv[1]), "build_exit": int(sys.argv[2])}
+          (Path(os.environ["LINUX_EVIDENCE_DIR"]) / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+          if result["test_exit"] or result["build_exit"]:
+              raise SystemExit("Linux desktop Release build or tests failed")
+          PY
+          binary="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/ssmcp-desktop"
+          test -x "$binary"
+          ldd "$binary" | tee "$LINUX_EVIDENCE_DIR/dependencies.log"
+          if grep -q 'not found' "$LINUX_EVIDENCE_DIR/dependencies.log"; then
+            echo '::error::The Linux desktop executable has unresolved runtime libraries.'
+            exit 1
+          fi
+      - name: Observe the Release executable in a real X11 window
+        id: window
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=5s 45s xvfb-run --auto-servernum \
+            --server-args='-screen 0 1280x900x24 +extension GLX -nolisten tcp' python3 - <<'PY'
+          import hashlib, json, os, re, subprocess, time
+          from pathlib import Path
+          evidence = Path(os.environ["LINUX_EVIDENCE_DIR"])
+          binary = Path(os.environ["CARGO_TARGET_DIR"]) / "x86_64-unknown-linux-gnu/release/ssmcp-desktop"
+          renderer = subprocess.run(["glxinfo", "-B"], text=True, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, timeout=10)
+          (evidence / "renderer.log").write_text(renderer.stdout)
+          if renderer.returncode or "llvmpipe" not in renderer.stdout.lower():
+              raise SystemExit("The Xvfb display must provide Mesa llvmpipe OpenGL")
+          title = "ssmcp-desktop · 本地工作台"
+          window = {"source_commit": os.environ["SOURCE_COMMIT"], "target": "x86_64-unknown-linux-gnu",
+                    "profile": "release", "backend": "x11-opengl", "renderer": "llvmpipe", "title": title,
+                    "mapped": False, "width": 0, "height": 0, "exit_after_ms": 10000,
+                    "binary_bytes": binary.stat().st_size, "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
+          started = time.monotonic()
+          deadline = started + 30
+          probe_text = ""
+          with (evidence / "window.log").open("w") as log:
+              process = subprocess.Popen([str(binary), "--exit-after-ms", "10000"], stdout=log, stderr=subprocess.STDOUT)
+              try:
+                  while process.poll() is None and time.monotonic() < deadline:
+                      try:
+                          probe = subprocess.run(["xwininfo", "-name", title, "-stats"], text=True,
+                                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=1)
+                      except subprocess.TimeoutExpired:
+                          continue
+                      probe_text = probe.stdout
+                      width = re.search(r"(?m)^\s*Width:\s*(\d+)\s*$", probe_text)
+                      height = re.search(r"(?m)^\s*Height:\s*(\d+)\s*$", probe_text)
+                      if probe.returncode == 0 and "Map State: IsViewable" in probe_text and width and height:
+                          window.update(mapped=True, width=int(width[1]), height=int(height[1]))
+                          break
+                      time.sleep(0.1)
+                  process.wait(timeout=max(0.001, deadline - time.monotonic()))
+              finally:
+                  if process.poll() is None:
+                      process.kill()
+                      process.wait(timeout=5)
+                  window.update(exit_code=process.returncode, elapsed_ms=int((time.monotonic() - started) * 1000))
+                  (evidence / "xwininfo.log").write_text(probe_text or "No mapped application window was observed.\n")
+                  (evidence / "window.json").write_text(json.dumps(window, indent=2) + "\n")
+          if not window["mapped"] or window["exit_code"] != 0 or not 10000 <= window["elapsed_ms"] < 30000:
+              raise SystemExit("The Release executable did not complete its bounded native window check")
+          PY
+      - name: Package the exact Linux Release executable tested in Xvfb
+        run: |
+          python3 scripts/release.py package-gui --platform linux --evidence "$LINUX_EVIDENCE_DIR" \
+            --binary "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/ssmcp-desktop"
+      - name: Retain the downloadable Linux Release archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ssmcp-gui-linux
+          path: dist/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+      - name: Record the validation scope
+        if: always()
+        env:
+          NATIVE_OUTCOME: ${{ steps.native.outcome }}
+          WINDOW_OUTCOME: ${{ steps.window.outcome }}
+        run: |
+          {
+            printf '### Linux desktop client\n\n- Source commit: `%s`\n' "$SOURCE_COMMIT"
+            printf -- '- Native Release build and Rust tests: %s\n' "$NATIVE_OUTCOME"
+            printf -- '- Xvfb/Mesa llvmpipe mapped window and bounded clean exit: %s\n' "$WINDOW_OUTCOME"
+            printf '%s\n' '- Scope: default X11/OpenGL backend, without a live CLI session. This is not GPU, Wayland-native or interactive session acceptance.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve Linux build, test and actual window evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: linux-${{ needs.validate.outputs.ref }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ssmcp-gui-ci-linux
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows:
+    name: Windows native desktop build and tests
+    needs: validate
+    if: needs.validate.outputs.windows == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 40
+    env:
+      SOURCE_COMMIT: ${{ needs.validate.outputs.ref }}
+      CARGO_TERM_COLOR: never
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out the requested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: recursive
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+
+      - name: Record the source revision and require its lockfile
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $evidence = Join-Path $env:RUNNER_TEMP 'ssmcp-gui-ci-windows'
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          $targetDirectory = Join-Path $env:RUNNER_TEMP 'ssmcp-desktop-target'
+          "CARGO_TARGET_DIR=$targetDirectory" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $actualCommit = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actualCommit -cne $env:SOURCE_COMMIT) {
+            throw 'The checked-out commit does not match the requested commit.'
+          }
+          @(
+            "source_commit=$actualCommit"
+            "workflow_commit=$env:GITHUB_WORKFLOW_SHA"
+            "runner=$env:RUNNER_OS/$env:RUNNER_ARCH"
+          ) | Set-Content -Path (Join-Path $evidence 'revision.txt')
+          if (-not (Test-Path 'apps/ssmcp-desktop/Cargo.lock' -PathType Leaf)) {
+            throw 'The requested commit must contain apps/ssmcp-desktop/Cargo.lock; CI does not generate it.'
+          }
+
+      - name: Install Rust 1.100.0 for native Windows
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
+        with:
+          toolchain: 1.100.0
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build and test with the Visual C++ environment
+        id: native
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $evidence = Join-Path $env:RUNNER_TEMP 'ssmcp-gui-ci-windows'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          if (-not (Test-Path $vswhere -PathType Leaf)) {
+            throw 'Visual Studio discovery tool vswhere.exe is missing.'
+          }
+          $installations = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $installations) {
+            throw 'No Visual Studio installation with the x64 C++ tools is available.'
+          }
+          $visualStudio = ($installations | Select-Object -First 1).Trim()
+          $developerShell = Join-Path $visualStudio 'Common7/Tools/Launch-VsDevShell.ps1'
+          # zgpui's native build script directly invokes cl and lib. Keep this
+          # environment and both Cargo commands in the same PowerShell step.
+          & $developerShell -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          Get-Command cl.exe, lib.exe, cargo.exe, rustc.exe |
+            Format-Table Name, Source -AutoSize | Out-String |
+            Tee-Object -FilePath (Join-Path $evidence 'native-tools.log')
+          & rustc -Vv 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'rustc.log')
+          if ($LASTEXITCODE -ne 0) { throw 'rustc version inspection failed.' }
+          & cargo -V 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'cargo.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo version inspection failed.' }
+
+          & cargo test --manifest-path apps/ssmcp-desktop/Cargo.toml --locked --target x86_64-pc-windows-msvc 2>&1 |
+            Tee-Object -FilePath (Join-Path $evidence 'tests.log')
+          $testExit = $LASTEXITCODE
+          & cargo build --manifest-path apps/ssmcp-desktop/Cargo.toml --locked --target x86_64-pc-windows-msvc 2>&1 |
+            Tee-Object -FilePath (Join-Path $evidence 'build.log')
+          $buildExit = $LASTEXITCODE
+          [ordered]@{
+            source_commit = $env:SOURCE_COMMIT
+            target = 'x86_64-pc-windows-msvc'
+            profile = 'debug'
+            test_exit = $testExit
+            build_exit = $buildExit
+          } | ConvertTo-Json | Set-Content -Path (Join-Path $evidence 'result.json')
+          if ($testExit -ne 0 -or $buildExit -ne 0) {
+            throw "Desktop checks failed: cargo test=$testExit, cargo build=$buildExit."
+          }
+          $executable = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/debug/ssmcp-desktop.exe'
+          if (-not (Test-Path $executable -PathType Leaf)) {
+            throw 'Cargo reported success without the expected desktop executable.'
+          }
+          [ordered]@{
+            file = 'ssmcp-desktop.exe'
+            bytes = (Get-Item $executable).Length
+            sha256 = (Get-FileHash -Algorithm SHA256 -Path $executable).Hash.ToLowerInvariant()
+          } | ConvertTo-Json | Set-Content -Path (Join-Path $evidence 'executable.json')
+
+      - name: Package the tested Windows debug executable
+        run: |
+          $evidence = Join-Path $env:RUNNER_TEMP 'ssmcp-gui-ci-windows'
+          $executable = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/debug/ssmcp-desktop.exe'
+          & python scripts/release.py package-gui --platform windows --evidence $evidence --binary $executable
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop packaging and source proof failed.' }
+
+      - name: Retain the downloadable Windows debug archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ssmcp-gui-windows
+          path: dist/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Record the validation scope
+        if: always()
+        env:
+          NATIVE_OUTCOME: ${{ steps.native.outcome }}
+        run: |
+          @(
+            '### Windows desktop client'
+            ''
+            ('- Source commit: `{0}`' -f $env:SOURCE_COMMIT)
+            ('- Native MSVC Debug build and Rust tests: {0}' -f $env:NATIVE_OUTCOME)
+            '- Scope: compilation and automated tests; this job does not launch or visually inspect a window or connect to a live session.'
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Preserve Windows build and test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: windows-${{ needs.validate.outputs.ref }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ssmcp-gui-ci-windows
+          if-no-files-found: warn
+          retention-days: 7
+
+  android:
+    name: Android debug APK and real Instrumentation
+    needs: validate
+    if: needs.validate.outputs.android == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      SOURCE_COMMIT: ${{ needs.validate.outputs.ref }}
+      ANDROID_SERIAL: emulator-5554
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+
+      - name: Prepare Android evidence and emulator directories
+        run: |
+          set -euo pipefail
+          printf 'ANDROID_EVIDENCE_DIR=%s\nANDROID_AVD_HOME=%s\n' \
+            "$RUNNER_TEMP/ssmcp-gui-ci-android" "$RUNNER_TEMP/ssmcp-android-avd" >> "$GITHUB_ENV"
+
+      - name: Install Linux emulator runtime libraries
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libpulse0
+
+      - name: Install fixed Gradle and emulator archives on the runner
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test -d "$JAVA_HOME_21_X64"
+          mkdir -p "$ANDROID_EVIDENCE_DIR" "$ANDROID_AVD_HOME" "$RUNNER_TEMP/ssmcp-android-tools"
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          printf 'JAVA_HOME=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+          printf '%s\n' "$JAVA_HOME/bin" >> "$GITHUB_PATH"
+          java -version 2>&1 | tee "$ANDROID_EVIDENCE_DIR/java.log"
+          printf 'source_commit=%s\nworkflow_commit=%s\nrunner=%s/%s\n' \
+            "$SOURCE_COMMIT" "$GITHUB_WORKFLOW_SHA" "$RUNNER_OS" "$RUNNER_ARCH" \
+            > "$ANDROID_EVIDENCE_DIR/revision.txt"
+          # Published upstream SHA-256 values:
+          # https://gradle.org/release-checksums/
+          # https://developer.android.com/studio/emulator_archive (36.2.12)
+          cd "$RUNNER_TEMP/ssmcp-android-tools"
+          curl --fail --location --retry 3 --connect-timeout 30 --max-time 300 \
+            https://services.gradle.org/distributions/gradle-8.10.2-bin.zip -o gradle.zip
+          printf '%s  gradle.zip\n' 31c55713e40233a8303827ceb42ca48a47267a0ad4bab9177123121e71524c26 \
+            | sha256sum --check - | tee "$ANDROID_EVIDENCE_DIR/gradle-download.log"
+          curl --fail --location --retry 3 --connect-timeout 30 --max-time 300 \
+            https://dl.google.com/android/repository/emulator-linux_x64-14214601.zip -o emulator.zip
+          printf '%s  emulator.zip\n' 55e7ce272dd27413855c81b4629c107a1553d07a2f77fa55a6049fdca22f4221 \
+            | sha256sum --check - | tee "$ANDROID_EVIDENCE_DIR/emulator-download.log"
+          unzip -q gradle.zip
+          unzip -q emulator.zip
+          printf '%s\n' "$RUNNER_TEMP/ssmcp-android-tools/gradle-8.10.2/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/ssmcp-android-tools/emulator/emulator" -version \
+            2>&1 | tee "$ANDROID_EVIDENCE_DIR/emulator-version.log"
+
+      - name: Install the API 35 SDK and emulator image
+        run: |
+          set -euo pipefail
+          sdkmanager="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          "$sdkmanager" --licenses < <(printf 'y\n%.0s' {1..100}) > "$ANDROID_EVIDENCE_DIR/licenses.log"
+          "$sdkmanager" --install 'platform-tools' 'cmdline-tools;16.0' 'platforms;android-35' \
+            'build-tools;35.0.0' 'system-images;android-35;google_apis;x86_64' \
+            2>&1 | tee "$ANDROID_EVIDENCE_DIR/sdk-install.log"
+          # SDK Manager verifies its archive metadata. Retain the resolved package
+          # revisions; a rebuilt debug APK is not promised to be byte-identical.
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          sdk = Path(os.environ["ANDROID_SDK_ROOT"])
+          evidence = Path(os.environ["ANDROID_EVIDENCE_DIR"])
+          with (evidence / "sdk-packages.log").open("w") as output:
+              for directory in ("cmdline-tools/16.0", "platforms/android-35", "build-tools/35.0.0",
+                                "system-images/android-35/google_apis/x86_64", "platform-tools"):
+                  metadata = sdk / directory / "source.properties"
+                  data = metadata.read_bytes()
+                  output.write(f"{directory} sha256={hashlib.sha256(data).hexdigest()}\n")
+                  output.write(data.decode("utf-8") + "\n")
+          PY
+          export PATH="$ANDROID_SDK_ROOT/platform-tools:$PATH"
+          printf '%s\n' "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          command -v adb | tee "$ANDROID_EVIDENCE_DIR/adb-path.log"
+          gradle --version 2>&1 | tee "$ANDROID_EVIDENCE_DIR/gradle-version.log"
+          adb version 2>&1 | tee "$ANDROID_EVIDENCE_DIR/adb-version.log"
+
+      - name: Build the debug app and custom Instrumentation APK
+        id: build
+        working-directory: apps/ssmcp-android
+        run: |
+          set -euo pipefail
+          gradle --no-daemon --console=plain :app:assembleDebug :app:assembleDebugAndroidTest \
+            2>&1 | tee "$ANDROID_EVIDENCE_DIR/build.log"
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
+            app/build/outputs/apk/debug/app-debug.apk \
+            2>&1 | tee "$ANDROID_EVIDENCE_DIR/apk-signature.log"
+          cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            "$ANDROID_EVIDENCE_DIR/app-debug-androidTest.apk"
+
+      - name: Run the custom Instrumentation on an API 35 emulator
+        id: tests
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm
+          sudo chown "$(id -u):$(id -g)" /dev/kvm
+          printf 'no\n' | "$ANDROID_SDK_ROOT/cmdline-tools/16.0/bin/avdmanager" create avd \
+            --force --name ssmcp-ci-api35 --package 'system-images;android-35;google_apis;x86_64' --device pixel_2
+          "$RUNNER_TEMP/ssmcp-android-tools/emulator/emulator" -avd ssmcp-ci-api35 \
+            -port 5554 -no-window -gpu swiftshader_indirect -no-audio -no-snapshot \
+            -no-boot-anim -accel on -camera-back none -camera-front none \
+            > "$ANDROID_EVIDENCE_DIR/emulator.log" 2>&1 &
+          emulator_pid=$!
+          trap 'timeout 10 adb emu kill >/dev/null 2>&1 || kill "$emulator_pid" 2>/dev/null || true' EXIT
+          timeout 180 adb wait-for-device
+          deadline=$((SECONDS + 240))
+          until [[ "$(timeout 10 adb shell getprop sys.boot_completed | tr -d '\r')" == 1 ]]; do
+            if (( SECONDS >= deadline )); then
+              echo '::error::The API 35 emulator did not finish booting.'
+              exit 1
+            fi
+            sleep 2
+          done
+          test "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" = 35
+          adb shell getprop > "$ANDROID_EVIDENCE_DIR/device.log"
+          adb install -r apps/ssmcp-android/app/build/outputs/apk/debug/app-debug.apk \
+            2>&1 | tee "$ANDROID_EVIDENCE_DIR/install-app.log"
+          adb install -r "$ANDROID_EVIDENCE_DIR/app-debug-androidTest.apk" \
+            2>&1 | tee "$ANDROID_EVIDENCE_DIR/install-tests.log"
+          timeout 120 adb shell am instrument -w \
+            dev.ssmcp.mobile.test/dev.ssmcp.mobile.ProtocolInstrumentation \
+            2>&1 | tee "$ANDROID_EVIDENCE_DIR/tests.log"
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "scripts")
+          import release
+          evidence = Path(os.environ["ANDROID_EVIDENCE_DIR"])
+          release.validate_android_instrumentation((evidence / "tests.log").read_text())
+          (evidence / "result.json").write_text(json.dumps({
+              "source_commit": os.environ["SOURCE_COMMIT"],
+              "target": "android-api-35-x86_64", "profile": "debug",
+              "build_exit": 0, "test_exit": 0,
+          }) + "\n")
+          PY
+
+      - name: Package the tested debug APK and source receipt
+        run: |
+          python3 scripts/release.py package-gui --platform android \
+            --evidence "$ANDROID_EVIDENCE_DIR" \
+            --binary apps/ssmcp-android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Retain the Android debug release asset
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ssmcp-gui-android
+          path: dist/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Record Android validation scope
+        if: always()
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+        run: |
+          {
+            printf '### Android client\n\n'
+            printf -- '- Source commit: %s\n' "$SOURCE_COMMIT"
+            printf -- '- Debug APK build: %s\n' "$BUILD_OUTCOME"
+            printf -- '- API 35 custom Instrumentation: %s\n' "$TEST_OUTCOME"
+            printf -- '- Scope: one protocol/controller invocation with an injected gateway; no live HTTPS gateway or visual UI acceptance.\n'
+            printf -- '- The APK uses the runner debug certificate; no production signing or app-store publication.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve Android evidence and the test APK
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: android-${{ needs.validate.outputs.ref }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ssmcp-gui-ci-android
+          if-no-files-found: warn
+          retention-days: 7

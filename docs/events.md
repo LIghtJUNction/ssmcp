@@ -169,8 +169,66 @@ conditional: continue any independent useful work; when none remains, await
 user-input and worker events. The hook does not invent an idle state or launch
 another model.
 
-Use `events.policy` to change `enabled`, `window_ms`, `kinds` or a concise
-`strategy` for the current participant. The default window is 55 seconds.
-Strategies change guidance, not task ownership, access control or completion
-receipts. Policy hints are throttled and bounded, and a policy change takes
-effect without waiting for a process reload.
+Use `events.policy` to change `enabled`, `window_ms`, `kinds`, a concise
+`strategy`, or an optional `dreaming` round for the current participant. The
+default waiting window is 55 seconds. The generated subscription filter always
+includes `user.input_available` unless `user.*` already covers it; the stored
+`kinds` preference and explicit subscriptions are unchanged. Wait guidance is
+suppressed when input for this participant or the next caller is queued or being
+edited, or when the response already contains user messages. Observing this
+state does not reserve, consume or acknowledge any input.
+
+### One optional Dreaming round
+
+Dreaming is disabled by default. An authorized coordinator can set a single
+round through the public `events` tool with `action: "policy"` and this
+`patch` on its bound control client:
+
+~~~json
+{
+  "dreaming": {
+    "round_id": "tools-round-1",
+    "repository": "project",
+    "budget_ms": 20000
+  }
+}
+~~~
+
+All three round fields are required. `round_id` contains 1–128 ASCII letters,
+digits, underscores or hyphens; `repository` is `project` or `global`;
+`budget_ms` is 1,000–55,000. An invalid patch preserves the previous policy.
+Omitting `dreaming` preserves it, while `{"dreaming": null}` clears it.
+The scope names identify a requested local layer; they do not register a source
+or grant permission to edit it.
+
+The existing response hook can return `coordination_hints[].dreaming_round`
+when the selected round has not been offered in its current cache entry, no
+relevant input is pending, the response is not an error, and the linked pool is
+both authorized and observed fully idle. Busy, queued, offline, retiring,
+stopping, disconnected or unavailable pool state suppresses the round. This
+observation is not a reservation of capacity or proof that earlier uncertain
+effects have stopped. The caller must still have no independent authorized
+work left and must reconcile known task and job receipts before starting.
+
+The last offered round ID is retained in the existing bounded hint cache.
+Ordinary wait reminders, changing the same round's budget, and temporarily
+disabling policy do not offer that round again. Policy entries expire after
+15 inactive minutes; both the policy registry and hint cache hold at most
+256 entries. Cache eviction or reconnect can expose a familiar round ID again.
+Reuse the original task and job identities; a repeated hint, elapsed budget,
+cancelled wait or `unknown` outcome never authorizes another execution.
+
+The round and its time budget are advisory instructions for the external
+coordinator. Setting the policy starts no timer, model, task submission or Git
+write. Use short operations within the remaining budget, let new user input
+preempt further steps, and retain the actual outcome and reviewable local
+changes. Explicit event acknowledgement still does not deliver user text;
+handle `user.input_available` through the existing input-delivery path.
+See [the tool-maintenance workflow](tool-repositories.md#maintaining-workflows-with-dreaming).
+
+All policy fields change guidance without changing task ownership, access
+control or completion receipts. The hook shares its existing 750 ms probe
+deadline and 4 KiB response-growth budget; a suppressed or oversized hint does
+not spend the round's delivery opportunity.
+[Policy validation](../src/http/coordination_policy.rs) ·
+[Hint gating and cache](../src/http/worker_reminders.rs)

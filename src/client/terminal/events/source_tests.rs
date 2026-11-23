@@ -147,6 +147,12 @@ async fn call_scope_native_exec_keeps_creator_through_concurrency_reads_and_exit
     let mut view = EventView::default();
     for (event, source) in observed {
         let id = event["job_id"].as_str().unwrap();
+        if id == "main" {
+            // The unified registry also projects the pre-existing main PTY.
+            // It must not inherit a later caller's provenance.
+            assert!(source.call.is_none());
+            continue;
+        }
         let expected = if id == a {
             Some(&alice)
         } else if id == b {
@@ -910,7 +916,11 @@ async fn history_capture_is_lazy_and_headless_first_message_uses_its_reserved_ow
             .await;
         let read = first_call.scope(native_call(&runtime, "ssmcp.exec.list", json!({})));
         // A read-only native observation creates no session record or directory.
-        assert_eq!(read.await.unwrap()["jobs"], json!([]));
+        let listed = read.await.unwrap();
+        let jobs = listed["jobs"].as_array().unwrap();
+        assert_eq!(jobs.len(), 1, "a read must not create another job");
+        assert_eq!(jobs[0]["job_id"], "main");
+        assert_eq!(jobs[0]["mode"], "pty");
         assert!(!path.exists());
         assert!(history::sessions().unwrap().is_empty());
         assert!(history::current().unwrap().is_none());

@@ -67,39 +67,64 @@ Run the relevant tests and show the diff.</code></pre></article>
 Report the exit code and any failure.</code></pre></article>
     <article><h3>Review an image</h3><p>Send the image with a specific question. Terminals with image support display pixels; other terminals display an attachment card.</p><pre><code>@assets/chart.png
 Explain the trend and unclear labels.</code></pre></article>
-    <article><h3>Continue with context</h3><p>In the chat composer, <code>/resume</code> opens saved conversations; <code>/context</code> and <code>/memory</code> show local branch memory; <code>/handoff</code> prepares a context draft for a recipient.</p><pre><code>/handoff Continue investigating the failing tests.</code></pre><p class="note">From a system terminal, <code>ssmcp resume</code> opens the same picker for the current workspace. With no saved history it gives a clear explanation. Restoring history does not replay tools or resend old requests.</p></article>
+    <article><h3>Invite collaborators</h3><p>Generate connection instructions in the main window and give them to the coordinator and external workers.</p><pre><code>/invite
+/invite worker</code></pre><p class="note">A worker invitation requires a linked pool. Copying instructions only shares connection information; the agent becomes available after actually joining and waiting. See the worker workflow below.</p></article>
   </div>
 </section>
 <section id="workers" aria-labelledby="workers-title">
-    <div class="section-heading"><p class="eyebrow">Technical reference · Workers</p><h2 id="workers-title">Workers: a bounded local execution pool</h2></div>
-    <p>Worker mode prepares independent execution slots. Its monitor shows idle, working, offline, total and queued counts, with no chat composer. Select an installed and configured local executor explicitly:</p>
-    <pre><code>ssmcp yourname@{{gateway_authority}} --worker 10 --agent codex</code></pre>
-    <p>Execution currently requires Linux, cgroup v2 with CPU and memory controllers, and a usable user systemd manager. Supported executors are <code>codex</code>, <code>claude</code>, <code>opencode</code> and <code>exec</code>. The default <code>next-caller</code> does not launch a model. Missing executors or unavailable hard limits leave slots offline with a reason.</p>
-    <h3 class="subheading">Invite a coordinator and external workers</h3>
-    <ol><li>Connect the main window, enter <code>/invite</code>, and press Enter. Paste the prompt into the authorized coordinator conversation. The coordinator joins the control session as <code>main</code> and binds with its own credentials.</li><li>For external workers, start a linked pool with <code>ssmcp --worker 3</code> or open stations with <code>/worker +N</code>. Use <code>/worker ls</code> to confirm the pool is connected and has room. In the main window, enter <code>/invite worker</code> and press Enter. Paste the prompt into each separate authorized worker conversation. Each worker joins and binds as <code>worker</code> on the pool, then calls <code>ssmcp.worker.wait</code>.</li></ol>
-    <p>Both commands open a panel and try to copy the prompt. Copy it manually if needed and press Esc to close. Each agent keeps its own credentials private. Wait for a connected, stable pool with room before inviting a worker.</p>
-    <h3 class="subheading">Queue, results and cancellation</h3><p>A genuinely bound caller submits through <code>ssmcp.worker.submit</code>. Idle slots claim tasks in FIFO order. <code>status</code> inspects the pool, <code>result</code> reads the caller's task, and <code>cancel</code> requests cancellation. A running slot stays busy until owned processes and scopes are confirmed clean. An <code>unknown</code> outcome must not be replayed blindly.</p>
-    <h3 class="subheading">How resource shares work</h3><p>Per-slot CPU and RAM ceilings use “effective system capacity ÷ registered slots for this OS user × k.” The <code>--worker-k</code> default is 1. These are ceilings, not reserved resources. Other OS users and independently launched commands are outside that count.</p>
-    <p>Slots keep SSMCP context, not a promised persistent model-native thread, and tasks cannot rely on slot affinity. See the <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/workers.md">worker technical guide</a> for limits and cleanup behavior.</p>
-  </section>
-<section id="extensions" aria-labelledby="extensions-title">
-  <div class="section-heading"><p class="eyebrow">Technical reference · Extensions</p><h2 id="extensions-title">Project and global tool helpers</h2></div>
-  <p><a href="https://github.com/LIghtJUNction/ssmcp-tools">ssmcp-tools</a> supplies the official JavaScript helpers for code_mode. Explicitly registered local repositories can replace or extend them. Each new call reports the source paths, hashes and Git state it actually loaded.</p>
-  <div class="table-wrap"><table><thead><tr><th>Layer</th><th>Location</th><th>Priority</th></tr></thead><tbody>
-    <tr><td>Project</td><td><code>./.ssmcp/tools/</code> under the exact workspace root</td><td>Highest</td></tr>
-    <tr><td>Global</td><td><code>~/.ssmcp/tool/</code></td><td>Above official helpers</td></tr>
-    <tr><td>Official</td><td><code>$XDG_DATA_HOME/ssmcp/tools/official</code>, default <code>~/.local/share/ssmcp/tools/official</code></td><td>Loaded first</td></tr>
+  <div class="section-heading"><p class="eyebrow">Technical reference · Workers</p><h2 id="workers-title">Coordinate in chat, delegate through a worker pool</h2></div>
+  <p>From an interactive terminal in your project, open the main chat and a linked worker monitor. The default worker is an external agent using its existing application and model. SSMCP supplies the queue, tools and receipts; it does not start a model.</p>
+  <pre><code>ssmcp yourname@{{gateway_authority}} --worker 3</code></pre>
+  <p>All three stations start offline. The main window keeps its chat input; the worker window shows task states and logs. Startup needs an available terminal adapter to open the second window.</p>
+  <div class="table-wrap"><table><thead><tr><th>Main-window command</th><th>Result</th></tr></thead><tbody>
+    <tr><td><code>/invite</code></td><td>Generate connection instructions for the coordinator</td></tr>
+    <tr><td><code>/invite worker</code></td><td>Generate instructions for an external worker to join the linked pool</td></tr>
+    <tr><td><code>/worker ls</code></td><td>Inspect stations and registered, working, standby and offline counts</td></tr>
+    <tr><td><code>/worker +2</code></td><td>Add two offline stations, opening a linked window if none exists</td></tr>
+    <tr><td><code>/worker -1</code></td><td>Request one fewer station; await task completion and retirement confirmation</td></tr>
   </tbody></table></div>
+  <p>Enter <code>/invite</code> in the connected main window and press Enter. Paste its instructions into the authorized coordinator conversation; the coordinator joins the control session as <code>main</code> and binds its own credentials. Before <code>/invite worker</code>, use <code>/worker ls</code> to confirm the linked pool is connected and has room, then paste the worker invitation into each separate authorized worker conversation.</p>
+  <p>Both invitation commands open a scrollable panel and try to copy the instructions. Copy manually if the clipboard is unavailable, and press Esc to close. Each agent keeps its own credentials private; wait for a connected, stable pool with room before inviting a worker.</p>
+  <p>Give the instructions to the intended agent. Each external worker joins the pool connection with <code>collab.join</code> and <code>role: "worker"</code>, binds its private credentials, then calls <code>ssmcp.worker.wait</code> to register a station and await a task. <code>registered_workers</code> counts registered workers, <code>working</code> counts active assignments, and <code>standby</code>/<code>idle</code> identifies available capacity. Creating stations or copying an invitation does not connect a worker.</p>
+  <p>After binding as the pool's manager, the coordinator submits work with <code>ssmcp.worker.submit</code>. The worker preserves the complete claim, reports the actual outcome with <code>ssmcp.worker.complete</code>, then uses a new wait request ID. Wait retries reuse the original ID. Cancellation awaits the executor's acknowledgement; an <code>unknown</code> outcome after disconnect is never automatically replayed. See the <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/workers.md">worker guide</a> for window closure, reload and resizing.</p>
+  <h3 class="subheading">Wait for real events</h3>
+  <p>The prompt hook at the end of a Code Mode reply reads the linked pool's actual state and checks the caller's binding, coordinator role and permissions. Its throttled, bounded hints suggest delegation and, when independent work is finished, waiting for <code>user.input_available</code>, <code>worker.completed</code>, <code>worker.idle</code> and <code>worker.progress</code>. A hint does not execute work or start a model.</p>
+  <p><code>events.policy</code> changes the current participant's <code>enabled</code>, <code>window_ms</code>, <code>kinds</code> and <code>strategy</code> settings. The strategy is advisory text. Use the control-session ID and that connection's own credentials obtained earlier:</p>
+  <details><summary>Change the waiting guidance</summary><pre><code>await collab.bind(controlId, controlCredentials);
+return await events.policy(controlId, {
+  patch: {
+    enabled: true,
+    window_ms: 55000,
+    kinds: ["user.input_available", "worker.completed", "worker.idle", "worker.progress"],
+    strategy: "Finish independent work first, then await user input and worker events."
+  }
+});</code></pre></details>
+  <p>Use the public <code>await</code> or <code>events</code> tool for long observations, with a default and maximum window of 55 seconds. Inside JavaScript, <code>events.wait</code> defaults to and is limited to one second. Retain <code>wait_id</code> across windows and explicitly acknowledge the event and wait-result cursors after handling them. An input event only wakes the observer; retrieve its text through the existing input channel. See the <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/events.md">subscription, binding and waiting examples</a>.</p>
+</section>
+<section id="extensions" aria-labelledby="extensions-title">
+  <div class="section-heading"><p class="eyebrow">Technical reference · Extensions</p><h2 id="extensions-title">Maintain tools in independent Git repositories</h2></div>
+  <p><a href="https://github.com/LIghtJUNction/ssmcp-tools">ssmcp-tools</a> supplies the official Code Mode JavaScript helpers. Project and global repositories can extend or override orchestration functions, with their own commits, tests and Git history.</p>
+  <div class="table-wrap"><table><thead><tr><th>Layer</th><th>Location</th><th>Activation</th></tr></thead><tbody>
+    <tr><td>Project</td><td><code>./.ssmcp/tools/</code> under the current workspace</td><td>The trusted RC's <code>tools.projects</code> registers that exact canonical absolute workspace</td></tr>
+    <tr><td>Global</td><td><code>~/.ssmcp/tools/</code></td><td><code>tools.global = true</code> in the trusted RC</td></tr>
+    <tr><td>Official</td><td><code>$XDG_DATA_HOME/ssmcp/tools/official</code>, default <code>~/.local/share/ssmcp/tools/official</code></td><td>The selected client's official source</td></tr>
+  </tbody></table></div>
+  <p>Loading follows <strong>official → ordered RC overrides → enabled global → registered project</strong>. Later same-name exports replace earlier ones. Project selection matches the canonical absolute workspace exactly, without searching parent directories. Creating a directory or cloning a repository does not activate it.</p>
   <pre><code>ssmcp tools paths
 ssmcp tools init project --git
 ssmcp tools init global --git
 ssmcp tools status</code></pre>
-  <p>The trusted RC is <code>$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml</code>, default <code>~/.config/ssmcp/ssmcprc.toml</code>. Initialization is offline and registers the chosen layer; <code>--git</code> creates an independent local repository without a commit or remote. Existing destinations are preserved. Use <code>ssmcp tools enable project</code> for reviewed existing source and <code>ssmcp tools disable project</code> to unregister it while retaining its files; replace <code>project</code> with <code>global</code> for that layer.</p>
-  <p>Loading follows official, ordered RC overrides, enabled global, then the registered exact project. Files in an arbitrary checkout do not activate themselves. Invalid selected sources stop the call. Host-owned calls, identity checks and native permissions remain in force.</p>
+  <p>Run project commands from the workspace you intend to register. <code>paths</code> only reports locations. <code>init</code> creates a factory, manifest and README offline, then registers the layer. <code>--git</code> creates an independent Git repository without a commit or remote; an existing destination is preserved and reported as an error. Use <code>ssmcp tools enable project</code> for reviewed existing source and <code>ssmcp tools disable project</code> to disable it while keeping the files. Replace <code>project</code> with <code>global</code> for that layer.</p>
+  <p>The trusted RC is <code>$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml</code>, default <code>~/.config/ssmcp/ssmcprc.toml</code>. After editing, explicitly select the client in a new MCP <code>code_mode</code> request:</p>
+  <pre><code>{
+  "tool_client_id": "CLIENT_ID_FROM_LIST",
+  "code": "return 'sources loaded';"
+}</code></pre>
+  <p>Check the outer <code>structuredContent.tool_sources</code> receipt for the layers, paths, SHA-256 hashes and Git HEAD/dirty state actually loaded. JavaScript orchestration can evolve independently and reloads on a new call. New native operations still require a supporting CLI/relay version. Overrides preserve host authentication, permissions and native argument checks; an invalid selected source stops the call.</p>
+  <p><code>ssmcp tools check</code> fetches official upstream state; <code>ssmcp tools update</code> only fast-forwards a clean official checkout. Maintain project and global repositories through their own Git workflows.</p>
   <h3 class="subheading">Maintain reusable workflows</h3>
-  <p>Dreaming can use existing execution, filesystem and Git operations to maintain the selected repository and its workflow files. Review and test the edit, then verify its source hash on a new code_mode call. Repository initialization creates no model or background scheduler. See <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/tool-repositories.md">tool repository management</a> for the trusted configuration and validation workflow.</p>
-  <p>For Web, native desktop, Android and iOS entry points and their validation status, see the <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/clients.md">client overview</a>. The <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/gui-gateway.md">GUI gateway guide</a> describes HTTP connections and pairing.</p>
-  <p><code>ssmcp tools check</code> fetches official upstream state; <code>ssmcp tools update</code> only fast-forwards a clean official checkout. These commands do not update local project or global repositories.</p>
+  <p>Dreaming can maintain these repositories and workflows through existing execution, filesystem and Git operations. Initialization starts no model or scheduler. See <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/tool-repositories.md">tool repository management</a> and <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/code-mode.md#find-and-iterate-tool-implementations">source selection and receipts</a>.</p>
+  <p>See the <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/clients.md">client overview</a> for Web, native desktop, Android and iOS entry points and validation status, and the <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/gui-gateway.md">GUI gateway guide</a> for HTTP connections and pairing.</p>
   <p class="note">This guide follows the server build. The selected client's actual tool schema defines its capabilities. Installers fetch published releases; new features need a corresponding client process.</p>
 </section>
 <section id="tools" aria-labelledby="tools-title">

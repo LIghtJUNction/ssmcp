@@ -7,12 +7,12 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde_json::{Value, json};
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     io::{self, Read, Write},
     path::Path,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -54,6 +54,18 @@ struct Input {
     complete: oneshot::Sender<io::Result<()>>,
 }
 
+pub(crate) type OutputEvent = Arc<dyn Fn(u64, &[u8]) + Send + Sync>;
+
+pub(crate) struct JobConfig<'a> {
+    pub command: &'a [String],
+    pub cwd: &'a Path,
+    pub env: &'a HashMap<String, String>,
+    pub id: &'a str,
+    pub size: Option<(u16, u16)>,
+    pub live: bool,
+    pub output_event: Option<OutputEvent>,
+}
+
 pub struct Terminal {
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     child: Mutex<Option<Box<dyn Child + Send + Sync>>>,
@@ -62,6 +74,7 @@ pub struct Terminal {
     changed: Arc<Notify>,
     closed: AtomicBool,
     pid: u32,
+    input_bytes: AtomicU64,
     observer: Option<std::sync::Weak<crate::observer::Pool>>,
     display_id: String,
     observer_cwd: std::path::PathBuf,
@@ -112,25 +125,12 @@ impl Terminal {
         if !shell.is_absolute() {
             return Err("shell must be an absolute path".into());
         }
-        let initial_size = if live {
-            let (rows, cols) = crate::client::terminal::pane_size(24, 80);
-            PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            }
-        } else {
-            PtySize::default()
-        };
-        let pair = native_pty_system()
-            .openpty(initial_size)
-            .map_err(io::Error::other)?;
-        let mut reader = pair.master.try_clone_reader().map_err(io::Error::other)?;
-        let mut writer = pair.master.take_writer().map_err(io::Error::other)?;
-        let mut command = CommandBuilder::new(shell);
+        let cwd = cwd
+            .map(Path::to_path_buf)
+            .unwrap_or(std::env::current_dir()?);
+        let mut argv = vec![shell.to_string_lossy().into_owned()];
         #[cfg(unix)]
-        command.arg("-i");
+        argv.push("-i".into());
         #[cfg(windows)]
         if shell
             .file_stem()
@@ -142,19 +142,69 @@ impl Terminal {
                 )
             })
         {
-            command.arg("-i");
+            argv.push("-i".into());
         }
         #[cfg(windows)]
         if shell.file_stem().is_some_and(|name| {
             name.eq_ignore_ascii_case("powershell") || name.eq_ignore_ascii_case("pwsh")
         }) {
-            command.arg("-NoLogo");
+            argv.push("-NoLogo".into());
         }
+        Self::spawn_job(
+            JobConfig {
+                command: &argv,
+                cwd: &cwd,
+                env: &HashMap::new(),
+                id: display_id,
+                size: None,
+                live,
+                output_event: None,
+            },
+            store,
+        )
+    }
+
+    pub(crate) fn spawn_job(
+        config: JobConfig<'_>,
+        store: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        let JobConfig {
+            command: argv,
+            cwd,
+            env,
+            id: display_id,
+            size,
+            live,
+            output_event,
+        } = config;
+        if argv.is_empty() || argv[0].is_empty() {
+            return Err("PTY command must not be empty".into());
+        }
+        let (rows, cols) = size.unwrap_or_else(|| {
+            if live {
+                crate::client::terminal::pane_size(24, 80)
+            } else {
+                (24, 80)
+            }
+        });
+        let initial_size = PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let pair = native_pty_system()
+            .openpty(initial_size)
+            .map_err(io::Error::other)?;
+        let mut reader = pair.master.try_clone_reader().map_err(io::Error::other)?;
+        let mut writer = pair.master.take_writer().map_err(io::Error::other)?;
+        let mut command = CommandBuilder::new(&argv[0]);
+        command.args(&argv[1..]);
         command.env("TERM", "xterm-256color");
-        command.cwd(
-            cwd.map(Path::to_path_buf)
-                .unwrap_or(std::env::current_dir()?),
-        );
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        command.cwd(cwd);
         #[allow(unused_mut)]
         let mut child = pair
             .slave
@@ -187,11 +237,10 @@ impl Terminal {
             changed: Arc::new(Notify::new()),
             closed: AtomicBool::new(false),
             pid,
+            input_bytes: AtomicU64::new(0),
             observer: store.observer().map(|pool| Arc::downgrade(&pool)),
             display_id: display_id.into(),
-            observer_cwd: cwd
-                .map(Path::to_path_buf)
-                .unwrap_or(std::env::current_dir()?),
+            observer_cwd: cwd.to_path_buf(),
             #[cfg(windows)]
             job,
         });
@@ -250,7 +299,15 @@ impl Terminal {
                             };
                             #[cfg(unix)]
                             let visible = &data[..n];
-                            output.lock().unwrap().push(visible);
+                            let offset = {
+                                let mut output = output.lock().unwrap();
+                                let offset = output.end;
+                                output.push(visible);
+                                offset
+                            };
+                            if let Some(event) = &output_event {
+                                event(offset, visible);
+                            }
                             if let Some(pool) = observer.as_ref().and_then(std::sync::Weak::upgrade)
                             {
                                 pool.terminal_output(&display_id, visible);
@@ -368,6 +425,7 @@ impl Terminal {
                 .map_err(|_| {
                     "terminal write timed out; input may be partially written".to_owned()
                 })??;
+                self.input_bytes.fetch_add(bytes as u64, Ordering::AcqRel);
                 Ok(json!({"written":bytes}))
             }
             Operation::Resize { rows, cols } => {
@@ -435,6 +493,25 @@ impl Terminal {
     }
 
     async fn read(&self, cursor: u64, max_bytes: usize, wait_ms: u64) -> Result<Value, String> {
+        self.read_impl(cursor, max_bytes, wait_ms, true).await
+    }
+
+    pub(crate) async fn read_page(
+        &self,
+        cursor: u64,
+        max_bytes: usize,
+        wait_ms: u64,
+    ) -> Result<Value, String> {
+        self.read_impl(cursor, max_bytes, wait_ms, false).await
+    }
+
+    async fn read_impl(
+        &self,
+        cursor: u64,
+        max_bytes: usize,
+        wait_ms: u64,
+        spill: bool,
+    ) -> Result<Value, String> {
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         loop {
             let changed = self.changed.notified();
@@ -464,7 +541,7 @@ impl Terminal {
                         );
                     let long =
                         output.end - cursor > INLINE_BYTES as u64 || pending_lines > INLINE_LINES;
-                    if long {
+                    if spill && long {
                         let capture = output
                             .capture
                             .as_ref()
@@ -508,6 +585,44 @@ impl Terminal {
             }
             let _ = timeout_at(deadline, changed).await;
         }
+    }
+
+    pub(crate) fn pid(&self) -> u32 {
+        self.pid
+    }
+    pub(crate) fn changed(&self) -> Arc<Notify> {
+        self.changed.clone()
+    }
+    pub(crate) fn input_bytes(&self) -> u64 {
+        self.input_bytes.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn output_snapshot(&self) -> Value {
+        let output = self.output.lock().unwrap();
+        json!({"start_cursor":output.start,"next_cursor":output.end,
+            "truncated":output.start>0,"eof":output.eof,
+            "artifact":output.capture.as_ref().and_then(Capture::metadata),
+            "error":output.capture.as_ref().and_then(Capture::error)})
+    }
+
+    pub(crate) async fn wait_exit(&self) -> io::Result<(Option<i32>, Option<i32>)> {
+        while self.running() {
+            let _ = timeout(Duration::from_millis(25), self.changed.notified()).await;
+        }
+        // The legacy portable closer owns reaping. It does not retain an exit
+        // status, so never invent a successful code for these compatibility jobs.
+        Ok((None, None))
+    }
+
+    pub(crate) async fn write_counted(
+        &self,
+        _data: &[u8],
+        _wait_ms: u64,
+    ) -> (usize, bool, Option<String>) {
+        // The current portable writer uses blocking write_all on an OS thread.
+        // Its timed-out request can still write later; do not expose it through
+        // the exact-count exec contract or queue any bytes before this rejection.
+        (0, false, Some("exact-count PTY input is currently available on Linux; use the legacy terminal interface on this platform".into()))
     }
 
     fn stop(&self) -> Option<oneshot::Receiver<()>> {

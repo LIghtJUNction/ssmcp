@@ -6,7 +6,7 @@ SSMCP Web 是现有 CLI 核心的浏览器前端。页面通过同源 HTTP 网�
 
 ## 启动
 
-需要 Node.js 20 或更新版本，以及已经运行的 SSMCP CLI HTTP 网关。网关启动方式和配对令牌以仓库的 [GUI bridge 文档](../../docs/gui-gateway.md) 及当前 CLI 帮助为准。
+需要 Node.js 20 或更新版本，以及已经运行的 SSMCP CLI HTTP 网关。网关启动方式和配对令牌以仓库的 [GUI gateway 文档](../../docs/gui-gateway.md) 及当前 CLI 帮助为准。
 
 在仓库根目录运行下列命令。把 `网关端口` 换成 CLI 实际监听的端口：
 

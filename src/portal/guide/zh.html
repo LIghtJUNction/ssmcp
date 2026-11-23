@@ -67,39 +67,64 @@
 最后报告退出码和失败原因。</code></pre></article>
     <article><h3>检查图片</h3><p>把图片与具体问题放在一起。支持图片的终端显示像素，其他终端显示附件卡片。</p><pre><code>@assets/chart.png
 说明变化趋势和不清楚的标注。</code></pre></article>
-    <article><h3>继续已有上下文</h3><p>聊天框内的 <code>/resume</code> 打开已保存对话；<code>/context</code>、<code>/memory</code> 查看本地分支记忆；<code>/handoff</code> 准备可交接的上下文草稿。</p><pre><code>/handoff 继续排查失败的测试。</code></pre><p class="note">在系统终端运行 <code>ssmcp resume</code> 可打开当前工作区的同一历史选择器。没有历史时会给出明确提示；恢复历史不会重放工具，也不会重发旧请求。</p></article>
+    <article><h3>邀请协作者</h3><p>在主窗口生成接入说明，分别交给协调者和外部 worker。</p><pre><code>/invite
+/invite worker</code></pre><p class="note">Worker 邀请需要关联任务池。复制说明只是在分享连接信息；Agent 实际接入并等待后才成为可用 worker。见下方 Worker 流程。</p></article>
   </div>
 </section>
 <section id="workers" aria-labelledby="workers-title">
-    <div class="section-heading"><p class="eyebrow">技术说明 · Worker</p><h2 id="workers-title">Worker：有上限的本地执行池</h2></div>
-    <p>Worker 模式为任务准备独立执行槽位。终端只显示空闲、正在工作、离线、总数与排队数，没有聊天输入框。需要明确选择已安装、已配置的本地执行器：</p>
-    <pre><code>ssmcp yourname@{{gateway_authority}} --worker 10 --agent codex</code></pre>
-    <p>当前执行要求 Linux、支持 CPU 与内存控制的 cgroup v2，以及可用的用户 systemd 管理器。支持的执行器为 <code>codex</code>、<code>claude</code>、<code>opencode</code> 和 <code>exec</code>。默认的 <code>next-caller</code> 不启动模型；缺少执行器或资源限制时，槽位离线并报告原因。</p>
-    <h3 class="subheading">邀请主 Agent 和外部 worker</h3>
-    <ol><li>连接主窗口，输入 <code>/invite</code> 并按 Enter。把说明粘贴到已获准接入的主 Agent 对话。主 Agent 在控制会话以 <code>main</code> 加入，并用自己的凭据绑定。</li><li>需要外部 worker 时，先用 <code>ssmcp --worker 3</code> 启动关联池，或用 <code>/worker +N</code> 开启席位。用 <code>/worker ls</code> 确认池在线且有空位。在主窗口输入 <code>/invite worker</code> 并按 Enter，把说明粘贴到每个独立、已获准接入的 worker 对话。每个 worker 在池中加入并绑定为 <code>worker</code>，然后调用 <code>ssmcp.worker.wait</code>。</li></ol>
-    <p>两个命令都显示面板并尝试复制。必要时手动复制，按 Esc 关闭面板。各 Agent 私下保管自己的凭据。池满员、离线或调整席位期间，请等状态恢复再邀请 worker。</p>
-    <h3 class="subheading">队列、结果与取消</h3><p>真实绑定的调用者通过 <code>ssmcp.worker.submit</code> 提交任务，空闲槽位按 FIFO 领取。<code>status</code> 查看池状态，<code>result</code> 读取自己的结果，<code>cancel</code> 请求取消。运行中的取消要等自有进程与 scope 清理确认后才能重新空闲；<code>unknown</code> 结果不能盲目重放。</p>
-    <h3 class="subheading">资源如何分配</h3><p>每个槽位的 CPU 与 RAM 上限分别按“有效系统容量 ÷ 当前系统用户已注册槽位总数 × k”计算，<code>--worker-k</code> 默认 1。它们是上限，不是预留资源；其他系统用户和独立启动的命令不在这个计数中。</p>
-    <p>任务使用每个槽位的 SSMCP 上下文，不能假设是持久的模型原生线程，也不能依赖固定槽位。完整限制、输入上限和清理机制见<a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/workers.md">Worker 技术说明</a>。</p>
-  </section>
-<section id="extensions" aria-labelledby="extensions-title">
-  <div class="section-heading"><p class="eyebrow">技术说明 · 扩展</p><h2 id="extensions-title">项目与全局工具 helper</h2></div>
-  <p><a href="https://github.com/LIghtJUNction/ssmcp-tools">ssmcp-tools</a> 提供 code_mode 的官方 JavaScript helper。明确登记的本地仓库可以扩展或覆盖它们；每次新调用都返回实际加载的源码路径、摘要和 Git 状态。</p>
-  <div class="table-wrap"><table><thead><tr><th>来源</th><th>位置</th><th>优先级</th></tr></thead><tbody>
-    <tr><td>项目</td><td>当前工作区根目录的 <code>./.ssmcp/tools/</code></td><td>最高</td></tr>
-    <tr><td>全局</td><td><code>~/.ssmcp/tool/</code>，单数 tool</td><td>覆盖官方 helper</td></tr>
-    <tr><td>官方</td><td><code>$XDG_DATA_HOME/ssmcp/tools/official</code>，默认 <code>~/.local/share/ssmcp/tools/official</code></td><td>最先加载</td></tr>
+  <div class="section-heading"><p class="eyebrow">技术说明 · Worker</p><h2 id="workers-title">主窗口协作，worker 池分工</h2></div>
+  <p>在项目目录的交互终端启动主聊天和关联的 worker 监控窗口。默认 worker 是外部 Agent，使用它自己的应用和模型；SSMCP 提供队列、工具和回执，不启动模型。</p>
+  <pre><code>ssmcp yourname@{{gateway_authority}} --worker 3</code></pre>
+  <p>三个席位初始都是离线。主窗口保留聊天输入；worker 窗口显示任务状态和日志。启动时需要可用的终端适配器来打开第二个窗口。</p>
+  <div class="table-wrap"><table><thead><tr><th>主窗口命令</th><th>作用</th></tr></thead><tbody>
+    <tr><td><code>/invite</code></td><td>生成主协调者的接入说明</td></tr>
+    <tr><td><code>/invite worker</code></td><td>生成指向关联池的外部 worker 说明</td></tr>
+    <tr><td><code>/worker ls</code></td><td>查看席位、注册、工作中、待命与离线数量</td></tr>
+    <tr><td><code>/worker +2</code></td><td>增加两个离线席位；尚无池时创建关联窗口</td></tr>
+    <tr><td><code>/worker -1</code></td><td>请求减少一个席位，等待任务完成与退役确认</td></tr>
   </tbody></table></div>
+  <p>在已连接的主窗口输入 <code>/invite</code> 并按 Enter，把说明粘贴到已获准接入的主 Agent 对话；主 Agent 在控制会话以 <code>main</code> 加入并绑定自己的凭据。邀请外部 worker 前，用 <code>/worker ls</code> 确认关联池在线且有空位，再输入 <code>/invite worker</code> 并按 Enter，把说明交给每个独立、已获准接入的 worker 对话。</p>
+  <p>两个邀请命令都会打开可滚动面板并尝试复制；剪贴板不可用时手动复制，按 Esc 关闭。各 Agent 私下保管自己的凭据；池满员、离线或正在调整席位时，先等待状态恢复。</p>
+  <p>把说明交给对应的 Agent。外部 worker 在池连接中用 <code>collab.join</code> 登记 <code>role: "worker"</code>，绑定自己的私有凭据，再调用 <code>ssmcp.worker.wait</code> 注册席位并等候任务。<code>registered_workers</code> 计注册人数，<code>working</code> 计执行中的任务，<code>standby</code>／<code>idle</code> 才是待命容量；创建席位或复制邀请不代表已有 worker 接入。</p>
+  <p>协调者在池中完成管理者绑定后，用 <code>ssmcp.worker.submit</code> 派发任务。Worker 保留完整 claim，用 <code>ssmcp.worker.complete</code> 报告实际结果，再换新请求 ID 等待；等待重试复用原 ID。取消要等执行者确认，断线造成的 <code>unknown</code> 不自动重放。窗口退出、重载和缩容的完整行为见 <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/workers.md">Worker 指南</a>。</p>
+  <h3 class="subheading">按真实事件等待</h3>
+  <p>Code Mode 回复末尾的提示词 hook 读取真实关联池状态，并检查调用者的绑定、协调角色和权限。它以有节流、长度有界的建议提示分工；独立工作完成后，建议等待 <code>user.input_available</code>、<code>worker.completed</code>、<code>worker.idle</code> 和 <code>worker.progress</code>。建议不会自动执行任务或启动模型。</p>
+  <p><code>events.policy</code> 可调整当前成员的 <code>enabled</code>、<code>window_ms</code>、<code>kinds</code> 和 <code>strategy</code>；后者是建议文本。使用已经取得的控制会话 ID 和该连接自己的凭据：</p>
+  <details><summary>修改等待建议</summary><pre><code>await collab.bind(controlId, controlCredentials);
+return await events.policy(controlId, {
+  patch: {
+    enabled: true,
+    window_ms: 55000,
+    kinds: ["user.input_available", "worker.completed", "worker.idle", "worker.progress"],
+    strategy: "先完成独立工作，空闲时再等待用户输入和 worker 事件。"
+  }
+});</code></pre></details>
+  <p>长等待使用公开 <code>await</code> 或 <code>events</code> 工具，默认且最长为 55 秒；JavaScript 内的 <code>events.wait</code> 默认且最多等待 1 秒。跨窗口保留 <code>wait_id</code>，处理后分别确认事件和等待结果游标；输入事件只负责唤醒，正文仍通过原输入通道领取。见 <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/events.md">订阅、绑定与等待示例</a>。</p>
+</section>
+<section id="extensions" aria-labelledby="extensions-title">
+  <div class="section-heading"><p class="eyebrow">技术说明 · 扩展</p><h2 id="extensions-title">在独立 Git 仓库中维护工具</h2></div>
+  <p><a href="https://github.com/LIghtJUNction/ssmcp-tools">ssmcp-tools</a> 提供 Code Mode 的官方 JavaScript helper。项目与全局仓库可扩展或覆盖编排函数，并独立提交、测试和管理 Git 历史。</p>
+  <div class="table-wrap"><table><thead><tr><th>来源</th><th>位置</th><th>启用条件</th></tr></thead><tbody>
+    <tr><td>项目</td><td>当前工作区的 <code>./.ssmcp/tools/</code></td><td>可信 RC 的 <code>tools.projects</code> 精确登记规范化后的工作区绝对路径</td></tr>
+    <tr><td>全局</td><td><code>~/.ssmcp/tools/</code></td><td>可信 RC 中 <code>tools.global = true</code></td></tr>
+    <tr><td>官方</td><td><code>$XDG_DATA_HOME/ssmcp/tools/official</code>，默认 <code>~/.local/share/ssmcp/tools/official</code></td><td>使用所选客户端的官方源码</td></tr>
+  </tbody></table></div>
+  <p>加载顺序是<strong>官方 → RC 中按序列出的 overrides → 已启用全局 → 已登记项目</strong>。后加载的同名导出覆盖前者。项目按规范化后的绝对工作区精确匹配，不向父目录查找；创建目录或克隆仓库不会自动启用。</p>
   <pre><code>ssmcp tools paths
 ssmcp tools init project --git
 ssmcp tools init global --git
 ssmcp tools status</code></pre>
-  <p>可信 RC 位于 <code>$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml</code>，默认是 <code>~/.config/ssmcp/ssmcprc.toml</code>。初始化离线创建并登记指定来源；<code>--git</code> 创建独立本地仓库，不自动提交或添加远端。已有目录会保留。审阅过的已有源码用 <code>ssmcp tools enable project</code> 登记，<code>ssmcp tools disable project</code> 取消登记并保留文件；全局来源把 <code>project</code> 换成 <code>global</code>。</p>
-  <p>加载顺序是官方、RC 中按序列出的 overrides、已启用全局、已登记的当前项目。项目路径必须与当前工作区完全匹配，普通 checkout 中的文件不会自行启用。选中来源损坏会中止调用；宿主原语、身份检查与原生权限仍然生效。</p>
+  <p>在要登记的项目目录执行项目命令。<code>paths</code> 只查询位置；<code>init</code> 离线创建工厂、manifest 和 README，再登记来源。<code>--git</code> 创建独立 Git 仓库，不自动提交或添加远端；已有目标保留并返回错误。已有源码用 <code>ssmcp tools enable project</code> 登记，用 <code>ssmcp tools disable project</code> 停用并保留文件；全局来源把 <code>project</code> 换成 <code>global</code>。</p>
+  <p>可信 RC 位于 <code>$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml</code>，默认是 <code>~/.config/ssmcp/ssmcprc.toml</code>。修改后，在新的 MCP <code>code_mode</code> 调用参数中明确选择要维护的客户端：</p>
+  <pre><code>{
+  "tool_client_id": "CLIENT_ID_FROM_LIST",
+  "code": "return 'sources loaded';"
+}</code></pre>
+  <p>核对外层 <code>structuredContent.tool_sources</code> 中实际加载的来源、路径、SHA-256 和 Git HEAD／dirty 状态。JavaScript 编排可以独立迭代，新调用重新加载所选来源；新增底层原语仍需相应 CLI／中继版本。同名覆盖不改变宿主身份、权限和原生参数校验；选中来源损坏时调用明确失败。</p>
+  <p><code>ssmcp tools check</code> 获取官方上游状态；<code>ssmcp tools update</code> 只快进清洁的官方仓库。项目与全局仓库使用各自的 Git 工作流维护。</p>
   <h3 class="subheading">维护可复用工作流</h3>
-  <p>Dreaming 可以使用已有的执行、文件与 Git 操作，维护选中的工具仓库和工作流内容。审阅、测试改动后，在新 code_mode 调用中核对实际源码摘要；初始化不会启动模型或后台调度器。可信配置与验证步骤见<a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/tool-repositories.md">工具仓库管理</a>。</p>
-  <p>Web、原生桌面、Android 与 iOS 的源码入口和各端验收范围见<a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/clients.md">客户端概览</a>；HTTP 接入与配对协议见<a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/gui-gateway.md">GUI 网关说明</a>。</p>
-  <p><code>ssmcp tools check</code> 获取官方上游状态；<code>ssmcp tools update</code> 只快进清洁的官方仓库。这两个命令不更新项目或全局仓库。</p>
+  <p>Dreaming 可使用已有执行、文件和 Git 操作维护这些仓库与工作流。初始化不会启动模型或调度器。完整规则见 <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/tool-repositories.md">工具仓库管理</a>，源码选择见 <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/code-mode.md#find-and-iterate-tool-implementations">加载与回执</a>。</p>
+  <p>Web、原生桌面、Android 与 iOS 的源码入口和验收范围见 <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/clients.md">客户端概览</a>；HTTP 接入与配对协议见 <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/gui-gateway.md">GUI 网关说明</a>。</p>
   <p class="note">文档随服务器构建更新，具体能力以目标客户端返回的工具 schema 为准。安装器获取已经公开的版本，新功能需要相应客户端进程。</p>
 </section>
 <section id="tools" aria-labelledby="tools-title">

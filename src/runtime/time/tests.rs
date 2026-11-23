@@ -293,6 +293,34 @@ async fn bounded_wait_timeout_preserves_timer_and_local_cancel_wakes_the_same_id
         .await;
 }
 
+#[test]
+fn completed_wait_receipts_survive_the_four_timer_preview_limit() {
+    let clock = Clock::new().unwrap();
+    let source = Source::default();
+    let mut ids = Vec::new();
+    for index in 0..8 {
+        let mut guard = clock
+            .observe(
+                "ssmcp.exec.wait",
+                &json!({"job_id":format!("fixture-job-{index}"),"wait_ms":1000}),
+                &source,
+            )
+            .unwrap();
+        ids.push(guard.id.clone());
+        guard.finish(&Ok(json!({"running":false,"exit_code":0})), false);
+    }
+    let snapshot = clock.snapshot(&None, Instant::now());
+    assert!(snapshot.active.is_empty());
+    for id in ids {
+        let entry = snapshot.recent.iter().find(|entry| entry.id == id).unwrap();
+        assert_eq!(entry.status, Status::Returned);
+        assert_eq!(
+            entry.wait.as_ref().unwrap().outcome,
+            crate::wire::wait_display::Outcome::Triggered
+        );
+    }
+}
+
 #[tokio::test]
 async fn observation_drop_and_cancel_only_remove_the_observer() {
     let clock = Clock::new().unwrap();

@@ -123,10 +123,9 @@ impl CommandPanel {
 
 impl Event {
     fn is_worker_operation(&self) -> bool {
-        self.meta
-            .keys
-            .iter()
-            .any(|key| key.starts_with("worker-operation\0"))
+        self.meta.keys.iter().any(|key| {
+            key.starts_with("worker-operation\0") || key.starts_with("wait-observation\0")
+        })
     }
 
     fn set_chat_expanded(&mut self, expanded: bool) -> bool {
@@ -259,6 +258,9 @@ impl Event {
     /// At most two result lines, drawn from the retained redacted transcript.
     /// The existing render cache keeps scanning out of idle repaint frames.
     fn chat_preview(&self, width: usize) -> Vec<String> {
+        if let Some(preview) = tool_summaries::exec_read_preview(self, width) {
+            return preview;
+        }
         let plain = unstyled(&self.text);
         let summary = unstyled(&self.summary);
         let mut first = Vec::new();
@@ -1046,7 +1048,15 @@ impl EventView {
     /// viewport. Live wait updates replace their own card without moving its
     /// position or masquerading as an assistant message or executable command.
     pub(super) fn ingest_worker_operation(&mut self, key: &str, heading: &str, detail: &str) {
-        let body = format!("[WORKER] {heading}\n{detail}\n");
+        self.ingest_observation_card("[WORKER]", key, heading, detail);
+    }
+
+    pub(super) fn ingest_wait_observation(&mut self, key: &str, heading: &str, detail: &str) {
+        self.ingest_observation_card("[WAIT]", key, heading, detail);
+    }
+
+    fn ingest_observation_card(&mut self, label: &str, key: &str, heading: &str, detail: &str) {
+        let body = format!("{label} {heading}\n{detail}\n");
         if let Some(event) = self
             .events
             .iter_mut()

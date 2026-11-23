@@ -8,6 +8,45 @@ fn original() -> Value {
         "structuredContent":{"result":{"exit_code":9},"user_messages":[{"id":"existing","text":"original input"}]}})
 }
 
+fn without_input() -> Value {
+    let mut response = original();
+    response["structuredContent"]
+        .as_object_mut()
+        .unwrap()
+        .remove("user_messages");
+    response
+}
+
+fn successful() -> Value {
+    json!({"isError":false,"content":[{"type":"text","text":"observed fixture result"}],
+        "structuredContent":{"result":{"ready":true}}})
+}
+
+fn configure_dreaming(target: &EligibleUserResponse) {
+    let binding = target.binding.as_ref().unwrap();
+    coordination_policy::effective(
+        &binding.owner,
+        target.session.client_id(),
+        &binding.agent_id,
+        Some(&json!({"dreaming":{
+            "round_id":"fixture-round-1","repository":"project","budget_ms":1000
+        }})),
+    )
+    .unwrap();
+}
+
+async fn quiet_pool_reply(fixture: &TestFixture) -> Value {
+    let pool = fixture
+        .broker
+        .test_register_identity(crate::broker::IDENTITY_RESOURCE, fixture.actor.clone())
+        .await;
+    let mut reply = pool_reply();
+    reply["structuredContent"]["value"]["client_id"] = json!(pool.client_id());
+    reply["structuredContent"]["value"]["idle"] = json!(3);
+    reply["structuredContent"]["value"]["working"] = json!(0);
+    reply
+}
+
 fn pool_reply() -> Value {
     json!({"isError":false,"structuredContent":{"path":"/worker_pool","value":{
         "client_id":"b".repeat(64),"process_id":42,"total":3,"desired_total":3,
@@ -210,6 +249,11 @@ async fn real_session_probe_preserves_errors_and_does_not_consume_user_input() {
     assert_eq!(notice["agent_id"], binding.agent_id);
     assert_eq!(notice["worker_client_id"], "b".repeat(64));
     assert_eq!(notice["standby"], 2);
+    assert!(
+        appended["structuredContent"]
+            .get("coordination_hints")
+            .is_none()
+    );
     assert!(appended.to_string().len() - before.to_string().len() <= MAX_APPEND_BYTES);
     assert_pending(&eligible[0]);
 }
@@ -217,7 +261,7 @@ async fn real_session_probe_preserves_errors_and_does_not_consume_user_input() {
 #[tokio::test]
 async fn real_probe_error_and_revocation_leave_the_original_response_intact() {
     let (mut fixture, report, eligible) = prepared("coordinator").await;
-    let before = original();
+    let before = without_input();
     let (failed, operation) =
         tokio::time::timeout(Duration::from_secs(2), async {
             tokio::join!(append(&report, before.clone(), &eligible), fixture.native_reply(json!({
@@ -273,7 +317,7 @@ async fn actual_role_and_total_probe_deadline_gate_session_requests() {
     )
     .await
     .unwrap();
-    assert_policy_only(&timed_out, &before);
+    assert_eq!(timed_out, before);
     // The responder intentionally stayed silent. Seeing the actual queued call
     // distinguishes a bounded timeout from accidentally skipping the probe.
     let operation =
@@ -282,6 +326,205 @@ async fn actual_role_and_total_probe_deadline_gate_session_requests() {
             .unwrap();
     assert_probe(operation);
     assert_pending(&eligible[0]);
+}
+
+#[tokio::test]
+async fn input_arriving_during_probe_preempts_dreaming_without_consuming_it() {
+    let (mut fixture, report, eligible) = prepared("main").await;
+    configure_dreaming(&eligible[0]);
+    let quiet = quiet_pool_reply(&fixture).await;
+    let before = successful();
+    let reply = async {
+        let operation = fixture.native_reply(quiet.clone()).await;
+        publish_pending(&eligible[0]);
+        operation
+    };
+    let (blocked, operation) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(append(&report, before.clone(), &eligible), reply)
+    })
+    .await
+    .unwrap();
+    assert_probe(operation);
+    assert!(
+        blocked["structuredContent"]
+            .get("coordination_hints")
+            .is_none()
+    );
+    assert_pending(&eligible[0]);
+    assert!(!blocked.to_string().contains("Keep this genuine input"));
+
+    // Simulate handling that exact input before the next ordinary call. The
+    // suppressed hint must not have spent the round's delivery opportunity.
+    let target = &eligible[0];
+    let delivered = target.session.steering.claim(
+        target.session.client_id(),
+        "fixture-input-delivery",
+        Some(&target.binding.as_ref().unwrap().agent_id),
+        8,
+        65536,
+    );
+    assert_eq!(delivered.len(), 1);
+    let (ready, operation) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(
+            append(&report, before.clone(), &eligible),
+            fixture.native_reply(quiet.clone())
+        )
+    })
+    .await
+    .unwrap();
+    assert_probe(operation);
+    let hint = &ready["structuredContent"]["coordination_hints"][0];
+    assert_eq!(hint["dreaming_round"]["round_id"], "fixture-round-1");
+    assert_eq!(hint["dreaming_round"]["budget_ms"], 1000);
+    assert!(ready.to_string().len() - before.to_string().len() <= MAX_APPEND_BYTES);
+
+    let (repeated, operation) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(
+            append(&report, before.clone(), &eligible),
+            fixture.native_reply(quiet)
+        )
+    })
+    .await
+    .unwrap();
+    assert_probe(operation);
+    assert_eq!(repeated, before);
+}
+
+#[tokio::test]
+async fn busy_pool_does_not_spend_the_round_before_it_becomes_quiet() {
+    let (mut fixture, report, eligible) = prepared("main").await;
+    configure_dreaming(&eligible[0]);
+    let quiet = quiet_pool_reply(&fixture).await;
+    let mut busy = quiet.clone();
+    busy["structuredContent"]["value"]["idle"] = json!(2);
+    busy["structuredContent"]["value"]["working"] = json!(1);
+    let before = successful();
+    let (blocked, operation) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(
+            append(&report, before.clone(), &eligible),
+            fixture.native_reply(busy)
+        )
+    })
+    .await
+    .unwrap();
+    assert_probe(operation);
+    assert!(blocked["structuredContent"]["coordination_hints"][0]["dreaming_round"].is_null());
+
+    // The ordinary wait hint above was cached, but becoming quiet can offer
+    // the unspent explicit round without waiting for the thirty-second throttle.
+    let (ready, operation) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(
+            append(&report, before.clone(), &eligible),
+            fixture.native_reply(quiet)
+        )
+    })
+    .await
+    .unwrap();
+    assert_probe(operation);
+    assert_eq!(
+        ready["structuredContent"]["coordination_hints"][0]["dreaming_round"]["round_id"],
+        "fixture-round-1"
+    );
+    assert!(ready.to_string().len() - before.to_string().len() <= MAX_APPEND_BYTES);
+}
+
+#[tokio::test]
+async fn unknown_pool_authority_and_existing_errors_do_not_offer_dreaming() {
+    for failure in [
+        "unavailable",
+        "unauthorized",
+        "native_error",
+        "delivered_input",
+    ] {
+        let (mut fixture, report, eligible) = prepared("main").await;
+        configure_dreaming(&eligible[0]);
+        let mut reply = quiet_pool_reply(&fixture).await;
+        let mut before = successful();
+        match failure {
+            "unavailable" => reply = json!({"isError":true,"content":[]}),
+            "unauthorized" => {
+                reply["structuredContent"]["value"]["client_id"] = json!("f".repeat(64))
+            }
+            "native_error" => before["isError"] = json!(true),
+            "delivered_input" => {
+                before["structuredContent"]["user_messages"] =
+                    original()["structuredContent"]["user_messages"].clone();
+            }
+            _ => unreachable!(),
+        }
+        let (after, operation) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(
+                append(&report, before.clone(), &eligible),
+                fixture.native_reply(reply)
+            )
+        })
+        .await
+        .unwrap();
+        assert_probe(operation);
+        assert!(
+            after["structuredContent"]["coordination_hints"][0]["dreaming_round"].is_null(),
+            "{failure}"
+        );
+        assert!(!after.to_string().contains("Dreaming round fixture-round-1"));
+        assert_eq!(after["isError"], before["isError"]);
+        assert_eq!(
+            after["structuredContent"]["user_messages"],
+            before["structuredContent"]["user_messages"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn pending_input_observation_is_recipient_scoped_and_never_claims() {
+    let (fixture, _report, eligible) = prepared("main").await;
+    let target = &eligible[0];
+    let binding = target.binding.as_ref().unwrap();
+    let other = fixture
+        .session
+        .collaboration
+        .dispatch(
+            &binding.owner,
+            "join",
+            json!({"name":"other","role":"worker"}),
+        )
+        .await
+        .unwrap();
+    let mut snapshot = target
+        .session
+        .steering
+        .command(
+            target.session.client_id(),
+            target.session.collaboration.presence().unwrap(),
+            wire::SteeringCommand::Publish {
+                command_id: "other-input-publish".into(),
+                message_id: "other-input".into(),
+                expected_revision: 0,
+                text: "private other participant input".into(),
+                target: other["agent_id"].as_str().unwrap().into(),
+            },
+        )
+        .unwrap();
+    assert!(!input_pending(target, &successful()));
+    assert_eq!(snapshot.messages[0].state, wire::SteeringState::Queued);
+    publish_pending(target);
+    assert!(input_pending(target, &successful()));
+    assert_pending(target);
+    snapshot = target
+        .session
+        .steering
+        .command(
+            target.session.client_id(),
+            vec![],
+            wire::SteeringCommand::Snapshot {},
+        )
+        .unwrap();
+    assert_eq!(snapshot.messages.len(), 2);
+    assert!(
+        snapshot
+            .messages
+            .iter()
+            .all(|message| message.state == wire::SteeringState::Queued)
+    );
 }
 
 // A verified coordinator can receive generic wait policy even when a worker

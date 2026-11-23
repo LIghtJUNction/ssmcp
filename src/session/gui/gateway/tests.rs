@@ -542,6 +542,44 @@ async fn real_http_event_envelopes_preserve_large_cursors_and_generation() {
 }
 
 #[tokio::test]
+async fn readonly_commands_are_denied_without_entering_native_transport() {
+    let server = Server::new(None).await;
+    let opened = server.open("readonly-open", true).await;
+    let path = format!(
+        "/connections/{}/bridge",
+        opened["connection_id"].as_str().unwrap()
+    );
+    let reads_before = server.counts.reads.load(Ordering::Relaxed);
+    let request = BridgeRequest {
+        version: zbridge::VERSION,
+        id: id("readonly-command"),
+        operation: Operation::Command {
+            generation: id("fixture-core"),
+            command: id("terminal.write"),
+            arguments: json!({"terminal_id":"fixture","data":""}),
+        },
+    };
+    let response = server
+        .request(reqwest::Method::POST, &path)
+        .json(&request)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response: BridgeResponse = response.json().await.unwrap();
+    response.validate_for(&request).unwrap();
+    let ResponseBody::Error(error) = response.body else {
+        panic!("readonly command was not denied")
+    };
+    assert_eq!(error.code, ErrorCode::Denied);
+    assert_eq!(error.effect, Effect::None);
+    // Count entry to Connection::request, not only successful commands: the
+    // permission check must happen before even the native transport is called.
+    assert_eq!(server.counts.reads.load(Ordering::Relaxed), reads_before);
+    assert_eq!(server.counts.commands.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
 async fn a_lost_command_receipt_is_unknown_and_is_never_automatically_replayed() {
     let server = Server::new(None).await;
     let opened = server.open("control-open", false).await;

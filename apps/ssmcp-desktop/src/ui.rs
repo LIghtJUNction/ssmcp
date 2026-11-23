@@ -11,11 +11,11 @@ use zgpui::{
     native::{ButtonStyle, Canvas, Event as NativeEvent, Rect, Ui},
 };
 
-pub const BG: u32 = 0xf7f9fcff;
+pub const BG: u32 = 0xf8f9fbff;
 const SURFACE: u32 = 0xffffffff;
-const TEXT: u32 = 0x202124ff;
-const MUTED: u32 = 0x5f6368ff;
-const LINE: u32 = 0xe8eaedff;
+const TEXT: u32 = 0x253142ff;
+const MUTED: u32 = 0x667085ff;
+const LINE: u32 = 0xe5e9f0ff;
 const BLUE: u32 = 0x1a73e8ff;
 const BLUE_SOFT: u32 = 0xe8f0feff;
 const GREEN: u32 = 0x147d4eff;
@@ -301,17 +301,17 @@ impl Desktop {
         height: f32,
     ) {
         self.sidebar(canvas, ui, handle, view, height);
-        let x = SIDE + 32.;
-        let w = (width - x - 32.).max(400.);
+        let x = SIDE + 36.;
+        let w = (width - x - 36.).max(400.);
         canvas.ellipsis(
             view.target
                 .as_ref()
                 .map_or("连接你的工作会话", Target::label),
             x,
-            28.,
+            31.,
             w - 300.,
-            25,
-            true,
+            21,
+            false,
             TEXT,
         );
         let (status_color, status) = match view.phase {
@@ -322,7 +322,7 @@ impl Desktop {
             Phase::Disconnected => (MUTED, "使用已运行的本地 CLI 会话"),
         };
         canvas.rect(Rect::new(x, 66., 6., 6.), 3., status_color);
-        canvas.text(status, x + 14., 60., 13, false, MUTED);
+        canvas.text(status, x + 14., 60., 12, false, MUTED);
         let target = view.target.clone();
         let right = x + w;
         if ui.button(
@@ -393,12 +393,8 @@ impl Desktop {
             (Page::Receipts, "回执"),
         ];
         for (index, (page, label)) in tabs.into_iter().enumerate() {
-            let rect = Rect::new(x + index as f32 * 100., 99., 90., 36.);
-            let style = if self.page == page {
-                ButtonStyle::Secondary
-            } else {
-                ButtonStyle::Quiet
-            };
+            let rect = Rect::new(x + index as f32 * 94., 99., 84., 36.);
+            let style = ButtonStyle::Quiet;
             if ui.button(canvas, 20 + index as u64, rect, label, style, true) {
                 self.page = page;
                 self.thread_picker = false;
@@ -452,15 +448,14 @@ impl Desktop {
     ) {
         canvas.rect(Rect::new(0., 0., SIDE, height), 0., SURFACE);
         canvas.line((SIDE, 0.), (SIDE, height), 1., LINE);
-        canvas.rect(Rect::new(25., 30., 28., 28.), 7., BLUE);
-        canvas.text("S", 33., 32., 21, true, SURFACE);
-        canvas.text("SSMCP", 64., 30., 22, true, TEXT);
-        canvas.text("桌面工作台", 26., 78., 13, false, MUTED);
-        canvas.text("本地会话", 26., 126., 13, true, TEXT);
+        connection_mark(canvas, 23., 29., 28., TEXT);
+        canvas.text("ssmcp", 61., 30., 20, true, TEXT);
+        canvas.text("桌面工作台", 26., 73., 11, false, MUTED);
+        canvas.text("本地会话", 26., 114., 12, true, MUTED);
         if ui.button(
             canvas,
             101,
-            Rect::new(152., 115., 52., 32.),
+            Rect::new(152., 103., 52., 32.),
             "刷新",
             ButtonStyle::Quiet,
             !view.sessions_loading,
@@ -470,7 +465,7 @@ impl Desktop {
         if ui.input(
             canvas,
             102,
-            Rect::new(20., 157., 188., 36.),
+            Rect::new(22., 144., 184., 38.),
             &mut self.session_filter,
             "筛选会话",
             false,
@@ -489,7 +484,7 @@ impl Desktop {
         self.session_page = self.session_page.min(pages - 1);
         let start = self.session_page * per_page;
         for (offset, session) in sessions.iter().skip(start).take(per_page).enumerate() {
-            let y = 210. + offset as f32 * 62.;
+            let y = 198. + offset as f32 * 62.;
             let selected = view
                 .target
                 .as_ref()
@@ -530,8 +525,8 @@ impl Desktop {
                     "还没有可列出的会话"
                 },
                 26.,
-                226.,
-                13,
+                216.,
+                12,
                 false,
                 MUTED,
             );
@@ -580,7 +575,7 @@ impl Desktop {
             106,
             Rect::new(22., height - 73., 184., 36.),
             "观察连接",
-            ButtonStyle::Secondary,
+            ButtonStyle::Primary,
             !self.named_session.trim().is_empty()
                 && self.named_session.len() <= 128
                 && self.pending.is_none(),
@@ -1715,19 +1710,51 @@ impl Desktop {
     }
 
     fn empty(&self, canvas: &mut Canvas<'_>, bounds: Rect, title: &str, detail: &str) {
-        let y = bounds.y + (bounds.h / 2. - 44.).max(20.);
-        canvas.text(title, bounds.x + 26., y, 22, true, TEXT);
-        let (lines, _) = wrap(canvas, detail, bounds.w - 52., 14, 3);
+        let width = (bounds.w - 32.).clamp(280., 592.);
+        let (lines, _) = wrap(canvas, detail, width - 104., 14, 4);
+        let height = 96. + lines.len().max(1) as f32 * 23.;
+        let x = bounds.x + (bounds.w - width) / 2.;
+        let y = bounds.y + ((bounds.h - height) * 0.38).max(16.);
+        let card = Rect::new(x, y, width, height);
+        canvas.rect(card, 12., LINE);
+        canvas.rect(card.inset(1.), 11., SURFACE);
+        connection_mark(canvas, x + 24., y + 25., 30., MUTED);
+        canvas.text(title, x + 78., y + 24., 19, false, TEXT);
         for (index, line) in lines.iter().enumerate() {
             canvas.text(
                 line,
-                bounds.x + 26.,
-                y + 44. + index as f32 * 24.,
+                x + 78.,
+                y + 58. + index as f32 * 23.,
                 14,
                 false,
                 MUTED,
             );
         }
+    }
+}
+
+// Same seven rounded strokes as assets/ssmcp-desktop.svg and the Web mark.
+fn connection_mark(canvas: &mut Canvas<'_>, x: f32, y: f32, size: f32, color: u32) {
+    let scale = size / 32.;
+    for (left, top, width, height) in [
+        (5., 7., 2., 18.),
+        (5., 7., 7., 2.),
+        (5., 23., 7., 2.),
+        (25., 7., 2., 18.),
+        (20., 7., 7., 2.),
+        (20., 23., 7., 2.),
+        (11., 15., 10., 2.),
+    ] {
+        canvas.rect(
+            Rect::new(
+                x + left * scale,
+                y + top * scale,
+                width * scale,
+                height * scale,
+            ),
+            scale,
+            color,
+        );
     }
 }
 

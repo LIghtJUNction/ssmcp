@@ -1792,6 +1792,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "zbridge",
  "zharness",
+ "zi18n",
  "zip",
  "zplugin",
  "ztuio",
@@ -2819,6 +2820,11 @@ dependencies = [
  "zguard",
  "zplugin",
 ]
+
+[[package]]
+name = "zi18n"
+version = "0.1.0"
+source = "git+https://github.com/LIghtJUNction/zi18n.git?tag=v0.1.0#b90984b48465a764bcb699ad2bb3251fa7020024"
 
 [[package]]
 name = "zip"

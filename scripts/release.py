@@ -256,6 +256,30 @@ def locked_project_z(lock):
     return packages
 
 
+def application_version_files(root):
+    """Version bytes owned by this application, including its desktop path lock."""
+    root = Path(root)
+    files = [Path("Cargo.toml"), Path("Cargo.lock")]
+    desktop = Path("apps/ssmcp-desktop")
+    manifest_path, lock_path = root / desktop / "Cargo.toml", root / desktop / "Cargo.lock"
+    if manifest_path.exists():
+        manifest = read_toml(manifest_path)
+        dependency = manifest.get("dependencies", {}).get("ssmcp")
+        if (manifest.get("package", {}).get("name") != "ssmcp-desktop"
+                or not isinstance(dependency, dict)
+                or not isinstance(dependency.get("path"), str)
+                or Path(dependency["path"]).is_absolute()
+                or (manifest_path.parent / dependency["path"]).resolve() != root.resolve()
+                or set(dependency) & {"version", "git", "registry", "registry-index"}):
+            raise ValueError("ssmcp-desktop must use this repository's ssmcp path dependency")
+        if not lock_path.is_file():
+            raise ValueError("apps/ssmcp-desktop/Cargo.lock must exist before a release bump")
+        files.append(desktop / "Cargo.lock")
+    elif lock_path.exists():
+        raise ValueError("desktop Cargo.lock has no matching application manifest")
+    return files
+
+
 def validate_package(tag, root):
     match = TAG.fullmatch(tag)
     if not match or any(part.isdigit() and len(part) > 1 and part.startswith("0")
@@ -270,6 +294,10 @@ def validate_package(tag, root):
         locked = [p["version"] for p in lock["package"] if p["name"] == name]
         if locked != [package_version]:
             raise ValueError(f"Cargo.lock must contain exactly the manifest's {name} version")
+    for relative in application_version_files(root)[2:]:
+        rows = [row for row in read_toml(root / relative)["package"] if row["name"] == "ssmcp"]
+        if len(rows) != 1 or rows[0]["version"] != actual or rows[0].get("source") is not None:
+            raise ValueError(f"{relative} must contain exactly this local ssmcp version")
     return actual
 
 
@@ -451,7 +479,8 @@ def validate_tag(tag, root=None, *, build_only=False):
                  "prerelease": str("-" in actual).lower(),
                  "publish": str(not build_only).lower(), "create_tag": "false",
                  "build_only": str(build_only).lower(), "release_contract": RELEASE_CONTRACT,
-                 "crate_publication": crate_publication(actual, build_only=build_only)["status"]})
+                 "crate_publication": crate_publication(actual, build_only=build_only)["status"],
+                 "gui_clients": str(bool(gui_clients(root))).lower()})
 
 
 def prepare(tag=None, automatic=False, root=None):
@@ -505,24 +534,30 @@ def bumped_version(old, level, custom_version=None):
     return ".".join(map(str, parts))
 
 def bump(level, root=None, *, custom_version=None, dry_run=False):
-    root = root or ROOT
+    root = Path(root or ROOT)
     old = version(root)
-    # Validate every local dependency/lock entry before changing either app file.
+    # Validate and prepare every replacement before changing any version bytes.
     validate_package("v" + old, root)
     new = bumped_version(old, level, custom_version)
-    manifest_path, lock_path = root / "Cargo.toml", root / "Cargo.lock"
+    manifest_path = root / "Cargo.toml"
     manifest, manifest_count = re.subn(
         r'(?m)^(version\s*=\s*")' + re.escape(old) + r'("\s*)$',
         lambda match: match[1] + new + match[2], manifest_path.read_text(encoding="utf-8"), count=1)
-    lock, lock_count = re.subn(
-        r'(\[\[package\]\]\nname = "ssmcp"\nversion = ")' + re.escape(old) + r'("\n)',
-        lambda match: match[1] + new + match[2], lock_path.read_text(encoding="utf-8"))
-    if manifest_count != 1 or lock_count != 1:
-        raise ValueError("expected one matching ssmcp version in Cargo.toml and Cargo.lock")
+    if manifest_count != 1:
+        raise ValueError("expected one matching ssmcp version in Cargo.toml")
+    replacements = {manifest_path: manifest}
+    for relative in application_version_files(root)[1:]:
+        lock_path = root / relative
+        lock, count = re.subn(
+            r'(\[\[package\]\]\nname = "ssmcp"\nversion = ")' + re.escape(old) + r'("\n)',
+            lambda match: match[1] + new + match[2], lock_path.read_text(encoding="utf-8"))
+        if count != 1:
+            raise ValueError(f"expected one matching ssmcp version in {relative}")
+        replacements[lock_path] = lock
     result = {"tag": "v" + new, "version": new, "dry_run": str(dry_run).lower()}
     if not dry_run:
-        manifest_path.write_text(manifest, encoding="utf-8")
-        lock_path.write_text(lock, encoding="utf-8")
+        for path, text in replacements.items():
+            path.write_text(text, encoding="utf-8")
     return emit(result)
 
 def archive_name(target, release_version):
@@ -590,17 +625,276 @@ def package(target, root=None):
     print(json.dumps({"archive": archive.name, "sha256": checksum, "bytes": archive.stat().st_size}))
 
 
+GUI_CLIENTS = {
+    "linux": {
+        "directory": "apps/ssmcp-desktop", "entry": "Cargo.toml",
+        "asset": "ssmcp-desktop-x86_64-unknown-linux-gnu-release.tar.gz",
+        "target": "x86_64-unknown-linux-gnu", "profile": "release",
+        "scope": "Native Release build and Rust tests; mapped X11/OpenGL window under Xvfb/Mesa llvmpipe. No live session interaction.",
+    },
+    "windows": {
+        "directory": "apps/ssmcp-desktop", "entry": "Cargo.toml",
+        "asset": "ssmcp-desktop-x86_64-pc-windows-msvc-debug.zip",
+        "target": "x86_64-pc-windows-msvc", "profile": "debug",
+        "scope": "Native MSVC build and Rust tests; window interaction and live gateway are separate checks.",
+    },
+    "android": {
+        "directory": "apps/ssmcp-android", "entry": "app/build.gradle.kts",
+        "asset": "ssmcp-android-debug.apk", "target": "android-api-35-x86_64",
+        "profile": "debug",
+        "scope": "One custom Instrumentation invocation on API 35; protocol/controller checks use an injected gateway.",
+    },
+    "ios": {
+        "directory": "apps/ssmcp-ios", "entry": "SSMCP.xcodeproj/project.pbxproj",
+        "asset": None, "target": "ios-simulator", "profile": "debug",
+        "scope": "Unsigned simulator build and XCTest; no device IPA, App Store signing, or live gateway check.",
+    },
+}
+
+
+def gui_clients(root):
+    clients = {}
+    for platform, spec in GUI_CLIENTS.items():
+        directory = Path(root) / spec["directory"]
+        if directory.exists():
+            if not directory.is_dir() or not (directory / spec["entry"]).is_file():
+                raise ValueError(f"incomplete {platform} application source")
+            clients[platform] = spec
+    return clients
+
+
+def gui_receipt_name(platform):
+    return f"ssmcp-gui-{platform}.json"
+
+
+def gui_source(root, platform):
+    spec = GUI_CLIENTS[platform]
+    return {
+        "commit": command("git", "rev-parse", "HEAD", cwd=root),
+        "tree": command("git", "rev-parse", "HEAD^{tree}", cwd=root),
+        "application_tree": command("git", "rev-parse", "HEAD:" + spec["directory"], cwd=root),
+        "release_version": version(root),
+    }
+
+
+def validate_android_instrumentation(text):
+    # This application has one custom Instrumentation, not a JUnit test runner.
+    # adb may exit zero when the application reports RESULT_CANCELED.
+    success = "SSMCP protocol and controller checks passed:"
+    failures = ("SSMCP check failed:", "INSTRUMENTATION_FAILED", "INSTRUMENTATION_ABORTED",
+                "FAILURES!!!", "Process crashed")
+    codes = re.findall(r"(?m)^INSTRUMENTATION_CODE:\s*(-?\d+)\s*$", text)
+    if (text.count(success) != 1 or any(marker in text for marker in failures)
+            or (codes and codes != ["-1"])):
+        raise ValueError("Android Instrumentation did not report one successful controller/protocol run")
+
+
+def validate_gui_test_log(platform, text):
+    if platform == "android":
+        validate_android_instrumentation(text)
+    elif platform in {"linux", "windows"}:
+        passed = re.findall(r"test result: ok\. (\d+) passed;", text)
+        if not passed or max(map(int, passed)) == 0 or "test result: FAILED." in text:
+            raise ValueError(f"{platform} Cargo log does not contain a successful nonempty native test run")
+    else:
+        summaries = re.findall(r"Executed (\d+) tests?, with (\d+) failures", text)
+        if (not summaries or max(int(count) for count, _ in summaries) == 0
+                or any(int(failed) for _, failed in summaries)):
+            raise ValueError("iOS XCTest log does not contain a successful nonempty test run")
+
+
+def validate_linux_gui_window(window, source_commit):
+    expected = {"source_commit": source_commit, "target": GUI_CLIENTS["linux"]["target"],
+                "profile": "release", "backend": "x11-opengl", "renderer": "llvmpipe",
+                "title": "ssmcp-desktop · 本地工作台", "mapped": True, "exit_after_ms": 10000,
+                "exit_code": 0}
+    if (not isinstance(window, dict) or any(window.get(key) != value for key, value in expected.items())
+            or window.get("mapped") is not True
+            or any(type(window.get(key)) is not int for key in
+                   ("exit_after_ms", "exit_code", "elapsed_ms", "width", "height", "binary_bytes"))
+            or not 10000 <= window["elapsed_ms"] < 30000
+            or window["width"] <= 0 or window["height"] <= 0 or window["binary_bytes"] < 20
+            or not re.fullmatch(r"[0-9a-f]{64}", str(window.get("binary_sha256", "")))):
+        raise ValueError("Linux GUI requires a successful bounded native window receipt for this Release source")
+
+
+def validate_linux_gui_executable(stream):
+    header = stream.read(20)
+    if (len(header) < 20 or header[:6] != b"\x7fELF\x02\x01"
+            or int.from_bytes(header[18:20], "little") != 62):
+        raise ValueError("the Linux GUI build must provide an x86_64 ELF executable")
+
+
+def verify_linux_gui_archive(archive, source, window):
+    """Bind the published executable and source proof to the actual window probe."""
+    with tarfile.open(archive, "r:gz") as package:
+        members = package.getmembers()
+        expected = {"ssmcp-desktop", "README.md", "LICENSE", "build-source.json"}
+        if (len(members) != len(expected) or {member.name for member in members} != expected
+                or not all(member.isfile() for member in members)):
+            raise ValueError("Linux GUI archive must contain only the executable, instructions, license and source proof")
+        binary = package.getmember("ssmcp-desktop")
+        if binary.size != window["binary_bytes"] or binary.mode != 0o755:
+            raise ValueError("Linux GUI archive differs from the executable tested in the native window")
+        with package.extractfile(binary) as stream:
+            validate_linux_gui_executable(stream)
+        with package.extractfile(binary) as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != window["binary_sha256"]:
+                raise ValueError("Linux GUI archive differs from the executable tested in the native window")
+        with package.extractfile("build-source.json") as stream:
+            if json.load(stream) != source:
+                raise ValueError("Linux GUI archived source proof differs from the release checkout")
+
+
+def package_gui(platform, evidence, binary=None, root=None):
+    """Package successful GUI checks from this exact checkout; never publish."""
+    root, evidence = Path(root or ROOT), Path(evidence)
+    clients = gui_clients(root)
+    if platform not in clients:
+        raise ValueError(f"the requested source does not contain the {platform} client")
+    spec = clients[platform]
+    source = gui_source(root, platform)
+    if os.environ.get("SOURCE_COMMIT") != source["commit"]:
+        raise ValueError("GUI source does not match the requested immutable commit")
+    subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
+    result = json.loads((evidence / "result.json").read_text(encoding="utf-8-sig"))
+    expected = {"source_commit": source["commit"], "target": spec["target"], "profile": spec["profile"],
+                "build_exit": 0, "test_exit": 0}
+    if result != expected or any(type(result[key]) is not int for key in ("build_exit", "test_exit")):
+        raise ValueError("GUI build and test exit receipts must both succeed for this source and target")
+    for name in ("build.log", "tests.log"):
+        path = evidence / name
+        if path.is_symlink() or not path.is_file() or not path.stat().st_size:
+            raise ValueError(f"missing GUI evidence: {name}")
+    validate_gui_test_log(platform, (evidence / "tests.log").read_text(encoding="utf-8-sig"))
+    provenance = {key: os.environ.get(name, "") for key, name in (
+        ("repository", "GITHUB_REPOSITORY"), ("run_id", "GITHUB_RUN_ID"),
+        ("run_attempt", "GITHUB_RUN_ATTEMPT"), ("workflow_commit", "GITHUB_WORKFLOW_SHA"),
+    )}
+    if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", provenance["repository"])
+            or not all(re.fullmatch(r"[1-9][0-9]*", provenance[key]) for key in ("run_id", "run_attempt"))
+            or not re.fullmatch(r"[0-9a-f]{40}", provenance["workflow_commit"])):
+        raise ValueError("GUI packages require a concrete Actions run receipt")
+    provenance["evidence_artifact"] = f"{platform}-{source['commit']}-{provenance['run_attempt']}"
+    receipt = {"schema_version": 1, "platform": platform, "target": spec["target"], "profile": spec["profile"],
+               "scope": spec["scope"], "source": source, "checks": result, "actions": provenance,
+               "evidence": {path.name: digest(path) for path in sorted(evidence.iterdir())
+                            if path.is_file() and not path.is_symlink()
+                            and (path.suffix == ".log" or path.name == "result.json")},
+               "asset": None}
+    if platform == "linux":
+        for name in ("window.json", "window.log", "xwininfo.log", "renderer.log"):
+            path = evidence / name
+            if path.is_symlink() or not path.is_file() or (name != "window.log" and not path.stat().st_size):
+                raise ValueError(f"missing Linux native window evidence: {name}")
+            receipt["evidence"][name] = digest(path)
+        receipt["window"] = json.loads((evidence / "window.json").read_text(encoding="utf-8"))
+        validate_linux_gui_window(receipt["window"], source["commit"])
+    output = root / "dist"
+    output.mkdir(exist_ok=True)
+    if spec["asset"]:
+        if binary is None or Path(binary).is_symlink() or not Path(binary).is_file():
+            raise ValueError("the successful build must provide a regular GUI executable")
+        binary = Path(binary)
+        archive = output / spec["asset"]
+        if platform in {"linux", "windows"}:
+            with binary.open("rb") as stream:
+                if platform == "linux":
+                    validate_linux_gui_executable(stream)
+                elif stream.read(2) != b"MZ":
+                    raise ValueError("the Windows GUI build must provide a PE executable")
+            if platform == "linux" and (digest(binary) != receipt["window"]["binary_sha256"]
+                                         or binary.stat().st_size != receipt["window"]["binary_bytes"]):
+                raise ValueError("Linux GUI executable changed after its native window check")
+            epoch = int(command("git", "show", "-s", "--format=%ct", "HEAD", cwd=root))
+            with tempfile.TemporaryDirectory(prefix="ssmcp-desktop-package-") as temporary:
+                stage = Path(temporary)
+                executable = stage / ("ssmcp-desktop.exe" if platform == "windows" else "ssmcp-desktop")
+                shutil.copyfile(binary, executable)
+                if platform == "linux":
+                    executable.chmod(0o755)
+                shutil.copyfile(root / "LICENSE", stage / "LICENSE")
+                shutil.copyfile(root / spec["directory"] / "README.md", stage / "README.md")
+                (stage / "build-source.json").write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+                write_archive(stage, archive, epoch)
+            if platform == "linux":
+                verify_linux_gui_archive(archive, source, receipt["window"])
+        else:
+            with zipfile.ZipFile(binary) as apk:
+                if not {"AndroidManifest.xml", "classes.dex"} <= set(apk.namelist()):
+                    raise ValueError("the Android debug package is not an executable APK")
+            shutil.copyfile(binary, archive)
+        receipt["asset"] = {"name": archive.name, "sha256": digest(archive), "bytes": archive.stat().st_size}
+        (output / (archive.name + ".sha256")).write_text(
+            f"{receipt['asset']['sha256']}  {archive.name}\n", encoding="utf-8")
+    elif binary is not None:
+        raise ValueError("iOS simulator validation does not publish a device application")
+    path = output / gui_receipt_name(platform)
+    path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({"receipt": path.name, "source": source, "asset": receipt["asset"]}))
+    return receipt
+
+
+def verified_gui_receipts(root, source):
+    output = root / "dist"
+    receipts = []
+    for platform, spec in gui_clients(root).items():
+        path = output / gui_receipt_name(platform)
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"missing GUI build and test receipt: {path.name}")
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        expected_source = gui_source(root, platform)
+        if (expected_source["commit"] != source["commit"] or expected_source["tree"] != source["tree"]
+                or receipt.get("schema_version") != 1 or receipt.get("source") != expected_source
+                or any(receipt.get(key) != value for key, value in
+                       (("platform", platform), ("target", spec["target"]),
+                        ("profile", spec["profile"]), ("scope", spec["scope"])))):
+            raise ValueError(f"GUI source or platform proof differs: {platform}")
+        checks = receipt.get("checks", {})
+        if (checks != {"source_commit": source["commit"], "target": spec["target"], "profile": spec["profile"],
+                       "build_exit": 0, "test_exit": 0}
+                or any(type(checks[key]) is not int for key in ("build_exit", "test_exit"))):
+            raise ValueError(f"GUI build or tests did not succeed: {platform}")
+        actions = receipt.get("actions", {})
+        if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", str(actions.get("repository", "")))
+                or not all(re.fullmatch(r"[1-9][0-9]*", str(actions.get(key, "")))
+                           for key in ("run_id", "run_attempt"))
+                or not re.fullmatch(r"[0-9a-f]{40}", str(actions.get("workflow_commit", "")))
+                or actions.get("evidence_artifact") != f"{platform}-{source['commit']}-{actions.get('run_attempt')}"):
+            raise ValueError(f"GUI Actions provenance is missing or invalid: {platform}")
+        evidence = receipt.get("evidence", {})
+        if (not isinstance(evidence, dict) or not {"build.log", "tests.log", "result.json"} <= evidence.keys()
+                or not all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+                           for value in evidence.values())):
+            raise ValueError(f"GUI test evidence hashes are missing or invalid: {platform}")
+        artifact = output / spec["asset"] if spec["asset"] else None
+        expected_asset = ({"name": artifact.name, "sha256": digest(artifact), "bytes": artifact.stat().st_size}
+                          if artifact is not None else None)
+        if receipt.get("asset") != expected_asset:
+            raise ValueError(f"GUI artifact does not match its successful build: {platform}")
+        if platform == "linux":
+            validate_linux_gui_window(receipt.get("window"), source["commit"])
+            if not {"window.json", "window.log", "xwininfo.log", "renderer.log"} <= evidence.keys():
+                raise ValueError("Linux native window evidence hashes are missing")
+            verify_linux_gui_archive(artifact, expected_source, receipt["window"])
+        receipts.append(receipt)
+    return receipts
+
+
 def checksums(root=None, *, build_only=False, recheck=False):
     """Verify GitHub archives; Publisher raw-client release.json is separate."""
     root = root or ROOT
     release_version = version(root)
     output = root / "dist"
-    expected = {archive_name(target, release_version) for target in TARGETS}
-    actual = {p.name for p in output.iterdir() if p.name.endswith((".zip", ".tar.gz"))}
+    clients = gui_clients(root)
+    gui_assets = {spec["asset"] for spec in clients.values() if spec["asset"]}
+    gui_proofs = {gui_receipt_name(platform) for platform in clients}
+    expected = {archive_name(target, release_version) for target in TARGETS} | gui_assets
+    actual = {p.name for p in output.iterdir() if p.name.endswith((".zip", ".tar.gz", ".apk"))}
     if actual != expected:
         raise ValueError(f"release archive set differs: missing={sorted(expected-actual)}, extra={sorted(actual-expected)}")
     installers = {"install.sh", "install.ps1"}
-    inputs = expected | installers | {name + ".sha256" for name in expected}
+    inputs = expected | installers | gui_proofs | {name + ".sha256" for name in expected}
     allowed = inputs | {"SHA256SUMS", "release-manifest.json"}
     unexpected = {p.name for p in output.iterdir()} - allowed
     if unexpected:
@@ -621,6 +915,10 @@ def checksums(root=None, *, build_only=False, recheck=False):
             raise ValueError(f"installer is missing or differs from the validated source: {name}")
         records.append({"name": name, "sha256": digest(path), "bytes": path.stat().st_size})
     source = verified_source_receipt(root)
+    gui_receipts = verified_gui_receipts(root, source)
+    for name in sorted(gui_proofs):
+        path = output / name
+        records.append({"name": name, "sha256": digest(path), "bytes": path.stat().st_size})
     policy = crate_publication(release_version, build_only=build_only)
     verified = verified_crate_receipt(root) if policy["status"] == "registry" else None
     if verified is not None and verified["source"] != source:
@@ -632,6 +930,8 @@ def checksums(root=None, *, build_only=False, recheck=False):
                 "toolchain": {"cargo": source["cargo"], "rustc": source["rustc"]},
                 "submodules": source["submodules"], "dependency_graph": source["dependency_graph"],
                 "crate_publication": policy, "verified_crate": verified, "artifacts": records}
+    if gui_receipts:
+        manifest["gui_clients"] = gui_receipts
     documents = {
         "SHA256SUMS": "".join(f"{r['sha256']}  {r['name']}\n" for r in records),
         "release-manifest.json": json.dumps(manifest, indent=2) + "\n",
@@ -1199,6 +1499,10 @@ def main():
     validation_mode.add_argument("--event", action="store_true")
     commands.add_parser("package").add_argument("--target", required=True, choices=TARGETS)
     commands.add_parser("pack").add_argument("target", choices=TARGETS)
+    gui = commands.add_parser("package-gui")
+    gui.add_argument("--platform", required=True, choices=GUI_CLIENTS)
+    gui.add_argument("--evidence", required=True)
+    gui.add_argument("--binary")
     sums = commands.add_parser("checksums")
     sums.add_argument("--build-only", action="store_true")
     sums.add_argument("--recheck", action="store_true")
@@ -1228,6 +1532,8 @@ def main():
             validate_tag(args.tag, build_only=args.build_only)
     elif args.command in {"package", "pack"}:
         package(args.target)
+    elif args.command == "package-gui":
+        package_gui(args.platform, args.evidence, args.binary)
     elif args.command == "checksums":
         checksums(build_only=args.build_only, recheck=args.recheck)
     elif args.command == "verify-source":

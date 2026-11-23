@@ -6,14 +6,14 @@ use crate::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     io,
     os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
     path::Path,
     process::Stdio,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -52,13 +52,27 @@ impl Output {
     }
 }
 
+pub(crate) type OutputEvent = Arc<dyn Fn(u64, &[u8]) + Send + Sync>;
+
+pub(crate) struct JobConfig<'a> {
+    pub command: &'a [String],
+    pub cwd: &'a Path,
+    pub env: &'a HashMap<String, String>,
+    pub id: &'a str,
+    pub size: Option<(u16, u16)>,
+    pub live: bool,
+    pub output_event: Option<OutputEvent>,
+}
+
 pub struct Terminal {
     master: Mutex<Option<Arc<AsyncFd<OwnedFd>>>>,
     child: AsyncMutex<Option<Child>>,
     leader: OwnedFd,
     pid: libc::pid_t,
     output: Mutex<Output>,
-    changed: Notify,
+    changed: Arc<Notify>,
+    input_bytes: AtomicU64,
+    output_event: Option<OutputEvent>,
     writer: AsyncMutex<()>,
     reader: Mutex<Option<JoinHandle<()>>>,
     closed: AtomicBool,
@@ -111,13 +125,49 @@ impl Terminal {
         if !shell.is_absolute() {
             return Err("shell must be an absolute path".into());
         }
+        let cwd = cwd
+            .map(Path::to_path_buf)
+            .unwrap_or(std::env::current_dir()?);
+        let command = vec![shell.to_string_lossy().into_owned(), "-i".into()];
+        Self::spawn_job(
+            JobConfig {
+                command: &command,
+                cwd: &cwd,
+                env: &HashMap::new(),
+                id: display_id,
+                size: None,
+                live,
+                output_event: None,
+            },
+            output_store,
+        )
+    }
+
+    pub(crate) fn spawn_job(
+        config: JobConfig<'_>,
+        output_store: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        let JobConfig {
+            command: argv,
+            cwd,
+            env,
+            id: display_id,
+            size,
+            live,
+            output_event,
+        } = config;
+        if argv.is_empty() || argv[0].is_empty() {
+            return Err("PTY command must not be empty".into());
+        }
         let mut master = -1;
         let mut slave = -1;
-        let (rows, cols) = if live {
-            crate::client::terminal::pane_size(24, 80)
-        } else {
-            (24, 80)
-        };
+        let (rows, cols) = size.unwrap_or_else(|| {
+            if live {
+                crate::client::terminal::pane_size(24, 80)
+            } else {
+                (24, 80)
+            }
+        });
         let size = libc::winsize {
             ws_row: rows,
             ws_col: cols,
@@ -152,17 +202,16 @@ impl Terminal {
         }
         // SAFETY: OwnedFd keeps this descriptor valid and stable for AsyncFd's whole lifetime.
         let master = Arc::new(unsafe { AsyncFd::register(master) }?);
-        let mut command = Command::new(shell);
+        let mut command = Command::new(&argv[0]);
         command
-            .arg("-i")
+            .args(&argv[1..])
             .env("TERM", "xterm-256color")
+            .envs(env)
             .stdin(Stdio::from(slave.try_clone()?))
             .stdout(Stdio::from(slave.try_clone()?))
             .stderr(Stdio::from(slave))
             .kill_on_drop(true);
-        if let Some(cwd) = cwd {
-            command.current_dir(cwd);
-        }
+        command.current_dir(cwd);
         // SAFETY: this closure runs after fork and only calls async-signal-safe syscalls.
         unsafe {
             command.pre_exec(|| {
@@ -189,16 +238,16 @@ impl Terminal {
                 capture: Some(output_store.capture("terminal_session")),
                 ..Output::default()
             }),
-            changed: Notify::new(),
+            changed: Arc::new(Notify::new()),
+            input_bytes: AtomicU64::new(0),
+            output_event,
             writer: AsyncMutex::new(()),
             reader: Mutex::new(None),
             closed: AtomicBool::new(false),
             live,
             display_id: display_id.into(),
             observer: output_store.observer().map(|pool| Arc::downgrade(&pool)),
-            observer_cwd: cwd
-                .map(Path::to_path_buf)
-                .unwrap_or(std::env::current_dir()?),
+            observer_cwd: cwd.to_path_buf(),
         });
         let weak = Arc::downgrade(&terminal);
         let reader = tokio::spawn(async move {
@@ -219,7 +268,15 @@ impl Terminal {
                 };
                 match result {
                     Ok(n) if n > 0 => {
-                        terminal.output.lock().unwrap().push(&data[..n]);
+                        let offset = {
+                            let mut output = terminal.output.lock().unwrap();
+                            let offset = output.end;
+                            output.push(&data[..n]);
+                            offset
+                        };
+                        if let Some(event) = &terminal.output_event {
+                            event(offset, &data[..n]);
+                        }
                         if let Some(pool) = terminal
                             .observer
                             .as_ref()
@@ -277,17 +334,9 @@ impl Terminal {
                 if !self.running().await {
                     return Err("terminal has exited".into());
                 }
-                if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
-                    pool.terminal_begin(&self.display_id, &self.observer_cwd)
-                        .await?;
-                }
-                timeout(Duration::from_secs(5), self.write(data.as_bytes()))
-                    .await
-                    .map_err(|_| {
-                        "terminal write timed out; input may be partially written".to_string()
-                    })?
-                    .map_err(|error| error.to_string())?;
-                Ok(json!({"written": data.len()}))
+                let (written, timed_out, error) = self.write_counted(data.as_bytes(), 5000).await;
+                Ok(json!({"written":written,"requested_bytes":data.len(),
+                    "remaining_bytes":data.len()-written,"timed_out":timed_out,"error":error}))
             }
             Operation::Resize { rows, cols } => {
                 if !self.running().await {
@@ -356,6 +405,25 @@ impl Terminal {
     }
 
     async fn read(&self, cursor: u64, max_bytes: usize, wait_ms: u64) -> Result<Value, String> {
+        self.read_impl(cursor, max_bytes, wait_ms, true).await
+    }
+
+    pub(crate) async fn read_page(
+        &self,
+        cursor: u64,
+        max_bytes: usize,
+        wait_ms: u64,
+    ) -> Result<Value, String> {
+        self.read_impl(cursor, max_bytes, wait_ms, false).await
+    }
+
+    async fn read_impl(
+        &self,
+        cursor: u64,
+        max_bytes: usize,
+        wait_ms: u64,
+        spill: bool,
+    ) -> Result<Value, String> {
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         loop {
             let changed = self.changed.notified();
@@ -385,7 +453,7 @@ impl Terminal {
                         );
                     let long =
                         output.end - cursor > INLINE_BYTES as u64 || pending_lines > INLINE_LINES;
-                    if long {
+                    if spill && long {
                         let capture = output
                             .capture
                             .as_ref()
@@ -431,22 +499,126 @@ impl Terminal {
         }
     }
 
-    async fn write(&self, data: &[u8]) -> io::Result<()> {
-        let _guard = self.writer.lock().await;
-        let master = self.master().map_err(io::Error::other)?;
-        let mut offset = 0;
-        while offset < data.len() {
-            let mut ready = master.writable().await?;
-            match ready.try_io(|fd| write_fd(fd.get_ref().as_raw_fd(), &data[offset..])) {
-                Ok(Ok(0)) => {
-                    return Err(io::Error::new(io::ErrorKind::WriteZero, "terminal closed"));
+    pub(crate) fn pid(&self) -> u32 {
+        self.pid as u32
+    }
+
+    pub(crate) fn changed(&self) -> Arc<Notify> {
+        self.changed.clone()
+    }
+
+    pub(crate) fn input_bytes(&self) -> u64 {
+        self.input_bytes.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn output_snapshot(&self) -> Value {
+        let output = self.output.lock().unwrap();
+        json!({"start_cursor":output.start,"next_cursor":output.end,
+            "truncated":output.start>0,"eof":output.eof,
+            "artifact":output.capture.as_ref().and_then(Capture::metadata),
+            "error":output.capture.as_ref().and_then(Capture::error)})
+    }
+
+    /// Observe the leader without reaping it: its PID/session identity must remain
+    /// pinned until shutdown has signalled all owned members.
+    pub(crate) async fn wait_exit(&self) -> io::Result<(Option<i32>, Option<i32>)> {
+        // SAFETY: the cloned OwnedFd pins this descriptor for the entire
+        // registration lifetime; no other owner can replace or close it.
+        let leader = unsafe { AsyncFd::register(self.leader.try_clone()?) }?;
+        loop {
+            let mut ready = leader.readable().await?;
+            // SAFETY: waitid writes initialized siginfo storage for this owned,
+            // unreaped child, and WNOHANG prevents blocking the async executor.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let result = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    self.pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            };
+            if result < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // Readiness may be spurious; never turn it into cancellation of a
+            // still-running command.
+            if unsafe { info.si_pid() } == 0 {
+                ready.clear_ready();
+                continue;
+            }
+            let status = unsafe { info.si_status() };
+            return match info.si_code {
+                libc::CLD_EXITED => Ok((Some(status), None)),
+                libc::CLD_KILLED | libc::CLD_DUMPED => Ok((None, Some(status))),
+                _ => Err(io::Error::other("PTY leader exit status unavailable")),
+            };
+        }
+    }
+
+    /// Every successful nonblocking syscall is counted before another await.
+    /// Dropping or timing out this future never leaves a queued background write.
+    pub(crate) async fn write_counted(
+        &self,
+        data: &[u8],
+        wait_ms: u64,
+    ) -> (usize, bool, Option<String>) {
+        let deadline = Instant::now() + Duration::from_millis(wait_ms);
+        if !self.running().await {
+            return (0, false, Some("terminal has exited".into()));
+        }
+        if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
+            match timeout_at(
+                deadline,
+                pool.terminal_begin(&self.display_id, &self.observer_cwd),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => return (0, false, Some(error)),
+                Err(_) => return (0, true, None),
+            }
+        }
+        let _guard = match timeout_at(deadline, self.writer.lock()).await {
+            Ok(guard) => guard,
+            Err(_) => return (0, true, None),
+        };
+        let master = match self.master() {
+            Ok(master) => master,
+            Err(error) => return (0, false, Some(error)),
+        };
+        let mut written = 0;
+        while written < data.len() {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self.closed.load(Ordering::Acquire) {
+                return (written, false, Some("terminal is closed".into()));
+            }
+            if Instant::now() >= deadline {
+                return (written, true, None);
+            }
+            let ready = tokio::select! {
+                biased;
+                _ = &mut changed => continue,
+                ready = timeout_at(deadline, master.writable()) => ready,
+            };
+            let mut ready = match ready {
+                Ok(Ok(ready)) => ready,
+                Ok(Err(error)) => return (written, false, Some(error.to_string())),
+                Err(_) => return (written, true, None),
+            };
+            match ready.try_io(|fd| write_fd(fd.get_ref().as_raw_fd(), &data[written..])) {
+                Ok(Ok(0)) => return (written, false, Some("terminal accepted zero bytes".into())),
+                Ok(Ok(count)) => {
+                    written += count;
+                    self.input_bytes.fetch_add(count as u64, Ordering::AcqRel);
                 }
-                Ok(Ok(n)) => offset += n,
-                Ok(Err(error)) => return Err(error),
+                Ok(Err(error)) => return (written, false, Some(error.to_string())),
                 Err(_) => continue,
             }
         }
-        Ok(())
+        (written, false, None)
     }
 
     pub async fn shutdown(&self) {
@@ -456,6 +628,7 @@ impl Terminal {
         if self.closed.swap(true, Ordering::AcqRel) {
             return;
         }
+        self.changed.notify_waiters();
         let mut child = self.child.lock().await;
         if child.is_some() {
             self.stop_session();
@@ -465,9 +638,11 @@ impl Terminal {
             }
         }
         let reader = self.reader.lock().unwrap().take();
-        if let Some(reader) = reader {
-            reader.abort();
-            let _ = reader.await;
+        if let Some(mut reader) = reader {
+            if timeout(Duration::from_secs(2), &mut reader).await.is_err() {
+                reader.abort();
+                let _ = reader.await;
+            }
         }
         self.master.lock().unwrap().take();
         let mut output = self.output.lock().unwrap();
