@@ -1,0 +1,127 @@
+{
+  "schema": "ssmcp.linux-multiuser-runtime-observation.public.v1",
+  "scope": "对两份既有只读现场记录的公开摘要；本次仅读取记录，没有重新调查环境或执行产品、测试、用户命令。",
+  "status": "reported_runtime_identity_unresolved",
+  "source_documents": [
+    {
+      "file": "facts-and-boundaries.json",
+      "bytes": 5833,
+      "sha256": "9eefcfb9341404ca9a5c5f3a764e4ca3e2c1ee1fbe768c77f4b25419cf8da494",
+      "complete_read_and_hash_match": true
+    },
+    {
+      "file": "execution-receipts.json",
+      "bytes": 9579,
+      "sha256": "16f8528d35a4b28549cda6fc72b558be5c6baa4601f9da955f95baa39dd266be",
+      "complete_read_and_hash_match": true
+    }
+  ],
+  "evidence_readback": {
+    "projection_source_read": {
+      "exit_code": 0,
+      "stdout_eof": true,
+      "stderr_eof": true,
+      "stdout_truncated": false,
+      "stderr_truncated": false,
+      "files_read": 2
+    },
+    "retained_diagnostic_receipts": {
+      "count": 3,
+      "exit_codes": [
+        0,
+        0,
+        0
+      ],
+      "all_streams_eof": true,
+      "any_stream_truncated": false,
+      "classification": "既有只读诊断命令的执行回执，不是产品或验收测试通过数。"
+    },
+    "original_archive_writer": {
+      "exit_code": null,
+      "completion": "重连后原作业终态不可取得，原 exit 未知；不声称 exit 0。",
+      "source": "协调者提供的归档状态"
+    },
+    "subsequent_archive_verification": {
+      "exit_code": 0,
+      "stdout_eof": true,
+      "stderr_eof": true,
+      "manifest_files_verified": 7,
+      "source": "协调者已核对的后续完整读回回执；本投影没有重新读取该作业或其余五份文件。",
+      "limit": "后续读回确认归档内容，不补造原 writer 的退出状态。"
+    }
+  },
+  "source_identity_as_recorded": {
+    "W": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+    "P": "ea2bfcae6aea9672d8955f832a8ec5bd1e0749f4",
+    "tree": "5be29af415b915ef3307bfed08c6cefec2798898",
+    "relation": "既有记录说明 P 与 W 的 tree 相同；本次未重新读取 Git 对象，也不据此声明祖先关系或转移运行结果。",
+    "existing_behavior": "既有源码观察记录 W 已按有效用户身份隔离普通临时输出目录，并对继承而来的异主控制终端验证 /dev/tty 回退。这里只说明已有机制，不代表本次新增或完成修复。"
+  },
+  "confirmed_observations_as_recorded": {
+    "system_binary_candidate": {
+      "path": "/usr/bin/ssmcp",
+      "kind": "ELF",
+      "mode": "0755",
+      "bytes": 9885680,
+      "sha256": "59f29540db09e78dc21d49e17bedc279f7c0721bf5aba8939a7d1ef99d13bc13",
+      "package_name": "ssmcp-git",
+      "package_registered_version": "0.9.1.r377.gee05244-1",
+      "package_mtree_matches_size_and_sha256": true,
+      "relevant_error_and_legacy_tmp_literals_present": true,
+      "version_command_executed": false,
+      "limit": "包数据库登记版本和 ELF 字节匹配只绑定这个系统候选；报错用户实际 PATH、wrapper 或 saved-session 选择的可执行文件及其版本仍未知。"
+    },
+    "private_home_permissions": {
+      "workspace_owner_home_mode": "0700",
+      "workspace_owner_posix_access_acl_query": "ENODATA",
+      "workspace_owner_posix_access_acl_meaning": "查询未返回 POSIX access ACL 属性。",
+      "other_user_home_mode": "0700",
+      "observer_access_to_other_users_private_paths": "EACCES",
+      "interpretation": "观察者不能读取另一用户的私有目录，符合用户间私有 HOME 隔离；这不能被解释成该用户自己的 HOME 损坏或对本人不可用。"
+    },
+    "visible_target_user_process_count": 0,
+    "proc_mount_has_hidepid": false,
+    "process_observation_limit": "只代表当次可见进程快照，没有取得报错 shell 的实际命令解析或完整运行环境。"
+  },
+  "bounded_inferences": [
+    {
+      "statement": "与包 mtree 相符且含相关错误及旧临时目录字面量的系统 ELF，是原报错的具体候选。",
+      "not_established": "它是否就是报错用户当时选中的入口，尚未证明。"
+    },
+    {
+      "statement": "工作区位于另一所有者的 0700 私有 HOME 下，且没有返回 POSIX access ACL；在普通权限下，另一用户不能遍历这条工作区路径。",
+      "not_established": "未以该用户身份启动进程或复现产品失败，不能据此还原原始截断错误的完整原因。"
+    }
+  ],
+  "unresolved": {
+    "reported_user_command_resolution": null,
+    "reported_user_selected_executable_and_version": null,
+    "reported_user_PATH": null,
+    "wrapper_or_shell_function": null,
+    "saved_session_executable_pin": null,
+    "reported_user_actual_HOME_and_XDG_context": null,
+    "failure_root_cause": "尚未确认；现有记录的候选与权限观察不足以证明报错用户实际运行身份。"
+  },
+  "boundaries": {
+    "original_user_log_republished": false,
+    "raw_diagnostic_stdout_reopened_for_this_projection": false,
+    "source_code_reopened": false,
+    "binaries_rehashed_for_this_projection": false,
+    "diagnostic_commands_reexecuted": 0,
+    "product_executions": 0,
+    "cargo_or_test_executions": 0,
+    "model_or_native_agent_started": 0,
+    "identity_switch_or_privilege_escalation": 0,
+    "installation_or_permission_changes": 0,
+    "failure_reproduction_performed": false,
+    "repair_or_installation_claimed": false,
+    "account_compat_multi_subject_fixture_is_separate": true,
+    "added_UI_or_P1_pass_count": 0,
+    "excluded_from_public_output": [
+      "本机用户名和真实 UID/GID",
+      "私人 HOME 与工作目录",
+      "native client、agent、job 和会话标识",
+      "token、凭据、完整环境和原始用户聊天"
+    ]
+  }
+}

@@ -1,0 +1,220 @@
+--- a/publication-verifier-git-source-zuse-cli-unbound/verify_published_manual_main.py
++++ b/publication-verifier-git-source-zuse-cli-v26-unbound/verify_published_manual_main.py
+@@ -1,7 +1,7 @@
+-"""Verify the v0.10.25 CLI-lifecycle manual-main Git-source publication with crate deferral.
+-
+-UNBOUND preparation: final S, workflow P, run and original dispatch evidence have
+-not been selected. Missing or unsupported evidence fails closed. This program
++"""Verify the v0.10.26 CLI-lifecycle manual-main Git-source publication with crate deferral.
++
++UNBOUND preparation: runtime S/P/run and original dispatch evidence have
++not been bound. Missing or unsupported evidence fails closed. This program
+ never dispatches a workflow, creates a tag, publishes, or deploys.
+ Only the reviewed git-source-v1 contract is supported: no legacy, registry or
+ build-only mode, and no registry claim or registry package download.
+@@ -40,7 +40,7 @@
+ 
+ # Source receipt policy is unchanged; the reviewed CLI recipe has three gitlinks.
+ RELEASE_CONTRACT = "git-source-v1"
+-RELEASE_VERSION = "0.10.25"
++RELEASE_VERSION = "0.10.26"
+ CRATE_PUBLICATION = {
+     "status": "deferred",
+     "reason": "Independent registry dependencies and the external package require separate verification.",
+@@ -56,14 +56,14 @@
+         raise ValueError(message)
+ 
+ 
+-# This is the reviewed recipe source, not a selected release candidate or main SHA.
++# This is the reviewed recipe source, not a runtime product/workflow binding.
+ # Updating any pin requires a new source review; never learn pins from the run.
+-RECIPE_SOURCE_COMMIT = "35ff6e4eb8b463aeb090230e9557fb08fb22b458"
++RECIPE_SOURCE_COMMIT = "4c6cd21b2ab46c11febbac7c1921e302da49f4b2"
+ REVIEWED_RECIPE = {
+-    ".github/workflows/release.yml": (22724, "ba51af5f000826fcf31455591af2de5de2256cdaa5846e51eaeeb0e5241dbe8c"),
++    ".github/workflows/release.yml": (22855, "d7f29c1ac896e247a1c7e00aa3f68e349cbe8fd81a45dd3c317e5c25fc26e677"),
+     ".github/workflows/ci.yml": (14994, "e7c753ca1a058b43f798cb1f31bc2b8980a09b3bc72cdb1996ef6eaadb5a7172"),
+     ".github/workflows/deploy-server.yml": (4499, "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"),
+-    "scripts/release.py": (65003, "3d0361e548bf78f0a7e4657e7ccab870c9698fe3b8d91c9ab72c62b9375b976e"),
++    "scripts/release.py": (65111, "a11208e6f6949d0af6893774046295b71aaa0fa8b65ca8a462f53b94db5a1855"),
+     "scripts/install.sh": (6783, "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"),
+     "scripts/install.ps1": (12928, "e2c0607275d6b04315e4ddce85d01280dcc56b2bb2710be0849fbaeee626d051"),
+ }
+@@ -396,10 +396,10 @@
+     require(release_version == RELEASE_VERSION
+             and isinstance(manifest, dict) and set(manifest) == expected_fields
+             and type(manifest["schema_version"]) is int and manifest["schema_version"] == 2,
+-            "only the reviewed v0.10.25 schema-2 Git-source manifest is supported")
++            "only the reviewed v0.10.26 schema-2 Git-source manifest is supported")
+     require(manifest["crate_publication"] == CRATE_PUBLICATION
+             and manifest["verified_crate"] is None,
+-            "v0.10.25 must defer crate publication; registry, legacy and build-only receipts are unsupported")
++            "v0.10.26 must defer crate publication; registry, legacy and build-only receipts are unsupported")
+     candidate_tree = git_read(checkout, "rev-parse", candidate + "^{tree}").decode().strip()
+     candidate_manifest = git_read(checkout, "show", candidate + ":Cargo.toml")
+     candidate_lock = git_read(checkout, "show", candidate + ":Cargo.lock")
+--- a/publication-verifier-git-source-zuse-cli-unbound/manual_main_provenance.py
++++ b/publication-verifier-git-source-zuse-cli-v26-unbound/manual_main_provenance.py
+@@ -4,7 +4,7 @@
+ malicious runner, build script, or compromised action. Job logs are obtained by
+ the job IDs in one exact attempt. An ambiguous or missing identity is an error;
+ there is no whole-log fallback that searches for a later favorable value.
+-Only 0.10.25 / git-source-v1 with registry publication deferred is supported.
++Only 0.10.26 / git-source-v1 with registry publication deferred is supported.
+ """
+ 
+ from collections import Counter
+@@ -32,7 +32,7 @@
+ )
+ DEFERRED_REASON = (
+     "Preserve active relay sessions until a separate non-disruptive server switch is verified.")
+-RELEASE_VERSION = "0.10.25"
++RELEASE_VERSION = "0.10.26"
+ RELEASE_CONTRACT = "git-source-v1"
+ CRATE_DEFERRED_REASON = (
+     "Independent registry dependencies and the external package require separate verification.")
+@@ -308,7 +308,7 @@
+ def validated_release(candidate, version):
+     need(version == RELEASE_VERSION and isinstance(candidate, str)
+          and re.fullmatch(r"[0-9a-f]{40}", candidate),
+-         "only the reviewed 0.10.25 Git-source candidate is supported")
++         "only the reviewed 0.10.26 Git-source candidate is supported")
+     return {"tag": "v" + version, "version": version, "sha": candidate,
+             "submodule_count": 3, "prerelease": "false", "publish": "true",
+             "create_tag": "false", "build_only": "false",
+--- a/publication-verifier-git-source-zuse-cli-unbound/README.md
++++ b/publication-verifier-git-source-zuse-cli-v26-unbound/README.md
+@@ -1,31 +1,32 @@
+-# H2：适配独立 Zuse CLI 迁移的静态后继
++# H2：v0.10.26 独立 Zuse CLI 发布的静态后继
+ 
+-本目录是 **0.10.25 / manual-main / git-source-v1** 发行核验器的静态准备版本。已审配方来自固定源码 35ff6e4eb8b463aeb090230e9557fb08fb22b458，只适用于 GitHub 二进制发行与 crate 延期的组合。
++本目录准备 **0.10.26 / manual-main / git-source-v1** 发行核验器。六份配方直接读取自固定源码 [4c6cd21](https://github.com/LIghtJUNction/ssmcp/commit/4c6cd21b2ab46c11febbac7c1921e302da49f4b2)，适用于 GitHub 二进制发行、crate 延期和服务器部署延期的组合。
+ 
+-**它尚未执行，也尚未绑定最终产品提交 S、main 工作流提交 P、tag、运行编号或原始 dispatch 回执。** 这里的配方来源不是已选定的最终候选。静态语法与源码审阅不能代替真实发布核验；本目录不会触发发布、创建标签、安装程序或部署服务器。
++**本包尚未执行，运行核验使用的 S、P、tag、run 和原始 dispatch 回执均未绑定。** 已审配方来源与实际运行参数分别记录；静态源码、字节和语法审阅不能代替正式发布核验。本目录不会触发发布、创建标签、安装程序或部署服务器。
+ 
+-## 与旧配方对应的必要变化
++## 与 v0.10.25 静态包的必要差异
+ 
+-[前一份 H2 CI 固定版本](https://github.com/LIghtJUNction/ssmcp/tree/6f6bb09bace5b54c82f47f7eb0ae245f17d5ff2d/docs/reports/command-await-delivery-20261120/publication-verifier-git-source-ci-unbound)保留原样。以下变化来自已退役的内置电脑／浏览器执行器及新的 CLI 安装管理；它们不转移任何旧候选的运行成绩。
++[原 v0.10.25 H2 CLI 包](https://github.com/LIghtJUNction/ssmcp/tree/840629d64e3915bbe2b17496aa600d067e34b7e3/docs/reports/command-await-delivery-20261120/publication-verifier-git-source-zuse-cli-unbound)保留原字节。v0.10.25 的正式 CI 失败和原生返回保存缺口保留在[阶段报告](../current-iteration-Release-CI-followup.md)，不转记为 v0.10.26 的成绩。
+ 
+-| 旧规则 | 当前固定配方 | 保留的约束 |
++| 变化 | 当前固定来源 | 保留的约束 |
+ |---|---|---|
+-| 四个 gitlink，直接依赖包含 zuse-computer | 三个 gitlink：zharness、zplugin、ztuio；直接 Project Z 分类与 release.py 一致 | receipt 路径和 commit 集合必须等于最终 S 的真实递归 Git tree，每个子模块 tree 继续核对 |
+-| Build 主上传位于 step 12；Windows 共三次上传 | 全部平台主上传为 step 8，唯一上传 occurrence 0、total 1 | 对应 action、job、时间窗口、artifact ID 与字节全部核对 |
+-| Windows browser/bootstrap 诊断 step 10/11 | 仅删除这两项已退役的 Build 检查 | finalize 自身 step 10/11 的 verified-source 与 finalized-release-assets 上传仍保留 |
+-| 六份旧配方大小与摘要 | 四份已变、两份逐字节未变；全部重新固定于已审源码 | 最终 S 是 P 的祖先，且六份配方在 S/P 均等于独立固定字节 |
++| 两份 Python 模块的版本绑定改为 0.10.26，说明和错误文字同步 | 固定新版本的 manifest、Cargo 根包、标签和 validate 输出 | schema-2、git-source-v1、crate deferred 和原始运行身份规则 |
++| Release 工作流与 release.py 显式增加 0.10.26 的延期策略 | 同时保留 0.10.25；没有把后续任意版本一律延期 | GitHub-only、相同延期 reason、deploy_server=false；没有增加或移除 job、step 或 artifact |
++| 更新已审来源和两份变化配方的大小／SHA-256 | 其余四份配方逐字节相同；六份 Git blob 身份均实际核对 | 最终 S 是 P 的祖先，S/P 六配方均须等于独立审阅字节 |
+ 
+-[固定 Release](https://github.com/LIghtJUNction/ssmcp/blob/35ff6e4eb8b463aeb090230e9557fb08fb22b458/.github/workflows/release.yml) · [固定 CI](https://github.com/LIghtJUNction/ssmcp/blob/35ff6e4eb8b463aeb090230e9557fb08fb22b458/.github/workflows/ci.yml) · [固定 release.py](https://github.com/LIghtJUNction/ssmcp/blob/35ff6e4eb8b463aeb090230e9557fb08fb22b458/scripts/release.py)
++固定源码的完整递归 tree 已实际读回，未截断，包含 zharness、zplugin、ztuio 三个 gitlink，提交身份与原包一致。三个模块只做 AST 语法和静态差分审阅，没有 import 或执行。
+ 
+-独立 CI 调试客户端的既有规则继续保留：Preserve the Linux candidate client 仍是 API step 20；Release 调用两个 Linux job 时必须为 skipped。Linux x86／ARM 实际上传计数保持 2／1。它不参与正式发布证据。十九个 job、十六个公开文件、八份必要发布 artifact 及 Windows CRLF sidecar 核验均保留。
++原 dispatch 解析器逐字节不变。新的版本绑定不接受手工拼装的原生回执，也不会把后续 snapshot 当成丢失的原始返回。运行参数与回执仍由原执行者从真实观察取得。
+ 
+-原 dispatch 解析器逐字节不变。三个模块只做 AST 语法解析和静态审阅，没有 import 或执行；实际 Actions 日志兼容性仍须在真实发布时确认。
++[固定 Release](https://github.com/LIghtJUNction/ssmcp/blob/4c6cd21b2ab46c11febbac7c1921e302da49f4b2/.github/workflows/release.yml) · [固定 CI](https://github.com/LIghtJUNction/ssmcp/blob/4c6cd21b2ab46c11febbac7c1921e302da49f4b2/.github/workflows/ci.yml) · [固定 release.py](https://github.com/LIghtJUNction/ssmcp/blob/4c6cd21b2ab46c11febbac7c1921e302da49f4b2/scripts/release.py)
++
++原结构约束继续保留：Build 打包／安装器／唯一上传分别是 API step 6／7／8；finalize 的两次上传仍是 step 10／11。Linux 的 `Preserve the Linux candidate client` 仍为 API step 20，Release 调用时须 skipped；两份 Linux job 的上传数仍为 2／1。该辅助候选不作为正式发布证据。十九个 job、十六个公开文件、八份必要发布 artifact 和 Windows CRLF sidecar 核验规则保持不变。
+ 
+ ## 适用范围
+ 
+ | 项目 | 必须满足的合同 |
+ |---|---|
+-| 产品与版本 | `ssmcp`，`0.10.25`，正式标签 `v0.10.25` |
++| 产品与版本 | `ssmcp`，`0.10.26`，正式标签 `v0.10.26` |
+ | 触发方式 | 对 `main` 执行 `workflow_dispatch`，显式 `build_only=false`、`deploy_server=false` |
+ | 来源身份 | S 必须是真实 Git 提交；P 是实际执行工作流的 main 提交；S 是 P 的真实祖先，六份发布配方在 S/P 上等于已审阅字节 |
+ | 发布模式 | `git-source-v1`；crate 状态与固定 reason 必须为 `deferred`，`verified_crate` 必须为 null |
+@@ -44,7 +45,7 @@
+ - `dispatch_receipt_adapter.py`：只解析原始请求捕获与独立原生执行回执；保持旧版本字节不变。
+ - `reviewed-recipe.json`：实际已审阅源码及六份配方的大小和 SHA256。
+ - `preparation-identity.json`：模块、变更文件及静态审阅范围；所有未来运行绑定保持空值。
+-- `changes-from-H2-CI.patch`：与前一份 H2 CI 的两个模块、说明和配方差异；身份与静态核对结果另列。
++- `changes-from-H2-CLI-v25.patch`：相对固定 840629 原包的两个模块、说明和配方差异；身份与静态核对结果另列。
+ 
+ [原 H 保留在固定提交 2257fb1](https://github.com/LIghtJUNction/ssmcp/tree/2257fb1d235bba59e8a0d1747a4f4afc6348bad3/docs/reports/command-await-delivery-20261120/publication-verifier-manual-main-unbound)。本静态后继保留原 H2 和原 H，没有改写任何历史执行成绩。
+ 
+--- a/publication-verifier-git-source-zuse-cli-unbound/reviewed-recipe.json
++++ b/publication-verifier-git-source-zuse-cli-v26-unbound/reviewed-recipe.json
+@@ -1,12 +1,12 @@
+ {
+-  "schema": "ssmcp-h2-cli-reviewed-recipe-v1",
+-  "recipe_source_commit": "35ff6e4eb8b463aeb090230e9557fb08fb22b458",
+-  "scope": "0.10.25 manual-main git-source-v1; deferred crate publication; no deployment",
++  "schema": "ssmcp-h2-cli-v26-reviewed-recipe-v1",
++  "recipe_source_commit": "4c6cd21b2ab46c11febbac7c1921e302da49f4b2",
++  "scope": "0.10.26 manual-main git-source-v1; deferred crate publication; no deployment",
+   "files": [
+     {
+       "path": ".github/workflows/release.yml",
+-      "bytes": 22724,
+-      "sha256": "ba51af5f000826fcf31455591af2de5de2256cdaa5846e51eaeeb0e5241dbe8c"
++      "bytes": 22855,
++      "sha256": "d7f29c1ac896e247a1c7e00aa3f68e349cbe8fd81a45dd3c317e5c25fc26e677"
+     },
+     {
+       "path": ".github/workflows/ci.yml",
+@@ -20,8 +20,8 @@
+     },
+     {
+       "path": "scripts/release.py",
+-      "bytes": 65003,
+-      "sha256": "3d0361e548bf78f0a7e4657e7ccab870c9698fe3b8d91c9ab72c62b9375b976e"
++      "bytes": 65111,
++      "sha256": "a11208e6f6949d0af6893774046295b71aaa0fa8b65ca8a462f53b94db5a1855"
+     },
+     {
+       "path": "scripts/install.sh",
+@@ -38,8 +38,8 @@
+   "workflow_sha": null,
+   "run_id": null,
+   "execution_performed": false,
+-  "previous_recipe_source_commit": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+-  "previous_static_helper_commit": "6f6bb09bace5b54c82f47f7eb0ae245f17d5ff2d",
++  "previous_recipe_source_commit": "35ff6e4eb8b463aeb090230e9557fb08fb22b458",
++  "previous_static_helper_commit": "840629d64e3915bbe2b17496aa600d067e34b7e3",
+   "independent_ci_candidate_step": {
+     "yaml_step": 19,
+     "expected_api_step": 20,
+@@ -56,7 +56,7 @@
+   },
+   "official_context_source": "https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context",
+   "CLI_migration": {
+-    "source_tree": "38cf85469fc3b2f92efc61009652baa1bf669274",
++    "source_tree": "6b40a2f7e2349c888d78a98d1f70692a938351a3",
+     "gitlink_count": 3,
+     "observed_gitlinks": [
+       {
+@@ -85,6 +85,25 @@
+       10,
+       11
+     ],
+-    "final_candidate_not_selected": true
++    "runtime_bindings_not_assigned": true,
++    "recipe_source_is_not_runtime_binding": true
++  },
++  "version_successor": {
++    "previous_version": "0.10.25",
++    "reviewed_version": "0.10.26",
++    "changed_recipe_paths": [
++      ".github/workflows/release.yml",
++      "scripts/release.py"
++    ],
++    "unchanged_recipe_paths": [
++      ".github/workflows/ci.yml",
++      ".github/workflows/deploy-server.yml",
++      "scripts/install.sh",
++      "scripts/install.ps1"
++    ],
++    "explicit_deferrals_preserve_previous_version": true,
++    "unlisted_future_versions_not_automatically_deferred": true,
++    "job_step_artifact_structure_unchanged": true,
++    "native_receipt_adapter_unchanged": true
+   }
+ }

@@ -1,0 +1,259 @@
+{
+  "schema": "ssmcp-cli-first-checks-cleanup-progress-v1",
+  "snapshot_utc": "2026-11-21 16:06:25 UTC",
+  "scope": {
+    "desktop_and_browser_actions": "Standalone Zuse CLI",
+    "computer_tools": [
+      "version",
+      "download",
+      "install",
+      "uninstall"
+    ],
+    "user_wait": "Red symbol/text and remaining mm:ss for active user waits",
+    "finish": "Exact authenticated Human decision required by the new finish-wait protocol",
+    "latest_shortcut_feedback": "Remove only the default Super+Alt+C binding; preserve existing explicit control switches; do not touch the machine currently livestreaming.",
+    "explicit_control_switch_preservation": "Final source reconciliation required; not yet verified in a frozen candidate."
+  },
+  "source": {
+    "node_checked_commit": "031fc6ed108d0642793b60f099992574b62a5de4",
+    "node_checked_tree": "8680f3d39c9d955c3bc6a016b1f71ba38d69ea01",
+    "latest_fixed_diff_read": "c7eebfd25fa4b1a3e83ebc5a7cd07eab1bd0cc39",
+    "main_at_remote_branch_read": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "frozen_final_candidate": false,
+    "latest_fixed_tree_reported": "ad82a453feea9784388469e0ed74519388f4e4e6"
+  },
+  "node_checks": {
+    "scripts": [
+      {
+        "exit_code": 0,
+        "script": "scripts/test_cua_facade.mjs"
+      },
+      {
+        "exit_code": 0,
+        "script": "scripts/test_client_capabilities.mjs"
+      },
+      {
+        "exit_code": 0,
+        "script": "scripts/test_execution_helpers.mjs"
+      },
+      {
+        "exit_code": 0,
+        "script": "scripts/test_rtk_helpers.mjs"
+      },
+      {
+        "exit_code": 0,
+        "script": "scripts/test_tools_search.mjs"
+      }
+    ],
+    "all_listed_exit_codes_zero": true,
+    "source_git_status_after": "",
+    "case_total_not_inferred": true,
+    "receipt": {
+      "file": "cli-node-preflight-20261121-v1/receipt.json",
+      "bytes": 18139,
+      "sha256": "40d4b54638d82c7bd35f50b7426fab26893b3d6dde809e0a8d8cf14171d6c2ce",
+      "report_owner_read_original": false
+    },
+    "evidence": "Source owner completion report; original acceptance coordinator independently rehashed/read the receipt and confirmed source/tree and five exit codes.",
+    "report_owner_original_read": false,
+    "acceptance_coordinator_original_read": true,
+    "no_Cargo_or_product_acceptance_implied": true
+  },
+  "cargo": {
+    "phase": "blocked",
+    "error": "shared Cargo owner lock still busy after bounded wait",
+    "receipt": {
+      "file": "cli-lock-resolution-20261121-v1/receipt.json",
+      "bytes": 2032,
+      "sha256": "4d0665051910240b6dc5a7b95925d6dcd5283be73c6e7f8d4a8e94282d040bef",
+      "report_owner_read_original": false
+    },
+    "execution": "Owner reports bounded shared-owner-lock wait ended blocked with exit 1 before Cargo execution; no source-lock mutation.",
+    "last_reported_holder": "Another release batch's Zuse 0.4.2 registry validation",
+    "handoff": "Original owner is coordinating through an existing participant; no lock bypass or process termination.",
+    "report_owner_original_read": false,
+    "acceptance_coordinator_original_read": true
+  },
+  "cleanup": {
+    "source_of_native_results": "Original source owner report; native cleanup originals not independently read by report owner.",
+    "cache_batches": [
+      {
+        "count": 65,
+        "allocated_path_bytes": 96792784896,
+        "disk_free_before": 393849294848,
+        "disk_free_after": 436946583552,
+        "completed_utc": "2026-11-21T15:43:19.823790+00:00",
+        "receipt": {
+          "file": "ssmcp-release21-recovery-20261121/cli-cache-cleanup-20261121-v3.jsonl",
+          "bytes": 32134,
+          "sha256": "72b405f77dee2d0d655fff7613e8a1e4abed7c8614549eca79ada9eecf495c0b",
+          "report_owner_read_original": false
+        }
+      },
+      {
+        "count": 7,
+        "allocated_path_bytes": 30651887616,
+        "disk_free_before": 438227677184,
+        "disk_free_after": 461121187840,
+        "completed_utc": "2026-11-21T15:49:28.712194+00:00",
+        "receipt": {
+          "file": "ssmcp-release21-recovery-20261121/cli-cache-cleanup-20261121-v4-main.jsonl",
+          "bytes": 3313,
+          "sha256": "eb7d331495c85dbdadf6bde5d01bf24e1b71a3227f41d6de5d679006c63dec26",
+          "report_owner_read_original": false
+        }
+      }
+    ],
+    "totals": {
+      "allocated_path_bytes": 127444672512,
+      "allocated_path_gib": 118.69210052490234,
+      "last_disk_free_bytes": 461121187840,
+      "last_disk_free_gib": 429.4525718688965,
+      "first_to_last_free_difference_bytes": 67271892992,
+      "first_to_last_free_difference_gib": 62.651832580566406,
+      "not_attributed_as_net_cleanup_release": true
+    },
+    "cache_directories_removed": 72,
+    "shared_target_untouched_as_reported": true,
+    "source_worktrees_removed_as_reported": 0,
+    "branches": {
+      "remote_deleted_as_reported": [
+        "chore/zuse-metadata-20261121",
+        "feat/conversation-goal-20261120",
+        "feat/iteration-integration-20261121",
+        "fix/allow-recovery-main-20261120",
+        "fix/ci-integrated-ui-20261120",
+        "fix/finish-observer-history-20261120",
+        "fix/release-0.10.23-20261120",
+        "fix/release-portability-20261120",
+        "fix/tool-summary-delivery-p2-20261120",
+        "fix/zuse-input-20261121",
+        "integrate/native-plugins-20261119",
+        "lightdot/zuse-0.3.0-motion"
+      ],
+      "local_deleted_as_reported": [
+        "fix/zuse-input-20261121",
+        "work/release21-paste-ci-20261121"
+      ],
+      "receipt": {
+        "file": "ssmcp-release21-recovery-20261121/cli-history-branch-deletion-20261121-v1.jsonl",
+        "bytes": 3529,
+        "sha256": "a5688333cbcb8b01276c8a68744edd9c367aa351076e69ee268a603c7b38c11e",
+        "report_owner_read_original": false
+      },
+      "actual_remote_readback": {
+        "snapshot_utc": "2026-11-21 15:57:36 UTC",
+        "branch_count": 50,
+        "complete_single_page": true,
+        "reported_deleted": [
+          "chore/zuse-metadata-20261121",
+          "feat/conversation-goal-20261120",
+          "feat/iteration-integration-20261121",
+          "fix/allow-recovery-main-20261120",
+          "fix/ci-integrated-ui-20261120",
+          "fix/finish-observer-history-20261120",
+          "fix/release-0.10.23-20261120",
+          "fix/release-portability-20261120",
+          "fix/tool-summary-delivery-p2-20261120",
+          "fix/zuse-input-20261121",
+          "integrate/native-plugins-20261119",
+          "lightdot/zuse-0.3.0-motion"
+        ],
+        "deleted_names_still_present": [],
+        "active_branches": [
+          {
+            "name": "docs/command-await-delivery-20261120",
+            "sha": "c40f35c962ed1e8464e39ea62222c299ba1cc71f"
+          },
+          {
+            "name": "main",
+            "sha": "02aa4dcd18786062ef44be6c76422dff054fbfed"
+          },
+          {
+            "name": "work/zuse-cli-only-20261121",
+            "sha": "671442b08b7d4f107ee1e18955d049f0dcfcf5ee"
+          }
+        ],
+        "root_independently_read": true
+      }
+    },
+    "stale_worktree_record_prune_not_added_to_cache_or_source_worktree_counts": true
+  },
+  "review": {
+    "Windows_ZIP_rule": "Static correction observed at8af607f",
+    "PATH_selection": "Static correction observed atbc57b3b",
+    "retired_key_sequence": "Static correction observed at526136f6; Alt+C test corrected at031fc6e",
+    "finish_request_scope": "Limited state-layer review found no approval reuse; native authorization-before-mutation and retained generation changes are present at671442b/2042d3f. No runtime pass inferred.",
+    "finish_completion_cache": "671442b refreshes the final receipt; 2042d3f additionally binds completed receipt updates and authorization to the same generation. Exact diff read; limited followup review pending.",
+    "Rust_arguments": "The previously missing finish_request_id is now explicitly None in src/http/await_tool.rs at fixed c7eebfd, verified by actual GitHub diff; static closure only, no compiler execution.",
+    "runtime_results": "No whole-product, Rust or release acceptance pass claimed for the migration."
+  },
+  "publication": {
+    "ssmcp_latest_release_read": {
+      "tag": "v0.10.20",
+      "published_at": "2026-11-20T09:43:48Z",
+      "draft": false,
+      "prerelease": false,
+      "html_url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.20",
+      "assets_count": 16,
+      "read_utc": "2026-11-21 15:59:39 UTC"
+    },
+    "new_migration_release_receipt_seen": false,
+    "zuse_latest_release_read": {
+      "tag": "v0.4.2",
+      "published_at": "2026-11-21T15:35:44Z",
+      "draft": false,
+      "prerelease": false,
+      "html_url": "https://github.com/LIghtJUNction/zuse/releases/tag/v0.4.2",
+      "assets": [
+        {
+          "name": "zuse-v0.4.2-aarch64-apple-darwin.tar.gz",
+          "size": 929302,
+          "digest": "sha256:7fc9dc27b84588fcf764983d0689562ba62759a8b1fa8793beead3b2984738af"
+        },
+        {
+          "name": "zuse-v0.4.2-aarch64-unknown-linux-gnu.tar.gz",
+          "size": 1067789,
+          "digest": "sha256:beb7489070382d92e431d1e32d9065928fedb8c69ae989134003da321e6ded6d"
+        },
+        {
+          "name": "zuse-v0.4.2-x86_64-apple-darwin.tar.gz",
+          "size": 1014988,
+          "digest": "sha256:6542ff3cfca617fce44d583435ff44b990c5f68025b5e341019d376c42c8d667"
+        },
+        {
+          "name": "zuse-v0.4.2-x86_64-pc-windows-msvc.zip",
+          "size": 992519,
+          "digest": "sha256:47f56c4f38ee37a42b98cdcd5ad6aeb1062863ad06cb6d0f00de36edbe709386"
+        },
+        {
+          "name": "zuse-v0.4.2-x86_64-unknown-linux-gnu.tar.gz",
+          "size": 1149334,
+          "digest": "sha256:9707d2957e5a9cdabe6d827a5149e04d5cf25459a1ed3df427dfe03620218503"
+        }
+      ],
+      "root_independently_read": true,
+      "no_functionality_retest": true
+    },
+    "previous_user_SIGABRT_and_EPERM_reports": "No corresponding successful runtime re-test read by report owner."
+  },
+  "historical_results": {
+    "source": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "Gate20": "35 stages passed; originals independently read by report owner",
+    "N20": "One pass reported by original acceptance coordinator",
+    "inherited_by_new_source": false,
+    "old_H2": "Static, unbound and unexecuted by report owner; requires final recipe and gitlink adaptation."
+  },
+  "report_group_execution": {
+    "native": 0,
+    "Cargo": 0,
+    "metadata": 0,
+    "build": 0,
+    "product": 0,
+    "test": 0,
+    "source_write": 0,
+    "target_write": 0,
+    "H2_execution": 0,
+    "release_dispatch": 0
+  }
+}

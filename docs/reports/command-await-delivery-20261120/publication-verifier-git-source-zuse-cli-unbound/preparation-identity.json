@@ -1,0 +1,101 @@
+{
+  "schema": "ssmcp-h2-cli-static-preparation-v1",
+  "prepared_at_utc": "2026-11-21T16:21:43.339874+00:00",
+  "status": "static_reviewed_unexecuted_unbound",
+  "baseline_static_commit": "6f6bb09bace5b54c82f47f7eb0ae245f17d5ff2d",
+  "recipe_source_commit": "35ff6e4eb8b463aeb090230e9557fb08fb22b458",
+  "supported_contract": "v0.10.25/manual-main/git-source-v1/crate-deferred",
+  "bindings": {
+    "product_sha": null,
+    "workflow_sha": null,
+    "tag": null,
+    "run_id": null,
+    "run_attempt": null,
+    "dispatch_capture": null,
+    "native_execution_receipt": null
+  },
+  "files_excluding_this_identity": [
+    {
+      "name": "README.md",
+      "bytes": 7261,
+      "sha256": "0fec5fccfff541fcd5de943e5d3f89bbe73dba583bd4208d3849b1cf79c96478"
+    },
+    {
+      "name": "changes-from-H2-CI.patch",
+      "bytes": 19261,
+      "sha256": "8ab892192e2f757c12caf23d067d658ddafc4c3ca6e43cd478898c846852bed6"
+    },
+    {
+      "name": "dispatch_receipt_adapter.py",
+      "bytes": 14758,
+      "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4"
+    },
+    {
+      "name": "manual_main_provenance.py",
+      "bytes": 43709,
+      "sha256": "804f1cbc6171fded4559bfffda9b414cf8654d5ed05540b72209de8e98cab17b"
+    },
+    {
+      "name": "reviewed-recipe.json",
+      "bytes": 2855,
+      "sha256": "d04690aa2e7c03db5eafd4f58e47a57dae51f536793920965fcf4c76289c841d"
+    },
+    {
+      "name": "static-review.json",
+      "bytes": 1637,
+      "sha256": "29ba157806b4e5ae8b8e7188f5985b3513afad369a2dde7797b70906a3909668"
+    },
+    {
+      "name": "verify_published_manual_main.py",
+      "bytes": 48819,
+      "sha256": "a6b754024e2028b8d4ba6997faa2c71fc7f86b552582d58b461af808dbb39261"
+    }
+  ],
+  "verification": {
+    "schema": "ssmcp-h2-cli-static-review-v1",
+    "status": "independently_static_reviewed_unexecuted_unbound",
+    "source": "35ff6e4eb8b463aeb090230e9557fb08fb22b458",
+    "tree": "38cf85469fc3b2f92efc61009652baa1bf669274",
+    "baseline_commit": "6f6bb09bace5b54c82f47f7eb0ae245f17d5ff2d",
+    "recipe_bytes_git_blob_identity_matched": true,
+    "recursive_source_tree_truncated": false,
+    "actual_gitlink_count": 3,
+    "ast_parse": true,
+    "changed_functions": {
+      "verify_published_manual_main.py": [
+        "verify_source_gitlinks",
+        "main"
+      ],
+      "manual_main_provenance.py": [
+        "action_shape",
+        "validated_release",
+        "source_receipt_from_manifest",
+        "verify_execution"
+      ],
+      "dispatch_receipt_adapter.py": []
+    },
+    "function_signatures_unchanged": true,
+    "dispatch_adapter_unchanged": true,
+    "bindings": {
+      "product_sha": null,
+      "workflow_sha": null,
+      "tag": null,
+      "run_id": null,
+      "run_attempt": null,
+      "dispatch_capture": null,
+      "native_execution_receipt": null
+    },
+    "modules_imported": false,
+    "helper_executed": false,
+    "tests_run": false,
+    "native_execution": false,
+    "cargo_or_product_run": false,
+    "workflow_dispatch_or_publication": false,
+    "install_or_production_reload": false,
+    "independent_static_review_blockers": 0,
+    "independent_review": "Direct collaborator read baseline and successor actual files; confirmed exact diff, unchanged signatures and adapter, consistent count3, Build8/1, retained CI20/finalize10-11 and provenance/asset constraints.",
+    "nonblocking_document_wording": "Changed future success phrasing to avoid implying an executed pass."
+  },
+  "original_H2_commit_preserved": true,
+  "verified_at_utc": "2026-11-21T16:25:00.291897+00:00"
+}

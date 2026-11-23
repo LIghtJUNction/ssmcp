@@ -1,0 +1,260 @@
+{
+  "schema": "ssmcp.frozen-source-checkpoint.v1",
+  "checkpoint_utc": "2026-11-21T01:01:15Z",
+  "scope": "Historical frozen source B with subsequent version coordination pending; no build, product test, runtime, or performance result for B.",
+  "previous_published_checkpoint": {
+    "commit": "77ed976b84d284a2d894b86937d01e190378f5de",
+    "tree": "be654b6d912b9c89c3b02adf93b5ca7abac9d927",
+    "readme_url": "https://github.com/LIghtJUNction/ssmcp/blob/77ed976b84d284a2d894b86937d01e190378f5de/docs/reports/command-await-delivery-20261120/README.md",
+    "historical_ab_url": "https://github.com/LIghtJUNction/ssmcp/blob/77ed976b84d284a2d894b86937d01e190378f5de/docs/reports/command-await-delivery-20261120/candidate-ab-0010.json",
+    "historical_submetrics_url": "https://github.com/LIghtJUNction/ssmcp/blob/77ed976b84d284a2d894b86937d01e190378f5de/docs/reports/command-await-delivery-20261120/candidate-ab-submetrics-0021.json"
+  },
+  "intermediate_source_checkpoint": {
+    "relative_path": "source-union-0038.json",
+    "bytes": 8311,
+    "sha256": "e547f5bad4a947fc3a40862dd73ac296057272cb6f075ad5f0b5324e3ac33cc2",
+    "unchanged_from_unpublished_draft": true,
+    "published_before_this_increment": false,
+    "source_commit": "24c32869ba730f4a91406ebd6b05e18a462bec80"
+  },
+  "source": {
+    "commit": "be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1",
+    "tree": "5e8ea273c8f8bd8b0e7b1f87ccc0d19fd594601b",
+    "cargo_version": "0.10.24",
+    "commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1",
+    "cargo_url": "https://github.com/LIghtJUNction/ssmcp/blob/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1/Cargo.toml",
+    "includes_public_f33": true,
+    "status": "Historically frozen as candidate 0.10.24; final source version now requires reconfirmation before final binding execution or publication."
+  },
+  "commits": [
+    {
+      "commit": "106455301ebf7bd35a72c0074eb9507be74778db",
+      "tree": "bfcf35c7886c8fafe89858afbb2343c8515b92ab",
+      "parents": [
+        "24c32869ba730f4a91406ebd6b05e18a462bec80",
+        "f33ed8f14fc14aff05a2e4098743eb07e8527c06"
+      ],
+      "message": "merge: integrate public 0.10.23 fixes [skip ci]",
+      "committer_date": "2026-11-21T00:36:39Z",
+      "url": "https://github.com/LIghtJUNction/ssmcp/commit/106455301ebf7bd35a72c0074eb9507be74778db"
+    },
+    {
+      "commit": "c8f5d1ecc25721937f6ebc585247c67cfa75a932",
+      "tree": "d6edf019c30032a0fcd2f11feabea9e9c57f7f03",
+      "parents": [
+        "106455301ebf7bd35a72c0074eb9507be74778db"
+      ],
+      "message": "release: prepare 0.10.24 source metadata [skip ci]",
+      "committer_date": "2026-11-21T00:37:54Z",
+      "url": "https://github.com/LIghtJUNction/ssmcp/commit/c8f5d1ecc25721937f6ebc585247c67cfa75a932"
+    },
+    {
+      "commit": "be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1",
+      "tree": "5e8ea273c8f8bd8b0e7b1f87ccc0d19fd594601b",
+      "parents": [
+        "c8f5d1ecc25721937f6ebc585247c67cfa75a932"
+      ],
+      "message": "test: assert audit focus when Escape closes the filter [skip ci]",
+      "committer_date": "2026-11-21T00:38:38Z",
+      "url": "https://github.com/LIghtJUNction/ssmcp/commit/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1"
+    }
+  ],
+  "pull_request": {
+    "number": 159,
+    "state": "open",
+    "draft": true,
+    "merged": false,
+    "head": "be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1",
+    "url": "https://github.com/LIghtJUNction/ssmcp/pull/159"
+  },
+  "normal_push": {
+    "exit_code": 0,
+    "force": false,
+    "finished_utc": "2026-11-21T00:42:08.446246+00:00",
+    "remote_and_github_head_equal": true
+  },
+  "source_freeze": {
+    "status": "frozen",
+    "utc": "2026-11-21T00:43:00.589512+00:00",
+    "clean": true,
+    "previous_source": "fc06728a36d0b4d2920e1e2bc29885721ced5780",
+    "gitlinks": {
+      "crates/zharness": "cb63a9a0aa163214c6062664cd62fefb357be5a8",
+      "crates/zplugin": "cf02c1d9db575b92b36297dfe1fde72de9ee51e4",
+      "crates/ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "crates/zuse": "a1bb8fd2cbce0a9d85134999883c578358065242"
+    },
+    "cargo_lock": {
+      "bytes": 66476,
+      "sha256": "e8578cea449acae5281fc723f30bbaba56774cc3f460dd4e449b8381c21be53b",
+      "version_preparation_change_scope": "Self package version only."
+    },
+    "git_heads_binding": {
+      "bytes": 9437,
+      "sha256": "5b743006b190a718f29fac985e66b5e944d6b5794213ac9f606fc2cd8f1c065e",
+      "observation_utc": "2026-11-21T00:36:19Z"
+    },
+    "new_build_not_started_at_freeze": true,
+    "historic_ab_receipts_verified_unchanged": true,
+    "historic_ab_exports_artifacts_not_touched": true,
+    "gitlinks_unchanged": true
+  },
+  "receipts": [
+    {
+      "name": "source_change_receipt",
+      "bytes": 47820,
+      "sha256": "df0eb4f02aee4b2bf3b57cf16c495b4d2a390a489e284b0006f2149a26e9f173",
+      "verification": "Identity registered in the static-review receipt; coordinating reviewer has not independently read this complete original.",
+      "coordinating_reviewer_full_original_read": false,
+      "identity_registered_in": "root-static-review.json"
+    },
+    {
+      "name": "root-static-review.json",
+      "bytes": 2528,
+      "sha256": "968ec96e5d02ac60dd897b1fe36ca7d1f3a8c4cdaf7c8c08a89ad7a64159cca8",
+      "verification": "Complete original read by coordinating reviewer.",
+      "coordinating_reviewer_full_original_read": true
+    },
+    {
+      "name": "root-normal-push-receipt.json",
+      "bytes": 1072,
+      "sha256": "efc4e85ce78aa3a62c750d0d0cb87c87bd2756e8a5afca3ccb2198bfaeb673f0",
+      "verification": "Complete original read by coordinating reviewer.",
+      "coordinating_reviewer_full_original_read": true
+    },
+    {
+      "name": "source-freeze-be6da5b.json",
+      "bytes": 2862,
+      "sha256": "518f21c2afe0c148f4d653ce861e8cd6ab0e590b899e21414c91f85eedc597c1",
+      "verification": "Complete original read by coordinating reviewer.",
+      "coordinating_reviewer_full_original_read": true
+    }
+  ],
+  "static_review": {
+    "blocking_findings": [],
+    "scope": "source only; no build, product test, or runtime result",
+    "reviewed_u_source_blobs_unchanged_count": 18,
+    "reviewed_u_source_blobs_total": 18,
+    "does_not_relabel_u_or_fc_runtime_results": true,
+    "reusable_scope": "The already-reviewed CLI, paste and reply source ranges whose 18 Git blobs are identical from 24c to B.",
+    "historical_review_relative_path": "source-union-0038.json",
+    "no_build_test_or_ab_result_transferred": true,
+    "historical_fc_seven_new_tests_compiled": true,
+    "historical_fc_seven_new_tests_executed": false
+  },
+  "dashboard_correction": {
+    "commit": "be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1",
+    "scope": "fixture predicate only; product footer and timeout unchanged",
+    "old_predicate": "Wheel in footer AND physical hide_cursor",
+    "new_predicate": "Enter Apply absent from footer AND physical hide_cursor AND actual /display/focus equals audit",
+    "preserved": [
+      "existing timeout",
+      "scrollback zero after End",
+      "coalesced PageUp plus x",
+      "later input and resize checks"
+    ],
+    "failure_evidence_scope": "ARM original logs show Wheel absent and client alive; final cursor/focus values were not printed. Source update notice has priority over Wheel shortcut text; no ARM-slowness inference.",
+    "verification_pending": true,
+    "commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1"
+  },
+  "validation_status": {
+    "candidate_build_complete": false,
+    "candidate_runtime_complete": false,
+    "final_p1_passed": false,
+    "formal_release_verified": false,
+    "finish_approval": false
+  },
+  "historical_ab": {
+    "baseline": "781b87df1d364137b6885f17f631a3e9e991bd58",
+    "candidate": "fc06728a36d0b4d2920e1e2bc29885721ced5780",
+    "observations_per_side": 1,
+    "scope_unchanged": true,
+    "git_objects_exports_artifacts_and_receipts_unchanged": true,
+    "not_relabelled_as_b": true,
+    "fixed_record_url": "https://github.com/LIghtJUNction/ssmcp/blob/77ed976b84d284a2d894b86937d01e190378f5de/docs/reports/command-await-delivery-20261120/candidate-ab-0010.json"
+  },
+  "other_release_observation": {
+    "scope": "Retained historical observation from source-union-0038.json; not refreshed in this checkpoint and not a B release result.",
+    "source_relative_path": "source-union-0038.json",
+    "run_id": 44843331041,
+    "run_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44843331041",
+    "status": "completed",
+    "conclusion": "failure",
+    "updated_utc": "2026-11-21T00:33:03Z",
+    "historical_latest_published_tag": "v0.10.20",
+    "historical_asset_count": 16
+  },
+  "finish_approval": false,
+  "source_snapshot_checkpoint_utc": "2026-11-21T00:48:08Z",
+  "execution_coordination_at_freeze": {
+    "state": "awaiting explicit handoff of existing shared compute window; no new heavy work queued at freeze",
+    "new_candidate_build_started": false,
+    "new_candidate_runtime_started": false,
+    "new_heavy_work_queued": false
+  },
+  "execution_coordination": {
+    "state": "Final binding execution and publication paused pending coordination of version intent and the existing validation owner.",
+    "observation_basis": "Read-only observation reported by the source owner and coordinator.",
+    "coordinating_reviewer_independently_read_process_details": false,
+    "other_existing_validation_chain": {
+      "reported_version": "0.10.24",
+      "reported_in_progress": true,
+      "shared_target_lock_reported_held": true
+    },
+    "planned_core_task_started": false,
+    "b_final_binding_execution_paused": true,
+    "b_publication_paused": true,
+    "new_candidate_build_started": false,
+    "new_candidate_runtime_started": false,
+    "new_heavy_work_queued": false,
+    "final_source_version_requires_reconfirmation": true,
+    "replacement_version_selected": false
+  },
+  "current_version_coordination": {
+    "historical_b_cargo_version": "0.10.24",
+    "historical_b_freeze_unchanged": true,
+    "final_candidate_version_confirmed": false,
+    "replacement_version": null,
+    "no_0_10_25_selection_claim": true,
+    "publication_complete": false,
+    "proposed_follow_up_version": "0.10.25",
+    "proposal_basis": "Existing native conversation assistant progress proposes a deferral; this is a plan, not a confirmed final source or release identity."
+  },
+  "other_existing_chain_git_identity": {
+    "observed_utc": "2026-11-21T00:50:52Z",
+    "scope": "Git objects only; no process ownership or runtime validator source binding claim",
+    "head": "35de95d2924184daf994710b6f54a5c2a89b1218",
+    "tree": "8731180414b41beb63220acf43a22957ad457127",
+    "branch": "fix/release-0.10.24-20261121",
+    "cargo_version": "0.10.24",
+    "ancestor_checks": {
+      "f33ed8f14fc14aff05a2e4098743eb07e8527c06": {
+        "exit_code": 0,
+        "included": true
+      },
+      "24c32869ba730f4a91406ebd6b05e18a462bec80": {
+        "exit_code": 1,
+        "included": false
+      },
+      "be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1": {
+        "exit_code": 1,
+        "included": false
+      }
+    },
+    "head_unchanged_after_read": true,
+    "native_read_job_exit_code": 0,
+    "native_read_both_eof": true,
+    "process_identity_independently_verified": false,
+    "validator_runtime_source_binding_verified": false,
+    "public_push_or_release_inferred": false
+  },
+  "latest_public_readback": {
+    "observed_utc": "2026-11-21T01:01:15Z",
+    "pull_request": 159,
+    "pr_head": "be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1",
+    "pr_state": "open",
+    "pr_draft": true,
+    "pr_merged": false,
+    "main_head": "f33ed8f14fc14aff05a2e4098743eb07e8527c06"
+  }
+}

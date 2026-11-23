@@ -1,0 +1,406 @@
+{
+  "schema": "ssmcp.runtime-input.public-facts.v1",
+  "evidence_basis": "Independent read-only extraction of two complete existing runtime receipts; no new test or product execution.",
+  "source": {
+    "revision": "784370b5fe1b817c788273a5f7b1ab826c743965",
+    "tree": "2c60d011da8c2b31aefd80367bf7f19e28f10b62",
+    "normalized_manifest": {
+      "entries": 1545,
+      "sha256": "8e909b206d372757eaaf719e8fe585007d680f6491f045806dc7a7e45ced6675"
+    },
+    "launch_source_matches_report": true
+  },
+  "result": {
+    "passed": true,
+    "total_checks": 18,
+    "passed_checks": 18,
+    "private_mcp_checks": 12,
+    "transport_checks": 6,
+    "errors": [],
+    "started_utc": "2026-11-21T03:27:15Z",
+    "finished_utc": "2026-11-21T03:27:27Z",
+    "runtime_duration_ms": 12127,
+    "outer_duration_ms": 12894,
+    "outer_exit_code": 0,
+    "timed_out": false,
+    "outer_errors": []
+  },
+  "recorded_inputs": {
+    "driver": {
+      "bytes": 25574,
+      "sha256": "153ebeb51dd3d595f2c0354caf604c31abc173c4fff060a5ac1b184232a93344"
+    },
+    "binaries": {
+      "library": {
+        "bytes": 166657104,
+        "sha256": "da95c523626a6de2fdeeb7372992b8a3678e7348ce84c42f367fe7fc4dec2be0",
+        "executable": true
+      },
+      "ssmcp": {
+        "bytes": 15738696,
+        "sha256": "2dbab2aa293ae411de20f9839d574bf62ef79a644710884a81f6fe6239717e35",
+        "executable": true
+      },
+      "ssmcp-frontend": {
+        "bytes": 1386584,
+        "sha256": "2e19f8ad2fea673f899bbfc44449161e072381571946b85e3c6a5dc7e8325a06",
+        "executable": true
+      },
+      "ssmcpd": {
+        "bytes": 8176168,
+        "sha256": "e2e63fcfc63c05ca81907c976f8f3dda2aee65db9efa6d0d242fba69b95271b0",
+        "executable": true
+      },
+      "vt_snapshot": {
+        "bytes": 440984,
+        "sha256": "efdbeb3f200fcf4404b2612d836433047ecc90eb0744f345fc971ee7441db97f",
+        "executable": true
+      }
+    },
+    "modules": {
+      "transport": {
+        "bytes": 53245,
+        "sha256": "5f0a777b73fe6a32c6509913df4e0c099ebac13d9a942f6f4749c5e6f2e6538b",
+        "executable": false
+      },
+      "private_mcp": {
+        "bytes": 59433,
+        "sha256": "7a712fcf4d593fa3e493d7c807b3497139570e2c4d820ee86f4583ad84bb6336",
+        "executable": false
+      }
+    },
+    "referenced_gate_proof": {
+      "bytes": 624100,
+      "sha256": "5b0876e98d59d1da9ea1e5b6aded4c73fa96ca5747d239a666ac36b669d64fa6",
+      "executable": false,
+      "independently_opened_in_this_extraction": false
+    },
+    "referenced_library_compile_log": {
+      "bytes": 213954,
+      "sha256": "7b568957239bdb1b4dc1ed9b83d8894d7b8fe57608dce8c5da94d55cfb37d7ec",
+      "independently_opened_in_this_extraction": false
+    },
+    "binding_limit": "Build/file identities are recorded in the two runtime receipts. This extraction did not reopen the binary files or compile log, rebuild, or execute them."
+  },
+  "input_guards": {
+    "inputs_before_equal_inputs_after": true,
+    "guarded_groups": [
+      "gate_proof",
+      "source",
+      "binaries",
+      "modules"
+    ],
+    "transport_helper_bindings_before_equal_after": true,
+    "transport_helper_binding_count": 7
+  },
+  "modules": {
+    "private_mcp": {
+      "status": "passed",
+      "source_revision": "784370b5fe1b817c788273a5f7b1ab826c743965",
+      "checks": [
+        {
+          "name": "private_mcp.owned_account_and_two_clients",
+          "passed": true,
+          "chat_and_none_client_identities_distinct": true
+        },
+        {
+          "name": "private_mcp.chat_history_draft_queue_baseline",
+          "passed": true,
+          "history_sha256": "0b75af1a647089067f0ae941899d314217a1ce4b2f370f435f527cdcafc8f38a",
+          "history_bytes": 739,
+          "draft_sha256": "3d9b08e9dc38788e67a5e819003e597a16af59ca78961725a02f56429ff01ea4"
+        },
+        {
+          "name": "private_mcp.globally_retired_native_tools_absent",
+          "passed": true,
+          "absent_in_both": {
+            "agent_answer": "ssmcp.ui.answer",
+            "finish": "ssmcp.ui.finish"
+          },
+          "invoked_retired_tools": false
+        },
+        {
+          "name": "private_mcp.none_remaining_human_tools_hidden",
+          "passed": true,
+          "absent": [
+            "ssmcp.ui.reply",
+            "ssmcp.ui.wait"
+          ],
+          "scope": "client_input_none"
+        },
+        {
+          "name": "private_mcp.concurrent_chat_remaining_human_tools_present",
+          "passed": true,
+          "present": [
+            "ssmcp.ui.reply",
+            "ssmcp.ui.wait"
+          ],
+          "input_schema_sha256": {
+            "human_reply": "dfdb28727142776753f09845964caeff9dc3a17f236c772990571c42b03da6ee",
+            "human_wait": "96066ffd0c7d18221d7d52ab12d777faf2f4c5053a90ab4b8ca6ecc45624e809"
+          }
+        },
+        {
+          "name": "private_mcp.none_stale_human_reply_rejected",
+          "passed": true,
+          "tool": "ssmcp.ui.reply",
+          "rejection_scope": "client_input_none",
+          "rejection_recorded": true
+        },
+        {
+          "name": "private_mcp.none_stale_human_wait_rejected",
+          "passed": true,
+          "tool": "ssmcp.ui.wait",
+          "rejection_scope": "client_input_none",
+          "rejection_recorded": true
+        },
+        {
+          "name": "private_mcp.none_exec_roundtrip",
+          "passed": true,
+          "exit_code": 0,
+          "stdout_sha256": "4a574c10141b4a0ce982c5ecd175095c494aeff6473fc5abae4c6d4e6a19a221"
+        },
+        {
+          "name": "private_mcp.none_time_roundtrip",
+          "passed": true,
+          "wall_clock": "UTC Unix epoch",
+          "deadline_clock": "monotonic"
+        },
+        {
+          "name": "private_mcp.none_native_messages_roundtrip",
+          "passed": true,
+          "peer_connection_removed": true,
+          "distinct_owned_clients": true,
+          "both_directions_acknowledged": true,
+          "forward": {
+            "states": [
+              "queued",
+              "included",
+              "acknowledged",
+              "acknowledged"
+            ],
+            "same_message_identity": true,
+            "same_recipient_identity": true,
+            "all_nonduplicate": true,
+            "ack_timestamp_present": true,
+            "sender_status_confirms_ack_timestamp": true
+          },
+          "reverse": {
+            "states": [
+              "queued",
+              "included",
+              "acknowledged",
+              "acknowledged"
+            ],
+            "same_message_identity": true,
+            "same_recipient_identity": true,
+            "all_nonduplicate": true,
+            "ack_timestamp_present": true,
+            "sender_status_confirms_ack_timestamp": true
+          },
+          "reverse_reverses_client_roles": true
+        },
+        {
+          "name": "private_mcp.none_reload_reconnect_preserves_none",
+          "passed": true,
+          "native_reload_accepted": true,
+          "old_connection_removed": true,
+          "same_owned_process": true,
+          "outbox_empty_before_and_after": true,
+          "chat_enabled_after": false,
+          "hidden_after": [
+            "ssmcp.ui.reply",
+            "ssmcp.ui.wait"
+          ],
+          "globally_retired_after": {
+            "agent_answer": "ssmcp.ui.answer",
+            "finish": "ssmcp.ui.finish"
+          },
+          "reload_requests": 1,
+          "raw_ready_captured": false,
+          "disabled_chat_ack_evidence": "source-enforced registration guard and actual new connection capabilities"
+        },
+        {
+          "name": "private_mcp.chat_history_draft_queue_unchanged",
+          "passed": true,
+          "history_sha256": "0b75af1a647089067f0ae941899d314217a1ce4b2f370f435f527cdcafc8f38a",
+          "history_identity_unchanged": true,
+          "history_hash_unchanged": true,
+          "queue_unchanged": true,
+          "exact_draft_and_cursor_unchanged": true,
+          "pty_transcript_sha256": "b0976b6fe07c8343c7a9104385278eb0042ba9145bf3da60074614f298cbedae"
+        }
+      ],
+      "cleanup": {
+        "passed": true,
+        "errors": [],
+        "owned_process_count": 7,
+        "all_owned_processes_exited": true,
+        "all_owned_process_exit_codes_zero": true
+      }
+    },
+    "transport": {
+      "status": "passed",
+      "declared_source_revision": "784370b5fe1b817c788273a5f7b1ab826c743965",
+      "elapsed_seconds": 3.653457054984756,
+      "models_started": false,
+      "tls_verified": false,
+      "fixture_metadata": {
+        "prepared_source_revision": "b12c43b19ecfa3e14c46a09923b7add9eac94b68",
+        "observed_routing_source_revision": "cae35a82683104049d4e30041df6e7e6bb3e6fc5",
+        "note": "Historical fixture provenance fields; the product/source revision credited to this run is the separately recorded U revision."
+      },
+      "checks": [
+        {
+          "name": "mcp_stdio_protocol_only",
+          "passed": true,
+          "response_count": 3,
+          "non_json_stdout_bytes": 0,
+          "no_banners": true
+        },
+        {
+          "name": "pipe_mcp_literal_and_warnings",
+          "passed": true,
+          "literal_payload_sha256": "863f6aabd930d2435b12991d0cfa74e425835f44f7b846a5584391f0eacb36e1",
+          "pipe_history": {
+            "bytes": 812,
+            "sha256": "fa3f55e0dfaf61250cd82aeed0ce992b02db8d43302cfc5c697e109033c869b6",
+            "user_count": 1,
+            "answer_count": 1
+          },
+          "mcp_history": {
+            "bytes": 822,
+            "sha256": "c37da649f6cc829ed5d7ec8417640bd56addeca233b6a4daf2b87c58286c973e",
+            "user_count": 1,
+            "answer_count": 1
+          },
+          "pipe_warning_count": 1,
+          "mcp_warning_count": 1
+        },
+        {
+          "name": "fake_exec_argv_literal",
+          "passed": true,
+          "pipe_invocations": 1,
+          "mcp_invocations": 1,
+          "source_utf8_bytes": 83,
+          "shell_sentinel_absent": true
+        },
+        {
+          "name": "fake_exec_nonzero_bounded_diagnostics",
+          "passed": true,
+          "invocations": 1,
+          "expected_fake_process_exit_code": 23,
+          "actual_detail_utf8_bytes": 53,
+          "max_detail_utf8_bytes": 66,
+          "no_raw_provider_output": true,
+          "no_next_caller_fallback": true,
+          "same_endpoint_ping_ready": true,
+          "history": {
+            "bytes": 601,
+            "sha256": "feff0db82a1c0670b1a0c840d813f1afb5c64cbfd4c8d6a08ce0d6b8cdf470a4",
+            "user_count": 1,
+            "answer_count": 0
+          }
+        },
+        {
+          "name": "unix_socket_write_half_close_once",
+          "passed": true,
+          "actual_family": "AF_UNIX",
+          "invocations": 1,
+          "json_line_count": 1,
+          "write_half_closed": true,
+          "history": {
+            "bytes": 816,
+            "sha256": "d23277461fa7220d5ee28578fe6e87da866d9635e60de4f3887cb964601ed1e6",
+            "user_count": 1,
+            "answer_count": 1
+          }
+        },
+        {
+          "name": "terminal_original_history_and_current_draft",
+          "passed": true,
+          "history": {
+            "bytes": 1020,
+            "sha256": "f25dc9b70a8748e62ba279b7d1124297931791c653420b1abca409ff81f618b3",
+            "user_count": 1,
+            "answer_count": 1
+          },
+          "draft_sha256": "e1d9c06cc719f11d6e870228422ea5e5956db671718eeba6cc1d396b2e7ba009",
+          "draft_cursor": 57,
+          "invocations": 1
+        }
+      ],
+      "cleanup": {
+        "passed": true,
+        "errors": [],
+        "owned_process_count": 10,
+        "all_owned_process_returncodes_zero": true,
+        "decoder_count": 1,
+        "all_decoder_returncodes_zero": true,
+        "fake_process_count": 5,
+        "all_fake_processes_exited": true,
+        "fake_process_cleanup_signalled_count": 0,
+        "socket_directories_removed": true
+      },
+      "failure": null
+    }
+  },
+  "cleanup": {
+    "all_modules_passed": true,
+    "short_temp_root_removed": true,
+    "outer_process_reaped": true,
+    "outer_process_exit_code": 0,
+    "outer_termination_requested": false
+  },
+  "prior_attempt_context": {
+    "basis": "Coordinator-provided earlier receipt summary; the initial failure and preservation record were not reopened in this extraction.",
+    "initial_preflight": {
+      "status": "failed_before_runtime_modules",
+      "generated_python_cache_files": 6,
+      "started_modules": [],
+      "product_cases_executed": 0
+    },
+    "preservation_record": {
+      "bytes": 4452,
+      "sha256": "aa8bfa12615f86fecb783b330e1220547cfeb9302f16bc0c3292b3f2101c8689",
+      "read_in_this_extraction": false
+    },
+    "counts_not_added_to_clean_run": true
+  },
+  "scope": {
+    "declared_runtime_scope": "Separate input/recipient runtime smoke; not Gate35, final25, P1, publication or a human finish approval.",
+    "declared_launch_scope": "Separate prepared smoke; not Gate35/final25/P1 or finish approval",
+    "not_covered_by_this_receipt": [
+      "UI24 and alias acceptance",
+      "P1",
+      "Gate35",
+      "complete final-candidate acceptance",
+      "publication",
+      "human finish approval"
+    ],
+    "tls_verified": false,
+    "raw_ready_frame_captured": false,
+    "no_production_switch_claim": true
+  },
+  "originals": {
+    "runtime_report": {
+      "filename": "run/report.json",
+      "bytes": 62335,
+      "sha256": "ff972401586a41dba8a803a17f229098b1bed9f52c9de8aeff61aff2a6440cf9",
+      "complete_bytes_read": true,
+      "transport_reencoded_sha256_matched": true
+    },
+    "outer_launch": {
+      "filename": "launch-result.json",
+      "bytes": 12641,
+      "sha256": "128d30c191226ec1d2fcb2532569f7ae32f6802c3e69499c8eb6f916c257b947",
+      "complete_bytes_read": true,
+      "transport_reencoded_sha256_matched": true
+    }
+  },
+  "redactions": [
+    "Actual native job, client, agent, session, conversation, message and process identifiers are omitted.",
+    "Private absolute paths and namespace/filesystem identity numbers are omitted.",
+    "Test conversation payloads, draft text and raw output bodies are omitted; selected hashes, counts and outcomes are retained."
+  ]
+}

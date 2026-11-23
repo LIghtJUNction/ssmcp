@@ -1,0 +1,194 @@
+{
+  "schema": "ssmcp.source-union-checkpoint.v1",
+  "checkpoint_utc": "2026-11-21T00:39:08Z",
+  "scope": "Immutable intermediate source checkpoint; static review only.",
+  "previous_checkpoint": {
+    "commit": "77ed976b84d284a2d894b86937d01e190378f5de",
+    "tree": "be654b6d912b9c89c3b02adf93b5ca7abac9d927",
+    "readme_url": "https://github.com/LIghtJUNction/ssmcp/blob/77ed976b84d284a2d894b86937d01e190378f5de/docs/reports/command-await-delivery-20261120/README.md",
+    "readme_bytes": 93497,
+    "readme_sha256": "8628cbdf53b83e2a9e832bb4a8381300b9545b5f6c3dab1937b24ee6ec8c277c",
+    "historical_ab_url": "https://github.com/LIghtJUNction/ssmcp/blob/77ed976b84d284a2d894b86937d01e190378f5de/docs/reports/command-await-delivery-20261120/candidate-ab-0010.json",
+    "historical_submetrics_url": "https://github.com/LIghtJUNction/ssmcp/blob/77ed976b84d284a2d894b86937d01e190378f5de/docs/reports/command-await-delivery-20261120/candidate-ab-submetrics-0021.json",
+    "history_copied_without_changes_except_prior_current_heading": true
+  },
+  "source": {
+    "commit": "24c32869ba730f4a91406ebd6b05e18a462bec80",
+    "tree": "d8cb76cefa139d4809edba45f2b701d45e2a59e0",
+    "cargo_version": "0.10.22",
+    "commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/24c32869ba730f4a91406ebd6b05e18a462bec80",
+    "cargo_url": "https://github.com/LIghtJUNction/ssmcp/blob/24c32869ba730f4a91406ebd6b05e18a462bec80/Cargo.toml",
+    "merge_commit": "b87d8d0f1c47684da9574610f1279d40aefa2f96",
+    "merge_tree": "9fc030e66057ae9b00fc3f36115b73ba1f15c180",
+    "merge_parents": [
+      "fc06728a36d0b4d2920e1e2bc29885721ced5780",
+      "f208a03b5403332214f3acf6ee0b176752b5d2c9"
+    ],
+    "merge_url": "https://github.com/LIghtJUNction/ssmcp/commit/b87d8d0f1c47684da9574610f1279d40aefa2f96",
+    "followup_change": "One Composer test expectation line.",
+    "includes_f33": false,
+    "final_source_frozen": false
+  },
+  "pull_request": {
+    "number": 159,
+    "state": "open",
+    "draft": true,
+    "merged": false,
+    "head": "24c32869ba730f4a91406ebd6b05e18a462bec80",
+    "url": "https://github.com/LIghtJUNction/ssmcp/pull/159"
+  },
+  "normal_push": {
+    "exit_code": 0,
+    "force": false,
+    "finished_utc": "2026-11-21T00:29:31.980906+00:00",
+    "remote_readback_equal": true,
+    "git_tree_clean": true
+  },
+  "source_check_history": {
+    "initial_static_toml_probe": {
+      "exit_code": 1,
+      "meaning": "The original probe rejected duplicate include entries already present in both parents; the revised check requires no new repetition and retains the inherited entries."
+    },
+    "initial_merge": {
+      "exit_code": 1,
+      "meaning": "three-way merge conflicts, subsequently resolved before commit"
+    },
+    "final_source_checks": {
+      "rustfmt_exit_code": 0,
+      "python_ast_static_contracts_exit_code": 0,
+      "final_merge_composer_combined_diff_check_exit_codes": [
+        0,
+        0,
+        0
+      ]
+    },
+    "no_product_pass_inferred": true
+  },
+  "source_receipts": [
+    {
+      "name": "root-static-review.json",
+      "bytes": 2349,
+      "sha256": "c8f87dcea38421042d361b96ccf5de272d628dfb90d61caab883835d69bc812f",
+      "verification": "Read and checked by the coordinating reviewer; identity only is published here."
+    },
+    {
+      "name": "root-normal-push-receipt.json",
+      "bytes": 1073,
+      "sha256": "0bb2b4c8929520c7edea7652cc47cc1889b36c1ead4f347f6e6966ca0ab1c446",
+      "verification": "Read and checked by the coordinating reviewer; identity only is published here."
+    },
+    {
+      "name": "source-changes-receipt.json",
+      "bytes": 113600,
+      "sha256": "4cf556f4fc79b42b6b2c86282cc2806727c69cd06e2ae17f2e95d2de64b803ab",
+      "verification": "Read and checked by the coordinating reviewer; identity only is published here."
+    }
+  ],
+  "static_reviews": {
+    "paste_review": {
+      "result": "No definite merge regression found in the selected reviewed paths.",
+      "reviewed_paths": [
+        "src/client/terminal.rs",
+        "src/client/terminal/conversation.rs",
+        "src/client/terminal/conversation/tests/paste_batch.rs",
+        "src/client/interface.rs",
+        "src/wire.rs"
+      ],
+      "compared_with": "fc06728a36d0b4d2920e1e2bc29885721ced5780",
+      "preserved_paths": [
+        "paste_literal_prefix",
+        "chat_output",
+        "chat_process_input",
+        "completion refresh before suggestion-consuming controls and after each batch",
+        "InputStamp and asynchronous input completion protections"
+      ],
+      "byte_equal_conversation_ranges": [
+        {
+          "lines": "74-85",
+          "description": "InputStamp structure"
+        },
+        {
+          "lines": "949-966",
+          "description": "Completion refresh"
+        },
+        {
+          "lines": "2188-2589",
+          "description": "Input stamps, asynchronous input, paste, output and batch processing"
+        }
+      ],
+      "new_test_module_registered": true,
+      "new_test_file": {
+        "path": "src/client/terminal/conversation/tests/paste_batch.rs",
+        "bytes": 8620,
+        "sha256": "68511f539518cd13a8067598cf660734eefed4436fbeeb24d579a0f9215ef6e9",
+        "identical_to_fc": true,
+        "test_count": 7,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/24c32869ba730f4a91406ebd6b05e18a462bec80/src/client/terminal/conversation/tests/paste_batch.rs"
+      },
+      "static_test_coverage": [
+        "Read-span work counters",
+        "One completion refresh per ordinary input batch",
+        "Split UTF-8 and navigation boundaries",
+        "Literal CR/LF inside bracketed paste",
+        "Tab and Escape completion boundaries",
+        "PNG opaque byte buffering and embedded control markers",
+        "Size overflow and draft protection",
+        "Command-before-paste ordering"
+      ],
+      "retired_remote_tool_matching": "Exact names: request_finish, ssmcp.ui.finish, ssmcp.ui.answer; local chat_finish_input retained.",
+      "limitations": [
+        "Selected source review only, not all transitive dependencies.",
+        "Performance driver/cohort was not revalidated in this review.",
+        "The seven new tests do not establish executed asynchronous-completion or pending-input race coverage.",
+        "FC compilation does not establish 24c compilation."
+      ]
+    },
+    "cli_and_reply_review": {
+      "blocking_findings": [],
+      "scope": "Static review of CLI recipient/preload separation, saved specification and reload data paths, and reply guard.",
+      "provider_runtime_argv_proven": false,
+      "runtime_validation": false
+    }
+  },
+  "execution_boundary": {
+    "source_only": true,
+    "build_run_for_24c": false,
+    "tests_run_for_24c": false,
+    "performance_run_for_24c": false,
+    "historical_fc_new_tests_compiled": true,
+    "historical_fc_new_tests_executed": false,
+    "historical_ab": {
+      "baseline": "781b87df1d364137b6885f17f631a3e9e991bd58",
+      "candidate": "fc06728a36d0b4d2920e1e2bc29885721ced5780",
+      "observations_per_side": 1,
+      "unchanged_source_scope": true,
+      "cannot_relabel_as_u_or_final": true
+    },
+    "all_source_commands_exited_zero": false,
+    "no_product_pass_inferred": true
+  },
+  "next_work": {
+    "public_main": "f33ed8f14fc14aff05a2e4098743eb07e8527c06",
+    "public_main_tree": "f9bc35bf497c80d9d93d668f5d6e339c3d19c802",
+    "f33_included_in_u": false,
+    "target_version_selected_by_source_owner": "0.10.24",
+    "target_is_source_metadata_plan_not_published_release": true,
+    "final_build_runtime_p1_publication_pending": true,
+    "public_main_url": "https://github.com/LIghtJUNction/ssmcp/commit/f33ed8f14fc14aff05a2e4098743eb07e8527c06",
+    "same_author_continuation": true
+  },
+  "other_release_observation": {
+    "run_id": 44843331041,
+    "event": "workflow_dispatch",
+    "workflow_origin": "f33ed8f14fc14aff05a2e4098743eb07e8527c06",
+    "status": "completed",
+    "conclusion": "failure",
+    "updated_utc": "2026-11-21T00:33:03Z",
+    "latest_published_tag": "v0.10.20",
+    "latest_published_asset_count": 16,
+    "not_this_groups_release": true,
+    "run_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44843331041",
+    "latest_published_url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.20"
+  },
+  "finish_approval": false
+}

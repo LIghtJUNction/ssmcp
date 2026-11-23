@@ -1,0 +1,34 @@
+{
+  "schema": "ssmcp.clipboard-format-diagnostic.v1",
+  "status": "completed",
+  "native_job_id": "714432728275819fb054764a698875f7-1",
+  "exit_code": 0,
+  "job_duration_ms": 51,
+  "stdout_complete": true,
+  "stderr_complete": true,
+  "observation": {
+    "wayland_environment": true,
+    "x11_environment": true,
+    "checks": [
+      {
+        "program": "wl-paste",
+        "available": true,
+        "exit_code": 0,
+        "duration_ms": 1.15,
+        "supported_types": [
+          "image/png"
+        ],
+        "output_bytes": 10
+      },
+      {
+        "program": "xclip",
+        "available": false
+      }
+    ]
+  },
+  "scope": "Recovered result of an earlier read-only native job whose orchestration call timed out. It lists clipboard formats only; no clipboard payload was read. The current format observation is not the user's earlier text-paste baseline and does not measure image/text payload retrieval or durable storage.",
+  "limitations": [
+    "A 1.15 ms successful format query in this sample does not establish the cause of the original reported delay.",
+    "Orchestration timeout was not treated as native job failure and the probe was not replayed."
+  ]
+}

@@ -1,0 +1,310 @@
+{
+  "schema_version": 1,
+  "kind": "ssmcp-gate17-original-failure",
+  "observed_utc": "2026-11-21T10:53:44Z",
+  "source": {
+    "commit": "401581267005e64f1ccf99e1590df285a9d7c158",
+    "tree": "be0e7801b3455d406781cde880824fc937c1b8f4",
+    "pr": 168
+  },
+  "run_id": "c8419923004aaefebff434397674ce47",
+  "status": "failed",
+  "started_utc": "2026-11-21T10:45:44.924Z",
+  "finished_utc": "2026-11-21T10:50:52.781Z",
+  "original_contract": {
+    "stages": 35,
+    "rust_stages": 26,
+    "integration_targets": 20,
+    "mandatory_ignored_tests": 14,
+    "host_library_tests": 6
+  },
+  "stage_counts": {
+    "passed": 7,
+    "failed": 1,
+    "not_run": 27,
+    "total": 35
+  },
+  "stages": [
+    {
+      "exit_code": 0,
+      "name": "release-policy",
+      "seconds": 7.67
+    },
+    {
+      "exit_code": 0,
+      "name": "deployment-policy",
+      "seconds": 0.36
+    },
+    {
+      "exit_code": 0,
+      "name": "fmt",
+      "seconds": 3.06
+    },
+    {
+      "exit_code": 0,
+      "name": "library-compile",
+      "seconds": 102.99
+    },
+    {
+      "exit_code": 0,
+      "name": "library-private",
+      "seconds": 54.01,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 6,
+          "ignored": 26,
+          "measured": 0,
+          "passed": 2101,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "exit_code": 0,
+      "name": "library-host",
+      "seconds": 0.02,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 2127,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "exit_code": 0,
+      "name": "clippy",
+      "seconds": 75.52
+    },
+    {
+      "exit_code": 101,
+      "name": "windows-gnu-clippy",
+      "seconds": 52.26
+    }
+  ],
+  "failed_stage": {
+    "name": "windows-gnu-clippy",
+    "exit_code": 101,
+    "duration_seconds": 52.26,
+    "target": "x86_64-pc-windows-gnu",
+    "message": "function `resume_test_history` is never used",
+    "source_location": "src/client/interface/history.rs:1077:15",
+    "compiler_option": "-D warnings",
+    "dead_code_is_error": true,
+    "manifest_qrcodegen_warning_also_present": true,
+    "manifest_warning_not_identified_as_the_recorded_fatal_error": true
+  },
+  "library_results": {
+    "private": {
+      "passed": 2101,
+      "failed": 0,
+      "ignored": 26,
+      "filtered": 6,
+      "reported_seconds": 53.99
+    },
+    "host": {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 2127
+    },
+    "exact_regression_lines": [
+      {
+        "line": 4874,
+        "text": "test browser::tests::browser_dispatch_future_fits_a_small_stack_budget ... ok"
+      },
+      {
+        "line": 6245,
+        "text": "test browser::tests::act_deadline_includes_time_queued_without_starting_input ... ok"
+      },
+      {
+        "line": 6391,
+        "text": "test computer::zuse_backend::tests::num_lock_pre_dispatch_cancellation_and_success_preserve_cleanup ... ok"
+      },
+      {
+        "line": 6392,
+        "text": "test computer::zuse_backend::tests::num_lock_uncertain_native_write_marks_worker_cleanup_unconfirmed ... ok"
+      }
+    ],
+    "parent_summary": {
+      "line": 7996,
+      "text": "test result: ok. 2101 passed; 0 failed; 26 ignored; 0 measured; 6 filtered out; finished in 53.99s"
+    },
+    "child_process_summaries_not_added_to_parent_count": true,
+    "library_sha256_reported_by_gate": "152e01dbe95041023b72a7f4a41a47489caeb073e07d3baa2f272cae96c3af62",
+    "library_ELF_independently_rehashed_by_reporting_root": false,
+    "proof_scope": "Specific regression lines and the parent summary were read; not an independent audit of every private-library log line. These results belong only to S401 and its recorded ELF."
+  },
+  "launch": {
+    "owned_started_utc": "2026-11-21T10:45:44.173525+00:00",
+    "driver_started_unix": 1795257944.9246488,
+    "run_id": "c8419923004aaefebff434397674ce47",
+    "source_lock_acquired": true,
+    "target_lock_acquired_by_outer_controller": false,
+    "exclusive_target_lock_acquired_by_bound_launcher": true,
+    "target_lock_declared_held_for_entire_batch": true,
+    "inputs_before": {
+      "cargo_config": {
+        "sha256": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+        "matches_prepared_input_identity": true
+      },
+      "cargo_lock": {
+        "sha256": "0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992",
+        "matches_prepared_input_identity": true
+      },
+      "dependency_auditor": {
+        "sha256": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+        "matches_prepared_input_identity": true
+      },
+      "driver": {
+        "sha256": "182e4fe97e8e4c6af6dc3796ebc60e2e9fe6eca7150594478f08a582907b3677",
+        "matches_prepared_input_identity": true
+      },
+      "git_heads": {
+        "sha256": "976d2dd7970337b66c67bbc8796a00bb63bd3ec6bf86e3c8ec0a73dc62566a1e",
+        "matches_prepared_input_identity": true
+      },
+      "owner_agreement": {
+        "sha256": "c9814d82021b5fc1a5ddc5e9cb3f6654e5014d51ac4bb6be8a08cd16e1679a77",
+        "matches_prepared_input_identity": true
+      },
+      "reviewed_baseline": {
+        "sha256": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+        "matches_prepared_input_identity": true
+      },
+      "workspace_wrapper": {
+        "sha256": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+        "matches_prepared_input_identity": true
+      },
+      "wrapper": {
+        "sha256": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43",
+        "matches_prepared_input_identity": true
+      }
+    }
+  },
+  "preparation_snapshot": {
+    "file": "binding-manifest.json",
+    "bytes": 16560,
+    "sha256": "aace1542cbd18f24bd61b252a5129200b00e87d6457ad102cdf39308f02786c2",
+    "prepared_utc": "2026-11-21T10:44:19.882711+00:00",
+    "execution_started": false,
+    "new_gate_run_id": null,
+    "source_lock_acquired": false,
+    "target_lock_acquired": false,
+    "interpretation": "This is the immutable preparation snapshot. The later original launch receipts separately establish actual start and held locks; its false/null preparation fields were not rewritten.",
+    "normalized_ast_and_inverse_byte_equivalence_reported": true,
+    "full_driver_independently_reaudited_by_reporting_root": false
+  },
+  "observation_age_and_coordination": {
+    "git_default_heads": "Retained the original 2026-11-21 09:36 observation of eleven repositories; not refetched by the Gate17 helper and not claimed fresh at launch.",
+    "root_and_three_direct_reviewers_fresh_exact_source_zero_heavy_ack": true,
+    "native_acceptance_group_fresh_exact_source_zero_heavy_ack_reported": true,
+    "original_project_z_hold_preserved_without_new_ack": true,
+    "author_unexecuted_names_not_a_complete_test_inventory": true
+  },
+  "exit": {
+    "launcher": {
+      "file": "exit.json",
+      "bytes": 4860,
+      "sha256": "8d8ce512bd4147fd62cda8cb4f90e0fa7eb60e2b165f53355d0b791451629e92",
+      "exit_code": 1,
+      "status": "failed",
+      "gate_receipt_sha256": "c37f5e748a484abfb89304c3fbdd3266dd124d2cbed0971ffd570c7f764d2353",
+      "inputs_before": {
+        "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+        "cargo_lock": "0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992",
+        "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+        "driver": "182e4fe97e8e4c6af6dc3796ebc60e2e9fe6eca7150594478f08a582907b3677",
+        "git_heads": "976d2dd7970337b66c67bbc8796a00bb63bd3ec6bf86e3c8ec0a73dc62566a1e",
+        "owner_agreement": "c9814d82021b5fc1a5ddc5e9cb3f6654e5014d51ac4bb6be8a08cd16e1679a77",
+        "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+        "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+        "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+      },
+      "inputs_after": {
+        "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+        "cargo_lock": "0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992",
+        "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+        "driver": "182e4fe97e8e4c6af6dc3796ebc60e2e9fe6eca7150594478f08a582907b3677",
+        "git_heads": "976d2dd7970337b66c67bbc8796a00bb63bd3ec6bf86e3c8ec0a73dc62566a1e",
+        "owner_agreement": "c9814d82021b5fc1a5ddc5e9cb3f6654e5014d51ac4bb6be8a08cd16e1679a77",
+        "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+        "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+        "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+      },
+      "all_nine_inputs_unchanged": true,
+      "worktree_head_after": "401581267005e64f1ccf99e1590df285a9d7c158",
+      "worktree_status_after": ""
+    },
+    "owned": {
+      "file": "exit.json",
+      "bytes": 1172,
+      "sha256": "f1b48df6b888522ba57dd5332a08a8a6528dc0bb98b3c85abfc4bb365e40ad5f",
+      "exit_code": 1,
+      "launcher_returncode": 1,
+      "error": null,
+      "started_utc": "2026-11-21T10:45:44.173525+00:00",
+      "finished_utc": "2026-11-21T10:50:52.954334+00:00",
+      "source_lock_held_until_child_return": true
+    },
+    "all_descendants_reaped_independently_proven_by_these_exit_fields": false
+  },
+  "evidence": {
+    "gate": {
+      "file": "candidate-gates.json",
+      "bytes": 938126,
+      "sha256": "c37f5e748a484abfb89304c3fbdd3266dd124d2cbed0971ffd570c7f764d2353",
+      "read_scope": "Whole original hashed; all eight stage statuses, durations, test summaries, source, run identity, start and end fields read."
+    },
+    "owned_launch": {
+      "file": "launch.json",
+      "bytes": 1008,
+      "sha256": "3d53003b99d983156d1a5b56c5d43193e442591fc95b3c804beb30723184c8a4",
+      "read_scope": "entire original"
+    },
+    "gate_launch": {
+      "file": "launch.json",
+      "bytes": 3635,
+      "sha256": "ced5c2f2a6a164bebff07c54ef7da7bd57afe745e15661a0ef3c290fcb3fd0f2",
+      "read_scope": "entire original"
+    },
+    "private_library_log": {
+      "file": "candidate2-library-private.log",
+      "bytes": 565943,
+      "sha256": "c018ee01962443fd689f419d6c4205619dfb0ab029221bd01e0bd30821487a77",
+      "read_scope": "Whole original hashed; four exact regression result lines and parent test summary read. Three child summaries were observed separately and were not added to the parent count."
+    },
+    "windows_log": {
+      "file": "candidate2-windows-gnu-clippy.log",
+      "bytes": 1399,
+      "sha256": "5131beda45373e29e8ce9a3b244e39afb6404890750f932d6492c9c8e95c08dc",
+      "read_scope": "Whole original hashed; compiler fatal diagnostic and surrounding lines read. Full log not published."
+    },
+    "exits_read_in_full": true,
+    "initial_running_observation": {
+      "file": "candidate-gates.json",
+      "bytes": 935123,
+      "sha256": "79047c20e904480877893eff2c141694a0fb6fd3f9f2ca9ffdcb125cdc492ce8",
+      "status": "running",
+      "read_scope": "Whole mutable snapshot hashed; top-level keys, source, run identity, start time and status read. Individual stage results, test outcomes and ELF were not audited in this start snapshot."
+    }
+  },
+  "downstream": {
+    "runtime": "not_run_on_S401",
+    "multi_uid": "not_run",
+    "ui": "not_run",
+    "P1": "not_run",
+    "version_tree_cli": "not_run",
+    "additional_native_ignored_scenarios": "not_run",
+    "H2": "static_only_unbound_unexecuted",
+    "workflow_dispatch": "not_performed",
+    "production_install_or_reload": "not_performed"
+  },
+  "prior_gate16_failure_preserved": true,
+  "prior_source_results_transferred": false,
+  "next_step_at_snapshot": "Original source coordinator notified of the actual Windows lint failure; no successor author launch or fix result had been read by the reporting root."
+}

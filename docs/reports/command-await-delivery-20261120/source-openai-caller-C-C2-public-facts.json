@@ -1,0 +1,260 @@
+{
+  "schema": "ssmcp.openai-caller-source-C-C2-public-facts.v1",
+  "observation_recorded_utc": "2026-11-21 06:44:22 UTC",
+  "first_commit": {
+    "schema": "ssmcp.source-openai-caller-public-facts.v1",
+    "commit": "cb67a9aacdb16dbd612a877208c1db6221860483",
+    "tree": "2d8eb258c41fe89774b3b3102ad1fa53f15b5332",
+    "parents": [
+      "ea2bfcae6aea9672d8955f832a8ec5bd1e0749f4"
+    ],
+    "commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/cb67a9aacdb16dbd612a877208c1db6221860483",
+    "commit_time_utc": "2026-11-21T06:33:18Z",
+    "stats": {
+      "total": 566,
+      "additions": 549,
+      "deletions": 17
+    },
+    "files": [
+      {
+        "path": "src/broker.rs",
+        "status": "modified",
+        "additions": 14,
+        "deletions": 1
+      },
+      {
+        "path": "src/broker/traffic.rs",
+        "status": "modified",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/client.rs",
+        "status": "modified",
+        "additions": 21,
+        "deletions": 3
+      },
+      {
+        "path": "src/client/incoming_tests.rs",
+        "status": "modified",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/client/interface/history.rs",
+        "status": "modified",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "src/client/interface/history/openai.rs",
+        "status": "added",
+        "additions": 258,
+        "deletions": 0
+      },
+      {
+        "path": "src/client/relay.rs",
+        "status": "modified",
+        "additions": 21,
+        "deletions": 8
+      },
+      {
+        "path": "src/code_mode.rs",
+        "status": "modified",
+        "additions": 2,
+        "deletions": 0
+      },
+      {
+        "path": "src/device.rs",
+        "status": "modified",
+        "additions": 47,
+        "deletions": 2
+      },
+      {
+        "path": "src/http.rs",
+        "status": "modified",
+        "additions": 48,
+        "deletions": 1
+      },
+      {
+        "path": "src/http/await_tool.rs",
+        "status": "modified",
+        "additions": 4,
+        "deletions": 1
+      },
+      {
+        "path": "src/oauth_github_tests.rs",
+        "status": "modified",
+        "additions": 1,
+        "deletions": 0
+      },
+      {
+        "path": "src/runtime.rs",
+        "status": "modified",
+        "additions": 20,
+        "deletions": 0
+      },
+      {
+        "path": "src/runtime/call_scope.rs",
+        "status": "modified",
+        "additions": 31,
+        "deletions": 1
+      },
+      {
+        "path": "src/wire.rs",
+        "status": "modified",
+        "additions": 7,
+        "deletions": 0
+      },
+      {
+        "path": "src/wire/openai.rs",
+        "status": "added",
+        "additions": 71,
+        "deletions": 0
+      }
+    ],
+    "scope": "First metadata-capture source checkpoint. Its original in-progress command status is superseded by the C2 source and merged PR facts recorded here; no C test result is inferred.",
+    "validation": {
+      "cargo_run_by_report_owner": false,
+      "product_run_by_report_owner": false,
+      "tests_for_C": null
+    },
+    "requirements": {
+      "metadata_keys": [
+        "openai/session",
+        "openai/subject"
+      ],
+      "planned_commands": [
+        "/openai",
+        "/openai-session",
+        "/openai-subject",
+        "/chatgpt set",
+        "/chatgpt open",
+        "/chatgpt copy",
+        "/chatgpt clear",
+        "/plugin-docs"
+      ],
+      "status": "Implementation agreement reported by source owner; command completion awaits actual successor commits and validation.",
+      "conversation_url": "Store a real user-supplied URL; do not derive a URL from anonymized caller identifiers."
+    },
+    "observation_recorded_utc": "2026-11-21 06:41:47 UTC"
+  },
+  "second_commit": {
+    "commit": "cb3d51c90e82a2d116c77782f9da146b98744af2",
+    "tree": "51a73774a9880fcb2b62be3c3d95e719e349c761",
+    "parents": [
+      "cb67a9aacdb16dbd612a877208c1db6221860483"
+    ],
+    "url": "https://github.com/LIghtJUNction/ssmcp/commit/cb3d51c90e82a2d116c77782f9da146b98744af2",
+    "commit_time_utc": "2026-11-21T06:39:31Z",
+    "stats": {
+      "total": 647,
+      "additions": 636,
+      "deletions": 11
+    },
+    "files": [
+      {
+        "path": "docs/commands.md",
+        "status": "modified",
+        "additions": 16,
+        "deletions": 0
+      },
+      {
+        "path": "src/client/account.rs",
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/client/attachments.rs",
+        "status": "modified",
+        "additions": 101,
+        "deletions": 0
+      },
+      {
+        "path": "src/client/composer.rs",
+        "status": "modified",
+        "additions": 20,
+        "deletions": 0
+      },
+      {
+        "path": "src/client/interface/history/openai.rs",
+        "status": "modified",
+        "additions": 169,
+        "deletions": 6
+      },
+      {
+        "path": "src/client/terminal/conversation.rs",
+        "status": "modified",
+        "additions": 33,
+        "deletions": 4
+      },
+      {
+        "path": "src/client/terminal/conversation/history.rs",
+        "status": "modified",
+        "additions": 7,
+        "deletions": 0
+      },
+      {
+        "path": "src/client/terminal/conversation/messaging.rs",
+        "status": "modified",
+        "additions": 5,
+        "deletions": 0
+      },
+      {
+        "path": "src/client/terminal/conversation/openai.rs",
+        "status": "added",
+        "additions": 273,
+        "deletions": 0
+      },
+      {
+        "path": "src/client/terminal/markdown.rs",
+        "status": "modified",
+        "additions": 11,
+        "deletions": 0
+      }
+    ]
+  },
+  "pr": {
+    "number": 164,
+    "state": "closed",
+    "draft": false,
+    "head": "cb3d51c90e82a2d116c77782f9da146b98744af2",
+    "base": "ea2bfcae6aea9672d8955f832a8ec5bd1e0749f4",
+    "merged": true,
+    "merged_at": "2026-11-21T06:41:36Z",
+    "closed_at": "2026-11-21T06:41:36Z",
+    "merge_commit_sha": "3f678a7fca7ea64d220454f1723189e43d3b5546",
+    "updated_at": "2026-11-21T06:41:47Z",
+    "html_url": "https://github.com/LIghtJUNction/ssmcp/pull/164"
+  },
+  "merge_point": {
+    "label": "P2",
+    "commit": "3f678a7fca7ea64d220454f1723189e43d3b5546",
+    "tree": "51a73774a9880fcb2b62be3c3d95e719e349c761",
+    "parents": [
+      "ea2bfcae6aea9672d8955f832a8ec5bd1e0749f4"
+    ],
+    "same_tree_as_C2": true,
+    "main_ref_observed": "3f678a7fca7ea64d220454f1723189e43d3b5546"
+  },
+  "commands_in_C2_documentation": [
+    "/openai",
+    "/openai-session",
+    "/openai-subject",
+    "/chatgpt set <URL>",
+    "/chatgpt open",
+    "/chatgpt",
+    "/chatgpt copy",
+    "/chatgpt clear",
+    "/plugin-docs"
+  ],
+  "source_documentation_url": "https://github.com/LIghtJUNction/ssmcp/blob/cb3d51c90e82a2d116c77782f9da146b98744af2/docs/commands.md",
+  "official_metadata_reference": "https://developers.openai.com/plugins/reference#_meta-fields-the-client-provides",
+  "validation": {
+    "C_C2_or_P2_test_results": null,
+    "W_results_remain_bound_to_W": true,
+    "report_owner_executed_products_or_tests": false
+  },
+  "scope": "Public GitHub commit graphs, file-change metadata, fixed C2 commands documentation, PR and main ref were read directly. Source commits and merge are complete; runtime validation of the new feature is pending. Private caller identifiers, user logs and executable paths are not published."
+}

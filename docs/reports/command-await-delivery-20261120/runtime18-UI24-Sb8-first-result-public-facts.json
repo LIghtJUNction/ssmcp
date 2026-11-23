@@ -1,0 +1,473 @@
+{
+  "schema_version": 1,
+  "kind": "ssmcp-Sb8d-runtime18-pass-ui24-first-failure",
+  "source": {
+    "commit": "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+    "tree": "1391701c52db5066e7a25bbe3a32c1d5a82c47d5"
+  },
+  "gate18": {
+    "status": "passed",
+    "stages": 35,
+    "run_id": "3084787068b4155c51b6e440b6b66202",
+    "fact_file": "gate-Sb8d-r18-final-public-facts.json"
+  },
+  "N18": {
+    "status": "passed_readonly_parse",
+    "product_tests": 0,
+    "cargo_invocations": 0
+  },
+  "runtime18": {
+    "passed": true,
+    "started_utc": "2026-11-21T11:53:04Z",
+    "finished_utc": "2026-11-21T11:53:13Z",
+    "driver_duration_ms": 8524,
+    "outer_duration_ms": 9220,
+    "outer_exit_code": 0,
+    "outer_timed_out": false,
+    "outer_errors": [],
+    "driver_errors": [],
+    "scope": "Separate input/recipient runtime smoke; not Gate35, final25, P1, publication or a human finish approval.",
+    "source_and_compiled_source_same_gate_export": true,
+    "inputs_equal": true,
+    "source_entries": 1613,
+    "normalized_source_manifest_sha256": "27749093e31070940d1bb212a09079f8c6ac4e5fa7aaca8fcd5aaf6230796792",
+    "binaries": [
+      {
+        "role": "library",
+        "bytes": 171932288,
+        "sha256": "f329e613d4bbc4fccf5b380107e4e8cbf5f467343c3fcc75453e6299fb40f6c0",
+        "read_scope": "Read recorded runtime input identity; reporting root did not independently rehash binary files."
+      },
+      {
+        "role": "ssmcp",
+        "bytes": 16248008,
+        "sha256": "b5113562137983fee8e1e35914e0f5d90e3acc69eecd68473a014ff676d1e794",
+        "read_scope": "Read recorded runtime input identity; reporting root did not independently rehash binary files."
+      },
+      {
+        "role": "ssmcp-frontend",
+        "bytes": 1386584,
+        "sha256": "d3069119110ea265a021ae654dfb783d9db4c32b1f2f4e5f4758fc4ee7c8cbda",
+        "read_scope": "Read recorded runtime input identity; reporting root did not independently rehash binary files."
+      },
+      {
+        "role": "ssmcpd",
+        "bytes": 8395024,
+        "sha256": "5c3a87c059aaafac8620c471773a764a1680f17ec227db2e8cf5ed3b695d98cb",
+        "read_scope": "Read recorded runtime input identity; reporting root did not independently rehash binary files."
+      },
+      {
+        "role": "vt_snapshot",
+        "bytes": 440984,
+        "sha256": "efdbeb3f200fcf4404b2612d836433047ecc90eb0744f345fc971ee7441db97f",
+        "read_scope": "Read recorded runtime input identity; reporting root did not independently rehash binary files."
+      }
+    ],
+    "modules": [
+      {
+        "name": "transport",
+        "status": "passed",
+        "source_revision": "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+        "checks": [
+          {
+            "name": "mcp_stdio_protocol_only",
+            "passed": true
+          },
+          {
+            "name": "pipe_mcp_literal_and_warnings",
+            "passed": true
+          },
+          {
+            "name": "fake_exec_argv_literal",
+            "passed": true
+          },
+          {
+            "name": "fake_exec_nonzero_bounded_diagnostics",
+            "passed": true
+          },
+          {
+            "name": "unix_socket_write_half_close_once",
+            "passed": true
+          },
+          {
+            "name": "terminal_original_history_and_current_draft",
+            "passed": true
+          }
+        ],
+        "cleanup_passed": true,
+        "models_started": false,
+        "models_started_field_present": true
+      },
+      {
+        "name": "private_mcp",
+        "status": "passed",
+        "source_revision": "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+        "checks": [
+          {
+            "name": "private_mcp.owned_account_and_two_clients",
+            "passed": true
+          },
+          {
+            "name": "private_mcp.chat_history_draft_queue_baseline",
+            "passed": true
+          },
+          {
+            "name": "private_mcp.globally_retired_native_tools_absent",
+            "passed": true
+          },
+          {
+            "name": "private_mcp.none_remaining_human_tools_hidden",
+            "passed": true
+          },
+          {
+            "name": "private_mcp.concurrent_chat_remaining_human_tools_present",
+            "passed": true
+          },
+          {
+            "name": "private_mcp.none_stale_human_reply_rejected",
+            "passed": true
+          },
+          {
+            "name": "private_mcp.none_stale_human_wait_rejected",
+            "passed": true
+          },
+          {
+            "name": "private_mcp.none_exec_roundtrip",
+            "passed": true
+          },
+          {
+            "name": "private_mcp.none_time_roundtrip",
+            "passed": true
+          },
+          {
+            "name": "private_mcp.none_native_messages_roundtrip",
+            "passed": true
+          },
+          {
+            "name": "private_mcp.none_reload_reconnect_preserves_none",
+            "passed": true
+          },
+          {
+            "name": "private_mcp.chat_history_draft_queue_unchanged",
+            "passed": true
+          }
+        ],
+        "cleanup_passed": true,
+        "models_started": null,
+        "models_started_field_present": false
+      }
+    ],
+    "cleanup": {
+      "outer_child": {
+        "exit_code": 0,
+        "reaped": true,
+        "spawned": true,
+        "termination_requested": false
+      },
+      "transport": {
+        "passed": true,
+        "processes": 10,
+        "all_process_returncodes_zero": true,
+        "decoders": 1,
+        "all_decoder_returncodes_zero": true,
+        "fake_processes": 5,
+        "all_fake_processes_exited": true,
+        "cleanup_signalled": false,
+        "errors": [],
+        "socket_directories_removed": true
+      },
+      "private_mcp": {
+        "passed": true,
+        "owned_processes": 7,
+        "all_exited": true,
+        "all_exit_codes_zero": true,
+        "errors": []
+      },
+      "short_temp_removed": true,
+      "read_scope": "Original recorded cleanup fields read; no new cleanup or process actions by reporting root."
+    },
+    "evidence": [
+      {
+        "file": "launch-result.json",
+        "bytes": 12348,
+        "sha256": "18b430caff0a720fa27ed6cb7120fbe9bffb4f266ebb126e5636f0a4843dae20",
+        "read_scope": "Whole original hashed; selected identity, state, per-case results, input comparisons and cleanup fields read."
+      },
+      {
+        "file": "run/report.json",
+        "bytes": 62280,
+        "sha256": "c11644d45080fb1d99530bd1ca81e3eb936a8e9aa4b702d303af924cfc13bed1",
+        "read_scope": "Whole original hashed; selected identity, state, per-case results, input comparisons and cleanup fields read."
+      }
+    ],
+    "production_relay_ACK_or_deployment_proven": false,
+    "actual_native_terminal": {
+      "exit_code": 0,
+      "both_eof": true,
+      "read_scope": "Acceptance coordinator report; original outer-launch exit and inner report independently read by reporting root."
+    }
+  },
+  "UI24": {
+    "status": "failed",
+    "started_utc": "2026-11-21T11:57:16Z",
+    "finished_utc": "2026-11-21T11:58:38Z",
+    "seconds": 81.774,
+    "logical_suite_count": 25,
+    "planned_execution_count": 24,
+    "actual_execution_count": 4,
+    "independent_pass_count": 3,
+    "not_run_count": 20,
+    "alias_coverage_count": 0,
+    "error": "acceptance stopped at zuse_worker",
+    "successful_parent_assertions": 264,
+    "assertion_partition": [
+      {
+        "suite": "message_references",
+        "passed": 53
+      },
+      {
+        "suite": "force_send",
+        "passed": 137
+      },
+      {
+        "suite": "listener_transports",
+        "passed": 74
+      }
+    ],
+    "failed_suite_parent_assertions_recorded": null,
+    "failed_suite_parent_assertions_added": 0,
+    "checks": [
+      {
+        "name": "message_references",
+        "status": "passed",
+        "exit_code": 0,
+        "seconds": 18.679
+      },
+      {
+        "name": "force_send",
+        "status": "passed",
+        "exit_code": 0,
+        "seconds": 27.454
+      },
+      {
+        "name": "listener_transports",
+        "status": "passed",
+        "exit_code": 0,
+        "seconds": 10.445
+      },
+      {
+        "name": "zuse_worker",
+        "status": "failed",
+        "exit_code": 1,
+        "seconds": 4.426
+      },
+      {
+        "name": "interactions",
+        "status": "not_run"
+      },
+      {
+        "name": "private_desktop",
+        "status": "not_run"
+      },
+      {
+        "name": "account_compat",
+        "status": "not_run"
+      },
+      {
+        "name": "input_history",
+        "status": "not_run"
+      },
+      {
+        "name": "reload_state",
+        "status": "not_run"
+      },
+      {
+        "name": "session_groups",
+        "status": "not_run"
+      },
+      {
+        "name": "client_ui",
+        "status": "not_run"
+      },
+      {
+        "name": "canvas_logs",
+        "status": "not_run"
+      },
+      {
+        "name": "composer",
+        "status": "not_run"
+      },
+      {
+        "name": "questions",
+        "status": "not_run"
+      },
+      {
+        "name": "presentations",
+        "status": "not_run"
+      },
+      {
+        "name": "context_memory",
+        "status": "not_run"
+      },
+      {
+        "name": "file_paste",
+        "status": "not_run"
+      },
+      {
+        "name": "relay_composer",
+        "status": "not_run"
+      },
+      {
+        "name": "goal_startup",
+        "status": "not_run"
+      },
+      {
+        "name": "tool_summaries",
+        "status": "not_run"
+      },
+      {
+        "name": "readable_commands",
+        "status": "not_run"
+      },
+      {
+        "name": "summary_commands",
+        "status": "not_run"
+      },
+      {
+        "name": "physical_latency",
+        "status": "not_run"
+      },
+      {
+        "name": "time_wait",
+        "status": "not_run"
+      }
+    ],
+    "inputs_unchanged": {
+      "unchanged": true,
+      "input_set_sha256": "f5f651f3b5f86a698347e1c26cd766bb2da4b3cff1ae820b7a752c3f26e93a1c",
+      "changed": []
+    },
+    "actual_native_terminal": {
+      "exit_code": 1,
+      "nonrunning": true,
+      "both_eof": true,
+      "read_scope": "Acceptance coordinator report; reporting root independently read original acceptance and suite artifacts."
+    },
+    "per_started_suite_parent_reaped": [
+      {
+        "name": "message_references",
+        "owned_child_reaped": true
+      },
+      {
+        "name": "force_send",
+        "owned_child_reaped": true
+      },
+      {
+        "name": "listener_transports",
+        "owned_child_reaped": true
+      },
+      {
+        "name": "zuse_worker",
+        "owned_child_reaped": true
+      }
+    ],
+    "all_descendants_reaped_proven_by_parent_flags_alone": false,
+    "evidence": [
+      {
+        "file": "acceptance.json",
+        "bytes": 812362,
+        "sha256": "fca8d44852d3efc39b79866712b1677ffc9319ca240ee0e0e39ebc1f7ef33856",
+        "read_scope": "Whole original hashed; top-level identity/result, all 24 planned statuses and selected first-four suite fields read."
+      },
+      {
+        "file": "inputs-before.json",
+        "bytes": 422587,
+        "sha256": "3d8f8cd821fc2dac73004fa9bbcf591c025c77a0f47e673446a413b4af4cca7e",
+        "read_scope": "Whole original hashed; before/after identical bytes."
+      },
+      {
+        "file": "inputs-after.json",
+        "bytes": 422587,
+        "sha256": "3d8f8cd821fc2dac73004fa9bbcf591c025c77a0f47e673446a413b4af4cca7e",
+        "read_scope": "Whole original hashed; before/after identical bytes."
+      }
+    ],
+    "worker_failure": {
+      "error": "timed out: worker observed cancellation EOF",
+      "parent_exit_code": 1,
+      "suite_seconds": 4.426,
+      "child_seconds": 1.631,
+      "parent_subprocess_timeout_seconds": 120,
+      "outer_suite_timeout_seconds": 900,
+      "subprocess_timeout_exception_observed": false,
+      "observed_exception": "CalledProcessError: child returned non-zero exit status 1",
+      "failure_path": "scripts/e2e_zuse_worker.py:180 -> scripts/e2e_x11_text.py",
+      "root_cause": "not established",
+      "child_case_results": [
+        {
+          "name": "whole-string rejection for wrong machine",
+          "status": "passed"
+        },
+        {
+          "name": "fresh worker after corrected machine",
+          "status": "passed"
+        },
+        {
+          "name": "whole-string rejection for wrong pid",
+          "status": "passed"
+        },
+        {
+          "name": "fresh worker after corrected pid",
+          "status": "passed"
+        },
+        {
+          "name": "whole UTF-8 replaces a character selection",
+          "status": "passed"
+        }
+      ],
+      "child_passed_cases": 5,
+      "child_cases_not_added_to_parent_assertions": true,
+      "child_owned_process_cleanup": "passed",
+      "private_display": true,
+      "live_desktop_input_performed_by_reporting_root": false,
+      "evidence": [
+        {
+          "file": "zuse_worker/run.log",
+          "bytes": 2321,
+          "sha256": "139e20caa2461fc659135021afa5843104d1182f0bf18c7a9b979464c1eb7f68",
+          "read_scope": "Entire original log read; raw private paths not published."
+        },
+        {
+          "file": "whole-text.json",
+          "bytes": 5254,
+          "sha256": "efee59ca2237615a8c45d06e7dc28da8f764575466e9619984a75cb071ad628a",
+          "read_scope": "Entire original child report read; public projection omits private display/window identity and payload bodies."
+        }
+      ]
+    }
+  },
+  "downstream": {
+    "controls": "not_run_per_acceptance_owner_terminal_update",
+    "multiUID": "not_run_per_acceptance_owner_terminal_update",
+    "version_all": "not_run_per_acceptance_owner_terminal_update",
+    "P1": "not_run_per_acceptance_owner_terminal_update",
+    "two_native_supplements": "not_run_per_acceptance_owner_terminal_update",
+    "release": "not_dispatched",
+    "H2": "unbound_unexecuted",
+    "production_install_reload_deploy": false
+  },
+  "root_scope": {
+    "heavy_work": 0,
+    "product_test_invocations": 0,
+    "new_gate_invocations": 0,
+    "validator_reruns": 0,
+    "root_did_not_resume_native_author": true
+  },
+  "historical_failures_preserved": [
+    "Gate16",
+    "Gate17",
+    "W UI24",
+    "Sb8 UI24 first failure"
+  ],
+  "observed_utc": "2026-11-21T12:05:33Z"
+}

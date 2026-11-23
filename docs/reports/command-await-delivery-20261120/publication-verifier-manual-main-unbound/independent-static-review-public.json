@@ -1,0 +1,113 @@
+{
+  "author_files_unchanged_at_record_write": true,
+  "baseline": {
+    "bytes": 30229,
+    "commit": "6bb7105648538f81cbea7047faf5b211ba0c2f63",
+    "file": "docs/reports/command-await-delivery-20261120/publication-verifier-v25-unbound/verify_published_candidate.py",
+    "sha256": "9f75533684446080b4ae6ec82f17d245b174541a23a29a2c3399536680c95109"
+  },
+  "checks": [
+    {
+      "finding": "Main accepts only workflow_dispatch, head_branch main, head_sha exactly workflow_sha P, run_attempt 1; jobs and run-attempt records must agree. Tag, source(path), gitlinks, complete crate source and checkout verification use candidate U.",
+      "name": "P/U separation"
+    },
+    {
+      "finding": "git --no-replace-objects verifies U is an ancestor of exact P. All six reviewed recipe files at both commits must match fixed byte lengths and SHA-256. release.yml, ci.yml and deploy-server.yml are included; reusable workflow records must resolve to P.",
+      "name": "Recipe and ancestry"
+    },
+    {
+      "finding": "Entry hashes original capture and independently bound native execution receipt, calls parse_dispatch_capture, then verify_dispatch_contract. Captured argv requires gh api, explicit --hostname github.com, POST, --input -, --include and API 2026-03-10. Original stdin must contain exactly ref main plus tag v0.10.25 and explicit false deploy_server/build_only. HTTP 200 response workflow_run_id and both URLs must identify the same run checked as P/main/workflow_dispatch/attempt 1.",
+      "name": "Original dispatch connection"
+    },
+    {
+      "finding": "Adapter requires independently supplied native job ID and capture path, native exit 0/nonrunning/both EOF/complete stdout, exact file descriptor bytes/hash and exact capture envelope. Its documentation correctly states hashes or self-authored JSON alone do not establish authenticity.",
+      "name": "Native receipt boundary"
+    },
+    {
+      "finding": "verify_execution actually fetches all 18 successful job logs. Each canonical initial pinned checkout must request candidate U (validate requests tag), print U within the mapped checkout window, and agree with exact API step identity/order/timestamps. No favorable later checkout or whole-log fallback is accepted.",
+      "name": "18 initial checkouts"
+    },
+    {
+      "finding": "Actual package output, upload artifact ID/size/digest and consumer download selections/digest multiset are tied to run P. Seven actual Actions artifact ZIPs are fetched; exact regular members are checked. Six inner binary archives must match package JSON, manifest and public release bytes; verified-crates must contain the exact official registry crate and the manifest verified-crate receipt.",
+      "name": "Six release artifacts and crate bridge"
+    },
+    {
+      "finding": "Main calls verify_execution and requires its returned verified field to be exactly True; only after that and final run recheck can provenance_verified and passed be set.",
+      "name": "No success stub"
+    },
+    {
+      "finding": "Exact 19-job set (18 successful, deployment skipped), exact 16-asset set, full crate src file set and bytes, four gitlinks, crate contract and dependency graph checks remain connected in main. __debug__ is required before inherited assertions.",
+      "name": "Preserved acceptance"
+    }
+  ],
+  "created_utc": "2026-11-21T03:09:12.721122+00:00",
+  "legacy_core_functions_byte_and_ast_identical": [
+    "package_identity",
+    "dependency_tables",
+    "locked_packages",
+    "locked_edges",
+    "relative_manifest",
+    "verify_graph",
+    "read_crate_members",
+    "verify_crate_contract"
+  ],
+  "native_read_jobs": [
+    {
+      "exit_code": 0,
+      "purpose": "Entry/CLI, exact file hashes and module outlines",
+      "stderr_eof": true,
+      "stdout_eof": true
+    },
+    {
+      "exit_code": 0,
+      "purpose": "Recipe, dispatch, checkout, execution and artifact connections",
+      "stderr_eof": true,
+      "stdout_eof": true
+    },
+    {
+      "exit_code": 0,
+      "purpose": "Baseline AST/source equality and bounded step-window primitives",
+      "stderr_eof": true,
+      "stdout_eof": true
+    }
+  ],
+  "observations": [
+    "This is a static no-blocker verdict for the pinned prepared files, not proof of an actual publication.",
+    "No helper/controller import or execution, helper tests, POST, tag/release/deployment action, source/cache/target mutation, or final tuple binding was performed.",
+    "Owner's raw HTTP-format and platform-sidecar investigation was not repeated. Existing code's explicit ordinary reviewed CI trust boundary is preserved; this does not claim malicious-builder attestation.",
+    "Before actual use, root must retain original independently observed native dispatch evidence and select actual P/U/run only after its UI/runtime/P1 gates."
+  ],
+  "public_copy": {
+    "kind": "redacted_public_copy",
+    "original_bytes": 6037,
+    "original_sha256": "b984df1a8ada6d18b3948e2409df22f99bf160228f172132a67c67502c68d287",
+    "preserved": "Original review scope, findings, verdict, source identities and reviewed-file hashes are unchanged.",
+    "removed_fields": [
+      "native_read_jobs[].id",
+      "reviewer"
+    ]
+  },
+  "review": "manual-main verifier entry and identity boundary",
+  "reviewed_files": {
+    "changes-from-v25-push.diff": {
+      "bytes": 72404,
+      "scope": "Identity checked; this bounded review did not repeat full diff review.",
+      "sha256": "0cc931a8c956ec3276fe09dce72644b231787f032898741484fa137a76edfd47"
+    },
+    "dispatch_receipt_adapter.py": {
+      "bytes": 14758,
+      "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4"
+    },
+    "manual_main_provenance.py": {
+      "bytes": 30695,
+      "sha256": "26c25c00314530ef297fc8d56451ccec696325db7d5ad1140447bce1afc9ca48"
+    },
+    "verify_published_manual_main.py": {
+      "bytes": 45719,
+      "sha256": "d84c6a02b73a9752e0a5b5ad2658deba3afe6c3dcccc83a8b0a1df2d913c0479"
+    }
+  },
+  "schema": 1,
+  "scope": "Bounded static entry/call-chain review only. Prepared helper remains UNBOUND; no final workflow/candidate/run tuple was selected by this review.",
+  "verdict": "NO_STATIC_BLOCKER_WITHIN_REVIEWED_SCOPE"
+}

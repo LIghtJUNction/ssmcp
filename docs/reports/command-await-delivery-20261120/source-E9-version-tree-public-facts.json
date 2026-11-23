@@ -1,0 +1,98 @@
+{
+  "schema": "ssmcp-E9-version-tree-source-public-facts-v1",
+  "observation_kind": "immutable source and independent static review; no execution",
+  "commit": "71851cf221076e661b5c243a63d585fb1b04fdaf",
+  "tree": "0b25cd91d25a451e35278b048e0cbb1fb7414f0a",
+  "parents": [
+    "f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b"
+  ],
+  "committed_utc": "2026-11-21T08:01:31Z",
+  "subject": "feat: show the locked dependency tree offline [skip ci]",
+  "changed_files": [
+    {
+      "path": "docs/dependencies.md",
+      "status": "modified",
+      "additions": 2,
+      "deletions": 0
+    },
+    {
+      "path": "src/client.rs",
+      "status": "modified",
+      "additions": 14,
+      "deletions": 6
+    },
+    {
+      "path": "src/client/version.rs",
+      "status": "added",
+      "additions": 281,
+      "deletions": 0
+    },
+    {
+      "path": "src/output.rs",
+      "status": "modified",
+      "additions": 4,
+      "deletions": 1
+    }
+  ],
+  "behavior": {
+    "command": "ssmcp --version --all",
+    "input": "Cargo.lock embedded at compilation via include_str!, not a runtime file or network query",
+    "plain_version_contract": "ssmcp VERSION followed by one newline",
+    "routing": "Top-level version requests return before agent/config/context/account/local startup paths",
+    "graph_scope": "Packages reachable from ssmcp in the build-time lock, including build/dev and all locked targets; not the exact active feature/platform compiled linkage graph",
+    "package_identity": [
+      "name",
+      "version",
+      "source"
+    ],
+    "duplicate_identity": "error",
+    "ambiguous_dependency": "error",
+    "missing_dependency": "error",
+    "shared_node": "already expanded marker",
+    "cycle": "cycle marker; traversal stops at ancestor",
+    "output_atomicity": "The complete tree is rendered into a String before printing; failed resolution does not print a partial tree",
+    "scope_qualification": "Static review covers the new version module and client::run route, not a fresh execution or every outer process initialization step.",
+    "main_commit_or_complete_lock_digest_proven_by_output": false
+  },
+  "rust_regression_definitions": {
+    "new_definitions": 3,
+    "executed": false,
+    "names": [
+      "version_requests_are_top_level_and_plain_output_is_unchanged",
+      "actual_locked_root_resolves_every_reachable_edge",
+      "locked_identity_distinguishes_sources_and_versions_and_marks_shared_nodes_and_cycles"
+    ]
+  },
+  "startup_test_followup": {
+    "prior_source_commit": "9e1a06c4c6a04fe6a7ac7919c9cee9ab497ac95b",
+    "change": "Convert the boxed error to a string before the existing substring assertion",
+    "original_typed_error_watchdog_symlink_and_target_byte_assertions_preserved": true,
+    "compiled_or_run": false
+  },
+  "static_review": {
+    "all_four_patches_directly_read_by_root": true,
+    "complete_version_module_read": true,
+    "independent_review_completed": true,
+    "confirmed_blocking_mismatches": 0,
+    "helper_or_product_execution": false,
+    "cargo_or_metadata_execution": false,
+    "source_files_edited_by_reviewers": false
+  },
+  "release_recipe": {
+    "six_H2_recipe_paths_changed": false,
+    "H2_fixed_delivery_commit": "2e8e58ac1a7047900feac8501878b80e64f4bd52",
+    "helper_executed": false
+  },
+  "phase_boundary": {
+    "E9_completed": false,
+    "unified_on_off_source_completed": false,
+    "final_dependency_refresh_completed": false,
+    "narrow_author_checks_result": null,
+    "final_source_S": null,
+    "full_gate_result": null,
+    "runtime": null,
+    "ui": null,
+    "p1": null,
+    "release": null
+  }
+}

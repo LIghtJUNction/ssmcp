@@ -1,0 +1,15 @@
+{
+  "commit": "71851cf221076e661b5c243a63d585fb1b04fdaf",
+  "files": [
+    {
+      "name": "release-notes-0.10.25.original.md",
+      "bytes": 2620,
+      "sha256": "4c7de5f6a284ff56b723b50f036ba59741c502636c78e6e481fdcdba021a6af6"
+    },
+    {
+      "name": "commands-71851cf.reference.md",
+      "bytes": 16643,
+      "sha256": "7405110a36d28cc5be4ee16b5f7b7a517cd5c2f12f1e4c59c591f52ceb082af0"
+    }
+  ]
+}

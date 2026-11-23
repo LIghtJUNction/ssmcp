@@ -1,0 +1,250 @@
+{
+  "schema": "ssmcp.publication-verifier.source-schema-recheck.v1",
+  "scope": "Static immutable-source schema review only; not final publication verification or acceptance.",
+  "status": "verified_crate_and_development_registry_graph_schemas_compatible",
+  "verifier": {
+    "sha256": "a23827c06034964c6ef8aa3299613f7d50cafbd6ddfb2bafeb7b50d814889394",
+    "modified": false
+  },
+  "source_before": {
+    "commit": "5d087d1f7363fe5741f6080168037623362280e7",
+    "path": "scripts/release.py",
+    "bytes": 53812,
+    "sha256": "534a780221adddd8533ba3df35f19df834964b46ae97aad46867cfb0f7dd8900"
+  },
+  "source_after": {
+    "commit": "c53c5ea681cb0840f1c41c9e8d31489abac4fd37",
+    "path": "scripts/release.py",
+    "bytes": 54070,
+    "sha256": "43e995d675689f3c881f4452172796f4e2f7b195dbceef3dbb9b1ed1d9f95be4"
+  },
+  "whole_file_identical": false,
+  "ast_summary": {
+    "method": "ast.dump(FunctionDef, include_attributes=False)",
+    "identical_function_count": 14,
+    "identical_functions": [
+      {
+        "name": "check_registry_graph",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      },
+      {
+        "name": "checksums",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      },
+      {
+        "name": "dependency_graph",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      },
+      {
+        "name": "dependency_tables",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      },
+      {
+        "name": "graph_records",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      },
+      {
+        "name": "locked_project_z",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      },
+      {
+        "name": "metadata_graph",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      },
+      {
+        "name": "normalized_crate",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      },
+      {
+        "name": "normalized_registry_graph",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      },
+      {
+        "name": "package_identity",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      },
+      {
+        "name": "release_source",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      },
+      {
+        "name": "require_shared_zplugin",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      },
+      {
+        "name": "verified_crate_receipt",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      },
+      {
+        "name": "verify_crate",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": true
+      }
+    ],
+    "changed_functions": [
+      {
+        "name": "registry_dependencies",
+        "present_before": true,
+        "present_after": true,
+        "ast_identical": false
+      }
+    ],
+    "per_function_ast_digest_recorded": false,
+    "details": "The original comparison recorded before/after function presence and exact normalized AST equality; it did not emit separate per-function AST hash values."
+  },
+  "unique_diff": {
+    "function": "registry_dependencies",
+    "old_lines": "141-152",
+    "new_lines": "141-158",
+    "text": "--- 5d087d1f7363fe5741f6080168037623362280e7/scripts/release.py\n+++ c53c5ea681cb0840f1c41c9e8d31489abac4fd37/scripts/release.py\n@@ -141,12 +141,18 @@\n             plugin = dependencies.get(\"zplugin\", {})\n             declared = local.get(\"dependencies\", {}).get(\"zplugin\")\n             requirement = declared.get(\"version\") if isinstance(declared, dict) else declared\n-            if not plugin or requirement != plugin.get(\"version\") or \"zplugin\" not in patches:\n-                raise ValueError(\"zharness and ssmcp require the same exact zplugin version and canonical crates.io patch\")\n+            if not plugin or requirement != plugin.get(\"version\"):\n+                raise ValueError(\"zharness and ssmcp require the same exact zplugin version\")\n             if isinstance(declared, dict) and \"git\" in declared:\n                 require_project_z_git(\"zplugin\", declared, \"zplugin\")\n-            elif isinstance(declared, dict) and set(declared) & {\"path\", \"registry\", \"registry-index\"}:\n-                raise ValueError(\"zharness must resolve zplugin through its canonical Git source\")\n+            else:\n+                if isinstance(declared, dict) and (\n+                    declared.get(\"package\", \"zplugin\") != \"zplugin\"\n+                    or set(declared) - {\"package\", \"version\", \"default-features\", \"features\", \"optional\"}\n+                ):\n+                    raise ValueError(\"zharness must resolve zplugin through its canonical Git source\")\n+                if \"zplugin\" not in patches:\n+                    raise ValueError(\"registry zplugin in zharness requires the canonical crates.io patch\")\n         result.append((package_name, release_version))\n     return result\n \n\n",
+    "meaning": "zharness's canonical direct Git zplugin declaration no longer requires an additional crates.io patch; a registry declaration still requires the canonical patch and allowed declaration fields are checked.",
+    "sha256": "653e130a90aee0cee035d0d0356e65ebdfd3169f33291433d523c0df3333e9f7"
+  },
+  "compatibility": {
+    "receipt_fields_changed": false,
+    "development_graph_schema_changed": false,
+    "normalized_registry_graph_schema_changed": false,
+    "verifier_change_required_for_this_diff": false,
+    "reason": "The 14 receipt/graph functions are AST-identical, and a238 does not unconditionally require the removed redundant patch for a direct canonical Git declaration."
+  },
+  "prior_native_jobs": [
+    {
+      "job_id": "1c828d2fc3165848bd0b270a25c57148-1c9",
+      "exit_code": 0,
+      "kind": "immutable release.py identity"
+    },
+    {
+      "job_id": "1c828d2fc3165848bd0b270a25c57148-1cd",
+      "exit_code": 0,
+      "kind": "bound old/new diff and AST comparison"
+    }
+  ],
+  "original_digest_output": {
+    "source_revision": "c53c5ea681cb0840f1c41c9e8d31489abac4fd37",
+    "path": "scripts/release.py",
+    "bytes": 54070,
+    "sha256": "43e995d675689f3c881f4452172796f4e2f7b195dbceef3dbb9b1ed1d9f95be4",
+    "reviewed_sha256": "534a780221adddd8533ba3df35f19df834964b46ae97aad46867cfb0f7dd8900",
+    "identical_to_reviewed_schema": false
+  },
+  "original_ast_comparison": {
+    "check_registry_graph": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    },
+    "checksums": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    },
+    "dependency_graph": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    },
+    "dependency_tables": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    },
+    "graph_records": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    },
+    "locked_project_z": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    },
+    "metadata_graph": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    },
+    "normalized_crate": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    },
+    "normalized_registry_graph": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    },
+    "package_identity": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    },
+    "registry_dependencies": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": false
+    },
+    "release_source": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    },
+    "require_shared_zplugin": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    },
+    "verified_crate_receipt": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    },
+    "verify_crate": {
+      "present_before": true,
+      "present_after": true,
+      "ast_identical": true
+    }
+  },
+  "performed_now": [
+    "serialize retained review evidence",
+    "write dedicated report",
+    "read back byte count and SHA256"
+  ],
+  "not_performed_now": [
+    "repeat immutable-source reads or AST comparison",
+    "offline test rerun",
+    "Cargo",
+    "PTY",
+    "CI",
+    "network publisher",
+    "source or verifier edits"
+  ],
+  "final_publication_pass_claimed": false,
+  "gate10_assessment": "Not delivered in the prior task context; no new search or inference performed."
+}

@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "kind": "ssmcp-one-time-recovery-prepared-not-executed",
+  "observed_utc": "2026-11-21T11:15:23Z",
+  "request": {
+    "actual_user_request_read": true,
+    "requested_utc": "2026-11-21T11:00:48.686Z",
+    "scope": "Set up a one-time post-reboot recovery script to open ztty, enter the SSMCP project and resume the SSMCP session.",
+    "source": "Bounded read of the workspace conversation's original user requirement; private message/session identifiers omitted."
+  },
+  "files": [
+    {
+      "name": "ssmcp-resume-once.desktop",
+      "bytes": 395,
+      "sha256": "07c79a14595a9283b75277c723b5f30f40a688dea5171ea25ef92cb0dda0d6f9"
+    },
+    {
+      "name": "restore.py",
+      "bytes": 3210,
+      "sha256": "17338cd335ff5183fddc4b77399fab74c5f9cc2dd1f225d7cfbc920d80c64af9"
+    },
+    {
+      "name": "config.json",
+      "bytes": 849,
+      "sha256": "deee5596a0f7c7b49957214d82e99d92ff7cdc1bff1329dc6fe8dc492dfda621",
+      "mode": "0o600"
+    },
+    {
+      "name": "continuation.json",
+      "bytes": 3289,
+      "sha256": "b788e2e1458df579ff7284bdbc7fb1968574a98167e358a1bc0b02bd052c7c19",
+      "mode": "0o600"
+    }
+  ],
+  "locations": {
+    "desktop_entry": "~/.config/autostart/ssmcp-resume-once.desktop",
+    "recovery_directory": "~/.local/state/work-maintainer/ssmcp-resume-once-20261121/"
+  },
+  "reported_setup": {
+    "source_owner_reported_finished_utc": "2026-11-21T11:10:48.341282Z",
+    "source_owner_reported_non_launching_check_exit_code": 0,
+    "original_setup_check_output_reopened_by_reporting_root": false,
+    "reporting_root_reran_script": false
+  },
+  "observed_configuration": {
+    "workspace_is_ssmcp": true,
+    "ztty_basename": "ztty-launch",
+    "ssmcp_basename": "ssmcp",
+    "configured_programs_executable": true,
+    "workspace_exists": true,
+    "armed_boot_equals_current_boot": true,
+    "desktop_content_matches": true,
+    "desktop_mode": "0o600",
+    "recovery_directory_mode": "0o700",
+    "completed_marker_exists": false,
+    "recovery_log_exists": false,
+    "terminal_startup_log_exists": false,
+    "launch_lock_file_exists": false
+  },
+  "static_behavior": {
+    "entry_point": "XDG graphical-login autostart",
+    "skip_armed_current_boot": true,
+    "requires_different_boot_id": true,
+    "requires_DISPLAY": true,
+    "requires_project_directory_and_both_executables": true,
+    "nonblocking_flock": true,
+    "completed_marker_stops_duplicate_launch": true,
+    "argv_template": [
+      "ztty-launch",
+      "--cwd",
+      "<SSMCP workspace>",
+      "-e",
+      "<installed ssmcp executable>"
+    ],
+    "changes_to_project_directory_before_launch": true,
+    "does_not_install_product": true,
+    "does_not_reload_client": true,
+    "does_not_reboot": true,
+    "does_not_start_or_resume_model": true,
+    "does_not_replay_prior_requests": true,
+    "completion_marker_condition": "Popen returned a child and child.poll() remained None after a one-second wait.",
+    "completion_marker_does_not_prove_gui_or_connection": true,
+    "completion_marker_connection_confirmed": false,
+    "desktop_entry_removed_only_if_unchanged": true,
+    "waits_for_terminal_child_after_marker": true,
+    "continuation_file_is_checkpoint_material_not_a_model_resume_command": true
+  },
+  "recovery_scope": {
+    "workspace_connection_and_existing_workspace_context": "prepared",
+    "exact_prior_UI_conversation_id_auto_selected": false,
+    "prior_conversations_remain_available_via": "/resume",
+    "graphical_window_observed_from_this_script": false,
+    "ssmcp_connection_observed_from_this_script": false,
+    "current_online_connection_is_not_proof_this_script_executed": true,
+    "next_reboot_graphical_login_execution": "not_observed"
+  },
+  "evidence_scope": {
+    "desktop_and_script_read_in_full": true,
+    "config_hash_and_selected_fields_read": true,
+    "continuation_hash_and_top_level_keys_read": true,
+    "continuation_full_content_independently_reviewed": false
+  },
+  "authorization_boundary": {
+    "requested_one_time_setup": true,
+    "reporting_root_only_read_existing_files": true,
+    "second_recovery_installation_by_reporting_root": false
+  }
+}

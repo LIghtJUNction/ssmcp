@@ -1,0 +1,879 @@
+{
+  "schema_version": 1,
+  "kind": "completed-source-increment-with-unresolved-static-findings",
+  "observed_utc": "2026-11-21 08:37:51 UTC",
+  "source": {
+    "base": {
+      "head": "f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b",
+      "tree": "4852c9a5c2d928e46ae4b291a4d27e5229998a18",
+      "parents": [
+        "879ba17fc3ba4bad6a26a85494b79e29acf1938a"
+      ],
+      "subject": "test: isolate original history for HTTP caller metadata [skip ci]"
+    },
+    "final": {
+      "head": "27e9733fa539c400c532474e076971eba03f845a",
+      "tree": "205138cdce8368956a4e96ed87df3285f9f5011f",
+      "parents": [
+        "8ce982cd2f37e3bbb3c6a218a7388fefdbf0c7e5"
+      ],
+      "subject": "test: call the owned Playwright fixture cleanup directly [skip ci]"
+    },
+    "remote_head": "27e9733fa539c400c532474e076971eba03f845a",
+    "clean_worktree_and_submodules_reported": true,
+    "changed_paths": [
+      "Cargo.lock",
+      "README.md",
+      "crates/zharness",
+      "crates/zplugin",
+      "docs/background-control.md",
+      "docs/browser-desktop.md",
+      "docs/computer-use.md",
+      "docs/dependencies.md",
+      "packaging/ssmcp-computer.lua",
+      "scripts/e2e_computer_controls.py",
+      "src/backend/playwright.rs",
+      "src/backend/rpc.rs",
+      "src/browser.rs",
+      "src/client.rs",
+      "src/client/browser_setup.rs",
+      "src/client/composer.rs",
+      "src/client/computer_control.rs",
+      "src/client/config.rs",
+      "src/client/interface/computer.rs",
+      "src/client/terminal.rs",
+      "src/client/terminal/computer.rs",
+      "src/client/terminal/conversation/history.rs",
+      "src/client/terminal/conversation/timing/tests.rs",
+      "src/client/version.rs",
+      "src/computer.rs",
+      "src/computer/host_control.rs",
+      "src/computer/host_control/storage.rs",
+      "src/computer/host_control/tests.rs",
+      "src/computer/isolated.rs",
+      "src/computer/macos.rs",
+      "src/computer/windows.rs",
+      "src/computer/zuse_backend.rs",
+      "src/omarchy.rs",
+      "src/output.rs",
+      "src/runtime.rs",
+      "src/runtime/capabilities.rs",
+      "src/runtime/native_plugins/desktop.rs",
+      "src/runtime/native_plugins/process.rs"
+    ]
+  },
+  "source_stage": {
+    "started_utc": "2026-11-21T07:58:56.031244+00:00",
+    "finished_utc": "2026-11-21T08:30:20.342799+00:00",
+    "exit_code": 0,
+    "error": null,
+    "author_wrapper_unchanged": true,
+    "rustc_wrapper_unchanged": true,
+    "same_original_author": true,
+    "final_acceptance_allowed": false
+  },
+  "evidence_read_scope": {
+    "author_exit": {
+      "file": "author-exit.json",
+      "bytes": 2216,
+      "sha256": "e855f552e79c43d95f4b9225e64fcb247ba3c95d2af73811e805205cb0039e6f",
+      "read": "full original JSON"
+    },
+    "source_receipt": {
+      "file": "source-changes-receipt.json",
+      "bytes": 115934,
+      "sha256": "0d39a81c5f5b7c847699f0655d5c0c2e572df7d00a4fec64339494734dc4bbc2",
+      "read": "full bytes hashed; selected fields parsed, including all milestone push statuses, changed paths, dependency snapshot, seven attempts, final check summary and unrun definitions; not all 199 command records or referenced files independently read"
+    },
+    "final_check_receipt": {
+      "file": "final author check result.json",
+      "bytes": 82447,
+      "sha256": "27f8d0fce421ded231745059731035560d812f7234f8d11c9ccbc906420f735c",
+      "read": "full bytes hashed; top-level status and selected source, input, command, exit and cleanup fields read; four output files fully read separately"
+    },
+    "github": {
+      "read": "all five fixed commit identities and changed-path lists read; complete diffs for 71851cf, 43fde19, 8ce982c and 27e9733; selected 2619686 implementation and document patches, supplemented by scoped direct reviews and coordinator-reported deep review",
+      "all_261_changed_files_fully_reviewed_by_this_reporter": false
+    }
+  },
+  "commits": [
+    {
+      "commit": "71851cf221076e661b5c243a63d585fb1b04fdaf",
+      "tree": "0b25cd91d25a451e35278b048e0cbb1fb7414f0a",
+      "parents": [
+        "f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b"
+      ],
+      "committed_utc": "2026-11-21T08:01:31Z",
+      "stats": {
+        "total": 308,
+        "additions": 301,
+        "deletions": 7
+      },
+      "changed_paths": [
+        "docs/dependencies.md",
+        "src/client.rs",
+        "src/client/version.rs",
+        "src/output.rs"
+      ],
+      "push_exit_code": 0
+    },
+    {
+      "commit": "26196862691774cab333e1f110b2fdb9c15e5b97",
+      "tree": "74edf048b4a55d91dd09b6b3590b8949ad1de853",
+      "parents": [
+        "71851cf221076e661b5c243a63d585fb1b04fdaf"
+      ],
+      "committed_utc": "2026-11-21T08:17:47Z",
+      "stats": {
+        "total": 1366,
+        "additions": 1135,
+        "deletions": 231
+      },
+      "changed_paths": [
+        "README.md",
+        "docs/background-control.md",
+        "docs/browser-desktop.md",
+        "docs/computer-use.md",
+        "packaging/ssmcp-computer.lua",
+        "scripts/e2e_computer_controls.py",
+        "src/backend/playwright.rs",
+        "src/browser.rs",
+        "src/client.rs",
+        "src/client/browser_setup.rs",
+        "src/client/composer.rs",
+        "src/client/computer_control.rs",
+        "src/client/config.rs",
+        "src/client/interface/computer.rs",
+        "src/client/terminal.rs",
+        "src/client/terminal/computer.rs",
+        "src/client/terminal/conversation/history.rs",
+        "src/client/terminal/conversation/timing/tests.rs",
+        "src/computer.rs",
+        "src/computer/host_control.rs",
+        "src/computer/host_control/storage.rs",
+        "src/computer/host_control/tests.rs",
+        "src/computer/isolated.rs",
+        "src/computer/macos.rs",
+        "src/computer/windows.rs",
+        "src/computer/zuse_backend.rs",
+        "src/omarchy.rs",
+        "src/runtime.rs",
+        "src/runtime/capabilities.rs",
+        "src/runtime/native_plugins/desktop.rs",
+        "src/runtime/native_plugins/process.rs"
+      ],
+      "push_exit_code": 0
+    },
+    {
+      "commit": "43fde1904cd37b006f033b07682068ebab7bb7be",
+      "tree": "a53df8959d820eff3c329b5c12cf8936f7f4ac77",
+      "parents": [
+        "26196862691774cab333e1f110b2fdb9c15e5b97"
+      ],
+      "committed_utc": "2026-11-21T08:19:31Z",
+      "stats": {
+        "total": 14,
+        "additions": 7,
+        "deletions": 7
+      },
+      "changed_paths": [
+        "Cargo.lock",
+        "crates/zharness",
+        "crates/zplugin"
+      ],
+      "push_exit_code": 0
+    },
+    {
+      "commit": "8ce982cd2f37e3bbb3c6a218a7388fefdbf0c7e5",
+      "tree": "ecbb6233151b9e0582d21ac6ff3cb6e3ebebf6a7",
+      "parents": [
+        "43fde1904cd37b006f033b07682068ebab7bb7be"
+      ],
+      "committed_utc": "2026-11-21T08:21:42Z",
+      "stats": {
+        "total": 12,
+        "additions": 10,
+        "deletions": 2
+      },
+      "changed_paths": [
+        "src/backend/rpc.rs",
+        "src/browser.rs",
+        "src/omarchy.rs"
+      ],
+      "push_exit_code": 0
+    },
+    {
+      "commit": "27e9733fa539c400c532474e076971eba03f845a",
+      "tree": "205138cdce8368956a4e96ed87df3285f9f5011f",
+      "parents": [
+        "8ce982cd2f37e3bbb3c6a218a7388fefdbf0c7e5"
+      ],
+      "committed_utc": "2026-11-21T08:25:03Z",
+      "stats": {
+        "total": 2,
+        "additions": 1,
+        "deletions": 1
+      },
+      "changed_paths": [
+        "src/runtime/native_plugins/process.rs"
+      ],
+      "push_exit_code": 0
+    }
+  ],
+  "narrow_checks": {
+    "source": "27e9733fa539c400c532474e076971eba03f845a",
+    "status": "passed",
+    "started_utc": "2026-11-21T08:25:39.525133+00:00",
+    "finished_utc": "2026-11-21T08:28:21.510734+00:00",
+    "release_policy_tests": 106,
+    "rust_test_execution": false,
+    "cargo_check_tests_only": true,
+    "final_35_stage_gate_executed": false,
+    "owned_cleanup_complete": true,
+    "target_lock_held_until_owned_cleanup": true,
+    "stages": [
+      {
+        "name": "release-policy",
+        "status": "passed",
+        "source_unchanged": true,
+        "inputs_unchanged": true,
+        "command": [
+          "python3",
+          "-B",
+          "scripts/test_release.py"
+        ],
+        "actual": {
+          "exit_code": 0,
+          "succeeded": true,
+          "timed_out": false,
+          "error": null,
+          "started_utc": "2026-11-21T08:27:46.341566+00:00",
+          "finished_utc": "2026-11-21T08:27:53.050526+00:00",
+          "duration_seconds": 6.708964065008331,
+          "stop_signal": null
+        },
+        "cleanup": {
+          "all_owned_descendants_reaped": true,
+          "errors": [],
+          "process_count": 253
+        },
+        "source_before": {
+          "head": "27e9733fa539c400c532474e076971eba03f845a",
+          "tree": "205138cdce8368956a4e96ed87df3285f9f5011f",
+          "sha256": "9486aa3e846f88762f38e3b4f6c8847a5dd15b2a3c0198f83a5f8ff1b380ba55",
+          "untracked_files": 0
+        },
+        "source_after": {
+          "head": "27e9733fa539c400c532474e076971eba03f845a",
+          "tree": "205138cdce8368956a4e96ed87df3285f9f5011f",
+          "sha256": "9486aa3e846f88762f38e3b4f6c8847a5dd15b2a3c0198f83a5f8ff1b380ba55",
+          "untracked_files": 0
+        }
+      },
+      {
+        "name": "cargo-check-tests",
+        "status": "passed",
+        "source_unchanged": true,
+        "inputs_unchanged": true,
+        "command": [
+          "cargo",
+          "check",
+          "--tests",
+          "--locked",
+          "--offline",
+          "--jobs",
+          "1"
+        ],
+        "actual": {
+          "exit_code": 0,
+          "succeeded": true,
+          "timed_out": false,
+          "error": null,
+          "started_utc": "2026-11-21T08:27:59.464905+00:00",
+          "finished_utc": "2026-11-21T08:28:20.051774+00:00",
+          "duration_seconds": 20.586956776009174,
+          "stop_signal": null
+        },
+        "cleanup": {
+          "all_owned_descendants_reaped": true,
+          "errors": [],
+          "process_count": 49
+        },
+        "source_before": {
+          "head": "27e9733fa539c400c532474e076971eba03f845a",
+          "tree": "205138cdce8368956a4e96ed87df3285f9f5011f",
+          "sha256": "9486aa3e846f88762f38e3b4f6c8847a5dd15b2a3c0198f83a5f8ff1b380ba55",
+          "untracked_files": 0
+        },
+        "source_after": {
+          "head": "27e9733fa539c400c532474e076971eba03f845a",
+          "tree": "205138cdce8368956a4e96ed87df3285f9f5011f",
+          "sha256": "9486aa3e846f88762f38e3b4f6c8847a5dd15b2a3c0198f83a5f8ff1b380ba55",
+          "untracked_files": 0
+        }
+      }
+    ],
+    "outputs": [
+      {
+        "file": "024-release-policy.stdout",
+        "bytes": 4856,
+        "sha256": "6ba0b008ce736d8edd238da6e618e25c95dc288bb8e346de4aa9767c982d4088",
+        "full_text_read": true,
+        "conclusion": null
+      },
+      {
+        "file": "024-release-policy.stderr",
+        "bytes": 890,
+        "sha256": "e9708058e3953a182b73fa97b2a69a029a96f346ba589b7993073a5ab7ecf6fb",
+        "full_text_read": true,
+        "conclusion": "Ran 106 tests; OK; fixture outputs are not publication evidence"
+      },
+      {
+        "file": "071-cargo-check-tests.stdout",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "full_text_read": true,
+        "conclusion": null
+      },
+      {
+        "file": "071-cargo-check-tests.stderr",
+        "bytes": 185,
+        "sha256": "348258700a9f33c39e406c26d9b9c65831421b2e50a5568b95ab8452ca167efc",
+        "full_text_read": true,
+        "conclusion": "Finished dev check profile; no Rust test execution"
+      }
+    ]
+  },
+  "retained_attempts": [
+    {
+      "attempt": 1,
+      "receipt": {
+        "bytes": 789,
+        "sha256": "4864c4c43ffc6a20d8e04849b6904a0bbfb089fcf90761a725eb64ff43994f0d"
+      },
+      "status": "failed",
+      "exit_code": 1,
+      "error": "RuntimeError: helper is not in the author's invocation",
+      "owned_cleanup_complete": null,
+      "stages": []
+    },
+    {
+      "attempt": 2,
+      "receipt": {
+        "bytes": 87069,
+        "sha256": "08b4fddf2e7541aec9c8e2016da747a26f2cb74f2a405b2ec53bba97cffedbae"
+      },
+      "status": "passed",
+      "exit_code": 0,
+      "error": null,
+      "owned_cleanup_complete": true,
+      "stages": [
+        {
+          "name": "release-policy",
+          "status": "passed",
+          "exit_code": 0,
+          "reason": null,
+          "source_head": "71851cf221076e661b5c243a63d585fb1b04fdaf",
+          "source_working_fingerprint": "ac81e36d109d54f110acaa9315a64ddbe382674279ed82c09a2113a882d111f0",
+          "source_unchanged": true,
+          "inputs_unchanged": true
+        },
+        {
+          "name": "cargo-check-tests",
+          "status": "passed",
+          "exit_code": 0,
+          "reason": null,
+          "source_head": "71851cf221076e661b5c243a63d585fb1b04fdaf",
+          "source_working_fingerprint": "ac81e36d109d54f110acaa9315a64ddbe382674279ed82c09a2113a882d111f0",
+          "source_unchanged": true,
+          "inputs_unchanged": true
+        }
+      ],
+      "binding_scope": "recorded working-tree fingerprint only; not independently verified here as immutable commit acceptance"
+    },
+    {
+      "attempt": 3,
+      "receipt": {
+        "bytes": 67104,
+        "sha256": "d14d8109f77e79e0a8be387bfb5c1b095a4180eecd5336fcb7608a86d11aec1a"
+      },
+      "status": "failed",
+      "exit_code": 1,
+      "error": "RuntimeError: release-policy did not succeed",
+      "owned_cleanup_complete": true,
+      "stages": [
+        {
+          "name": "release-policy",
+          "status": "failed",
+          "exit_code": -15,
+          "reason": "ProcessLookupError: [Errno 3] No such process",
+          "source_head": "43fde1904cd37b006f033b07682068ebab7bb7be",
+          "source_working_fingerprint": "53c8fcb93108903b0ed20a44b79d6ae2844621feb4006edaf5541bd9a268a0a5",
+          "source_unchanged": true,
+          "inputs_unchanged": true
+        }
+      ]
+    },
+    {
+      "attempt": 4,
+      "receipt": {
+        "bytes": 68054,
+        "sha256": "a3821fe83d0ec4c40cfe443afca0b76b1bff0787b1c3d4b9d5f26d16c9a025ce"
+      },
+      "status": "failed",
+      "exit_code": 1,
+      "error": "RuntimeError: release-policy did not succeed",
+      "owned_cleanup_complete": true,
+      "stages": [
+        {
+          "name": "release-policy",
+          "status": "failed",
+          "exit_code": -15,
+          "reason": "ProcessLookupError: [Errno 3] No such process",
+          "source_head": "8ce982cd2f37e3bbb3c6a218a7388fefdbf0c7e5",
+          "source_working_fingerprint": "ae661a95b1edb5739f92f167fc334875591aebf46662fa2df4f091198351c7a1",
+          "source_unchanged": true,
+          "inputs_unchanged": true
+        }
+      ]
+    },
+    {
+      "attempt": 5,
+      "receipt": {
+        "bytes": 88905,
+        "sha256": "310960accfa4b078da1c802e979544aeb03d85e09ad09f218f6b542481909c95"
+      },
+      "status": "passed",
+      "exit_code": 0,
+      "error": null,
+      "owned_cleanup_complete": true,
+      "stages": [
+        {
+          "name": "release-policy",
+          "status": "passed",
+          "exit_code": 0,
+          "reason": null,
+          "source_head": "8ce982cd2f37e3bbb3c6a218a7388fefdbf0c7e5",
+          "source_working_fingerprint": "ae661a95b1edb5739f92f167fc334875591aebf46662fa2df4f091198351c7a1",
+          "source_unchanged": true,
+          "inputs_unchanged": true
+        },
+        {
+          "name": "cargo-check-tests",
+          "status": "passed",
+          "exit_code": 0,
+          "reason": null,
+          "source_head": "8ce982cd2f37e3bbb3c6a218a7388fefdbf0c7e5",
+          "source_working_fingerprint": "ae661a95b1edb5739f92f167fc334875591aebf46662fa2df4f091198351c7a1",
+          "source_unchanged": true,
+          "inputs_unchanged": true
+        }
+      ],
+      "binding_scope": "recorded working-tree fingerprint only; not independently verified here as immutable commit acceptance"
+    },
+    {
+      "attempt": 6,
+      "receipt": {
+        "bytes": 43174,
+        "sha256": "9aa8c149559ff7a1fca8491899f22064d5023b3170f65ba7eb07f69db0117223"
+      },
+      "status": "failed",
+      "exit_code": 1,
+      "error": "RuntimeError: author source changed during release-policy",
+      "owned_cleanup_complete": true,
+      "stages": [
+        {
+          "name": "release-policy",
+          "status": "failed",
+          "exit_code": -15,
+          "reason": "ProcessLookupError: [Errno 3] No such process",
+          "source_head": "8ce982cd2f37e3bbb3c6a218a7388fefdbf0c7e5",
+          "source_working_fingerprint": "9f7d759df3382a43991a972ba2626f31627275a7d3ec07bbe028262e00547497",
+          "source_unchanged": false,
+          "inputs_unchanged": true
+        }
+      ]
+    },
+    {
+      "attempt": 7,
+      "receipt": {
+        "bytes": 82447,
+        "sha256": "27f8d0fce421ded231745059731035560d812f7234f8d11c9ccbc906420f735c"
+      },
+      "status": "passed",
+      "exit_code": 0,
+      "error": null,
+      "owned_cleanup_complete": true,
+      "stages": [
+        {
+          "name": "release-policy",
+          "status": "passed",
+          "exit_code": 0,
+          "reason": null,
+          "source_head": "27e9733fa539c400c532474e076971eba03f845a",
+          "source_working_fingerprint": "9486aa3e846f88762f38e3b4f6c8847a5dd15b2a3c0198f83a5f8ff1b380ba55",
+          "source_unchanged": true,
+          "inputs_unchanged": true
+        },
+        {
+          "name": "cargo-check-tests",
+          "status": "passed",
+          "exit_code": 0,
+          "reason": null,
+          "source_head": "27e9733fa539c400c532474e076971eba03f845a",
+          "source_working_fingerprint": "9486aa3e846f88762f38e3b4f6c8847a5dd15b2a3c0198f83a5f8ff1b380ba55",
+          "source_unchanged": true,
+          "inputs_unchanged": true
+        }
+      ]
+    }
+  ],
+  "dependency_snapshot": {
+    "read": "fields read from source receipt; underlying 44,984-byte resolver result and full Cargo metadata were not independently reopened",
+    "resolver_result": {
+      "path": "resolve-internal-git-v1/result.json",
+      "bytes": 44984,
+      "sha256": "081d5c094252b57738794a61c2cda9fabcac9ff4c66439c12217c765866b8974"
+    },
+    "observations": [
+      {
+        "url": "https://github.com/LIghtJUNction/z64.git",
+        "default_ref": "refs/heads/main",
+        "head": "7e9cff67beae2c484f8b9749b83ae24a1d0e1bbd",
+        "observed_utc": "2026-11-21T08:19:47.928344+00:00",
+        "exit": 0,
+        "tree": "c33efa40e9b132568fb164c3e886ed500c02f0de"
+      },
+      {
+        "url": "https://github.com/LIghtJUNction/zcall.git",
+        "default_ref": "refs/heads/main",
+        "head": "199678d08104bed588e5d10b2c0634a47d7c8417",
+        "observed_utc": "2026-11-21T08:19:47.891674+00:00",
+        "exit": 0,
+        "tree": "bfad27d3bb1bb342f9abc618b1204724cf9210d3"
+      },
+      {
+        "url": "https://github.com/LIghtJUNction/zclap.git",
+        "default_ref": "refs/heads/main",
+        "head": "4d87f3ae3743e81509d5ac5500909955667c860f",
+        "observed_utc": "2026-11-21T08:19:47.903495+00:00",
+        "exit": 0,
+        "tree": "ad4773af1a2ff1cbfbf83d3fabac35bb44d9ec60"
+      },
+      {
+        "url": "https://github.com/LIghtJUNction/zconv.git",
+        "default_ref": "refs/heads/main",
+        "head": "0af1f7eb0766ff0ce9db5cee7c6184eff511a8c1",
+        "observed_utc": "2026-11-21T08:19:47.935870+00:00",
+        "exit": 0,
+        "tree": "1a175b3d2244bcf44aad7d86981b044c7bdf64de"
+      },
+      {
+        "url": "https://github.com/LIghtJUNction/zguard.git",
+        "default_ref": "refs/heads/main",
+        "head": "6772b932a65e18f64e13591dee6edb2f6b099406",
+        "observed_utc": "2026-11-21T08:19:48.598414+00:00",
+        "exit": 0,
+        "tree": "ff75d6516b42f9fa5aa8b9c80ecec139b62f1c2d"
+      },
+      {
+        "url": "https://github.com/LIghtJUNction/zharness.git",
+        "default_ref": "refs/heads/main",
+        "head": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+        "observed_utc": "2026-11-21T08:19:48.625791+00:00",
+        "exit": 0,
+        "tree": "2bafbf2a61c1c5744fcf096412beacc22e6ae63a"
+      },
+      {
+        "url": "https://github.com/LIghtJUNction/zmcpio.git",
+        "default_ref": "refs/heads/main",
+        "head": "04bb6cd05c5295ab41a892a76cbef10b8ac07402",
+        "observed_utc": "2026-11-21T08:19:48.619855+00:00",
+        "exit": 0,
+        "tree": "44de92f1bd2628d005e6f9bb8d905bca31fa52a7"
+      },
+      {
+        "url": "https://github.com/LIghtJUNction/zplugin.git",
+        "default_ref": "refs/heads/main",
+        "head": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+        "observed_utc": "2026-11-21T08:19:48.635255+00:00",
+        "exit": 0,
+        "tree": "d36329006326f9f12d2841999049ce83214f8774"
+      },
+      {
+        "url": "https://github.com/LIghtJUNction/zsys.git",
+        "default_ref": "refs/heads/main",
+        "head": "808fcfdb73584ca7ca122e20b76f0209f56ab0f7",
+        "observed_utc": "2026-11-21T08:19:49.378115+00:00",
+        "exit": 0,
+        "tree": "d2be92c61823fda996ae43c2dc54f0680272c601"
+      },
+      {
+        "url": "https://github.com/LIghtJUNction/ztuio.git",
+        "default_ref": "refs/heads/main",
+        "head": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+        "observed_utc": "2026-11-21T08:19:49.308782+00:00",
+        "exit": 0,
+        "tree": "d16a5b9a87370e766b7cfeb9593d9b2b20c8fa60"
+      },
+      {
+        "url": "https://github.com/LIghtJUNction/zuse.git",
+        "default_ref": "refs/heads/main",
+        "head": "830fcefd2277cbba46536c67d206f29058ba7fb3",
+        "observed_utc": "2026-11-21T08:19:49.348774+00:00",
+        "exit": 0,
+        "tree": "3c110034f10ba5f35b0e18ac6b890d533121a473"
+      }
+    ],
+    "gitlinks": {
+      "crates/zharness": {
+        "before": "cb63a9a0aa163214c6062664cd62fefb357be5a8",
+        "after": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+        "tree": "2bafbf2a61c1c5744fcf096412beacc22e6ae63a"
+      },
+      "crates/zplugin": {
+        "before": "cf02c1d9db575b92b36297dfe1fde72de9ee51e4",
+        "after": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+        "tree": "d36329006326f9f12d2841999049ce83214f8774"
+      },
+      "crates/ztuio": {
+        "before": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+        "after": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+        "tree": "d16a5b9a87370e766b7cfeb9593d9b2b20c8fa60"
+      },
+      "crates/zuse": {
+        "before": "830fcefd2277cbba46536c67d206f29058ba7fb3",
+        "after": "830fcefd2277cbba46536c67d206f29058ba7fb3",
+        "tree": "3c110034f10ba5f35b0e18ac6b890d533121a473"
+      }
+    },
+    "lock_before": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "a686f331197bcf0469a8abdf7b7a19a6c43d9413",
+      "bytes": 66476,
+      "sha256": "5e9d5cecd724991e310e2ec34867545cf6efed7b1a2a24e2e15ca628e2efceb6"
+    },
+    "lock_after": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "5cfd13289784a9da530c25fcf33d3d9aeee500bd",
+      "bytes": 66476,
+      "sha256": "0f213ad0db728a3448d70009141375711b098f4e9fd69b1334cc8217746e4f14"
+    },
+    "changed_packages": [
+      "zcall",
+      "zharness",
+      "zmcpio",
+      "zplugin",
+      "zplugin-macros"
+    ],
+    "resolved_features_and_checkout_identities": [
+      {
+        "name": "z64",
+        "version": "0.1.2",
+        "source": "git+https://github.com/LIghtJUNction/z64.git#7e9cff67beae2c484f8b9749b83ae24a1d0e1bbd",
+        "checkout_tree": "c33efa40e9b132568fb164c3e886ed500c02f0de",
+        "manifest_sha256": "ffbd5bd1b185d80789135f509086f6d5f74f28f65ccedae75ec78817f709fa3f",
+        "features": []
+      },
+      {
+        "name": "zcall",
+        "version": "0.4.0",
+        "source": "git+https://github.com/LIghtJUNction/zcall.git#199678d08104bed588e5d10b2c0634a47d7c8417",
+        "checkout_tree": "bfad27d3bb1bb342f9abc618b1204724cf9210d3",
+        "manifest_sha256": "f348de2e6e5748e134b2505d39e9f5ec33393bc825a19314a2d4e421da8d49b6",
+        "features": []
+      },
+      {
+        "name": "zclap",
+        "version": "0.1.4",
+        "source": "git+https://github.com/LIghtJUNction/zclap.git#4d87f3ae3743e81509d5ac5500909955667c860f",
+        "checkout_tree": "ad4773af1a2ff1cbfbf83d3fabac35bb44d9ec60",
+        "manifest_sha256": "fce05eab6f02d794e6304cb6aaab37264077f17fe5bd9738be07965d0d541386",
+        "features": []
+      },
+      {
+        "name": "zconv",
+        "version": "0.4.0",
+        "source": "git+https://github.com/LIghtJUNction/zconv.git#0af1f7eb0766ff0ce9db5cee7c6184eff511a8c1",
+        "checkout_tree": "1a175b3d2244bcf44aad7d86981b044c7bdf64de",
+        "manifest_sha256": "d190ca222cd19960fe28727eb7f8b26c3d4ee1764fc710d7fe67d0d2617e943a",
+        "features": []
+      },
+      {
+        "name": "zguard",
+        "version": "0.1.0",
+        "source": "git+https://github.com/LIghtJUNction/zguard.git#6772b932a65e18f64e13591dee6edb2f6b099406",
+        "checkout_tree": "ff75d6516b42f9fa5aa8b9c80ecec139b62f1c2d",
+        "manifest_sha256": "9dc8abe2b13847750137ec6fcb7e44bd46b644353c300fc1502b2f5c2902b37c",
+        "features": []
+      },
+      {
+        "name": "zharness",
+        "version": "0.6.0",
+        "source": "git+https://github.com/LIghtJUNction/zharness.git#fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+        "checkout_tree": "2bafbf2a61c1c5744fcf096412beacc22e6ae63a",
+        "manifest_sha256": "a08fcdc6f4709dfcd1d69a30bcc2799c2175597d950715ec686d29bd41cca03f",
+        "features": [
+          "std"
+        ]
+      },
+      {
+        "name": "zmcpio",
+        "version": "0.4.0",
+        "source": "git+https://github.com/LIghtJUNction/zmcpio.git#04bb6cd05c5295ab41a892a76cbef10b8ac07402",
+        "checkout_tree": "44de92f1bd2628d005e6f9bb8d905bca31fa52a7",
+        "manifest_sha256": "73ba51d1ead5d038f6a106dcb2dd06d02a672188af61b5b11bc1dbf89c4e792d",
+        "features": [
+          "std"
+        ]
+      },
+      {
+        "name": "zplugin",
+        "version": "0.3.1",
+        "source": "git+https://github.com/LIghtJUNction/zplugin.git#592a1be623b81a775026c470e6f0efe91fcf78f3",
+        "checkout_tree": "d36329006326f9f12d2841999049ce83214f8774",
+        "manifest_sha256": "774db000e46f47d99e5da0003646e62f4cdd1d41f7935eba05527b3b48cdc54f",
+        "features": [
+          "alloc",
+          "macros",
+          "std"
+        ]
+      },
+      {
+        "name": "zplugin-macros",
+        "version": "0.3.1",
+        "source": "git+https://github.com/LIghtJUNction/zplugin.git#592a1be623b81a775026c470e6f0efe91fcf78f3",
+        "checkout_tree": "d36329006326f9f12d2841999049ce83214f8774",
+        "manifest_sha256": "907f23b3301523caaf36b883a5b58fc830666e883416eff57d0ddc09af5f461e",
+        "features": []
+      },
+      {
+        "name": "zsys",
+        "version": "0.1.1",
+        "source": "git+https://github.com/LIghtJUNction/zsys.git#808fcfdb73584ca7ca122e20b76f0209f56ab0f7",
+        "checkout_tree": "d2be92c61823fda996ae43c2dc54f0680272c601",
+        "manifest_sha256": "8d4b641db369f8922b57c57289b6652e00c48729ea10716e429d5d6ecb31117e",
+        "features": [
+          "dylib"
+        ]
+      },
+      {
+        "name": "ztuio",
+        "version": "0.1.0",
+        "source": "git+https://github.com/LIghtJUNction/ztuio.git#9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+        "checkout_tree": "d16a5b9a87370e766b7cfeb9593d9b2b20c8fa60",
+        "manifest_sha256": "acf0bdf3904e08b0bcf595b5c10aec4b1e6e83cf6c597b03a0ff6fc5c92fd3cb",
+        "features": []
+      },
+      {
+        "name": "zuse-computer",
+        "version": "0.3.0",
+        "source": "git+https://github.com/LIghtJUNction/zuse.git#830fcefd2277cbba46536c67d206f29058ba7fb3",
+        "checkout_tree": "3c110034f10ba5f35b0e18ac6b890d533121a473",
+        "manifest_sha256": "9b40ab589644944eec27178eb21bd801adc64fe6b63f2193465fa416af54c136",
+        "features": [
+          "std"
+        ]
+      }
+    ],
+    "package": {
+      "name": "ssmcp",
+      "version": "0.10.25",
+      "locked_reachable_count": 277
+    }
+  },
+  "control_review": {
+    "reviewed_source_at_initial_findings": "26196862691774cab333e1f110b2fdb9c15e5b97",
+    "current_source": "27e9733fa539c400c532474e076971eba03f845a",
+    "runtime_reproduction_performed": false,
+    "findings": [
+      {
+        "id": "cdp-lock-order",
+        "status": "requires-source-fix",
+        "evidence": "coordinator-reported fixed-source deep review",
+        "description": "Direct input acquires lease then page; act holds page then waits for lease. Concurrent operations can wait on each other until the timeout."
+      },
+      {
+        "id": "playwright-writer-recheck",
+        "status": "statically-closed-in-8ce982c-present-in-27e9733",
+        "evidence": "fixed 8ce patch and independent scoped 27e call-chain review",
+        "description": "Check current permit after writer lock and before IncompleteFrame or first write. Refusal returns the original error before send-layer poison; no-permit RPC check is a no-op.",
+        "limits": "No runtime proof; no claim that Off and first-byte transmission are atomic, or that outer cancellation never stops the owned driver."
+      },
+      {
+        "id": "playwright-on-uncertain-result",
+        "status": "requires-source-fix",
+        "evidence": "coordinator-reported fixed-source deep review and post-E9 remaining-findings confirmation",
+        "description": "An already-sent request returning Err without a confirmed reply while On still needs an explicit unknown/partial result and replay=false, preserving real confirmed replies and cleaning only its owned driver."
+      },
+      {
+        "id": "omarchy-cleanup-lock-lifetime",
+        "status": "requires-source-fix",
+        "evidence": "coordinator-reported fixed-source deep review and post-E9 remaining-findings confirmation",
+        "description": "An outer cancelled permit future can drop Managed and release serial/input leases before awaited shutdown cleanup completes."
+      }
+    ],
+    "residual_text": {
+      "path": "src/computer/isolated.rs",
+      "text": "Background browser control remains enabled",
+      "status": "confirmed stale wording in 261; not evidence of a control bypass"
+    },
+    "state_migration_review": {
+      "scope": "persistent state, old browser presentation config, CLI/UI and e2e fixture definitions",
+      "additional_old_off_reenabled_issue_found": false,
+      "old_ticket_revival_issue_found": false,
+      "coverage_limit": "Static only. Ten e2e fixture checks do not execute actual desktop/CDP/Omarchy/Playwright actions."
+    },
+    "operating_system_boundary": false,
+    "arbitrary_same_uid_programs_constrained": false,
+    "notes": "Same-UID shell/standalone programs and local toggle commands retain existing OS rights. A separate broker/isolation design is not implemented or deployed by this increment."
+  },
+  "unrun_rust_regression_definitions": [
+    "cleanup_lock_symlink_is_rejected_without_changing_its_target",
+    "version_requests_are_top_level_and_plain_output_is_unchanged",
+    "actual_locked_root_resolves_every_reachable_edge",
+    "locked_identity_distinguishes_sources_and_versions_and_marks_shared_nodes_and_cycles",
+    "each_pointer_keyboard_and_focus_operation_requires_the_switch",
+    "computer_use_switch_does_not_change_default_isolated_routing",
+    "off_blocks_both_desktops_before_input_or_startup",
+    "off_blocks_browser_mutations_and_an_old_queued_press_cannot_rearm",
+    "off_preserves_batch_progress_and_releases_an_owned_press_without_next_action",
+    "late_attach_after_off_and_on_cannot_publish_or_close_the_attached_browser",
+    "legacy_browser_presentation_settings_remain_readable",
+    "off_stops_omarchy_before_dispatch_but_allows_observation",
+    "off_revokes_only_the_owned_playwright_driver_and_preserves_uncertain_outcome"
+  ],
+  "remaining_validation": [
+    "No cargo test/build/clippy and no product, UI, desktop, provider, Gate35, runtime18 or P1 execution in this author increment.",
+    "The local switch governs SSMCP-controlled mutations; existing OS permissions, arbitrary exec and standalone programs remain independent.",
+    "Stopping the SSMCP-owned Playwright driver cannot roll back a dispatched action or establish that an attachment released every compound key.",
+    "No CI, tag, PR merge, release, install, reload, deployment or global wrapper/config change."
+  ],
+  "release_notes_draft": {
+    "commit": "90c6bde6d4ee910cebf24985a6b89834fcc87789",
+    "directory": "release-notes-review-unbound",
+    "baseline": "71851cf221076e661b5c243a63d585fb1b04fdaf",
+    "draft_control_snapshot": "26196862691774cab333e1f110b2fdb9c15e5b97",
+    "integration_required": true,
+    "product_file_modified_by_reporter": false
+  },
+  "release_verifier": {
+    "h2_commit": "2e8e58ac1a7047900feac8501878b80e64f4bd52",
+    "static_only": true,
+    "executed": false,
+    "six_recipe_files_changed_in_e9": false,
+    "final_S": null,
+    "workflow_P": null,
+    "run_id": null
+  },
+  "final_acceptance": {
+    "status": "not_started",
+    "candidate_not_frozen": true,
+    "old_W_results_reassigned": false,
+    "merge_performed": false,
+    "tag_or_dispatch_performed": false,
+    "production_deployment_performed": false
+  }
+}

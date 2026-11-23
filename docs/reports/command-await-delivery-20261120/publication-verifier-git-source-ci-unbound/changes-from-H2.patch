@@ -1,0 +1,131 @@
+--- H2/verify_published_manual_main.py
++++ H2-CI/verify_published_manual_main.py
+@@ -38,7 +38,7 @@
+     return hashlib.sha256(data).hexdigest()
+ 
+ 
+-# Source receipt and publication policy from the fixed E8 recipe below.
++# Source receipt policy is unchanged; the fixed recipe includes the reviewed E14 CI condition.
+ RELEASE_CONTRACT = "git-source-v1"
+ RELEASE_VERSION = "0.10.25"
+ CRATE_PUBLICATION = {
+@@ -57,12 +57,12 @@
+         raise ValueError(message)
+ 
+ 
+-# E8 is the reviewed recipe source, not a selected release candidate or main SHA.
++# This is the reviewed recipe source, not a selected release candidate or main SHA.
+ # Updating any pin requires a new source review; never learn pins from the run.
+-RECIPE_SOURCE_COMMIT = "879ba17fc3ba4bad6a26a85494b79e29acf1938a"
++RECIPE_SOURCE_COMMIT = "5a45be0401caf7fcd462fa1783c157e7f4c77019"
+ REVIEWED_RECIPE = {
+     ".github/workflows/release.yml": (24312, "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"),
+-    ".github/workflows/ci.yml": (14941, "d6d920faddfa8840a1ec4b37d54fddb6d169335139fa1bf241d04d716a753873"),
++    ".github/workflows/ci.yml": (15351, "d60f0b21ce4c16440d3dd39c1fb3d53fb21de3bb889a30c4ed4f8ae7822f9317"),
+     ".github/workflows/deploy-server.yml": (4499, "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"),
+     "scripts/release.py": (65061, "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"),
+     "scripts/install.sh": (6783, "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"),
+--- H2/manual_main_provenance.py
++++ H2-CI/manual_main_provenance.py
+@@ -1,4 +1,4 @@
+-"""Read-only provenance checks for the pinned E8 Git-source publication recipe.
++"""Read-only provenance checks for the reviewed Git-source publication recipe.
+ 
+ This is an ordinary reviewed GitHub Actions chain, not an attestation against a
+ malicious runner, build script, or compromised action. Job logs are obtained by
+@@ -650,6 +650,14 @@
+         receipt["api_job"]["encoding"] = "canonical JSON of the fixed-attempt API record, not HTTP wire bytes"
+         uploads, downloads, next_action = action_shape(name)
+         log = JobLog(data, job, uploads, downloads)
++        if name in ("checks / linux (ubuntu-24.04)", "checks / linux (ubuntu-24.04-arm)"):
++            candidate_step = log.steps.get(20)
++            need(candidate_step is not None
++                 and candidate_step.get("name") == "Preserve the Linux candidate client"
++                 and candidate_step.get("conclusion") == "skipped",
++                 "standalone CI candidate upload was not skipped in the release job")
++            receipt["standalone_ci_candidate_step"] = {
++                "step_number": 20, "name": candidate_step["name"], "conclusion": "skipped"}
+         receipt["checkout"] = verify_checkout(log, candidate, "v" + version, next_action)
+         logs[name], log_receipts[name] = log, receipt
+     need(len(logs) == 17, "required successful checkout count differs")
+--- H2/README.md
++++ H2-CI/README.md
+@@ -1,8 +1,18 @@
+-# H2：Git 来源发行的 manual-main 核验器
++# H2：适配独立 CI 上传条件的静态后继
+ 
+-本目录是 **0.10.25 / manual-main / git-source-v1** 发行核验器的静态准备版本。它以固定源码 `879ba17fc3ba4bad6a26a85494b79e29acf1938a` 的发布合同为依据，专门处理本轮 GitHub 二进制发行与 crate 延期的组合。
++本目录是 **0.10.25 / manual-main / git-source-v1** 发行核验器的静态准备版本。它以固定源码 `5a45be0401caf7fcd462fa1783c157e7f4c77019` 的六份配方为依据，专门处理本轮 GitHub 二进制发行与 crate 延期的组合。
+ 
+ **它尚未执行，也尚未绑定最终产品提交 S、main 工作流提交 P、tag、运行编号或原始 dispatch 回执。** AST 语法解析和源码审阅不能替代真实发布核验。本目录不会触发发布、创建标签、安装程序或部署服务器。
++
++## 本次只同步真实 CI 差异
++
++[原 H2 固定版本](https://github.com/LIghtJUNction/ssmcp/tree/2e8e58ac1a7047900feac8501878b80e64f4bd52/docs/reports/command-await-delivery-20261120/publication-verifier-git-source-unbound)继续保留。此次观察点是作者提交 5a45be0，尚未把它选作最终产品 S 或实际工作流 P，也没有转移任何源码阶段或旧版本的运行成绩。
++
++新的 CI 配方增加了调试客户端保留步骤，并以 `github.workflow == 'CI'` 限定为独立 CI 的手动运行。Release 调用该可复用流程时，github context 关联调用方 `Release`，因此两个 Linux job 的这个辅助步骤都应跳过。[固定 CI](https://github.com/LIghtJUNction/ssmcp/blob/5a45be0401caf7fcd462fa1783c157e7f4c77019/.github/workflows/ci.yml) · [官方调用方规则](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context)
++
++后继版本更新 CI 的固定字节摘要，并在两个 Linux job 的实际 API 记录中要求 step 20 名为 `Preserve the Linux candidate client`、结果为 `skipped`。缺失、改名或实际执行都会拒绝。原 Ubuntu x86／ARM 上传数量仍为 2／1；八件必要发布 artifacts、六个平台 archive、16 个公开文件、19 个 job 以及 `ssmcp-` 发布集合均保持原校验。这个辅助 debug client 不会被下载或代替正式产物。
++
++源码对比只涉及主模块的配方常量和 provenance 的上述步骤检查；原 dispatch 解析器逐字节不变。三个模块已做 AST 解析及接口核对，没有 import 或执行。条件与步骤位置已经按固定源码审阅，实际 Actions 日志兼容性仍须由首次真实运行证明。
+ 
+ ## 适用范围
+ 
+@@ -27,9 +37,9 @@
+ - `dispatch_receipt_adapter.py`：只解析原始请求捕获与独立原生执行回执；保持旧版本字节不变。
+ - `reviewed-recipe.json`：实际已审阅源码及六份配方的大小和 SHA256。
+ - `preparation-identity.json`：模块、变更文件及静态审阅范围；所有未来运行绑定保持空值。
+-- `changes-from-H.patch`：与原静态版本 H 的逐文件差异。
++- `changes-from-H2.patch`：与原 H2 的两个模块、说明和配方差异；身份与静态核对结果另列。
+ 
+-[原 H 保留在固定提交 2257fb1](https://github.com/LIghtJUNction/ssmcp/tree/2257fb1d235bba59e8a0d1747a4f4afc6348bad3/docs/reports/command-await-delivery-20261120/publication-verifier-manual-main-unbound)。H2 的版本替换不更改任何历史执行成绩。
++[原 H 保留在固定提交 2257fb1](https://github.com/LIghtJUNction/ssmcp/tree/2257fb1d235bba59e8a0d1747a4f4afc6348bad3/docs/reports/command-await-delivery-20261120/publication-verifier-manual-main-unbound)。本静态后继保留原 H2 和原 H，没有改写任何历史执行成绩。
+ 
+ ## 为什么保留两层附件核对
+ 
+--- H2/reviewed-recipe.json
++++ H2-CI/reviewed-recipe.json
+@@ -1,6 +1,6 @@
+ {
+-  "schema": "ssmcp-h2-reviewed-recipe-v1",
+-  "recipe_source_commit": "879ba17fc3ba4bad6a26a85494b79e29acf1938a",
++  "schema": "ssmcp-h2-ci-reviewed-recipe-v1",
++  "recipe_source_commit": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+   "scope": "0.10.25 manual-main git-source-v1; deferred crate publication; no deployment",
+   "files": [
+     {
+@@ -10,8 +10,8 @@
+     },
+     {
+       "path": ".github/workflows/ci.yml",
+-      "bytes": 14941,
+-      "sha256": "d6d920faddfa8840a1ec4b37d54fddb6d169335139fa1bf241d04d716a753873"
++      "bytes": 15351,
++      "sha256": "d60f0b21ce4c16440d3dd39c1fb3d53fb21de3bb889a30c4ed4f8ae7822f9317"
+     },
+     {
+       "path": ".github/workflows/deploy-server.yml",
+@@ -37,5 +37,22 @@
+   "candidate_sha": null,
+   "workflow_sha": null,
+   "run_id": null,
+-  "execution_performed": false
++  "execution_performed": false,
++  "previous_recipe_source_commit": "879ba17fc3ba4bad6a26a85494b79e29acf1938a",
++  "previous_static_helper_commit": "2e8e58ac1a7047900feac8501878b80e64f4bd52",
++  "independent_ci_candidate_step": {
++    "yaml_step": 19,
++    "expected_api_step": 20,
++    "name": "Preserve the Linux candidate client",
++    "standalone_workflow_name": "CI",
++    "caller_workflow_name": "Release",
++    "release_linux_jobs_expected_conclusion": "skipped",
++    "expected_release_linux_uploads": {
++      "ubuntu-24.04": 2,
++      "ubuntu-24.04-arm": 1
++    },
++    "auxiliary_artifact_name": "ssmcp-linux-x86_64-candidate",
++    "auxiliary_artifact_downloaded_or_used_as_release_evidence": false
++  },
++  "official_context_source": "https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context"
+ }

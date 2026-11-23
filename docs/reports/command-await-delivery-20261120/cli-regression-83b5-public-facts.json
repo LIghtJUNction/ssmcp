@@ -1,0 +1,354 @@
+{
+  "schema": "ssmcp-cli-validation-stage.v1",
+  "snapshot_utc": "2026-11-21T17:08:14Z",
+  "source": {
+    "commit": "83b5bc51866287c227bad5059dc68f195d78bc87",
+    "tree": "f6765b9bbe90bf3a0d44f84b46bceee2124db00b",
+    "parent": "28054f3dad16152c46f7a886a677e2e4100d5c7c",
+    "source_review": "Root actually read fixed GitHub diffs",
+    "pull_request": {
+      "time_precision": "upper bound from the subsequent clock read",
+      "head": "83b5bc51866287c227bad5059dc68f195d78bc87",
+      "base": "dde2938e050e1d9f8186a600f57dbb67e12de211",
+      "number": 174,
+      "url": "https://github.com/LIghtJUNction/ssmcp/pull/174",
+      "state": "open",
+      "draft": true,
+      "merged": false,
+      "mergeable": true,
+      "evidence": "Actual root GitHub plugin read in preceding call",
+      "observed_no_later_than": "2026-11-21T17:06:38Z"
+    }
+  },
+  "scope": {
+    "computer_browser_execution": "Standalone Zuse CLI",
+    "ssmcp_tools": [
+      "version",
+      "download",
+      "install",
+      "uninstall"
+    ],
+    "legacy_compatibility_entries_removed": true,
+    "default_super_alt_c_removed": true,
+    "ordinary_exec_terminal_message_file_skill_routes_preserved": true,
+    "user_wait": "Red symbol and text, remaining mm:ss",
+    "finish": "Bound authenticated Human decision; no text/timeout/cancellation approval",
+    "live_streaming_machine_not_operated_by_report_group": true
+  },
+  "completed_execution_on_28054": {
+    "source": "28054f3dad16152c46f7a886a677e2e4100d5c7c",
+    "tree": "20f27ec72fabd70dbc39e3bea98e382bd7c3ff0c",
+    "evidence": "Original source coordinator executions; original acceptance coordinator independently read the existing completed job outputs",
+    "library_build": {
+      "exit_code": 0,
+      "both_eof": true,
+      "receipt": {
+        "file": "cli-validation-20261121-v3/library-build.json",
+        "bytes": 11279,
+        "sha256": "1aedd44a87bf1b1058188b8970135dee654dfe36f2fc4f07977fd4dc24db6e52"
+      },
+      "library_test_binary": {
+        "bytes": 159877648,
+        "sha256": "7f42250748f6bf392beee6b04da7f636484a76c29a51f8d93d5d8cbe2377bf2f"
+      }
+    },
+    "exact_summary_diagnostic": {
+      "exit_code": 0,
+      "both_eof": true,
+      "passed": 1,
+      "failed": 0,
+      "filtered": 1988,
+      "elapsed_seconds": 0.37,
+      "both_bound_branches_original_assertions_passed": true,
+      "production_budget_or_assertion_relaxed": false,
+      "prior1358_failure_root_cause_proven": false,
+      "receipt": {
+        "bytes": 5391,
+        "sha256": "7f6f5bfd1f7515abd9ef002e5f6e35223cf98b8d9e1b77e1b3695edfa10f77d8",
+        "file": "cli-validation-20261121-v3/summary-diagnostic/receipt.json"
+      }
+    },
+    "light_checks": {
+      "Node_passed": 64,
+      "release_policy_passed": 106,
+      "deployment_policy_passed": 35,
+      "all_reported_passed": true,
+      "receipt": {
+        "bytes": 24330,
+        "sha256": "92c83a1412453c35b9fe6cef8f1a44042d3e0093441560c635035fbe788379c4",
+        "path_not_provided": true
+      }
+    },
+    "publication_or_live_install_or_deployment": false,
+    "library_and_groups": {
+      "wrapper_exit": 0,
+      "both_eof": true,
+      "private": {
+        "passed": 1971,
+        "ignored": 12,
+        "filtered": 6,
+        "failed": 0
+      },
+      "host": {
+        "passed": 6
+      },
+      "required_code_mode": {
+        "passed": 2
+      },
+      "summary_case_in_full_passed": true,
+      "receipt": {
+        "bytes": 217023,
+        "sha256": "c8148a29b79714f5f1f8190e640a007b11d9f4aa34551124ec31fd9e229a3847",
+        "file": "cli-validation-20261121-v3/library-tests/receipt.json"
+      },
+      "source_clean": true
+    },
+    "strict_clippy_failure_before_minimal_fix": {
+      "Linux_exit": 101,
+      "Windows_phase_at_report": "running",
+      "diagnostic": {
+        "code": "E0425",
+        "file": "src/server_main.rs",
+        "line": 248,
+        "expression": "ssmcp::computer::worker_entry()",
+        "scope": "Retired early worker entry remains in binary-only source, not covered by prior library compilation."
+      }
+    }
+  },
+  "bounded_equivalence_to_83b5": {
+    "source": "83b5bc51866287c227bad5059dc68f195d78bc87",
+    "tree": "f6765b9bbe90bf3a0d44f84b46bceee2124db00b",
+    "parent": "28054f3dad16152c46f7a886a677e2e4100d5c7c",
+    "source_diff_root_actual_read": true,
+    "changed_paths": [
+      "src/server_main.rs"
+    ],
+    "deleted_lines": 7,
+    "recipe_or_gitlink_change": false,
+    "v4_build": {
+      "fmt_exit": 0,
+      "locked_fetch_exit": 0,
+      "library_compile_exit": 0,
+      "wrapper_exit": 0,
+      "both_eof": true,
+      "receipt": {
+        "file": "cli-validation-20261121-v4/library-build.json",
+        "bytes": 11280,
+        "sha256": "c847a71f2cbe7403500d3b43c897f85af52a2cb023aee3afee1f74c4088c9aa1"
+      }
+    },
+    "test_binary_reuse": {
+      "same_sha256": "7f42250748f6bf392beee6b04da7f636484a76c29a51f8d93d5d8cbe2377bf2f",
+      "same_bytes": 159877648,
+      "cargo_fresh": true,
+      "original_execution_source": "28054f3dad16152c46f7a886a677e2e4100d5c7c",
+      "executed_again": false,
+      "equivalence_receipt": {
+        "bytes": 4148,
+        "sha256": "57860ee67abcb85dc5c85ba16dfc2887086f7e53ae177e48fe079d5546b51491",
+        "file": "cli-validation-20261121-v4/identical-input-verification.json"
+      },
+      "root_original_native_read": false,
+      "evidence": "Source coordinator actual byte/source-diff check; independently read by original acceptance coordinator"
+    },
+    "clippy": "Completed: Linux0 / WindowsGNU0",
+    "integration": "Completed:19 targets;101 ordinary passed;12 required ignored passed",
+    "candidate_binary_E2E_archive_lifecycle": "Later actual checks to bind83b5",
+    "release_started": false
+  },
+  "completed_execution_on_83b5": {
+    "source": "83b5bc51866287c227bad5059dc68f195d78bc87",
+    "tree": "f6765b9bbe90bf3a0d44f84b46bceee2124db00b",
+    "evidence": "Original source coordinator executions; original acceptance coordinator independently read the existing completed job outputs",
+    "clippy": {
+      "linux_exit": 0,
+      "windows_gnu_exit": 0,
+      "wrapper_exit": 0,
+      "both_eof": true,
+      "receipt": {
+        "bytes": 2398,
+        "sha256": "a6f68742093ec2e7a7b541d9588642c8e6c6cda3d8355b0efa2386a0b54d8d2e",
+        "file": "cli-validation-20261121-v4/clippy/receipt.json"
+      }
+    },
+    "integration": {
+      "targets": 19,
+      "ordinary_pass": 101,
+      "required_ignored_pass": 12,
+      "wrapper_exit": 0,
+      "both_eof": true,
+      "all_targets_actually_compiled_and_selected": true,
+      "parent_counts_match_enumeration": true,
+      "worktree_clean": true,
+      "receipt": {
+        "bytes": 138202,
+        "sha256": "732280056c12c6409e337a166df6f1fa119134a58113cf1f277d9a28cc4f60d3",
+        "file": "cli-validation-20261121-v4/integration/receipt.json"
+      }
+    },
+    "candidate_release_bins_and_vt_decoder": "build running",
+    "h2_preparation": {
+      "fixed_package_commit": "840629d64e3915bbe2b17496aa600d067e34b7e3",
+      "eight_files_match": true,
+      "six_recipe_bytes_match_source": true,
+      "receipt": {
+        "bytes": 4319,
+        "sha256": "9dbce6507609aa36245d22106c6486b1a95084e0d279a7aef339ea8320b92a4b"
+      },
+      "imported": false,
+      "executed": false,
+      "dispatch": false,
+      "S": null,
+      "P": null,
+      "run": null
+    },
+    "release_completed": false,
+    "planned_zuse_smoke": {
+      "version": "v0.4.2",
+      "latest_observed": "v0.5.0",
+      "not_latest_test": true,
+      "execution": "pending",
+      "evidence": "Native source coordinator explicitly retains the fixed official v0.4.2 test object"
+    }
+  },
+  "intermediate_failures": {
+    "source_c56": {
+      "library_compile_exit": 101,
+      "diagnostics": [
+        "E0599 retired cancel_host_input call",
+        "E0616 wait_fixture visibility"
+      ],
+      "fixed_by": [
+        "371d3e090bd939ed3501c58858e2421e9367f031",
+        "1358f84dff866970926f8b1c5c54ec0ba64e28cc"
+      ],
+      "previous_report": "current-iteration-CLI-compile-retry.md"
+    },
+    "source_1358": {
+      "private_passed": 1978,
+      "private_failed": 1,
+      "private_ignored": 12,
+      "failed_case": "time-bounded tool summary probe",
+      "root_cause_proven": false,
+      "production_deadline_or_assertions_relaxed": false,
+      "subsequent_280_exact_and_full_pass_do_not_rewrite_failure": true
+    },
+    "source_28054_binary_clippy": {
+      "exit": 101,
+      "diagnostic": "E0425 retired ssmcp::computer::worker_entry in src/server_main.rs:248",
+      "fixed_by": "83b5bc51866287c227bad5059dc68f195d78bc87"
+    }
+  },
+  "exec_read_detail": {
+    "upstream_commit": "dde2938e050e1d9f8186a600f57dbb67e12de211",
+    "merged_into": "28054f3dad16152c46f7a886a677e2e4100d5c7c",
+    "root_static_review": true,
+    "scope": "Current exec.read return only",
+    "total_local_preview_limit_bytes": 131072,
+    "stdout_stderr_and_metadata_share_limit": true,
+    "original_tool_return_unchanged": true,
+    "terminal_controls_removed_and_existing_redaction_applied": true,
+    "separate_product_UI_run_claimed": false
+  },
+  "H2": {
+    "published_package_commit": "840629d64e3915bbe2b17496aa600d067e34b7e3",
+    "directory": "publication-verifier-git-source-zuse-cli-unbound",
+    "root_static_review": true,
+    "independent_static_review": true,
+    "native_preparation": {
+      "fixed_package_commit": "840629d64e3915bbe2b17496aa600d067e34b7e3",
+      "eight_files_match": true,
+      "six_recipe_bytes_match_source": true,
+      "receipt": {
+        "bytes": 4319,
+        "sha256": "9dbce6507609aa36245d22106c6486b1a95084e0d279a7aef339ea8320b92a4b"
+      },
+      "imported": false,
+      "executed": false,
+      "dispatch": false,
+      "S": null,
+      "P": null,
+      "run": null
+    },
+    "source_recipe_pin_review": "35ff6e4eb8b463aeb090230e9557fb08fb22b458",
+    "recipe_files": 6,
+    "gitlinks": 3,
+    "expected_jobs": 19,
+    "expected_success": 17,
+    "expected_skipped": 2,
+    "public_assets": 16,
+    "required_release_artifacts": 8,
+    "scope": "Preparation only; no import, execution, dispatch or publication PASS",
+    "S": null,
+    "P": null,
+    "run": null,
+    "tag": null,
+    "attempt": null,
+    "dispatch": null
+  },
+  "upstream_zuse": {
+    "latest_metadata_root_observed": "v0.5.0",
+    "release_url": "https://github.com/LIghtJUNction/zuse/releases/tag/v0.5.0",
+    "published_at": "2026-11-21T16:29:47Z",
+    "planned_lifecycle_fixed_version": "v0.4.2",
+    "planned_lifecycle_result": "pending",
+    "prior_user_SIGABRT_Wayland_EPERM_fixed_claimed": false
+  },
+  "prior_cleanup_reference": {
+    "report": "current-iteration-CLI-first-checks-cleanup.md",
+    "cache_directories": 72,
+    "path_du_bytes": 127444672512,
+    "last_available_bytes": 461121187840,
+    "path_du_is_not_net_freed": true,
+    "remote_branches_absent_root_verified": 12
+  },
+  "pending": [
+    "candidate release binaries and VT decoder build completion",
+    "actual client input and product scenarios",
+    "archive installer and fixed Zuse lifecycle checks",
+    "final source selection and PR merge",
+    "authorized release, actual dispatch/run and H2 validation"
+  ],
+  "publication": {
+    "new_release": false,
+    "release_claim": "No new completed SSMCP release receipt in this snapshot",
+    "latest_root_metadata_observed_at": "2026-11-21T16:23:46Z",
+    "latest_at_that_read": "v0.10.20",
+    "deployment_performed": false
+  },
+  "historical_results": {
+    "source": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "Gate20": "35/35 stages passed on the old source",
+    "N20": "One pass on old source",
+    "inherited_by_migration": false
+  },
+  "report_group_execution": {
+    "native_product_or_Cargo": 0,
+    "H2_import_or_execution": 0,
+    "source_branch_writes": 0
+  },
+  "independent_native_readback": {
+    "by": "Original acceptance coordinator",
+    "report_group_native_original_read": false,
+    "existing_completed_jobs_read": 6,
+    "scopes": [
+      "28054 exact summary",
+      "28054 library tests",
+      "83b5 selected library binary",
+      "83b5 identical input bridge",
+      "83b5 Linux and WindowsGNU Clippy",
+      "83b5 integrations"
+    ],
+    "all_exit_zero": true,
+    "all_nonrunning": true,
+    "both_eof": true,
+    "no_truncation": true,
+    "receipt_bytes_and_sha256_match_owner": true,
+    "integration_required_ignored_groups": [
+      2,
+      7,
+      3
+    ],
+    "note": "Existing job reads only in this readback step. Earlier read-only receipt jobs remain historical; no claim of zero read-only job creation across the whole iteration."
+  }
+}

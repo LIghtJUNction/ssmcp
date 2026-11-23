@@ -1,0 +1,203 @@
+{
+  "schema": "ssmcp-gate20-library-running-public-facts-v1",
+  "snapshot_utc": "2026-11-21T13:58:09.232309+00:00",
+  "source": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+  "tree": "167e9976d2ac334fb3dfbd58f82288baf0eb9b17",
+  "version": "0.10.25",
+  "run_id": "2f9197c074824f45545f28952342f25d",
+  "status": "running",
+  "completed_stages": [
+    {
+      "name": "release-policy",
+      "exit_code": 0,
+      "seconds": 10.62
+    },
+    {
+      "name": "deployment-policy",
+      "exit_code": 0,
+      "seconds": 0.62
+    },
+    {
+      "name": "fmt",
+      "exit_code": 0,
+      "seconds": 4.66
+    },
+    {
+      "name": "library-compile",
+      "exit_code": 0,
+      "seconds": 278.12
+    },
+    {
+      "name": "library-private",
+      "exit_code": 0,
+      "seconds": 78.77
+    },
+    {
+      "name": "library-host",
+      "exit_code": 0,
+      "seconds": 0.05
+    }
+  ],
+  "completed_stage_count": 6,
+  "planned_stage_count": 35,
+  "gate_snapshot": {
+    "bytes": 936680,
+    "sha256": "9228d50dc4e625e188c34f4fc55bb7173e2bc05427ab9d9ceb7f5c431fc0d038",
+    "mutable_running_file": true
+  },
+  "launcher_exit_present": false,
+  "owned_exit_present": false,
+  "final_result_observed": false,
+  "private_library": {
+    "log": {
+      "bytes": 565684,
+      "sha256": "5a35d6f413635db4d504ceaaf47f570ea5b90a663e0f4dcf837996bc932cb930"
+    },
+    "parent": {
+      "passed": 2104,
+      "failed": 0,
+      "ignored": 26,
+      "measured": 0,
+      "filtered": 6,
+      "seconds": 78.72
+    },
+    "stage_seconds": 78.77,
+    "child_summaries": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2135 filtered out; finished in 0.00s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2135 filtered out; finished in 0.00s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2135 filtered out; finished in 0.01s"
+    ],
+    "children_added_to_parent": false,
+    "selected_test_lines": [
+      "test client::terminal::conversation::questions::history_tests::full_keyboard_empty_questions_list_arrows_move_between_panels ... ok",
+      "test client::terminal::conversation::questions::history_tests::full_keyboard_questions_list_arrows_preserve_selection_until_enter ... ok",
+      "test computer::zuse_backend::tests::cancellation_returns_while_native_submit_is_blocked_and_preserves_its_error ... ok",
+      "test http::question_delivery_tests::tool_summary_passive_timeout_resume_and_cancel_do_not_redeliver_or_consume_input ... ok",
+      "test http::question_delivery_tests::tool_summary_code_mode_wait_for_keeps_the_native_delivery_boundary ... ok",
+      "test http::question_delivery_tests::tool_summary_passive_await_rechecks_oauth_and_binding_after_probe ... ok",
+      "test http::question_delivery_tests::tool_summary_public_await_delivers_the_eleventh_call_without_consuming_user_input ... ok"
+    ],
+    "read_scope": "Whole-file hash and selected actual parent/child summary and seven test lines; not every stdout line independently audited."
+  },
+  "host_library": {
+    "stage_exit": 0,
+    "stage_seconds": 0.05,
+    "parent_test_summary_not_read_in_this_snapshot": true
+  },
+  "binding": {
+    "bytes": 16561,
+    "sha256": "8918b7e3b1b9b23a1c52ba00bcdb6ff3c65ee9b013ea5f356e8d121c281e96be",
+    "stage_contract": {
+      "integration_targets": 20,
+      "mandatory_ignored_tests": 14,
+      "rust_stages": 26,
+      "stages": 35
+    },
+    "inverse_bytes_and_normalized_ast_identical_recorded": true,
+    "comparison_reexecuted_by_report_owner": false,
+    "only_added_outer_environment": "PYTHONDONTWRITEBYTECODE=1",
+    "stale_outcomes_copied": false,
+    "observations_refetched_by_helper": false
+  },
+  "midrun_inputs": {
+    "observed_utc": "2026-11-21T13:58:09.264221+00:00",
+    "independently_rehashed_by_report_owner": true,
+    "inputs": {
+      "cargo_config": {
+        "bytes": 925,
+        "sha256": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+        "equals_launch_before": true,
+        "equals_binding_expected": true
+      },
+      "cargo_lock": {
+        "bytes": 66476,
+        "sha256": "b8caf2e4f747094a0bcd12842b1fe7894d7d956efa1f8b756f17a16518b9d393",
+        "equals_launch_before": true,
+        "equals_binding_expected": true
+      },
+      "dependency_auditor": {
+        "bytes": 14653,
+        "sha256": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+        "equals_launch_before": true,
+        "equals_binding_expected": true
+      },
+      "driver": {
+        "bytes": 83641,
+        "sha256": "17e246cab3a155737bfa25783eabd5392c934ddd041969d0ef93431f7f8c7cc5",
+        "equals_launch_before": true,
+        "equals_binding_expected": true
+      },
+      "git_heads": {
+        "bytes": 19053,
+        "sha256": "63fda4f8fdb92d0e471c1a3862c9e157c8f3c4f2c68bf6ba9254ec8ab38ed00d",
+        "equals_launch_before": true,
+        "equals_binding_expected": true
+      },
+      "owner_agreement": {
+        "bytes": 8663,
+        "sha256": "706fed42afcf5a704974f310121eeba84e9414c712b2a5fb748bf7577535aeb0",
+        "equals_launch_before": true,
+        "equals_binding_expected": true
+      },
+      "reviewed_baseline": {
+        "bytes": 56086,
+        "sha256": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+        "equals_launch_before": true,
+        "equals_binding_expected": true
+      },
+      "workspace_wrapper": {
+        "bytes": 3569,
+        "sha256": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+        "equals_launch_before": true,
+        "equals_binding_expected": true
+      },
+      "wrapper": {
+        "bytes": 272,
+        "sha256": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43",
+        "equals_launch_before": true,
+        "equals_binding_expected": true
+      }
+    },
+    "post_run_hash_comparison_completed": false
+  },
+  "E18_conditions": {
+    "success_fixture_target_input_before_ms": 1000,
+    "after_ms": 5000,
+    "observation_guard_ms": 9000,
+    "strict_whole_test_deadline": false,
+    "production_code_unchanged": true,
+    "old_timeout_resume_cancel_inputs_ms": 1000,
+    "old_Gate19_failure_preserved": true,
+    "new_pass_does_not_prove_old_one_second_condition_passed": true
+  },
+  "current_messaging_semantics": {
+    "source": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "native_and_group_send_supported": true,
+    "body_literal_in_UI_send_routing": true,
+    "local_listener_prepare_references": true,
+    "native_reference_completion_disabled": true,
+    "group_send_reference_completion_disabled": true,
+    "all_group_plain_input_completion_disabled_claimed": false,
+    "receipt_states_are_delivery_progress_not_execution_completion": true,
+    "read_scope": "Static fixed-source UI routing/body transfer, local preparation, completion conditions and receipt labels; no new backend-delivery or end-to-end execution.",
+    "native_and_group_implicit_local_file_or_skill_preparation": false
+  },
+  "previous_current_report": {
+    "commit": "82c20c73eb3892dc41a1f01232b46793bb34b856",
+    "file": "current-iteration-E18-summary-fixture.md",
+    "snapshot_utc": "2026-11-21T13:52:57Z",
+    "preserved": true
+  },
+  "consumers": "N20, runtime, UI24, controls, multiUID, version_all, P1 and two native supplements remain pending the original Gate result and original owner handoff.",
+  "release": {
+    "publication_verified_by_report_owner": false,
+    "owner_reported_observation": "At 13:56 UTC the source owner reported that the v0.10.25 tag and release endpoints returned 404; the report owner has not independently read those endpoints in this snapshot.",
+    "report_owner_dispatched": false,
+    "H2_executed_by_report_owner": false
+  },
+  "sources": {
+    "source_commit": "https://github.com/LIghtJUNction/ssmcp/commit/02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "E18_report": "https://github.com/LIghtJUNction/ssmcp/blob/82c20c73eb3892dc41a1f01232b46793bb34b856/docs/reports/command-await-delivery-20261120/current-iteration-E18-summary-fixture.md"
+  }
+}
+

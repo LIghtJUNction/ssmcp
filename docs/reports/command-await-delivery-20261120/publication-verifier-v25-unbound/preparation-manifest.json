@@ -1,0 +1,76 @@
+{
+  "schema": "ssmcp-publication-verifier-preparation-v1",
+  "prepared_at_utc": "2026-11-21T01:50:33.248692+00:00",
+  "status": "UNBOUND",
+  "target_version": "0.10.25",
+  "target_tag": "v0.10.25",
+  "candidate_sha": null,
+  "formal_release_run_id": null,
+  "original": {
+    "version": "0.10.21",
+    "commit": "90a83b0b74d7553d9c34470c96f5a3233d984b74",
+    "repository_path": "docs/reports/command-await-delivery-20261120/publication-verifier/verify_published_candidate.py",
+    "bytes": 30229,
+    "sha256": "27804d3605f2d0eecf8434100a193a89829dd7324b6150da5036cafc8bbd0755",
+    "preserved": true
+  },
+  "files": {
+    "verify_published_candidate.py": {
+      "bytes": 30229,
+      "sha256": "9f75533684446080b4ae6ec82f17d245b174541a23a29a2c3399536680c95109"
+    },
+    "changes-from-v21.diff": {
+      "bytes": 460,
+      "sha256": "dae5a5cbe9f7de33d23a6480c6e8cb0d3bef6788071f74e6c1eba786583d54f7"
+    },
+    "README.md": {
+      "bytes": 4543,
+      "sha256": "297d23f606fb91b8a9b9070cda8ebc106e439f5f4a52f1863e70937bc6e9b7dd"
+    }
+  },
+  "code_change": {
+    "count": 1,
+    "kind": "version_literal_only",
+    "old": "0.10.21",
+    "new": "0.10.25"
+  },
+  "preparation_checks": {
+    "exact_one_line_difference": true,
+    "original_unchanged": true,
+    "python_ast_parse": "passed",
+    "helper_imported": false,
+    "helper_executed": false,
+    "network_verifier_executed": false,
+    "argument_path_cases_rerun": false,
+    "schema_tests_rerun": false,
+    "tamper_cases_rerun": false
+  },
+  "preserved_contracts": {
+    "formal_event": "push",
+    "exact_candidate_head_and_tag": true,
+    "exact_jobs": 19,
+    "successful_jobs": 18,
+    "deploy_server_conclusion": "skipped",
+    "exact_release_assets": 16,
+    "manifest_artifact_records": 8,
+    "gitlinks": 4,
+    "official_crate_and_graph_checks": true,
+    "complete_src_file_set_and_bytes": true
+  },
+  "verification_scope": {
+    "actually_downloaded_assets": [
+      "release-manifest.json",
+      "SHA256SUMS",
+      "six archive .sha256 sidecars"
+    ],
+    "also_downloaded": [
+      "crates.io version metadata",
+      "official .crate"
+    ],
+    "binary_archives": "GitHub asset sizes and digests only; no independent archive download",
+    "installers": "GitHub asset sizes and digests plus candidate source digest; no installer download",
+    "cargo_metadata_reexecuted": false,
+    "install_or_deploy": false
+  },
+  "binding_requirement": "Source/release owner must bind final candidate and successful formal tag-push run after checking final workflow and receipt contracts; preparation is not publication success."
+}

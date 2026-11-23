@@ -1,0 +1,35 @@
+{
+  "schema": "ssmcp.live-input-socket-preflight.public.v1",
+  "observed_utc": "2026-11-21T06:59:32.393336+00:00",
+  "requested_endpoint": "The per-user chat-input.sock path supplied by the user; numeric user identity omitted.",
+  "observation": {
+    "errno": 2,
+    "error_kind": "FileNotFoundError",
+    "meaning": "The requested socket path did not exist at the preflight observation.",
+    "parent_directory_mode": "0o700",
+    "parent_is_symlink": false,
+    "application_bytes_sent": 0,
+    "model_started": false,
+    "product_started": false,
+    "socket_replaced_or_removed": false
+  },
+  "original": {
+    "file": "root-preflight.json",
+    "bytes": 682,
+    "sha256": "22a8a6efded7e1b0a9c5d727464564639da37a93ba755308f0575eb67cc4fb30",
+    "complete_bytes_read_and_hash_verified": true
+  },
+  "read_receipt": {
+    "exit_code": 0,
+    "stdout_eof": true,
+    "stderr_eof": true
+  },
+  "result": "Original live-session socket test not completed; a separate controlled future test must retain its own binary and execution identity.",
+  "scope": "Existing preflight record read only. No socket request, product, model, Cargo or test was launched by this report extraction.",
+  "private_fields_omitted": [
+    "numeric UID/GID",
+    "inode",
+    "absolute per-user path",
+    "native client and job identifiers"
+  ]
+}

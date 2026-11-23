@@ -1,0 +1,248 @@
+{
+  "schema": "ssmcp-e2e-fixes-and-ci-bump-stage.v1",
+  "snapshot_utc": "2026-11-21 17:30:25 UTC",
+  "current_main": {
+    "source": "3730c039ec15a33af7bb3b56a9811e5649a99f85",
+    "tree": "f6765b9bbe90bf3a0d44f84b46bceee2124db00b",
+    "parents": [
+      "dde2938e050e1d9f8186a600f57dbb67e12de211"
+    ],
+    "same_tree_as_83b5": true,
+    "actual_root_github_read": true,
+    "PR": 174,
+    "merged_at": "2026-11-21T17:14:53Z",
+    "new_native_execution_claimed": false,
+    "merge_method": "squash",
+    "merge_actor": "LIghtJUNction",
+    "report_and_source_coordinators_did_not_perform_merge": true,
+    "original_work_source_is_not_ancestor_of_merged_main": true
+  },
+  "followup": {
+    "commit": "2c94bacb2013e9a5c4d4dd13bcbeea2366252525",
+    "tree": "cf8d22c49f188b7fe6a34bc2d280e39db22513fc",
+    "branch": "work/zuse-cli-ui-fixes-20261121",
+    "base": "3730c039ec15a33af7bb3b56a9811e5649a99f85",
+    "changes": [
+      {
+        "commit": "56a1a5ab44185c3fd5354d175f8fe1921ccccab6",
+        "message": "test: reveal wait detail before checking narrow timeout row [skip ci]"
+      },
+      {
+        "commit": "88e6c3316522555f0cd7fb8fbfe4c3d56c202209",
+        "message": "fix: use the configured TLS client for Zuse downloads [skip ci]"
+      },
+      {
+        "commit": "2c94bacb2013e9a5c4d4dd13bcbeea2366252525",
+        "message": "test: verify retained PTY APIs and audit Copy navigation [skip ci]"
+      }
+    ],
+    "changed_paths": [
+      "scripts/e2e_terminal_control.py",
+      "scripts/e2e_user_wait.py",
+      "src/computer/release.rs"
+    ],
+    "root_actual_fixed_diff_read": true,
+    "new_runtime_pass_claimed": false,
+    "CI_diff_included": false,
+    "new_library_build": {
+      "status": "running",
+      "phase": "cli-validation-20261121-v5",
+      "actual_execution_owner": "Original source coordinator",
+      "source": "2c94bacb2013e9a5c4d4dd13bcbeea2366252525"
+    },
+    "TLS_static_review": {
+      "by": "Direct ChatGPT review agent",
+      "fixed_source": "2c94bacb2013e9a5c4d4dd13bcbeea2366252525",
+      "helper": "src/http_client.rs",
+      "explicit_provider": "ring",
+      "root_certificates": "WebPKI",
+      "global_default_provider_not_required_by_this_builder": true,
+      "metadata_and_archive_use_same_client": true,
+      "download_restrictions_unchanged": true,
+      "runtime_pass_claimed": false
+    }
+  },
+  "previous_completed_regression_reference": {
+    "path": "cli-regression-83b5-public-facts.json",
+    "commit": "1571628f78752f89eb6e8476b7c00f51d3b7c5ad",
+    "sha256": "7169f2d70e683383b365fa1e3196a3184e3e4a6066f95e3127746d4305270297",
+    "execution_sources": [
+      "28054f3dad16152c46f7a886a677e2e4100d5c7c",
+      "83b5bc51866287c227bad5059dc68f195d78bc87"
+    ],
+    "not_inherited_as_new_fix_execution": true
+  },
+  "candidate_build": {
+    "source": "83b5bc51866287c227bad5059dc68f195d78bc87",
+    "exit_code": 0,
+    "running": false,
+    "both_eof": true,
+    "profile": {
+      "release": true,
+      "opt_level": "z",
+      "test": false
+    },
+    "receipt": {
+      "file": "cli-validation-20261121-v4/candidate-build/receipt.json",
+      "bytes": 8300,
+      "sha256": "8c17b0aacc1b920df78b71d9587bfa7fd5b80a005b8de733f1e75a8f6bcb1e09"
+    },
+    "binaries": [
+      {
+        "name": "ssmcp",
+        "bytes": 14823504,
+        "sha256": "2ffe3905b1060aeeb12e561cdef80dd018a494f71a17f30660ddd7e63e0611e4"
+      },
+      {
+        "name": "ssmcpd",
+        "bytes": 7409856,
+        "sha256": "3bb5cb9d58e8ed00661ea40f3321819834e1f9c94919c8a50eb9ae9944b27c8c"
+      },
+      {
+        "name": "frontend",
+        "name_as_reported": true,
+        "bytes": 1386688,
+        "sha256": "78aa15bd86465a9cb424656b8756f5f2a992588b13704226b487ba137736ba6a"
+      },
+      {
+        "name": "vt_snapshot",
+        "bytes": 440984,
+        "sha256": "c3d390806fdec01cd9acd0492ee552d788df305665670fa6cb81144c627f7f65"
+      }
+    ],
+    "independent_acceptance_original_read": {
+      "stdout_bytes": 6691,
+      "stderr_bytes": 0,
+      "no_truncation": true,
+      "all_four_identities_match": true
+    },
+    "evidence": "Owner348 actual build and independent peer350 direct existing-output read"
+  },
+  "end_to_end": {
+    "source": "83b5bc51866287c227bad5059dc68f195d78bc87",
+    "evidence": "Original acceptance coordinator independently read completed existing native output; message354",
+    "exit_code": 1,
+    "running": false,
+    "both_eof": true,
+    "stdout_bytes": 32075,
+    "stderr_bytes": 0,
+    "groups": {
+      "total": 6,
+      "passed": 4,
+      "failed": 2
+    },
+    "receipt": {
+      "bytes": 125033,
+      "sha256": "3e0e8ee76fa7c409ac69c7eb9f78eaf7e324c906fd83697d651858849d82ac08",
+      "path_not_provided": true
+    },
+    "failures": [
+      {
+        "group": "user-wait",
+        "observed": "Red/bold/narrow-screen and normal delivery90 checks passed first; exact completed timeout detail assertion via /wait timed out",
+        "root_cause_proven": false
+      },
+      {
+        "group": "terminal-control",
+        "observed": "Initial assertion expected1/1 main terminal, observed CODE_MODE dashboard before terminal entry",
+        "root_cause_proven": false
+      }
+    ],
+    "other_four_group_names_not_provided": true,
+    "product_all_pass": false,
+    "release_completed": false,
+    "static_diagnosis_from_original_reviewers": {
+      "user_wait": "Completed timeout item is near the top of long /wait text; follow shows last page at24x48; existing PgUp navigation can expose exact item without changing ID/status checks or budget",
+      "finish_branch_reached": false,
+      "terminal_control": "Old Shell/F7 fixture differs from current audit dashboard; main PTY already exists; fixture update must preserve terminal APIs, independent VT, isolation, restoration, attribution, background and termios checks",
+      "runtime_fix_pass": false
+    }
+  },
+  "installer_and_lifecycle": {
+    "tested_source": "83b5bc51866287c227bad5059dc68f195d78bc87",
+    "evidence": "Original source coordinator actual completed native jobs; root has not reread native originals",
+    "installer": {
+      "exit_code": 0,
+      "both_eof": true,
+      "receipt": {
+        "file": "cli-validation-20261121-v4/installer-check/receipt.json",
+        "bytes": 7954,
+        "sha256": "4b23069d067e0001d77431a35ce0d9203f963bc54eac7f63727d6be22c338578"
+      }
+    },
+    "zuse_lifecycle": {
+      "wrapper_exit": 1,
+      "both_eof": true,
+      "fixed_version": "v0.4.2",
+      "version_before": "passed",
+      "download_exit": 101,
+      "diagnostic": "reqwest0.13.5 rustls-no-provider lacks configured crypto provider and panics",
+      "genuine_product_failure": true,
+      "receipt": {
+        "file": "cli-validation-20261121-v4/zuse-lifecycle-smoke/receipt.json",
+        "bytes": 3565,
+        "sha256": "0804452bc9a4216cdcbb2f05baeb5bd6f7a121cd1dcadf540284f6ddde7515ed"
+      }
+    },
+    "followups": {
+      "branch": "work/zuse-cli-ui-fixes-20261121",
+      "user_wait_fixture_commit_prefix": "56a1a5ab",
+      "user_wait_change_as_reported": "Only real content focus and selection gestures added; exact same-frame assertions retained",
+      "terminal_fixture": "Original direct review agent implementing",
+      "TLS": "Original direct review agent implementing minimal product source fix",
+      "CI_bump": "Original direct review agent improving existing bump.yml reliable version selection and fixed baseline"
+    },
+    "release": {
+      "planned_tag": "v0.10.25",
+      "github_release": true,
+      "server_deploy": false,
+      "registry_publish": false,
+      "source_and_tag_preparation_invalidated": true,
+      "POST_started": false,
+      "tag_created": false,
+      "real_user_program_installed": false
+    },
+    "independent_acceptance_original_read": {
+      "installer_exit": 0,
+      "lifecycle_exit": 1,
+      "both_eof": true,
+      "receipt_identities_match": true,
+      "TLS_panic_confirmed": true
+    }
+  },
+  "CI_bump": {
+    "user_requested": true,
+    "existing_workflow": "bump.yml",
+    "work": "Reliable version entry and fixed baseline using the existing workflow",
+    "actual_new_diff_reviewed": false,
+    "planned_release": "v0.10.25",
+    "server_deploy": false,
+    "registry_publish": false
+  },
+  "H2": {
+    "previous_static_package": "840629d64e3915bbe2b17496aa600d067e34b7e3",
+    "status": "Unbound and unexecuted preparation; final source/tag preparation invalidated",
+    "S": null,
+    "P": null,
+    "run": null,
+    "dispatch": null,
+    "new_flow_requires_actual_diff_review": true,
+    "old_static_assumptions_not_a_new_release_PASS": true
+  },
+  "publication": {
+    "latest_root_actual_read_at": "2026-11-21T17:23:09Z",
+    "latest_at_read": "v0.10.20",
+    "new_completed_release": false
+  },
+  "pending": [
+    "Actual rebuild and verification of TLS product fix",
+    "Actual wait and terminal fixture reruns with original behavior assertions retained",
+    "Final CI bump diff and relevant publication recipe review",
+    "Final source/tag/run binding and authorized v0.10.25 GitHub release"
+  ],
+  "report_group": {
+    "native_product_or_Cargo_execution": 0,
+    "source_writes": 0,
+    "H2_import_or_execution": 0
+  }
+}

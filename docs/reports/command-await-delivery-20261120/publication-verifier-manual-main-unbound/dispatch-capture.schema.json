@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SSMCP original gh api capture v1",
+  "description": "Proposed collector contract for a future dispatch. This schema does not authenticate an execution and is not a dispatch receipt.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "argv",
+    "stdin_base64",
+    "stdout_base64",
+    "stderr_base64",
+    "exit_code",
+    "started_utc",
+    "finished_utc"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ssmcp-gh-api-capture-v1"
+    },
+    "argv": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": {
+        "type": "string"
+      },
+      "description": "Exact executed argv. The parser requires gh api, explicit github.com hostname, --include, POST, API 2026-03-10, --input -, and the fixed release.yml dispatch endpoint; argument order may differ."
+    },
+    "stdin_base64": {
+      "type": "string",
+      "contentEncoding": "base64",
+      "description": "Canonical base64 of the actual bytes passed to gh stdin. Request JSON must explicitly contain ref=main and inputs tag/build_only=false/deploy_server=false."
+    },
+    "stdout_base64": {
+      "type": "string",
+      "contentEncoding": "base64",
+      "description": "Canonical base64 of original gh --include stdout. Preserve status/header/body bytes, including mixed line endings."
+    },
+    "stderr_base64": {
+      "type": "string",
+      "contentEncoding": "base64",
+      "description": "Canonical base64 of original stderr; empty is permitted."
+    },
+    "exit_code": {
+      "type": "integer",
+      "const": 0
+    },
+    "started_utc": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?(?:Z|\\+00:00)$"
+    },
+    "finished_utc": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?(?:Z|\\+00:00)$"
+    }
+  },
+  "$defs": {
+    "nativeExecutionReceipt": {
+      "type": "object",
+      "required": [
+        "id",
+        "exit_code",
+        "running",
+        "stdout",
+        "stderr",
+        "stdout_eof",
+        "stderr_eof",
+        "stdout_cursor",
+        "error"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exit_code": {
+          "type": "integer",
+          "const": 0
+        },
+        "running": {
+          "const": false
+        },
+        "stdout": {
+          "type": "string",
+          "description": "Original tool-returned stdout containing one complete file/capture JSON envelope."
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "stdout_eof": {
+          "const": true
+        },
+        "stderr_eof": {
+          "const": true
+        },
+        "stdout_cursor": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Must equal the UTF-8 byte length of stdout, proving the returned stream starts at byte zero within this collector contract; enforced by the parser."
+        },
+        "error": {
+          "type": "null"
+        },
+        "truncated": {
+          "const": false
+        },
+        "stdout_truncated": {
+          "const": false
+        },
+        "stderr_truncated": {
+          "const": false
+        }
+      },
+      "additionalProperties": true
+    },
+    "fileCaptureEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "capture"
+      ],
+      "properties": {
+        "file": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "bytes",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Actual recorded file path, independently supplied to the parser; private evidence only."
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "capture": {
+          "$ref": "#"
+        }
+      }
+    },
+    "independentNativeBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "native_job_id",
+        "capture_path"
+      ],
+      "properties": {
+        "native_job_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capture_path": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "description": "Supplied by an independent reviewer after reading the original tool receipt. The parser cannot establish that provenance from these fields alone."
+    }
+  }
+}

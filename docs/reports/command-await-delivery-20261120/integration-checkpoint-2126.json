@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "checkpoint_at_utc": "2026-11-20T21:26:25Z",
+  "repository": "LIghtJUNction/ssmcp",
+  "document_status": "reviewed_checkpoint",
+  "historical_report_commit": "6c4232b69d1f53fd097340856a1612837f980398",
+  "historical_report_source": "https://github.com/LIghtJUNction/ssmcp/commit/6c4232b69d1f53fd097340856a1612837f980398",
+  "public_merged_changes": [
+    {
+      "number": 158,
+      "url": "https://github.com/LIghtJUNction/ssmcp/pull/158",
+      "state": "closed",
+      "merged": true,
+      "merged_at_utc": "2026-11-20T21:01:44Z",
+      "head_sha": "daf7d93c3dd86a70299a25502dc9308bed9b4647",
+      "head_url": "https://github.com/LIghtJUNction/ssmcp/commit/daf7d93c3dd86a70299a25502dc9308bed9b4647",
+      "merge_commit_sha": "2dbad2cbf5b802ad8b8aa771f826a54ee90154d3",
+      "merge_commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/2dbad2cbf5b802ad8b8aa771f826a54ee90154d3"
+    },
+    {
+      "number": 157,
+      "url": "https://github.com/LIghtJUNction/ssmcp/pull/157",
+      "state": "closed",
+      "merged": true,
+      "merged_at_utc": "2026-11-20T21:02:00Z",
+      "head_sha": "32807fe15e24f828e45246cd46bcd3b88cb2f297",
+      "head_url": "https://github.com/LIghtJUNction/ssmcp/commit/32807fe15e24f828e45246cd46bcd3b88cb2f297",
+      "merge_commit_sha": "e767225827eec4955ab49bb80629cea8879ec10b",
+      "merge_commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/e767225827eec4955ab49bb80629cea8879ec10b"
+    },
+    {
+      "number": 155,
+      "url": "https://github.com/LIghtJUNction/ssmcp/pull/155",
+      "state": "closed",
+      "merged": true,
+      "merged_at_utc": "2026-11-20T21:02:15Z",
+      "head_sha": "bbebfaef5eeefa182776ff03f21d510c1ea4fed3",
+      "head_url": "https://github.com/LIghtJUNction/ssmcp/commit/bbebfaef5eeefa182776ff03f21d510c1ea4fed3",
+      "merge_commit_sha": "cf0ab581700918a37fcccbebb93de2e0cab02841",
+      "merge_commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/cf0ab581700918a37fcccbebb93de2e0cab02841"
+    }
+  ],
+  "integration_checkpoint": {
+    "commit": "cf0ab581700918a37fcccbebb93de2e0cab02841",
+    "commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/cf0ab581700918a37fcccbebb93de2e0cab02841",
+    "tree": "bd2bcce33baffa69b82d69d9cff3abdb85baa0fb",
+    "stage": "merged source; whole-candidate acceptance not established"
+  },
+  "input_first_stage": {
+    "pull_request": 159,
+    "url": "https://github.com/LIghtJUNction/ssmcp/pull/159",
+    "state": "open",
+    "draft": true,
+    "merged": false,
+    "created_at_utc": "2026-11-20T21:23:08Z",
+    "head_sha": "dcb504c3947259e8912ac37c3123e46809419116",
+    "head_url": "https://github.com/LIghtJUNction/ssmcp/commit/dcb504c3947259e8912ac37c3123e46809419116",
+    "tree": "cbeb8bdecdb8c6d07f585d4d2b4530d2d300653d",
+    "publication_status": "public draft PR independently verified through GitHub",
+    "implementation_report": {
+      "reported_completion_at_utc": "2026-11-20T21:09:40Z",
+      "reported_exit_code": 0,
+      "reported_first_stage_new_commits": 3,
+      "checks": [
+        "formatting",
+        "diff checks"
+      ],
+      "not_executed": [
+        "Cargo",
+        "tests",
+        "PTY",
+        "model calls"
+      ],
+      "paste_patch_6733_included": false,
+      "evidence_origin": "implementation owner report relayed by primary reviewer; execution not repeated here"
+    },
+    "github_pr_total_commits": 13,
+    "commit_count_scope_note": "3 refers to implementation-owner-reported new commits in the first stage; GitHub PR metadata reports 13 commits for the whole PR",
+    "limitations": [
+      "Unix/Linux restrictions remain",
+      "no compilation or product-runtime acceptance result",
+      "not merged"
+    ],
+    "followup_stage": {
+      "status": "in progress; no new execution result",
+      "scope": [
+        "integrate newer main",
+        "--input none and related hooks/user-answer-tool behavior",
+        "complete UI for existing timing capabilities",
+        "address existing defects"
+      ],
+      "native_execution_identifiers_omitted": true
+    }
+  },
+  "acceptance_boundaries": {
+    "bbeb_results_are_not_cf0_acceptance": true,
+    "prior_724_success_and_e079_89ca_failures_keep_original_heads": true,
+    "new_paste_ab_result": false,
+    "final_p1_result": false,
+    "release_result": false,
+    "release_v0_10_21_established": false
+  },
+  "context_targeted_run": {
+    "source_commit": "bbebfaef5eeefa182776ff03f21d510c1ea4fed3",
+    "source_url": "https://github.com/LIghtJUNction/ssmcp/commit/bbebfaef5eeefa182776ff03f21d510c1ea4fed3",
+    "tree": "1356b94a1e43b13185d280fec98451fdd5a6b010",
+    "pull_request_url": "https://github.com/LIghtJUNction/ssmcp/pull/155",
+    "status": "passed",
+    "execution_kind": "continuation_only_unfinished_artifact_and_process_regression",
+    "full_ssmcp_32_or_p1_run": false,
+    "started_at_utc": "2026-11-20T20:59:43.152586+00:00",
+    "finished_at_utc": "2026-11-20T21:00:27.383693+00:00",
+    "continuation_commands": [
+      {
+        "name": "head",
+        "status": "passed",
+        "exit_code": 0
+      },
+      {
+        "name": "tree",
+        "status": "passed",
+        "exit_code": 0
+      },
+      {
+        "name": "clean-source",
+        "status": "passed",
+        "exit_code": 0
+      },
+      {
+        "name": "locked-metadata",
+        "status": "passed",
+        "exit_code": 0
+      },
+      {
+        "name": "cli-artifact",
+        "status": "passed",
+        "exit_code": 0
+      },
+      {
+        "name": "actual-local-context-reload",
+        "status": "passed",
+        "exit_code": 0
+      },
+      {
+        "name": "final-clean-source",
+        "status": "passed",
+        "exit_code": 0
+      },
+      {
+        "name": "final-head",
+        "status": "passed",
+        "exit_code": 0
+      }
+    ],
+    "actual_reload": {
+      "status": "passed",
+      "cases": [
+        {
+          "selection": "command_line",
+          "status": "passed",
+          "assertion_count": 31
+        },
+        {
+          "selection": "environment",
+          "status": "passed",
+          "assertion_count": 32
+        },
+        {
+          "selection": "current",
+          "status": "passed",
+          "assertion_count": 31
+        }
+      ],
+      "assertion_counts_are_not_additional_test_counts": true
+    },
+    "inherited_results": {
+      "same_source_commit": "bbebfaef5eeefa182776ff03f21d510c1ea4fed3",
+      "same_source_tree": "1356b94a1e43b13185d280fec98451fdd5a6b010",
+      "unit_passed": 84,
+      "cli_passed": 17,
+      "combined_prior_results": 101,
+      "test_failed": 0,
+      "test_ignored": 0,
+      "no_completed_tests_reexecuted": true,
+      "raw_logs_rehashed_is_a_receipt_claim": true
+    },
+    "receipt_identities": [
+      {
+        "name": "ssmcp-context-bbeb-final-validation.json",
+        "bytes": 17312,
+        "sha256": "d3808175dee4f5f26a43aa5228fcf2b14b7af722523647c5de9ebdca7d11d1d2"
+      },
+      {
+        "name": "ssmcp-context-bbeb-actual-reload.json",
+        "bytes": 7635,
+        "sha256": "bc0949d0b6bae2af68d1405008e11aab48f58eb2dc2bdbbba63b139d3dcb7a70"
+      }
+    ],
+    "immutable_cli": {
+      "bytes": 215941144,
+      "sha256": "9daa9e1af8152f2cfed004c7e484b3c5cdf2d5a7dde3866ed2cc0506d49f1657",
+      "source_commit": "bbebfaef5eeefa182776ff03f21d510c1ea4fed3",
+      "source_tree": "1356b94a1e43b13185d280fec98451fdd5a6b010"
+    },
+    "resume_driver": {
+      "bytes": 9077,
+      "sha256": "0f42017895ff0a1811c0b0e2ee4bffd16e26f70b7c3585be0a5644a7ba50832b"
+    },
+    "verification_coverage": {
+      "this_checkpoint": "read and SHA256-verified the two supplied receipt files; reviewed their scoped results",
+      "primary_reviewer_reported": "native receipt copies, immutable CLI bytes/hash and resume-driver bytes/hash independently matched",
+      "not_claimed": [
+        "all inherited raw logs independently read by this checkpoint",
+        "final cleanup independently read by this checkpoint",
+        "cf0 whole-candidate acceptance",
+        "new performance comparison"
+      ]
+    }
+  },
+  "new_source_review_findings": [
+    {
+      "source": "dcb504c3947259e8912ac37c3123e46809419116",
+      "severity": "P2",
+      "path": "src/client/chat_io.rs",
+      "issue": "literal SSMCP forwarding blocked by unused local reference preparation error or timeout",
+      "status": "sent to existing author; fix/runtime result not yet verified"
+    },
+    {
+      "source": "dcb504c3947259e8912ac37c3123e46809419116",
+      "severity": "P2",
+      "path": "src/client/chat_io/transport.rs",
+      "issue": "default HTTP port 80 equivalent Host/Origin forms rejected by exact-byte comparison after successful bind",
+      "status": "sent to existing author; fix/runtime result not yet verified",
+      "port_zero_is_rejected_and_not_a_finding": true,
+      "normative_reference": "https://www.rfc-editor.org/rfc/rfc9110.html#section-4.2.3"
+    }
+  ]
+}

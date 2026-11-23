@@ -1,0 +1,141 @@
+{
+  "schema": "ssmcp.xvfb-display-diagnostic.public-facts.v1",
+  "evidence_basis": "Read-only extraction of four complete existing files. No diagnostic, product worker, UI suite, repair or P1 run was started during this extraction.",
+  "sequence_basis": "Initial failure followed by Mesa confirmation, as identified by the execution coordinator. The result files record durations, not absolute UTC timestamps.",
+  "diagnostic_source_sha256_same_in_both": true,
+  "initial_failure": {
+    "capture_status": "diagnostic_captured",
+    "namespace_exit_code": 1,
+    "diagnostic_duration_seconds": 0.44821035300265066,
+    "timed_out": false,
+    "namespace_stderr_empty": true,
+    "ready": false,
+    "xvfb_exit_code": -6,
+    "probe_duration_seconds": 0.3949648559791967,
+    "diagnostic_source_sha256": "45f9872a97ac81b5e0a9441dfce01fc5181c3c82fe4e339ba7058e9b94659dd7",
+    "worker_started": false,
+    "suite_started": false,
+    "product_worker_executions": 0,
+    "suite_executions": 0,
+    "cleanup": {
+      "namespace_owned_child_reaped": true,
+      "xvfb_owned_child_reaped": true,
+      "owned_temp_removed": true,
+      "namespace_cleanup_error": null,
+      "probe_cleanup_error": null
+    },
+    "capture_command_exit_code": {
+      "value": 0,
+      "basis": "Execution coordinator's original capture receipt; this exit code is not a field in result.json."
+    },
+    "recorded_error": {
+      "type": "AssertionError",
+      "message": "private Xvfb exited without readiness"
+    },
+    "standalone_stderr_matches_result": true,
+    "stderr_observations": {
+      "segmentation_fault_reported": true,
+      "reported_signal": 11,
+      "fault_address_class": "null",
+      "observed_library_order": [
+        "libnvidia-egl-gbm.so.1",
+        "libEGL_nvidia.so.0",
+        "libEGL.so.1",
+        "swrast_dri.so"
+      ],
+      "non_root_x11_directory_warning_present": true,
+      "backtrace_does_not_establish_faulty_component": true
+    }
+  },
+  "mesa_confirmation": {
+    "capture_status": "diagnostic_captured",
+    "namespace_exit_code": 0,
+    "diagnostic_duration_seconds": 0.1868611730169505,
+    "timed_out": false,
+    "namespace_stderr_empty": true,
+    "ready": true,
+    "xvfb_exit_code": 0,
+    "probe_duration_seconds": 0.13465045698103495,
+    "diagnostic_source_sha256": "45f9872a97ac81b5e0a9441dfce01fc5181c3c82fe4e339ba7058e9b94659dd7",
+    "worker_started": false,
+    "suite_started": false,
+    "product_worker_executions": 0,
+    "suite_executions": 0,
+    "cleanup": {
+      "namespace_owned_child_reaped": true,
+      "xvfb_owned_child_reaped": true,
+      "owned_temp_removed": true,
+      "namespace_cleanup_error": null,
+      "probe_cleanup_error": null
+    },
+    "recorded_error": null,
+    "standalone_stderr_matches_result": true,
+    "provider_inputs_unchanged_reported": true,
+    "recorded_provider_files": {
+      "vendor": {
+        "filename": "50_mesa.json",
+        "bytes": 105,
+        "sha256": "cd3881df4227c13ca7f9cfe6c78820f21d5f7a00a41b299214f6f827e63be369"
+      },
+      "library": {
+        "filename": "libEGL_mesa.so.0.0.0",
+        "bytes": 396040,
+        "sha256": "1720ace461c7e7639cc3f92ceba0cf529ac7f2dd9a6b6e213ec0eed9be8fd73e"
+      }
+    },
+    "configuration": {
+      "scope": "Private environment for the owned display diagnostic.",
+      "basis": "Execution-coordinator description; result.json records provider identities and readiness but does not serialize the environment.",
+      "environment": {
+        "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+        "LIBGL_ALWAYS_SOFTWARE": "true"
+      }
+    },
+    "stderr_observations": {
+      "only_the_non_root_directory_warning_remains": true,
+      "segmentation_fault_reported": false,
+      "same_directory_warning_as_initial_failure": true
+    }
+  },
+  "interpretation": {
+    "observed": "The first display diagnostic exited without readiness and recorded an EGL-related backtrace. The Mesa-labelled follow-up reached readiness and exited cleanly.",
+    "narrow_comparison": "The identical non-root X11-directory warning is present in both the failed and ready samples; it is not sufficient on its own to identify the failure cause.",
+    "root_cause_established": false,
+    "confirmed_scope": "Display readiness for the recorded private Mesa configuration only.",
+    "not_established": [
+      "Which graphics component caused the original fault",
+      "Worker or product runtime success",
+      "UI24 or alias suite success",
+      "P1 success",
+      "Final-candidate acceptance or publication"
+    ],
+    "no_product_cases_added_to_runtime_or_ui_counts": true
+  },
+  "originals": {
+    "u-ui24-xvfb-diagnostic-v1/result.json": {
+      "bytes": 5054,
+      "sha256": "b1358828432a512b5a599666c5ae3d4ffa5482794b5ede411c8824f967a57574",
+      "complete_file_read": true
+    },
+    "u-ui24-xvfb-diagnostic-v1/xvfb.stderr": {
+      "bytes": 2637,
+      "sha256": "eda143aea9efd0d38b3252e535928c802334f2135a057f11cec165351e0515ec",
+      "complete_file_read": true
+    },
+    "u-ui24-xvfb-mesa-diagnostic-v1/result.json": {
+      "bytes": 1992,
+      "sha256": "5f7b3736de5f9838f935b81eef57b38068d6a1bc2d6b17ba9881686117e7af0a",
+      "complete_file_read": true
+    },
+    "u-ui24-xvfb-mesa-diagnostic-v1/xvfb.stderr": {
+      "bytes": 81,
+      "sha256": "e2861dbf17c9cb74d57668ceaa0ec8111c014cd26d10d2d0dffdf37188dac690",
+      "complete_file_read": true
+    }
+  },
+  "public_redactions": [
+    "Native job, agent, session and process identifiers are omitted.",
+    "Private paths, X display numbers and memory addresses are omitted.",
+    "Raw argv, traceback and stderr are not reproduced; library basenames and narrowly selected observations are retained."
+  ]
+}

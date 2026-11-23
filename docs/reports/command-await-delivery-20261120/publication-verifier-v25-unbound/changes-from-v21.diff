@@ -1,0 +1,11 @@
+--- publication-verifier-v21/verify_published_candidate.py
++++ publication-verifier-v25-unbound/verify_published_candidate.py
+@@ -375,7 +375,7 @@
+     args = parse_arguments(argv)
+     candidate, run_id = args.candidate, args.run_id
+     repository = "LIghtJUNction/ssmcp"
+-    version = "0.10.21"
++    version = "0.10.25"
+     tag = "v" + version
+     checkout = args.checkout
+     report_path = args.report_dir / ("verification-" + candidate[:12] + ".json")

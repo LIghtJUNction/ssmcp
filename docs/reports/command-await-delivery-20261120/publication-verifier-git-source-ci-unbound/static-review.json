@@ -1,0 +1,52 @@
+{
+  "schema": "ssmcp-h2-ci-static-review-v1",
+  "baseline_static_commit": "2e8e58ac1a7047900feac8501878b80e64f4bd52",
+  "reviewed_recipe": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+  "reviewer_scope": "Independent review of the fixed CI condition and specified skipped-step insertion; root final byte, AST, interface and unchanged-logic comparison against previously reviewed H2.",
+  "reviewed_modules": [
+    {
+      "name": "verify_published_manual_main.py",
+      "bytes": 48892,
+      "sha256": "f891a676f5da3d501660e74a443d156445a5ec4cdec254ace0ab7808271aca2f",
+      "ast_parse": true
+    },
+    {
+      "name": "manual_main_provenance.py",
+      "bytes": 44191,
+      "sha256": "348fd9083d4c55e693925533028d61340e157000508b711778da5e2d7bfe8f33",
+      "ast_parse": true
+    },
+    {
+      "name": "dispatch_receipt_adapter.py",
+      "bytes": 14758,
+      "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4",
+      "ast_parse": true
+    }
+  ],
+  "main_ast_identical_except_reviewed_recipe_constants": true,
+  "provenance_text_identical_after_removing_reviewed_insertion_and_docstring_label": true,
+  "dispatch_adapter_bytes_identical": true,
+  "source_ci_bytes_match_independently_reviewed_pin": true,
+  "linux_step_position_checked_from_fixed_source": true,
+  "confirmed_blocking_contract_mismatches": 0,
+  "ast_only": true,
+  "modules_imported": false,
+  "helper_executed": false,
+  "tests_run": false,
+  "actual_actions_log_compatibility_verified": false,
+  "formal_publication_verified": false,
+  "reviewed_contract": [
+    "19 jobs: 17 successful and two skipped",
+    "17 initial checkouts and the same original dispatch/native evidence binding",
+    "Eight required release artifacts and 16 exact public asset files",
+    "Unchanged strict release artifact namespace and six platform archive consumers",
+    "Linux upload counts remain 2/1; exact candidate step 20 must be skipped",
+    "Real S ancestor of P; six pre-reviewed recipe byte identities"
+  ],
+  "limitations": [
+    "Final S, P, tag, run and original dispatch remain unbound.",
+    "This preparation did not import or execute any verifier module, run tests, Cargo or a product, or dispatch/publish/install/deploy.",
+    "The fixed recipe observation point is an author commit, not an accepted release source.",
+    "Metadata features/kinds and non-gitlink Git trees remain workflow receipt evidence; H2 does not re-query upstream default branches."
+  ]
+}

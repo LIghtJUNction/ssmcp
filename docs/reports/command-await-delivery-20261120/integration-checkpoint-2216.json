@@ -1,0 +1,526 @@
+{
+  "schema_version": 1,
+  "cutoff_utc": "2026-11-20T22:16:00Z",
+  "repository": "LIghtJUNction/ssmcp",
+  "document_status": "draft_for_review",
+  "base_report": {
+    "commit": "40822c73ae7a357a3b64d8cbe551ea4ffee5bfbc",
+    "url": "https://github.com/LIghtJUNction/ssmcp/blob/40822c73ae7a357a3b64d8cbe551ea4ffee5bfbc/docs/reports/command-await-delivery-20261120/README.md",
+    "bytes": 58007,
+    "sha256": "3de349b76453a3f890de89012d777dcb82c6a226a944efc8649ab8e9b76cdb5a"
+  },
+  "public_pull_request": {
+    "number": 159,
+    "url": "https://github.com/LIghtJUNction/ssmcp/pull/159",
+    "state": "open",
+    "draft": true,
+    "merged": false,
+    "head_sha": "441814bf9945e0b49bb3dde170e57762abf8318e"
+  },
+  "c248": {
+    "run_id": 44824373375,
+    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44824373375",
+    "head_sha": "c248d420e01d04c06be967e84543ce7d883f4cb3",
+    "jobs": [
+      {
+        "id": 136593082355,
+        "name": "native-lifecycle (ubuntu-24.04)",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44824373375/job/136593082355",
+        "head_sha": "c248d420e01d04c06be967e84543ce7d883f4cb3",
+        "status": "completed",
+        "conclusion": "failure",
+        "steps": [
+          {
+            "name": "Run cargo fmt --all -- --check",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo clippy --locked --all-targets -- -D warnings",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify workspace unit tests on Linux",
+            "conclusion": "failure"
+          },
+          {
+            "name": "Run cargo test --locked --lib session:: -- --test-threads=4",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run cargo test --locked --lib client::protocol_tests -- --test-threads=4",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run cargo build --locked --bin ssmcp",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Exercise private native session lifecycle",
+            "conclusion": "skipped"
+          }
+        ]
+      },
+      {
+        "id": 136593083004,
+        "name": "native-lifecycle (windows-2025)",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44824373375/job/136593083004",
+        "head_sha": "c248d420e01d04c06be967e84543ce7d883f4cb3",
+        "status": "completed",
+        "conclusion": "failure",
+        "steps": [
+          {
+            "name": "Run cargo fmt --all -- --check",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo clippy --locked --all-targets -- -D warnings",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify workspace unit tests on Linux",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run cargo test --locked --lib session:: -- --test-threads=4",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo test --locked --lib client::protocol_tests -- --test-threads=4",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo build --locked --bin ssmcp",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise private native session lifecycle",
+            "conclusion": "failure"
+          }
+        ]
+      },
+      {
+        "id": 136593083123,
+        "name": "native-lifecycle (macos-15)",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44824373375/job/136593083123",
+        "head_sha": "c248d420e01d04c06be967e84543ce7d883f4cb3",
+        "status": "completed",
+        "conclusion": "failure",
+        "steps": [
+          {
+            "name": "Run cargo fmt --all -- --check",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo clippy --locked --all-targets -- -D warnings",
+            "conclusion": "success"
+          },
+          {
+            "name": "Verify workspace unit tests on Linux",
+            "conclusion": "skipped"
+          },
+          {
+            "name": "Run cargo test --locked --lib session:: -- --test-threads=4",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo test --locked --lib client::protocol_tests -- --test-threads=4",
+            "conclusion": "success"
+          },
+          {
+            "name": "Run cargo build --locked --bin ssmcp",
+            "conclusion": "success"
+          },
+          {
+            "name": "Exercise private native session lifecycle",
+            "conclusion": "failure"
+          }
+        ]
+      }
+    ],
+    "linux": {
+      "job_id": 136593082355,
+      "passed": 2030,
+      "failed": 3,
+      "ignored": 23,
+      "measured": 0,
+      "filtered_out": 0,
+      "elapsed_seconds": 30.02,
+      "step_exit_code": 101,
+      "scope": "failed ssmcp library batch; nested subprocess summaries not added",
+      "failures": [
+        {
+          "test": "client::terminal::conversation::tests::mouse_selects_visible_agents_after_a_list_has_scrolled",
+          "panic_location": "src/client/terminal/conversation.rs:4396:9",
+          "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/c248d420e01d04c06be967e84543ce7d883f4cb3/src/client/terminal/conversation.rs#L1522-L1541",
+          "bounded_cause": "Agents right-click calls chat_thread_history_mouse and returns before logs_toggle; the test right-clicks the list header after preceding selection assertions passed"
+        },
+        {
+          "test": "client::terminal::conversation::timing::tests::real_frames_keep_a_live_clock_visible_beside_a_draft_and_specific_notice",
+          "panic_location": "src/client/terminal/conversation/timing/tests.rs:82:13",
+          "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/c248d420e01d04c06be967e84543ce7d883f4cb3/src/client/terminal/conversation/timing/tests.rs#L60-L87",
+          "bounded_cause": "Clock text assertions already passed; the compact control-status label is not in the three accepted strings"
+        },
+        {
+          "test": "client::terminal::tests::connection_footer_uses_the_same_last_row_in_every_layout",
+          "panic_location": "src/client/terminal.rs:4433:13",
+          "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/c248d420e01d04c06be967e84543ce7d883f4cb3/src/client/terminal.rs#L4417-L4438",
+          "bounded_cause": "Geometry, row count and notice assertions already passed; rendered Logs footer has host without the https scheme, while this assertion requires the full URL"
+        }
+      ],
+      "original_log": {
+        "bytes": 883294,
+        "sha256": "48666ff1df08987b7abdcb51d09014df4dff94a94583725b26c6295298a4640d",
+        "utf8_bom": true,
+        "crlf_count": 0,
+        "library": {
+          "library_file_id": "libfile_fde3_f-305066a573c4819186cb4b5306813245_e58c93d727108191bbc40d6c0d09ec81",
+          "file_id": "file_0000000086fc820990fdf2c4e1352c9a",
+          "current_version_number": 0,
+          "url": "https://chatgpt.com/library?file_id=libfile_fde3_f-305066a573c4819186cb4b5306813245_e58c93d727108191bbc40d6c0d09ec81&account_id=personal"
+        },
+        "drive": {
+          "id": "1CRymWjoLpoivHhc20knttxO_P2ttaaPR",
+          "url": "https://drive.google.com/file/d/1CRymWjoLpoivHhc20knttxO_P2ttaaPR/view?usp=drivesdk",
+          "actual_raw_download_verified": true,
+          "exact_byte_equality": true
+        }
+      }
+    },
+    "windows": {
+      "job_id": 136593083004,
+      "session_passed": 52,
+      "protocol_passed": 10,
+      "build": "success",
+      "native_lifecycle": {
+        "passed": 40,
+        "failed": 1
+      },
+      "artifact": {
+        "id": 14674230483,
+        "bytes": 2515,
+        "sha256": "0db05bc524bcf20e10464d7eafbea489dcdb7283b38d5dab1205c0671c234743",
+        "actual_download_hash_verified": true,
+        "verification_scope": "independent reviewer actual in-memory raw ZIP download; this checkpoint did not redownload"
+      },
+      "final_artifact_counters": {
+        "login_start": 1,
+        "login_poll": 1,
+        "whoami": 8,
+        "connect": 20,
+        "unexpected": 1
+      }
+    },
+    "macos": {
+      "job_id": 136593083123,
+      "session": "success",
+      "protocol": "success",
+      "build": "success",
+      "native_lifecycle": {
+        "passed": 39,
+        "failed": 1
+      },
+      "artifact": {
+        "id": 14673681804,
+        "bytes": 2384,
+        "sha256": "bb65072d54e6c8946bc1221775abe70248e1919d9a588aba8f2f72401e4b8745",
+        "actual_download_hash_verified": true,
+        "verification_scope": "independent reviewer actual in-memory raw ZIP download; this checkpoint did not redownload"
+      },
+      "final_artifact_counters": {
+        "login_start": 1,
+        "login_poll": 1,
+        "whoami": 8,
+        "connect": 14,
+        "unexpected": 1
+      }
+    },
+    "counter_scope": "cleanup rewrites the count file; final artifacts are not independent assertion-time counter snapshots",
+    "portable_source_inference": {
+      "fixture_call": "attach absent-fixture --read-only",
+      "missing_selector": "--local",
+      "fixture_source": "https://github.com/LIghtJUNction/ssmcp/blob/c248d420e01d04c06be967e84543ce7d883f4cb3/scripts/e2e_service_portable.py#L447",
+      "auto_account_attach_source": "https://github.com/LIghtJUNction/ssmcp/blob/c248d420e01d04c06be967e84543ce7d883f4cb3/src/client/account/attach.rs#L147-L166",
+      "predicted_route": "GET /api/client/sessions",
+      "fixture_unexpected_line": 82,
+      "actual_route_captured": false,
+      "verification_scope": "primary and independent reviewers traced fixed source; route remains an inference, not an observed request trace"
+    }
+  },
+  "source_42e9": {
+    "commit": "42e9a25bb3a71a5fd06226a2b1d03c845532ef6e",
+    "tree": "dd5e413dd0e024caf973afa8968fc75f3feef597",
+    "url": "https://github.com/LIghtJUNction/ssmcp/commit/42e9a25bb3a71a5fd06226a2b1d03c845532ef6e",
+    "scope": "input none Snapshot/reload source fix only",
+    "review": "primary and independent fixed-source review completed; no runtime reproduction or acceptance",
+    "ci": {
+      "run_id": 44825725216,
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44825725216",
+      "head_sha": "42e9a25bb3a71a5fd06226a2b1d03c845532ef6e",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "updated_at_utc": "2026-11-20T22:09:29Z",
+      "acceptance_established": false
+    }
+  },
+  "source_441": {
+    "commit": "441814bf9945e0b49bb3dde170e57762abf8318e",
+    "tree": "72f4d06f61b06f62ae22ce1837dd429465ef0b39",
+    "parent": "42e9a25bb3a71a5fd06226a2b1d03c845532ef6e",
+    "url": "https://github.com/LIghtJUNction/ssmcp/commit/441814bf9945e0b49bb3dde170e57762abf8318e",
+    "source_phase_reported_finished_at_utc": "2026-11-20T22:08:21Z",
+    "files_changed": 5,
+    "additions": 15,
+    "deletions": 11,
+    "complete_patch_read": true,
+    "files": [
+      {
+        "path": "scripts/e2e_service_portable.py",
+        "additions": 1,
+        "deletions": 1
+      },
+      {
+        "path": "src/client/terminal.rs",
+        "additions": 4,
+        "deletions": 1
+      },
+      {
+        "path": "src/client/terminal/conversation.rs",
+        "additions": 1,
+        "deletions": 2
+      },
+      {
+        "path": "src/client/terminal/conversation/history.rs",
+        "additions": 8,
+        "deletions": 4
+      },
+      {
+        "path": "src/client/terminal/conversation/timing/tests.rs",
+        "additions": 1,
+        "deletions": 3
+      }
+    ],
+    "changes": [
+      "mouse helper returns hit status and falls back to Logs when no history target is hit",
+      "Escape return preserves selected agent",
+      "clock status assertion matches exact Chinese long/short forms",
+      "footer assertion requires last token to be exact full or scheme-omitted same host",
+      "portable absent attach adds --local; strict request counter checks unchanged"
+    ],
+    "ci": {
+      "run_id": 44826521363,
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44826521363",
+      "head_sha": "441814bf9945e0b49bb3dde170e57762abf8318e",
+      "status": "completed",
+      "conclusion": "success",
+      "event": "pull_request",
+      "run_attempt": 1,
+      "updated_at_utc": "2026-11-20T22:15:37Z",
+      "jobs": [
+        {
+          "id": 136600511790,
+          "name": "native-lifecycle (macos-15)",
+          "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44826521363/job/136600511790",
+          "head_sha": "441814bf9945e0b49bb3dde170e57762abf8318e",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at_utc": "2026-11-20T22:14:46Z",
+          "steps": [
+            {
+              "name": "Run cargo fmt --all -- --check",
+              "conclusion": "success"
+            },
+            {
+              "name": "Run cargo clippy --locked --all-targets -- -D warnings",
+              "conclusion": "success"
+            },
+            {
+              "name": "Verify workspace unit tests on Linux",
+              "conclusion": "skipped"
+            },
+            {
+              "name": "Run cargo test --locked --lib session:: -- --test-threads=4",
+              "conclusion": "success"
+            },
+            {
+              "name": "Run cargo test --locked --lib client::protocol_tests -- --test-threads=4",
+              "conclusion": "success"
+            },
+            {
+              "name": "Run cargo build --locked --bin ssmcp",
+              "conclusion": "success"
+            },
+            {
+              "name": "Exercise private native session lifecycle",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "id": 136600512121,
+          "name": "native-lifecycle (windows-2025)",
+          "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44826521363/job/136600512121",
+          "head_sha": "441814bf9945e0b49bb3dde170e57762abf8318e",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at_utc": "2026-11-20T22:15:36Z",
+          "steps": [
+            {
+              "name": "Run cargo fmt --all -- --check",
+              "conclusion": "success"
+            },
+            {
+              "name": "Run cargo clippy --locked --all-targets -- -D warnings",
+              "conclusion": "success"
+            },
+            {
+              "name": "Verify workspace unit tests on Linux",
+              "conclusion": "skipped"
+            },
+            {
+              "name": "Run cargo test --locked --lib session:: -- --test-threads=4",
+              "conclusion": "success"
+            },
+            {
+              "name": "Run cargo test --locked --lib client::protocol_tests -- --test-threads=4",
+              "conclusion": "success"
+            },
+            {
+              "name": "Run cargo build --locked --bin ssmcp",
+              "conclusion": "success"
+            },
+            {
+              "name": "Exercise private native session lifecycle",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "id": 136600512288,
+          "name": "native-lifecycle (ubuntu-24.04)",
+          "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44826521363/job/136600512288",
+          "head_sha": "441814bf9945e0b49bb3dde170e57762abf8318e",
+          "status": "completed",
+          "conclusion": "success",
+          "completed_at_utc": "2026-11-20T22:14:16Z",
+          "steps": [
+            {
+              "name": "Run cargo fmt --all -- --check",
+              "conclusion": "success"
+            },
+            {
+              "name": "Run cargo clippy --locked --all-targets -- -D warnings",
+              "conclusion": "success"
+            },
+            {
+              "name": "Verify workspace unit tests on Linux",
+              "conclusion": "success"
+            },
+            {
+              "name": "Run cargo test --locked --lib session:: -- --test-threads=4",
+              "conclusion": "skipped"
+            },
+            {
+              "name": "Run cargo test --locked --lib client::protocol_tests -- --test-threads=4",
+              "conclusion": "skipped"
+            },
+            {
+              "name": "Run cargo build --locked --bin ssmcp",
+              "conclusion": "success"
+            },
+            {
+              "name": "Exercise private native session lifecycle",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ],
+      "linux_outer_library_summary": {
+        "job_id": 136600512288,
+        "passed": 2034,
+        "failed": 0,
+        "ignored": 23,
+        "filtered_out": 0,
+        "elapsed_seconds": 30.44,
+        "nested_one_pass_subprocess_summaries_excluded": 3,
+        "explicit_successful_new_regression": "client::steering::tests::disabled_chat_keeps_the_outbox_and_advances_reload_without_queue_commands",
+        "raw_log_verification_scope": "primary reviewer relayed independent complete Linux raw-log read, including exact checkout and outer summary; this checkpoint independently read run/job metadata",
+        "announced_test_count": 2057,
+        "explicit_successful_tests": [
+          {
+            "name": "client::steering::tests::disabled_chat_keeps_the_outbox_and_advances_reload_without_queue_commands",
+            "log_line": 6644,
+            "result": "ok"
+          },
+          {
+            "name": "client::terminal::conversation::tests::mouse_selects_visible_agents_after_a_list_has_scrolled",
+            "log_line": 6878,
+            "result": "ok"
+          },
+          {
+            "name": "client::terminal::conversation::timing::tests::real_frames_keep_a_live_clock_visible_beside_a_draft_and_specific_notice",
+            "log_line": 6911,
+            "result": "ok"
+          },
+          {
+            "name": "client::terminal::tests::connection_footer_uses_the_same_last_row_in_every_layout",
+            "log_line": 7172,
+            "result": "ok"
+          }
+        ]
+      },
+      "scope": "success of this fixed-head workflow only; no fresh development-machine five-artifact acceptance, actual private reload, paste A/B or P1 result inferred",
+      "old_c248_counts_reused": false
+    }
+  },
+  "build_artifact_status": {
+    "current_441": {
+      "source_commit": "441814bf9945e0b49bb3dde170e57762abf8318e",
+      "verification_at_utc": "2026-11-20T22:15:38Z",
+      "verification_origin": "primary reviewer actual development-machine read",
+      "target_lock_acquired": true,
+      "target_lock_wait_seconds": 331.048719,
+      "initial_source_metadata_dependency_guards": "completed",
+      "library_no_run_started_at_utc": "2026-11-20T22:14:50Z",
+      "stage": "library no-run compilation actually running",
+      "fresh_five_artifact_set_accepted": false,
+      "development_machine_product_test_pass_receipt": false
+    },
+    "cancelled_c248": {
+      "source_commit": "c248d420e01d04c06be967e84543ce7d883f4cb3",
+      "status": "separate development-machine build cancelled",
+      "owner_addendum_reported_copied_items": 1,
+      "item_kind": "library test artifact; partial set, not a claim of truncated file bytes",
+      "complete_five_artifact_set": false,
+      "consumed_by_followup_acceptance": false,
+      "verification_scope": "build-owner addendum; not independent acceptance of the retained artifact"
+    }
+  },
+  "remaining_status": {
+    "new_paste_ab_result": false,
+    "final_p1_result": false,
+    "release_result": false,
+    "no_historical_results_retagged": true,
+    "ci_441_workflow_success": true,
+    "input_none_reload_evidence": "fixed 441 library regression passed; actual process reexec remains pending",
+    "actual_input_none_process_reexec_result": false
+  },
+  "prior_cutoff_utc": "2026-11-20T22:11:00Z",
+  "history_at_2211": {
+    "source_441_ci": {
+      "run_id": 44826521363,
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44826521363",
+      "head_sha": "441814bf9945e0b49bb3dde170e57762abf8318e",
+      "status_at_cutoff": "in_progress",
+      "conclusion_at_cutoff": null,
+      "independent_read_at_utc": "2026-11-20T22:13:54Z",
+      "independent_read_status": "in_progress",
+      "independent_read_conclusion": null,
+      "acceptance_claimed": false
+    },
+    "development_build": {
+      "source_commit": "441814bf9945e0b49bb3dde170e57762abf8318e",
+      "status_at_cutoff": "build owner reports running",
+      "fresh_five_artifact_set_accepted": false
+    }
+  }
+}

@@ -1,0 +1,689 @@
+{
+  "schema": "ssmcp-resume-fix-and-source-scoped-validation-stage.v1",
+  "snapshot_utc": "2026-11-21 19:02:13 UTC",
+  "source": {
+    "commit": "d67ae612c8acc9d3a2e9090996b69826d1b48d8d",
+    "tree": "d95fdaf496ec0975b72fa6522a24aa7e7113d2e9",
+    "branch": "fix/release-0.10.26-20261121",
+    "version": "0.10.26",
+    "frozen": true,
+    "freeze_status": "Final formatter-only successor frozen by original source coordinator",
+    "commits_since_main": 9,
+    "changed_paths_since_main": 13,
+    "actual_compare": {
+      "source": "6e9336bb1423aeec5e1228c3b555f5de77349f9b",
+      "tree": "04fd14fba3f75076f8e281d3ee4567be408d3d80",
+      "main": "d4887aee7117973f890e7806c429eabf2199856c",
+      "ahead_by": 8,
+      "behind_by": 0,
+      "total_commits": 8,
+      "changed_paths": [
+        ".github/workflows/release.yml",
+        "Cargo.lock",
+        "Cargo.toml",
+        "docs/release-notes-0.10.26.md",
+        "scripts/e2e_agents.py",
+        "scripts/e2e_input_history.py",
+        "scripts/release.py",
+        "scripts/test_release.py",
+        "src/client.rs",
+        "src/client/terminal.rs",
+        "src/client/terminal/conversation/history.rs",
+        "src/computer/storage.rs",
+        "src/computer/tests.rs"
+      ],
+      "commits": [
+        "6c79f12d9e9a71bb04eed9e1c2a229c3d1723751",
+        "3abb6e8ada2e218e0de8ca5be33c62e0cbf5bab3",
+        "cee66ce281ff21df8499e626d359754da743b3de",
+        "86e8ede97445cbbe17e1ee2e9fe393326f356a32",
+        "12340059598e3ee39aa88ba22a0e83b341c4b3e4",
+        "4c6cd21b2ab46c11febbac7c1921e302da49f4b2",
+        "0dc3f6cd784ae9b34d738de9f2ef663400f94932",
+        "6e9336bb1423aeec5e1228c3b555f5de77349f9b"
+      ]
+    },
+    "format_successor": {
+      "parent": "6e9336bb1423aeec5e1228c3b555f5de77349f9b",
+      "changed_paths": [
+        "src/client.rs"
+      ],
+      "three_format_only_hunks": true,
+      "root_actual_commit_diff_read": true
+    }
+  },
+  "release_notes": {
+    "branch": "fix/release-0.10.26-20261121",
+    "parent": "0dc3f6cd784ae9b34d738de9f2ef663400f94932",
+    "tree": "04fd14fba3f75076f8e281d3ee4567be408d3d80",
+    "commit": "6e9336bb1423aeec5e1228c3b555f5de77349f9b",
+    "file": "docs/release-notes-0.10.26.md",
+    "bytes": 9447,
+    "sha256": "e747b9501705797d822f07ebbbc123c4c972ec5c6747d8f19e0d5cf2998ec326",
+    "blob": "070c06804a5f58892d2b8878d6f532640c94746c",
+    "exact_file_readback": true,
+    "head_matches": true,
+    "changed_files": [
+      {
+        "path": "docs/release-notes-0.10.26.md",
+        "status": "modified"
+      }
+    ],
+    "exact_owned_file_only": true,
+    "actual_code_read": "0dc3f6cd784ae9b34d738de9f2ef663400f94932"
+  },
+  "implemented_fixes": {
+    "Linux_optional_provider_fixture": {
+      "explicit_providers": [
+        "codex",
+        "claude",
+        "pi",
+        "opencode",
+        "ssmcp"
+      ],
+      "retired_Playwright_not_registered": true,
+      "independent_invocation_trap": true,
+      "lazy_cache_refresh_isolation_assertions_retained": true
+    },
+    "lifecycle_storage_fixture": {
+      "cfg_test_per_store_target": true,
+      "synthetic_archive_never_executed": true,
+      "production_host_target_policy_retained": true,
+      "security_assertions_retained": true
+    },
+    "release_policy": {
+      "explicit_crate_deferrals": [
+        "0.10.25",
+        "0.10.26"
+      ],
+      "explicit_26_server_deployment_deferred": true,
+      "future_0_10_27_regular_policy_retained": true,
+      "job_step_artifact_structure_unchanged": true,
+      "v26_test_route_coverage": true,
+      "full_chain_fixture_still_v25": true
+    }
+  },
+  "validation": {
+    "source": "4c6cd21b2ab46c11febbac7c1921e302da49f4b2",
+    "tree": "6b40a2f7e2349c888d78a98d1f70692a938351a3",
+    "light": {
+      "status": "passed",
+      "counts": {
+        "Node": 64,
+        "release_python": 118,
+        "deployment_python": 35
+      },
+      "receipt": {
+        "file": "cli-validation-20261121-v7/light-checks/receipt.json",
+        "bytes": 24331,
+        "sha256": "ea2629d51421c3ebc69700667ad757ee51d42e5b0159e1c2eba562629f489d09"
+      },
+      "evidence": "Original source coordinator completion plus original acceptance coordinator independent complete read",
+      "exit_code": 0,
+      "both_eof": true,
+      "stdout_bytes": 18467,
+      "stderr_bytes": 0,
+      "independent_original_read": true
+    },
+    "first_library_attempt": {
+      "status": "resource_wait_timeout",
+      "error": "TimeoutError('shared Cargo owner lock busy')",
+      "resource_wait_budget_seconds": 180,
+      "library_artifact": null,
+      "source_clean": true,
+      "compiler_failure_claimed": false,
+      "receipt": {
+        "file": "cli-validation-20261121-v7/library-build.json",
+        "bytes": 6055,
+        "sha256": "ba990f893e6656633d02ea18d5da67c700ae31933ddc70df6d0862d5836fa514"
+      },
+      "exit_code": 1,
+      "both_eof": true,
+      "stdout_bytes": 992,
+      "stderr_bytes": 0,
+      "independent_original_read": true,
+      "no_Cargo_execution": true
+    },
+    "old_v25_tests_inherited_as_new_execution": false,
+    "resource_retry": {
+      "source": "4c6cd21b2ab46c11febbac7c1921e302da49f4b2",
+      "stage": "v8",
+      "status": "Completed build with exit0",
+      "resource_wait_budget_seconds": 600,
+      "native_total_seconds": 900,
+      "overall_deadline_seconds": 840,
+      "cargo_compile_cap_seconds": 660,
+      "test_internal_budgets_and_assertions_unchanged": true,
+      "light_checks_not_rerun": true,
+      "unrelated_owners_untouched": true
+    },
+    "library_build_v8": {
+      "source": "4c6cd21b2ab46c11febbac7c1921e302da49f4b2",
+      "exit_code": 0,
+      "both_eof": true,
+      "binary": {
+        "bytes": 159890640,
+        "sha256": "9cc239292099c9982a0fbf3b48b350ff7a53bf00e27b4b63de5757a6abe3b796",
+        "fresh": false
+      },
+      "receipt": {
+        "file": "cli-validation-20261121-v8/library-build.json",
+        "bytes": 11337,
+        "sha256": "242bcc54364fa2997f077d99c54d37138efd101334d66101e9c1aac960c1733a"
+      },
+      "evidence": "Original source coordinator completion plus original acceptance coordinator independent complete read",
+      "running": false,
+      "no_truncation": true,
+      "stdout_bytes": 2542,
+      "stderr_bytes": 0,
+      "independent_original_read": true,
+      "package_version": "0.10.26"
+    },
+    "full_library_tests": {
+      "source": "4c6cd21b2ab46c11febbac7c1921e302da49f4b2",
+      "exit_code": 0,
+      "both_eof": true,
+      "private": {
+        "passed": 1972,
+        "failed": 0,
+        "ignored": 12,
+        "filtered": 6
+      },
+      "host": {
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 1984
+      },
+      "required_code_mode": {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 1988
+      },
+      "nested_fixture_process_result_lines_not_added_to_counts": true,
+      "source_clean": true,
+      "receipt": {
+        "file": "cli-validation-20261121-v8/library-tests/receipt.json",
+        "bytes": 217118,
+        "sha256": "b289e56f0aae1708f49a11162d9d9893b9c51c0d692345eebe38fe6ac8308450"
+      },
+      "evidence": "Original source coordinator completion plus original acceptance coordinator independent complete read",
+      "independent_original_read": true,
+      "running": false,
+      "stdout_bytes": 1482,
+      "stderr_bytes": 0,
+      "no_truncation": true
+    },
+    "clippy": {
+      "source": "4c6cd21b2ab46c11febbac7c1921e302da49f4b2",
+      "exit_code": 0,
+      "both_eof": true,
+      "linux_exit": 0,
+      "windows_gnu_exit": 0,
+      "all_targets": true,
+      "deny_warnings": true,
+      "receipt": {
+        "file": "cli-validation-20261121-v8/clippy/receipt.json",
+        "bytes": 2398,
+        "sha256": "044dac9dc45ff7440e49fdf82a59c6a9275594640bb26b92e82a77e776eea0f9"
+      },
+      "evidence": "Original source coordinator completion plus original acceptance coordinator independent complete read; source remains4c6",
+      "independent_original_read": true,
+      "stdout_bytes": 2088,
+      "stderr_bytes": 0,
+      "no_truncation": true
+    }
+  },
+  "H2_static_package": {
+    "directory": "publication-verifier-git-source-zuse-cli-v26-unbound",
+    "source": "4c6cd21b2ab46c11febbac7c1921e302da49f4b2",
+    "tree": "6b40a2f7e2349c888d78a98d1f70692a938351a3",
+    "baseline_static_commit": "840629d64e3915bbe2b17496aa600d067e34b7e3",
+    "files": [
+      {
+        "name": "README.md",
+        "bytes": 7549,
+        "sha256": "13a22467893dc0480fc03216cbc0af3f9bd3fc70e2465ec6db0e594d4adb87db"
+      },
+      {
+        "name": "changes-from-H2-CLI-v25.patch",
+        "bytes": 15783,
+        "sha256": "270b5bf605b1f17f25fbbbf0fe151b9e346c690f7cc933b18027610365c676eb"
+      },
+      {
+        "name": "dispatch_receipt_adapter.py",
+        "bytes": 14758,
+        "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4"
+      },
+      {
+        "name": "manual_main_provenance.py",
+        "bytes": 43709,
+        "sha256": "4683164cc124e4f048f6d64c8fd481f1b9970be0ff4c2364607039f6b24d9bcf"
+      },
+      {
+        "name": "preparation-identity.json",
+        "bytes": 3658,
+        "sha256": "8ba875c83ab4a82902771a1e3346bf727e004baf44c690a48a5863b8db16c379"
+      },
+      {
+        "name": "reviewed-recipe.json",
+        "bytes": 3506,
+        "sha256": "58529002b276cb8584e833cb23fc81a37ea807b51d8c8a422b4c9266fbc8bdfd"
+      },
+      {
+        "name": "static-review.json",
+        "bytes": 1709,
+        "sha256": "787e2d21001f9c8252b4cab2bfd42405bf7601036a658e7b344bb4214eddd7c1"
+      },
+      {
+        "name": "verify_published_manual_main.py",
+        "bytes": 48801,
+        "sha256": "04945d54734ce8b6c62900d71ca365217030cda486ed204e76cafa6972a59e12"
+      }
+    ],
+    "review": {
+      "schema": "ssmcp-h2-cli-v26-static-review-v1",
+      "status": "independently_static_reviewed_unexecuted_unbound",
+      "source": "4c6cd21b2ab46c11febbac7c1921e302da49f4b2",
+      "tree": "6b40a2f7e2349c888d78a98d1f70692a938351a3",
+      "baseline_commit": "840629d64e3915bbe2b17496aa600d067e34b7e3",
+      "recipe_bytes_git_blob_identity_matched": true,
+      "recursive_source_tree_truncated": false,
+      "actual_gitlink_count": 3,
+      "ast_parse": true,
+      "changed_functions": {
+        "verify_published_manual_main.py": [
+          "verify_source_contract"
+        ],
+        "manual_main_provenance.py": [
+          "validated_release"
+        ],
+        "dispatch_receipt_adapter.py": []
+      },
+      "changed_function_bodies_are_version_message_literals_only": true,
+      "function_signatures_unchanged": true,
+      "logic_unchanged_after_allowed_version_recipe_constants_and_message_normalization": true,
+      "dispatch_adapter_unchanged": true,
+      "bindings": {
+        "product_sha": null,
+        "workflow_sha": null,
+        "tag": null,
+        "run_id": null,
+        "run_attempt": null,
+        "dispatch_capture": null,
+        "native_execution_receipt": null
+      },
+      "modules_imported": false,
+      "helper_executed": false,
+      "tests_run": false,
+      "native_execution": false,
+      "cargo_or_product_run": false,
+      "workflow_dispatch_or_publication": false,
+      "install_or_production_reload": false,
+      "independent_static_review_blockers": 0,
+      "independent_review": "Direct collaborator read actual baseline and successor files, independently recomputed all six recipe byte/SHA256/Git blob identities, verified exact patch and metadata, and confirmed normalized AST, signatures, unchanged adapter and all provenance/job/asset constraints. No import, execution, fixtures or product tests."
+    },
+    "recipe_identity": {
+      "source": "4c6cd21b2ab46c11febbac7c1921e302da49f4b2",
+      "tree": "6b40a2f7e2349c888d78a98d1f70692a938351a3",
+      "files": [
+        {
+          "path": ".github/workflows/release.yml",
+          "bytes": 22855,
+          "sha256": "d7f29c1ac896e247a1c7e00aa3f68e349cbe8fd81a45dd3c317e5c25fc26e677",
+          "git_blob": "d8d7e4ffcf7fc50e9f91e3de67f61a8ffc3f472c",
+          "same_as_v25": false
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "bytes": 14994,
+          "sha256": "e7c753ca1a058b43f798cb1f31bc2b8980a09b3bc72cdb1996ef6eaadb5a7172",
+          "git_blob": "14629b92b94ed22deba31850185187abd93444ef",
+          "same_as_v25": true
+        },
+        {
+          "path": ".github/workflows/deploy-server.yml",
+          "bytes": 4499,
+          "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c",
+          "git_blob": "a550ffbfb4b915af8d6922bdf0f05ba5c58763ca",
+          "same_as_v25": true
+        },
+        {
+          "path": "scripts/release.py",
+          "bytes": 65111,
+          "sha256": "a11208e6f6949d0af6893774046295b71aaa0fa8b65ca8a462f53b94db5a1855",
+          "git_blob": "1c8c3ae1a89f91c19b7842087ebc81065f0eba44",
+          "same_as_v25": false
+        },
+        {
+          "path": "scripts/install.sh",
+          "bytes": 6783,
+          "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906",
+          "git_blob": "7620b1d29b87173492ea9d8b74d846f8d9c3c185",
+          "same_as_v25": true
+        },
+        {
+          "path": "scripts/install.ps1",
+          "bytes": 12928,
+          "sha256": "e2c0607275d6b04315e4ddce85d01280dcc56b2bb2710be0849fbaeee626d051",
+          "git_blob": "7c2cc8cd0ad5d16cc34215a2f4a36ffd3005c621",
+          "same_as_v25": true
+        }
+      ],
+      "changed_recipe_paths": [
+        ".github/workflows/release.yml",
+        "scripts/release.py"
+      ],
+      "gitlinks": [
+        {
+          "path": "crates/zharness",
+          "mode": "160000",
+          "type": "commit",
+          "sha": "5f9a9f58f090326bf2d43f4df2cc90c1bc674c21"
+        },
+        {
+          "path": "crates/zplugin",
+          "mode": "160000",
+          "type": "commit",
+          "sha": "592a1be623b81a775026c470e6f0efe91fcf78f3"
+        },
+        {
+          "path": "crates/ztuio",
+          "mode": "160000",
+          "type": "commit",
+          "sha": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e"
+        }
+      ],
+      "git_tree_truncated": false,
+      "H2_imported": false,
+      "H2_executed": false,
+      "S": null,
+      "P": null,
+      "run": null
+    },
+    "H2_imported": false,
+    "H2_executed": false,
+    "version_only_and_two_recipe_pins_changed": true,
+    "original_native_flat_contract_unchanged": true,
+    "fixed_docs_commit": "432900420ef4fbe093ad284cb49e66e1e2892800",
+    "successor_recipe_reuse_status": "All six recipes and three gitlinks independently matched at6e; d67 actual only-client-format diff leaves these unchanged",
+    "successor_recipe_reuse": {
+      "source": "6e9336bb1423aeec5e1228c3b555f5de77349f9b",
+      "tree": "04fd14fba3f75076f8e281d3ee4567be408d3d80",
+      "all_six_full_bytes_sha256_git_blobs_match": true,
+      "recursive_tree_count": 1299,
+      "recursive_tree_truncated": false,
+      "all_three_gitlinks_match": true,
+      "format_successor": "d67ae612c8acc9d3a2e9090996b69826d1b48d8d",
+      "successor_only_client_rs_changed": true,
+      "modules_imported": false,
+      "H2_executed": false
+    }
+  },
+  "previous_v25": {
+    "run": {
+      "id": 44934221685,
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "d4887aee7117973f890e7806c429eabf2199856c",
+      "run_attempt": 1,
+      "created_at": "2026-11-21T18:12:20Z",
+      "updated_at": "2026-11-21T18:24:57Z",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44934221685"
+    },
+    "jobs": [
+      {
+        "id": 136937233483,
+        "name": "validate",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937412816,
+        "name": "Build x86_64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937412832,
+        "name": "Build x86_64-apple-darwin",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937412836,
+        "name": "Build aarch64-pc-windows-msvc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937412871,
+        "name": "Build x86_64-pc-windows-msvc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937412885,
+        "name": "Build aarch64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937412929,
+        "name": "Build aarch64-apple-darwin",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937413125,
+        "name": "checks / linux (ubuntu-24.04)",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "id": 136937413140,
+        "name": "checks / Client (macos-15)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937413183,
+        "name": "checks / linux (ubuntu-24.04-arm)",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "id": 136937413206,
+        "name": "checks / Client (windows-2025)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937413219,
+        "name": "checks / Client (macos-15-intel)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937413350,
+        "name": "checks / Client (windows-11-arm)",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "id": 136939220550,
+        "name": "Verify installed server x86_64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136939220635,
+        "name": "Verify installed server aarch64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136940786764,
+        "name": "finalize",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 136940787073,
+        "name": "publish_crates",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 136940787588,
+        "name": "publish_release",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "id": 136940788038,
+        "name": "deploy_server",
+        "status": "completed",
+        "conclusion": "skipped"
+      }
+    ],
+    "counts": {
+      "success": 12,
+      "failure": 3,
+      "skipped": 4
+    },
+    "release_by_tag_http_status": 404,
+    "tag_ref_still_exists": true,
+    "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+    "workflow_sha": "d4887aee7117973f890e7806c429eabf2199856c",
+    "original_native_result_missing": true,
+    "H2_completed": false,
+    "evidence": "Root actual GitHub run/jobs/release GET read"
+  },
+  "actual_main_sync": {
+    "target": "d4887aee7117973f890e7806c429eabf2199856c",
+    "prior": "3730c039ec15a33af7bb3b56a9811e5649a99f85",
+    "exit_code": 0,
+    "both_eof": true,
+    "mode": "normal fast-forward",
+    "local_dependency_HEAD_diff_untracked_hashes_preserved": true,
+    "user_modifications_preserved": true,
+    "user_worktree_clean": false,
+    "owned_validation_source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+    "owned_validation_clean": true,
+    "receipt": {
+      "file": "git-sync-main-post176-20261121/receipt.json",
+      "bytes": 2841,
+      "sha256": "fadcdc18ead7704bc6cd9a75dc3c1654edf33a577ea0e604caa8e2c38c21ede9"
+    },
+    "evidence": "Original source coordinator completion and original acceptance coordinator independent complete read of original job",
+    "independent_original_read": true,
+    "stdout_bytes": 594,
+    "stderr_bytes": 0
+  },
+  "current_release": {
+    "planned_tag": "v0.10.26",
+    "candidate_source": "d67ae612c8acc9d3a2e9090996b69826d1b48d8d",
+    "S": "d67ae612c8acc9d3a2e9090996b69826d1b48d8d",
+    "P": null,
+    "run": null,
+    "dispatch": null,
+    "complete": false,
+    "merge_tag_dispatch_started": false,
+    "server_deployment": false,
+    "registry_publication": false
+  },
+  "exec_read_live_scope": {
+    "implementation_in_source": true,
+    "original_screenshot_binary_and_response_not_available": true,
+    "live_UI_updated_claimed": false
+  },
+  "report_group": {
+    "native_product_or_Cargo": 0,
+    "product_source_writes": 0,
+    "source_branch_release_note_files_added": 1,
+    "H2_execution": 0,
+    "POST": 0,
+    "source_branch_release_note_followup_commits": 1
+  },
+  "successor_validation": {
+    "source": "d67ae612c8acc9d3a2e9090996b69826d1b48d8d",
+    "stage": "v10",
+    "status": "library build started; no completed result",
+    "old_results_inherited_as_successor_execution": false
+  },
+  "resume_fix": {
+    "user_requested": true,
+    "core": {
+      "commit": "0dc3f6cd784ae9b34d738de9f2ef663400f94932",
+      "tree": "97fcba23f97489f66e5ed6a30077215f2e438788",
+      "parent": "4c6cd21b2ab46c11febbac7c1921e302da49f4b2",
+      "paths": [
+        "scripts/e2e_input_history.py",
+        "src/client.rs",
+        "src/client/terminal.rs",
+        "src/client/terminal/conversation/history.rs"
+      ],
+      "root_actual_diff_read": true,
+      "independent_source_review": "READY as source524; static only",
+      "new_source_runtime_execution_claimed": false
+    },
+    "before_reproduction": {
+      "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+      "binary_sha256": "f87fa3eb4afb6fbe7f9e93773a1c0bbcc775d23f941b8f182a6cc8932bc3b1d9",
+      "retired_ssh_error_reproduced": true,
+      "isolated_private_config": true,
+      "receipt": {
+        "file": "resume-user-bug-before-20261121/receipt.json",
+        "bytes": 586,
+        "sha256": "b8402d9fc81d8461dac7aac8d5c214b2c3b7006a0f8ae5cc2dd287858c7d92c8"
+      },
+      "evidence": "Original source coordinator actual completed reproduction",
+      "wrapper_exit_code": 0,
+      "command_exit_code": 1,
+      "wrapper_stdout_bytes": 798,
+      "wrapper_stderr_bytes": 0,
+      "both_eof": true,
+      "no_truncation": true,
+      "user_configuration_used": false,
+      "independent_original_read": true
+    },
+    "implemented_behavior": {
+      "leading_CLI_resume": true,
+      "remaining_normal_startup_flags": true,
+      "empty_unarchived_workspace_history_exits_zero_before_login_or_network": true,
+      "history_requires_stdin_and_stderr_TTY": true,
+      "existing_picker_opened_once_after_connection": true,
+      "temporary_chat_layout_not_persisted": true,
+      "existing_workspace_archive_lease_checks_retained": true,
+      "no_automatic_latest_choice": true,
+      "no_request_replay_or_model_PTY_credential_restore": true,
+      "noninteractive_modes_rejected": true,
+      "active_retired_computer_control_help_removed": true
+    },
+    "new_tests_defined_but_not_yet_executed_in_successor": true,
+    "existing_history_E2E_restart_now_uses_CLI_resume": true,
+    "first_successor_attempt": {
+      "source": "6e9336bb1423aeec5e1228c3b555f5de77349f9b",
+      "stage": "v9",
+      "native_exit_code": 1,
+      "running": false,
+      "stdout_bytes": 1255,
+      "stderr_bytes": 0,
+      "both_eof": true,
+      "no_truncation": true,
+      "format_check_exit_code": 1,
+      "compiler_executed": false,
+      "library_artifact": null,
+      "product_tests_executed": false,
+      "source_clean": true,
+      "receipt": {
+        "file": "cli-validation-20261121-v9/library-build.json",
+        "bytes": 8886,
+        "sha256": "fe44bfc2e1f11a8d95ee2d5ef5b6d4fa233073ab7d7bcb11ab22f8da46ff2365"
+      },
+      "independent_original_read": true
+    }
+  }
+}

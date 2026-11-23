@@ -1,0 +1,67 @@
+{
+  "schema": "ssmcp.sha2-lowerhex-static-review.v1",
+  "status": "static_review_no_blocker",
+  "source_commit": "5d087d1f7363fe5741f6080168037623362280e7",
+  "migration_commit": "c0e8931ce5fa6f1fbabda4d939606bdb39b92bcb",
+  "read_window_utc": {
+    "start": "2026-11-20T17:57:23Z",
+    "end": "2026-11-20T18:04:10Z"
+  },
+  "source_stability": {
+    "head_unchanged": true,
+    "tracked_status_clean": true,
+    "files_hashed_before_and_after": 44
+  },
+  "scope": {
+    "rust_files_scanned": 535,
+    "migration_sites_reviewed": 49,
+    "helper_replacements": 46,
+    "bytewise_integration_test_replacements": 3
+  },
+  "findings": {
+    "digest_lowerhex_calls_remaining": 0,
+    "lowercase_fixed_width_hex": true,
+    "leading_zeroes_preserved": true,
+    "byte_order_preserved": true,
+    "id_prefixes_and_truncation_preserved": true,
+    "base64_and_raw_digest_consumers_unchanged": true
+  },
+  "key_file_sha256": {
+    "src/hex.rs": "6775d530029010a26ae4664c0c8d02e59e9bd513f5318262cadd3db92b849746",
+    "src/runtime/capabilities.rs": "3b887a3087eb08d8161a0abd3c6aeffc080a96b90a4821ec7f2340dfe6174aa5",
+    "src/commerce/store.rs": "c4107495a5721f709c85380a5a01921e8989b99ea085d80d345496efafca2011"
+  },
+  "raw_evidence": [
+    {
+      "name": "source-binding-and-consumers.log",
+      "bytes": 16876,
+      "sha256": "2a7fdb2b2b88c8e880fe4e0bd3b6053f3268bb37fb4522928d4d0af2434a3b46",
+      "native_job_id": "1c828d2fc3165848bd0b270a25c57148-118"
+    },
+    {
+      "name": "migration-diff-and-format-scan.log",
+      "bytes": 95470,
+      "sha256": "1e651dc249226b523a7aaa9ffc551d1dee5f6c06db0d8ebd2a187321f3ba43de"
+    }
+  ],
+  "preservation": {
+    "native_directory": "/home/lightjunction/Documents/GITHUB/ssmcp-root-report-handoff-20261121/sha2-lowerhex-review",
+    "copy_job_id": "1c828d2fc3165848bd0b270a25c57148-11e",
+    "copy_exit_code": 0,
+    "copied_bytes_verified": true
+  },
+  "execution": {
+    "cargo": false,
+    "rust_tests": false,
+    "pty": false,
+    "ci": false,
+    "source_edit": false,
+    "git_ref_write": false,
+    "external_model": false
+  },
+  "limitations": [
+    "Counts describe reviewed migration sites and source files, not executed passing tests.",
+    "The read-only snapshot does not automatically transfer its conclusion to a later integrated candidate.",
+    "This review does not revalidate complete signing, authentication, or TLS flows."
+  ]
+}

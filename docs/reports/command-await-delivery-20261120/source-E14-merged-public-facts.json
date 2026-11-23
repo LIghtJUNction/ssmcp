@@ -1,0 +1,557 @@
+{
+  "schema_version": 1,
+  "kind": "ssmcp-e14-completed-normal-merge-and-gate17-failure",
+  "observed_utc": "2026-11-21T10:53:44Z",
+  "author_phase": {
+    "file": "author-exit.json",
+    "bytes": 2192,
+    "sha256": "372ced9e531df6ab8af5af5cfc02b68c52ce112d57cd700dbff693f93f57c3f9",
+    "started_utc": "2026-11-21T10:26:57.306041+00:00",
+    "finished_utc": "2026-11-21T10:35:30.665512+00:00",
+    "exit_code": 0,
+    "error": null,
+    "source_start": "e3d8f00f559da097627988407ea6b14ec00e92f6",
+    "source_tree": "3a3ade1e5c2979bf23a4fe1182514bfdd5f8026c",
+    "author_wrapper_unchanged": true,
+    "rustc_wrapper_unchanged": true,
+    "same_original_author_continuation": true,
+    "launch_receipt": {
+      "file": "launch-receipt.json",
+      "bytes": 2032,
+      "sha256": "24f80214d8a6733674727ea944d05796ddbbede6c1f0d26cabc7ee03193a3ffa"
+    }
+  },
+  "source": {
+    "revisions": {
+      "start": {
+        "commit": "e3d8f00f559da097627988407ea6b14ec00e92f6",
+        "tree": "3a3ade1e5c2979bf23a4fe1182514bfdd5f8026c",
+        "parents": [
+          "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc"
+        ],
+        "subject": "fix: box scoped computer-use futures at construction [skip ci]"
+      },
+      "fixed_main": {
+        "commit": "5f4a35482c6353750248ddee8761e5fd3daffad6",
+        "tree": "1c2162abe806fe866b870081f14612e21a965559",
+        "parents": [
+          "769ab956a2d838c2c039e5abf75a953ad58bf609"
+        ],
+        "subject": "docs: record final Zuse integration validation [skip ci]"
+      },
+      "merge": {
+        "commit": "3b7641756c511174bf9830d5cd32b769b9ea3edb",
+        "tree": "86d1607a91102902e480d5a7d63dbb7e0f73272b",
+        "parents": [
+          "e3d8f00f559da097627988407ea6b14ec00e92f6",
+          "5f4a35482c6353750248ddee8761e5fd3daffad6"
+        ],
+        "subject": "merge: absorb the fixed main Zuse integration [skip ci]"
+      },
+      "num_lock_fix": {
+        "commit": "959782ed9c4da0b17e8b02746fa79d3db130fab1",
+        "tree": "971eda11a85f55760ad9a3b868cbbf8ec9b6ea2e",
+        "parents": [
+          "3b7641756c511174bf9830d5cd32b769b9ea3edb"
+        ],
+        "subject": "fix: retain unconfirmed Num Lock cleanup [skip ci]"
+      },
+      "ci_fix": {
+        "commit": "662c34c298fedc4b3ab28fc77015bd81f41f6ee4",
+        "tree": "f0e2260ac24a47d47a070d8f3f04089bca67f001",
+        "parents": [
+          "959782ed9c4da0b17e8b02746fa79d3db130fab1"
+        ],
+        "subject": "ci: preserve candidate clients only in standalone CI [skip ci]"
+      },
+      "e2e_sync": {
+        "commit": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+        "tree": "be0e7801b3455d406781cde880824fc937c1b8f4",
+        "parents": [
+          "662c34c298fedc4b3ab28fc77015bd81f41f6ee4"
+        ],
+        "subject": "test: synchronize the exact E2E computer tool catalog [skip ci]"
+      },
+      "final": {
+        "commit": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+        "tree": "be0e7801b3455d406781cde880824fc937c1b8f4",
+        "parents": [
+          "662c34c298fedc4b3ab28fc77015bd81f41f6ee4"
+        ],
+        "subject": "test: synchronize the exact E2E computer tool catalog [skip ci]"
+      }
+    },
+    "merge_strategy": "ort; automatic without conflicts",
+    "main_increment_base": "64738751cb59af9ef0d467ce34c50f091d2f6fa4",
+    "main_imported_commits": [
+      "5f4a35482c6353750248ddee8761e5fd3daffad6",
+      "769ab956a2d838c2c039e5abf75a953ad58bf609",
+      "1cb14141271a760bbc360eb739b02166e5cec856",
+      "b7d622e311f77d3d751ee5f10a9b5ed9d9319cbb",
+      "a9436fa9f11e7301c782a326e7e6face7c6622e2",
+      "e065c1eb54685276de6fe471e44c22d58af6e2e8"
+    ],
+    "main_imported_paths": [
+      ".github/workflows/ci.yml",
+      "docs/computer-use.md",
+      "docs/zuse-input-20261121.md",
+      "src/browser.rs",
+      "src/computer.rs",
+      "src/computer/host_control.rs",
+      "src/computer/host_control/storage.rs",
+      "src/computer/host_control/tests.rs",
+      "src/computer/isolated.rs",
+      "src/computer/routing.rs",
+      "src/computer/zuse_backend.rs",
+      "src/computer/zuse_backend/browser_tests.rs",
+      "src/computer/zuse_backend/wayland_tests.rs",
+      "src/wire/openai.rs"
+    ],
+    "own_fix_paths": [
+      ".github/workflows/ci.yml",
+      "scripts/e2e.py",
+      "src/computer/zuse_backend.rs"
+    ],
+    "total_changed_paths": [
+      ".github/workflows/ci.yml",
+      "docs/computer-use.md",
+      "docs/zuse-input-20261121.md",
+      "scripts/e2e.py",
+      "src/browser.rs",
+      "src/computer.rs",
+      "src/computer/host_control.rs",
+      "src/computer/host_control/storage.rs",
+      "src/computer/host_control/tests.rs",
+      "src/computer/isolated.rs",
+      "src/computer/routing.rs",
+      "src/computer/zuse_backend.rs",
+      "src/computer/zuse_backend/browser_tests.rs",
+      "src/computer/zuse_backend/wayland_tests.rs",
+      "src/wire/openai.rs"
+    ],
+    "ordinary_push_count": 2,
+    "pushes": [
+      {
+        "index": 1,
+        "exit_code": 0,
+        "remote_head": "3b7641756c511174bf9830d5cd32b769b9ea3edb",
+        "ordinary_push": true,
+        "remote_readback_record_present": true
+      },
+      {
+        "index": 2,
+        "exit_code": 0,
+        "remote_head": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+        "ordinary_push": true,
+        "remote_readback_record_present": true
+      }
+    ],
+    "clean_status": {
+      "porcelain": "",
+      "worktree_and_index_clean": true,
+      "submodules_clean": true
+    },
+    "package_version": "0.10.25"
+  },
+  "actual_main_merge": {
+    "commit": "401581267005e64f1ccf99e1590df285a9d7c158",
+    "tree": "be0e7801b3455d406781cde880824fc937c1b8f4",
+    "parents": [
+      "5f4a35482c6353750248ddee8761e5fd3daffad6",
+      "5a45be0401caf7fcd462fa1783c157e7f4c77019"
+    ],
+    "pr": 168,
+    "merged_at": "2026-11-21T10:38:37Z",
+    "commit_time": "2026-11-21T10:38:37Z",
+    "actual_main_ref_read": true,
+    "tree_equals_author_tree": true,
+    "author_commit_is_real_merge_parent": true,
+    "full_gate_passed": false
+  },
+  "fixes": {
+    "num_lock": {
+      "commit": "959782ed9c4da0b17e8b02746fa79d3db130fab1",
+      "upstream_source": "crates/zuse/src/platform/wayland_keyboard.rs at ac5713: a short input write may have sent the press, and the fallback release result is discarded. I/O write error also lacks release confirmation.",
+      "new_boundary": "The production num_lock arm calls execute_num_lock. Argument validation, cancellation and the WorkerTicket permit run before the injected native closure. A native error reaching that closure clears cleanup_ok, conservatively including opaque errors that do not prove preflight. The existing readback decode path is unchanged after successful native dispatch.",
+      "reply_and_parent": "worker_main reports cleanup_ok=false in Reply and takes its existing unconfirmed-cleanup exit path. The parent leaves worker.input_pending set, records the error in ReleaseTasks and waits for worker reaping through the unchanged tracker path.",
+      "no_retry_or_toggle_replay": true,
+      "key_type_preflight_whitelist_unchanged": true,
+      "linux_default_regressions_defined": [
+        "num_lock_uncertain_native_write_marks_worker_cleanup_unconfirmed",
+        "num_lock_pre_dispatch_cancellation_and_success_preserve_cleanup"
+      ],
+      "upstream_partial_write_description_is_author_receipt_and_source_review_evidence_not_a_root_device_reproduction": true,
+      "root_and_direct_reviewer_checked_fixed_local_propagation": true,
+      "new_tests_are_synthetic_helper_level_definitions": true,
+      "worker_IPC_or_real_device_failure_executed": false,
+      "new_regressions_executed_during_author_phase": false,
+      "subsequent_gate17_both_new_regression_lines_ok": true
+    },
+    "ci": {
+      "commit": "662c34c298fedc4b3ab28fc77015bd81f41f6ee4",
+      "workflow_file": {
+        "imported": {
+          "blob": "8569a033706c114a84f18bbe3c4001f06798f0d9",
+          "bytes": 15324,
+          "sha256": "c154b14dcc67b5794c82762881d65bfcb70f8ed904442ed070e80375ad0d9508"
+        },
+        "final": {
+          "blob": "762eec62ae3e8d842f1188141ce13a422e931838",
+          "bytes": 15351,
+          "sha256": "d60f0b21ce4c16440d3dd39c1fb3d53fb21de3bb889a30c4ed4f8ae7822f9317"
+        }
+      },
+      "condition": "if: matrix.runner == 'ubuntu-24.04' && github.event_name == 'workflow_dispatch' && github.workflow == 'CI'",
+      "basis": "The github context in a reusable workflow comes from the caller, including github.workflow. A Release workflow_dispatch therefore has github.workflow=Release.",
+      "reference": "https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context",
+      "artifact_step_name_upload_action_path_and_retention_preserved": true,
+      "release_download_glob_and_strict_file_set_unchanged": true,
+      "real_release_h2_skipped_step_observed": false,
+      "root_fixed_ci_read_in_full": true,
+      "release_runtime_skip_observed": false
+    },
+    "e2e_catalog": {
+      "commit": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+      "all_platforms_added": [
+        "ssmcp.computer.watch_until_click"
+      ],
+      "linux_only_added": [
+        "ssmcp.computer.move_path",
+        "ssmcp.computer.keyboard_state",
+        "ssmcp.computer.num_lock"
+      ],
+      "e2e_agents_uses_same_set": true,
+      "strict_exact_names_count_and_input_schema_checks_preserved": true,
+      "source_reachability_verified": true,
+      "e2e_scripts_executed": false,
+      "root_full_patch_read": true,
+      "exact_checks_not_relaxed": true
+    }
+  },
+  "file_changes_after_merge": {
+    ".github/workflows/ci.yml": {
+      "merge": {
+        "blob": "8569a033706c114a84f18bbe3c4001f06798f0d9",
+        "bytes": 15324,
+        "sha256": "c154b14dcc67b5794c82762881d65bfcb70f8ed904442ed070e80375ad0d9508"
+      },
+      "final": {
+        "blob": "762eec62ae3e8d842f1188141ce13a422e931838",
+        "bytes": 15351,
+        "sha256": "d60f0b21ce4c16440d3dd39c1fb3d53fb21de3bb889a30c4ed4f8ae7822f9317"
+      }
+    },
+    "scripts/e2e.py": {
+      "merge": {
+        "blob": "af4d2b021e060986bbffeaca2a0d83dc93902c41",
+        "bytes": 49707,
+        "sha256": "6d9ac0b14416e034e171cff3697dac8e1bd9203ccfb6b18fff9691429230505a"
+      },
+      "final": {
+        "blob": "58481fe227a3e19370cd864d6ab442ed9989ebef",
+        "bytes": 49927,
+        "sha256": "294c9fd997f30fba7f7046ef3b4f93e0876121655d952797bdb47222e9cd9c19"
+      }
+    },
+    "src/computer/zuse_backend.rs": {
+      "merge": {
+        "blob": "fd98fd380ee93632536b424a2e6b35db1818cc8b",
+        "bytes": 94753,
+        "sha256": "f103576a91aa85a52c54e46a2a4d74551716365ab70e2a5f7f4f6950d58bb80f"
+      },
+      "final": {
+        "blob": "ee42b7250ec8f3c8e9e9e90e36c9d4349bd8ab96",
+        "bytes": 97062,
+        "sha256": "e29f1bf5721c5306fd9070953b5f58198f376ebdb9f0794e4897be4677c4d9b5"
+      }
+    }
+  },
+  "checks": {
+    "first_attempt": {
+      "file": "result.json",
+      "bytes": 2748,
+      "sha256": "f278c2cc6798ba3fad9739fa9d4dc51d144442e642276f7a1fec41af9d505fa9",
+      "started_utc": "2026-11-21T10:30:28.806192+00:00",
+      "finished_utc": "2026-11-21T10:30:28.820228+00:00",
+      "status": "blocked",
+      "error": "shared target lock is busy; no command was started",
+      "exit_code": 75,
+      "check_commands_started": 0,
+      "stages": [],
+      "target_lock_acquired": false,
+      "full_original_read": true,
+      "source_snapshot_not_taken": true,
+      "lock_holder_identity_established": false
+    },
+    "successful_attempt": {
+      "result": {
+        "file": "result.json",
+        "bytes": 89054,
+        "sha256": "a2dd0104e8b153f515fc4535e283e7f4ce8881062a4b489c9161c10e8376f3e5"
+      },
+      "schema": "ssmcp-e9-author-checks-v1",
+      "started_utc": "2026-11-21T10:33:13.514990+00:00",
+      "finished_utc": "2026-11-21T10:34:50.682480+00:00",
+      "status": "passed",
+      "exit_code": 0,
+      "error": null,
+      "check_commands_started": 2,
+      "final_35_stage_gate_executed": false,
+      "owned_cleanup_complete": true,
+      "target_lock_acquired": true,
+      "target_lock_held_until_owned_cleanup": true,
+      "stop_signal": null,
+      "stages": [
+        {
+          "name": "release-policy",
+          "status": "passed",
+          "source_unchanged": true,
+          "inputs_unchanged": true,
+          "input_count": 8,
+          "inputs_equal": true,
+          "actual": {
+            "argv": [
+              "python3",
+              "-B",
+              "scripts/test_release.py"
+            ],
+            "exit_code": 0,
+            "succeeded": true,
+            "timed_out": false,
+            "error": null,
+            "started_utc": "2026-11-21T10:33:14.636997+00:00",
+            "finished_utc": "2026-11-21T10:33:22.262714+00:00",
+            "duration_seconds": 7.6257128290017135,
+            "stop_signal": null
+          },
+          "cleanup": {
+            "all_owned_descendants_reaped": true,
+            "errors": [],
+            "target_lock_held_through_cleanup": true
+          },
+          "source_before": {
+            "head": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+            "tree": "be0e7801b3455d406781cde880824fc937c1b8f4",
+            "sha256": "1975b01c49fc6fe2fffcdcd538069d0925897b2acc0abbb276b6a5750ffd8bb9",
+            "untracked_files": 0,
+            "snapshot": {
+              "file": "release-policy-before.source.json",
+              "bytes": 542640,
+              "sha256": "1975b01c49fc6fe2fffcdcd538069d0925897b2acc0abbb276b6a5750ffd8bb9"
+            },
+            "snapshot_fully_reopened_by_reporting_root": false
+          },
+          "source_after": {
+            "head": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+            "tree": "be0e7801b3455d406781cde880824fc937c1b8f4",
+            "sha256": "1975b01c49fc6fe2fffcdcd538069d0925897b2acc0abbb276b6a5750ffd8bb9",
+            "untracked_files": 0,
+            "snapshot": {
+              "file": "release-policy-after.source.json",
+              "bytes": 542640,
+              "sha256": "1975b01c49fc6fe2fffcdcd538069d0925897b2acc0abbb276b6a5750ffd8bb9"
+            },
+            "snapshot_fully_reopened_by_reporting_root": false
+          }
+        },
+        {
+          "name": "cargo-check-tests",
+          "status": "passed",
+          "source_unchanged": true,
+          "inputs_unchanged": true,
+          "input_count": 8,
+          "inputs_equal": true,
+          "actual": {
+            "argv": [
+              "cargo",
+              "check",
+              "--tests",
+              "--locked",
+              "--offline",
+              "--jobs",
+              "1"
+            ],
+            "exit_code": 0,
+            "succeeded": true,
+            "timed_out": false,
+            "error": null,
+            "started_utc": "2026-11-21T10:33:23.628964+00:00",
+            "finished_utc": "2026-11-21T10:34:49.249160+00:00",
+            "duration_seconds": 85.62026710002101,
+            "stop_signal": null
+          },
+          "cleanup": {
+            "all_owned_descendants_reaped": true,
+            "errors": [],
+            "target_lock_held_through_cleanup": true
+          },
+          "source_before": {
+            "head": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+            "tree": "be0e7801b3455d406781cde880824fc937c1b8f4",
+            "sha256": "1975b01c49fc6fe2fffcdcd538069d0925897b2acc0abbb276b6a5750ffd8bb9",
+            "untracked_files": 0,
+            "snapshot": {
+              "file": "cargo-check-tests-before.source.json",
+              "bytes": 542640,
+              "sha256": "1975b01c49fc6fe2fffcdcd538069d0925897b2acc0abbb276b6a5750ffd8bb9"
+            },
+            "snapshot_fully_reopened_by_reporting_root": false
+          },
+          "source_after": {
+            "head": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+            "tree": "be0e7801b3455d406781cde880824fc937c1b8f4",
+            "sha256": "1975b01c49fc6fe2fffcdcd538069d0925897b2acc0abbb276b6a5750ffd8bb9",
+            "untracked_files": 0,
+            "snapshot": {
+              "file": "cargo-check-tests-after.source.json",
+              "bytes": 542640,
+              "sha256": "1975b01c49fc6fe2fffcdcd538069d0925897b2acc0abbb276b6a5750ffd8bb9"
+            },
+            "snapshot_fully_reopened_by_reporting_root": false
+          }
+        }
+      ],
+      "release_policy_tests": 106,
+      "release_policy_reported_seconds": 7.35,
+      "release_policy_result": "OK",
+      "cargo_reported_duration": "1m 25s",
+      "rust_test_targets_type_checked": true,
+      "rust_test_execution": false
+    },
+    "original_logs": [
+      {
+        "stage": "release-policy",
+        "stream": "stdout",
+        "file": "024-release-policy.stdout",
+        "bytes": 4856,
+        "sha256": "dadcb0b5857d0624af7283494df208819dcbe7fad04b03832b91a414d5f7ce14",
+        "read_scope": "entire file"
+      },
+      {
+        "stage": "release-policy",
+        "stream": "stderr",
+        "file": "024-release-policy.stderr",
+        "bytes": 890,
+        "sha256": "87b4b30d57fdfccab27084d59700f7b8165d94bb4c42877a6b3c7d97cf36cc1f",
+        "read_scope": "entire file"
+      },
+      {
+        "stage": "cargo-check-tests",
+        "stream": "stdout",
+        "file": "071-cargo-check-tests.stdout",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "read_scope": "entire file"
+      },
+      {
+        "stage": "cargo-check-tests",
+        "stream": "stderr",
+        "file": "071-cargo-check-tests.stderr",
+        "bytes": 185,
+        "sha256": "901350e99c969223e93b438cb911f73f2cbaa10680f52680b899691a879e3ccc",
+        "read_scope": "entire file"
+      }
+    ],
+    "fixture_publication_output_is_actual_release": false,
+    "results_reassigned_to_merged_source": false
+  },
+  "evidence": {
+    "source_receipt": {
+      "file": "source-changes-receipt.json",
+      "bytes": 57498,
+      "sha256": "89b3d513cbe3a4bf4d376b6ebceee219924027416505454708051ccb8b86abfb",
+      "read_scope": "Whole original hashed; selected revision, merge, path, patch identity, preservation, push/readback and check fields read. Not all static command output records independently reviewed."
+    },
+    "author_launch_and_exit_read_in_full": true,
+    "successful_check_result_read_scope": "Whole original hashed; actual commands, times, status, source fingerprints, input equality and owned cleanup fields read.",
+    "all_four_source_snapshots_reopened_in_full": false,
+    "github_author_commits_diff_and_actual_main_merge_read": true
+  },
+  "acceptance_scope": {
+    "full_gate17": "failed_7_stages_passed_1_failed_27_not_run",
+    "original_contract": {
+      "stages": 35,
+      "rust_stages": 26,
+      "integration_targets": 20,
+      "mandatory_ignored_tests": 14,
+      "host_library_tests": 6
+    },
+    "native_ignored_supplements": "Two dedicated native scenarios planned separately on the same final source and library ELF; exact executed tests remain receipt-bound.",
+    "author_unexecuted_name_list_is_complete_inventory": false,
+    "runtime": "not_run",
+    "multi_uid": "not_run",
+    "ui": "not_run",
+    "P1": "not_run",
+    "version_tree_command": "not_run",
+    "formal_release": "not_run",
+    "production_deploy_or_reload": "not_run",
+    "rust_test_execution_in_gate17": "private_library_2101_passed_and_host_6_passed; four_selected_regression_lines_read; no_downstream_consumer_execution",
+    "gate17_result_facts": "gate-S401-r17-failure-public-facts.json"
+  },
+  "H2_static_successor": {
+    "commit": "6f6bb09bace5b54c82f47f7eb0ae245f17d5ff2d",
+    "public_directory": "docs/reports/command-await-delivery-20261120/publication-verifier-git-source-ci-unbound",
+    "recipe_source_commit": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+    "recipe_source_is_review_anchor_not_runtime_candidate_binding": true,
+    "files": [
+      {
+        "name": "verify_published_manual_main.py",
+        "bytes": 48892,
+        "sha256": "f891a676f5da3d501660e74a443d156445a5ec4cdec254ace0ab7808271aca2f"
+      },
+      {
+        "name": "manual_main_provenance.py",
+        "bytes": 44191,
+        "sha256": "348fd9083d4c55e693925533028d61340e157000508b711778da5e2d7bfe8f33"
+      },
+      {
+        "name": "dispatch_receipt_adapter.py",
+        "bytes": 14758,
+        "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4"
+      },
+      {
+        "name": "reviewed-recipe.json",
+        "bytes": 2098,
+        "sha256": "84d1b01a256ea7f905419d35f86499674f0added45f36bafe0d2e97e9cfd1823"
+      },
+      {
+        "name": "README.md",
+        "bytes": 6695,
+        "sha256": "4d188d644b07cf700475876fb8832914596c8dffeba6cce7687e7cb9593da0f4"
+      },
+      {
+        "name": "changes-from-H2.patch",
+        "bytes": 8596,
+        "sha256": "ab13d998265a3890eb3607cf6fa880c3ec49bf8ebb8135cdbde6df7c622f5f2e"
+      },
+      {
+        "name": "static-review.json",
+        "bytes": 2459,
+        "sha256": "206a6857a6c23367dc03b5106dfdaa8ff798529b2d4382389aca39c95b7dada3"
+      },
+      {
+        "name": "preparation-identity.json",
+        "bytes": 2232,
+        "sha256": "4a3bf9c68a710b79efd4c929a15128c818642b361445c23f3f139a9bffcfba85"
+      }
+    ],
+    "source_sha": null,
+    "workflow_sha": null,
+    "run_id": null,
+    "dispatch_capture": null,
+    "ast_parsed": true,
+    "modules_imported": false,
+    "helper_executed": false,
+    "tests_run": false,
+    "workflow_dispatched": false,
+    "original_H2_preserved": true
+  },
+  "ongoing_window": {
+    "source": "401581267005e64f1ccf99e1590df285a9d7c158",
+    "tree": "be0e7801b3455d406781cde880824fc937c1b8f4",
+    "fresh_root_group_ack_received": true,
+    "heavy_or_queued_work_by_reporting_group": 0,
+    "source_owner_release_required": true,
+    "old_project_z_window_not_presented_as_new_ack": true
+  }
+}

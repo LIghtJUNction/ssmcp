@@ -1,0 +1,103 @@
+{
+  "schema": "ssmcp-W-public-source-facts-v1",
+  "observed_utc": "2026-11-21T05:45:36Z",
+  "source": {
+    "label": "W",
+    "commit": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+    "tree": "5be29af415b915ef3307bfed08c6cefec2798898",
+    "sole_parent": "f42baae1d5227bd6db8315aef778160b80b57274",
+    "parent_label": "V",
+    "parent_tree": "64b40eb8a3e0188076cf376229d3d87074d27dcc",
+    "commit_time_utc": "2026-11-21T05:35:22Z",
+    "commit_message": "test: match explicit Next caller edit label [skip ci]",
+    "public_commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8"
+  },
+  "comparison": {
+    "basis": "Complete GitHub commit diff against its verified sole parent V.",
+    "changed_file_count": 1,
+    "additions": 1,
+    "deletions": 1,
+    "file": "scripts/e2e_composer.py",
+    "changed_line": 515,
+    "old_expression": "editing_queue(shot, \"next caller\")",
+    "new_expression": "editing_queue(shot, \"Next caller\")",
+    "complete_unique_patch": "@@ -512,7 +512,7 @@ def matching_roster():\n                    and held[\"draft\"] == {\"text\": retargeted[\"text\"], \"cursor\": 0},\n                    \"Left preserves the held request, exact recipient and original text during retargeting\")\n         front.send(HOME + ENTER)\n-        front.until(lambda shot: editing_queue(shot, \"next caller\")\n+        front.until(lambda shot: editing_queue(shot, \"Next caller\")\n                                  and column(shot) == (\"conversation\", 2, 8) and not shot[\"hide_cursor\"],\n                     \"the explicit Next caller choice returning to the active edit\")\n         retargeted_text = \"COMPOSER_RETARGET_NEXT_CALLER\"",
+    "interpretation": "Only the expected label's initial n changes to N for the explicit Next caller choice.",
+    "remaining_assertions_and_time_limits_unchanged": true,
+    "implicit_default_label_checks_at_351_and_376_not_modified": true
+  },
+  "root_tree_comparison": {
+    "recursive": false,
+    "both_responses_complete": true,
+    "root_entry_count": 19,
+    "changed_entries": [
+      {
+        "path": "scripts",
+        "before": {
+          "mode": "040000",
+          "type": "tree",
+          "sha": "2b019cf4235fa697e729e27f4b81e722e0731d08"
+        },
+        "after": {
+          "mode": "040000",
+          "type": "tree",
+          "sha": "93a15f7a896bb61937c3509216faeaa7caff22b2"
+        }
+      }
+    ],
+    "unchanged_entry_count": 18,
+    "unchanged_entries": [
+      ".github",
+      ".gitignore",
+      ".gitmodules",
+      "AGENTS.md",
+      "Cargo.lock",
+      "Cargo.toml",
+      "LICENSE",
+      "Makefile",
+      "README.md",
+      "crates",
+      "docs",
+      "examples",
+      "packaging",
+      "reports",
+      "rust-toolchain.toml",
+      "skills",
+      "src",
+      "tests"
+    ],
+    "equality_basis": "Each unchanged root entry has identical path, mode, type and Git object SHA.",
+    "product_src_tree_unchanged": true,
+    "product_src_tree_sha": "240267de7fb1765cbfff7f58aaaf14b4e70695e9",
+    "cargo_toml_and_lock_unchanged": true,
+    "crates_tree_unchanged": true,
+    "github_workflow_tree_unchanged": true
+  },
+  "scope": {
+    "source_only_snapshot": true,
+    "no_new_build_test_or_product_execution_by_this_review": true,
+    "no_large_binary_rehash": true,
+    "no_native_model_started": true,
+    "no_w_gate_or_runtime_pass_asserted": true,
+    "parent_v_results_not_transferred_to_w": true,
+    "no_new_review_gate_added": true
+  },
+  "sources": [
+    {
+      "kind": "commit_and_complete_patch",
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/commits/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8"
+    },
+    {
+      "kind": "parent_root_tree",
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/trees/64b40eb8a3e0188076cf376229d3d87074d27dcc"
+    },
+    {
+      "kind": "w_root_tree",
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/trees/5be29af415b915ef3307bfed08c6cefec2798898"
+    },
+    {
+      "kind": "changed_file",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/scripts/e2e_composer.py#L515"
+    }
+  ]
+}

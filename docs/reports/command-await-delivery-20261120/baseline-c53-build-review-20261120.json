@@ -1,0 +1,349 @@
+{
+  "schema": "ssmcp-repaired-baseline-build-independent-review-v1",
+  "reviewer_task": "/root/baseline_failure_review",
+  "observed_utc": "2026-11-20T19:09:51.775084+00:00",
+  "review_scope": {
+    "read_only_product_state": true,
+    "cargo_commands_executed": 0,
+    "tests_executed": 0,
+    "pty_executed": 0,
+    "ci_started": 0,
+    "locks_probed_or_acquired": 0,
+    "only_output_mutation": "this independent review receipt"
+  },
+  "outcome": {
+    "original_receipt_status": "build_completed",
+    "scope": "build_only",
+    "build_completed": true,
+    "source_revision": "c53c5ea681cb0840f1c41c9e8d31489abac4fd37",
+    "source_tree": "6f6fce9c24f7b4042854a7ee5b3920faf6333f3e",
+    "build_commands_attempted": 3,
+    "product_tests_executed": 0,
+    "benchmark_executed": false,
+    "release_gate_executed": false,
+    "performance_or_release_acceptance_claimed": false
+  },
+  "build_receipt": {
+    "bytes": 39128,
+    "path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-baseline-c53/build-receipt.json",
+    "sha256": "16da6d1611355d18721582451326195629a87060f6b7e9f3ccf16bdf5cd9daaa"
+  },
+  "previous_in_progress_observation": {
+    "observed_utc": "2026-11-20T19:08:57.886535+00:00",
+    "status": "running",
+    "receipt_sha256": "f723620aa19b2477fe217aedec82bbade166fc8e05fb97f74d6d4e8c0a197fa9",
+    "stage": "readonly-post-build-before-metadata",
+    "builds_and_copies_already_completed": 3
+  },
+  "source_delta": {
+    "base": "b156254b45c015a3994b8be1475b423167ac980f",
+    "candidate": "c53c5ea681cb0840f1c41c9e8d31489abac4fd37",
+    "candidate_tree": "6f6fce9c24f7b4042854a7ee5b3920faf6333f3e",
+    "changed_paths": [
+      "M\tsrc/client/terminal.rs",
+      "M\tsrc/runtime/time/tests.rs"
+    ],
+    "only_two_line_replacements": true,
+    "patch": "diff --git a/src/client/terminal.rs b/src/client/terminal.rs\nindex abbb42d..a368e4d 100644\n--- a/src/client/terminal.rs\n+++ b/src/client/terminal.rs\n@@ -383,7 +383,7 @@ pub(super) fn take_exit_message() -> Option<String> {\n }\n \n /// Wake the display after asynchronous local discovery without publishing a log.\n-pub(super) fn invalidate() {\n+pub(crate) fn invalidate() {\n     if let Some(shared) = shared() {\n         shared\n             .state\ndiff --git a/src/runtime/time/tests.rs b/src/runtime/time/tests.rs\nindex d1f8fbf..298b11c 100644\n--- a/src/runtime/time/tests.rs\n+++ b/src/runtime/time/tests.rs\n@@ -399,7 +399,7 @@ async fn remote_time_catalog_and_hard_coded_calls_fail_closed_without_negotiatio\n         seed.id\n     ));\n     std::fs::create_dir_all(&root).unwrap();\n-    let backend = crate::backend::Backend::start_with_tty(\"/bin/sh\", None)\n+    let backend = crate::backend::Backend::start_with_tty(std::path::Path::new(\"/bin/sh\"), None)\n         .await\n         .unwrap();\n     let runtime = crate::runtime::Runtime::new(backend, root.clone()).unwrap();\n",
+    "committed_lock": {
+      "bytes": 66476,
+      "exit_code": 0,
+      "sha256": "6c76ff5b75b161aeb691ebc6be129ba719aae82b09c8c0d50ae42f6d817c604d"
+    },
+    "lock_unchanged_from_b156": true
+  },
+  "inputs": {
+    "cargo_config": {
+      "sha256": "2f17a98f9a7ebe1eda68749fb1076d9d9959aba7e1c5701f22703e5ef5147aab",
+      "bytes": 925,
+      "matches_receipt": true
+    },
+    "dependency_auditor": {
+      "sha256": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+      "bytes": 14653,
+      "matches_receipt": true
+    },
+    "heads": {
+      "sha256": "3932b4f327bd932219771b0587cb36d946a9660c01e40db71133d98e02849cb1",
+      "bytes": 4427,
+      "matches_receipt": true
+    },
+    "lock": {
+      "sha256": "6c76ff5b75b161aeb691ebc6be129ba719aae82b09c8c0d50ae42f6d817c604d",
+      "bytes": 66476,
+      "matches_receipt": true
+    },
+    "manifest": {
+      "sha256": "b2f80da20d96034236ff5c91dba0bf790bf7071eb672a8990c0d2e3b880c09f0",
+      "bytes": 9795,
+      "matches_receipt": true
+    },
+    "reviewed_driver": {
+      "sha256": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+      "bytes": 56086,
+      "matches_receipt": true
+    },
+    "runner": {
+      "sha256": "98ba8f44d9a3ce009d5e2be36983b18ae6b454158f08c27bd9adf40ccae98a38",
+      "bytes": 29731,
+      "matches_receipt": true
+    },
+    "wrapper": {
+      "sha256": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43",
+      "bytes": 272,
+      "matches_receipt": true
+    }
+  },
+  "source_manifest": {
+    "path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-baseline-c53/source-before.json",
+    "bytes": 443804,
+    "sha256": "6bb0ea024e1e590605b99ce9bb3d009c89fa3ceadcd0da8428327542768837e3",
+    "matches_receipt": true
+  },
+  "dependency_manifest": {
+    "path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-baseline-c53/dependency-before.json",
+    "bytes": 4231018,
+    "sha256": "cf2f97aafba39bd5e0b0be2af15a7bce929156112753aa130e8def81c7997621",
+    "matches_receipt": true,
+    "identical_to_failed_baseline_dependency_manifest": true
+  },
+  "heads_identity": {
+    "document_lock_sha256": "6c76ff5b75b161aeb691ebc6be129ba719aae82b09c8c0d50ae42f6d817c604d",
+    "document_source_revision": "c53c5ea681cb0840f1c41c9e8d31489abac4fd37",
+    "provisional": true,
+    "repositories_equal_b156_preparation_observations": true
+  },
+  "artifacts": {
+    "library-test-fixture": {
+      "build_step": "build-library-fixture",
+      "source_revision": "c53c5ea681cb0840f1c41c9e8d31489abac4fd37",
+      "source_tree": "6f6fce9c24f7b4042854a7ee5b3920faf6333f3e",
+      "sha256": "27a12b0682822319f34c42ae48fe43737df4491476bce401e57cb8474b85e818",
+      "bytes": 161080360,
+      "mode_octal": "0755",
+      "copy_path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-baseline-c53/bin/library-test-fixture",
+      "target_path": "/var/tmp/project-z-cargo-target/debug/build/ssmcp/224b707b6a9402a5/out/ssmcp-224b707b6a9402a5",
+      "target_and_copy_independently_hashed": true,
+      "hash_size_and_mode_match_receipt": true,
+      "all_declared_binding_checks_passed": true,
+      "compiler_executable_matches_target": true
+    },
+    "ssmcp": {
+      "build_step": "build-release-bins",
+      "source_revision": "c53c5ea681cb0840f1c41c9e8d31489abac4fd37",
+      "source_tree": "6f6fce9c24f7b4042854a7ee5b3920faf6333f3e",
+      "sha256": "f7e94f0fa64187c0a21fbeda127fd8dff90f25d5c4f0804e4e40fbc2b3ea233d",
+      "bytes": 15150192,
+      "mode_octal": "0755",
+      "copy_path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-baseline-c53/bin/ssmcp",
+      "target_path": "/var/tmp/project-z-cargo-target/release/ssmcp",
+      "target_and_copy_independently_hashed": true,
+      "hash_size_and_mode_match_receipt": true,
+      "all_declared_binding_checks_passed": true,
+      "compiler_executable_matches_target": true
+    },
+    "ssmcp-frontend": {
+      "build_step": "build-release-bins",
+      "source_revision": "c53c5ea681cb0840f1c41c9e8d31489abac4fd37",
+      "source_tree": "6f6fce9c24f7b4042854a7ee5b3920faf6333f3e",
+      "sha256": "15f6258268a1026f42ac915613be51423fc88f9b5e210dbd202dc1df723db31a",
+      "bytes": 1385400,
+      "mode_octal": "0755",
+      "copy_path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-baseline-c53/bin/ssmcp-frontend",
+      "target_path": "/var/tmp/project-z-cargo-target/release/ssmcp-frontend",
+      "target_and_copy_independently_hashed": true,
+      "hash_size_and_mode_match_receipt": true,
+      "all_declared_binding_checks_passed": true,
+      "compiler_executable_matches_target": true
+    },
+    "ssmcpd": {
+      "build_step": "build-release-bins",
+      "source_revision": "c53c5ea681cb0840f1c41c9e8d31489abac4fd37",
+      "source_tree": "6f6fce9c24f7b4042854a7ee5b3920faf6333f3e",
+      "sha256": "003d15c2d56296d99f1989bb78ced9b144b7a02c2703f0c8e5da0d0418f8d21a",
+      "bytes": 8108656,
+      "mode_octal": "0755",
+      "copy_path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-baseline-c53/bin/ssmcpd",
+      "target_path": "/var/tmp/project-z-cargo-target/release/ssmcpd",
+      "target_and_copy_independently_hashed": true,
+      "hash_size_and_mode_match_receipt": true,
+      "all_declared_binding_checks_passed": true,
+      "compiler_executable_matches_target": true
+    },
+    "vt_snapshot": {
+      "build_step": "build-vt-snapshot",
+      "source_revision": "c53c5ea681cb0840f1c41c9e8d31489abac4fd37",
+      "source_tree": "6f6fce9c24f7b4042854a7ee5b3920faf6333f3e",
+      "sha256": "3d5bfe4b7dc23bd866b8075a83c40d51025a6708de9a1ce7d3a305feb7d9bd54",
+      "bytes": 440728,
+      "mode_octal": "0755",
+      "copy_path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-baseline-c53/bin/examples/vt_snapshot",
+      "target_path": "/var/tmp/project-z-cargo-target/release/examples/vt_snapshot",
+      "target_and_copy_independently_hashed": true,
+      "hash_size_and_mode_match_receipt": true,
+      "all_declared_binding_checks_passed": true,
+      "compiler_executable_matches_target": true
+    }
+  },
+  "build_outcomes": [
+    {
+      "build_finished": [
+        true
+      ],
+      "error_count": 0,
+      "record_count": 228,
+      "root_artifact_targets": [
+        "ssmcp"
+      ],
+      "step": "build-library-fixture"
+    },
+    {
+      "build_finished": [
+        true
+      ],
+      "error_count": 0,
+      "record_count": 231,
+      "root_artifact_targets": [
+        "ssmcp",
+        "ssmcpd",
+        "ssmcp-frontend",
+        "ssmcp"
+      ],
+      "step": "build-release-bins"
+    },
+    {
+      "build_finished": [
+        true
+      ],
+      "error_count": 0,
+      "record_count": 229,
+      "root_artifact_targets": [
+        "ssmcp",
+        "vt_snapshot"
+      ],
+      "step": "build-vt-snapshot"
+    }
+  ],
+  "source_bound_build_steps": [
+    {
+      "finished_utc": "2026-11-20T18:59:24.968401+00:00",
+      "name": "verify-bound-inputs-and-source",
+      "status": "completed"
+    },
+    {
+      "exit_code": 0,
+      "finished_utc": "2026-11-20T18:59:27.862250+00:00",
+      "name": "metadata-before",
+      "status": "completed"
+    },
+    {
+      "finished_utc": "2026-11-20T18:59:33.771533+00:00",
+      "name": "audit-initial-metadata-and-selected-dependency-sources",
+      "status": "completed"
+    },
+    {
+      "exit_code": 0,
+      "finished_utc": "2026-11-20T19:01:07.983433+00:00",
+      "name": "build-library-fixture",
+      "status": "completed"
+    },
+    {
+      "finished_utc": "2026-11-20T19:01:15.364175+00:00",
+      "name": "preserve-build-library-fixture",
+      "status": "completed"
+    },
+    {
+      "exit_code": 0,
+      "finished_utc": "2026-11-20T19:06:56.637580+00:00",
+      "name": "build-release-bins",
+      "status": "completed"
+    },
+    {
+      "finished_utc": "2026-11-20T19:06:59.856854+00:00",
+      "name": "preserve-build-release-bins",
+      "status": "completed"
+    },
+    {
+      "exit_code": 0,
+      "finished_utc": "2026-11-20T19:08:50.686200+00:00",
+      "name": "build-vt-snapshot",
+      "status": "completed"
+    },
+    {
+      "finished_utc": "2026-11-20T19:08:52.277475+00:00",
+      "name": "preserve-build-vt-snapshot",
+      "status": "completed"
+    },
+    {
+      "finished_utc": "2026-11-20T19:09:00.573396+00:00",
+      "name": "readonly-post-build-before-metadata",
+      "status": "completed"
+    },
+    {
+      "exit_code": 0,
+      "finished_utc": "2026-11-20T19:09:03.130485+00:00",
+      "name": "metadata-after",
+      "status": "completed"
+    },
+    {
+      "finished_utc": "2026-11-20T19:09:06.720587+00:00",
+      "name": "final-readonly-input-source-and-artifact-checks",
+      "status": "completed"
+    }
+  ],
+  "final_timestamps": {
+    "started_utc": "2026-11-20T18:58:19.918403+00:00",
+    "finished_utc": "2026-11-20T19:09:09.362449+00:00",
+    "locks": [
+      {
+        "acquired_utc": "2026-11-20T18:58:33.763346+00:00",
+        "path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/source-author.lock",
+        "released_utc": "2026-11-20T19:09:09.418595+00:00"
+      },
+      {
+        "acquired_utc": "2026-11-20T18:59:23.772825+00:00",
+        "path": "/var/tmp/project-z-cargo-target/.project-z-cargo-owner.lock",
+        "released_utc": "2026-11-20T19:09:09.418588+00:00"
+      }
+    ]
+  },
+  "metadata_before_after": {
+    "sha256_before": "bdc2910a074db48bf7dd215e74290d4a4ab791f1d1b6af8e797194aae74f53dc",
+    "sha256_after": "bdc2910a074db48bf7dd215e74290d4a4ab791f1d1b6af8e797194aae74f53dc",
+    "bytes_before": 1454314,
+    "bytes_after": 1454314
+  },
+  "build_stdout_logs": [
+    {
+      "path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-baseline-c53/logs/build-library-fixture.stdout",
+      "bytes": 207046,
+      "sha256": "421a304a4065f2624674c3d7b619b96af94dec14811ec178a75b418e5aa8b9c8"
+    },
+    {
+      "path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-baseline-c53/logs/build-release-bins.stdout",
+      "bytes": 210795,
+      "sha256": "a0f498394beea82de3e29ff90357592f96d11afff975816a81b3b06f16861238"
+    },
+    {
+      "path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-baseline-c53/logs/build-vt-snapshot.stdout",
+      "bytes": 209118,
+      "sha256": "c2108a55f57dede49203881dfa780fb09fe10fcf6454ba54678a2cd34e3b4474"
+    }
+  ],
+  "verification": {
+    "checked_files": 34,
+    "all_hash_size_mode_checks_passed": true,
+    "all_artifact_binding_checks_passed": true,
+    "all_hashed_files_unchanged_while_hashing": true,
+    "build_receipt_unchanged_during_verification": true,
+    "original_b156_failed_receipt_sha256": "699ed5ee292f636dbdddc4ff0d4a44fb986b34e85cd8e0db835eab017e8cbd7c",
+    "original_b156_failed_receipt_unchanged": true,
+    "verification_job": "1c828d2fc3165848bd0b270a25c57148-1c7",
+    "full_output_read": true
+  },
+  "limitations": [
+    "This review verifies persisted build evidence, immutable Git diff, and declared input/artifact bytes. It does not rerun the dependency audit or inspect every compiler process.",
+    "Recorded lock release times are receipt evidence; live lock availability was not probed.",
+    "Successful baseline compilation does not establish paste latency improvement, product test success, or release acceptance."
+  ]
+}

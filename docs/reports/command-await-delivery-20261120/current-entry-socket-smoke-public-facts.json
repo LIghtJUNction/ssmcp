@@ -1,0 +1,161 @@
+{
+  "schema": "ssmcp.current-entry-socket-smoke-public-facts.v1",
+  "status": "single_isolated_smoke_passed",
+  "evidence_read_utc": "2026-11-21T07:29:29.764139+00:00",
+  "entry": {
+    "label": "current PATH entry",
+    "reported_version": "ssmcp 0.10.25",
+    "bytes": 15751344,
+    "sha256_before": "54651b3fd9611210a838ffa5ddc1e032dc40d7b71ea2cf163487e4b32085c7b9",
+    "sha256_after": "54651b3fd9611210a838ffa5ddc1e032dc40d7b71ea2cf163487e4b32085c7b9",
+    "before_equals_after": true,
+    "launch_receipt_hash_matches": true,
+    "source_commit": null,
+    "source_tree": null,
+    "source_binding": "No binding to W or a final source candidate is claimed. Version equality does not establish source identity.",
+    "binary_files_read_or_rehashed_by_this_extractor": false,
+    "descriptor_source": "Existing execution and launch receipts."
+  },
+  "scope": {
+    "case": "A newly isolated local socket endpoint exercised once by the original executor.",
+    "product_launches": 1,
+    "socket_messages": 1,
+    "deterministic_exec_fixture_invocations": 1,
+    "model_invocations": 0,
+    "original_requested_socket": {
+      "exercised": false,
+      "availability": "Reported missing before this isolated case by the original executor/coordinator; this extractor did not probe that endpoint."
+    },
+    "default_host_socket_touched": false,
+    "production_deployment": false,
+    "installed_entry_modified": false
+  },
+  "original_text_and_references": {
+    "original_preserved": true,
+    "literal_utf8_bytes": 76,
+    "literal_sha256": "19ce8c7f971e6fd6535db0635a70ec19db25887845ce75dcedf95e940525ad19",
+    "original_literal_is_exact_substring_of_prepared_input": true,
+    "prepared_input_utf8_bytes": 885,
+    "prepared_input_sha256": "5d2260359ed2ad9437257a6fd121c930f9df14d7f15f2ee1d3024a0615e1e9d3",
+    "prepared_input_matches_recorded_actual_input_descriptor": true,
+    "actual_input_file_read_by_this_extractor": false,
+    "missing_references": [
+      {
+        "kind": "file",
+        "status": "unavailable",
+        "warning_present": true,
+        "warning_in_returned_receipt": true
+      },
+      {
+        "kind": "skill",
+        "status": "unavailable",
+        "warning_present": true,
+        "warning_in_returned_receipt": true
+      }
+    ],
+    "returned_warning_count": 2,
+    "boundary": "Literal text, reference paths and prepared content are not reproduced. Preservation and warning checks are extracted from the structured report; the prepared-content hash was compared with the existing input-file descriptor."
+  },
+  "socket_result": {
+    "write_half_closed": true,
+    "json_lines": 1,
+    "eof": true,
+    "receipt_status": "completed",
+    "receipt_jsonl_rows": 1,
+    "output_utf8_bytes": 37,
+    "output_sha256": "00e473e7f3228159f35f54a01c744265284aef59ff1ead48b2e57fb010b3ff96",
+    "report_receipt_equals_jsonl": true,
+    "execution_receipt_equals_jsonl": true,
+    "endpoint_mode_octal": "0o600"
+  },
+  "execution": {
+    "original_observed_at_utc": "2026-11-21T07:25:28.141230+00:00",
+    "native_exit_code": 0,
+    "native_running": false,
+    "native_stdout_eof": true,
+    "native_stderr_eof": true,
+    "native_command_capture_stdout_bytes": 219,
+    "native_command_capture_stderr_bytes": 0,
+    "native_snapshot": {
+      "state": "completed",
+      "exit_code": 0,
+      "duration_ms": 422,
+      "error": null,
+      "timed_out": false,
+      "cancelled": false
+    },
+    "outer_launch_exit_code": 0,
+    "namespace_launch_attempts": 1,
+    "outer_launch_elapsed_seconds": 0.3789758649945725,
+    "capture_boundary": "The native EOF and byte counts describe command-capture streams. They do not describe the excluded raw client.stderr file."
+  },
+  "cleanup": {
+    "outer": {
+      "started": true,
+      "exit_code": 0,
+      "reaped": true,
+      "errors": [],
+      "endpoint_absent": true
+    },
+    "client": {
+      "started": true,
+      "exit_code": 0,
+      "reaped": true,
+      "errors": []
+    },
+    "endpoint_absent": true,
+    "outer_process_absent": true,
+    "report_endpoint": {
+      "state": "absent",
+      "absent": true
+    },
+    "source": "Existing execution, launch and structured report fields; no new process or socket probe by this extractor."
+  },
+  "recorded_driver_descriptor": {
+    "bytes": 17452,
+    "sha256": "86f2f4958d3d22ce3a0c390ad186db200186f54389ff3b5e4fdfd6753257602d"
+  },
+  "originals_read": [
+    {
+      "role": "execution",
+      "file": "root-actual-execution.json",
+      "bytes": 4462,
+      "sha256": "06fbc49233e47108ce49ab9ffaf9d29258757aa588cd96bc05ee5a72408abffe",
+      "full_bytes_read_and_expected_sha256_verified": true
+    },
+    {
+      "role": "launch",
+      "file": "launch-result.json",
+      "bytes": 2124,
+      "sha256": "7be51e0a9a2765e61968606bd8ed3d0e153be3066f8d4fe9ee906c16f104dbfb",
+      "full_bytes_read_and_expected_sha256_verified": true
+    },
+    {
+      "role": "report",
+      "file": "namespace-tmp/evidence/report.json",
+      "bytes": 2718,
+      "sha256": "7b2b5c68dcb490ac82960a837a11e89023119aba821621f5d197ea5d05c912b5",
+      "full_bytes_read_and_expected_sha256_verified": true
+    },
+    {
+      "role": "receipt",
+      "file": "namespace-tmp/evidence/socket-receipt.jsonl",
+      "bytes": 285,
+      "sha256": "3f3e1ef56253c9cdccc023d7efddbabf781da11f382ca57aa37e724488b76340",
+      "full_bytes_read_and_expected_sha256_verified": true
+    }
+  ],
+  "privacy": {
+    "raw_client_stderr_read": false,
+    "raw_client_stderr_uploaded": false,
+    "raw_authentication_values_in_public_output": false,
+    "omitted": "Private HOME and executable paths, UID/GID, native/peer/request identifiers, command argv, original text, prepared input and raw warning paths."
+  },
+  "boundaries": [
+    "Only the four structured originals listed above were read. The receipt JSONL was located by its exact filename inside the supplied case directory.",
+    "No product, test, Cargo, helper, model or repeated smoke was executed by this extractor.",
+    "The originally requested disappeared socket was not tested; this result concerns the new isolated local case only.",
+    "This current-PATH-entry result is not a W runtime18, UI24, P1 or final-source acceptance result.",
+    "Cleanup and unchanged-entry observations belong to the original execution receipts; this extractor did not reread ELF bytes or modify the installed entry."
+  ]
+}
