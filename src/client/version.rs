@@ -227,7 +227,7 @@ mod tests {
             Options::parse(peer)
                 .err()
                 .unwrap()
-                .contains("environment variable")
+                .contains("peer option requires a nonempty value")
         );
     }
 
