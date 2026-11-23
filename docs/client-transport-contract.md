@@ -1,6 +1,6 @@
 # Shared client transport
 
-SSMCP frontends reuse the running CLI through its existing zbridge adapter. The CLI retains session identity, authorization, input leases, worker claims and command execution. A frontend stores a small current projection and asks the core for explicit state or operations. The shared observer added here supplies bounded event observation; it does not implement a desktop window, browser gateway or mobile application. [Adapter](../src/session/attach/zbridge_adapter.rs) · [Remote connection](../src/session/attach/zbridge_adapter/remote.rs)
+SSMCP frontends reuse the running CLI through its existing zbridge adapter. The CLI retains session identity, authorization, input leases, worker claims and command execution. A frontend stores a small current projection and asks the core for explicit state or operations. The shared observer supplies bounded event observation, and `ssmcp gui serve` provides a paired HTTP gateway to the same native core. Platform windows and application packages have separate hosts. [Adapter](../src/session/attach/zbridge_adapter.rs) · [Remote connection](../src/session/attach/zbridge_adapter/remote.rs) · [Gateway contract](gui-gateway.md)
 
 ## Verified source baseline
 
@@ -20,7 +20,7 @@ The machine has Rust/Cargo 1.100.0, Node 26.13.1, Java 21, Android SDK platforms
 
 Native desktop clients can use `RemoteFrontend::connect(directory, read_only)` for an existing private attach endpoint. An embedded host can obtain `Frontend` from `Handle::frontend`. Both issue a real attach lease, and neither accepts caller-supplied account or agent identity. Closing the frontend releases its lease without stopping the session. A writable frontend must be an explicit user choice; observer capabilities do not advertise commands. [Connection and lease rules](gui-bridge.md#连接与授权)
 
-A browser cannot read the protected endpoint descriptor directly. Its application gateway must own an authorized CLI connection and forward bounded zbridge frames within the browser user's authenticated session. The descriptor token stays inside that host. This change does not add such a gateway or claim a new public HTTP endpoint. Android and iOS similarly need an application-owned transport and lifecycle host before these protocol types can reach a CLI core.
+A browser connects through `ssmcp gui serve`, which owns an authorized `RemoteFrontend` and forwards bounded zbridge frames. The private descriptor and native lease stay in the CLI process. The gateway listens on loopback, serves optional same-origin assets and requires a separate process-scoped pairing bearer for every API request. Android and iOS may use an explicitly configured HTTPS reverse proxy and the same pairing contract. Each platform still owns its view and lifecycle behavior. [CLI binding](../src/session/gui.rs) · [HTTP implementation and limits](gui-gateway.md)
 
 Start every connection with `capabilities`, retain the complete opaque `generation`, and use only advertised resources and commands. A generation change requires capability discovery and fresh state. Preserve any uncertain command record with the old generation; reconnecting never turns it into a command for the new backend.
 
@@ -29,11 +29,11 @@ Start every connection with `capabilities`, retain the complete opaque `generati
 | Client requirement | Current bridge contract | Frontend behavior |
 | --- | --- | --- |
 | Connection and core presence | `runtime`, empty query; includes `backend_active`, native capabilities and `live_cursor` | Display observed presence and preserve the returned decimal cursor |
-| Session selection | The application selects an existing attach directory before connecting; the local core exposes `session::list()` and session-control operations separately | Use the real OS-user session manager under its own authorization; there is no bridge session-list endpoint |
+| Session selection | The paired HTTP gateway projects actual `session::list()` results through `/api/gui/v1/sessions`; native clients can select an existing private attach directory | Display actual manager and connection state separately; explicitly select a saved session before opening a lease |
 | Terminal state | `terminals`, empty query, only when a Runtime is bound | Render the actual returned list |
 | Task and worker state | `workers`, `offset` and `limit` 1–32, only when a pool exists | Use real offline/idle/working/retiring counts, stable slot/epoch, task IDs and native result semantics |
-| Conversation and messages | No conversation/message state resource or send command is advertised by the inspected adapter | Keep this feature unavailable until the core supplies an authorized API; terminal bytes are not a substitute for structured messages |
-| Event observation | zbridge `events`; one protocol wait is 0–1,000 ms | Use `EventObserver` to compose a frontend window up to 55,000 ms |
+| Conversation and messages | The inspected baseline had no conversation/message state resource or send command; any added core projection is discovered from live capabilities | Enable the feature only when the connected core advertises and authorizes it; gateway routing does not invent a separate conversation API |
+| Event observation | zbridge `events`; one protocol wait is 0–1,000 ms | Use `EventObserver`, directly or through `/connections/{id}/events`, to compose a frontend window up to 55,000 ms |
 | Explicit control | `terminal.write`, `terminal.resize`, and configured `workers.resize` under a write lease | Submit once following a user action; preserve the native receipt |
 
 These resources and commands come from the real capability and dispatch implementation. Observation does not claim next-caller input, acknowledge messages, complete tasks or acquire manager authority. [Capability catalog and dispatch](../src/session/attach/zbridge_adapter.rs)
@@ -87,4 +87,4 @@ flock /var/tmp/project-z-cargo-target/.project-z-cargo-owner.lock \
   cargo test --locked --lib session::attach::zbridge_adapter::observation::tests
 ```
 
-Protocol and observer tests establish only this shared transport behavior. Full SSMCP integration and Linux/Windows windows, browser authentication, Android lifecycle, iOS builds, signing and device acceptance remain separate validation steps.
+The gateway has a separate [language-neutral HTTP fixture](../src/session/gui/gateway/contract-v1.json), real loopback HTTP tests and a private attach IPC round-trip test. Its [verification entry point](gui-gateway.md#边界与验证) covers the CLI transport integration. Protocol and gateway tests do not establish Linux/Windows window behavior, Android lifecycle, iOS builds, signing or device acceptance.

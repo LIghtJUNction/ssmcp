@@ -5,6 +5,7 @@
 //! and connection-scoped tools/tasks. A saved session is not a persistent task.
 pub mod attach;
 pub mod control;
+pub mod gui;
 pub mod install;
 pub(crate) mod ipc;
 pub mod service;

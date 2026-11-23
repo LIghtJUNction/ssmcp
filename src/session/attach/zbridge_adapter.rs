@@ -637,3 +637,7 @@ fn event_page(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "zbridge_adapter/gui_gateway_tests.rs"]
+mod gui_gateway_tests;

@@ -249,6 +249,8 @@ and registered threads; thread input reaches only that exact recipient. Enter
 submits input. Ctrl-] or Ctrl-C detaches; pending requests remain running.
 Use -i or attach process ID --terminal TERMINAL_ID for a remote shell PTY;
 Ctrl-C reaches that shell. --read-only sends no chat/terminal input or resize.
+ssmcp gui serve --assets PATH starts a paired GUI gateway for existing sessions.
+It prints its loopback URL and private pairing-file path; see gui --help.
 sessions list and bare attach show saved local sessions. Existing local names
 work offline; --local selects them explicitly, and --remote selects online chat.
 send prints a receipt. wait prints actual final replies: --any waits for one,
@@ -2166,6 +2168,9 @@ pub async fn run() -> crate::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "update") {
         return update::run(args.into_iter().skip(1).collect()).await;
+    }
+    if args.first().is_some_and(|arg| arg == "gui") {
+        return crate::session::gui::run(args.into_iter().skip(1).collect()).await;
     }
     if args.first().is_some_and(|arg| arg == "ui") {
         return ui_command::run(args.into_iter().skip(1).collect()).await;
