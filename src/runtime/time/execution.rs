@@ -8,6 +8,7 @@ pub(crate) struct ExecutionTiming {
 }
 
 impl ExecutionTiming {
+    #[cfg(test)]
     pub(crate) fn new(started: Instant, timeout_ms: u64) -> Self {
         Self {
             started,

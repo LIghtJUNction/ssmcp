@@ -35,8 +35,7 @@ const MAX_OUTPUT: usize = 64 * 1024;
 const COMPLETED_INLINE_BYTES: usize = 4 * 1024;
 const MAX_COMMAND_ARGS: usize = 256;
 const MAX_TITLE_CHARS: usize = 160;
-const MAX_WAIT: u64 = 60_000;
-const MAX_TIMEOUT: u64 = 900_000;
+const MAX_READ_WAIT: u64 = 60_000;
 const MAX_INPUT: usize = 32 * 1024;
 const MAX_INPUT_WAIT: u64 = 5_000;
 static NEXT_JOB: AtomicU64 = AtomicU64::new(1);
@@ -357,7 +356,7 @@ impl Shell {
                     "artifact_budget_bytes":{"type":"integer","minimum":1,"description":"Custom logical-byte soft limit. Providing a positive value also enables tracking for compatibility."},
                     "temporary_artifacts":{"type":"boolean","default":false,"description":"Enable tracking for disposable, task-exclusive artifacts eligible for bounded shutdown cleanup. Omit to keep artifacts after close or reload."},
                     "stdin":{"enum":["null","pipe"],"type":"string","default":"null","description":"null delivers EOF immediately; pipe enables bounded exec.write input and explicit close_stdin."},
-                    "timeout_ms":{"type":"integer","minimum":0,"maximum":MAX_TIMEOUT,"default":0,"description":"0 means no execution deadline. A nonzero deadline terminates the command."}}),
+                    "timeout_ms":{"type":"integer","minimum":0,"default":0,"description":"0 means no execution deadline. A nonzero deadline terminates the command."}}),
                 &["command"],
                 false,
             ),
@@ -377,8 +376,8 @@ impl Shell {
             ),
             tool(
                 "ssmcp.exec.wait",
-                "Wait for completion for up to 60 seconds. A wait deadline leaves the command running; reuse job_id to wait again.",
-                json!({"job_id":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":MAX_WAIT,"default":5000}}),
+                "Wait for this command to finish. Omit wait_ms for no tool-level deadline, set it to 0 for an immediate snapshot, or pass an explicit timeout. A wait timeout leaves the command running.",
+                json!({"job_id":{"type":"string"},"wait_ms":{"type":"integer","minimum":0}}),
                 &["job_id"],
                 true,
             ),
@@ -387,7 +386,7 @@ impl Shell {
                 "Read incremental stdout/stderr and an atomic status snapshot. Each stream has its own byte cursor; base64 preserves exact bytes. Live streams use bounded tails; completed streams read full saved output until artifact retention expires. Artifacts are also accessible through outputs.read.",
                 json!({"job_id":{"type":"string"},"stdout_cursor":{"type":"integer","minimum":0,"default":0},
                     "stderr_cursor":{"type":"integer","minimum":0,"default":0},"max_bytes":{"type":"integer","minimum":1,"maximum":32768,"default":16384},
-                    "wait_ms":{"type":"integer","minimum":0,"maximum":MAX_WAIT,"default":0}}),
+                    "wait_ms":{"type":"integer","minimum":0,"maximum":MAX_READ_WAIT,"default":0}}),
                 &["job_id"],
                 true,
             ),
@@ -454,11 +453,13 @@ impl Shell {
             }
             "ssmcp.exec.wait" => {
                 let args: Wait = parse(args)?;
-                check_wait(args.wait_ms)?;
+                let deadline = args.wait_ms.map(wait_deadline).transpose()?;
                 let job = self.job(&args.job_id)?;
-                wait_finished(&job, args.wait_ms).await;
+                wait_finished(&job, deadline).await;
                 let mut result = job.snapshot();
-                result["wait_timed_out"] = result["running"].clone();
+                let pending = result["running"] == true;
+                result["wait_timed_out"] = json!(pending);
+                result["wait_status"] = json!(if pending { "pending" } else { "ready" });
                 Ok(result)
             }
             "ssmcp.exec.read" => {
@@ -493,7 +494,7 @@ impl Shell {
                 if job.state().running {
                     job.cancel.send_replace(true);
                 }
-                wait_finished(&job, 8000).await;
+                wait_finished(&job, Some(Instant::now() + Duration::from_secs(8))).await;
                 Ok(job.snapshot())
             }
             "ssmcp.exec.forget" => {
@@ -682,9 +683,6 @@ impl Shell {
         {
             return Err("command must contain 1..=256 argv strings, at most 8192 bytes each and 65536 bytes total".into());
         }
-        if args.timeout_ms > MAX_TIMEOUT {
-            return Err(format!("timeout_ms must be 0..={MAX_TIMEOUT}"));
-        }
         if let Some(env) = &args.env
             && (env.len() > 128
                 || env.iter().any(|(k, v)| {
@@ -773,6 +771,15 @@ impl Shell {
         if let Some(env) = args.env {
             command.envs(env);
         }
+        let started = std::time::Instant::now();
+        let deadline = (args.timeout_ms != 0)
+            .then(|| {
+                started
+                    .checked_add(Duration::from_millis(args.timeout_ms))
+                    .ok_or("timeout_ms cannot be represented by the execution clock")
+            })
+            .transpose()?;
+        let timing = ExecutionTiming { started, deadline };
         #[cfg(target_os = "linux")]
         let artifacts = artifact_budget
             .map(|limit| artifacts::Artifacts::new(&self.root, limit))
@@ -817,7 +824,7 @@ impl Shell {
             command: args.command,
             title,
             cwd,
-            timing: ExecutionTiming::new(Instant::now().into_std(), args.timeout_ms),
+            timing,
             state: Mutex::new(State {
                 running: true,
                 #[cfg(target_os = "linux")]
@@ -959,7 +966,8 @@ impl Shell {
         for job in &jobs {
             job.cancel.send_replace(true);
         }
-        let waits = jobs.iter().map(|job| wait_finished(job, 8000));
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let waits = jobs.iter().map(|job| wait_finished(job, Some(deadline)));
         futures_util::future::join_all(waits).await;
         drop(jobs);
         #[cfg(target_os = "linux")]
@@ -1043,17 +1051,27 @@ impl Drop for Shell {
         }
     }
 }
-async fn wait_finished(job: &Job, wait_ms: u64) {
-    let deadline = Instant::now() + Duration::from_millis(wait_ms);
+fn wait_deadline(ms: u64) -> Result<Instant, String> {
+    Instant::now()
+        .checked_add(Duration::from_millis(ms))
+        .ok_or_else(|| "wait_ms cannot be represented by the execution clock".into())
+}
+
+async fn wait_finished(job: &Job, deadline: Option<Instant>) {
     loop {
         let notified = job.changed.notified();
         tokio::pin!(notified);
         notified.as_mut().enable();
-        if !job.state().running || wait_ms == 0 {
+        if !job.state().running {
             return;
         }
-        if timeout_at(deadline, notified).await.is_err() {
-            return;
+        match deadline {
+            Some(deadline) => {
+                if deadline <= Instant::now() || timeout_at(deadline, notified).await.is_err() {
+                    return;
+                }
+            }
+            None => notified.await,
         }
     }
 }
@@ -1200,8 +1218,8 @@ fn empty(args: Value) -> Result<(), String> {
     Ok(())
 }
 fn check_wait(ms: u64) -> Result<(), String> {
-    if ms > MAX_WAIT {
-        Err(format!("wait_ms must be 0..={MAX_WAIT}"))
+    if ms > MAX_READ_WAIT {
+        Err(format!("wait_ms must be 0..={MAX_READ_WAIT}"))
     } else {
         Ok(())
     }
@@ -1226,8 +1244,7 @@ struct Input {
 #[serde(deny_unknown_fields)]
 struct Wait {
     job_id: String,
-    #[serde(default = "default_wait")]
-    wait_ms: u64,
+    wait_ms: Option<u64>,
 }
 fn default_wait() -> u64 {
     5000
@@ -2017,6 +2034,139 @@ mod tests {
     async fn py(shell: &Shell, code: &str) -> String {
         start(shell, &[python(), "-u", "-c", code], 0).await
     }
+    #[tokio::test]
+    async fn native_completion_wait_is_targeted_and_droppable() {
+        let shell = Shell::new();
+        let other_connection = Shell::new();
+        let job_id = start(
+            &shell,
+            &[python(), "-u", "-c", "import time; time.sleep(10)"],
+            900_001,
+        )
+        .await;
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                shell.call("ssmcp.exec.wait", json!({"job_id":job_id})),
+            )
+            .await
+            .is_err()
+        );
+        let wait = shell.call("ssmcp.exec.wait", json!({"job_id":job_id}));
+        tokio::pin!(wait);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut wait)
+                .await
+                .is_err()
+        );
+        assert!(
+            other_connection
+                .call("ssmcp.exec.wait", json!({"job_id":job_id}))
+                .await
+                .is_err()
+        );
+        let sibling = py(&shell, "print('unrelated')").await;
+        assert_eq!(
+            shell
+                .call("ssmcp.exec.wait", json!({"job_id":sibling}))
+                .await
+                .unwrap()["exit_code"],
+            0
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut wait)
+                .await
+                .is_err()
+        );
+        let zero = shell
+            .call("ssmcp.exec.wait", json!({"job_id":job_id,"wait_ms":0}))
+            .await
+            .unwrap();
+        assert_eq!(zero["wait_timed_out"], true);
+        shell
+            .call("ssmcp.exec.cancel", json!({"job_id":job_id}))
+            .await
+            .unwrap();
+        let result = wait.await.unwrap();
+        assert_eq!(result["cancelled"], true);
+        assert_eq!(result["wait_timed_out"], false);
+        let already = shell
+            .call("ssmcp.exec.wait", json!({"job_id":job_id}))
+            .await
+            .unwrap();
+        assert_eq!(already["cancelled"], true);
+    }
+
+    #[tokio::test]
+    #[ignore = "real 61-second or 305-second isolated command completion acceptance"]
+    async fn native_completion_wait_once_beyond_sixty_seconds() {
+        let shell = Shell::new();
+        let seconds = match std::env::var("SSMCP_TEST_NATIVE_WAIT_SECONDS").as_deref() {
+            Ok("305") => 305,
+            Err(std::env::VarError::NotPresent) => 61,
+            _ => panic!("set SSMCP_TEST_NATIVE_WAIT_SECONDS to 305 or leave it unset"),
+        };
+        let code = format!("import time; time.sleep({seconds}); print('long wait complete')");
+        let id = py(&shell, &code).await;
+        let args = if seconds == 61 {
+            json!({"job_id":id})
+        } else {
+            json!({"job_id":id,"wait_ms":(seconds + 10) * 1000})
+        };
+        let started = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(seconds + 20),
+            shell.call("ssmcp.exec.wait", args),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(started.elapsed() > Duration::from_secs(seconds - 1));
+        assert_eq!(result["running"], false);
+        assert_eq!(result["exit_code"], 0);
+        assert_eq!(result["wait_timed_out"], false);
+    }
+
+    #[tokio::test]
+    #[ignore = "real 61-second command with multiple short observation windows"]
+    async fn native_completion_windows_resume_the_same_job() {
+        let shell = Shell::new();
+        let id = py(&shell, "import time; time.sleep(61); print('once')").await;
+        let started = Instant::now();
+        for _ in 0..3 {
+            let pending = shell
+                .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":20_000}))
+                .await
+                .unwrap();
+            assert_eq!(pending["job_id"], id);
+            assert_eq!(pending["wait_status"], "pending");
+            assert_eq!(pending["wait_timed_out"], true);
+            assert_eq!(pending["running"], true);
+        }
+        // Deliberately let the process complete while there is no outstanding wait.
+        tokio::time::sleep_until(started + Duration::from_secs(62)).await;
+        let next = shell
+            .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":20_000}))
+            .await
+            .unwrap();
+        assert_eq!(next["job_id"], id);
+        assert_eq!(next["wait_status"], "ready");
+        assert_eq!(next["wait_timed_out"], false);
+        assert_eq!(next["exit_code"], 0);
+        let output = shell
+            .call("ssmcp.exec.read", json!({"job_id":id}))
+            .await
+            .unwrap();
+        assert_eq!(output["stdout"], format!("once{}", newline()));
+        let repeated = shell
+            .call("ssmcp.exec.wait", json!({"job_id":id}))
+            .await
+            .unwrap();
+        assert_eq!(repeated["job_id"], id);
+        assert_eq!(repeated["exit_code"], 0);
+        assert!(started.elapsed() > Duration::from_secs(60));
+    }
+
     #[tokio::test]
     async fn waits_keep_work_running_and_completed_jobs_remain_available() {
         let shell = Shell::new();

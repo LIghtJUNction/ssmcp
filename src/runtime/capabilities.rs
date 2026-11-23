@@ -187,10 +187,11 @@ fn native_limits(chat_enabled: bool) -> Value {
             "formats":["image/png","image/jpeg","image/gif","image/webp"]
         },
         "command_jobs":{
-            "default_wait_ms":5000,
-            "max_wait_ms":60000,
+            "default_wait_ms":null,
+            "max_wait_ms":null,
+            "max_output_read_wait_ms":60000,
             "default_command_timeout_ms":0,
-            "max_command_timeout_ms":900000,
+            "max_command_timeout_ms":null,
             "max_running_per_client":32,
             "max_retained_per_client":128,
             "live_output_bytes_per_stream":65536,
@@ -494,8 +495,9 @@ rtk.start creates a background job managed through exec.read/wait/cancel. Comman
 exclude the rtk prefix; compression follows RTK subcommands. RTK recall and tee hints remain \
 in output. Missing RTK fails without automatic installation or rerunning the original command.\n\n\
 Use exec.start(clientId,options) to launch background work, exec.list(clientId) to find jobs, \
-exec.status(clientId,jobId) to inspect one, exec.wait(clientId,jobId,{wait_ms:60000}) to wait, \
-and exec.read(clientId,jobId,{stdout_cursor,stderr_cursor,max_bytes}) to read new output. \
+exec.status(clientId,jobId) to inspect one, or call(clientId,\"ssmcp.exec.wait\",{job_id:jobId}) \
+for a native completion wait without a tool-level deadline. Code Mode and relay transport have separate deadlines. \
+Use exec.read(clientId,jobId,{stdout_cursor,stderr_cursor,max_bytes}) to read new output. \
 Each stream has its own byte cursor. exec.cancel stops a running process tree; exec.forget \
 releases a completed job's retained state. These command jobs survive code_mode completion \
 and stop when the client disconnects or reloads. Each client permits 32 running jobs and \
