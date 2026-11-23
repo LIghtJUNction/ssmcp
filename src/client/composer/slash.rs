@@ -11,13 +11,6 @@ pub(super) struct Query<'a> {
 }
 
 impl Query<'_> {
-    pub fn provider(&self) -> Option<&str> {
-        (!self.primary)
-            .then(|| self.command.strip_prefix('/'))
-            .flatten()
-            .filter(|name| matches!(*name, "pi" | "cc" | "codex"))
-    }
-
     pub fn commands(&self) -> &'static [SlashCommand] {
         if self.primary {
             SLASH_COMMANDS
@@ -228,15 +221,6 @@ pub(super) fn subcommands(command: &str) -> &'static [SlashCommand] {
             "/worker ls" => "List worker stations",
             "/worker +" => "N · add 1–128 stations; type the count next",
             "/worker -" => "N · retire 1–128 stations; type the count next",
-        },
-        "/pi" => commands! {
-            "/pi tools" => "[OFFSET] · list actual registered Pi tools",
-        },
-        "/cc" => commands! {
-            "/cc tools" => "[OFFSET] · list actual registered Claude tools",
-        },
-        "/codex" => commands! {
-            "/codex tools" => "[OFFSET] · list actual registered Codex tools",
         },
         _ => &[],
     }

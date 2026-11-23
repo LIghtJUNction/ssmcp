@@ -659,6 +659,7 @@ impl Hub {
             .clone())
     }
 
+    #[cfg(test)]
     pub(crate) async fn wait(
         &self,
         actor: &Actor,

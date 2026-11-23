@@ -61,7 +61,7 @@ pub(super) fn parse(arguments: Value) -> Result<(Provider, bool), String> {
         .iter()
         .find(|(_, name)| *name == request.provider)
         .map(|(provider, _)| *provider)
-        .ok_or("optional harness provider must be codex, claude, pi, opencode or a configured ssmcp peer")?;
+        .ok_or("third-party harness import was removed; use external tools or explicit terminal/exec. Only a configured ssmcp peer can be attached here")?;
     Ok((provider, request.refresh))
 }
 
@@ -189,16 +189,20 @@ mod tests {
     #[test]
     fn load_request_rejects_unknown_providers_and_extra_arguments() {
         assert_eq!(
-            parse(json!({"provider":"claude"})).unwrap(),
-            (Provider::Claude, false)
+            parse(json!({"provider":"ssmcp"})).unwrap(),
+            (Provider::Peer, false)
         );
         assert_eq!(
-            parse(json!({"provider":"codex","refresh":true})).unwrap(),
-            (Provider::Codex, true)
+            parse(json!({"provider":"ssmcp","refresh":true})).unwrap(),
+            (Provider::Peer, true)
         );
         for arguments in [
             json!({}),
             json!({"provider":"native"}),
+            json!({"provider":"codex"}),
+            json!({"provider":"claude"}),
+            json!({"provider":"pi"}),
+            json!({"provider":"opencode"}),
             json!({"provider":"playwright"}),
             json!({"provider":"codex","refresh":"true"}),
             json!({"provider":"codex","command":["other-program"]}),
@@ -223,7 +227,7 @@ mod tests {
         let entered = Arc::new(Notify::new());
         let release = Arc::new(Semaphore::new(0));
         let first = loads
-            .request(Provider::Codex, false, {
+            .request(Provider::Peer, false, {
                 let count = count.clone();
                 let entered = entered.clone();
                 let release = release.clone();
@@ -237,12 +241,12 @@ mod tests {
             .unwrap();
         entered.notified().await;
         let second = loads
-            .request(Provider::Codex, false, async {
+            .request(Provider::Peer, false, async {
                 Err("duplicate initialization".into())
             })
             .unwrap();
         let refreshing = loads
-            .request(Provider::Codex, true, async {
+            .request(Provider::Peer, true, async {
                 Err("refresh duplicated an in-flight initialization".into())
             })
             .unwrap();
@@ -254,7 +258,7 @@ mod tests {
         assert_eq!(c.unwrap(), json!({"peer":17}));
         assert_eq!(
             loads
-                .request(Provider::Codex, false, async {
+                .request(Provider::Peer, false, async {
                     Err("cached success was restarted".into())
                 })
                 .unwrap()
@@ -271,7 +275,7 @@ mod tests {
         let entered = Arc::new(Notify::new());
         let release = Arc::new(Semaphore::new(0));
         let pending = loads
-            .request(Provider::Claude, false, {
+            .request(Provider::Peer, false, {
                 let entered = entered.clone();
                 let release = release.clone();
                 async move {
@@ -294,7 +298,7 @@ mod tests {
         let loads = Loads::default();
         let count = Arc::new(AtomicUsize::new(0));
         let first = loads
-            .request(Provider::Pi, false, {
+            .request(Provider::Peer, false, {
                 let count = count.clone();
                 async move {
                     count.fetch_add(1, Ordering::SeqCst);
@@ -304,7 +308,7 @@ mod tests {
             .unwrap();
         assert_eq!(first.await.unwrap_err(), "fixture unavailable");
         let cached = loads
-            .request(Provider::Pi, false, {
+            .request(Provider::Peer, false, {
                 let count = count.clone();
                 async move {
                     count.fetch_add(1, Ordering::SeqCst);
@@ -315,7 +319,7 @@ mod tests {
         assert_eq!(cached.await.unwrap_err(), "fixture unavailable");
         assert_eq!(count.load(Ordering::SeqCst), 1);
         let retried = loads
-            .request(Provider::Pi, true, {
+            .request(Provider::Peer, true, {
                 let count = count.clone();
                 async move {
                     count.fetch_add(1, Ordering::SeqCst);
@@ -325,16 +329,6 @@ mod tests {
             .unwrap();
         assert_eq!(retried.await.unwrap(), json!({"ready":true}));
         assert_eq!(count.load(Ordering::SeqCst), 2);
-        assert_eq!(
-            loads
-                .request(Provider::Claude, false, async {
-                    Ok(json!({"independent":true}))
-                })
-                .unwrap()
-                .await
-                .unwrap(),
-            json!({"independent":true})
-        );
     }
 
     #[tokio::test]
@@ -349,7 +343,7 @@ mod tests {
         let entered = Arc::new(Notify::new());
         let dropped = Arc::new(AtomicBool::new(false));
         let pending = loads
-            .request(Provider::Claude, false, {
+            .request(Provider::Peer, false, {
                 let entered = entered.clone();
                 let dropped = dropped.clone();
                 async move {
@@ -366,7 +360,7 @@ mod tests {
         assert!(dropped.load(Ordering::SeqCst));
         assert!(
             loads
-                .request(Provider::Codex, false, async {
+                .request(Provider::Peer, false, async {
                     panic!("closed loader must never poll this work")
                 })
                 .is_err()

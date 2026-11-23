@@ -589,7 +589,6 @@ pub(crate) async fn call(
     let size = {
         let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
         match name {
-            "ssmcp.ui.harness" => return harness::call(arguments),
             "ssmcp.ui.ask" => return questions::ask(arguments),
             "ssmcp.ui.question_ack" => return questions::acknowledge_answers(arguments),
             "ssmcp.ui.question_delivery" => return questions::delivery_peek(arguments),
@@ -668,7 +667,6 @@ pub(crate) fn tools() -> Vec<Value> {
         json!({"name":"ssmcp.ui.action","description":"Perform one display action. reload validates and reloads appearance only (F5); use ssmcp.client.reload for a process restart. save persists current appearance. logs.clear clears visible history, leaving audit events intact.","inputSchema":{"type":"object","required":["action"],"additionalProperties":false,"properties":{"action":{"type":"string","enum":ACTIONS}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
     ].into_iter().chain(questions::tools())
     .chain(std::iter::once(history::tool()))
-    .chain(std::iter::once(harness::tool()))
     .chain(std::iter::once(super::presentation::tool())).collect()
 }
 
@@ -1217,7 +1215,6 @@ mod tests {
             "ssmcp.ui.ask",
             "ssmcp.ui.filter",
             "ssmcp.ui.get",
-            "ssmcp.ui.harness",
             "ssmcp.ui.events",
             "ssmcp.ui.listener",
             "ssmcp.ui.message",
@@ -1232,6 +1229,7 @@ mod tests {
             "ssmcp.ui.wait",
         ]);
         assert_eq!(names, expected);
+        assert!(!names.contains("ssmcp.ui.harness"));
         let schema = catalog
             .iter()
             .find(|tool| tool["name"] == "ssmcp.ui.action")

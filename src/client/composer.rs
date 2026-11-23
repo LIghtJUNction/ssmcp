@@ -233,18 +233,6 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         name: "/handoff",
         description: "Prepare a context file and editable handoff draft",
     },
-    SlashCommand {
-        name: "/pi",
-        description: "Inspect or call the installed Pi harness",
-    },
-    SlashCommand {
-        name: "/cc",
-        description: "Inspect or call native Claude Code tools",
-    },
-    SlashCommand {
-        name: "/codex",
-        description: "Inspect or call native Codex tools",
-    },
 ];
 
 /// Cursor coordinates are zero based and relative to `lines`.
@@ -269,9 +257,6 @@ pub(super) struct Composer {
     saved_draft: Option<(String, usize)>,
     suggestion_index: usize,
     suggestions_dismissed: bool,
-    harness_input: Option<(u64, usize, bool)>,
-    harness_generation: Option<u64>,
-    harness_commands: Vec<(String, String)>,
     reference_query: Option<completion::Query>,
     reference_input: Option<(u64, usize, bool)>,
     reference_version: Option<completion::Version>,
@@ -580,7 +565,7 @@ impl Composer {
         let Some(query) = slash::query(&self.text, self.cursor) else {
             return Vec::new();
         };
-        let mut suggestions: Vec<_> = query
+        query
             .commands()
             .iter()
             .filter(|command| query.matches(command))
@@ -589,19 +574,7 @@ impl Composer {
                 description: command.description,
                 reference: false,
             })
-            .collect();
-        if query.provider().is_some()
-            && self.harness_input == Some((self.revision, self.cursor, true))
-        {
-            suggestions.extend(self.harness_commands.iter().map(|(name, description)| {
-                Suggestion {
-                    name,
-                    description,
-                    reference: false,
-                }
-            }));
-        }
-        suggestions
+            .collect()
     }
 
     pub(super) fn selected_suggestion(&self) -> Option<Suggestion<'_>> {
@@ -615,56 +588,7 @@ impl Composer {
     }
 
     pub(super) fn refresh_completions(&mut self, enabled: bool) {
-        self.refresh_harness_completions_with(
-            enabled,
-            super::interface::harness::completion_candidates,
-        );
         self.refresh_completions_with(enabled, completion::lookup);
-    }
-
-    fn refresh_harness_completions_with(
-        &mut self,
-        enabled: bool,
-        lookup: impl FnOnce(
-            &str,
-            &str,
-            Option<u64>,
-        )
-            -> Result<Option<super::interface::harness::CompletionCatalog>, String>,
-    ) {
-        let input = (self.revision, self.cursor, enabled);
-        if self.harness_input != Some(input) {
-            self.harness_input = Some(input);
-            self.harness_generation = None;
-            self.harness_commands.clear();
-        }
-        if !enabled || self.suggestions_dismissed {
-            return;
-        }
-        let Some(query) = slash::query(&self.text, self.cursor) else {
-            return;
-        };
-        let Some(provider) = query.provider() else {
-            return;
-        };
-        let selected = self.selected_suggestion().map(|item| item.name.to_owned());
-        match lookup(provider, query.prefix, self.harness_generation) {
-            Ok(Some((generation, commands))) => {
-                self.harness_generation = Some(generation);
-                self.harness_commands = commands
-                    .into_iter()
-                    .map(|(name, description)| (format!("{} {name}", query.command), description))
-                    .collect();
-                self.suggestion_index = selected
-                    .and_then(|name| self.suggestions().iter().position(|item| item.name == name))
-                    .unwrap_or(0);
-            }
-            Ok(None) => {}
-            Err(_) => {
-                self.harness_generation = None;
-                self.harness_commands.clear();
-            }
-        }
     }
 
     /// Enter keeps the existing first-word shortcut. Merely showing a secondary
@@ -1204,13 +1128,13 @@ mod tests {
         assert_eq!(draft.text(), "/re");
         draft.set_text("/");
         assert!(draft.move_suggestion(-1));
-        assert_eq!(draft.selected_suggestion().unwrap().name, "/codex");
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/handoff");
         assert!(
             draft
                 .rows(60, 3, &ui, true)
                 .lines
                 .iter()
-                .any(|line| line.contains("› /codex"))
+                .any(|line| line.contains("› /handoff"))
         );
         draft.insert("au");
         assert_eq!(draft.selected_suggestion().unwrap().name, "/audit");

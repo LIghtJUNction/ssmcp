@@ -158,12 +158,14 @@ ssmcp context use here
 | 运行本地命令 | `!pwd`、`!cargo test`；输出与退出码回到会话 |
 | 查看任务 | `/tasks`；`/tasks cancel JOB_ID` 停止指定命令任务 |
 | 回答问题 | **Shift + ↑** 打开待答问题，保留普通草稿 |
-| 查看原生工具 | `/pi`、`/cc`、`/codex` 列出真实目录；`TOOL {...}` 显式调用 |
+| 查看原生工具 | 通过 MCP 工具目录或 `ssmcp --list-tools` 查看 |
 | 浏览工具输出 | 默认显示状态与最多两行已脱敏结果；点击 `Click expand` 或选中后按 Enter 展开 |
 | 查看成员事件 | 在成员列表右键点击进程或线程，查看当前进程保留的对应事件；Esc 返回 |
 | 查看详细日志 | `/logs` 打开 Logs；其他对话页可用右键切换日志 |
 | 展开状态侧栏 | **F3** 或 `/sidebar`；再按一次收起，F8 保存当前设置 |
 | 复制与帮助 | `/copy` 复制最近回复；**F7** 原生选择；`/help` 打开完整帮助 |
+
+旧版内置 Codex、Claude Code、Pi 和 OpenCode 导入已移除。请删除启动脚本中的相应 `--load-harness` 参数，改用独立 MCP 客户端或在本地显式运行命令。现有配置与历史文件可继续保留。
 
 工具调用成功结束时显示 `done`，运行中、失败、取消或超时显示实际状态。对话页只预览简短结果，详细记录可在 Logs 中查看；仍保留的长输出可按任务游标或输出 ID 读取。
 
@@ -323,9 +325,9 @@ printf 'a\nb\n' | count-lines
 
 ## 复用现有工具
 
-ssmcp 默认启用命令、文件、会话和 Zuse CLI 管理工具，不要求安装其他 harness。Codex、Claude Code、Pi 和 OpenCode 默认不探测、不启动；需要时用 `ssmcp.harnesses.load` 显式加载一项，`ssmcp.harnesses.list` 只读取缓存状态。加载后保留该工具的完整 schema、会话和审批方式，实际模型调用仍须显式发起。[按需加载说明](docs/optional-harnesses.md)
+SSMCP 默认启用原生命令、文件、会话和 Zuse CLI 管理工具。第三方工具可以使用独立的 MCP 客户端接入；`ssmcp.harnesses.load` 仅支持显式配置的 SSMCP peer。[迁移与连接说明](docs/optional-harnesses.md)
 
-`--input` 默认从终端接收聊天消息，`--agent` 默认由下一位调用方领取。要在启动时加载原生协议，请用 `--load-harness codex` 或 `--load-harness claude-code`。用 `ssmcp --list-harnesses` 查看支持项。`--load-harness ssmcp` 可以连接明确指定并已认证的 MCP 网关。[客户端输入](docs/client-input.md) · [协议加载](docs/agent-entry.md)
+`--input` 默认从终端接收聊天消息，`--agent` 默认由下一位调用方领取。用 `ssmcp --list-harnesses` 查看支持项；启动时可用 `--load-harness ssmcp` 连接明确指定并已认证的 MCP 网关，连接参数放在 `--` 之后。[客户端输入](docs/client-input.md) · [连接参数](docs/agent-entry.md)
 
 `ssmcp local --socket` 提供默认路径的本机 HTTP/MCP Unix socket，`--socket PATH` 可指定私有路径。时间工具支持当前 UTC、跨时区时间差和倒计时，终端直接显示运行时长与剩余时间，`/wait` 可查看详情。[本机连接](docs/local-mode.md) · [时间原语](docs/time-primitives.md)
 
