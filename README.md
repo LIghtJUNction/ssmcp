@@ -227,7 +227,7 @@ ssmcp ui check
 
 ## 复用现有工具
 
-ssmcp 默认启用命令、文件、会话和 Zuse CLI 管理工具，不要求安装其他 harness。Codex、Claude Code、Pi 和 OpenCode 默认不探测、不启动；需要时用 `ssmcp.harnesses.load` 显式加载一项，`ssmcp.harnesses.list` 只读取缓存状态。加载后保留该工具的完整 schema、会话和审批方式，实际模型调用仍须显式发起。[按需加载说明](docs/optional-harnesses.md)
+SSMCP 默认启用原生命令、文件、会话和 Zuse CLI 管理工具。第三方工具可以使用独立的 MCP 客户端接入；`ssmcp.harnesses.load` 仅支持显式配置的 SSMCP peer。[迁移与连接说明](docs/optional-harnesses.md)
 
 `--input` 默认从终端接收聊天消息，`--agent` 默认由下一位调用方领取。要在启动时加载原生协议，请用 `--load-harness codex` 或 `--load-harness claude-code`。用 `ssmcp --list-harnesses` 查看支持项。`--load-harness ssmcp` 可以连接明确指定并已认证的 MCP 网关。[客户端输入](docs/client-input.md) · [协议加载](docs/agent-entry.md)
 

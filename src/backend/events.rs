@@ -314,9 +314,6 @@ impl EventLog {
         timing: Option<crate::runtime::time::ExecutionTiming>,
     ) {
         let mut event = self.audit_mode.event(event);
-        if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
-            pool.native_event(&self.label, &event);
-        }
         // Serialise persistence, display and sequence assignment for this stream.
         let mut archive = self.archive.lock().unwrap_or_else(|e| e.into_inner());
         let external_output = self
@@ -324,11 +321,8 @@ impl EventLog {
             .as_ref()
             .and_then(std::sync::Weak::upgrade)
             .is_some()
-            && (event["method"] == "command/exec/outputDelta"
-                || matches!(
-                    event["type"].as_str(),
-                    Some("background_output" | "bash_execution_update")
-                ));
+            && self.label == "shell"
+            && event["method"] == "command/exec/outputDelta";
         if !external_output && presentation != Presentation::LocalDiscovery {
             #[cfg(all(test, unix))]
             if let Some(sink) = self.projection.lock().unwrap().as_ref() {

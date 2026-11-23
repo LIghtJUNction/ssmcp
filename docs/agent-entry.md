@@ -1,48 +1,6 @@
-# 用 `--load-harness` 加载原生协议
+# 显式认证 MCP peer
 
-`--load-harness` 在客户端启动时加载一个明确指定的协议适配器。原生命令、文件和 Zuse CLI 管理工具继续使用同一份 runtime 与工具目录；适配器完成握手和工具枚举后，连接才报告就绪。启动过程不提交 prompt 或模型回合。需要执行任务时，调用已枚举的原生工具，并遵循该工具的参数和审批流程。[入口](../src/client/agent.rs) · [加载与关闭](../src/runtime/native_plugins/process.rs)
-
-`--agent` 单独选择聊天消息的处理方，默认 `next-caller`。两项可同时使用，例如 `ssmcp local --agent next-caller --load-harness codex`。聊天输入和收件人见[客户端输入](client-input.md)。
-
-## 选择一个 provider
-
-`--list-harnesses` 显示本版本支持的 provider 和别名，无需登录，也不探测本机程序。普通启动保持按需加载；添加 `--load-harness` 后，只初始化选中的一项。
-
-```sh
-ssmcp --list-harnesses
-ssmcp --list-harnesses --json
-
-ssmcp alice@relay.example --load-harness codex
-ssmcp local --load-harness claude-code
-ssmcp --context work --load-harness codex
-
-# 只检查原生协议和实际工具目录，完成后退出。
-ssmcp --list-tools --load-harness claude-code
-```
-
-| 名称 | 别名 | 启动时连接的接口 | 参数来源 |
-| --- | --- | --- | --- |
-| `codex` | — | 已安装 `codex` 的 App Server stdio 接口 | `--` 后的参数追加到协议进程 |
-| `claude` | `claude-code`、`cc` | 已安装 `claude` 的 `mcp serve` 接口 | `--` 后的参数追加到协议进程 |
-| `pi` | — | 已初始化的本机私有 RPC socket | `SSMCP_PI_RPC_SOCKET` |
-| `opencode` | — | 已运行的原生 loopback HTTP 服务 | `SSMCP_OPENCODE_URL`、`OPENCODE_PASSWORD` |
-| `ssmcp` | — | 明确指定的 MCP peer 网关 | `--` 后的 `--endpoint`、`--token-env`，可选 `--socket` |
-
-表中的前四项复用现有适配器，包括程序解析、协议校验、原生审批和退出清理。Pi 与 OpenCode 连接操作者已准备好的服务；这两项收到额外进程参数会直接报错，避免参数被忽略。实际支持的工具以握手后返回的目录为准。[适配器](../src/backend.rs) · [按需加载](optional-harnesses.md)
-
-## 用 `--` 分开两层参数
-
-`--` 前属于 ssmcp；`--` 后完整交给选中的协议适配器。一次连接只接受一个 `--load-harness`。Codex、Claude Code 的参数必须适用于它们各自的协议服务入口，具体参数由已安装版本校验。
-
-```sh
-# --name 命名 ssmcp 连接；--verbose 传给 Claude Code 的 MCP 服务。
-ssmcp alice@relay.example --name review --load-harness claude-code -- --verbose
-
-# 原有连接上下文继续选择中继；额外参数仍需要 --。
-ssmcp --context work --load-harness codex -- --config approval_policy=on-request
-```
-
-参数中的中文、空字符串以及看起来像 ssmcp 选项的值都保持原样。保存后台会话时，会记录 provider 和参数分界；重连继续使用该选择。旧 `--type`、`--backend` 和 `-t` 入口仍会被拒绝。旧版协议保存记录如果只有 `--agent`，恢复会提示重新创建。预加载请用 `--load-harness`，要指定聊天处理方则显式配置受支持的输入模式与 `--agent`。[参数与会话记录](../src/client.rs)
+旧启动选项迁移见[原生工具与显式 MCP peer](optional-harnesses.md)。
 
 ## 连接另一个 ssmcp 的 MCP 网关
 
@@ -83,14 +41,4 @@ provider 缺失、原生握手失败、认证拒绝或目录无效时，启动�
 
 peer 使用 JSON-response MCP，协商 2025 系列协议。单个请求最多 1 MiB、单个响应最多 2 MiB；目录最多 64 页、4,096 个工具、合计 8 MiB。初始化和通知各最多等待 10 秒，单页目录 15 秒、整份目录 75 秒；显式工具调用最多等待 900 秒。超时返回错误，不将 ACK、空响应或伪造的本地返回值当作远端工具结果。
 
-回归检查覆盖 CLI 参数、保存会话、原生假进程，以及私有 HTTP/Unix 协议服务。实际 CLI 脚本使用独立 HOME 和配置目录，核对真实 argv、握手、目录、连接就绪与子进程退出，并断言启动没有提交模型回合：
-
-```sh
-cargo test --lib client::agent::tests
-cargo test --lib peer_
-python3 scripts/e2e_agent_entry.py \
-  --binary /absolute/path/to/built/ssmcp \
-  --output /absolute/path/to/new-evidence-directory
-```
-
-这些用例使用协议 fixture；不同真实 CLI 版本的工具、账户、模型权限和原生审批由各自实现决定。peer 用例核对完整返回内容、工具错误和 JSON-RPC 错误，并覆盖错误认证、重复游标、重定向、响应上限、超时及关闭时的取消。[CLI 回归](../scripts/e2e_agent_entry.py) · [协议回归](../src/backend/peer.rs)
+回归检查覆盖保存会话、私有 HTTP/Unix 服务、真实 schema 和返回内容，以及认证、重复游标、重定向、超时和关闭取消。[协议回归](../src/backend/peer.rs)

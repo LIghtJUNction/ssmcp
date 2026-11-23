@@ -1,12 +1,12 @@
 # 统一客户端、Harness 与代码模式
 
-本开发分支对外提供 `list`、`code_mode`、`collab`、`await` 和 `messages` 五个 MCP 工具。`list` 枚举当前获准客户端；`code_mode` 编排原生操作；`collab` 管理现有参与者；`await` 观察任务、协作对象或用户输入；`messages` 按明确收件人处理原生消息。每条新连接显示为 `shell`，提供交互式终端、独立命令任务和已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
+本开发分支对外提供 `list`、`code_mode`、`collab`、`await` 和 `messages` 五个 MCP 工具。`list` 枚举当前获准客户端；`code_mode` 编排原生操作；`collab` 管理现有参与者；`await` 观察任务、协作对象或用户输入；`messages` 按明确收件人处理原生消息。每条新连接显示为 `shell`，提供交互式终端和独立命令任务。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
 
 <a id="启动参数"></a>
 
 ## 1. 启动客户端
 
-先在 Linux、macOS 或 Windows 进入需要工作的本机目录，再启动一个客户端。它始终提供交互式 shell，并自动发现 `PATH` 中可用的 Codex、Claude Code、Pi、OpenCode 原生接口。把 `octocat@github` 换成允许访问这条连接的 GitHub 用户名；安装方式和平台范围见[版本与安装](releases.md)。
+先在 Linux、macOS 或 Windows 进入需要工作的本机目录，再启动一个客户端。它始终提供交互式 shell，以及原生命令和工作区能力。把 `octocat@github` 换成允许访问这条连接的 GitHub 用户名；安装方式和平台范围见[版本与安装](releases.md)。
 
 ```sh
 ssmcp --server https://relay.example --allow alice@relay.example --name dev --title "检查当前项目并修复构建"
@@ -36,23 +36,10 @@ ssmcp --list-tools
 ssmcp --server https://relay.example --name dev --title "继续项目开发" --allow alice@relay.example
 ```
 
-| 来源 | 本机原生入口或实现 | 可调用范围 |
-| --- | --- | --- |
-| ssmcp | 交互式终端、独立后台进程、文件、上下文原语 | 不依赖安装 coding harness；文件读写与命令执行直接在本机完成 |
-| Codex | `codex app-server --listen stdio://`，并须支持 `app-server generate-json-schema --experimental` | App Server 方法；成功发现时注册 `codex.mcp.*`，通过原生 MCP 调用接口转发 |
-| Claude Code | `claude mcp serve` | 该入口实际返回的 MCP 工具目录，统一加 `claude.` 前缀 |
-| Pi | 显式连接已初始化的本机私有 Unix RPC socket | `pi.rpc` 与事件、请求、回复四项桥接操作；内部模型、插件和 MCP 工具 Schema 不可枚举 |
-| OpenCode | 操作者已启动的本机 HTTP 服务；显式配置 loopback 地址 | 从 `/api/info` 握手和 `/openapi.json` 发现操作；发现阶段不代为启动服务 |
-
-发现成功才会加入对应工具；缺少 CLI、版本不兼容或初始化失败会记录本机诊断，shell 连接仍可使用。调用 `ssmcp.harnesses.list` 可查看当前注册数量，完整名称、参数和权限以 `list({client_id})` 为准。安装一个 harness 不等于它的每个内部功能都提供可直接调用的接口。[自动发现与分派](../src/backend.rs)
-
-提供者按明确的加载请求独立初始化或刷新，普通 Shell 和目录查询不会自动扫描它们。版本、握手或目录读取失败保留该项实际诊断；客户端关闭会取消尚未完成的加载。时间、页数和工具数量有界，具体限制由对应适配器定义。[按需加载](optional-harnesses.md) · [加载实现](../src/runtime/native_plugins/process/lazy.rs)
-
-发现只使用已有程序，不安装运行时、依赖或 Harness，也不提交模型任务。mise、asdf、Volta 等 shim 需要解析到已安装入口；无法确认安全启动的版本保留为 unavailable，并给出原因。关闭网络下载不能证明不会从缓存安装依赖。参见 [OpenCode 的启动限制](#8-opencode从-openapi-发现操作) 和 [原生程序解析](../src/program.rs)。
+外部客户端通过标准 MCP 接入。旧导入选项见[迁移说明](optional-harnesses.md)，显式 SSMCP peer 见[连接说明](agent-entry.md)。
 
 桌面与浏览器程序直接调用独立 Zuse CLI，经通用 exec 管理任务；`computer` 只提供版本、下载、安装和卸载。SSMCP 不再加载 Playwright 专用桥或内置浏览器后端。外部 MCP 的通用目录与调用转发继续遵循真实 schema 和授权。[Zuse 管理与执行](computer-use.md)
 
-后续显式调用是否使用模型由原生方法决定。例如 Codex 的 turn、Pi 的 prompt 控制请求，以及 Claude 目录中可能存在的 Agent 工具会进入其任务流程；直接 MCP 工具也可能在内部使用模型。开发与验收默认使用协议 fixture、状态查询和已确认无模型的工具。普通读写文件与 Shell 命令可直接使用 `fs` 和 `exec`。
 
 `ssmcpd` 和代码模式的隔离执行环境运行在 Linux。服务端通过系统 Node.js、bubblewrap 与 util-linux 的 `prlimit` 执行编排代码；客户端只需本机 OpenSSH 与所选 shell。服务端的安装条件见[部署说明](deployment.md#系统代码运行环境)。原生 rsync 端点目前也仅在 Linux 客户端提供；macOS／Windows 可使用文件和 loopback 网络原语。[rsync 平台分支](../src/rsync.rs)
 
@@ -251,78 +238,6 @@ PTY 最近 1 MiB 输出保存在内存中。单次读取最多 32 KiB，写入�
 `--title` 随连接进入 `list`，供 agent 确认本轮任务。安装更新后可按[重载协议](#9-更新后的客户端重载)重启原入口；重载应答与新版本已经在线是两个状态，需要重新读取 `list` 确认。
 
 长输出超过 32 KiB 或 500 行时按来源转储，返回 ID、路径、摘要、字节数和行数。Unix 使用 `/tmp/ssmcp-<uid>`，Windows 默认使用 `%LOCALAPPDATA%\ssmcp\output`，未设置 LOCALAPPDATA 时使用用户临时目录下的 `ssmcp/output`；返回路径属于目标客户端机器。默认保留 24 小时，已结束文件总量上限 512 MiB，单文件上限 256 MiB，活动文件不参加自动淘汰。具体的 `complete`、范围及截断语义见[长输出护卫](session-control.md#长输出自动转储)与[实现](../src/output.rs)。
-
-## 5. Codex：App Server 与动态 MCP 工具
-
-Codex 适配器使用安装版本生成的 JSON Schema 注册 App Server 方法，例如原生 `thread/start` 对应路由 `codex.thread_start`。通用 `codex.rpc` 保留原生 method 和 params；它不能重复初始化连接。工具的可用范围取决于本机版本、配置和实际握手。[Codex 适配器](../src/backend/codex.rs)
-
-内部 MCP 工具通过原生 `mcpServerStatus/list` 完整分页发现，再由 `mcpServer/tool/call` 调用。注册名称采用 `codex.mcp.<server>.<tool>`，组件会转义，过长组件使用摘要。原生 Tool 对象只替换路由名称；`inputSchema`、可选 `outputSchema`、描述、annotations、结果和错误保留。缺少工具 Schema 的接口标为不可枚举，不能从“服务器存在”推断其全部工具可用。
-
-~~~javascript
-const c = clients.find(c => c.id === "CLIENT_ID_FROM_LIST");
-if (!c) throw new Error("Select an online client from list");
-return await tools(c.id);
-~~~
-
-跟随返回的 `nextCursor` 读取全部目录。选择其中实际出现的完整名称，按原生 Schema 调用 `call(c.id, toolName, arguments)`；不要硬编码某个 MCP Server、工具或参数。验收需同时保存实际枚举与实际工具调用证据，仅列出服务器名称不足以证明转发成功。
-
-只有完整分页成功才发布 MCP 快照。后台定期刷新，动态 MCP 调用前再次检查；发现失败、取消或原生连接失效时清除旧 MCP 路由。通用 App Server 控制方法与动态工具目录分别维护可用范围。
-
-`ssmcp.codex.events` 读取事件，`ssmcp.codex.requests` 读取待处理审批、用户输入和动态工具请求，`ssmcp.codex.schema` 查看原生响应 Schema。需要回复时，用原始请求 ID 和对应的 `result` 或 `error` 调用 `ssmcp.codex.respond`。ssmcp 不自动选择审批答案，不改变 Codex 的原生沙箱和账户设置。模型 turn 只在获得任务授权后显式提交，发现和本项目回归测试不提交 turn。
-
-## 6. Claude Code：发现原生 MCP 工具
-
-Claude Code 适配器连接 `claude mcp serve`，重新读取它的完整分页目录，并给每个原生名称加上 `claude.` 前缀。原生 schema、描述、annotations 和结果字段保留；工具是否存在由本机版本与配置决定。[Claude Code 适配实现](../src/backend/cc.rs)
-
-当发现目录提供 `claude.Read` 且参数包含 `file_path` 时，可以读取启动目录中的 README：
-
-```js
-const c = clients.find(c => c.name === "dev");
-if (!c) throw new Error("Claude Code client is offline");
-return await call(c.id, "claude.Read", { file_path: c.cwd + "/README.md" });
-```
-
-如果目录提供 `claude.Agent`，可按其实际 `inputSchema` 把任务交给本机 Agent。原生服务真正发来的请求可通过 `ssmcp.claude.requests` 读取，再用 `ssmcp.claude.respond` 的 `{id, result}` 或 `{id, error}` 回复。直接调用原生 MCP 工具时，不能假定它会出现交互式 Claude 终端的确认弹窗。
-
-Claude 的前台 Bash 输出通常随调用结果返回。桥记录原生进度事件；当成功的后台 Bash 结果包含 `backgroundOutputPath` 时，桥才增量跟随这个已知路径，将输出写入本机终端和 `ssmcp.claude.events`。没有该字段时不会猜测输出文件；文件暂时不增长也不能证明命令已结束。最多同时跟随 32 个输出文件。
-
-## 7. Pi：有限的原生 RPC 桥接
-
-Pi 适配器的支持范围是控制协议，成功握手只注册四项：`pi.rpc`、`ssmcp.pi.events`、`ssmcp.pi.requests`、`ssmcp.pi.respond`。ssmcp 不把已知控制命令表伪装为发现到的模型工具目录。模型、扩展和内部 MCP 工具没有可枚举的原生 Schema 时保持不可枚举状态。[Pi 适配器](../src/backend/pi.rs)
-
-在当前连接实际注册 `pi.rpc` 后，可以按它的 Schema 查询状态：
-
-~~~javascript
-const c = clients.find(c => c.id === "CLIENT_ID_FROM_LIST");
-if (!c) throw new Error("Select an online client from list");
-return await call(c.id, "pi.rpc", {type: "get_state", arguments: {}});
-~~~
-
-`get_state` 用于协议握手，发现不会发送 prompt。扩展对话通过 `ssmcp.pi.requests` 读取，`ssmcp.pi.respond` 保留原始 ID；实际字段和互斥条件以目录 Schema 为准。收到回复确认只表示交给了 Pi，不证明任务完成。
-
-自动发现不启动新的 Pi 进程。操作者需事先初始化原生 JSONL RPC 会话，并通过 `SSMCP_PI_RPC_SOCKET` 显式提供本机私有 Unix socket 入口。ssmcp 核对已安装程序与版本；socket 路径必须为绝对路径，socket 和直接父目录不能是符号链接，必须由当前 UID 拥有且没有 group/other 权限。连接后再次核对 peer UID，并在 5 秒内完成原生 `get_state` 握手。只有 `success: true`、`command: "get_state"` 且 `data` 为对象的响应才被接受。未配置安全的既有入口时保持 unavailable；保留已安装与不可连接的诊断，不禁用用户扩展，也不替代其原生审批。ssmcp 不模拟终端交互来创建这一接口。[连接与发现](../src/backend.rs)
-
-Pi 1.5.0 的原生包解析器在 `PI_OFFLINE=1` 时跳过缺失包安装，但扩展代码仍可执行。RPC 模式在处理第一条 `get_state` 前先绑定扩展，发出 `session_start` 并运行资源发现钩子；仅配置离线模式不能证明启动无安装或模型副作用。[包解析](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/src/core/package-manager.ts) · [RPC 启动顺序](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/src/modes/rpc/rpc-mode.ts) · [扩展绑定](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/src/core/agent-session.ts)
-
-既有会话由操作者管理。断线或 reload 关闭 ssmcp 的 RPC 连接与本地请求状态，不杀死外部 Pi 服务；每条连接使用新的 128 位随机请求前缀，避免旧响应与重连后的请求重号。上述四项是适配器的协议范围，实际是否已注册仍以当前目录和握手结果为准。
-
-## 8. OpenCode：从 OpenAPI 发现操作
-
-OpenCode 适配器从原生 OpenAPI 文档发现 `opencode.<operationId>`。参数按 `path`、`query`、`headers`、`body` 分组，关联 Schema 与完整文档可通过 `opencode.schema` 查询；`opencode.api` 保留原生操作调用入口。[OpenCode 适配器](../src/backend/opencode.rs)
-
-自动发现不会启动新的 OpenCode 服务。操作者需先按原生方式启动服务，再用 `SSMCP_OPENCODE_URL` 指定 `http://127.0.0.1:端口/`，并通过 `OPENCODE_PASSWORD` 提供非空、最多 4096 字节的原生密码；Basic 用户名固定为 `opencode`。端口必须显式指定，不接受其他主机、userinfo、非根路径、query 或 fragment，也不使用环境代理或跟随重定向。没有已配置端点时，提供者报告 unavailable。发现阶段只查询 `/api/info` 与 `/openapi.json`，要求原生信息为 v2 主版本并包含正数 PID；不创建会话、不提交 prompt，也不订阅 SSE。首次明确调用原生操作或 `opencode.events` 时才连接 `/api/event`。后续调用仍遵循原生权限审批；断线和 reload 只关闭本桥接连接。真实连接与版本兼容性必须在部署环境分别验证。
-
-这一限制来自 OpenCode v2.3.0 的启动路径：服务会启动调度器；调度步骤会初始化会话 location，插件解析可进一步安装缺失包，到期任务也可能唤起模型。关闭更新、模型列表抓取或 npm 网络访问不能证明这些行为已经停止。固定版本的源码依据见 [服务启动](https://github.com/anomalyco/opencode/blob/v2.3.0/packages/server/src/process.ts)、[调度器](https://github.com/anomalyco/opencode/blob/v2.3.0/packages/core/src/schedule.ts)、[插件管理](https://github.com/anomalyco/opencode/blob/v2.3.0/packages/core/src/plugin/supervisor.ts)、[插件安装](https://github.com/anomalyco/opencode/blob/v2.3.0/packages/core/src/plugin/module.ts)。
-
-注册成功后可读取原生文档，具体操作仍以实时目录为准：
-
-~~~javascript
-const c = clients.find(c => c.id === "CLIENT_ID_FROM_LIST");
-if (!c) throw new Error("Select an online client from list");
-return await call(c.id, "opencode.schema", {document: true});
-~~~
-
-HTTP 响应保留状态、内容类型和原生数据。短 JSON 仍为原生对象；长正文返回 `body_format`、`body_artifact`、预览及 `complete`。SSE 与 WebSocket 使用 `stream_id`，通过 `opencode.events` 读取、`opencode.stream_send` 写入 WebSocket、`opencode.stream_close` 关闭。SSE 解析达到边界时记录 decode_error，原始流仍交给同一 OutputStore 捕获。适配器隐藏自身的 transport 凭据，其他二进制字节保持保真。
 
 ## 9. 更新后的客户端重载
 

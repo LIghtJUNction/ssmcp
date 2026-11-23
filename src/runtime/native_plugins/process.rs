@@ -365,18 +365,7 @@ impl Process {
                     .ok_or("provider is no longer connected; refresh tools")?;
                 self.registry
                     .validate_route(&id, provider, generation, &native_name)?;
-                let observation = match &self.observer {
-                    Some(pool) => {
-                        pool.native_begin(provider.label(), &native_name, &arguments)
-                            .await?
-                    }
-                    None => None,
-                };
-                let result = driver.call(&native_name, arguments).await;
-                if let (Some(pool), Some(lease)) = (&self.observer, observation) {
-                    pool.native_finish(lease, &result);
-                }
-                result
+                driver.call(&native_name, arguments).await
             }
             _ => Err("provider belongs to the workspace runtime".into()),
         }
@@ -478,10 +467,6 @@ impl NativePlugin for Process {
             Provider::Exec,
             Provider::Ui,
             Provider::Harnesses,
-            Provider::Codex,
-            Provider::Claude,
-            Provider::Pi,
-            Provider::OpenCode,
             Provider::Peer,
         ]
     }

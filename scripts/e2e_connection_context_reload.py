@@ -23,7 +23,6 @@ import tempfile
 import time
 
 from e2e import free_port
-from e2e_agent_entry import fixture_program, owned_alive, records
 from e2e_local import Local, process_identity, sha256
 from e2e_local_socket import SocketLocal
 
@@ -37,13 +36,6 @@ class ContextReload(Local):
         self.extra_root.mkdir(mode=0o700)
         self.cross_features = selection == "command_line"
         self.socket_path = None
-        self.agent_log = directory / "agent-invocations.jsonl"
-        self.agent_directory = directory / "fake-claude"
-        self.native_arguments = ["--fixture-dir", str(self.agent_directory),
-            "--server", "native-server", "--context", "native-context",
-            "--title", "native title 中文", "--help", "--socket", "native.sock", ""]
-        if self.cross_features:
-            self.agent_directory.mkdir(mode=0o700)
 
     def client_command(self, *, name="context-reload", **_kwargs):
         selector = ["--context", "original"] if self.selection == "command_line" else []
@@ -52,8 +44,8 @@ class ContextReload(Local):
                 "--listen", f"127.0.0.1:{self.listen_port}", "--shell", "/bin/sh",
                 "--theme", "nord", "--no-color", "--no-watchdog", "--no-browser"]
         if self.cross_features:
-            # The optional socket path must not consume the following --load-harness.
-            command += ["--socket", "--load-harness", "claude-code", "--", *self.native_arguments]
+            # The optional socket path must leave a following option intact.
+            command += ["--socket", "--no-color"]
         return command
 
     def request(self, *args, **kwargs):
@@ -86,43 +78,19 @@ class ContextReload(Local):
             environment["SSMCP_CONTEXT"] = "original"
         if self.cross_features:
             self.socket_path = Path(environment["XDG_RUNTIME_DIR"]) / "ssmcp/mcp.sock"
-            fixture = Path(__file__).resolve().parent.parent / "tests/fixtures/cc-fake.py"
-            wrapper = Path(environment["PATH"]) / "claude"
-            assert not wrapper.exists(), "the isolated PATH must contain no installed Claude"
-            wrapper.write_text(fixture_program("claude", fixture, self.agent_log))
-            wrapper.chmod(0o700)
         self.environments[label] = environment
         return environment
 
-    def check_agent_generation(self, credentials, generation):
-        self.check(credentials.get("agent") == "claude"
-                   and credentials.get("agent_scope") == "protocol_catalog",
-                   "the real connection reports its selected protocol only after initialization")
+    def check_native_generation(self, generation):
         metadata = self.socket_path.lstat()
         self.check(stat.S_ISSOCK(metadata.st_mode) and stat.S_IMODE(metadata.st_mode) == 0o600
                    and metadata.st_uid == os.geteuid(),
-                   "the combined agent connection serves its owned private MCP socket")
-        invocations = [row for row in records(self.agent_log) if row["argv"][:2] == ["mcp", "serve"]]
-        self.check(len(invocations) == generation
-                   and all(row["argv"] == ["mcp", "serve", *self.native_arguments] for row in invocations),
-                   "each real provider process receives the exact native arguments after --")
-        self.check(owned_alive(invocations[-1])
-                   and not any(owned_alive(row) for row in invocations[:-1]),
-                   "reload replaces only its owned provider process and leaves the current one live")
-        requests = [row["request"] for row in records(self.agent_log.with_suffix(".rpc.jsonl"))]
-        self.check(sum(row.get("method") == "initialize" for row in requests) == generation
-                   and sum(row.get("method") == "tools/list" for row in requests) == 2 * generation
-                   and sum(row.get("method") == "tools/call" for row in requests) == generation - 1
-                   and not any(row.get("method") in ("turn/start", "prompt") for row in requests),
-                   "each startup performs protocol/catalog work and submits no task")
-        # This is an explicit call to the fixture's real advertised native tool.
-        arguments = {"marker": "cross-feature 中文", "generation": generation}
-        result = self.call("claude.Dynamic1", arguments)
-        self.check(result == {"native_name": "Dynamic1", "arguments": arguments},
-                   "authenticated MCP over the Unix socket returns the actual selected provider result")
-        argv = Path(f"/proc/{self.client.pid}/cmdline").read_bytes().split(b"\0")[:-1]
-        self.check(argv[argv.index(b"--") + 1:] == [arg.encode() for arg in self.native_arguments],
-                   "the live client argv retains native selector-like flags and the empty argument")
+                   "the current connection serves its owned private MCP socket")
+        marker = f"native-generation-{generation}"
+        job = self.call("ssmcp.exec.start", {"command": ["/bin/echo", marker]})
+        result = self.call("ssmcp.exec.wait", {"job_id": job["job_id"]})
+        self.check(result.get("exit_code") == 0 and result.get("wait_status") == "ready",
+                   "authenticated native execution completes over the owned MCP socket")
 
     def read_replacement(self):
         with selectors.DefaultSelector() as selector:
@@ -149,7 +117,7 @@ class ContextReload(Local):
         initial = self.current_client()
         self.client_id = initial["id"]
         if self.cross_features:
-            self.check_agent_generation(credentials, 1)
+            self.check_native_generation(1)
         self.check(initial.get("title") == "--context", "literal --title value is preserved at startup")
         roots = self.call("ssmcp.context.roots")["roots"]
         self.check(any(root["path"] == str(self.extra_root.resolve()) for root in roots),
@@ -175,7 +143,7 @@ class ContextReload(Local):
         current = self.current_client()
         self.client_id = current["id"]
         if self.cross_features:
-            self.check_agent_generation(replacement, 2)
+            self.check_native_generation(2)
         self.check(current["id"] != initial["id"], "reexec obtains a new real connection identity")
         self.check(current.get("title") == initial.get("title") and current["cwd"] == initial["cwd"],
                    "reexec preserves the literal title and launch cwd")
@@ -200,11 +168,6 @@ class ContextReload(Local):
             super().close()
         finally:
             if self.cross_features:
-                survivors = [row for row in records(self.agent_log) if owned_alive(row)]
-                for row in survivors:
-                    if owned_alive(row):
-                        os.kill(row["pid"], signal.SIGKILL)
-                self.check(not survivors, "normal client cleanup stops every owned fake provider")
                 if self.socket_path is not None:
                     self.check(not self.socket_path.exists(),
                                "normal client cleanup removes the combined connection's MCP socket")
@@ -230,8 +193,7 @@ def main():
               "binary_sha256": sha256(binary), "cases": [],
               "sources": {name: sha256(Path(__file__).with_name(name)) for name in (
                   "e2e_connection_context_reload.py", "e2e_local.py", "e2e.py", "e2e_account_gateway.py",
-                  "e2e_agent_entry.py", "e2e_local_socket.py")}}
-    report["sources"]["cc-fake.py"] = sha256(Path(__file__).resolve().parent.parent / "tests/fixtures/cc-fake.py")
+                  "e2e_local_socket.py")}}
     try:
         for selection in ("command_line", "environment", "current"):
             with tempfile.TemporaryDirectory(prefix="ssmcp-context-reload-") as directory:

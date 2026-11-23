@@ -2,7 +2,6 @@
 pub mod events;
 pub(crate) mod peer;
 pub mod process;
-pub mod rpc;
 pub mod shell;
 
 // Keep the established public startup API while the implementation belongs to

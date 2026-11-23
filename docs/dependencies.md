@@ -1,6 +1,6 @@
 # 独立核心库与子模块
 
-ssmcp 将终端绘制、原生扩展接口和动态库加载分别交给三个独立 Rust 库。编译器将这些库连进客户端；它们本身不会启动模型、读取其他 Agent 的账号，或扫描机器上安装的 harness。Codex、Claude Code、Pi 和 OpenCode 遵循[显式加载](optional-harnesses.md)。桌面与浏览器操作使用独立 Zuse CLI，不再作为 Rust 库连进 SSMCP。
+ssmcp 将终端绘制、原生扩展接口和动态库加载分别交给三个独立 Rust 库。编译器将这些库连进客户端；它们本身不会启动模型、读取其他 Agent 的账号，或扫描机器上安装的 harness。第三方工具通过独立 MCP 客户端接入。桌面与浏览器操作使用独立 Zuse CLI，不再作为 Rust 库连进 SSMCP。
 
 | 源码目录 | 固定库版本 | 在 ssmcp 中的职责 | 独立仓库 |
 |---|---|---|---|

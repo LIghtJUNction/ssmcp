@@ -146,7 +146,7 @@ mod tests {
                     .contains("third-party harness import was removed")
             );
         }
-        assert_eq!(OPTIONAL_PROVIDERS, &[(Provider::Peer, "ssmcp")]);
+        assert_eq!(OPTIONAL_PROVIDERS, [(Provider::Peer, "ssmcp")]);
         assert!(options(&["--list-tools"]).harness.is_none());
     }
 
