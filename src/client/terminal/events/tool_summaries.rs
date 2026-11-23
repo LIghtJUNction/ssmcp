@@ -171,15 +171,21 @@ pub(super) fn exec_read_preview(event: &super::Event, width: usize) -> Option<Ve
         .strip_prefix("[RUN] ssmcp.exec.read\n[RESULT] ")?;
     let summary = body.lines().next()?;
     let shown = super::clip_plain(summary, width);
-    let hint = if event.truncated {
-        "TRUNCATED details · Click expand"
-    } else if summary.contains(" · TRUNCATED ") && !shown.contains("TRUNCATED") {
-        // A long exit status can push the output warning out of a narrow pane.
-        "TRUNCATED output · Click expand"
-    } else {
-        "… Click expand"
+    let clipped_warning = summary.contains(" · TRUNCATED ") && !shown.contains("TRUNCATED");
+    let warning = match (event.truncated, clipped_warning) {
+        (true, true) => Some("TRUNCATED details/output"),
+        (true, false) => Some("TRUNCATED details"),
+        (false, true) => Some("TRUNCATED output"),
+        (false, false) => None,
     };
-    Some(vec![shown, super::clip_plain(hint, width)])
+    let mut rows = vec![shown];
+    if let Some(warning) = warning {
+        rows.push(super::clip_plain(warning, width));
+    }
+    // Tool windows replace this final hint with their shared footer. Warnings
+    // must stay in the preceding result rows, even when the summary is clipped.
+    rows.push(super::clip_plain("… Click expand", width));
+    Some(rows)
 }
 
 fn exec_read_process(
@@ -306,11 +312,13 @@ fn exec_read_detail(value: &Value) -> Option<ExecReadDetail> {
         "timed_out":snapshot["timed_out"],
         "error":snapshot["error"].as_str().map(super::unstyled),
     }));
+    // Show the actual output first in the bounded tool-window viewport. The
+    // retained head and tail keep the compact result and trailing diagnostics.
     let text = format!(
-        "[RUN] ssmcp.exec.read\n[RESULT] {}\n\nDetails\njob={job} running={running} exit_code={exit_code}\nprocess={process_detail}\n{}\n{}",
+        "[RUN] ssmcp.exec.read\n[RESULT] {}\n\n{}\nDetails\njob={job} running={running} exit_code={exit_code}\nprocess={process_detail}\n{}",
         compact.join(" · "),
-        metadata.join("\n"),
-        streams.join("")
+        streams.join(""),
+        metadata.join("\n")
     );
     let (text, truncated) = super::retained_text(text.as_bytes());
     if truncated && tone != "error" {

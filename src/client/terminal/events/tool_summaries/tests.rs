@@ -387,7 +387,17 @@ fn read_result(stdout: &str, stderr: &str) -> Value {
     }))
 }
 
-fn export_exec_read_fixture(view: &mut EventView, phase: &str) {
+fn expand_exec_read_group(view: &mut EventView, call: &Source) {
+    let group = group_id(view, call);
+    view.tool_summary_set(call, &group, "Inspect command output", Some(0))
+        .unwrap();
+    let group = view.tool_groups()[0].clone();
+    view.set_tool_expanded(&group, true);
+    view.selected_group = None;
+    view.selected = Some(view.events[0].id);
+}
+
+fn export_exec_read_fixture(view: &mut EventView, phase: &str, at_end: bool) {
     let Some(root) = std::env::var_os("SSMCP_EXEC_READ_FIXTURE") else {
         return;
     };
@@ -397,16 +407,37 @@ fn export_exec_read_fixture(view: &mut EventView, phase: &str) {
         color: true,
         ..Ui::default()
     };
-    // Reserve one row for the fixture label within the 120 x 30 capture.
-    let rows = view.render(120, 29, &ui, true);
-    std::fs::write(
-        root.join(format!("{phase}.ansi")),
-        format!(
-            "\x1b[2J\x1b[HSSMCP exec.read renderer fixture: {phase}\r\n{}\x1b[0m",
-            rows.join("\r\n")
-        ),
-    )
-    .unwrap();
+    let position = view.position();
+    for width in [120, 48] {
+        view.restore_position(&position);
+        // Reflow before scrolling so each fixture uses its own viewport bounds.
+        view.render(width, 29, &ui, true);
+        if at_end {
+            assert!(view.scroll_selected_panel(isize::MAX));
+        }
+        let rows = view.render(width, 29, &ui, true);
+        let name = if width == 120 {
+            phase.to_owned()
+        } else {
+            format!("{phase}-{width}")
+        };
+        let label = super::super::clip_plain(
+            &format!("SSMCP exec.read renderer fixture: {phase}"),
+            usize::from(width),
+        );
+        // Reserve one row for the label in each actual width x 30 capture.
+        std::fs::write(
+            root.join(format!("{name}.ansi")),
+            format!("\x1b[2J\x1b[H{label}\r\n{}\x1b[0m", rows.join("\r\n")),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(format!("{name}.json")),
+            serde_json::to_vec(&json!({"cols":width,"rows":30})).unwrap(),
+        )
+        .unwrap();
+    }
+    view.restore_position(&position);
 }
 
 #[tokio::test]
@@ -468,24 +499,29 @@ async fn exec_read_native_result_expands_without_replaying_folded_output() {
         assert!(!folded.contains("reader-stdout"), "{folded}");
 
         // The same details and one-line projection also work inside a tool window.
-        let group = group_id(&view, &call);
-        view.tool_summary_set(&call, &group, "Inspect command output", Some(0)).unwrap();
-        let group = view.tool_groups()[0].clone();
-        view.set_tool_expanded(&group, true);
-        view.selected_group = None;
-        view.selected = Some(id);
+        expand_exec_read_group(&mut view, &call);
         let folded = view.render(120, 30, &ui, true).join("\n");
         assert!(folded.contains("stdout 44 B"), "{folded}");
         assert!(!folded.contains("reader-stdout"), "{folded}");
         assert!(!folded.contains("reader-stderr"), "{folded}");
-        export_exec_read_fixture(&mut view, "collapsed");
+        export_exec_read_fixture(&mut view, "collapsed", false);
         assert!(view.open());
-        let expanded = view.render(120, 30, &ui, true).join("\n");
-        assert!(expanded.contains("reader-stdout"), "{expanded}");
-        assert!(expanded.contains("reader-stderr"), "{expanded}");
-        assert!(expanded.contains("API_TOKEN=[redacted]"), "{expanded}");
-        assert!(!expanded.contains("fixture-token-value"), "{expanded}");
-        export_exec_read_fixture(&mut view, "expanded");
+        for width in [48, 120] {
+            let expanded = view.render(width, 30, &ui, true).join("\n");
+            assert!(expanded.contains("reader-stdout"), "{expanded}");
+            assert!(expanded.contains("reader-stderr"), "{expanded}");
+            assert!(expanded.contains("API_TOKEN=[redacted]"), "{expanded}");
+            assert!(!expanded.contains("fixture-token-value"), "{expanded}");
+            assert!(view.scroll_selected_panel(isize::MAX));
+            let tail = view.render(width, 30, &ui, true).join("\n");
+            assert!(tail.contains("eof=true"), "{tail}");
+            assert!(tail.contains("truncated="), "{tail}");
+            assert!(tail.contains("artifact=none"), "{tail}");
+            assert!(!tail.contains("fixture-token-value"), "{tail}");
+            assert!(view.scroll_selected_panel(isize::MIN + 1));
+        }
+        export_exec_read_fixture(&mut view, "expanded", false);
+        export_exec_read_fixture(&mut view, "expanded-tail", true);
     }).await;
     fixture.runtime.shutdown().await;
 }
@@ -703,91 +739,123 @@ async fn exec_read_compact_warnings_survive_narrow_panes_and_detail_retention() 
             color: false,
             ..Ui::default()
         };
-        for (exit_code, process, label, tone) in [
-            (
-                json!(i32::MIN),
-                json!({"state":"failed","error":"API_TOKEN=private-error-token"}),
-                "Process error",
-                "error",
-            ),
-            (Value::Null, json!({}), "Exit unknown", "warning"),
-            (json!(0), json!({}), "Exit 0", "warning"),
-        ] {
+        for grouped in [false, true] {
+            for (exit_code, process, label, tone) in [
+                (
+                    json!(i32::MIN),
+                    json!({"state":"failed","error":"API_TOKEN=private-error-token"}),
+                    "Process error",
+                    "error",
+                ),
+                (Value::Null, json!({}), "Exit unknown", "warning"),
+                (json!(0), json!({}), "Exit 0", "warning"),
+            ] {
+                let mut view = new_view(&call);
+                view.summary_call_started(&call, "ssmcp.exec.read");
+                let mut result = read_result("stdout-payload\n", "stderr-payload\n");
+                let read = &mut result["structuredContent"];
+                read["exit_code"] = exit_code;
+                read["stdout_truncated"] = true.into();
+                read["stderr_truncated"] = true.into();
+                for (key, value) in process.as_object().unwrap() {
+                    read["snapshot"][key] = value.clone();
+                }
+                assert!(view.summary_exec_read_result(&call, &result));
+                view.summary_call_finished(&call, true);
+                assert_eq!(view.events[0].tone, tone);
+                if grouped {
+                    expand_exec_read_group(&mut view, &call);
+                }
+                for width in [32, 48, 120] {
+                    let rows = view.render(width, 24, &ui, true);
+                    let folded = rows.join("\n");
+                    assert!(folded.contains(label), "{folded}");
+                    assert!(folded.contains("TRUNCATED"), "{folded}");
+                    assert!(
+                        rows.iter()
+                            .all(|row| unstyled(row).width() <= usize::from(width))
+                    );
+                    for raw in [
+                        "cursor=",
+                        "artifact=",
+                        "eof=",
+                        "truncated=",
+                        "job=",
+                        "stdout-payload",
+                        "stderr-payload",
+                        "private-error-token",
+                    ] {
+                        assert!(!folded.contains(raw), "{folded}");
+                    }
+                }
+                assert!(view.open());
+                let mut expanded = view.render(120, 30, &ui, true).join("\n");
+                // Short stdout/stderr remain visible on the first group page.
+                assert!(expanded.contains("stdout-payload"), "{expanded}");
+                assert!(expanded.contains("stderr-payload"), "{expanded}");
+                if grouped {
+                    assert!(view.scroll_selected_panel(isize::MAX));
+                    expanded.push_str(&view.render(120, 30, &ui, true).join("\n"));
+                }
+                for retained in [
+                    "artifact=stdout-artifact",
+                    "artifact=stderr-artifact",
+                    "truncated=true",
+                ] {
+                    assert!(expanded.contains(retained), "{expanded}");
+                }
+                assert!(!expanded.contains("private-error-token"), "{expanded}");
+            }
+
+            // Two native-sized pages of invalid UTF-8 exceed text retention
+            // after lossy decoding, even when neither native page was lost.
+            let raw = vec![0xff; 32768];
+            let text = String::from_utf8_lossy(&raw);
+            let mut result = read_result(&text, &text);
+            for stream in ["stdout", "stderr"] {
+                result["structuredContent"][format!("{stream}_base64")] =
+                    STANDARD.encode(&raw).into();
+                result["structuredContent"][format!("{stream}_cursor")] = (raw.len() as u64).into();
+            }
             let mut view = new_view(&call);
             view.summary_call_started(&call, "ssmcp.exec.read");
-            let mut result = read_result("stdout-payload\n", "stderr-payload\n");
-            let read = &mut result["structuredContent"];
-            read["exit_code"] = exit_code;
-            read["stdout_truncated"] = true.into();
-            read["stderr_truncated"] = true.into();
-            for (key, value) in process.as_object().unwrap() {
-                read["snapshot"][key] = value.clone();
-            }
             assert!(view.summary_exec_read_result(&call, &result));
             view.summary_call_finished(&call, true);
-            assert_eq!(view.events[0].tone, tone);
+            assert!(view.events[0].truncated);
+            assert_eq!(view.events[0].tone, "warning");
+            let detail = &view.events[0].text;
+            assert!(detail.len() <= super::super::MAX_DETAIL);
+            for retained in [
+                "preview truncated",
+                "stdout cursor=32768 eof=true truncated=false artifact=stdout-artifact",
+                "stderr cursor=32768 eof=true truncated=false artifact=stderr-artifact",
+            ] {
+                assert!(detail.contains(retained), "{retained}");
+            }
+            if grouped {
+                expand_exec_read_group(&mut view, &call);
+            }
             for width in [32, 48, 120] {
                 let rows = view.render(width, 24, &ui, true);
                 let folded = rows.join("\n");
-                assert!(folded.contains(label), "{folded}");
-                assert!(folded.contains("TRUNCATED"), "{folded}");
+                assert!(folded.contains("TRUNCATED details"), "{folded}");
                 assert!(
                     rows.iter()
                         .all(|row| unstyled(row).width() <= usize::from(width))
                 );
-                for raw in [
-                    "cursor=",
-                    "artifact=",
-                    "eof=",
-                    "truncated=",
-                    "job=",
-                    "stdout-payload",
-                    "stderr-payload",
-                    "private-error-token",
-                ] {
+                for raw in ["cursor=", "artifact=", "eof=", "truncated=", "job="] {
                     assert!(!folded.contains(raw), "{folded}");
                 }
-            }
-            assert!(view.open());
-            let expanded = view.render(120, 30, &ui, true).join("\n");
-            for retained in [
-                "stdout-payload",
-                "stderr-payload",
-                "artifact=stdout-artifact",
-                "artifact=stderr-artifact",
-                "truncated=true",
-            ] {
-                assert!(expanded.contains(retained), "{expanded}");
-            }
-            assert!(!expanded.contains("private-error-token"), "{expanded}");
-        }
-
-        // Two native-sized pages of invalid UTF-8 exceed the text retention
-        // budget after lossy decoding, even when neither native page was lost.
-        let raw = vec![0xff; 32768];
-        let text = String::from_utf8_lossy(&raw);
-        let mut result = read_result(&text, &text);
-        for stream in ["stdout", "stderr"] {
-            result["structuredContent"][format!("{stream}_base64")] = STANDARD.encode(&raw).into();
-            result["structuredContent"][format!("{stream}_cursor")] = (raw.len() as u64).into();
-        }
-        let mut view = new_view(&call);
-        view.summary_call_started(&call, "ssmcp.exec.read");
-        assert!(view.summary_exec_read_result(&call, &result));
-        view.summary_call_finished(&call, true);
-        assert!(view.events[0].truncated);
-        assert_eq!(view.events[0].tone, "warning");
-        assert!(view.events[0].text.contains("preview truncated"));
-        for width in [32, 48, 120] {
-            let rows = view.render(width, 24, &ui, true);
-            let folded = rows.join("\n");
-            assert!(folded.contains("TRUNCATED details"), "{folded}");
-            assert!(
-                rows.iter()
-                    .all(|row| unstyled(row).width() <= usize::from(width))
-            );
-            for raw in ["cursor=", "artifact=", "eof=", "truncated=", "job="] {
-                assert!(!folded.contains(raw), "{folded}");
+                // The window consumes only the final expansion hint; it must
+                // not consume either of the at-most-two result rows.
+                let preview = view.events[0].chat_preview(usize::from(width));
+                assert!(preview.len() <= 3);
+                assert_eq!(preview.last().unwrap(), "… Click expand");
+                assert!(
+                    preview[..preview.len() - 1]
+                        .join("\n")
+                        .contains("TRUNCATED details")
+                );
             }
         }
     })
