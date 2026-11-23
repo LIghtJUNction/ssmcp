@@ -48,7 +48,7 @@ class ProtocolInstrumentation : Instrumentation() {
         page.put("retention_gap", true)
         val gap = Protocol.page(page, Counter.parse("9007199254740992"), 16)
         val issued = Counter.parse("9007199254740992")
-        val inbox = EventInbox("generation-1", issued); check(inbox.receive(gap, issued))
+        val inbox = EventInbox("generation-1", Counter.parse(issued.text)); check(inbox.receive(gap, issued))
         rejects { inbox.consume { error("Gap must not be consumed without reconciliation") } }
         rejects { inbox.consume("generation-1") { throw BridgeFailure("unavailable", "snapshot failed") } }
         check(inbox.cursor?.text == "9007199254740992" && inbox.pending != null)

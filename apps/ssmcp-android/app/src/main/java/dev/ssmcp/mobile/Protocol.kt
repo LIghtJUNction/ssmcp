@@ -5,7 +5,11 @@ import org.json.JSONObject
 import java.util.UUID
 
 /** zbridge v1. Never convert wire counters through Double or signed Long. */
-data class Counter private constructor(val text: String) : Comparable<Counter> {
+class Counter private constructor(val text: String) : Comparable<Counter> {
+    override fun equals(other: Any?): Boolean = other is Counter && text == other.text
+    override fun hashCode(): Int = text.hashCode()
+    override fun toString(): String = "Counter(text=$text)"
+
     override fun compareTo(other: Counter): Int =
         if (text.length != other.text.length) text.length.compareTo(other.text.length)
         else text.compareTo(other.text)
