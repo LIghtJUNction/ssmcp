@@ -171,6 +171,9 @@ fn is_coordinator(report: &CodeRunReport, target: &EligibleUserResponse) -> bool
     else {
         return false;
     };
+    if matches!(member.status.as_str(), "offline" | "retiring") {
+        return false;
+    }
     serde_json::to_value(member)
         .ok()
         .and_then(|member| member["role"].as_str().map(coordinator_role))
@@ -279,7 +282,7 @@ fn guidance(
     }
     let maintenance = round.map_or_else(String::new, |round| {
         format!(
-            " Dreaming round {}: spend at most {} ms on one already-authorized {} improvement while the main task waits. Queue it via worker.submit for standby workers with real claims. Keep this round ID and original receipts; timeout, cancellation or unknown never starts another round. Yield to user input. Use a detached worktree; validate and retain a reviewable diff without overwriting dirty files.",
+            " Agent lifecycle maintenance request {}: budget {} ms for one already-authorized {} improvement. This request is not execution. Use collab.update with current lifecycle revision to report start; report the actual complete/fail/cancel/unknown result for this same round. Delegate only through real authorized worker claims. Preserve original receipts and unknown outcomes; yield immediately to new user input.",
             round.round_id, round.budget_ms, round.repository
         )
     });
@@ -293,7 +296,7 @@ fn guidance(
         "subscription_filter":{"client_ids":clients,"kinds":kinds},
         "await_target_type":"event",
         "message":format!(
-            "Continue authorized work, including bounded chores while dependencies run (Dreaming); queue independent chores for standby workers. Otherwise subscribe to listed events and use public await event windows of at most {} ms. Resume the same wait_id. Acknowledge subscription and await result cursors after processing. user.input_available wakes you; ui.wait delivers its text. Inspect unknown outcomes by original operation ID. Use events action=policy to change this guidance.{}",
+            "Continue independent authorized work when available. For maintenance, use the live Agent lifecycle request and report its actual outcome. Otherwise subscribe to listed events and use public await event windows of at most {} ms. Resume the same wait_id. Acknowledge subscription and await result cursors after processing. user.input_available wakes you; ui.wait delivers its text. Inspect unknown outcomes by original operation ID. Use events action=policy to change this guidance.{}",
             policy.window_ms, maintenance
         )
     })
@@ -551,22 +554,43 @@ pub(super) async fn append(
         let mut cache = guidance_cache()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let round = policy.dreaming.as_ref().filter(|round| {
-            policy.enabled
-                && response["isError"] != true
-                && pool.is_some_and(|pool| pool.counts.should_remind())
-                && cache.dreaming_due(&scope, round)
+        let Ok(lifecycle) = target.session.collaboration.lifecycle_snapshot(
+            &binding.owner,
+            &binding.agent_id,
+            &binding.token,
+        ) else {
+            continue;
+        };
+        if matches!(lifecycle["status"].as_str(), Some("offline" | "retiring")) {
+            continue;
+        }
+        let requested = &lifecycle["lifecycle"]["maintenance"];
+        let live_round = (lifecycle["status"] == "dreaming" && requested["status"] == "requested")
+            .then(|| {
+                Some(Dreaming {
+                    round_id: requested["round_id"].as_str()?.into(),
+                    repository: requested["repository"].as_str()?.into(),
+                    budget_ms: requested["budget_ms"].as_u64()?,
+                })
+            })
+            .flatten();
+        let round = live_round.as_ref().filter(|round| {
+            policy.enabled && response["isError"] != true && cache.dreaming_due(&scope, round)
         });
         if !cache.due(&scope, &policy, now) && round.is_none() {
             continue;
         }
-        hints.push(guidance(
+        let mut hint = guidance(
             target.session.client_id(),
             &binding.agent_id,
             pool.map(|pool| pool.client_id.as_str()),
             &policy,
             round,
-        ));
+        );
+        hint["agent_lifecycle"] = lifecycle;
+        hint["provenance"] = json!("agent_lifecycle");
+        hint["completion_permission"] = json!(false);
+        hints.push(hint);
         let Some(next) = append_section(
             &with_workers,
             &hints,

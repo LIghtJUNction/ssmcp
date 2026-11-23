@@ -323,6 +323,12 @@ impl Session {
             let mut recipients = std::collections::BTreeMap::<String, Vec<String>>::new();
             if let Some((owner, agent_id, _)) = seed {
                 if message.target == "next" || message.target == agent_id {
+                    self.collaboration.user_input_queued(
+                        owner,
+                        agent_id,
+                        &message.id,
+                        message.revision,
+                    );
                     recipients
                         .entry(owner.into())
                         .or_default()
@@ -331,6 +337,12 @@ impl Session {
             } else {
                 for (owner, member) in &members {
                     if message.target == "next" || message.target == member.agent_id {
+                        self.collaboration.user_input_queued(
+                            owner,
+                            &member.agent_id,
+                            &message.id,
+                            message.revision,
+                        );
                         recipients.entry(owner.clone()).or_default().push(format!(
                             "{}:{}",
                             self.client_id(),
@@ -601,6 +613,17 @@ impl Session {
             return Err("audit intent could not be saved; tool was not dispatched".into());
         }
         let call_traffic = TrafficFailureState::default();
+        let mut lifecycle_activity = binding
+            .as_ref()
+            .map(|binding| {
+                self.collaboration.prepare_native_activity(
+                    &binding.owner,
+                    &binding.agent_id,
+                    &binding.token,
+                    &operation,
+                )
+            })
+            .transpose()?;
         let (reply, response) = oneshot::channel();
         if self
             .sender
@@ -636,6 +659,9 @@ impl Session {
         if carries_source && let Some(run) = audit_run.as_ref() {
             run.native_dispatched(self.client_id(), audit_tool.as_deref());
         }
+        if let Some(activity) = lifecycle_activity.as_mut() {
+            activity.dispatched();
+        }
         let started = std::time::Instant::now();
         let result = match timeout(duration, response).await {
             Ok(Ok(result)) => result,
@@ -654,6 +680,11 @@ impl Session {
         } else {
             result
         };
+        // Capture only the actual authorized native receipt. Cancellation before
+        // this boundary drops the guard and retains uncertain worker outcomes.
+        if let Some(activity) = lifecycle_activity.take() {
+            activity.finish(&result);
+        }
         if audit_tool.is_some() {
             let outcome = if result
                 .as_ref()

@@ -261,6 +261,8 @@ pub(crate) fn policy(
         "strategy": policy.strategy,
         "dreaming": policy.dreaming,
         "advisory": true,
+        "agent_lifecycle_control":"collab.update with current expected_revision",
+        "dreaming_execution":"Only the live agent lifecycle round can request maintenance; this policy is advisory.",
         "retention_ms": RETAIN_FOR.as_millis(),
         "max_policies": MAX_POLICIES,
     }))

@@ -3,17 +3,18 @@
 //! Membership is explicit because HTTP callers can share an OAuth identity.
 //! Participant credentials bind a mailbox to that authenticated identity.
 //! Messages stay in memory until acknowledged or the membership/session ends.
+pub(crate) mod lifecycle;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, VecDeque},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, atomic::AtomicBool},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
 use tokio::{
-    sync::{Semaphore, watch},
+    sync::{Notify, Semaphore, watch},
     time::Instant,
 };
 
@@ -44,15 +45,22 @@ pub(crate) fn limits() -> Value {
         "idempotency_window": MAX_DEDUP,
         "max_metadata_bytes": 128,
         "max_capabilities": 16,
-        "max_capability_bytes": 64
+        "max_capability_bytes": 64,
+        "agent_states": ["working","idle","offline","dreaming","retiring"],
+        "default_idle_after_ms": lifecycle::DEFAULT_IDLE_AFTER_MS,
+        "default_maintenance_budget_ms": lifecycle::DEFAULT_MAINTENANCE_BUDGET_MS,
+        "max_offline_summaries": MAX_AGENTS,
+        "offline_retention_ms": 300_000
     })
 }
 
 #[derive(Default)]
 pub(crate) struct Hub {
     session_id: String,
-    state: Mutex<State>,
+    state: Arc<Mutex<State>>,
     events: Option<Arc<crate::events::Hub>>,
+    lifecycle_changed: Arc<Notify>,
+    lifecycle_started: AtomicBool,
 }
 
 #[derive(Default)]
@@ -61,6 +69,7 @@ struct State {
     sequence: u64,
     queued_bytes: usize,
     agents: BTreeMap<String, Agent>,
+    offline: VecDeque<lifecycle::Offline>,
 }
 
 struct Agent {
@@ -70,7 +79,7 @@ struct Agent {
     owner: String,
     name: String,
     role: Option<String>,
-    status: String,
+    lifecycle: lifecycle::Lifecycle,
     capabilities: Vec<String>,
     joined_at_ms: u64,
     last_seen_ms: u64,
@@ -117,7 +126,11 @@ enum Request {
         name: Option<String>,
         #[serde(alias = "summary")]
         role: Option<String>,
-        status: Option<String>,
+        status: Option<lifecycle::Status>,
+        expected_revision: Option<u64>,
+        idle_after_ms: Option<u64>,
+        maintenance_budget_ms: Option<u64>,
+        maintenance: Option<lifecycle::MaintenancePatch>,
         capabilities: Option<Vec<String>>,
     },
     Send {
@@ -168,7 +181,9 @@ impl Agent {
             "name": self.name,
             "role": self.role,
             "summary": self.role,
-            "status": self.status,
+            "status": self.lifecycle.status,
+            "membership_active": true,
+            "lifecycle": self.lifecycle.public(),
             "capabilities": self.capabilities,
             "joined_at_ms": self.joined_at_ms,
             "last_seen_ms": self.last_seen_ms,
@@ -227,15 +242,17 @@ impl Hub {
     pub(crate) fn for_session(session_id: &str) -> Self {
         Self {
             session_id: session_id.into(),
-            ..Self::default()
+            state: Arc::default(),
+            events: None,
+            lifecycle_changed: Arc::default(),
+            lifecycle_started: AtomicBool::new(false),
         }
     }
 
     pub(crate) fn with_events(session_id: &str, events: Arc<crate::events::Hub>) -> Self {
-        Self {
-            events: Some(events),
-            ..Self::for_session(session_id)
-        }
+        let mut hub = Self::for_session(session_id);
+        hub.events = Some(events);
+        hub
     }
 
     fn agent_event(&self, owner: &str, id: &str, kind: &str, data: Value) {
@@ -312,7 +329,7 @@ impl Hub {
                 agent_id: agent.id.clone(),
                 name: agent.name.clone(),
                 role: agent.role.clone(),
-                status: agent.status.clone(),
+                status: agent.lifecycle.status.as_str().into(),
             })
             .collect())
     }
@@ -332,7 +349,7 @@ impl Hub {
                         agent_id: agent.id.clone(),
                         name: agent.name.clone(),
                         role: agent.role.clone(),
-                        status: agent.status.clone(),
+                        status: agent.lifecycle.status.as_str().into(),
                     },
                 )
             })
@@ -352,7 +369,7 @@ impl Hub {
             agent_id: agent.id.clone(),
             name: agent.name.clone(),
             role: agent.role.clone(),
-            status: agent.status.clone(),
+            status: agent.lifecycle.status.as_str().into(),
         })
     }
 
@@ -368,37 +385,28 @@ impl Hub {
             .expect("existing membership for this verified fixture owner");
         member.expires = Instant::now();
         member.expires_at_ms = now_ms();
+        self.lifecycle_changed.notify_one();
     }
 
     fn locked(&self) -> Result<MutexGuard<'_, State>, String> {
+        self.start_lifecycle();
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.closed {
             return Err("collaboration session is closed; refresh clients and join again".into());
         }
-        for agent in state.purge_expired() {
-            self.agent_event(
-                &agent.owner,
-                &agent.id,
-                "agent.left",
-                json!({"reason":"lease_expired"}),
-            );
-        }
+        self.advance_lifecycle(&mut state);
         Ok(state)
     }
 
     pub(crate) fn close(&self) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.closed = true;
-        for agent in state.agents.values() {
-            agent.changed.send_replace(());
-            self.agent_event(
-                &agent.owner,
-                &agent.id,
-                "agent.left",
-                json!({"reason":"session_closed"}),
-            );
+        let ids: Vec<_> = state.agents.keys().cloned().collect();
+        for id in ids {
+            self.remove_member(&mut state, &id, "session_closed");
         }
-        state.agents.clear();
+        state.offline.clear();
+        self.lifecycle_changed.notify_one();
         state.queued_bytes = 0;
     }
 
@@ -432,7 +440,7 @@ impl Hub {
             Request::List {} => {
                 let state = self.locked()?;
                 Ok(
-                    json!({"session_id":self.session_id, "client_id":self.session_id, "agents":state.public_agents(), "limits":limits()}),
+                    json!({"session_id":self.session_id, "client_id":self.session_id, "agents":state.public_agents(), "offline_agents":state.offline_agents(), "limits":limits()}),
                 )
             }
             Request::Update {
@@ -441,6 +449,10 @@ impl Hub {
                 name,
                 role,
                 status,
+                expected_revision,
+                idle_after_ms,
+                maintenance_budget_ms,
+                maintenance,
                 capabilities,
             } => {
                 if let Some(name) = &name {
@@ -449,33 +461,35 @@ impl Hub {
                 if let Some(role) = &role {
                     text(role, "role", 128, true)?;
                 }
-                if let Some(status) = &status {
-                    text(status, "status", 128, false)?;
-                }
                 if let Some(capabilities) = &capabilities {
                     validate_capabilities(capabilities)?;
                 }
                 let mut state = self.locked()?;
                 let agent = state.authenticated(owner, &agent_id, &token)?;
-                let previous_status = agent.status.clone();
+                let changes = agent.lifecycle.update(
+                    &agent_id,
+                    lifecycle::Patch {
+                        status,
+                        expected_revision,
+                        idle_after_ms,
+                        maintenance_budget_ms,
+                        maintenance,
+                    },
+                    Instant::now(),
+                    now_ms(),
+                )?;
                 if let Some(name) = name {
                     agent.name = name;
                 }
                 if let Some(role) = role {
                     agent.role = (!role.is_empty()).then_some(role);
                 }
-                if let Some(status) = status {
-                    agent.status = status;
-                }
                 if let Some(capabilities) = capabilities {
                     agent.capabilities = capabilities;
                 }
                 agent.renew();
                 agent.changed.send_replace(());
-                if previous_status != agent.status {
-                    self.agent_event(owner, &agent_id, "agent.status_changed",
-                        json!({"previous_status":previous_status,"status":agent.status,"source":"participant"}));
-                }
+                self.publish_lifecycle(agent, changes);
                 Ok(json!({"agent":agent.public(), "lease_ms":LEASE_MS}))
             }
             Request::Send {
@@ -516,8 +530,7 @@ impl Hub {
             Request::Leave { agent_id, token } => {
                 let mut state = self.locked()?;
                 state.authenticated(owner, &agent_id, &token)?;
-                state.remove(&agent_id);
-                self.agent_event(owner, &agent_id, "agent.left", json!({"reason":"left"}));
+                self.remove_member(&mut state, &agent_id, "left");
                 Ok(json!({"agent_id":agent_id, "left":true}))
             }
         }
@@ -554,7 +567,7 @@ impl Hub {
             owner: owner.into(),
             name,
             role: role.filter(|value| !value.is_empty()),
-            status: "available".into(),
+            lifecycle: lifecycle::Lifecycle::new(Instant::now(), now),
             capabilities,
             joined_at_ms: now,
             last_seen_ms: now,
@@ -569,7 +582,13 @@ impl Hub {
             waiters: Arc::new(Semaphore::new(1)),
         };
         state.agents.insert(id.clone(), agent);
-        self.agent_event(owner, &id, "agent.joined", json!({"status":"available"}));
+        self.agent_event(
+            owner,
+            &id,
+            "agent.joined",
+            json!({"status":"idle","revision":1}),
+        );
+        self.lifecycle_changed.notify_one();
         Ok(json!({
             "agent_id":id,
             "thread_id":id,
@@ -818,7 +837,8 @@ impl Hub {
             return Err("invalid agent status wait bounds".into());
         }
         for status in statuses {
-            text(status, "status", 128, false)?;
+            serde_json::from_value::<lifecycle::Status>(json!(status))
+                .map_err(|_| "agent status must be working, idle, offline, dreaming or retiring")?;
         }
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
         let mut changes = None;
@@ -826,11 +846,17 @@ impl Hub {
             let expires = {
                 let mut state = self.locked()?;
                 state.authenticated(owner, id, token)?.renew();
-                let agent = state
-                    .agents
-                    .get(target)
-                    .ok_or("await_unknown_target: agent is absent or its lease expired")?;
-                let matched = statuses.contains(&agent.status);
+                let Some(agent) = state.agents.get(target) else {
+                    if statuses.iter().any(|status| status == "offline")
+                        && let Some(agent) = state.offline_agent(target)
+                    {
+                        return Ok(json!({"agent":agent,"matched":true}));
+                    }
+                    return Err("await_unknown_target: agent is absent or its lease expired".into());
+                };
+                let matched = statuses
+                    .iter()
+                    .any(|status| status == agent.lifecycle.status.as_str());
                 if matched || Instant::now() >= deadline {
                     return Ok(json!({"agent":agent.public(),"matched":matched}));
                 }
@@ -840,11 +866,7 @@ impl Hub {
                 agent.expires
             };
             let changed = changes.as_mut().expect("subscribed status observer");
-            if let Ok(Err(_)) =
-                tokio::time::timeout_at(deadline.min(expires), changed.changed()).await
-            {
-                return Err("await_unknown_target: agent membership ended".into());
-            }
+            let _ = tokio::time::timeout_at(deadline.min(expires), changed.changed()).await;
         }
     }
 
@@ -1039,10 +1061,12 @@ mod lifecycle_event_tests {
         let (observer, _) = member(&hub, "owner", "observer");
         let (actor, subscription) = subscribe(&events, "owner", &observer, "agent.*");
         let (id, token) = member(&hub, "owner", "worker");
-        let update = json!({"agent_id":id,"token":token,"status":"working"});
+        let mut update =
+            json!({"agent_id":id,"token":token,"status":"working","expected_revision":1});
         hub.dispatch("owner", "update", update.clone())
             .await
             .unwrap();
+        update["expected_revision"] = json!(2);
         hub.dispatch("owner", "update", update).await.unwrap();
         hub.expire_lease_for_test("owner", &id);
         hub.presence().unwrap();
@@ -1055,9 +1079,15 @@ mod lifecycle_event_tests {
             .collect();
         assert_eq!(
             kinds,
-            ["agent.joined", "agent.status_changed", "agent.left"]
+            [
+                "agent.joined",
+                "agent.status_changed",
+                "agent.status_changed",
+                "agent.left"
+            ]
         );
-        assert_eq!(entries[1]["data"]["previous_status"], "available");
-        assert_eq!(entries[2]["data"]["reason"], "lease_expired");
+        assert_eq!(entries[1]["data"]["previous_status"], "idle");
+        assert_eq!(entries[2]["data"]["status"], "offline");
+        assert_eq!(entries[3]["data"]["reason"], "lease_expired");
     }
 }

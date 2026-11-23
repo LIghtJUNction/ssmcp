@@ -22,17 +22,31 @@ fn successful() -> Value {
         "structuredContent":{"result":{"ready":true}}})
 }
 
-fn configure_dreaming(target: &EligibleUserResponse) {
+async fn configure_dreaming(target: &EligibleUserResponse) -> String {
     let binding = target.binding.as_ref().unwrap();
-    coordination_policy::effective(
-        &binding.owner,
-        target.session.client_id(),
-        &binding.agent_id,
-        Some(&json!({"dreaming":{
-            "round_id":"fixture-round-1","repository":"project","budget_ms":1000
-        }})),
-    )
-    .unwrap();
+    let current = target
+        .session
+        .collaboration
+        .lifecycle_snapshot(&binding.owner, &binding.agent_id, &binding.token)
+        .unwrap();
+    let updated = target
+        .session
+        .collaboration
+        .dispatch(
+            &binding.owner,
+            "update",
+            json!({
+                "agent_id":binding.agent_id,"token":binding.token,
+                "expected_revision":current["lifecycle"]["revision"],
+                "status":"dreaming","maintenance_budget_ms":5000,
+            }),
+        )
+        .await
+        .unwrap();
+    updated["agent"]["lifecycle"]["maintenance"]["round_id"]
+        .as_str()
+        .unwrap()
+        .into()
 }
 
 async fn quiet_pool_reply(fixture: &TestFixture) -> Value {
@@ -163,18 +177,13 @@ async fn prepared(role: &str) -> (TestFixture, CodeRunReport, Vec<EligibleUserRe
 fn publish_pending(target: &EligibleUserResponse) {
     target
         .session
-        .steering
-        .command(
-            target.session.client_id(),
-            target.session.collaboration.presence().unwrap(),
-            wire::SteeringCommand::Publish {
-                command_id: "publish-worker-hint-fixture".into(),
-                message_id: "worker-hint-fixture".into(),
-                expected_revision: 0,
-                text: "Keep this genuine input queued during the passive worker probe.".into(),
-                target: target.binding.as_ref().unwrap().agent_id.clone(),
-            },
-        )
+        .steering_command(wire::SteeringCommand::Publish {
+            command_id: "publish-worker-hint-fixture".into(),
+            message_id: "worker-hint-fixture".into(),
+            expected_revision: 0,
+            text: "Keep this genuine input queued during the passive worker probe.".into(),
+            target: target.binding.as_ref().unwrap().agent_id.clone(),
+        })
         .unwrap();
 }
 
@@ -331,7 +340,7 @@ async fn actual_role_and_total_probe_deadline_gate_session_requests() {
 #[tokio::test]
 async fn input_arriving_during_probe_preempts_dreaming_without_consuming_it() {
     let (mut fixture, report, eligible) = prepared("main").await;
-    configure_dreaming(&eligible[0]);
+    let round_id = configure_dreaming(&eligible[0]).await;
     let quiet = quiet_pool_reply(&fixture).await;
     let before = successful();
     let reply = async {
@@ -353,8 +362,8 @@ async fn input_arriving_during_probe_preempts_dreaming_without_consuming_it() {
     assert_pending(&eligible[0]);
     assert!(!blocked.to_string().contains("Keep this genuine input"));
 
-    // Simulate handling that exact input before the next ordinary call. The
-    // suppressed hint must not have spent the round's delivery opportunity.
+    // Handling input does not resurrect a cancelled maintenance request.
+    // A subsequent explicit authorized request receives a different round ID.
     let target = &eligible[0];
     let delivered = target.session.steering.claim(
         target.session.client_id(),
@@ -364,6 +373,16 @@ async fn input_arriving_during_probe_preempts_dreaming_without_consuming_it() {
         65536,
     );
     assert_eq!(delivered.len(), 1);
+    let binding = target.binding.as_ref().unwrap();
+    let preempted = target
+        .session
+        .collaboration
+        .lifecycle_snapshot(&binding.owner, &binding.agent_id, &binding.token)
+        .unwrap();
+    assert_eq!(preempted["status"], "working");
+    assert_eq!(preempted["lifecycle"]["maintenance"]["status"], "cancelled");
+    let fresh_round_id = configure_dreaming(target).await;
+    assert_ne!(fresh_round_id, round_id);
     let (ready, operation) = tokio::time::timeout(Duration::from_secs(2), async {
         tokio::join!(
             append(&report, before.clone(), &eligible),
@@ -374,8 +393,10 @@ async fn input_arriving_during_probe_preempts_dreaming_without_consuming_it() {
     .unwrap();
     assert_probe(operation);
     let hint = &ready["structuredContent"]["coordination_hints"][0];
-    assert_eq!(hint["dreaming_round"]["round_id"], "fixture-round-1");
-    assert_eq!(hint["dreaming_round"]["budget_ms"], 1000);
+    assert_eq!(hint["dreaming_round"]["round_id"], fresh_round_id);
+    assert_eq!(hint["dreaming_round"]["budget_ms"], 5000);
+    assert_eq!(hint["provenance"], "agent_lifecycle");
+    assert_eq!(hint["completion_permission"], false);
     assert!(ready.to_string().len() - before.to_string().len() <= MAX_APPEND_BYTES);
 
     let (repeated, operation) = tokio::time::timeout(Duration::from_secs(2), async {
@@ -391,9 +412,9 @@ async fn input_arriving_during_probe_preempts_dreaming_without_consuming_it() {
 }
 
 #[tokio::test]
-async fn busy_pool_preserves_the_round_until_a_real_standby_worker_is_available() {
+async fn lifecycle_request_can_be_observed_without_standby_workers() {
     let (mut fixture, report, eligible) = prepared("main").await;
-    configure_dreaming(&eligible[0]);
+    let round_id = configure_dreaming(&eligible[0]).await;
     let mut available = quiet_pool_reply(&fixture).await;
     available["structuredContent"]["value"]["idle"] = json!(2);
     available["structuredContent"]["value"]["working"] = json!(1);
@@ -410,10 +431,17 @@ async fn busy_pool_preserves_the_round_until_a_real_standby_worker_is_available(
     .await
     .unwrap();
     assert_probe(operation);
-    assert!(blocked["structuredContent"]["coordination_hints"][0]["dreaming_round"].is_null());
+    assert_eq!(
+        blocked["structuredContent"]["coordination_hints"][0]["dreaming_round"]["round_id"],
+        round_id
+    );
+    assert!(
+        blocked["structuredContent"]
+            .get("worker_reminders")
+            .is_none()
+    );
 
-    // The ordinary wait hint above was cached, but real standby capacity offers
-    // the unspent explicit round without waiting for the thirty-second throttle.
+    // A later capacity notice does not reissue the already delivered request.
     let (ready, operation) = tokio::time::timeout(Duration::from_secs(2), async {
         tokio::join!(
             append(&report, before.clone(), &eligible),
@@ -423,15 +451,21 @@ async fn busy_pool_preserves_the_round_until_a_real_standby_worker_is_available(
     .await
     .unwrap();
     assert_probe(operation);
-    assert_eq!(
-        ready["structuredContent"]["coordination_hints"][0]["dreaming_round"]["round_id"],
-        "fixture-round-1"
+    assert!(
+        ready["structuredContent"]
+            .get("coordination_hints")
+            .is_none()
+    );
+    assert!(
+        ready["structuredContent"]["worker_reminders"]
+            .as_array()
+            .is_some_and(|items| items.len() == 1)
     );
     assert!(ready.to_string().len() - before.to_string().len() <= MAX_APPEND_BYTES);
 }
 
 #[tokio::test]
-async fn unknown_pool_authority_and_existing_errors_do_not_offer_dreaming() {
+async fn maintenance_uses_only_main_authority_and_yields_to_errors_or_input() {
     for failure in [
         "unavailable",
         "unauthorized",
@@ -439,7 +473,7 @@ async fn unknown_pool_authority_and_existing_errors_do_not_offer_dreaming() {
         "delivered_input",
     ] {
         let (mut fixture, report, eligible) = prepared("main").await;
-        configure_dreaming(&eligible[0]);
+        let round_id = configure_dreaming(&eligible[0]).await;
         let mut reply = quiet_pool_reply(&fixture).await;
         let mut before = successful();
         match failure {
@@ -463,11 +497,17 @@ async fn unknown_pool_authority_and_existing_errors_do_not_offer_dreaming() {
         .await
         .unwrap();
         assert_probe(operation);
-        assert!(
-            after["structuredContent"]["coordination_hints"][0]["dreaming_round"].is_null(),
-            "{failure}"
-        );
-        assert!(!after.to_string().contains("Dreaming round fixture-round-1"));
+        let hint = &after["structuredContent"]["coordination_hints"][0];
+        if matches!(failure, "unavailable" | "unauthorized") {
+            assert_eq!(hint["dreaming_round"]["round_id"], round_id);
+            assert_eq!(
+                hint["subscription_filter"]["client_ids"],
+                json!([eligible[0].session.client_id()])
+            );
+            assert!(after["structuredContent"].get("worker_reminders").is_none());
+        } else {
+            assert!(hint["dreaming_round"].is_null(), "{failure}");
+        }
         assert_eq!(after["isError"], before["isError"]);
         assert_eq!(
             after["structuredContent"]["user_messages"],
