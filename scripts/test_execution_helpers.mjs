@@ -522,3 +522,33 @@ test('live UI events preserve selectors and failures without retrying native rea
       : {value:response.value.structuredContent,options});
   }
 });
+
+test('exec.run passes the artifact budget through start and returns the scoped read notice', async () => {
+  const artifacts = {
+    directory: '.ssmcp/task-artifacts/0123456789abcdef',
+    logical_bytes: 12,
+    soft_limit_bytes: 10,
+    incomplete: false,
+    notice: {
+      type: 'ssmcp.exec.artifact_budget_exceeded',
+      logical_bytes: 12,
+      soft_limit_bytes: 10,
+    },
+  };
+  const record = await run(`
+    return await exec.run('one', {command:['true'],track_artifacts:true,artifact_budget_bytes:10});
+  `, ({name, arguments: args}) => {
+    const snapshot = {job_id:'job',running:false,exit_code:0};
+    if (name === 'ssmcp.exec.start') {
+      assert.deepEqual(args, {command:['true'],track_artifacts:true,artifact_budget_bytes:10});
+      return native({job_id:'job',running:true});
+    }
+    assert.equal(args.job_id, 'job');
+    if (name === 'ssmcp.exec.wait') return native(snapshot);
+    assert.equal(name, 'ssmcp.exec.read');
+    return native({snapshot:{...snapshot,artifacts},stdout:'',stderr:''});
+  });
+  succeeded(record);
+  assert.deepEqual(result(record).artifacts, artifacts);
+  assert.deepEqual(result(record).snapshot.artifacts, artifacts);
+});
