@@ -376,8 +376,8 @@ fn read_result(stdout: &str, stderr: &str) -> Value {
         "stdout_cursor":stdout.len(), "stderr_cursor":stderr.len(),
         "stdout_eof":true, "stderr_eof":true,
         "stdout_truncated":false, "stderr_truncated":false,
-        "stdout_base64":"encoded-stdout-must-not-be-shown",
-        "stderr_base64":"encoded-stderr-must-not-be-shown",
+        "stdout_base64":STANDARD.encode(stdout.as_bytes()),
+        "stderr_base64":STANDARD.encode(stderr.as_bytes()),
         "snapshot":{
             "command":["private-command-must-not-be-shown"],
             "cwd":"/private/cwd-must-not-be-shown",
@@ -445,8 +445,13 @@ async fn exec_read_native_result_expands_without_replaying_folded_output() {
         for width in [48, 120] {
             let folded = view.render(width, 24, &ui, true).join("\n");
             assert!(folded.contains("ssmcp.exec.read"), "{folded}");
-            assert!(folded.contains("stdout cursor=44"), "{folded}");
-            assert!(folded.contains("stderr cursor=14"), "{folded}");
+            assert!(folded.contains("stdout 44 B"), "{folded}");
+            if width == 120 {
+                assert!(folded.contains("stderr 14 B"), "{folded}");
+            }
+            for raw in ["cursor=", "artifact=", "truncated=", "eof="] {
+                assert!(!folded.contains(raw), "{folded}");
+            }
             assert!(!folded.contains("reader-stdout"), "{folded}");
             assert!(!folded.contains("reader-stderr"), "{folded}");
             assert!(!folded.contains("fixture-token-value"), "{folded}");
@@ -462,7 +467,7 @@ async fn exec_read_native_result_expands_without_replaying_folded_output() {
         let folded = view.render(120, 30, &ui, true).join("\n");
         assert!(!folded.contains("reader-stdout"), "{folded}");
 
-        // The same details and two-line preview also work inside a tool window.
+        // The same details and one-line projection also work inside a tool window.
         let group = group_id(&view, &call);
         view.tool_summary_set(&call, &group, "Inspect command output", Some(0)).unwrap();
         let group = view.tool_groups()[0].clone();
@@ -470,7 +475,7 @@ async fn exec_read_native_result_expands_without_replaying_folded_output() {
         view.selected_group = None;
         view.selected = Some(id);
         let folded = view.render(120, 30, &ui, true).join("\n");
-        assert!(folded.contains("stdout cursor=44"), "{folded}");
+        assert!(folded.contains("stdout 44 B"), "{folded}");
         assert!(!folded.contains("reader-stdout"), "{folded}");
         assert!(!folded.contains("reader-stderr"), "{folded}");
         export_exec_read_fixture(&mut view, "collapsed");
@@ -540,7 +545,8 @@ fn exec_read_details_are_redacted_bounded_and_exclude_encoded_and_snapshot_bodie
         "🦀".repeat(40_000)
     );
     let original = read_result(&output, "password=private-password\nordinary-stderr\n");
-    let (detail, truncated) = exec_read_detail(&original).unwrap();
+    let projected = exec_read_detail(&original).unwrap();
+    let (detail, truncated) = (projected.text, projected.truncated);
     assert!(truncated);
     assert!(detail.len() <= super::super::MAX_DETAIL);
     assert!(detail.contains("safe-prefix") && detail.contains("safe-tail"));
@@ -568,7 +574,7 @@ fn exec_read_details_are_redacted_bounded_and_exclude_encoded_and_snapshot_bodie
     );
     assert_eq!(
         original["structuredContent"]["stderr_base64"],
-        "encoded-stderr-must-not-be-shown"
+        STANDARD.encode("password=private-password\nordinary-stderr\n")
     );
 }
 
@@ -577,7 +583,8 @@ fn exec_read_details_keep_empty_stream_state_and_reject_failed_or_unstructured_r
     let mut original = read_result("", "");
     original["structuredContent"]["stdout_truncated"] = true.into();
     original["structuredContent"]["stderr_eof"] = false.into();
-    let (detail, truncated) = exec_read_detail(&original).unwrap();
+    let projected = exec_read_detail(&original).unwrap();
+    let (detail, truncated) = (projected.text, projected.truncated);
     assert!(!truncated);
     assert!(detail.contains("stdout cursor=0 eof=true truncated=true"));
     assert!(detail.contains("stderr cursor=0 eof=false truncated=false"));
@@ -590,6 +597,202 @@ fn exec_read_details_keep_empty_stream_state_and_reject_failed_or_unstructured_r
     original["isError"] = false.into();
     original["structuredContent"]["stdout_cursor"] = "malformed".into();
     assert!(exec_read_detail(&original).is_none());
+}
+
+#[test]
+fn exec_read_compact_status_keeps_process_and_output_lifecycles_separate() {
+    for (running, exit_code, eof, process, expected, tone) in [
+        (true, Value::Null, true, json!({}), "Running", "foreground"),
+        (false, json!(0), false, json!({}), "Exit 0", "foreground"),
+        (
+            false,
+            Value::Null,
+            true,
+            json!({}),
+            "Exit unknown",
+            "warning",
+        ),
+        (false, json!(7), true, json!({}), "Exit 7", "error"),
+        (
+            false,
+            Value::Null,
+            true,
+            json!({"timed_out":true}),
+            "Timed out",
+            "warning",
+        ),
+        (
+            false,
+            Value::Null,
+            true,
+            json!({"cancelled":true}),
+            "Cancelled",
+            "warning",
+        ),
+        (
+            false,
+            Value::Null,
+            true,
+            json!({"error":"native process failure"}),
+            "Process error",
+            "error",
+        ),
+        (
+            false,
+            Value::Null,
+            true,
+            json!({"state":"failed"}),
+            "Process error",
+            "error",
+        ),
+        (
+            false,
+            Value::Null,
+            true,
+            json!({"exit_signal":15}),
+            "Signal 15",
+            "error",
+        ),
+    ] {
+        let mut result = read_result("", "");
+        let read = &mut result["structuredContent"];
+        read["running"] = running.into();
+        read["exit_code"] = exit_code;
+        read["stdout_eof"] = eof.into();
+        read["stderr_eof"] = eof.into();
+        read["snapshot"] = process;
+        let detail = exec_read_detail(&result).unwrap();
+        let output = if eof { "EOF" } else { "output pending" };
+        assert_eq!(
+            detail.text.lines().nth(1).unwrap(),
+            format!("[RESULT] {expected} · {output} · No new output")
+        );
+        assert_eq!(detail.tone, tone);
+    }
+}
+
+#[test]
+fn exec_read_compact_amounts_count_native_page_bytes_and_keep_unknown_sizes_unknown() {
+    let raw = [0xff, 0xfe, 0, b'A'];
+    let lossy = String::from_utf8_lossy(&raw);
+    assert_ne!(lossy.len(), raw.len());
+    let mut result = read_result(&lossy, "猫");
+    let read = &mut result["structuredContent"];
+    read["stdout_base64"] = STANDARD.encode(raw).into();
+    read["stdout_cursor"] = 9_876_543u64.into();
+    let detail = exec_read_detail(&result).unwrap();
+    let summary = detail.text.lines().nth(1).unwrap();
+    assert!(summary.contains("stdout 4 B · stderr 3 B"), "{summary}");
+    assert!(!summary.contains("9876543"), "{summary}");
+    assert!(detail.text.contains("stdout cursor=9876543"));
+    for encoded in [Value::Null, json!("not base64")] {
+        result["structuredContent"]["stdout_base64"] = encoded;
+        let detail = exec_read_detail(&result).unwrap();
+        let summary = detail.text.lines().nth(1).unwrap();
+        assert!(summary.contains("stdout read · stderr 3 B"), "{summary}");
+        assert!(!summary.contains("stdout 4 B"), "{summary}");
+    }
+}
+
+#[tokio::test]
+async fn exec_read_compact_warnings_survive_narrow_panes_and_detail_retention() {
+    let fixture = Fixture::new().await;
+    history::with_test_history(fixture.root.join("history"), async {
+        let call = source(&fixture.runtime, 1, "123", None, "same-label").await;
+        let ui = Ui {
+            color: false,
+            ..Ui::default()
+        };
+        for (exit_code, process, label, tone) in [
+            (
+                json!(i32::MIN),
+                json!({"state":"failed","error":"API_TOKEN=private-error-token"}),
+                "Process error",
+                "error",
+            ),
+            (Value::Null, json!({}), "Exit unknown", "warning"),
+            (json!(0), json!({}), "Exit 0", "warning"),
+        ] {
+            let mut view = new_view(&call);
+            view.summary_call_started(&call, "ssmcp.exec.read");
+            let mut result = read_result("stdout-payload\n", "stderr-payload\n");
+            let read = &mut result["structuredContent"];
+            read["exit_code"] = exit_code;
+            read["stdout_truncated"] = true.into();
+            read["stderr_truncated"] = true.into();
+            for (key, value) in process.as_object().unwrap() {
+                read["snapshot"][key] = value.clone();
+            }
+            assert!(view.summary_exec_read_result(&call, &result));
+            view.summary_call_finished(&call, true);
+            assert_eq!(view.events[0].tone, tone);
+            for width in [32, 48, 120] {
+                let rows = view.render(width, 24, &ui, true);
+                let folded = rows.join("\n");
+                assert!(folded.contains(label), "{folded}");
+                assert!(folded.contains("TRUNCATED"), "{folded}");
+                assert!(
+                    rows.iter()
+                        .all(|row| unstyled(row).width() <= usize::from(width))
+                );
+                for raw in [
+                    "cursor=",
+                    "artifact=",
+                    "eof=",
+                    "truncated=",
+                    "job=",
+                    "stdout-payload",
+                    "stderr-payload",
+                    "private-error-token",
+                ] {
+                    assert!(!folded.contains(raw), "{folded}");
+                }
+            }
+            assert!(view.open());
+            let expanded = view.render(120, 30, &ui, true).join("\n");
+            for retained in [
+                "stdout-payload",
+                "stderr-payload",
+                "artifact=stdout-artifact",
+                "artifact=stderr-artifact",
+                "truncated=true",
+            ] {
+                assert!(expanded.contains(retained), "{expanded}");
+            }
+            assert!(!expanded.contains("private-error-token"), "{expanded}");
+        }
+
+        // Two native-sized pages of invalid UTF-8 exceed the text retention
+        // budget after lossy decoding, even when neither native page was lost.
+        let raw = vec![0xff; 32768];
+        let text = String::from_utf8_lossy(&raw);
+        let mut result = read_result(&text, &text);
+        for stream in ["stdout", "stderr"] {
+            result["structuredContent"][format!("{stream}_base64")] = STANDARD.encode(&raw).into();
+            result["structuredContent"][format!("{stream}_cursor")] = (raw.len() as u64).into();
+        }
+        let mut view = new_view(&call);
+        view.summary_call_started(&call, "ssmcp.exec.read");
+        assert!(view.summary_exec_read_result(&call, &result));
+        view.summary_call_finished(&call, true);
+        assert!(view.events[0].truncated);
+        assert_eq!(view.events[0].tone, "warning");
+        assert!(view.events[0].text.contains("preview truncated"));
+        for width in [32, 48, 120] {
+            let rows = view.render(width, 24, &ui, true);
+            let folded = rows.join("\n");
+            assert!(folded.contains("TRUNCATED details"), "{folded}");
+            assert!(
+                rows.iter()
+                    .all(|row| unstyled(row).width() <= usize::from(width))
+            );
+            for raw in ["cursor=", "artifact=", "eof=", "truncated=", "job="] {
+                assert!(!folded.contains(raw), "{folded}");
+            }
+        }
+    })
+    .await;
+    fixture.runtime.shutdown().await;
 }
 
 #[tokio::test]

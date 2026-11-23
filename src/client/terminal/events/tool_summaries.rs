@@ -3,6 +3,7 @@
 use super::{EventView, Kind, MAX_EVENTS, Meta, Status};
 use crate::client::interface::history::HistoryOwner;
 use crate::runtime::call_scope::Source;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -153,7 +154,83 @@ fn counted(name: &str) -> bool {
         )
 }
 
-fn exec_read_detail(value: &Value) -> Option<(String, bool)> {
+struct ExecReadDetail {
+    text: String,
+    truncated: bool,
+    tone: &'static str,
+}
+
+/// The compact row is generated from a validated native read result. Its marker
+/// separates the projection from retained diagnostics and untrusted output text.
+pub(super) fn exec_read_preview(event: &super::Event, width: usize) -> Option<Vec<String>> {
+    if event.meta.command || event.summary != "[RUN] ssmcp.exec.read" {
+        return None;
+    }
+    let body = event
+        .text
+        .strip_prefix("[RUN] ssmcp.exec.read\n[RESULT] ")?;
+    let summary = body.lines().next()?;
+    let shown = super::clip_plain(summary, width);
+    let hint = if event.truncated {
+        "TRUNCATED details · Click expand"
+    } else if summary.contains(" · TRUNCATED ") && !shown.contains("TRUNCATED") {
+        // A long exit status can push the output warning out of a narrow pane.
+        "TRUNCATED output · Click expand"
+    } else {
+        "… Click expand"
+    };
+    Some(vec![shown, super::clip_plain(hint, width)])
+}
+
+fn exec_read_process(
+    read: &Value,
+    running: bool,
+    exit_code: Option<i64>,
+) -> (String, &'static str) {
+    let snapshot = &read["snapshot"];
+    if running {
+        return ("Running".into(), "foreground");
+    }
+    let reason = if snapshot["timed_out"] == true {
+        Some(("Timed out", "warning"))
+    } else if snapshot["cancelled"] == true {
+        Some(("Cancelled", "warning"))
+    } else if snapshot["error"].as_str().is_some() || snapshot["state"] == "failed" {
+        Some(("Process error", "error"))
+    } else {
+        None
+    };
+    if let Some((reason, tone)) = reason {
+        let suffix = exit_code.map_or_else(String::new, |code| format!(" · exit {code}"));
+        return (format!("{reason}{suffix}"), tone);
+    }
+    if let Some(signal) = snapshot["exit_signal"].as_i64() {
+        return (format!("Signal {signal}"), "error");
+    }
+    match exit_code {
+        Some(code) => (
+            format!("Exit {code}"),
+            if code == 0 { "foreground" } else { "error" },
+        ),
+        None => ("Exit unknown".into(), "warning"),
+    }
+}
+
+fn exec_read_amount(read: &Value, stream: &str) -> Option<String> {
+    // The plaintext field can contain replacement characters for invalid UTF-8.
+    // Count the native bytes, never a cumulative cursor or lossy text length.
+    let encoded = read.get(format!("{stream}_base64"))?.as_str()?;
+    let bytes = STANDARD.decode(encoded).ok()?.len();
+    Some(if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes.is_multiple_of(1024) {
+        format!("{} KiB", bytes / 1024)
+    } else {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    })
+}
+
+fn exec_read_detail(value: &Value) -> Option<ExecReadDetail> {
     if value["isError"] == true {
         return None;
     }
@@ -164,19 +241,35 @@ fn exec_read_detail(value: &Value) -> Option<(String, bool)> {
     if !exit_code.is_null() && !exit_code.is_i64() {
         return None;
     }
+    let (process, mut tone) = exec_read_process(read, running, exit_code.as_i64());
     let mut metadata = Vec::new();
     let mut streams = Vec::new();
+    let mut amounts = Vec::new();
+    let mut truncated_streams = Vec::new();
+    let mut output_eof = true;
     for stream in ["stdout", "stderr"] {
         let text = read.get(stream)?.as_str()?;
         let cursor = read.get(format!("{stream}_cursor"))?.as_u64()?;
         let eof = read.get(format!("{stream}_eof"))?.as_bool()?;
         let truncated = read.get(format!("{stream}_truncated"))?.as_bool()?;
+        output_eof &= eof;
+        if truncated {
+            truncated_streams.push(stream);
+            if tone != "error" {
+                tone = "warning";
+            }
+        }
+        // Empty streams have no default row. Their exact state remains below.
+        if !text.is_empty() {
+            amounts.push(exec_read_amount(read, stream).map_or_else(
+                || format!("{stream} read"),
+                |amount| format!("{stream} {amount}"),
+            ));
+        }
         let artifact = read["snapshot"][stream]["artifact"]["id"]
             .as_str()
             .map(display_id)
             .unwrap_or_else(|| "none".into());
-        // These two fixed metadata lines are the folded preview. Output only
-        // follows them, so reading a job does not replay its body while folded.
         metadata.push(format!(
             "{stream} cursor={cursor} eof={eof} truncated={truncated} artifact={artifact}"
         ));
@@ -190,12 +283,44 @@ fn exec_read_detail(value: &Value) -> Option<(String, bool)> {
             if text.is_empty() { "(empty)" } else { text }
         ));
     }
+    let mut compact = vec![process];
+    if !truncated_streams.is_empty() {
+        // Put the warning before sizes so it survives clipping in narrow panes.
+        compact.push(format!("TRUNCATED {}", truncated_streams.join("/")));
+    }
+    if output_eof {
+        compact.push("EOF".into());
+    } else if !running {
+        compact.push("output pending".into());
+    }
+    if amounts.is_empty() {
+        compact.push("No new output".into());
+    } else {
+        compact.extend(amounts);
+    }
+    let snapshot = &read["snapshot"];
+    let process_detail = crate::audit::event(json!({
+        "state":snapshot["state"],
+        "exit_signal":snapshot["exit_signal"],
+        "cancelled":snapshot["cancelled"],
+        "timed_out":snapshot["timed_out"],
+        "error":snapshot["error"].as_str().map(super::unstyled),
+    }));
     let text = format!(
-        "[RUN] ssmcp.exec.read\n{}\njob={job} running={running} exit_code={exit_code}\n{}",
+        "[RUN] ssmcp.exec.read\n[RESULT] {}\n\nDetails\njob={job} running={running} exit_code={exit_code}\nprocess={process_detail}\n{}\n{}",
+        compact.join(" · "),
         metadata.join("\n"),
         streams.join("")
     );
-    Some(super::retained_text(text.as_bytes()))
+    let (text, truncated) = super::retained_text(text.as_bytes());
+    if truncated && tone != "error" {
+        tone = "warning";
+    }
+    Some(ExecReadDetail {
+        text,
+        truncated,
+        tone,
+    })
 }
 
 fn display_id(id: &str) -> String {
@@ -341,14 +466,15 @@ impl EventView {
         }) else {
             return false;
         };
-        let Some((text, truncated)) = exec_read_detail(value) else {
+        let Some(detail) = exec_read_detail(value) else {
             return false;
         };
         // Keep the accepted caller's existing row, group and selection. Adding
         // job keys here would merge the reader into the job creator's card.
-        event.text = text;
+        event.text = detail.text;
         event.lines = event.text.lines().count().max(1);
-        event.truncated = truncated;
+        event.truncated = detail.truncated;
+        event.tone = detail.tone;
         event.cache = None;
         self.prune();
         true

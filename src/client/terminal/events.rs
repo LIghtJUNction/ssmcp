@@ -258,6 +258,9 @@ impl Event {
     /// At most two result lines, drawn from the retained redacted transcript.
     /// The existing render cache keeps scanning out of idle repaint frames.
     fn chat_preview(&self, width: usize) -> Vec<String> {
+        if let Some(preview) = tool_summaries::exec_read_preview(self, width) {
+            return preview;
+        }
         let plain = unstyled(&self.text);
         let summary = unstyled(&self.summary);
         let mut first = Vec::new();
