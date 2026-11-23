@@ -187,6 +187,11 @@ impl Artifacts {
         let root = beneath(&workspace, &relative)?;
         // Watch before spawning, even when the directory is empty.
         ledger.refresh(&root, Path::new(""), &mut { MAX_ENTRIES })?;
+        if ledger.used != 0 {
+            return Err(io::Error::other(
+                "task artifact directory is not empty at admission",
+            ));
+        }
         Ok(Self {
             workspace,
             root,
@@ -211,6 +216,11 @@ impl Artifacts {
             "directory": self.relative.to_string_lossy(),
             "soft_limit_bytes": self.budget,
         })
+    }
+
+    pub(super) fn completion_delta(&mut self) -> (Option<u64>, bool) {
+        let report = self.sample();
+        (report["logical_bytes"].as_u64(), self.incomplete)
     }
 
     pub(super) fn sample(&mut self) -> Value {

@@ -583,3 +583,33 @@ async fn shutdown_preserves_incomplete_or_escaped_temp_artifacts() {
     assert_eq!(fs::read(paths[2].1.join("keep")).unwrap(), b"safe");
     assert_eq!(fs::read(outside.join("data")).unwrap(), b"external");
 }
+
+#[tokio::test]
+async fn local_tracked_command_projects_net_bytes_without_exposing_paths() {
+    let directory = Fixture::new();
+    let shell =
+        Shell::with_workspace(directory.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
+    let args = json!({"command":["/bin/sh", "-c", "printf abc > \"$TMPDIR/ssmcp-test\""], "track_artifacts":true});
+    assert!(shell.call("ssmcp.exec.start", args.clone()).await.is_err());
+    let local = crate::runtime::call_scope::Source::default().with_local_artifact_tracking();
+    let job = shell
+        .call_scoped("ssmcp.exec.start", args, local)
+        .await
+        .unwrap();
+    shell
+        .call("ssmcp.exec.wait", json!({"job_id":job["job_id"]}))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let stats = shell.local_command_stats();
+            if let Some(delta) = stats.jobs[0].disk_delta {
+                assert_eq!(delta, (Some(3), false));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}

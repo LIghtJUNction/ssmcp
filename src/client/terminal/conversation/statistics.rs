@@ -273,8 +273,18 @@ fn command_rows(
         }
         push("Recent tasks · local native execution", PanelTone::Muted);
         for job in stats.jobs {
+            let disk = match job.disk_delta {
+                Some((Some(bytes), false)) => format!("disk +{bytes} logical bytes"),
+                Some((Some(bytes), true)) => format!("disk +{bytes} logical bytes (incomplete)"),
+                Some((None, _)) => "disk unavailable (incomplete)".into(),
+                None if job.disk_tracking => "disk pending completion sample".into(),
+                None => "disk tracking off".into(),
+            };
             push(
-                &format!("{} · {} ms · {}", job.state, job.duration_ms, job.id),
+                &format!(
+                    "{} · {} ms · {} · {disk}",
+                    job.state, job.duration_ms, job.id
+                ),
                 PanelTone::Normal,
             );
         }
@@ -283,7 +293,7 @@ fn command_rows(
     }
     for line in [
         "CPU time and peak memory · unavailable",
-        "Disk net change · unavailable in local scope; opt-in verified Linux tasks have a separate ledger in job status",
+        "Disk net change · Linux /track-command · job-exclusive directory only · logical bytes above empty baseline",
         "Cache hits, refreshes, invalidation and avoided execution · not instrumented",
         "Browser, relay and worker calls · outside this panel’s scope",
         "Queue · native start rejects when capacity is full",

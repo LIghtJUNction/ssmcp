@@ -860,6 +860,13 @@ impl State {
                 crate::client::interface::harness::submit(&command[1..], rest)?;
                 self.notice = Some("Harness request queued · results appear here".into());
             }
+            "/track-command" => {
+                if self.preview {
+                    return Err("Preview does not execute shell commands".into());
+                }
+                crate::client::interface::harness::submit_shell_with_tracking(rest, true)?;
+                self.notice = Some("Tracked shell command started".into());
+            }
             "/command" => {
                 if rest.split_whitespace().count() > 1 {
                     return Err("Use /command [JOB_ID] to inspect a complete command".into());

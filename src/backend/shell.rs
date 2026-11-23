@@ -170,6 +170,8 @@ struct Job {
     artifacts: Option<Mutex<artifacts::Artifacts>>,
     #[cfg(target_os = "linux")]
     temporary_artifacts: bool,
+    #[cfg(target_os = "linux")]
+    disk_delta: std::sync::OnceLock<(Option<u64>, bool)>,
 }
 impl Job {
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -272,6 +274,8 @@ pub(crate) struct LocalCommandRow {
     pub id: String,
     pub duration_ms: u64,
     pub state: &'static str,
+    pub disk_delta: Option<(Option<u64>, bool)>,
+    pub disk_tracking: bool,
 }
 
 #[derive(Default)]
@@ -458,6 +462,26 @@ impl Shell {
                 LocalCommandRow {
                     id: job.id.clone(),
                     duration_ms: job.timing.elapsed_ms(through),
+                    disk_tracking: {
+                        #[cfg(target_os = "linux")]
+                        {
+                            job.artifacts.is_some()
+                        }
+                        #[cfg(not(target_os = "linux"))]
+                        {
+                            false
+                        }
+                    },
+                    disk_delta: {
+                        #[cfg(target_os = "linux")]
+                        {
+                            job.disk_delta.get().copied()
+                        }
+                        #[cfg(not(target_os = "linux"))]
+                        {
+                            None
+                        }
+                    },
                     state: if state.running {
                         "running"
                     } else if state.cancelled {
@@ -734,11 +758,12 @@ impl Shell {
             if !cfg!(target_os = "linux") {
                 return Err("task artifact budgets are available on Linux".into());
             }
-            if creator
-                .call
-                .as_ref()
-                .and_then(|scope| scope.thread())
-                .is_none()
+            if (args.temporary_artifacts || !creator.allows_local_artifact_tracking())
+                && creator
+                    .call
+                    .as_ref()
+                    .and_then(|scope| scope.thread())
+                    .is_none()
             {
                 return Err("task artifact budgets require a verified Agent thread".into());
             }
@@ -930,6 +955,8 @@ impl Shell {
             artifacts: artifacts.map(Mutex::new),
             #[cfg(target_os = "linux")]
             temporary_artifacts: args.temporary_artifacts,
+            #[cfg(target_os = "linux")]
+            disk_delta: std::sync::OnceLock::new(),
         });
         // A failed spawn must leave the retained history untouched.
         if let Some(id) = &evicted {
@@ -991,6 +1018,28 @@ impl Shell {
                 state.error = outcome.3;
                 state.exit_signal = outcome.4;
                 state.finished = Some(Instant::now());
+            }
+            // Terminal Stats reads only the completed projection. A blocked
+            // filesystem does not hold the UI thread or the command wait path.
+            #[cfg(target_os = "linux")]
+            if worker.creator.call.is_none() && worker.artifacts.is_some() {
+                static SAMPLES: Semaphore = Semaphore::const_new(MAX_JOBS);
+                if let Ok(permit) = SAMPLES.try_acquire() {
+                    let job = worker.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let _permit = permit;
+                        let mut artifacts = job
+                            .artifacts
+                            .as_ref()
+                            .unwrap()
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        let delta = artifacts.completion_delta();
+                        let _ = job.disk_delta.set(delta);
+                    });
+                } else {
+                    let _ = worker.disk_delta.set((None, true));
+                }
             }
             let status = {
                 let state = worker.state();
@@ -1397,6 +1446,8 @@ mod tests {
             artifacts: None,
             #[cfg(target_os = "linux")]
             temporary_artifacts: false,
+            #[cfg(target_os = "linux")]
+            disk_delta: std::sync::OnceLock::new(),
         })
     }
 
