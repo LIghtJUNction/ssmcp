@@ -61,6 +61,58 @@ pub(super) struct Artifacts {
     armed: bool,
     incomplete: bool,
     ledger: Option<Ledger>,
+    unstarted: Option<PendingDirectory>,
+}
+
+// A failed initialization or process spawn must not strand an unreported task
+// directory. Keep the opened parent so cleanup never follows a replacement path.
+struct PendingDirectory {
+    parent: File,
+    name: CString,
+    identity: Option<Identity>,
+}
+
+impl PendingDirectory {
+    fn new(parent: File, name: &Path) -> io::Result<Self> {
+        let c_name = CString::new(name.as_os_str().as_bytes())?;
+        mkdir(&parent, name)?;
+        let mut pending = Self {
+            parent,
+            name: c_name,
+            identity: None,
+        };
+        pending.identity = Some(pending.current_identity()?);
+        Ok(pending)
+    }
+
+    fn current_identity(&self) -> io::Result<Identity> {
+        let path = Path::new(&proc_fd(&self.parent))
+            .join(std::ffi::OsStr::from_bytes(self.name.as_bytes()));
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.is_dir() {
+            return Err(io::ErrorKind::NotADirectory.into());
+        }
+        Ok(identity(&metadata))
+    }
+}
+
+impl Drop for PendingDirectory {
+    fn drop(&mut self) {
+        if let Some(expected) = self.identity
+            && self
+                .current_identity()
+                .is_ok_and(|actual| actual == expected)
+        {
+            // rmdir refuses nonempty directories. Never remove files or recurse.
+            unsafe {
+                libc::unlinkat(
+                    self.parent.as_raw_fd(),
+                    self.name.as_ptr(),
+                    libc::AT_REMOVEDIR,
+                );
+            }
+        }
+    }
 }
 
 // Resolve entire paths in a single syscall. Never traverse a symlink, magic
@@ -131,7 +183,7 @@ impl Artifacts {
         let mut ledger = Ledger::new()?;
         let state_dir = ensure_dir(&workspace, Path::new(".ssmcp"))?;
         let managed = ensure_dir(&state_dir, Path::new("task-artifacts"))?;
-        mkdir(&managed, Path::new(&token))?;
+        let unstarted = PendingDirectory::new(managed, Path::new(&token))?;
         let root = beneath(&workspace, &relative)?;
         // Watch before spawning, even when the directory is empty.
         ledger.refresh(&root, Path::new(""), &mut { MAX_ENTRIES })?;
@@ -144,7 +196,14 @@ impl Artifacts {
             armed: true,
             incomplete: false,
             ledger: Some(ledger),
+            unstarted: Some(unstarted),
         })
+    }
+
+    pub(super) fn mark_started(&mut self) {
+        if let Some(mut directory) = self.unstarted.take() {
+            directory.identity = None;
+        }
     }
 
     pub(super) fn description(&self) -> Value {
