@@ -114,6 +114,7 @@ fn dashboard_fixture() -> Snapshot {
             interval_ms: Some(60_000),
             last_fired_at_unix_ms: Some(1_795_000_060_000),
             pending_count: 1,
+            visibility: "queued",
             missed_count: 2,
             tick: 3,
             retention_after_ack_ms: 300_000,
