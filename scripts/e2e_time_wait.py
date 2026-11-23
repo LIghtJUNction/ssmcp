@@ -137,11 +137,10 @@ class TimeWait(Interactions):
         self.replace_short(front, command)
         front.send(ENTER)
         self.wait_state(front, lambda item: item["draft"]["text"] == "",
-                        "the local wait command completes without publishing a user request")
+                        "the local wait command completes without publishing a user request", fields=("draft",))
 
     def verify_clock_layout(self):
-        display = self.ui("/display")
-        pane = display["panes"]["input"]
+        pane = self.ui("/display/panes/input")
         self.check(pane["row"] == ROWS - 4 and pane["rows"] == 3 and pane["visible"] is True,
                    "the actual composer geometry pins clock header 27 and excludes body, draft and footer")
 
@@ -169,7 +168,7 @@ class TimeWait(Interactions):
             self.frames.append(png.name)
             self.frame_manifest.append({"path": png.name, "sha256": digest(png), "cells": snapshot.name,
                                         "cells_sha256": digest(snapshot), "size": shot["size"], "clock": clock(shot)})
-            self.check(self.ui("/display/conversation")["draft"] == self.saved_draft,
+            self.check(self.ui("/display/conversation/draft") == self.saved_draft,
                        name + ": exact draft bytes and cursor survive " + str(width) + "-column rendering")
         front.resize(ROWS, 120)
         front.pump(0.1)
@@ -185,7 +184,7 @@ class TimeWait(Interactions):
         front.send(LEFT)
         state = self.wait_state(front, lambda item: item["draft"]["text"] == value
                                 and item["draft"]["cursor"] == len(value.encode()) - 1,
-                                "the owned timing draft has its exact nonterminal cursor")
+                                "the owned timing draft has its exact nonterminal cursor", fields=("draft",))
         self.saved_draft = state["draft"]
 
     def run(self):
@@ -392,7 +391,7 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
         front.credentials = credentials
         self.check(self.client_id != old_id and self.ui("/time") == {"active":[],"recent":[]},
                    "a fresh connection restores no active timers, observations or completion ledger")
-        self.check(self.ui("/display/conversation")["draft"] == self.saved_draft,
+        self.check(self.ui("/display/conversation/draft") == self.saved_draft,
                    "disconnect/reconnect preserves the exact unsubmitted draft and cursor")
         _, fresh = self.native("ssmcp.time.now", {})
         self.check(fresh["monotonic_scope"] != now["monotonic_scope"],

@@ -169,7 +169,7 @@ class InputHistory(Composer):
 
     def queue_current(self, front, source):
         before = {item["id"] for item in self.queue()["queue"]}
-        self.check(self.ui("/display/conversation")["draft"]["text"] == source,
+        self.check(self.ui("/display/conversation/draft")["text"] == source,
                    "the exact user draft is present before submission")
         front.send(ENTER)
         deadline = time.monotonic() + 8
@@ -178,16 +178,16 @@ class InputHistory(Composer):
             created = [item for item in self.queue()["queue"] if item["id"] not in before]
             if len(created) == 1 and created[0]["status"] == "queued":
                 self.wait_state(front, lambda state: not state["draft"]["text"],
-                                "the accepted draft did not clear")
+                                "the accepted draft did not clear", fields=("draft",))
                 return created[0]
         raise AssertionError("the submitted requirement was not acknowledged by the real queue")
 
     def submit_source(self, front, source):
-        self.check(not self.ui("/display/conversation")["draft"]["text"],
+        self.check(not self.ui("/display/conversation/draft")["text"],
                    "the next reference scenario starts with an empty composer")
         front.send(source)
         self.wait_state(front, lambda state: state["draft"]["text"] == source,
-                        "the UTF-8 draft did not reach the composer")
+                        "the UTF-8 draft did not reach the composer", fields=("draft",))
         return self.queue_current(front, source)
 
     def complete_reference(self, front, typed, candidate, expected, key, shot_name):
