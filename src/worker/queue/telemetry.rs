@@ -77,6 +77,13 @@ impl<T: Clone> Queue<T> {
             }
         };
         log(slot, now_ms, "info", &text, Some(&lease.task_id));
+        self.record_task_event(
+            &mut state,
+            "worker.progress",
+            &lease.task_id,
+            Some(update.event.clone()),
+            now_ms,
+        );
         self.changed(&mut state);
         Ok(())
     }
@@ -118,6 +125,13 @@ impl<T: Clone> Queue<T> {
             None => format!("Command finished: {command}"),
         };
         log(slot, now_ms, "info", &text, Some(&claim.task_id));
+        self.record_task_event(
+            &mut state,
+            "worker.progress",
+            &claim.task_id,
+            Some(update.event.clone()),
+            now_ms,
+        );
         self.changed(&mut state);
         Ok(())
     }

@@ -2,15 +2,18 @@
 //! display labels and request JSON never select or complete an execution slot.
 use super::{ManagerView, SlotLog, SlotView, Snapshot};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;
 use std::time::Instant;
 use tokio::sync::watch;
 
+mod events;
 mod lifecycle;
 mod operations;
 mod projection;
 mod telemetry;
+pub(super) use events::EventRequest;
 pub(super) use operations::{WaitRequest, WaitSpec};
 pub(super) use telemetry::{ReportEvent, ReportUpdate, display_text};
 
@@ -260,6 +263,7 @@ impl Slot {
 struct State<T> {
     manager: Option<Manager>,
     operations: operations::Operations,
+    events: events::Journal,
     tasks: BTreeMap<String, Task<T>>,
     fifo: VecDeque<String>,
     finished: VecDeque<String>,
@@ -293,6 +297,7 @@ impl<T: Clone> Queue<T> {
             state: Mutex::new(State {
                 manager: None,
                 operations: operations::Operations::default(),
+                events: events::Journal::default(),
                 tasks: BTreeMap::new(),
                 fifo: VecDeque::new(),
                 finished: VecDeque::new(),
@@ -443,10 +448,12 @@ impl<T: Clone> Queue<T> {
             return Ok(false);
         }
         state.stopping = true;
+        let mut task_events = Vec::new();
         while let Some(id) = state.fifo.pop_front() {
             if let Some(task) = state.tasks.get_mut(&id) {
                 task.view.status = TaskStatus::Cancelled;
                 task.view.updated_ms = now_ms;
+                task_events.push((id.clone(), "worker.completed"));
                 state.finished.push_back(id);
             }
         }
@@ -457,6 +464,7 @@ impl<T: Clone> Queue<T> {
         {
             task.view.status = TaskStatus::Cancelling;
             task.view.updated_ms = now_ms;
+            task_events.push((task.view.task_id.clone(), "worker.cancelling"));
         }
         for slot in &mut state.slots {
             if matches!(slot.state, SlotState::Idle) {
@@ -469,6 +477,9 @@ impl<T: Clone> Queue<T> {
                 "Manager requested stop; active tasks await completion acknowledgement",
                 None,
             );
+        }
+        for (id, kind) in task_events {
+            self.record_task_event(&mut state, kind, &id, None, now_ms);
         }
         trim(&mut state);
         self.changed(&mut state);
@@ -510,6 +521,7 @@ impl<T: Clone> Queue<T> {
             "Slot ready; waiting for a task",
             None,
         );
+        self.record_slot_event(&mut state, "worker.idle", slot, super::now_ms());
         self.changed(&mut state);
         Ok(epoch)
     }
@@ -661,6 +673,7 @@ impl<T: Clone> Queue<T> {
                 .operations
                 .dispatch("submit", &view, None, text, now_ms);
         }
+        self.record_task_event(&mut state, "task.submitted", &view.task_id, None, now_ms);
         self.changed(&mut state);
         Ok(view)
     }
@@ -746,6 +759,7 @@ impl<T: Clone> Queue<T> {
                 "Authenticated external worker registered; waiting for a task",
                 None,
             );
+            self.record_slot_event(&mut state, "worker.idle", slot, now_ms);
             self.changed(&mut state);
             slot
         };
@@ -823,6 +837,7 @@ impl<T: Clone> Queue<T> {
                 .operations
                 .dispatch("claim", &assigned, Some(epoch), &lease.text, now_ms);
         }
+        self.record_task_event(state, "worker.started", &id, None, now_ms);
         self.changed(state);
         Ok(Some(lease))
     }
@@ -867,7 +882,10 @@ impl<T: Clone> Queue<T> {
         if queued {
             state.fifo.retain(|queued| queued != id);
             state.finished.push_back(id.into());
+            self.record_task_event(&mut state, "worker.completed", id, None, now_ms);
             trim(&mut state);
+        } else if cancelling_slot.is_some() {
+            self.record_task_event(&mut state, "worker.cancelling", id, None, now_ms);
         }
         self.changed(&mut state);
         Ok(view)
@@ -1012,6 +1030,15 @@ impl<T: Clone> Queue<T> {
             Some(&lease.task_id),
         );
         state.finished.push_back(lease.task_id.clone());
+        let kind = if status == TaskStatus::Unknown {
+            "worker.unknown"
+        } else {
+            "worker.completed"
+        };
+        self.record_task_event(state, kind, &lease.task_id, None, now_ms);
+        if matches!(state.slots[lease.slot].state, SlotState::Idle) {
+            self.record_slot_event(state, "worker.idle", lease.slot, now_ms);
+        }
         trim(state);
         self.changed(state);
         Ok(view)
@@ -1020,10 +1047,12 @@ impl<T: Clone> Queue<T> {
     pub(crate) fn close(&self, now_ms: u64) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.closed = true;
+        let mut task_events = Vec::new();
         while let Some(id) = state.fifo.pop_front() {
             if let Some(task) = state.tasks.get_mut(&id) {
                 task.view.status = TaskStatus::Cancelled;
                 task.view.updated_ms = now_ms;
+                task_events.push((id.clone(), "worker.completed"));
                 state.finished.push_back(id);
             }
         }
@@ -1034,6 +1063,7 @@ impl<T: Clone> Queue<T> {
         {
             task.view.status = TaskStatus::Cancelling;
             task.view.updated_ms = now_ms;
+            task_events.push((task.view.task_id.clone(), "worker.cancelling"));
         }
         for slot in &mut state.slots {
             if !matches!(slot.state, SlotState::Working(_)) {
@@ -1043,8 +1073,46 @@ impl<T: Clone> Queue<T> {
             }
             log(slot, now_ms, "warning", "Worker connection closed", None);
         }
+        for (id, kind) in task_events {
+            self.record_task_event(&mut state, kind, &id, None, now_ms);
+        }
         trim(&mut state);
         self.changed(&mut state);
+    }
+
+    /// Routine replies read identity and capacity without cloning monitor logs.
+    /// The full snapshot remains available to the monitor and worker.status.
+    pub(crate) fn compact_snapshot(&self) -> Value {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let capacity = &state.availability;
+        let slots: Vec<_> = state
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.enabled)
+            .map(|(index, slot)| {
+                let (name, task_id) = match &slot.state {
+                    SlotState::Offline(_) => ("offline", None),
+                    SlotState::Idle => ("idle", None),
+                    SlotState::Working(id) => ("working", Some(id.as_str())),
+                    SlotState::Retiring => ("retiring", None),
+                };
+                json!({
+                    "slot":index,"epoch":slot.epoch,"state":name,"task_id":task_id,
+                    "registered":slot.registered.is_some(),
+                    "retire_requested":slot.retirement.is_some()
+                })
+            })
+            .collect();
+        json!({
+            "process_id":std::process::id(),"generation":self.generation,
+            "manager":state.manager.as_ref().map(|manager| &manager.view),
+            "total":capacity.total,"idle":capacity.idle,"working":capacity.working,
+            "offline":capacity.offline,"retiring":capacity.retiring,
+            "registered_workers":capacity.registered_workers,
+            "desired_total":capacity.desired_total,"queued":capacity.queued,
+            "closed":capacity.closed,"stopping":capacity.stopping,"slots":slots
+        })
     }
 
     pub(crate) fn snapshot(&self) -> Snapshot {
@@ -1143,6 +1211,9 @@ impl<T: Clone> Queue<T> {
                 task.view.updated_ms = now_ms;
                 finished.push(task.view.task_id.clone());
             }
+        }
+        for id in &finished {
+            self.record_task_event(&mut state, "worker.unknown", id, None, now_ms);
         }
         state.finished.extend(finished);
         for slot in &mut state.slots {
