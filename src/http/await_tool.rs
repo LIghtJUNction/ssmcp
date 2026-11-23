@@ -298,6 +298,7 @@ struct Record {
     windowed: bool,
     snapshot: Mutex<Option<Vec<TargetResult>>>,
     acknowledged: AtomicBool,
+    snapshot_overflow: AtomicBool,
 }
 
 impl Record {
@@ -399,6 +400,7 @@ impl Registry {
             windowed: args.window_ms.is_some(),
             snapshot: Mutex::new(None),
             acknowledged: AtomicBool::new(false),
+            snapshot_overflow: AtomicBool::new(false),
         });
         records.insert(id, record.clone());
         Ok(record)
@@ -859,6 +861,11 @@ fn read_window_snapshot(record: &Record, after: Option<u64>) -> Result<Option<Va
             Ok(None)
         };
     }
+    if record.snapshot_overflow.load(Ordering::Acquire) {
+        return Err(
+            "await_snapshot_overflow: the original delivery exceeded the replay byte limit".into(),
+        );
+    }
     if record.acknowledged.load(Ordering::Acquire) {
         if after != Some(1) {
             return Err("await result cursor expired after acknowledgement".into());
@@ -947,10 +954,13 @@ pub(super) async fn wait(
             .targets
             .iter()
             .any(|target| matches!(target, Target::UserInput { .. }));
-    if (!record.windowed && args.window_ms.is_some()) || (args.after.is_some() && !passive_window) {
+    if (!record.windowed && args.window_ms.is_some()) || (args.after.is_some() && !record.windowed)
+    {
         return Err("observation mode and result cursor must match the original await".into());
     }
-    if passive_window && let Some(response) = read_window_snapshot(&record, args.after)? {
+    if (passive_window || args.after.is_some())
+        && let Some(response) = read_window_snapshot(&record, args.after)?
+    {
         return Ok(response);
     }
     let window_ms = args.window_ms.unwrap_or(args.timeout_ms);
@@ -1190,6 +1200,17 @@ pub(super) async fn execute(
             .iter()
             .any(|result| result["target"]["type"] == "user_input")
     });
+    if is_user_input
+        && let Some(messages) = value["results"][0]["data"]
+            .as_object_mut()
+            .and_then(|data| data.remove("replayed_user_messages"))
+            .and_then(|messages| messages.as_array().cloned())
+    {
+        let receipt = value["results"][0]["data"].clone();
+        let mut response = append_user_messages(tool_result(Ok(value)), messages);
+        response["structuredContent"]["user_wait"] = json!([receipt]);
+        return Ok(response);
+    }
     // Passive object observation has no automatic inbox/question acknowledgement.
     // User input explicitly opts into the existing atomic outer delivery protocol.
     if !is_user_input {
@@ -1224,6 +1245,14 @@ pub(super) async fn execute(
     value["continue_wait"] = json!(matches!(status, Status::Pending | Status::TimedOut));
     value["results"][0]["status"] = json!(status);
     value["results"][0]["data"] = receipt;
+    if windowed && status == Status::Ready {
+        if response["structuredContent"].get("replay_error").is_none() {
+            value["cursor"] = json!(1);
+        } else {
+            value["replay_error"] = response["structuredContent"]["replay_error"].clone();
+        }
+        response["structuredContent"]["cursor"] = value["cursor"].clone();
+    }
     for key in ["status", "continue_wait", "results"] {
         response["structuredContent"][key] = value[key].clone();
     }
@@ -1343,9 +1372,12 @@ pub(super) fn commit_user_delivery(
             );
         }
     }
-    let response = commit();
+    let mut response = commit();
     for record in current {
         let receipt = report.run.user_wait_receipt(&record.actor.client_id);
+        if record.windowed && receipt["status"] == "received" && !*record.cancelled.borrow() {
+            retain_user_delivery(record, receipt.clone(), &mut response);
+        }
         let retryable = matches!(receipt["status"].as_str(), Some("timed_out" | "busy"));
         record
             .terminal
@@ -1357,6 +1389,47 @@ pub(super) fn commit_user_delivery(
         *record.touched.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
     }
     response
+}
+
+fn retain_user_delivery(record: &Record, mut receipt: Value, response: &mut Value) {
+    let identities = receipt["messages"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let messages: Vec<Value> = response["structuredContent"]["user_messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|message| {
+            message["client_id"] == record.actor.client_id
+                && message["agent_id"] == record.actor.agent_id
+                && identities.iter().any(|id| {
+                    message["message_id"] == id["message_id"]
+                        && message["revision"] == id["revision"]
+                })
+        })
+        .cloned()
+        .collect();
+    if messages.is_empty() || messages.len() != identities.len() {
+        record.snapshot_overflow.store(true, Ordering::Release);
+        response["structuredContent"]["replay_error"] = json!("await_receipt_unavailable");
+        return;
+    }
+    receipt["replayed_user_messages"] = json!(messages);
+    let snapshot = vec![TargetResult {
+        target: record.targets[0].clone(),
+        status: Status::Ready,
+        data: Some(receipt),
+        error: None,
+    }];
+    if serde_json::to_vec(&snapshot).is_ok_and(|bytes| bytes.len() <= MAX_SNAPSHOT_BYTES) {
+        *record.snapshot.lock().unwrap_or_else(|e| e.into_inner()) = Some(snapshot);
+        response["structuredContent"]["await_delivery_cursor"] =
+            json!({"wait_id":record.id,"cursor":1});
+    } else {
+        record.snapshot_overflow.store(true, Ordering::Release);
+        response["structuredContent"]["replay_error"] = json!("await_snapshot_overflow");
+    }
 }
 
 /// A dropped HTTP/code_mode response cannot leave a protected reservation

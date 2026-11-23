@@ -45,7 +45,7 @@
 return await waitFor(clientId, {wait_id: previous.wait_id, timeout_ms: 20000});
 ```
 
-首次传入 `window_ms: 20000` 可启用短窗口协议。窗口到期返回 `pending`，同一个 `wait_id` 可继续观察原目标。作业、任务分派和待交付输入继续由各自的有界队列持有，窗口结束不取消它们。普通结果就绪时返回 `cursor: 1`。处理前用 `after: 0` 重读同一结果，应用成功后用 `after: 1` 确认。确认可重复，逾期游标与超出 128 KiB 的结果会显式报错。协作收件箱仍应单独执行 `collab.ack`。用户输入沿用已有的最终交付事务和 `user_messages` 回执，不通过被动结果游标重放文本。
+首次传入 `window_ms: 20000` 可启用短窗口协议。窗口到期返回 `pending`，同一个 `wait_id` 可继续观察原目标。作业、任务分派和待交付输入继续由各自的有界队列持有，窗口结束不取消它们。普通结果就绪时返回 `cursor: 1`。处理前用 `after: 0` 重读同一结果，应用成功后用 `after: 1` 确认。确认可重复，逾期游标与超出 128 KiB 的结果会显式报错。协作收件箱仍应单独执行 `collab.ack`。用户输入仍由外层交付事务提交。短窗口的外层回执返回 `await_delivery_cursor`，公共 `await` 的响应也返回 `cursor: 1`。响应丢失时用 `after: 0` 重读已交付的同一消息及版本，按 `message_id` 和 `revision` 去重，处理后用 `after: 1` 确认。重读不会领取下一条输入。Code Mode 的 `waitFor` 重试将已交付消息放在目标数据的 `replayed_user_messages`；首次交付仍以外层 `user_messages` 为准。
 
 `worker_assignment` 接受该 worker 的 `request_id`，同一个观察持续使用该 ID。 `worker_result` 接受原任务的 `task_id`，并保留原生结果的终态。两个目标都要求独立等待，并继续由原生 worker 权限检查约束。
 

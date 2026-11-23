@@ -211,8 +211,19 @@ async fn windowed_await_over_http_retains_one_id_past_sixty_seconds() {
         "between_http_windows"
     );
     assert_eq!(ready["user_messages"].as_array().unwrap().len(), 1);
-    let retry = call(json!({"wait_id":id,"window_ms":20_000})).await;
-    assert!(retry.get("user_messages").is_none());
+    assert_eq!(ready["cursor"], 1);
+    // Simulate a lost response by resuming from the last application cursor.
+    fixture.publish("second_http_input");
+    let replay = call(json!({"wait_id":id,"after":0})).await;
+    assert_eq!(replay["cursor"], 1);
+    assert_eq!(replay["user_messages"], ready["user_messages"]);
+    assert_eq!(replay["user_wait"][0]["status"], "received");
+    assert_eq!(fixture.state("second_http_input"), SteeringState::Queued);
+    for _ in 0..2 {
+        let ack = call(json!({"wait_id":id,"after":1})).await;
+        assert_eq!(ack["acknowledged"], true);
+        assert!(ack.get("user_messages").is_none());
+    }
     server.abort();
 }
 
@@ -289,11 +300,51 @@ async fn windowed_user_input_delivers_input_published_between_requests_once() {
         .await;
     assert_eq!(ready["status"], "ready");
     assert_eq!(ready["user_messages"][0]["message_id"], "between_windows");
-    let retry = fixture
-        .public(&fixture.member, json!({"wait_id":id,"window_ms":1000}))
+    assert_eq!(ready["cursor"], 1);
+    let denied = fixture
+        .public(&fixture.peer, json!({"wait_id":id,"after":0}))
         .await;
-    assert_ne!(retry["status"], "ready");
-    assert!(retry.get("user_messages").is_none());
+    assert_eq!(denied["status"], "unauthorized");
+    assert!(denied.get("user_messages").is_none());
+    let retry = fixture
+        .public(&fixture.member, json!({"wait_id":id,"after":0}))
+        .await;
+    assert_eq!(retry["user_messages"], ready["user_messages"]);
+    let ack = fixture
+        .public(&fixture.member, json!({"wait_id":id,"after":1}))
+        .await;
+    assert_eq!(ack["acknowledged"], true);
+    assert!(ack.get("user_messages").is_none());
+}
+
+#[tokio::test]
+async fn user_delivery_replay_overflow_is_explicit_and_keeps_no_partial_copy() {
+    let fixture = Fixture::new().await;
+    let first = fixture
+        .public(
+            &fixture.member,
+            json!({"window_ms":1000,
+        "targets":[{"type":"user_input","notify":false}]}),
+        )
+        .await;
+    let record = fixture.record(first["wait_id"].as_str().unwrap());
+    let receipt = json!({"status":"received","messages":[{"message_id":"big","revision":1}]});
+    let mut response = json!({"structuredContent":{"user_messages":[{
+        "client_id":fixture.session.client_id(),"agent_id":fixture.member["agent_id"],
+        "message_id":"big","revision":1,"text":"x".repeat(MAX_SNAPSHOT_BYTES),
+    }]}});
+    retain_user_delivery(&record, receipt, &mut response);
+    record.terminal.store(true, Ordering::Release);
+    assert_eq!(
+        response["structuredContent"]["replay_error"],
+        "await_snapshot_overflow"
+    );
+    assert!(record.snapshot.lock().unwrap().is_none());
+    assert!(
+        read_window_snapshot(&record, Some(0))
+            .unwrap_err()
+            .contains("await_snapshot_overflow")
+    );
 }
 
 #[tokio::test]
