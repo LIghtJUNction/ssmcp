@@ -601,6 +601,9 @@ impl Session {
             .map_err(|_| "client busy; retry later")?;
         let duration = request_timeout(&operation);
         let catalog_query = matches!(&operation, Operation::ListTools { .. });
+        let generated_input = matches!(&operation,
+            Operation::CallTool { name, arguments }
+            if name == "ssmcp.ui.message" && arguments["kind"] == "input");
         let audit_tool = match &operation {
             Operation::CallTool { name, .. } => Some(name.clone()),
             _ => None,
@@ -665,7 +668,13 @@ impl Session {
             ));
         }
         if carries_source && let Some(run) = audit_run.as_ref() {
-            run.native_dispatched(self.client_id(), audit_tool.as_deref());
+            if generated_input {
+                // Retain original dispatch attribution without arming human input
+                // or question delivery for an agent-generated visible prompt.
+                run.dispatched(self.client_id());
+            } else {
+                run.native_dispatched(self.client_id(), audit_tool.as_deref());
+            }
         }
         if let Some(activity) = lifecycle_activity.as_mut() {
             activity.dispatched();

@@ -848,17 +848,20 @@ impl Hub {
                 }
                 _ => {
                     answer = name == "ssmcp.ui.message" && arguments["kind"] == "answer";
-                    business = !(name.starts_with("ssmcp.time.")
-                        || name.starts_with("ssmcp.events.")
-                        || name == crate::code_mode::tool_summaries::TOOL
-                        || name.starts_with("ssmcp.worker.")
-                        || matches!(
-                            name.as_str(),
-                            "ssmcp.ui.get"
-                                | "ssmcp.ui.wait"
-                                | "ssmcp.ui.question_delivery"
-                                | "ssmcp.client.capabilities"
-                        ));
+                    let generated_input =
+                        name == "ssmcp.ui.message" && arguments["kind"] == "input";
+                    business = !generated_input
+                        && !(name.starts_with("ssmcp.time.")
+                            || name.starts_with("ssmcp.events.")
+                            || name == crate::code_mode::tool_summaries::TOOL
+                            || name.starts_with("ssmcp.worker.")
+                            || matches!(
+                                name.as_str(),
+                                "ssmcp.ui.get"
+                                    | "ssmcp.ui.wait"
+                                    | "ssmcp.ui.question_delivery"
+                                    | "ssmcp.client.capabilities"
+                            ));
                 }
             }
         }

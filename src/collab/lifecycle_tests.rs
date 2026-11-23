@@ -702,3 +702,39 @@ async fn native_stop_receipt_retains_an_unrelated_unknown_wait() {
         assert_eq!(current["lifecycle"]["unknown_outcomes"], 1);
     }
 }
+
+#[tokio::test]
+async fn visible_generated_input_keeps_requested_maintenance_passive() {
+    let hub = Hub::for_session("visible-prompt-room");
+    let (id, token) = member(&hub, "owner", "main");
+    update(&hub, &id, &token, json!({"status":"dreaming"}))
+        .await
+        .unwrap();
+    let before = snapshot(&hub, &id, &token);
+    let operation = native(
+        "ui.message",
+        json!({
+            "kind":"input","input_origin":"maintenance","idempotency_key":"visible_round",
+            "text":"One authorized review","finish_task":false
+        }),
+    );
+    let mut call = hub
+        .prepare_native_activity("owner", &id, &token, &operation)
+        .unwrap();
+    call.dispatched();
+    call.finish(&receipt(
+        json!({"kind":"input","accepted":true,"recorded":true,
+        "input_origin":"maintenance","completion_permission":false}),
+    ));
+    let after = snapshot(&hub, &id, &token);
+    assert_eq!(after["status"], "dreaming");
+    assert_eq!(
+        after["lifecycle"]["maintenance"],
+        before["lifecycle"]["maintenance"]
+    );
+    assert_eq!(
+        after["lifecycle"]["revision"],
+        before["lifecycle"]["revision"]
+    );
+    assert_eq!(after["lifecycle"]["active_claims"], 0);
+}

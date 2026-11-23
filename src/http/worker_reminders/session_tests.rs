@@ -233,11 +233,17 @@ async fn real_session_probe_preserves_errors_and_does_not_consume_user_input() {
         .unwrap();
     assert!(!is_coordinator(&mismatch, &eligible[0]));
 
+    let pool = fixture
+        .broker
+        .test_register_identity(crate::broker::IDENTITY_RESOURCE, fixture.actor.clone())
+        .await;
+    let mut availability = pool_reply();
+    availability["structuredContent"]["value"]["client_id"] = json!(pool.client_id());
     let before = original();
     let (appended, operation) = tokio::time::timeout(Duration::from_secs(2), async {
         tokio::join!(
             append(&report, before.clone(), &eligible),
-            fixture.native_reply(pool_reply())
+            fixture.native_reply(availability)
         )
     })
     .await
@@ -256,7 +262,7 @@ async fn real_session_probe_preserves_errors_and_does_not_consume_user_input() {
     let notice = &appended["structuredContent"]["worker_reminders"][0];
     assert_eq!(notice["client_id"], fixture.session.client_id());
     assert_eq!(notice["agent_id"], binding.agent_id);
-    assert_eq!(notice["worker_client_id"], "b".repeat(64));
+    assert_eq!(notice["worker_client_id"], pool.client_id());
     assert_eq!(notice["standby"], 2);
     assert!(
         appended["structuredContent"]
