@@ -451,7 +451,22 @@ class DurableWait(Harness):
         return value
 
     def read_prompt(self, timer_id):
-        value = self.prompt(action="read", timer_id=timer_id, limit=4)
+        deadline = time.monotonic() + 5
+        while True:
+            value = self.prompt(action="read", timer_id=timer_id, limit=4)
+            if value.get("events"):
+                break
+            status = self.prompt(action="status", timer_id=timer_id)
+            visibility = status.get("schedule", {}).get("visibility")
+            self.record("prompt_visibility_observed", timer_id=timer_id,
+                        visibility=visibility, visibility_deferred=value.get("visibility_deferred"))
+            if (value.get("visibility_deferred") != 1
+                    or visibility not in {"queued", "in_progress", "recorded"}
+                    or time.monotonic() >= deadline):
+                raise AssertionError(
+                    f"original timer {timer_id} has no recorded visible event: {visibility}; "
+                    "no schedule, publication, or ACK was replayed")
+            time.sleep(0.05)
         self.check(value.get("ack_required") is True and len(value.get("events", [])) == 1,
                    "one timer retains one explicitly acknowledged pending event")
         event = value["events"][0]
@@ -492,11 +507,29 @@ class DurableWait(Harness):
         code = "await collab.bind(%s, %s); return null;" % (
             json.dumps(self.client_id),
             json.dumps({"agent_id": self.member["agent_id"], "token": self.member["token"]}))
-        outer = self.tool("code_mode", {"code": code, "timeout_ms": 10000})
-        hooks = outer.get("prompt_hooks", [])
-        matching = [hook for hook in hooks if hook.get("event", {}).get("timer_id") in self.timer_ids]
+        # Observe the original schedules while the native publisher owns a
+        # pending write. Reading never schedules, republishes, or acknowledges it.
+        deadline = time.monotonic() + 5
+        observed = {}
+        while set(observed) != set(self.timer_ids):
+            outer = self.tool("code_mode", {"code": code, "timeout_ms": 10000})
+            for hook in outer.get("prompt_hooks", []):
+                event = hook.get("event") if isinstance(hook, dict) else None
+                if isinstance(event, dict) and event.get("timer_id") in self.timer_ids:
+                    observed[event["timer_id"]] = hook
+            self.check(all(not item.get("user_messages") for item in mappings(self.last_public_reply)),
+                       "each timed-hook observation remains separate from human user_messages")
+            if set(observed) == set(self.timer_ids):
+                break
+            if time.monotonic() >= deadline:
+                states = {timer_id: self.prompt(action="status", timer_id=timer_id)
+                          for timer_id in self.timer_ids if timer_id not in observed}
+                raise AssertionError(
+                    f"original timed hooks remain unavailable: {states}; no schedule was replayed")
+            time.sleep(0.05)
+        matching = [observed[timer_id] for timer_id in self.timer_ids]
         self.check({hook["event"]["timer_id"] for hook in matching} == set(self.timer_ids),
-                   "a new bound HTTP response delivers both queued timed prompt hooks")
+                   "bound HTTP observations deliver both original queued timed prompt hooks")
         self.check(all(hook.get("provenance") == "agent_timer"
                        and hook.get("scope") == "native_connection"
                        and hook.get("client_id") == self.client_id

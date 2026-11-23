@@ -1326,7 +1326,7 @@ mod tests {
                     .prompts
                     .records
                     .values()
-                    .any(|record| record.pending.is_some())
+                    .any(|record| record.pending.is_some() && record.visibility() == "rejected")
                 {
                     break;
                 }
