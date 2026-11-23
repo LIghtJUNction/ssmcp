@@ -443,6 +443,10 @@ impl Runtime {
             .unwrap_or_else(|error| error.into_inner()) = hook;
     }
 
+    pub(crate) fn overview_jobs(&self) -> Value {
+        self.backend.overview_jobs()
+    }
+
     pub(crate) fn local_registry(&self) -> Arc<Registry> {
         self.registry.clone()
     }

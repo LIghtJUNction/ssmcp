@@ -9,6 +9,7 @@ pub mod gui;
 pub mod install;
 pub(crate) mod ipc;
 pub(crate) mod limits;
+pub mod overview;
 pub mod service;
 #[cfg(windows)]
 pub mod windows_service;

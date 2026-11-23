@@ -1003,6 +1003,37 @@ impl Shell {
             ),
         ]
     }
+    pub(crate) fn overview_jobs(&self) -> Value {
+        let mut jobs: Vec<_> = self.registry().jobs.values().cloned().collect();
+        let retained = jobs.len();
+        let running = jobs
+            .iter()
+            .filter(|job| job.id != "main" && job.state().running)
+            .count();
+        jobs.sort_unstable_by_key(|job| std::cmp::Reverse(job.timing.started));
+        let now = Instant::now();
+        let rows=jobs.into_iter().take(32).map(|job| {
+            let state=job.state();
+            let status=if state.running {"running"} else if state.cancelled {"cancelled"}
+                else if state.timed_out {"timed_out"} else if state.error.is_some() || state.exit_signal.is_some()
+                    || state.exit_code.is_some_and(|code|code!=0) {"failed"}
+                else if state.exit_code==Some(0) {"completed"} else {"unknown"};
+            json!({"job_id":job.id,"pid":job.pid,"pid_role":PID_ROLE,"state":status,
+                "running":state.running,"exit_code":state.exit_code,"exit_signal":state.exit_signal,
+                "cancelled":state.cancelled,"timed_out":state.timed_out,
+                "duration_ms":job.timing.elapsed_ms(state.finished.unwrap_or(now).into_std()).to_string(),
+                "mode":if job.terminal.is_some(){"pty"}else{"pipes"},
+                "scope":if job.creator.call.is_some(){"remote"}else{"local"},
+                "infrastructure":job.id=="main",
+                "cpu_us":state.usage.map(|usage|usage.cpu_us.to_string()),
+                "peak_rss_bytes":state.usage.map(|usage|usage.peak_rss_bytes.to_string()),
+                "output_omitted":true})
+        }).collect::<Vec<_>>();
+        json!({"jobs":rows,"retained":retained,"running_commands":running,
+            "limit":32,"has_more":retained>32,"argv_omitted":true,"output_omitted":true,
+            "artifact_paths_omitted":true,"measurements":"native_completed_job_usage_when_available"})
+    }
+
     pub(crate) fn local_command_stats(&self) -> LocalCommandStats {
         // Copy the bounded registry projection before inspecting job state.
         // This path never starts a process, samples disk, or increments counters.

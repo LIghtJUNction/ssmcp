@@ -97,6 +97,7 @@ Manage
   paths [NAME ...]             Show configuration and state paths without startup
   tools [status|check|update]    Inspect or update this client's tool repository
   sessions · attach · service  Saved and background sessions
+  overview                     Local sessions, agents, workers and commands
   computer                     Zuse CLI version and installation
   safety [status]              Show native filesystem safety coverage
   setup · ui · 007             Setup, appearance and recovery
@@ -134,6 +135,8 @@ Usage: ssmcp username@server [options]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
        ssmcp [options] [--server URL]
        ssmcp setup [--server URL] [--no-browser]
+       ssmcp overview [--json] [--watch]
+       ssmcp overview <show|state|jobs|exec|cancel|command> TARGET [arguments]
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
        ssmcp attach [process|thread] ID|N [--remote] [--read-only]
@@ -2236,6 +2239,9 @@ pub async fn run() -> crate::Result<()> {
     if args.first().is_some_and(|arg| arg == "update") {
         return update::run(args.into_iter().skip(1).collect()).await;
     }
+    if args.first().is_some_and(|arg| arg == "overview") {
+        return crate::session::overview::run(args.into_iter().skip(1).collect()).await;
+    }
     if args.first().is_some_and(|arg| arg == "gui") {
         return crate::session::gui::run(args.into_iter().skip(1).collect()).await;
     }
@@ -2428,6 +2434,21 @@ pub async fn run() -> crate::Result<()> {
             &format!("Live context unavailable: {error}"),
         );
     }
+    let mut foreground = if service.is_none() && !options.list_tools {
+        match crate::session::overview::Registration::open(options.metadata()?).await {
+            Ok(registration) => Some(registration),
+            Err(error) => {
+                render::status(
+                    "overview",
+                    "Unavailable",
+                    &format!("Local overview registration unavailable: {error}"),
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
     let mut attachment = if let Some(runner) = &service {
         Some(crate::session::attach::serve(runner.directory().to_path_buf(), None).await?)
     } else {
@@ -2549,7 +2570,9 @@ pub async fn run() -> crate::Result<()> {
             &options,
             &ui,
             service.as_ref(),
-            attachment.as_ref(),
+            attachment
+                .as_ref()
+                .or_else(|| foreground.as_ref().map(|value| value.handle())),
             attempt,
             &mut registered,
         )
@@ -2584,6 +2607,9 @@ pub async fn run() -> crate::Result<()> {
                 // Release the old service lease before the new runner opens it.
                 if let Some(handle) = attachment.take() {
                     handle.shutdown().await;
+                }
+                if let Some(registration) = foreground.take() {
+                    registration.shutdown().await;
                 }
                 drop(service.take());
                 if let Some(controller) = &options.worker_window {

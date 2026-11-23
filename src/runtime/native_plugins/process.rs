@@ -33,6 +33,10 @@ pub struct Process {
     harness: Option<crate::client::agent::Selection>,
 }
 impl Process {
+    pub(crate) fn overview_jobs(&self) -> Value {
+        self.shell.overview_jobs()
+    }
+
     pub(crate) fn local_command_stats(&self) -> shell::LocalCommandStats {
         self.shell.local_command_stats()
     }

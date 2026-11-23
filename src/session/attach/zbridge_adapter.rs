@@ -1,6 +1,7 @@
 //! Project Z frontends use the same protected local attach authority as the
 //! terminal. A lease is a host capability, never an account or agent identity.
 mod chat;
+mod execution;
 mod observation;
 mod remote;
 pub use observation::{EventObserver, MAX_OBSERVATION_MS};
@@ -277,12 +278,15 @@ impl Host for BoundHost<'_> {
                     commands.push(chat::command());
                 }
             }
+            resources.push(Resource { id:id("executions"),schema_version:1,
+                description:"The actual bounded native job registry, with argv, cwd, output and artifact paths omitted".into() });
             let workers = runtime.frontend_has_workers();
             if workers {
                 resources.push(Resource { id:id("workers"), schema_version:1,
                     description:"Actual worker registration and bounded station state; query offset and limit (1..32), with logs omitted".into() });
             }
             if mode == Mode::Control {
+                commands.extend(execution::commands());
                 commands.push(Command { id:id("terminal.write"),
                     description:"Write explicit UTF-8 input to one real terminal under the exclusive local input lease; never automatically retry a lost receipt".into(),
                     input_schema:json!({"type":"object","additionalProperties":false,
@@ -337,7 +341,12 @@ impl Host for BoundHost<'_> {
                         .unwrap_or_else(|error| error.into_inner())
                         .next;
                     json!({"backend_active":runtime.is_some(),"backend_generation":Counter(self.backend_generation),
-                        "native_capabilities":capabilities,"live_cursor":Counter(cursor),"retention":"live_process_memory"})
+                        "native_capabilities":capabilities,"live_cursor":Counter(cursor),"retention":"live_process_memory",
+                        "process_id":std::process::id(),"client_id":runtime.as_ref().and_then(|value|value.frontend_client_id())})
+                }
+                "executions" => {
+                    no_query(query)?;
+                    self.runtime()?.overview_jobs()
                 }
                 "terminals" => {
                     no_query(query)?;
@@ -477,6 +486,9 @@ impl Host for BoundHost<'_> {
                     runtime
                         .frontend_resize_workers(&args.pool_generation, usize::from(args.total))
                         .map_err(native)?
+                }
+                "exec.start" | "exec.cancel" => {
+                    execution::perform(self, &runtime, command.as_str(), arguments).await?
                 }
                 "chat.send" => chat::send(self, &runtime, arguments)?,
                 _ => {
