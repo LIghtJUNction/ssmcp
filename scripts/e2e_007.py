@@ -36,7 +36,7 @@ import e2e_account_relay as relay
 
 TOOLS = {
     "ssmcp.007.status", "ssmcp.007.list", "ssmcp.007.wake",
-    "ssmcp.007.close", "ssmcp.007.remove",
+    "ssmcp.007.recover", "ssmcp.007.close", "ssmcp.007.remove",
 }
 
 
@@ -68,6 +68,18 @@ class Socket(relay.WebSocket):
         self.client_pongs = 0
         self.silent = False
         self.accepted_at = time.monotonic()
+        # This protocol fixture checks bounded challenge consumption and the
+        # real client's identity continuity. Production signature verification
+        # is exercised by the Rust real-router acceptance tests, not mocked here.
+        self.proof = self.handler.device_proof
+
+    def device_id(self):
+        values = (self.state.origin, relay.IDENTITY["subject"], self.proof["public_key"])
+        message = b"ssmcp-device-id-v1\0"
+        for value in values:
+            encoded = value.encode()
+            message += len(encoded).to_bytes(8, "big") + encoded
+        return "dev_" + hashlib.sha256(message).hexdigest()
 
     def read(self):
         while True:
@@ -110,6 +122,7 @@ class Socket(relay.WebSocket):
                      "client_id": self.id, "login_code": "", "login_expires_in": 0}
             if self.hello["metadata"]["name"] != self.state.recovery_name:
                 ready["capabilities"] = list(self.state.capabilities)
+            ready.setdefault("capabilities", []).append("device_address_v1")
             self.send(ready)
             with self.state.lock:
                 self.state.sessions[self.id] = self
@@ -156,6 +169,8 @@ class Socket(relay.WebSocket):
                         result.put({"Err": "fixture connection closed"})
 
     def operation(self, operation, timeout=45):
+        if self.closed.is_set():
+            raise NativeFailure("fixture transport is offline; no operation was dispatched")
         with self.state.lock:
             self.sequence += 1
             identifier = self.sequence
@@ -173,7 +188,28 @@ class Socket(relay.WebSocket):
 
 
 class Handler(relay.Handler):
+    def do_POST(self):
+        if self.path != "/api/client/device/challenge":
+            return super().do_POST()
+        self.state.requests.append(("POST", self.path))
+        token = self.bearer()
+        size = int(self.headers.get("Content-Length", "0"))
+        if not 0 <= size <= 4096:
+            return self.respond(400, {"error": "invalid_challenge_body"})
+        self.rfile.read(size)
+        with self.state.lock:
+            self.state.challenge_attempts[token] = self.state.challenge_attempts.get(token, 0) + 1
+            if token in self.state.rejected:
+                return self.respond(self.state.rejected[token], {"error": "invalid_token"})
+            if not self.state.identity(token):
+                return self.respond(401, {"error": "invalid_token"})
+            nonce = secrets.token_hex(32)
+            self.state.challenges[nonce] = (token, time.monotonic() + 30)
+        return self.respond(200, {"format": "ssmcp-device-v1", "nonce": nonce, "expires_in": 30})
+
     def do_GET(self):
+        if self.bearer() in self.state.rejected:
+            return self.respond(self.state.rejected[self.bearer()], {"error": "invalid_token"})
         if self.path != "/api/client/connect":
             return super().do_GET()
         self.state.requests.append(("GET", self.path))
@@ -183,6 +219,21 @@ class Handler(relay.Handler):
             return self.respond(self.state.rejected[token], {"error": "invalid_token"})
         if not self.state.identity(token):
             return self.respond(401, {"error": "invalid_token"})
+        try:
+            header = self.headers["x-ssmcp-device-proof"]
+            assert header and len(header) <= 1024
+            proof = json.loads(base64.urlsafe_b64decode(header + "=" * (-len(header) % 4)))
+            assert set(proof) == {"version", "public_key", "session_key", "nonce", "signature"}
+            assert proof["version"] == 1
+            for name, size in (("public_key", 32), ("session_key", 32), ("nonce", 32), ("signature", 64)):
+                value = proof[name]
+                assert len(value) == size * 2 and value == value.lower() and len(bytes.fromhex(value)) == size
+            with self.state.lock:
+                challenge = self.state.challenges.pop(proof["nonce"], None)
+            assert challenge and challenge[0] == token and challenge[1] > time.monotonic()
+            self.device_proof = proof
+        except (AssertionError, KeyError, TypeError, ValueError):
+            return self.respond(401, {"error": "invalid_device_proof"})
         key = self.headers["Sec-WebSocket-Key"]
         accept = base64.b64encode(hashlib.sha1(
             (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()
@@ -217,6 +268,8 @@ class Fixture:
         shutil.copy2(binary, self.installed)
         self.state = relay.State()
         self.state.rejected = {}
+        self.state.challenges = {}
+        self.state.challenge_attempts = {}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
         self.server.state = self.state
@@ -233,6 +286,8 @@ class Fixture:
             key: value for key, value in os.environ.items()
             if not key.startswith("SSMCP_")
         }
+        user_home = root / "user-home"
+        user_home.mkdir(mode=0o700)
         minimal = root / "minimal-path"
         minimal.mkdir()
         for command in ("sh", "sleep", "systemctl", "systemd-run"):
@@ -243,6 +298,7 @@ class Fixture:
             PATH=str(minimal), SSMCP_007_HOME=str(self.home),
             SSMCP_SESSION_HOME=str(self.sessions),
             SSMCP_AUTH_HOME=str(self.auth),
+            HOME=str(user_home), USERPROFILE=str(user_home), ENV="/dev/null", BASH_ENV="/dev/null",
             XDG_CONFIG_HOME=str(root / "config"), NO_COLOR="1", TERM="dumb",
         )
         self.processes = []
@@ -261,11 +317,12 @@ class Fixture:
         with os.fdopen(descriptor, "w") as handle:
             json.dump(value, handle)
 
-    def write_credential(self):
+    def write_credential(self, subject=None):
         name = hashlib.sha256(self.state.origin.encode()).hexdigest() + ".json"
         self.private_json(self.auth / name, {
             "server": self.state.origin, "token": self.state.account_token,
-            "principal": relay.IDENTITY["principal"], "subject": relay.IDENTITY["subject"],
+            "principal": relay.IDENTITY["principal"],
+            "subject": relay.IDENTITY["subject"] if subject is None else subject,
             "expires_at": int(time.time()) + 3600,
         })
 
@@ -360,7 +417,7 @@ class Fixture:
         self.check(relay.descendants(self.zero.pid) == [], "idle 007 starts no relay child, PTY or tool backend")
         listed = connection.operation({"op": "list_tools", "cursor": None})
         self.check({item["name"] for item in listed["tools"]} == TOOLS,
-                   "007 exposes exactly five narrow recovery tools")
+                   "007 exposes exactly six narrow recovery tools")
         status = connection.tool("ssmcp.007.status", {})
         self.check(isinstance(status, dict), "007 status returns an object")
         if routing_only:
@@ -374,6 +431,10 @@ class Fixture:
                             "wake rejects traversal in session names")
         self.native_failure(connection, "ssmcp.007.wake", {"name": "escape", "cwd": ".."},
                             "wake rejects workspace traversal")
+        self.native_failure(connection, "ssmcp.007.recover", {
+            "name": "missing", "expected_device_id": connection.device_id(),
+            "expected_definition_id": "a" * 64, "command": ["sh"],
+        }, "guarded recovery rejects arbitrary command fields")
         (self.workspace / "escape").symlink_to(self.root)
         self.native_failure(connection, "ssmcp.007.wake", {"name": "escape", "cwd": "escape"},
                             "wake rejects an escaping cwd symlink")
@@ -381,9 +442,14 @@ class Fixture:
         self.check(connection.client_pings == 0, "007 relies on relay pings without a second heartbeat source")
 
         first_id = connection.id
+        first_device = connection.device_id()
+        first_session_key = connection.proof["session_key"]
         connection.close()
         connection = self.connected_zero(first_id)
         self.check(connection.id != first_id, "closed relay transport reconnects automatically")
+        self.check(connection.device_id() == first_device
+                   and connection.proof["session_key"] == first_session_key,
+                   "transport reconnect preserves the verified device and saved recovery session")
 
         cache = self.home / "state.json"
         saved_cache = self.home / "state.saved"
@@ -425,6 +491,49 @@ class Fixture:
             self.check(control_group != worker_group and ".service" in worker_group,
                        "the native worker has an independent systemd service cgroup")
         self.check(again.get("name", worker_name) == worker_name, "wake retry keeps the saved session identity")
+        expected = {
+            "name": worker_name, "expected_device_id": connection.device_id(),
+            "expected_definition_id": worker["definition_id"],
+        }
+        active = connection.tool("ssmcp.007.recover", expected)
+        self.check(active.get("recovery_state") == "already_active"
+                   and active.get("task_replay") == "never"
+                   and worker_identity(self.session_status(worker_name)) == worker_identity(worker),
+                   "guarded recovery observes an active original session without restarting or replaying it")
+        self.native_failure(connection, "ssmcp.007.recover", {
+            **expected, "expected_device_id": "dev_" + "0" * 64,
+        }, "guarded recovery refuses a different device")
+        self.native_failure(connection, "ssmcp.007.recover", {
+            **expected, "expected_definition_id": "0" * 64,
+        }, "guarded recovery refuses a replaced or unverified definition")
+
+        if not self.native_systemd:
+            # An owned no-watchdog session allows a real inactive-worker case
+            # without racing the independent supervisor's automatic retry.
+            offline_name = "recover-inactive"
+            self.cli("sessions", "create", offline_name, "--json", "--cwd", str(self.workspace),
+                     "--server", self.state.origin, "--no-watchdog")
+            self.names.add(offline_name)
+            original = self.worker_connected(offline_name)
+            original_pid, original_client = worker_identity(original)
+            self.check(original_pid in relay.descendants(self.manager.pid),
+                       "inactive-recovery test owns the exact worker it will stop")
+            os.kill(original_pid, signal.SIGTERM)
+            relay.wait_for(lambda: not self.session_status(offline_name).get("manager_active"),
+                           "owned no-watchdog worker exits", timeout=15)
+            stopped = self.session_status(offline_name)
+            self.check(not stopped["stop_requested"],
+                       "worker process exit does not invent a user stop request")
+            restored = connection.tool("ssmcp.007.recover", {
+                "name": offline_name, "expected_device_id": connection.device_id(),
+                "expected_definition_id": original["definition_id"],
+            })
+            renewed = self.worker_connected(offline_name)
+            self.check(restored.get("recovery_state") == "start_requested"
+                       and restored.get("executable_preserved") is True
+                       and renewed["definition_id"] == original["definition_id"]
+                       and worker_identity(renewed)[1] != original_client,
+                       "online 007 restores the exact inactive definition with its original executable")
 
         with self.state.lock:
             worker_socket = next(item for item in self.state.sessions.values()
@@ -441,10 +550,20 @@ class Fixture:
         marker_before = marker.stat().st_size
         self.zero.send_signal(signal.SIGTERM)
         self.zero.wait(timeout=10)
+        self.check(connection.closed.wait(5), "offline 007 has no live recovery transport")
+        try:
+            connection.tool("ssmcp.007.recover", expected)
+        except (NativeFailure, EOFError, OSError):
+            self.check(True, "offline recovery is a retained blocked outcome, never a fabricated success")
+        else:
+            raise AssertionError("offline 007 unexpectedly accepted recovery")
         preserved = self.worker_connected(worker_name)
         self.check(worker_identity(preserved) == worker_identity(worker),
                    "stopping 007 preserves the independent formal session")
         connection = self.start_zero()
+        self.check(connection.device_id() == first_device
+                   and connection.proof["session_key"] == first_session_key,
+                   "007 process restart retains its installation and saved-session identity")
         self.check(worker_identity(self.session_status(worker_name)) == worker_identity(worker),
                    "restarting 007 preserves the same formal-session process and connection")
         with self.state.lock:
@@ -477,6 +596,11 @@ class Fixture:
         closed = self.session_status(worker_name)
         self.check(not closed["manager_active"] and closed["stop_requested"],
                    "close persists stopped intent and confirms the worker stopped")
+        self.native_failure(connection, "ssmcp.007.recover", expected,
+                            "guarded recovery cannot clear an explicit user stop")
+        still_closed = self.session_status(worker_name)
+        self.check(not still_closed["manager_active"] and still_closed["stop_requested"],
+                   "refused recovery leaves the original stop marker and process state intact")
         connection.tool("ssmcp.007.wake", {"name": worker_name, "cwd": "child"})
         self.worker_connected(worker_name)
         self.check(True, "wake restarts an existing saved session while the installed client is broken")
@@ -493,16 +617,30 @@ class Fixture:
         old_token = self.state.account_token
         self.state.rejected[old_token] = 401
         old_id = connection.id
-        old_attempts = self.state.connect_attempts.get(old_token, 0)
+        old_attempts = self.state.challenge_attempts.get(old_token, 0)
         connection.close()
-        time.sleep(5)
-        attempts = self.state.connect_attempts.get(old_token, 0) - old_attempts
-        self.check(self.zero.poll() is None and 0 < attempts <= 5,
-                   "authorization refusal keeps 007 alive with bounded retries")
+        def authorization_paused():
+            try:
+                return json.loads((self.home / "state.json").read_text()).get("state") == "authorization_required"
+            except (FileNotFoundError, json.JSONDecodeError):
+                return False
+        relay.wait_for(authorization_paused, "007 pauses on revoked authorization", timeout=75)
+        attempts = self.state.challenge_attempts.get(old_token, 0) - old_attempts
+        self.check(self.zero.poll() is None and attempts == 1,
+                   "authorization refusal keeps 007 alive and pauses after one rejected challenge")
+        time.sleep(16)
+        self.check(self.state.challenge_attempts.get(old_token, 0) - old_attempts == 1,
+                   "authorization pause does not keep sending the revoked credential")
         self.state.account_token = "cl_" + secrets.token_hex(32)
+        self.write_credential(subject="456")
+        time.sleep(16)
+        self.check(self.state.challenge_attempts.get(self.state.account_token, 0) == 0
+                   and authorization_paused(),
+                   "a different saved account cannot silently resume the blocked recovery service")
         self.write_credential()
         connection = self.connected_zero(old_id, timeout=75)
-        self.check(True, "reconnection reloads repaired credentials from the private account store")
+        self.check(connection.device_id() == first_device,
+                   "explicit same-account reauthorization resumes the same verified device identity")
 
         removed = connection.tool("ssmcp.007.remove", {"name": recovery_name})
         self.check(removed.get("removed") is True,
@@ -682,6 +820,8 @@ def main():
                     if args.native_systemd else
                     "loopback synthetic account relay and independent private session manager"),
         "native_systemd_units_tested": args.native_systemd, "real_credentials_used": False,
+        "protocol_fixture_verifies_signatures": False,
+        "signature_verification_test": "wire::device_address::tests and real-router device acceptance",
         "routing_only": args.routing_only, "real_router": {"requested": fixture_binary is not None},
         "checks": [], "success": False,
     }
