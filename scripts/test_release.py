@@ -22,6 +22,30 @@ import bump_release
 import release
 
 
+class GuiWorkflowTests(unittest.TestCase):
+    def test_ios_selector_preserves_the_observed_simulator_identifier(self):
+        import re
+        import uuid
+        path = Path(__file__).resolve().parents[1] / ".github/workflows/gui-clients.yml"
+        workflow = path.read_text(encoding="utf-8")
+        start = workflow.index("          def select_simulator(devices, runtimes):")
+        end = workflow.index("          evidence = Path", start)
+        namespace = {"re": re, "uuid": uuid}
+        exec(compile(textwrap.dedent(workflow[start:end]), str(path), "exec"), namespace)
+        runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-0"
+        runtimes = {"runtimes": [{"identifier": runtime, "version": "26.0", "isAvailable": True}]}
+        observed = "87C401A1-6137-4CF6-8AAC-E12E171B64D7"
+        for identifier in (observed, observed.lower()):
+            with self.subTest(identifier=identifier):
+                device = {"name": "iPhone 16", "state": "Booted", "isAvailable": True,
+                          "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
+                          "udid": identifier}
+                malformed = dict(device, udid="not-a-device-identifier")
+                selected = namespace["select_simulator"](
+                    {"devices": {runtime: [malformed, device]}}, runtimes)
+                self.assertEqual(selected["udid"], identifier)
+
+
 class EventTests(unittest.TestCase):
     def test_only_version_tag_push_or_explicit_main_dispatch_can_publish(self):
         self.assertEqual(release.event_mode("push", "refs/tags/v0.5.0", {}), ("v0.5.0", False))
