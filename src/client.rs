@@ -2767,7 +2767,7 @@ struct RegisteredTransport {
     messaging_supported: bool,
     chat_disabled_acknowledged: bool,
     time_observation_supported: bool,
-    wait_display_supported: bool,
+    wait_display_version: Option<crate::wire::wait_display::Version>,
     openai_context_supported: bool,
     peer_ports: Option<&'static str>,
     version_notice: Option<crate::wire::versions::Notice>,
@@ -2829,6 +2829,7 @@ async fn register_transport(
     }
     let mut transport_command = command();
     let timing_offer = relay::timing_offer(&transport_command);
+    let durable_wait_offer = relay::durable_wait_display_offer(&transport_command);
     let peer_offer = relay::peer_ports_offer(&transport_command);
     let openai_context_offer = relay::openai_context_offer(&transport_command);
     let mut process = transport_command.spawn().map_err(|error| {
@@ -2921,7 +2922,7 @@ async fn register_transport(
                     && notice.valid()
             }),
             relay::negotiated_timing(timing_offer, &capabilities).0,
-            relay::negotiated_timing(timing_offer, &capabilities).1,
+            relay::negotiated_wait_display(timing_offer.1, durable_wait_offer, &capabilities),
             relay::negotiated_peer_ports(peer_offer, &capabilities),
             openai_context_offer
                 && capabilities
@@ -2968,7 +2969,7 @@ async fn register_transport(
         messaging_supported,
         version_notice,
         time_observation_supported,
-        wait_display_supported,
+        wait_display_version,
         peer_ports,
         openai_context_supported,
         chat_disabled_acknowledged,
@@ -3004,7 +3005,7 @@ async fn register_transport(
         messaging_supported,
         chat_disabled_acknowledged,
         time_observation_supported,
-        wait_display_supported,
+        wait_display_version,
         peer_ports,
         openai_context_supported,
         version_notice,
@@ -3108,14 +3109,17 @@ impl Transport<'_> {
         }
     }
 
-    fn timing_support(&self, acknowledged: (bool, bool)) -> (bool, bool) {
+    fn timing_support(
+        &self,
+        acknowledged: (bool, Option<crate::wire::wait_display::Version>),
+    ) -> (bool, Option<crate::wire::wait_display::Version>) {
         match self {
             Self::Account { .. } => acknowledged,
             // The private host and native runtime are compiled into this same
             // process, including the passive time-only delivery policy. Local
             // OAuth still has no account identity for public typed awaits.
             #[cfg(target_os = "linux")]
-            Self::Local(_) => (true, false),
+            Self::Local(_) => (true, None),
         }
     }
 
@@ -3393,14 +3397,14 @@ async fn connect_inner(
         messaging_supported,
         chat_disabled_acknowledged: _,
         time_observation_supported,
-        wait_display_supported,
+        wait_display_version,
         peer_ports,
         openai_context_supported,
         version_notice,
     } = registration;
     let peer_ports = crate::peer_port::PeerPorts::from_env(peer_ports, &client_id)?;
-    let (time_observation_supported, wait_display_supported) =
-        transport.timing_support((time_observation_supported, wait_display_supported));
+    let (time_observation_supported, wait_display_version) =
+        transport.timing_support((time_observation_supported, wait_display_version));
     let github_auth = !metadata.allow.is_empty();
     let login_received_at = std::time::Instant::now();
     if let Some(worker) = options.worker {
@@ -3499,7 +3503,7 @@ async fn connect_inner(
     )
     .and_then(|runtime| {
         runtime.bind_client_id(&client_id)?;
-        runtime.configure_timing(time_observation_supported, wait_display_supported)?;
+        runtime.configure_timing_version(time_observation_supported, wait_display_version)?;
         runtime.configure_chat(chat_enabled)?;
         if let Some(worker) = options.worker {
             runtime.configure_workers(worker, &options.chat.agent)?;

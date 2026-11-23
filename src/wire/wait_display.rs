@@ -5,6 +5,95 @@ use super::ControlAttribution;
 use serde::{Deserialize, Serialize};
 
 pub const CAPABILITY: &str = "wait_display_v3";
+pub const DURABLE_CAPABILITY: &str = "wait_display_v4";
+pub const MAX_LIFETIME_MS: u64 = 86_400_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Version {
+    V3,
+    V4,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DurableState {
+    Waiting,
+    Cached,
+    Acknowledged,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DurableStatus {
+    Ready,
+    TimedOut,
+    Cancelled,
+    Unauthorized,
+    UnknownTarget,
+    Unavailable,
+    Busy,
+}
+
+/// Metadata only. A retrieval timestamp describes a server-side attempt, not
+/// evidence that a remote client received a response. Only cursor ACK is explicit.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DurableObservation {
+    pub state: DurableState,
+    pub lifetime_ms: u64,
+    pub read_window_ms: u64,
+    pub started_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_read_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_read_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acknowledged_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_until_ms: Option<u64>,
+    pub elapsed_total_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_lag_ms: Option<u64>,
+    pub read_windows: u64,
+    pub replay_count: u64,
+    pub cursor: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_status: Option<DurableStatus>,
+}
+
+impl DurableStatus {
+    pub(crate) fn outcome(self) -> Outcome {
+        match self {
+            Self::Ready => Outcome::Triggered,
+            Self::TimedOut => Outcome::WindowExpired,
+            Self::Cancelled => Outcome::ObservationStopped,
+            _ => Outcome::Unknown,
+        }
+    }
+}
+
+impl DurableObservation {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        let terminal = self.state != DurableState::Waiting;
+        if !(1_000..=MAX_LIFETIME_MS).contains(&self.lifetime_ms)
+            || !(1_000..=MAX_WAIT_MS).contains(&self.read_window_ms)
+            || self.cursor != u64::from(terminal)
+            || terminal != self.completed_at_ms.is_some()
+            || terminal != self.result_status.is_some()
+            || terminal != self.retained_until_ms.is_some()
+            || (self.state == DurableState::Acknowledged) != self.acknowledged_at_ms.is_some()
+            || self.first_read_at_ms.is_some() != self.last_read_at_ms.is_some()
+            || self.first_read_at_ms.is_some() != self.delivery_lag_ms.is_some()
+            || (!terminal && self.first_read_at_ms.is_some())
+            || self.replay_count > self.read_windows
+        {
+            return Err("invalid durable wait metadata".into());
+        }
+        Ok(())
+    }
+}
 /// The relay has actual time-only delivery guards, including internal probes.
 pub const TIME_CAPABILITY: &str = "time_observation_v2";
 pub const MAX_ACTIVE: usize = 32;
@@ -74,6 +163,9 @@ pub struct Observation {
     pub elapsed_ms: u64,
     /// The current public-await observation budget, not a predicted job finish.
     pub remaining_ms: u64,
+    /// Present only after explicit wait_display_v4 negotiation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub durable: Option<DurableObservation>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,6 +179,10 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        self.validate_for(Version::V3)
+    }
+
+    pub(crate) fn validate_for(&self, version: Version) -> Result<(), String> {
         if self.revision == 0 || self.active.len() > MAX_ACTIVE || self.recent.len() > MAX_ACTIVE {
             return Err("invalid wait display revision or capacity".into());
         }
@@ -98,6 +194,25 @@ impl Snapshot {
             .map(|entry| (true, entry))
             .chain(self.recent.iter().map(|entry| (false, entry)))
         {
+            let bound = if let Some(durable) = &entry.durable {
+                if version != Version::V4 {
+                    return Err("durable wait display was not negotiated".into());
+                }
+                durable.validate()?;
+                if entry.window_ms != durable.lifetime_ms
+                    || entry.elapsed_ms != durable.elapsed_total_ms
+                    || active != (durable.state == DurableState::Waiting)
+                    || entry.outcome
+                        != durable
+                            .result_status
+                            .map_or(Outcome::Pending, DurableStatus::outcome)
+                {
+                    return Err("inconsistent durable wait observation".into());
+                }
+                MAX_LIFETIME_MS
+            } else {
+                MAX_WAIT_MS
+            };
             if entry.wait_id.is_empty()
                 || entry.wait_id.len() > 128
                 || !entry
@@ -108,10 +223,10 @@ impl Snapshot {
                 || !matches!(entry.operation.as_str(), "await" | "events.wait")
                 || entry.targets.is_empty()
                 || entry.targets.len() > MAX_TARGETS
-                || entry.elapsed_ms > MAX_WAIT_MS
-                || entry.remaining_ms > MAX_WAIT_MS
+                || (entry.durable.is_none() && entry.elapsed_ms > MAX_WAIT_MS)
+                || entry.remaining_ms > bound
                 || entry.window_ms == 0
-                || entry.window_ms > MAX_WAIT_MS
+                || entry.window_ms > bound
                 || entry.remaining_ms > entry.window_ms
                 || entry.target_labels.len() != entry.targets.len()
                 || entry.target_details.len() != entry.targets.len()
@@ -167,6 +282,7 @@ mod tests {
             window_ms: 20_000,
             elapsed_ms: 0,
             remaining_ms: 20_000,
+            durable: None,
         }
     }
 
@@ -255,5 +371,66 @@ mod tests {
         bad["recent"][0]["message_body"] = serde_json::json!("private text");
         assert!(serde_json::from_value::<Snapshot>(bad).is_err());
         assert_eq!(CAPABILITY, "wait_display_v3");
+    }
+
+    #[test]
+    fn durable_metadata_requires_v4_and_keeps_real_elapsed_and_read_receipts_distinct() {
+        let mut entry = observation();
+        assert!(
+            serde_json::to_value(&entry)
+                .unwrap()
+                .get("durable")
+                .is_none()
+        );
+        entry.window_ms = 600_000;
+        entry.elapsed_ms = 95_000;
+        entry.remaining_ms = 505_000;
+        entry.durable = Some(DurableObservation {
+            state: DurableState::Waiting,
+            lifetime_ms: 600_000,
+            read_window_ms: 1000,
+            started_at_ms: 1_000_000,
+            completed_at_ms: None,
+            first_read_at_ms: None,
+            last_read_at_ms: None,
+            acknowledged_at_ms: None,
+            retained_until_ms: None,
+            elapsed_total_ms: 95_000,
+            delivery_lag_ms: None,
+            read_windows: 3,
+            replay_count: 0,
+            cursor: 0,
+            result_status: None,
+        });
+        let mut snapshot = Snapshot {
+            revision: 1,
+            active: vec![entry],
+            recent: vec![],
+        };
+        assert!(snapshot.validate().is_err());
+        snapshot.validate_for(Version::V4).unwrap();
+        let mut finished = snapshot.active.pop().unwrap();
+        finished.outcome = Outcome::Triggered;
+        let durable = finished.durable.as_mut().unwrap();
+        durable.state = DurableState::Cached;
+        durable.completed_at_ms = Some(1_095_000);
+        durable.retained_until_ms = Some(2_895_000);
+        durable.result_status = Some(DurableStatus::Ready);
+        durable.cursor = 1;
+        snapshot.recent.push(finished);
+        snapshot.validate_for(Version::V4).unwrap();
+        let durable = snapshot.recent[0].durable.as_mut().unwrap();
+        durable.first_read_at_ms = Some(1_097_000);
+        durable.last_read_at_ms = durable.first_read_at_ms;
+        durable.delivery_lag_ms = Some(2000);
+        durable.state = DurableState::Acknowledged;
+        durable.acknowledged_at_ms = Some(1_098_000);
+        snapshot.validate_for(Version::V4).unwrap();
+        assert_eq!(snapshot.recent[0].elapsed_ms, 95_000);
+        let mut bad = serde_json::to_value(&snapshot).unwrap();
+        bad["recent"][0]["durable"]["body"] = serde_json::json!("private");
+        assert!(serde_json::from_value::<Snapshot>(bad).is_err());
+        snapshot.recent[0].durable.as_mut().unwrap().cursor = 0;
+        assert!(snapshot.validate_for(Version::V4).is_err());
     }
 }

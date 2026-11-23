@@ -75,12 +75,13 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
         .env(
             "SSMCP_RELAY_CAPABILITIES",
             format!(
-                "{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{}",
                 crate::wire::SESSION_ACCESS_CAPABILITY,
                 crate::wire::CONTROL_ATTRIBUTION_CAPABILITY,
                 crate::wire::messages::CAPABILITY,
                 crate::wire::versions::CAPABILITY,
                 crate::wire::wait_display::CAPABILITY,
+                crate::wire::wait_display::DURABLE_CAPABILITY,
                 crate::wire::wait_display::TIME_CAPABILITY,
                 crate::wire::openai::CAPABILITY
             ),
@@ -192,6 +193,35 @@ pub(super) fn negotiated_timing(offer: (bool, bool), capabilities: &[String]) ->
     )
 }
 
+pub(super) fn durable_wait_display_offer(command: &Command) -> bool {
+    parent_offer(command).is_some_and(|offer| {
+        offer
+            .split(',')
+            .any(|value| value.trim() == crate::wire::wait_display::DURABLE_CAPABILITY)
+    })
+}
+
+pub(super) fn negotiated_wait_display(
+    legacy_offer: bool,
+    durable_offer: bool,
+    capabilities: &[String],
+) -> Option<crate::wire::wait_display::Version> {
+    use crate::wire::wait_display::{CAPABILITY, DURABLE_CAPABILITY, Version};
+    let has = |name| capabilities.iter().any(|value| value == name);
+    if !has(crate::wire::SESSION_ACCESS_CAPABILITY)
+        || !has(crate::wire::CONTROL_ATTRIBUTION_CAPABILITY)
+    {
+        return None;
+    }
+    if durable_offer && has(DURABLE_CAPABILITY) {
+        Some(Version::V4)
+    } else if legacy_offer && has(CAPABILITY) {
+        Some(Version::V3)
+    } else {
+        None
+    }
+}
+
 fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
     let offer = parent_offer.filter(|offer| offer.len() <= 256)?;
     let capabilities: Vec<_> = offer.split(',').map(str::trim).collect();
@@ -203,6 +233,7 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::messages::CAPABILITY
                 | crate::wire::versions::CAPABILITY
                 | crate::wire::wait_display::CAPABILITY
+                | crate::wire::wait_display::DURABLE_CAPABILITY
                 | crate::wire::wait_display::TIME_CAPABILITY
                 | crate::wire::CHAT_DISABLED_CAPABILITY
                 | crate::wire::openai::CAPABILITY
@@ -646,6 +677,40 @@ mod tests {
         ] {
             assert!(websocket_url(origin).is_err(), "{origin}");
         }
+    }
+
+    #[test]
+    fn durable_display_requires_its_own_offer_and_echo_and_preserves_v3_fallback() {
+        use crate::wire::wait_display::{CAPABILITY, DURABLE_CAPABILITY, Version};
+        let mut parent = command(Path::new("/fixture/ssmcp"), "https://fixture.test", None);
+        assert!(durable_wait_display_offer(&parent));
+        let mut caps: Vec<String> = [
+            crate::wire::SESSION_ACCESS_CAPABILITY,
+            crate::wire::CONTROL_ATTRIBUTION_CAPABILITY,
+            CAPABILITY,
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(
+            negotiated_wait_display(true, true, &caps),
+            Some(Version::V3)
+        );
+        assert_eq!(negotiated_wait_display(false, true, &caps), None);
+        caps.push(DURABLE_CAPABILITY.into());
+        assert_eq!(
+            negotiated_wait_display(true, true, &caps),
+            Some(Version::V4)
+        );
+        assert_eq!(
+            negotiated_wait_display(true, false, &caps),
+            Some(Version::V3)
+        );
+        assert_eq!(negotiated_wait_display(false, false, &caps), None);
+        assert_eq!(negotiated_wait_display(true, true, &caps[2..]), None);
+        assert!(access_capability_header(parent_offer(&parent).as_deref()).is_some());
+        restrict_to_self(&mut parent);
+        assert!(!durable_wait_display_offer(&parent));
     }
 
     #[test]

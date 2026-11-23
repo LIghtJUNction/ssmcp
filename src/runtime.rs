@@ -476,6 +476,23 @@ impl Runtime {
         Ok(())
     }
 
+    pub(crate) fn configure_timing_version(
+        &self,
+        time_tools: bool,
+        version: Option<crate::wire::wait_display::Version>,
+    ) -> Result<(), String> {
+        self.time.configure_version(time_tools, version);
+        self.registry.replace(
+            Provider::Time,
+            if time_tools {
+                time::tools()
+            } else {
+                Vec::new()
+            },
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn wait_display(
         &self,
         snapshot: crate::wire::wait_display::Snapshot,

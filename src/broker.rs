@@ -1344,9 +1344,11 @@ impl Broker {
         let native_messages =
             registration.is_some() && peer.as_ref().is_some_and(|peer| peer.native_messages);
         let version_notice_supported = peer.as_ref().is_some_and(|peer| peer.version_notice);
-        let wait_display_supported = access_supported
-            && control_attribution
-            && peer.as_ref().is_some_and(|peer| peer.wait_display);
+        let wait_display_version = peer
+            .as_ref()
+            .and_then(|peer| peer.wait_display)
+            .filter(|_| access_supported && control_attribution);
+        let wait_display_supported = wait_display_version.is_some();
         let time_observation_supported = access_supported
             && control_attribution
             && peer.as_ref().is_some_and(|peer| peer.time_observation);
@@ -1391,8 +1393,14 @@ impl Broker {
         if version_notice_supported {
             capabilities.push(wire::versions::CAPABILITY.into());
         }
-        if wait_display_supported {
-            capabilities.push(wire::wait_display::CAPABILITY.into());
+        if let Some(version) = wait_display_version {
+            capabilities.push(
+                match version {
+                    wire::wait_display::Version::V3 => wire::wait_display::CAPABILITY,
+                    wire::wait_display::Version::V4 => wire::wait_display::DURABLE_CAPABILITY,
+                }
+                .into(),
+            );
         }
         if time_observation_supported {
             capabilities.push(wire::wait_display::TIME_CAPABILITY.into());
@@ -1444,7 +1452,7 @@ impl Broker {
                 },
                 sender,
                 reports,
-                wait_display: wait_display::Hub::new(wait_display_supported),
+                wait_display: wait_display::Hub::new_version(wait_display_version),
                 slots: Semaphore::new(wire::MAX_INFLIGHT),
                 alive: AtomicBool::new(true),
                 ssh_user: user.clone(),

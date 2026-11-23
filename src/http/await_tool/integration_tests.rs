@@ -1,6 +1,7 @@
 //! Real in-memory broker identities, memberships and queues. No external model,
 //! installed client, or other person's inbox participates in these fixtures.
 use super::*;
+mod durable_tests;
 use crate::{
     identity::Identity,
     wire::{SteeringCommand, SteeringState},

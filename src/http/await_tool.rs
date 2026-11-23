@@ -25,11 +25,16 @@ const MAX_ACTOR_RECORDS: usize = 32;
 const MAX_ACTIVE_PER_MEMBER: usize = 4;
 const MAX_ACTIVE_PER_CONNECTION: usize = 32;
 const RETAIN_FOR: Duration = Duration::from_secs(300);
+mod durable;
 
 pub(crate) fn limits() -> Value {
     json!({"public_tool":"await","code_mode_helper":"waitFor","max_targets":MAX_TARGETS,
         "min_wait_ms":1000,"max_wait_ms":MAX_OBSERVATION_WAIT_MS,"max_records":MAX_RECORDS,
         "max_records_per_actor":MAX_ACTOR_RECORDS,"retention_ms":RETAIN_FOR.as_millis(),
+        "max_lifetime_ms":crate::wire::wait_display::MAX_LIFETIME_MS,
+        "durable_retention_ms":durable::RETAIN_FOR.as_millis(),
+        "durable_requires_request_id":true,"durable_terminal_cursor":1,
+        "durable_targets":["exec","job","worker_result","agent_status","agent_messages","event"],
         "max_active_per_member":MAX_ACTIVE_PER_MEMBER,"max_active_per_connection":MAX_ACTIVE_PER_CONNECTION,
         "modes":["any","all"],"targets":["exec","job","agent_status","agent_messages","worker_result","worker_assignment","event","user_input"],
         "server_issued_wait_id":true,"cancel_changes_target":false,"acknowledges_inbox":false,
@@ -52,6 +57,8 @@ enum Op {
     #[default]
     Wait,
     Cancel,
+    List,
+    Status,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -129,6 +136,10 @@ pub(super) struct Arguments {
     #[serde(default)]
     window_ms: Option<u64>,
     #[serde(default)]
+    lifetime_ms: Option<u64>,
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(default)]
     after: Option<u64>,
     #[serde(default)]
     agent: Option<Agent>,
@@ -169,9 +180,22 @@ impl Arguments {
             .is_some_and(|ms| !(1_000..=MAX_OBSERVATION_WAIT_MS).contains(&ms))
             || args.after.is_some_and(|after| after > 1)
             || (args.after.is_some() && (args.wait_id.is_none() || args.op != Op::Wait))
-            || (args.window_ms.is_some() && args.op == Op::Cancel)
+            || (args.window_ms.is_some() && args.op != Op::Wait)
         {
             return Err("invalid await observation window or result cursor".into());
+        }
+        if args
+            .request_id
+            .as_deref()
+            .is_some_and(|id| !identifier(id, 128))
+            || args.lifetime_ms.is_some_and(|ms| {
+                !(1_000..=crate::wire::wait_display::MAX_LIFETIME_MS).contains(&ms)
+            })
+            || args.lifetime_ms.is_some() != args.request_id.is_some()
+            || (args.lifetime_ms.is_some()
+                && (args.op != Op::Wait || args.wait_id.is_some() || args.window_ms.is_none()))
+        {
+            return Err("durable creation requires request_id, window_ms and lifetime_ms in 1000..=86400000; resume uses only wait_id".into());
         }
         if args.agent.as_ref().is_some_and(|agent| {
             !identifier(&agent.id, 64)
@@ -184,9 +208,15 @@ impl Arguments {
             );
         }
         match (&args.wait_id, &args.targets, args.op) {
-            (Some(_), None, _) if args.mode.is_none() => {},
+            (None, None, Op::List) if args.mode.is_none() => {},
+            (Some(_), None, Op::Wait | Op::Cancel | Op::Status) if args.mode.is_none() => {},
             (None, Some(targets), Op::Wait) if (1..=MAX_TARGETS).contains(&targets.len()) => {
                 for (index, target) in targets.iter().enumerate() {
+                    if args.lifetime_ms.is_some()
+                        && matches!(target, Target::UserInput { .. } | Target::WorkerAssignment { .. } | Target::Finish { .. })
+                    {
+                        return Err("durable waits accept passive targets only; user_input and worker_assignment retain their original transaction".into());
+                    }
                     if targets[..index].contains(target) {
                         return Err("await targets must be distinct".into());
                     }
@@ -295,11 +325,14 @@ struct Actor {
 }
 impl Actor {
     fn same(&self, other: &Self) -> bool {
+        self.same_identity(other) && Weak::ptr_eq(&self.connection, &other.connection)
+    }
+
+    fn same_identity(&self, other: &Self) -> bool {
         self.user == other.user
             && self.owner == other.owner
             && self.client_id == other.client_id
             && self.agent_id == other.agent_id
-            && Weak::ptr_eq(&self.connection, &other.connection)
     }
 }
 
@@ -326,9 +359,24 @@ struct Record {
     acknowledged: AtomicBool,
     snapshot_overflow: AtomicBool,
     observation_state: Mutex<ObservationState>,
+    durable: Option<durable::Observation>,
 }
 
 impl Record {
+    fn retained(&self, now: Instant) -> bool {
+        if self.active.load(Ordering::Acquire) {
+            return true;
+        }
+        if let Some(durable) = &self.durable {
+            return durable.retained(now);
+        }
+        self.active.load(Ordering::Acquire)
+            || self.awaiting_delivery()
+            || now
+                .saturating_duration_since(*self.touched.lock().unwrap_or_else(|e| e.into_inner()))
+                < RETAIN_FOR
+    }
+
     fn awaiting_delivery(&self) -> bool {
         self.delivery_run
             .lock()
@@ -425,12 +473,7 @@ impl Registry {
     ) -> Result<Arc<Record>, (Status, &'static str)> {
         let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
-        records.retain(|_, record| {
-            record.active.load(Ordering::Acquire)
-                || record.awaiting_delivery()
-                || now.duration_since(*record.touched.lock().unwrap_or_else(|e| e.into_inner()))
-                    < RETAIN_FOR
-        });
+        records.retain(|_, record| record.retained(now));
         if let Some(id) = &args.wait_id {
             let record = records
                 .get(id)
@@ -441,24 +484,47 @@ impl Registry {
             *record.touched.lock().unwrap_or_else(|e| e.into_inner()) = now;
             return Ok(record.clone());
         }
+        if let Some(request_id) = &args.request_id {
+            if let Some(record) = records.values().find(|record| {
+                record.actor.same_identity(&actor)
+                    && record
+                        .durable
+                        .as_ref()
+                        .is_some_and(|value| &value.request_id == request_id)
+            }) {
+                if !record.actor.same(&actor) {
+                    return Err((Status::Unauthorized, "await_connection_changed"));
+                }
+                if !record
+                    .durable
+                    .as_ref()
+                    .expect("durable request")
+                    .matches(args)
+                {
+                    return Err((Status::Unavailable, "await_request_conflict"));
+                }
+                return Ok(record.clone());
+            }
+        }
         let at_capacity = |records: &HashMap<String, Arc<Record>>| {
             records.len() >= MAX_RECORDS
                 || records
                     .values()
-                    .filter(|record| record.actor.same(&actor))
+                    .filter(|record| record.actor.same_identity(&actor))
                     .count()
                     >= MAX_ACTOR_RECORDS
         };
         if at_capacity(&records) {
             let actor_full = records
                 .values()
-                .filter(|record| record.actor.same(&actor))
+                .filter(|record| record.actor.same_identity(&actor))
                 .count()
                 >= MAX_ACTOR_RECORDS;
             let victim = records
                 .values()
                 .filter(|record| {
                     !record.active.load(Ordering::Acquire)
+                        && record.durable.is_none()
                         && !record.awaiting_delivery()
                         && !record.has_unacknowledged_result()
                         && record.terminal.load(Ordering::Acquire)
@@ -497,6 +563,7 @@ impl Registry {
             acknowledged: AtomicBool::new(false),
             snapshot_overflow: AtomicBool::new(false),
             observation_state: Mutex::new(ObservationState::Created),
+            durable: args.lifetime_ms.map(|_| durable::Observation::new(args)),
         });
         records.insert(id, record.clone());
         Ok(record)
@@ -1199,6 +1266,9 @@ pub(super) async fn wait(
             ));
         }
     };
+    if args.op == Op::List {
+        return durable::list(&scope).await;
+    }
     if !scope.session.chat_enabled()
         && args
             .targets
@@ -1219,6 +1289,12 @@ pub(super) async fn wait(
             ));
         }
     };
+    if record.durable.is_some() {
+        return durable::wait(scope, record, args).await;
+    }
+    if args.op == Op::Status {
+        return Err("await status metadata is available for durable waits only".into());
+    }
     let mut results: Vec<_> = record.targets.iter().map(TargetResult::pending).collect();
     if args.op == Op::Cancel {
         broker.awaiting.cancel(&record);
@@ -1668,13 +1744,27 @@ async fn response_events_authorized(
     client_id: &str,
     value: &Value,
 ) -> bool {
-    let subscriptions: Vec<_> = value["results"]
+    let mut subscriptions: Vec<_> = value["results"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|result| result["target"]["type"] == "event" && result.get("data").is_some())
         .filter_map(|result| result["target"]["subscription_id"].as_str())
         .collect();
+    // Durable status/list receipts also recheck their declared subscriptions
+    // after the final asynchronous summary probe, despite containing no bodies.
+    for receipt in std::iter::once(value).chain(value["waits"].as_array().into_iter().flatten()) {
+        subscriptions.extend(
+            receipt["targets"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|target| target["type"] == "event")
+                .filter_map(|target| target["subscription_id"].as_str()),
+        );
+    }
+    subscriptions.sort_unstable();
+    subscriptions.dedup();
     if subscriptions.is_empty() {
         return true;
     }
@@ -1742,6 +1832,11 @@ fn response_authorized(report: &CodeRunReport, client_id: &str) -> bool {
 fn withhold(value: &mut Value) {
     value["status"] = json!("unauthorized");
     value["continue_wait"] = json!(false);
+    if let Some(fields) = value.as_object_mut() {
+        for key in ["waits", "metadata", "targets", "request_id"] {
+            fields.remove(key);
+        }
+    }
     if let Some(results) = value["results"].as_array_mut() {
         for result in results {
             result["status"] = json!("unauthorized");
@@ -1913,16 +2008,19 @@ pub(super) fn tool() -> Value {
                 {"type":"object","additionalProperties":false,"required":["type","subscription_id"],"properties":{"type":{"const":"event"},"subscription_id":{"type":"string","minLength":1,"maxLength":128},"limit":{"type":"integer","minimum":1,"maximum":64,"default":32}}},
                 {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"user_input"},"reason":{"type":"string","minLength":1,"maxLength":512},"notify":{"type":"boolean","default":true}}},
     ]);
-    json!({"name":"await","description":format!("Wait on typed execution jobs, relay jobs, worker results, agent status or inbox messages, event subscriptions, or user input without occupying a JavaScript worker. Authenticate the current participant with collab credentials. Create with targets; resume/cancel with the server-issued wait_id only. Timeout is bounded to 1000..{MAX_OBSERVATION_WAIT_MS}ms. Cancellation stops observation only: it never kills a job or acknowledges messages or event subscriptions. any returns when one target is ready; all requires all ready; explicit target failures return immediately with every target represented. Pending entries in an any response were not resolved. Worker targets require window_ms; worker_assignment and user_input must each be single-target waits. Only outer user_wait received plus matching user_messages proves user-input delivery."),
+    json!({"name":"await","description":format!("Wait on typed execution jobs, relay jobs, worker results, agent status or inbox messages, event subscriptions, or user input without occupying a JavaScript worker. Authenticate the current participant with collab credentials. Create with targets; resume/cancel with the server-issued wait_id only. Read windows are bounded to 1000..{MAX_OBSERVATION_WAIT_MS}ms. For a server-owned passive observer, create with lifetime_ms (1000..86400000), request_id and window_ms. Same request_id with the same normalized targets/mode/lifetime returns the same wait_id even after a lost response; read budgets may change. HTTP/code_mode cancellation stops only that read window. Every terminal outcome is cached for at least 30 minutes with cursor 1; after:1 acknowledges only that frozen snapshot. op:list lists owned durable metadata and op:status reads metadata for one wait_id without reading or acknowledging bodies. Cancellation stops observation only: it never kills a job or acknowledges messages or event subscriptions. any returns when one target is ready; all requires all ready; explicit target failures return immediately with every target represented. Unknown or unavailable outcomes never restart a target. Worker targets require window_ms; worker_assignment and user_input must each be single-target waits and cannot use lifetime_ms. Only outer user_wait received plus matching user_messages proves user-input delivery."),
         "inputSchema":{"type":"object","additionalProperties":false,"required":["client_id"],"properties":{
-            "client_id":{"type":"string","minLength":1,"maxLength":64},"op":{"enum":["wait","cancel"],"default":"wait"},
+            "client_id":{"type":"string","minLength":1,"maxLength":64},"op":{"enum":["wait","cancel","list","status"],"default":"wait"},
             "wait_id":{"type":"string","minLength":1,"maxLength":128},"mode":{"enum":["any","all"],"default":"any"},
             "timeout_ms":{"type":"integer","minimum":1000,"maximum":MAX_OBSERVATION_WAIT_MS,"default":20000},
             "window_ms":{"type":"integer","minimum":1000,"maximum":MAX_OBSERVATION_WAIT_MS,"description":"Opt into resumable observation windows of up to 55 seconds. Window expiry returns pending; targets are not cancelled."},
+            "lifetime_ms":{"type":"integer","minimum":1000,"maximum":crate::wire::wait_display::MAX_LIFETIME_MS,"description":"On creation only, keep one server-owned passive observer alive beyond caller cancellation; requires request_id and window_ms. Never accepted for user_input or worker_assignment."},
+            "request_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$","description":"Required with lifetime_ms for idempotent creation, private to this account/member/native connection. Reuse unchanged on a lost create response; changed targets/mode/lifetime are rejected."},
             "after":{"type":"integer","minimum":0,"maximum":1,"description":"On a resume, 0 retries the retained result and 1 acknowledges only this await snapshot. Inbox messages and event subscriptions require their own explicit acknowledgement."},
             "agent":{"type":"object","additionalProperties":false,"required":["id","token"],"properties":{"id":{"type":"string","minLength":1,"maxLength":64},"token":{"type":"string","minLength":64,"maxLength":64}}},
             "targets":{"type":"array","minItems":1,"maxItems":8,"items":{"oneOf":targets}}},"oneOf":[{"properties":{"op":{"const":"wait"}},"required":["targets"],"not":{"required":["wait_id"]}},
-                {"required":["wait_id"],"not":{"anyOf":[{"required":["targets"]},{"required":["mode"]}]}}]},
+                {"properties":{"op":{"enum":["wait","cancel","status"]}},"required":["wait_id"],"not":{"anyOf":[{"required":["targets"]},{"required":["mode"]},{"required":["lifetime_ms"]},{"required":["request_id"]}]}},
+                {"properties":{"op":{"const":"list"}},"required":["op"],"not":{"anyOf":[{"required":["wait_id"]},{"required":["targets"]},{"required":["mode"]},{"required":["window_ms"]},{"required":["after"]},{"required":["lifetime_ms"]},{"required":["request_id"]}]}}]},
         "annotations":{"readOnlyHint":false,"destructiveHint":false}})
 }
 
