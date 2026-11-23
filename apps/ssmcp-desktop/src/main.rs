@@ -19,6 +19,7 @@ struct Options {
     font: Option<String>,
     exit_after: Option<Duration>,
     first_frame_receipt: Option<PathBuf>,
+    frame_receipts: Option<PathBuf>,
 }
 
 fn options() -> Result<Option<Options>, String> {
@@ -72,9 +73,19 @@ fn options() -> Result<Option<Options>, String> {
                     .ok_or("--first-frame-receipt 需要一个不存在的文件路径。")?;
                 result.first_frame_receipt = Some(PathBuf::from(path));
             }
+            Some("--frame-receipts") => {
+                if result.frame_receipts.is_some() {
+                    return Err("只指定一个 --frame-receipts。".into());
+                }
+                let path = args
+                    .next()
+                    .filter(|value| !value.is_empty())
+                    .ok_or("--frame-receipts 需要一个不存在的文件路径。")?;
+                result.frame_receipts = Some(PathBuf::from(path));
+            }
             Some("--help" | "-h") => {
                 println!(
-                    "ssmcp-desktop [--session NAME | --directory PATH] [--control] [--font FAMILY]\n\n原生 Windows / Linux 客户端；默认只观察已有的 CLI 会话。\n--directory 使用显式提供的私有服务目录，不打印其内容。\n--exit-after-ms N 用于真实窗口的有界构建验收。\n--first-frame-receipt PATH 与有界验收一起使用，首次 present 返回后新建回执文件。"
+                    "ssmcp-desktop [--session NAME | --directory PATH] [--control] [--font FAMILY]\n\n原生 Windows / Linux 客户端；默认只观察已有的 CLI 会话。\n--directory 使用显式提供的私有服务目录，不打印其内容。\n--exit-after-ms N 用于真实窗口的有界构建验收。\n--first-frame-receipt PATH 与有界验收一起使用，首次 present 返回后新建回执文件。\n--frame-receipts PATH 记录最多 4096 次 present 回执，用于尺寸变化后的真实窗口验收。"
                 );
                 return Ok(None);
             }
@@ -86,6 +97,9 @@ fn options() -> Result<Option<Options>, String> {
     }
     if result.first_frame_receipt.is_some() && result.exit_after.is_none() {
         return Err("--first-frame-receipt 需要 --exit-after-ms。".into());
+    }
+    if result.frame_receipts.is_some() && result.exit_after.is_none() {
+        return Err("--frame-receipts 需要 --exit-after-ms。".into());
     }
     Ok(Some(result))
 }
@@ -110,6 +124,18 @@ fn run(options: Options) -> Result<(), String> {
     let mut pending_event = None;
     let mut dirty = true;
     let mut first_frame_receipt = options.first_frame_receipt;
+    let mut frame_receipts = options
+        .frame_receipts
+        .map(|path| {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .map_err(|error| format!("无法新建渲染帧回执：{error}"))
+        })
+        .transpose()?;
+    let mut presented_frames = 0_u64;
+    let mut presented_size = None;
     loop {
         if options
             .exit_after
@@ -127,38 +153,58 @@ fn run(options: Options) -> Result<(), String> {
             revision = next_revision;
             dirty = true;
         }
+        // Native event coalescing can replace a resize notification with input.
+        // Compare actual dimensions independently so every new size is drawn.
+        let size = window.size();
+        dirty |= presented_size != Some(size);
         if dirty {
             if let Some(event) = &pending_event {
                 desktop.event(event);
             }
             ui.begin(pending_event.take());
-            let (width, height) = window.size();
+            let (width, height) = size;
             let mut canvas = window.begin(ui::BG);
             desktop.draw(&mut canvas, &mut ui, &handle, &snapshot, width, height);
             ui.end();
             drop(canvas);
             window.present();
-            if let Some(path) = first_frame_receipt.take() {
-                // This is a present-call receipt, not proof of visible pixels.
-                // Acceptance separately inspects the real window's client area.
-                let receipt = serde_json::json!({
-                    "schema": "ssmcp-desktop-first-frame-v1",
+            presented_size = Some(size);
+            presented_frames += 1;
+            if first_frame_receipt.is_some() || frame_receipts.is_some() {
+                // A present-call receipt is not proof of visible pixels.
+                // Acceptance also inspects the real window at these dimensions.
+                let mut receipt = serde_json::json!({
+                    "schema": "ssmcp-desktop-present-v1",
                     "stage": "present_returned",
                     "pid": std::process::id(),
-                    "frame_index": 1,
+                    "frame_index": presented_frames,
                     "width": width,
                     "height": height,
                     "elapsed_ms": started.elapsed().as_millis(),
                 });
-                let bytes = serde_json::to_vec(&receipt)
-                    .map_err(|error| format!("无法编码首帧回执：{error}"))?;
-                let mut file = OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(path)
-                    .map_err(|error| format!("无法新建首帧回执：{error}"))?;
-                file.write_all(&bytes)
-                    .map_err(|error| format!("无法写入首帧回执：{error}"))?;
+                if let Some(path) = first_frame_receipt.take() {
+                    receipt["schema"] = "ssmcp-desktop-first-frame-v1".into();
+                    let bytes = serde_json::to_vec(&receipt)
+                        .map_err(|error| format!("无法编码首帧回执：{error}"))?;
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(path)
+                        .map_err(|error| format!("无法新建首帧回执：{error}"))?;
+                    file.write_all(&bytes)
+                        .map_err(|error| format!("无法写入首帧回执：{error}"))?;
+                    receipt["schema"] = "ssmcp-desktop-present-v1".into();
+                }
+                if let Some(file) = frame_receipts.as_mut() {
+                    if presented_frames > 4096 {
+                        return Err("有界验收的渲染帧回执已达到 4096 条上限。".into());
+                    }
+                    serde_json::to_writer(&mut *file, &receipt)
+                        .map_err(|error| format!("无法编码渲染帧回执：{error}"))?;
+                    file.write_all(b"\n")
+                        .and_then(|()| file.flush())
+                        .map_err(|error| format!("无法写入渲染帧回执：{error}"))?;
+                }
             }
             if let Some(text) = ui.clipboard.take() {
                 window.copy(&text);

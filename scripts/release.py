@@ -747,14 +747,14 @@ def verify_linux_gui_archive(archive, source, window):
                 raise ValueError("Linux GUI archived source proof differs from the release checkout")
 
 
-def gui_success_receipt_matches(value, platform, commit, spec):
-    expected = {"source_commit": commit, "target": spec["target"], "profile": spec["profile"],
-                "build_exit": 0, "test_exit": 0}
+def gui_exit_receipt_succeeded(platform, checks, source, spec):
+    """Require every platform-specific native gate and an exact source receipt."""
+    exits = ["build_exit", "test_exit"]
     if platform == "windows":
-        expected.update(cli_test_exit=0, cli_build_exit=0, native_plugin_exit=0)
-    return value == expected and all(
-        type(value[key]) is int for key in expected if key.endswith("_exit")
-    )
+        exits += ["cli_test_exit", "cli_build_exit", "native_plugin_exit"]
+    expected = {"source_commit": source["commit"], "target": spec["target"],
+                "profile": spec["profile"], **dict.fromkeys(exits, 0)}
+    return checks == expected and all(type(checks[key]) is int for key in exits)
 
 
 def package_gui(platform, evidence, binary=None, root=None):
@@ -769,8 +769,8 @@ def package_gui(platform, evidence, binary=None, root=None):
         raise ValueError("GUI source does not match the requested immutable commit")
     subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
     result = json.loads((evidence / "result.json").read_text(encoding="utf-8-sig"))
-    if not gui_success_receipt_matches(result, platform, source["commit"], spec):
-        raise ValueError("GUI build and test exit receipts must both succeed for this source and target")
+    if not gui_exit_receipt_succeeded(platform, result, source, spec):
+        raise ValueError("GUI build and test exit receipts must all succeed for this source and target")
     for name in ("build.log", "tests.log"):
         path = evidence / name
         if path.is_symlink() or not path.is_file() or not path.stat().st_size:
@@ -860,7 +860,7 @@ def verified_gui_receipts(root, source):
                         ("profile", spec["profile"]), ("scope", spec["scope"])))):
             raise ValueError(f"GUI source or platform proof differs: {platform}")
         checks = receipt.get("checks", {})
-        if not gui_success_receipt_matches(checks, platform, source["commit"], spec):
+        if not gui_exit_receipt_succeeded(platform, checks, source, spec):
             raise ValueError(f"GUI build or tests did not succeed: {platform}")
         actions = receipt.get("actions", {})
         if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", str(actions.get("repository", "")))
