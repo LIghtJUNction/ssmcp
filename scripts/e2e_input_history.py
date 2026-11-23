@@ -434,7 +434,7 @@ class InputHistory(Composer):
                    and receipt["kind"] == "progress" and duplicate["duplicate"]
                    and duplicate["message_id"] == receipt["message_id"],
                    "an idempotent native reply preserves its ID and is recorded in memory only once")
-        events_before = self.live_events(limit=1)
+        events_before = self.live_events()
         self.check(sum(event.get("value", {}).get("message_id") == receipt["message_id"]
                        for event in events_before["events"]) == 1,
                    "the ui.message receipt identifies exactly one live event")
@@ -468,7 +468,9 @@ class InputHistory(Composer):
         self.check(state["target"] == target and {item["id"] for item in after["queue"]} == before
                    and self.record(after, message_id=pending["id"])["status"] == "queued",
                    "handoff preserves the recipient and pending delivery without submitting another request")
-        added = self.live_events(limit=1, cursor=events_before["next_cursor"],
+        # A one-event page produces observer events faster than it scans the
+        # aggregate journal. Keep the same scope, frozen end, and gap checks.
+        added = self.live_events(limit=8, cursor=events_before["next_cursor"],
                                  generation=events_before["generation"])
         self.check(self.observe("ssmcp.ui.questions", {"id": question["id"]})["question"]["state"] == "pending"
                    and not any(event.get("value", {}).get("message_id") == receipt["message_id"]
