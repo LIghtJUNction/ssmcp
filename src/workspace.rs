@@ -1,6 +1,7 @@
 //! Root-scoped files and bounded loopback TCP handles shared by every backend.
 mod audit;
 mod image;
+pub(crate) mod safety;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -280,7 +281,7 @@ impl Workspace {
         ];
         tools.push(tool(
             "ssmcp.fs.events",
-            "Read successful native file access/write audit events and complete inline diffs or output artifact references. Unknown/binary/sensitive snapshots have null line counts; external file effects are not inferred.",
+            "Read native file safety decisions, successful file access/write audit events, and complete inline diffs or output artifact references. Unknown/binary/sensitive snapshots have null line counts; external file effects are not inferred.",
             crate::backend::events::schema()["properties"].clone(),
             &[],
             true,
@@ -1391,6 +1392,52 @@ mod managed_file_integration_tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[tokio::test]
+    async fn safety_rejects_policy_writes_before_creating_parents() {
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace();
+        let decision = workspace
+            .perform(
+                "ssmcp.fs.write_text",
+                json!({
+                    "path":"./.ssmcp/safety/rules.toml",
+                    "text":"synthetic-sensitive-text",
+                    "create_parents":true
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(decision, "native file mutation blocked by safety policy");
+        assert!(!scratch.0.join(".ssmcp/safety").exists());
+        let page = workspace
+            .perform("ssmcp.fs.events", json!({}))
+            .await
+            .unwrap();
+        let entries = page["events"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        let event = &entries[0]["event"];
+        assert_eq!(event["type"], "ssmcp.safety.decision");
+        assert_eq!(event["decision"], "require_approval");
+        assert_eq!(event["outcome"], "blocked");
+        let encoded = event.to_string();
+        assert!(!encoded.contains("synthetic-sensitive-text"));
+        assert!(!encoded.contains("rules.toml"));
+
+        workspace
+            .perform(
+                "ssmcp.fs.write_text",
+                json!({
+                    "path":"allowed.txt", "text":"allowed"
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join("allowed.txt")).unwrap(),
+            "allowed"
+        );
     }
 
     #[tokio::test]

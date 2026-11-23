@@ -424,6 +424,23 @@ hook 默认关闭，不内置额外审核流程，也不改变工具原生权限
 
 Linux 上的已验证 Agent 可用 `exec.start(clientId, { …, track_artifacts: true })` 为单个命令任务追踪产物。默认软额度为 20 GB（20,000,000,000 逻辑字节），可用 `artifact_budget_bytes` 覆盖。计量仅覆盖任务在 `.ssmcp/task-artifacts/` 下的独占目录，提醒随任务读取结果返回。[配置与计量范围](docs/workspaces.md#命令任务产物与软额度) 默认保留任务产物。一次性、任务独占产物可显式设为 `temporary_artifacts: true`，正常关闭或 reload 时，客户端只在确认任务树已退出、文件身份和独占性可验证后尝试有界回收。
 
+### 原生文件安全预检
+
+`ssmcp safety` 和 `ssmcp safety status` 显示本地版本的安全覆盖范围。原生
+`ssmcp.fs.write`、`ssmcp.fs.write_text`、`ssmcp.fs.edit_text` 和
+`ssmcp.fs.mkdir` 在现有工作区权限与文件系统检查之前执行 zguard 预检。
+绝对路径和父目录遍历被拒绝。在工具参数中直接命名 `.ssmcp/safety`
+及其子路径会要求审批。此版本没有绑定原请求的审批入口，因此这类请求会在执行前停止。
+
+拥有相应会话访问权的调用方可以通过 `ssmcp.fs.events` 分页读取
+`ssmcp.safety.decision`，按该流的游标定位记录。安全事件只含工具、策略、
+裁决与结果，省略路径、内容、参数和错误细节。文件审计流中其他既有事件仍
+遵循各自的披露范围。远程模型或单独的审计服务离线时，本地裁决仍然生效。
+
+当前只提供覆盖状态与会话内事件。CLI 风险队列、跨进程 `inspect`、审计对话、
+自定义规则和原请求审批仍待接入。目录名称预检只看直接请求的路径，实际工作区
+范围继续由原生文件系统门禁约束。外部进程、传输、删除与密钥外发未纳入此预检。
+
 ## 开发
 
 ```sh
