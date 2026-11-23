@@ -5,6 +5,8 @@ mod ui;
 
 use model::Target;
 use std::{
+    fs::OpenOptions,
+    io::Write,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -16,6 +18,7 @@ struct Options {
     control: bool,
     font: Option<String>,
     exit_after: Option<Duration>,
+    first_frame_receipt: Option<PathBuf>,
 }
 
 fn options() -> Result<Option<Options>, String> {
@@ -59,9 +62,19 @@ fn options() -> Result<Option<Options>, String> {
                     .ok_or("--exit-after-ms 需要 1–3600000。")?;
                 result.exit_after = Some(Duration::from_millis(millis));
             }
+            Some("--first-frame-receipt") => {
+                if result.first_frame_receipt.is_some() {
+                    return Err("只指定一个 --first-frame-receipt。".into());
+                }
+                let path = args
+                    .next()
+                    .filter(|value| !value.is_empty())
+                    .ok_or("--first-frame-receipt 需要一个不存在的文件路径。")?;
+                result.first_frame_receipt = Some(PathBuf::from(path));
+            }
             Some("--help" | "-h") => {
                 println!(
-                    "ssmcp-desktop [--session NAME | --directory PATH] [--control] [--font FAMILY]\n\n原生 Windows / Linux 客户端；默认只观察已有的 CLI 会话。\n--directory 使用显式提供的私有服务目录，不打印其内容。\n--exit-after-ms N 用于真实窗口的有界构建验收。"
+                    "ssmcp-desktop [--session NAME | --directory PATH] [--control] [--font FAMILY]\n\n原生 Windows / Linux 客户端；默认只观察已有的 CLI 会话。\n--directory 使用显式提供的私有服务目录，不打印其内容。\n--exit-after-ms N 用于真实窗口的有界构建验收。\n--first-frame-receipt PATH 与有界验收一起使用，首次 present 返回后新建回执文件。"
                 );
                 return Ok(None);
             }
@@ -70,6 +83,9 @@ fn options() -> Result<Option<Options>, String> {
     }
     if result.control && result.target.is_none() {
         return Err("--control 需要明确指定 --session 或 --directory。".into());
+    }
+    if result.first_frame_receipt.is_some() && result.exit_after.is_none() {
+        return Err("--first-frame-receipt 需要 --exit-after-ms。".into());
     }
     Ok(Some(result))
 }
@@ -93,6 +109,7 @@ fn run(options: Options) -> Result<(), String> {
     let mut snapshot = model::View::default();
     let mut pending_event = None;
     let mut dirty = true;
+    let mut first_frame_receipt = options.first_frame_receipt;
     loop {
         if options
             .exit_after
@@ -121,6 +138,28 @@ fn run(options: Options) -> Result<(), String> {
             ui.end();
             drop(canvas);
             window.present();
+            if let Some(path) = first_frame_receipt.take() {
+                // This is a present-call receipt, not proof of visible pixels.
+                // Acceptance separately inspects the real window's client area.
+                let receipt = serde_json::json!({
+                    "schema": "ssmcp-desktop-first-frame-v1",
+                    "stage": "present_returned",
+                    "pid": std::process::id(),
+                    "frame_index": 1,
+                    "width": width,
+                    "height": height,
+                    "elapsed_ms": started.elapsed().as_millis(),
+                });
+                let bytes = serde_json::to_vec(&receipt)
+                    .map_err(|error| format!("无法编码首帧回执：{error}"))?;
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)
+                    .map_err(|error| format!("无法新建首帧回执：{error}"))?;
+                file.write_all(&bytes)
+                    .map_err(|error| format!("无法写入首帧回执：{error}"))?;
+            }
             if let Some(text) = ui.clipboard.take() {
                 window.copy(&text);
             }
