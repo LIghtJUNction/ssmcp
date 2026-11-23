@@ -145,10 +145,19 @@ class TimeWait(Interactions):
         raise AssertionError("the exact owned timing entry did not reach the live UI")
 
     def local(self, front, command):
+        if not command.startswith("/wait cancel "):
+            raise AssertionError("this physical helper only cancels an exact owned wait")
+        queued = {item["id"] for item in self.queue()["queue"]}
         self.replace_short(front, command)
+        draft = self.ui("/display/conversation/draft")
         front.send(ENTER)
-        self.wait_state(front, lambda item: item["draft"]["text"] == "",
-                        "the local wait command completes without publishing a user request", fields=("draft",))
+        marker = "已取消等待 #" + command.removeprefix("/wait cancel ")
+        front.until(lambda shot: marker in text(shot),
+                    "the exact owned wait cancellation reaches the physical terminal")
+        self.check(self.ui("/display/conversation/draft") == draft,
+                   "local wait cancellation preserves the exact draft and cursor")
+        self.check({item["id"] for item in self.queue()["queue"]} == queued,
+                   "the local wait command publishes no new user requirement")
 
     def verify_clock_layout(self):
         pane = self.ui("/display/panes/input")
@@ -402,7 +411,7 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
         self.client_id = credentials["client_id"]
         front.client_id = self.client_id
         front.credentials = credentials
-        self.check(self.client_id != old_id and self.ui("/time") == {"active":[],"recent":[]},
+        self.check(self.client_id != old_id and self.ui("/time") == {"active":[],"recent":[],"prompts":[]},
                    "a fresh connection restores no active timers, observations or completion ledger")
         self.check(self.ui("/display/conversation/draft") == self.saved_draft,
                    "disconnect/reconnect preserves the exact unsubmitted draft and cursor")
