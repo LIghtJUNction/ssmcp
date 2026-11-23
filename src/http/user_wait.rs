@@ -81,7 +81,7 @@ pub(super) async fn wait_observed(
     client_id: String,
     arguments: Arguments,
     controller: Option<Controller>,
-    admitted: Option<&std::sync::atomic::AtomicBool>,
+    admitted: Option<(&std::sync::atomic::AtomicBool, bool)>,
 ) -> Result<Value, String> {
     coordinate_wait(
         broker,
@@ -89,11 +89,14 @@ pub(super) async fn wait_observed(
         token,
         client_id,
         WaitRequest {
+            broker_only: admitted.is_some_and(|(_, windowed)| windowed)
+                && !arguments.notify
+                && arguments.intent == Intent::NeedUser,
             arguments,
             message: None,
         },
         controller,
-        admitted,
+        admitted.map(|(flag, _)| flag),
     )
     .await
 }
@@ -127,6 +130,7 @@ pub(super) async fn message(
         token.clone(),
         client_id.clone(),
         WaitRequest {
+            broker_only: false,
             arguments,
             message: Some(message),
         },
@@ -155,6 +159,7 @@ pub(super) async fn message(
 }
 
 struct WaitRequest {
+    broker_only: bool,
     arguments: Arguments,
     message: Option<Value>,
 }
@@ -205,7 +210,11 @@ async fn coordinate_wait(
     controller: Option<Controller>,
     admitted: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<Value, String> {
-    let WaitRequest { arguments, message } = request;
+    let WaitRequest {
+        arguments,
+        message,
+        broker_only,
+    } = request;
     arguments.validate()?;
     let run = code_mode::AUDIT_RUN
         .try_with(Clone::clone)
@@ -327,12 +336,20 @@ async fn coordinate_wait(
             "finish_request_id":run.finish_request_id(&client_id)
         }),
     };
-    let native = session.call_with_bound_authorization(
-        operation,
-        controller.clone(),
-        &authorization,
-        recipient.binding.clone(),
-    );
+    let native = async {
+        if broker_only {
+            std::future::pending().await
+        } else {
+            session
+                .call_with_bound_authorization(
+                    operation,
+                    controller.clone(),
+                    &authorization,
+                    recipient.binding.clone(),
+                )
+                .await
+        }
+    };
     tokio::pin!(native);
     let deadline = Instant::now() + Duration::from_millis(arguments.timeout_ms);
     // Messages/disconnect/ACL changes wake via watch. A sleeping heartbeat only
@@ -418,7 +435,8 @@ async fn coordinate_wait(
     // Closing this UI is best effort, not a delivery acknowledgement. Keep
     // polling the first call while finish is dispatched so a local cancellation
     // already in flight can win before the final HTTP queue commit.
-    if !native_done
+    if !broker_only
+        && !native_done
         && let Ok(current) =
             authorized(&broker, &user, &token, &client_id, &session, &recipient).await
     {
