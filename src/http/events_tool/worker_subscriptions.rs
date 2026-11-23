@@ -2,7 +2,7 @@
 //! The native link is discovery, never source authority. Both original Sessions
 //! and both independently authenticated bindings remain necessary for delivery.
 use super::*;
-use crate::http::{CodeRunReport, EligibleUserResponse};
+use crate::http::{CodeRunReport, EligibleUserResponse, input_projection::Publication};
 use crate::wire::Operation;
 use serde_json::Map;
 
@@ -21,6 +21,7 @@ pub(crate) const DEFAULT_KINDS: &[&str] = &[
 ];
 const MAX_CONFIGURATIONS: usize = 128;
 const MAX_PROBES: usize = 4;
+const MAX_VISIBLE_MARKERS: usize = 128;
 const NOTICE_LIMIT: usize = 4;
 const MAX_NOTICE_BYTES: usize = 16 * 1024;
 const HEADER: &str = "WORKER STATE EVENTS — retained until explicit events.ack\n";
@@ -44,6 +45,12 @@ impl Key {
 }
 
 #[derive(Clone)]
+struct VisibleMarker {
+    sequence: Option<u64>,
+    publication: Publication,
+}
+
+#[derive(Clone)]
 struct Entry {
     user: String,
     principal: Source,
@@ -56,6 +63,7 @@ struct Entry {
     source: Option<Source>,
     pool_hint: Option<String>,
     problem: Option<String>,
+    visible: Arc<Mutex<HashMap<String, VisibleMarker>>>,
 }
 impl Entry {
     fn owns(&self, context: &Context) -> bool {
@@ -157,6 +165,7 @@ impl Registry {
             source: None,
             pool_hint: None,
             problem: None,
+            visible: Arc::new(Mutex::new(HashMap::new())),
         };
         entries.insert(key, entry.clone());
         Ok(entry)
@@ -832,6 +841,136 @@ fn fit_notice(
     append_values(response, &candidates, budget).map(|next| (next, fallback))
 }
 
+async fn publication_authorized(
+    report: &CodeRunReport,
+    context: &Context,
+    entry: &Entry,
+    deadline: tokio::time::Instant,
+) -> bool {
+    if !main_member(context, false)
+        || !report
+            .broker
+            .event_subscriptions
+            .workers
+            .current(context, entry)
+        || context
+            .final_authorization(&report.broker, &report.access_token)
+            .is_err()
+    {
+        return false;
+    }
+    let Some(id) = entry.subscription_id.as_deref() else {
+        return false;
+    };
+    let Ok(record) = report
+        .broker
+        .event_subscriptions
+        .get(&report.broker.events, context, id)
+    else {
+        return false;
+    };
+    matches!(
+        tokio::time::timeout_at(
+            deadline,
+            authorize_record(&report.broker, &report.access_token, context, &record, true)
+        )
+        .await,
+        Ok(Ok(()))
+    )
+}
+
+async fn visible_notice(
+    report: &CodeRunReport,
+    target: &EligibleUserResponse,
+    context: &Context,
+    entry: &Entry,
+    mut notice: Value,
+    deadline: tokio::time::Instant,
+    attempted: &mut usize,
+) -> Option<Value> {
+    let id = entry.subscription_id.as_deref()?;
+    let events = notice["events"].as_array()?.clone();
+    let acknowledged = notice["cursor"].as_u64().unwrap_or(0);
+    // Gap/read-required metadata is also visible. It never claims an event ACK.
+    let items = if events.is_empty() {
+        vec![(None, serde_json::to_string(&notice).ok()?)]
+    } else {
+        events
+            .iter()
+            .map(|event| {
+                Some((
+                    Some(event["seq"].as_u64()?),
+                    serde_json::to_string(event).ok()?,
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?
+    };
+    let mut visible = 0usize;
+    for (sequence, body) in items {
+        let identity = match sequence {
+            Some(sequence) => format!("{id}:{sequence}"),
+            None => format!("{id}:notice:{body}"),
+        };
+        let text = format!("{HEADER}{body}");
+        let publication = {
+            let mut markers = entry
+                .visible
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            // Only the real Hub cursor proves ACK. Unknown writes are retained
+            // even past ACK; absence from a pruned event page is not no-effect.
+            markers.retain(|_, marker| {
+                !marker.publication.settled()
+                    || marker
+                        .sequence
+                        .is_none_or(|sequence| sequence > acknowledged)
+            });
+            if let Some(marker) = markers.get(&identity) {
+                if !marker.publication.matches(&text, "worker_event") {
+                    return None;
+                }
+                marker.publication.clone()
+            } else {
+                if markers.len() >= MAX_VISIBLE_MARKERS {
+                    return None;
+                }
+                let publication = Publication::new(target, &identity, text, "worker_event")?;
+                markers.insert(
+                    identity,
+                    VisibleMarker {
+                        sequence,
+                        publication: publication.clone(),
+                    },
+                );
+                publication
+            }
+        };
+        if !publication.recorded() {
+            if *attempted == MAX_PROBES
+                || tokio::time::Instant::now() >= deadline
+                || !publication_authorized(report, context, entry, deadline).await
+            {
+                break;
+            }
+            *attempted += 1;
+            publication.start(report, target);
+            if !publication.recorded_by(deadline).await {
+                break;
+            }
+        }
+        visible += 1;
+    }
+    if visible == 0 {
+        return None;
+    }
+    if !events.is_empty() && visible < events.len() {
+        notice["events"] = json!(&events[..visible]);
+        notice["next_cursor"] = events[visible - 1]["seq"].clone();
+        notice["has_more"] = json!(true);
+    }
+    Some(notice)
+}
+
 pub(in crate::http) async fn append(
     report: &CodeRunReport,
     response: Value,
@@ -842,11 +981,13 @@ pub(in crate::http) async fn append(
     if budget < 512 {
         return response;
     }
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+    let mut attempted = 0usize;
     let mut notices = Vec::new();
     let mut proof_contexts = Vec::new();
     let mut appended = response.clone();
     for target in eligible {
-        if notices.len() == MAX_PROBES {
+        if notices.len() == MAX_PROBES || tokio::time::Instant::now() >= deadline {
             break;
         }
         let Some(binding) = &target.binding else {
@@ -865,8 +1006,9 @@ pub(in crate::http) async fn append(
             session: target.session.clone(),
             binding: binding.clone(),
         };
-        let notice = code_mode::AUDIT_RUN
-            .scope(
+        let notice = tokio::time::timeout_at(
+            deadline,
+            code_mode::AUDIT_RUN.scope(
                 report.run.clone(),
                 read_notice(
                     &report.broker,
@@ -876,9 +1018,10 @@ pub(in crate::http) async fn append(
                     0,
                     None,
                 ),
-            )
-            .await;
-        let Some(notice) = notice else { continue };
+            ),
+        )
+        .await;
+        let Ok(Some(notice)) = notice else { continue };
         let Some(entry) = report.broker.event_subscriptions.workers.get(&context) else {
             continue;
         };
@@ -891,12 +1034,33 @@ pub(in crate::http) async fn append(
         {
             continue;
         }
-        let Some((next, fitted)) = fit_notice(&response, &notices, notice, budget) else {
+        let Some((_, fitted)) = fit_notice(&response, &notices, notice, budget) else {
+            continue;
+        };
+        let Some(visible) = visible_notice(
+            report,
+            target,
+            &context,
+            &entry,
+            fitted,
+            deadline,
+            &mut attempted,
+        )
+        .await
+        else {
+            continue;
+        };
+        let Some((next, fitted)) = fit_notice(&response, &notices, visible, budget) else {
             continue;
         };
         notices.push(fitted);
         proof_contexts.push((context, entry));
         appended = next;
+    }
+    for (context, entry) in &proof_contexts {
+        if !publication_authorized(report, context, entry, deadline).await {
+            return response;
+        }
     }
     // Another probe may have awaited after an earlier notice. Freeze the entire
     // delivery proof again before any retained metadata leaves this collector.

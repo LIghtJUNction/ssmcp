@@ -2,6 +2,7 @@
 use super::{
     CodeRunReport, EligibleUserResponse, Operation,
     coordination_policy::{self, Dreaming, Policy},
+    input_projection::{self, Publication},
     response_authorization,
 };
 use crate::code_mode;
@@ -180,12 +181,66 @@ fn is_coordinator(report: &CodeRunReport, target: &EligibleUserResponse) -> bool
         .unwrap_or(false)
 }
 
+#[derive(Clone)]
+struct PendingReminder {
+    counts: Counts,
+    notice: Value,
+    publication: Publication,
+}
+
 #[derive(Default)]
 struct Cache {
     entries: HashMap<Scope, (Counts, Instant)>,
+    pending: HashMap<Scope, PendingReminder>,
 }
 
 impl Cache {
+    fn reserve(
+        &mut self,
+        scope: &Scope,
+        counts: &Counts,
+        notice: Value,
+        target: &EligibleUserResponse,
+    ) -> Option<PendingReminder> {
+        self.pending.retain(|_, item| item.publication.alive());
+        if let Some(pending) = self.pending.get(scope) {
+            if pending.counts == *counts {
+                return Some(pending.clone());
+            }
+            if !pending.publication.settled() {
+                return None;
+            }
+            self.pending.remove(scope);
+        }
+        if self.pending.len() >= MAX_CACHE_ENTRIES {
+            return None;
+        }
+        let publication = Publication::new(
+            target,
+            &input_projection::fresh_identity()?,
+            notice["message"].as_str()?.into(),
+            "system_hook",
+        )?;
+        let pending = PendingReminder {
+            counts: counts.clone(),
+            notice,
+            publication,
+        };
+        self.pending.insert(scope.clone(), pending.clone());
+        Some(pending)
+    }
+
+    fn commit(&mut self, scope: Scope, pending: PendingReminder, now: Instant) {
+        if self
+            .pending
+            .get(&scope)
+            .is_some_and(|current| current.publication.same(&pending.publication))
+        {
+            self.pending.remove(&scope);
+            self.emitted(scope, pending.counts, now);
+        }
+    }
+
     fn due(&mut self, scope: &Scope, counts: &Counts, now: Instant) -> bool {
         if !counts.should_remind() {
             self.entries.remove(scope);
@@ -216,12 +271,74 @@ fn cache() -> &'static Mutex<Cache> {
     CACHE.get_or_init(Default::default)
 }
 
+#[derive(Clone)]
+struct PendingGuidance {
+    policy: Policy,
+    round_id: Option<String>,
+    hint: Value,
+    publication: Publication,
+}
+
 #[derive(Default)]
 struct GuidanceCache {
     entries: HashMap<Scope, (Policy, Instant, Option<String>)>,
+    pending: HashMap<Scope, PendingGuidance>,
 }
 
 impl GuidanceCache {
+    fn reserve(
+        &mut self,
+        scope: &Scope,
+        policy: &Policy,
+        round_id: Option<String>,
+        hint: Value,
+        target: &EligibleUserResponse,
+    ) -> Option<PendingGuidance> {
+        self.pending.retain(|_, item| item.publication.alive());
+        if let Some(pending) = self.pending.get(scope) {
+            if pending.policy == *policy && pending.round_id == round_id {
+                return Some(pending.clone());
+            }
+            if !pending.publication.settled() {
+                return None;
+            }
+            self.pending.remove(scope);
+        }
+        if self.pending.len() >= MAX_CACHE_ENTRIES {
+            return None;
+        }
+        let origin = if round_id.is_some() {
+            "maintenance"
+        } else {
+            "system_hook"
+        };
+        let publication = Publication::new(
+            target,
+            &input_projection::fresh_identity()?,
+            hint["message"].as_str()?.into(),
+            origin,
+        )?;
+        let pending = PendingGuidance {
+            policy: policy.clone(),
+            round_id,
+            hint,
+            publication,
+        };
+        self.pending.insert(scope.clone(), pending.clone());
+        Some(pending)
+    }
+
+    fn commit(&mut self, scope: Scope, pending: PendingGuidance, now: Instant) {
+        if self
+            .pending
+            .get(&scope)
+            .is_some_and(|current| current.publication.same(&pending.publication))
+        {
+            self.pending.remove(&scope);
+            self.emitted(scope, pending.policy, now, pending.round_id);
+        }
+    }
+
     fn due(&self, scope: &Scope, policy: &Policy, now: Instant) -> bool {
         policy.enabled
             && self.entries.get(scope).is_none_or(|(old, emitted, _)| {
@@ -407,6 +524,24 @@ fn append_section(
     (growth <= budget).then_some(appended)
 }
 
+fn round_current(target: &EligibleUserResponse, round_id: Option<&str>) -> bool {
+    let Some(round_id) = round_id else {
+        return true;
+    };
+    let Some(binding) = &target.binding else {
+        return false;
+    };
+    target
+        .session
+        .collaboration
+        .lifecycle_snapshot(&binding.owner, &binding.agent_id, &binding.token)
+        .is_ok_and(|lifecycle| {
+            lifecycle["status"] == "dreaming"
+                && lifecycle["lifecycle"]["maintenance"]["status"] == "requested"
+                && lifecycle["lifecycle"]["maintenance"]["round_id"] == round_id
+        })
+}
+
 /// Probe only existing coordinator targets after the JS worker has been released.
 /// Failed pool probes suppress pool hints; authenticated coordinators can still
 /// receive their configured control-session input waiting guidance.
@@ -419,11 +554,12 @@ pub(super) async fn append(
     if budget < 512 {
         return response;
     }
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(750);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    let probe_deadline = deadline - Duration::from_millis(250);
     let mut observed = Vec::new();
     let mut probes = 0;
     for (index, target) in eligible.iter().enumerate() {
-        if probes >= MAX_PROBES || tokio::time::Instant::now() >= deadline {
+        if probes >= MAX_PROBES || tokio::time::Instant::now() >= probe_deadline {
             break;
         }
         if report.run.time_observation_only(target.session.client_id())
@@ -436,7 +572,7 @@ pub(super) async fn append(
         };
         probes += 1;
         let result = tokio::time::timeout_at(
-            deadline,
+            probe_deadline,
             code_mode::AUDIT_RUN.scope(
                 report.run.clone(),
                 target.session.call_with_authorization(
@@ -456,7 +592,7 @@ pub(super) async fn append(
             // A linked identifier is a hint, not permission to subscribe to it.
             // Keep a live authorized connection for the final synchronous check.
             let connection = tokio::time::timeout_at(
-                deadline,
+                probe_deadline,
                 report
                     .broker
                     .client(&report.user, &authorization, &pool.client_id),
@@ -468,11 +604,17 @@ pub(super) async fn append(
         }
     }
 
-    // No await follows these final binding/authorization decisions. A failed or
-    // oversized append does not consume the reminder's next delivery opportunity.
     let mut notices = Vec::new();
     let mut appended = None;
+    let mut reminder_commits = Vec::new();
+    let mut guidance_commits = Vec::new();
+    let mut proofs = Vec::new();
+    let mut round_proofs = Vec::new();
+    let mut publications = 0usize;
     for (index, pool, connection) in &observed {
+        if publications == MAX_REMINDERS || tokio::time::Instant::now() >= deadline {
+            break;
+        }
         let target = &eligible[*index];
         let Some(authorization) = response_authorization(report, target) else {
             continue;
@@ -495,17 +637,37 @@ pub(super) async fn append(
             agent_id: binding.agent_id.clone(),
             pool_id: pool.client_id.clone(),
         };
-        let now = Instant::now();
-        let mut cache = cache().lock().unwrap_or_else(|error| error.into_inner());
-        if !cache.due(&scope, &pool.counts, now) || notices.len() == MAX_REMINDERS {
+        let pending = {
+            let mut cache = cache().lock().unwrap_or_else(|error| error.into_inner());
+            if !cache.due(&scope, &pool.counts, Instant::now()) {
+                continue;
+            }
+            cache.reserve(
+                &scope,
+                &pool.counts,
+                notice(target.session.client_id(), &binding.agent_id, pool),
+                target,
+            )
+        };
+        let Some(pending) = pending else {
             continue;
-        }
-        notices.push(notice(target.session.client_id(), &binding.agent_id, pool));
+        };
+        notices.push(pending.notice.clone());
         let Some(next) = append_notices(&response, &notices, budget) else {
             notices.pop();
             continue;
         };
-        cache.emitted(scope, pool.counts.clone(), now);
+        publications += 1;
+        pending.publication.start(report, target);
+        if !pending.publication.recorded_by(deadline).await
+            || !is_coordinator(report, target)
+            || response_authorization(report, target).is_none()
+        {
+            notices.pop();
+            continue;
+        }
+        reminder_commits.push((scope, pending));
+        proofs.push((*index, connection.clone()));
         appended = Some(next);
     }
     let with_workers = appended.unwrap_or_else(|| response.clone());
@@ -518,8 +680,10 @@ pub(super) async fn append(
     let mut hints = Vec::new();
     let mut with_guidance = None;
     for (index, target) in eligible.iter().enumerate() {
-        if hints.len() == MAX_REMINDERS
-            || report.run.time_observation_only(target.session.client_id())
+        if publications == MAX_REMINDERS || tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        if report.run.time_observation_only(target.session.client_id())
             || !is_coordinator(report, target)
         {
             continue;
@@ -557,47 +721,59 @@ pub(super) async fn append(
             agent_id: binding.agent_id.clone(),
             pool_id: pool.map_or("", |pool| pool.client_id.as_str()).into(),
         };
-        let now = Instant::now();
-        let mut cache = guidance_cache()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let Ok(lifecycle) = target.session.collaboration.lifecycle_snapshot(
-            &binding.owner,
-            &binding.agent_id,
-            &binding.token,
-        ) else {
+        let pending = {
+            let mut cache = guidance_cache()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let Ok(lifecycle) = target.session.collaboration.lifecycle_snapshot(
+                &binding.owner,
+                &binding.agent_id,
+                &binding.token,
+            ) else {
+                continue;
+            };
+            if matches!(lifecycle["status"].as_str(), Some("offline" | "retiring")) {
+                continue;
+            }
+            let requested = &lifecycle["lifecycle"]["maintenance"];
+            let live_round = (lifecycle["status"] == "dreaming"
+                && requested["status"] == "requested")
+                .then(|| {
+                    Some(Dreaming {
+                        round_id: requested["round_id"].as_str()?.into(),
+                        repository: requested["repository"].as_str()?.into(),
+                        budget_ms: requested["budget_ms"].as_u64()?,
+                    })
+                })
+                .flatten();
+            let round = live_round.as_ref().filter(|round| {
+                policy.enabled && response["isError"] != true && cache.dreaming_due(&scope, round)
+            });
+            if !cache.due(&scope, &policy, Instant::now()) && round.is_none() {
+                continue;
+            }
+            let mut hint = guidance(
+                target.session.client_id(),
+                &binding.agent_id,
+                pool.map(|pool| pool.client_id.as_str()),
+                &policy,
+                round,
+            );
+            hint["agent_lifecycle"] = lifecycle;
+            hint["provenance"] = json!("agent_lifecycle");
+            hint["completion_permission"] = json!(false);
+            cache.reserve(
+                &scope,
+                &policy,
+                round.map(|round| round.round_id.clone()),
+                hint,
+                target,
+            )
+        };
+        let Some(pending) = pending else {
             continue;
         };
-        if matches!(lifecycle["status"].as_str(), Some("offline" | "retiring")) {
-            continue;
-        }
-        let requested = &lifecycle["lifecycle"]["maintenance"];
-        let live_round = (lifecycle["status"] == "dreaming" && requested["status"] == "requested")
-            .then(|| {
-                Some(Dreaming {
-                    round_id: requested["round_id"].as_str()?.into(),
-                    repository: requested["repository"].as_str()?.into(),
-                    budget_ms: requested["budget_ms"].as_u64()?,
-                })
-            })
-            .flatten();
-        let round = live_round.as_ref().filter(|round| {
-            policy.enabled && response["isError"] != true && cache.dreaming_due(&scope, round)
-        });
-        if !cache.due(&scope, &policy, now) && round.is_none() {
-            continue;
-        }
-        let mut hint = guidance(
-            target.session.client_id(),
-            &binding.agent_id,
-            pool.map(|pool| pool.client_id.as_str()),
-            &policy,
-            round,
-        );
-        hint["agent_lifecycle"] = lifecycle;
-        hint["provenance"] = json!("agent_lifecycle");
-        hint["completion_permission"] = json!(false);
-        hints.push(hint);
+        hints.push(pending.hint.clone());
         let Some(next) = append_section(
             &with_workers,
             &hints,
@@ -608,9 +784,49 @@ pub(super) async fn append(
             hints.pop();
             continue;
         };
-        let round_id = round.map(|round| round.round_id.clone());
-        cache.emitted(scope, policy, now, round_id);
+        publications += 1;
+        pending.publication.start(report, target);
+        if !pending.publication.recorded_by(deadline).await
+            || !is_coordinator(report, target)
+            || response_authorization(report, target).is_none()
+            || input_pending(target, &response)
+            || !round_current(target, pending.round_id.as_deref())
+        {
+            hints.pop();
+            continue;
+        }
+        round_proofs.push((index, pending.round_id.clone()));
+        guidance_commits.push((scope, pending));
+        proofs.push((index, None));
         with_guidance = Some(next);
+    }
+    // Publication is separate from model delivery and from event/human ACK.
+    // Recheck every original recipient/source after the final await.
+    if proofs.iter().any(|(index, pool)| {
+        let target = &eligible[*index];
+        !is_coordinator(report, target)
+            || response_authorization(report, target).is_none_or(|authorization| {
+                pool.as_ref()
+                    .is_some_and(|session| !session.is_alive() || !authorization.permits(session))
+            })
+    }) || round_proofs.iter().any(|(index, round)| {
+        input_pending(&eligible[*index], &response)
+            || !round_current(&eligible[*index], round.as_deref())
+    }) {
+        return response;
+    }
+    let now = Instant::now();
+    for (scope, pending) in reminder_commits {
+        cache()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .commit(scope, pending, now);
+    }
+    for (scope, pending) in guidance_commits {
+        guidance_cache()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .commit(scope, pending, now);
     }
     with_guidance.unwrap_or(with_workers)
 }

@@ -29,6 +29,7 @@ const CAPABILITIES_META: &str = "io.modelcontextprotocol/clientCapabilities";
 
 pub(crate) mod await_tool;
 mod coordination_policy;
+mod input_projection;
 pub(crate) mod events_tool;
 pub(crate) mod prompt_hooks;
 #[cfg(test)]
