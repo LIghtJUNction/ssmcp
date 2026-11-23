@@ -284,6 +284,10 @@ pub struct Runtime {
     workers: Mutex<Option<Arc<crate::worker::Pool>>>,
 }
 impl Runtime {
+    pub(crate) fn local_command_stats(&self) -> crate::backend::shell::LocalCommandStats {
+        self.backend.local_command_stats()
+    }
+
     pub fn new(backend: Arc<Backend>, root: PathBuf) -> Result<Arc<Self>, String> {
         Self::with_context_roots(backend, root, Vec::new())
     }

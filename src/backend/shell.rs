@@ -261,9 +261,26 @@ fn same_artifact_owner(
 }
 
 #[derive(Default)]
+pub(crate) struct LocalCommandStats {
+    pub calls: u64,
+    pub spawned: u64,
+    pub start_errors: u64,
+    pub jobs: Vec<LocalCommandRow>,
+}
+
+pub(crate) struct LocalCommandRow {
+    pub id: String,
+    pub duration_ms: u64,
+    pub state: &'static str,
+}
+
+#[derive(Default)]
 struct Registry {
     jobs: HashMap<String, Arc<Job>>,
     closed: bool,
+    local_calls: u64,
+    local_spawned: u64,
+    local_start_errors: u64,
     #[cfg(target_os = "linux")]
     retired_temporary: VecDeque<Arc<Job>>,
 }
@@ -424,6 +441,48 @@ impl Shell {
             ),
         ]
     }
+    pub(crate) fn local_command_stats(&self) -> LocalCommandStats {
+        let registry = self.registry();
+        let mut jobs: Vec<_> = registry
+            .jobs
+            .values()
+            .filter(|job| job.creator.call.is_none())
+            .collect();
+        jobs.sort_unstable_by_key(|job| std::cmp::Reverse(job.timing.started));
+        let jobs = jobs
+            .into_iter()
+            .take(20)
+            .map(|job| {
+                let state = job.state();
+                let through = state.finished.unwrap_or_else(Instant::now).into_std();
+                LocalCommandRow {
+                    id: job.id.clone(),
+                    duration_ms: job.timing.elapsed_ms(through),
+                    state: if state.running {
+                        "running"
+                    } else if state.cancelled {
+                        "cancelled"
+                    } else if state.timed_out {
+                        "timed out"
+                    } else if state.error.is_some()
+                        || state.exit_signal.is_some()
+                        || state.exit_code.is_some_and(|code| code != 0)
+                    {
+                        "failed"
+                    } else {
+                        "completed"
+                    },
+                }
+            })
+            .collect();
+        LocalCommandStats {
+            calls: registry.local_calls,
+            spawned: registry.local_spawned,
+            start_errors: registry.local_start_errors,
+            jobs,
+        }
+    }
+
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
         self.call_scoped(name, args, crate::runtime::call_scope::Source::capture())
             .await
@@ -438,7 +497,19 @@ impl Shell {
         creator: crate::runtime::call_scope::Source,
     ) -> Result<Value, String> {
         match name {
-            "ssmcp.exec.start" => self.start(args, creator).await,
+            "ssmcp.exec.start" => {
+                let local = creator.call.is_none();
+                if local {
+                    let mut registry = self.registry();
+                    registry.local_calls = registry.local_calls.saturating_add(1);
+                }
+                let result = self.start(args, creator).await;
+                if local && result.is_err() {
+                    let mut registry = self.registry();
+                    registry.local_start_errors = registry.local_start_errors.saturating_add(1);
+                }
+                result
+            }
             "ssmcp.exec.write" => self.write_input(args).await,
             "ssmcp.exec.list" => {
                 empty(args)?;
@@ -793,6 +864,9 @@ impl Shell {
         }
         let mut process =
             Managed::spawn(&mut command).map_err(|e| format!("could not start command: {e}"))?;
+        if creator.call.is_none() {
+            registry.local_spawned = registry.local_spawned.saturating_add(1);
+        }
         #[cfg(target_os = "linux")]
         if let Some(artifacts) = &mut artifacts {
             artifacts.mark_started();
@@ -1324,6 +1398,51 @@ mod tests {
             #[cfg(target_os = "linux")]
             temporary_artifacts: false,
         })
+    }
+
+    #[tokio::test]
+    async fn local_command_statistics_count_start_calls_and_hide_other_callers() {
+        let shell = Shell::new();
+        assert!(
+            shell
+                .call("ssmcp.exec.start", json!({"command":[]}))
+                .await
+                .is_err()
+        );
+        let args = json!({"command":[std::env::current_exe().unwrap(), "--exact",
+            "backend::shell::tests::fixture_process", "--nocapture"],
+            "env":{"SSMCP_SHELL_TEST_FIXTURE":"next"}});
+        let job = shell.call("ssmcp.exec.start", args.clone()).await.unwrap();
+        let id = job["job_id"].as_str().unwrap();
+        for _ in 0..3 {
+            shell
+                .call("ssmcp.exec.wait", json!({"job_id": id}))
+                .await
+                .unwrap();
+        }
+        for (connection, client) in [(3, "worker-other"), (4, "different-client")] {
+            let remote = crate::runtime::call_scope::CallScope::from_relay_for_client(
+                connection,
+                Some(client),
+                1,
+                None,
+                None,
+            )
+            .unwrap();
+            let job = remote
+                .scope(shell.call("ssmcp.exec.start", args.clone()))
+                .await
+                .unwrap();
+            remote
+                .scope(shell.call("ssmcp.exec.wait", json!({"job_id": job["job_id"]})))
+                .await
+                .unwrap();
+        }
+        let stats = shell.local_command_stats();
+        assert_eq!((stats.calls, stats.spawned, stats.start_errors), (2, 1, 1));
+        assert_eq!(stats.jobs.len(), 1);
+        assert_eq!(stats.jobs[0].id, id);
+        assert_eq!(stats.jobs[0].state, "completed");
     }
 
     #[tokio::test]

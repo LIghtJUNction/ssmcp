@@ -234,13 +234,73 @@ fn rows(
     output
 }
 
+fn command_rows(
+    stats: Option<crate::backend::shell::LocalCommandStats>,
+    width: u16,
+) -> Vec<(String, PanelTone)> {
+    let mut rows = Vec::new();
+    let mut push = |text: &str, tone| {
+        rows.extend(wrapped(text, width).into_iter().map(|row| (row, tone)));
+    };
+    push("Command execution", PanelTone::Heading);
+    push(
+        "Scope · native local execution, including terminal !",
+        PanelTone::Muted,
+    );
+    if let Some(stats) = stats {
+        push(
+            &format!(
+                "Start calls {} · Spawned {} · Start errors {}",
+                stats.calls, stats.spawned, stats.start_errors
+            ),
+            PanelTone::Normal,
+        );
+        let mut completed: Vec<_> = stats
+            .jobs
+            .iter()
+            .filter(|job| job.state != "running")
+            .collect();
+        completed.sort_unstable_by_key(|job| std::cmp::Reverse(job.duration_ms));
+        push(
+            "Longest among the 20 most recent retained jobs",
+            PanelTone::Muted,
+        );
+        for job in completed.into_iter().take(5) {
+            push(
+                &format!("{} ms · {}", job.duration_ms, job.id),
+                PanelTone::Normal,
+            );
+        }
+        push("Recent tasks · local native execution", PanelTone::Muted);
+        for job in stats.jobs {
+            push(
+                &format!("{} · {} ms · {}", job.state, job.duration_ms, job.id),
+                PanelTone::Normal,
+            );
+        }
+    } else {
+        push("Local execution data unavailable", PanelTone::Muted);
+    }
+    for line in [
+        "CPU time and peak memory · unavailable",
+        "Disk net change · unavailable in local scope; opt-in verified Linux tasks have a separate ledger in job status",
+        "Cache hits, refreshes, invalidation and avoided execution · not instrumented",
+        "Browser, relay and worker calls · outside this panel’s scope",
+        "Queue · native start rejects when capacity is full",
+    ] {
+        push(line, PanelTone::Muted);
+    }
+    push("", PanelTone::Normal);
+    rows
+}
+
 impl State {
     pub(super) fn chat_statistics_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
         let workers = (!self.preview).then(crate::worker::display).flatten();
         let linked = (!self.preview && workers.is_none())
             .then(crate::client::worker_window::linked_monitor_snapshot)
             .flatten();
-        let rows = rows(
+        let mut rows = rows(
             data,
             &self.audit.snapshot(),
             workers.as_ref(),
@@ -248,6 +308,11 @@ impl State {
             std::process::id(),
             self.geometry.left,
         );
+        let commands = (!self.preview)
+            .then(crate::client::interface::harness::local_runtime)
+            .and_then(Result::ok)
+            .map(|(runtime, _)| runtime.local_command_stats());
+        rows.extend(command_rows(commands, self.geometry.left));
         let maximum = rows.len().saturating_sub(usize::from(height));
         self.conversation.detail_scroll = self.conversation.detail_scroll.min(maximum);
         rows.into_iter()
