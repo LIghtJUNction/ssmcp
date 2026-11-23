@@ -31,6 +31,110 @@ fn entries(pool: &Value) -> Vec<&Value> {
     entries
 }
 
+fn is_assignment(operation: &Value) -> bool {
+    matches!(operation["kind"].as_str(), Some("submit" | "claim"))
+}
+
+/// One cursor for the current, validated pool. Repaints do not replay retained
+/// assignments; a replacement generation may reuse its own operation IDs.
+#[derive(Default)]
+pub(super) struct ConversationFeed {
+    generation: Option<String>,
+    after: Option<u64>,
+    observed: std::collections::BTreeMap<u64, Value>,
+}
+
+pub(super) struct ConversationEntry {
+    pub(super) key: String,
+    pub(super) heading: String,
+    pub(super) detail: String,
+}
+
+impl ConversationFeed {
+    pub(super) fn update(&mut self, pool: &Value) -> Vec<ConversationEntry> {
+        if pool["connected"] == false {
+            return Vec::new();
+        }
+        let Some(generation) = pool["generation"].as_str().filter(|text| !text.is_empty()) else {
+            return Vec::new();
+        };
+        if self.generation.as_deref() != Some(generation) {
+            self.generation = Some(generation.to_owned());
+            self.after = None;
+            self.observed.clear();
+        }
+        let mut updates = entries(pool);
+        updates.sort_by_key(|operation| operation["operation_id"].as_u64().unwrap_or(0));
+        let retained: std::collections::BTreeSet<_> = updates
+            .iter()
+            .filter_map(|operation| operation["operation_id"].as_u64())
+            .collect();
+        self.observed.retain(|id, _| retained.contains(id));
+        let mut output = Vec::new();
+        for operation in updates {
+            let Some(id) = operation["operation_id"].as_u64() else {
+                continue;
+            };
+            let previous = self.observed.get(&id);
+            if previous == Some(operation)
+                || (previous.is_none() && self.after.is_some_and(|after| id <= after))
+            {
+                continue;
+            }
+            self.after = Some(self.after.map_or(id, |after| after.max(id)));
+            self.observed.insert(id, operation.clone());
+            let heading = if operation["kind"] == "submit" {
+                "Task submitted · Queued".into()
+            } else if operation["kind"] == "claim" {
+                if let Some(slot) = operation["slot"].as_u64() {
+                    format!("Task assigned · Worker #{:02}", slot.saturating_add(1))
+                } else {
+                    "Task assigned · Station unavailable".into()
+                }
+            } else {
+                title(operation)
+            };
+            let mut detail = details(operation);
+            if is_assignment(operation) {
+                if detail.is_empty() {
+                    detail.push("Task summary unavailable".into());
+                }
+                detail.push(format!(
+                    "Task ID {}",
+                    operation["task_id"].as_str().unwrap_or("unavailable")
+                ));
+                if let (Some(slot), Some(epoch)) =
+                    (operation["slot"].as_u64(), operation["epoch"].as_u64())
+                {
+                    detail.push(format!(
+                        "Worker #{:02} · slot {slot} · epoch {epoch}",
+                        slot.saturating_add(1)
+                    ));
+                }
+            } else if operation["mode"] == "any" {
+                detail.push("ANY: at least one condition must be satisfied.".into());
+            } else if operation["mode"] == "all" {
+                detail
+                    .push("ALL: every condition must be satisfied in the same observation.".into());
+            }
+            detail.push(format!("Pool generation {generation} · operation {id}"));
+            output.push(ConversationEntry {
+                key: format!("worker-operation\0{generation}\0{id}"),
+                heading,
+                detail: detail
+                    .into_iter()
+                    .map(|text| panel::safe_text(&text))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            });
+        }
+        while self.observed.len() > 128 {
+            self.observed.pop_first();
+        }
+        output
+    }
+}
+
 fn duration(milliseconds: u64) -> String {
     if milliseconds < 60_000 {
         format!(
@@ -195,7 +299,10 @@ fn clip(text: &str, width: u16) -> String {
 }
 
 pub(super) fn compact(pool: &Value, width: u16, limit: usize) -> Vec<(String, PanelTone)> {
-    let operations = entries(pool);
+    let operations: Vec<_> = entries(pool)
+        .into_iter()
+        .filter(|operation| !is_assignment(operation))
+        .collect();
     let waiting = operations
         .iter()
         .take_while(|operation| operation["state"] == "waiting")
@@ -223,10 +330,7 @@ pub(super) fn compact(pool: &Value, width: u16, limit: usize) -> Vec<(String, Pa
             }
             if rows.len() < limit && limit > 2 {
                 rows.push((
-                    clip(
-                        "Full conditions and retained operations: main Statistics",
-                        width,
-                    ),
+                    clip("Full wait conditions: conversation", width),
                     PanelTone::Muted,
                 ));
             }
@@ -236,42 +340,22 @@ pub(super) fn compact(pool: &Value, width: u16, limit: usize) -> Vec<(String, Pa
     rows
 }
 
-/// Semantic lines; the caller wraps IDs to its own scrollable viewport.
-pub(super) fn full(pool: &Value) -> Vec<(String, PanelTone)> {
-    let operations = entries(pool);
-    if operations.is_empty() {
-        return Vec::new();
-    }
-    let mut rows = vec![("Coordinator activity".into(), PanelTone::Heading)];
-    if let Some(generation) = pool["generation"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-    {
-        rows.push((format!("Pool generation {generation}"), PanelTone::Muted));
-    }
-    rows.push((
-        "ANY: at least one condition · ALL: every condition in the same observation".into(),
-        PanelTone::Muted,
-    ));
-    rows.push((
-        "Times belong to one tool call; completed, failed or cancelled tasks are finished.".into(),
-        PanelTone::Muted,
-    ));
-    for operation in operations {
-        rows.push((String::new(), PanelTone::Normal));
-        rows.push((panel::safe_text(&title(operation)), tone(operation)));
-        rows.extend(
-            details(operation)
-                .into_iter()
-                .map(|text| (panel::safe_text(&text), PanelTone::Normal)),
-        );
-    }
-    rows
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn full(pool: &Value) -> Vec<(String, PanelTone)> {
+        ConversationFeed::default()
+            .update(pool)
+            .into_iter()
+            .flat_map(|entry| {
+                std::iter::once(entry.heading)
+                    .chain(entry.detail.lines().map(str::to_owned).collect::<Vec<_>>())
+            })
+            .map(|text| (text, PanelTone::Normal))
+            .collect()
+    }
+
     use serde_json::json;
 
     fn pool() -> Value {
@@ -335,20 +419,38 @@ mod tests {
     }
 
     #[test]
-    fn a_submission_is_not_an_assignment_and_narrow_details_are_explicitly_clipped() {
-        let pool = json!({"manager_operations":[{"operation_id":2,"kind":"submit",
-            "state":"submitted","task_id":"task-exact-123456789","summary":"Review the actual patch",
-            "targets":[],"elapsed_ms":0}]});
-        let rows = compact(&pool, 18, 2);
-        assert_eq!(rows.len(), 2);
-        assert!(rows[0].0.starts_with("Submitted"));
-        assert!(!rows.iter().any(|row| row.0.contains("Assigned")));
-        assert!(rows.iter().all(|row| row.0.width() <= 18));
-        assert!(rows[0].0.ends_with('…'));
-        assert!(
-            full(&pool)
-                .iter()
-                .any(|row| row.0.contains("task-exact-123456789"))
-        );
+    fn dispatch_feed_keeps_real_states_full_ids_and_generation_cursor() {
+        let mut pool = json!({"generation":"pool-a","manager_operations":[{
+            "operation_id":0,"kind":"submit","state":"submitted",
+            "task_id":"task-exact-123456789","summary":"Review the actual patch",
+            "targets":[],"elapsed_ms":0
+        }]});
+        assert!(compact(&pool, 18, 2).is_empty());
+        let mut feed = ConversationFeed::default();
+        let submitted = feed.update(&pool);
+        assert_eq!(submitted.len(), 1);
+        assert_eq!(submitted[0].heading, "Task submitted · Queued");
+        assert!(submitted[0].detail.contains("task-exact-123456789"));
+        assert!(feed.update(&pool).is_empty());
+        pool["manager_operations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "operation_id":1,"kind":"claim","state":"assigned","slot":2,"epoch":7,
+                "task_id":"task-exact-123456789","summary":"Review password=fixture-secret"
+            }));
+        let assigned = feed.update(&pool);
+        assert_eq!(assigned.len(), 1);
+        assert_eq!(assigned[0].heading, "Task assigned · Worker #03");
+        assert!(assigned[0].detail.contains("slot 2 · epoch 7"));
+        assert!(assigned[0].detail.contains("[redacted]"));
+        assert!(!assigned[0].detail.contains("fixture-secret"));
+        assert!(!assigned[0].heading.contains("done"));
+        pool["connected"] = json!(false);
+        pool["generation"] = json!("pool-b");
+        assert!(feed.update(&pool).is_empty());
+        pool["connected"] = json!(true);
+        assert_eq!(feed.update(&pool).len(), 2);
+        assert!(feed.update(&pool).is_empty());
     }
 }

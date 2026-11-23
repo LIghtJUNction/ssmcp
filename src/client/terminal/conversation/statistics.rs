@@ -225,12 +225,6 @@ fn rows(
     } else {
         push("No worker pool connected", PanelTone::Muted);
     }
-    let local_operations = workers.and_then(|workers| serde_json::to_value(workers).ok());
-    if let Some(pool) = local_operations.as_ref().or(linked) {
-        for (text, tone) in worker_operations::full(pool) {
-            push(&text, tone);
-        }
-    }
     output
 }
 
@@ -261,6 +255,28 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn statistics_keeps_pool_counts_without_coordination_history() {
+        let linked = json!({
+            "client_id":"linked-pool", "process_id":42, "total":3, "idle":1,
+            "working":2,"offline":0,"desired_total":3,"registered_workers":3,
+            "retiring":0,"queued":1,"generation":"pool",
+            "manager_operations":[{"operation_id":1,"kind":"claim","state":"assigned",
+                "task_id":"task-belongs-in-conversation","summary":"Inspect the layout",
+                "slot":2,"epoch":7}]
+        });
+        let text = rows(&json!({}), &json!({}), None, Some(&linked), 42, 100)
+            .into_iter()
+            .map(|row| row.0)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Workers 3 · Idle 1 · Working 2"));
+        assert!(text.contains("Queued tasks 1"));
+        assert!(!text.contains("Coordinator activity"));
+        assert!(!text.contains("task-belongs-in-conversation"));
+        assert!(!text.contains("Inspect the layout"));
+    }
 
     fn worker(client: &str, thread: &str) -> crate::worker::Snapshot {
         crate::worker::Snapshot {

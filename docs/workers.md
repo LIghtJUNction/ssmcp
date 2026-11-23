@@ -86,11 +86,13 @@ Registered worker participants and idle stations are separate counts. Three newl
 
 ## Use the monitor
 
-Select a station to inspect its retained activity. The left column scrolls through its real work log; the right column refreshes its current summary and measurements in fixed positions. Scrolling logs does not scroll the status column.
+Select a station to inspect its retained activity. Wide terminals give most of the width to the work log and keep a smaller activity column in a fixed position. Narrow terminals show a compact task summary above the full-width log. Scrolling the log does not scroll the activity column.
 
 | Control | Action |
 | --- | --- |
-| Left / Right | Select the previous or next worker. |
+| Left / Right or Tab / Shift+Tab | Select the previous or next worker. |
+| T | Switch between the log and full task details, including complete task and manager IDs. |
+| Enter | Expand or compact command arguments in the selected worker's log. |
 | Up / Down | Scroll the selected worker's log. |
 | Page Up / Page Down | Scroll that log by a page. |
 | Home | Show its earliest retained entry. |
@@ -105,11 +107,15 @@ In an attached worker window, Ctrl+R replaces the worker child while keeping the
 
 Reload is refused while tasks are running or queued; the worker panel shows the reason. Finish the tasks, or cancel them and wait for their acknowledgements and cleanup, before retrying. An accepted reload follows the existing connection cleanup and starts a fresh in-memory pool. It does not resume old tasks or prove that an external executor has stopped.
 
+Log rows use a muted time column, a short event label and aligned body text. Continuation lines stay under the body. RUN marks a reported command start; DONE requires an explicit exit 0; END means the finish record did not include an outcome. Warnings, failures and nonzero exit codes remain visible. Command start and finish records stay separate and preserve their observed order. Enter reveals retained command arguments; changing the view preserves the selected worker and its log anchor.
+
 Each station retains up to 64 log entries within a 16 KiB budget; an entry's text is limited to 1 KiB. Older entries drop out as new activity arrives, so Home only reaches the earliest retained entry. The monitor shows task summaries and work attributed to that station. A missing command or progress report remains explicitly unavailable. Full task results remain accessible through the authenticated `worker.result` workflow.
 
 The status column shows current and accumulated work time and the last three completed task durations when those observations are available. Resource readings identify the process they measure. An external model has no implied local PID, so its CPU and memory use cannot be inferred from the worker window. Local client measurements, their bounded line chart, and the CPU heat value refer to the worker client process and are labelled accordingly; unavailable samples remain unavailable.
 
-The monitor shows the worker process's OS PID and its bound manager identity when space permits. Full client and thread IDs wrap across rows on larger screens. Smaller screens use a compact binding status or omit these rows to preserve the task, log and measurement areas. The main window's Statistics page provides a scrollable view of both windows' IDs and the linked pool's counts. These displays observe identity without choosing a message recipient or acquiring management rights.
+The monitor header shows the worker process's OS PID and a compact manager binding status when space permits. Press T to read the full task and complete manager client and thread IDs. The main window's Statistics page also provides a scrollable view of both windows' IDs and the linked pool's counts. These displays observe identity without choosing a message recipient or acquiring management rights.
+
+Task submission and assignment records appear in the main conversation, in operation order. Each card identifies the observed state and assigned worker, when known; expand it to read the retained summary, exact task ID, station epoch and pool generation. Repainting does not duplicate cards. These records use the conversation's existing bounded history and scroll behavior. Wait operations also keep their full conditions in expandable conversation cards. A live wait updates its existing card without adding repeated entries or changing its position. Statistics keeps pool counts and identity.
 
 ## Bind the main agent and manage tasks
 

@@ -118,6 +118,7 @@ type SidebarAgentRow = (String, PanelTone, Option<SidebarAgentIdentity>);
 pub(super) struct Conversation {
     pub(super) composer: Composer,
     pub(super) worker_activity_rows: u16,
+    worker_assignments: worker_operations::ConversationFeed,
     #[cfg(test)]
     worker_activity_fixture: Option<Value>,
     pub(super) preferred_input_rows: Option<u16>,
@@ -3021,6 +3022,12 @@ impl State {
         self.events.set_scope(events::EventScope::Conversation);
         self.conversation.logs_open = self.conversation.view == View::Logs;
         self.chat_updates();
+        if let Some(pool) = self.chat_worker_operations() {
+            for entry in self.conversation.worker_assignments.update(&pool) {
+                self.events
+                    .ingest_worker_operation(&entry.key, &entry.heading, &entry.detail);
+            }
+        }
         if self.conversation.view == View::Tasks
             && let Err(error) = self.conversation.tasks.refresh(self.preview)
         {
@@ -3752,6 +3759,136 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    fn assignment_fixture() -> Value {
+        json!({
+            "generation":"assignment-fixture",
+            "manager_operations":[
+                {"operation_id":1,"kind":"submit","state":"submitted",
+                 "task_id":"worker_task_assignment_fixture_17",
+                 "summary":"Review the worker log · 检查换行与独立滚动"},
+                {"operation_id":2,"kind":"claim","state":"assigned","slot":2,"epoch":7,
+                 "task_id":"worker_task_assignment_fixture_17",
+                 "summary":"Review the worker log · 检查换行与独立滚动"}
+            ]
+        })
+    }
+
+    #[test]
+    fn worker_assignments_belong_to_conversation_and_repaints_do_not_replay_them() {
+        for cols in [120, 48] {
+            let mut state = preview(40, cols);
+            state.events.clear();
+            state.conversation.composer.set_text("Keep this draft");
+            state.conversation.worker_activity_fixture = Some(assignment_fixture());
+            let text = display(&mut state).screen().contents();
+            assert!(
+                text.contains("Task submitted") && text.contains("Task assigned"),
+                "{text}"
+            );
+            assert!(text.contains("Worker #03") && text.contains("Review the worker log"));
+            assert_eq!(state.conversation.worker_activity_rows, 0);
+            assert_eq!(state.events.snapshot()["retained_events"], 2);
+            display(&mut state);
+            assert_eq!(state.events.snapshot()["retained_events"], 2);
+            assert!(worker_operations::compact(&assignment_fixture(), cols, 2).is_empty());
+            state.events.open();
+            let details = display(&mut state).screen().contents();
+            assert!(
+                details.contains("worker_task_assignment_fixture_17"),
+                "{details}"
+            );
+            assert!(details.contains("epoch 7"));
+            assert_eq!(state.conversation.composer.text(), "Keep this draft");
+            assert!(state.conversation.target.is_none());
+            // A disconnected snapshot does not fabricate a new dispatch.
+            state.conversation.worker_activity_fixture.as_mut().unwrap()["connected"] =
+                json!(false);
+            display(&mut state);
+            assert_eq!(state.events.snapshot()["retained_events"], 2);
+        }
+    }
+
+    #[test]
+    #[ignore = "writes production conversation frames to SSMCP_WORKER_SNAPSHOT_DIR"]
+    fn worker_assignment_visual_fixture() {
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("SSMCP_WORKER_SNAPSHOT_DIR").expect("snapshot output directory"),
+        );
+        std::fs::create_dir_all(&directory).unwrap();
+        for (rows, cols, name) in [
+            (32, 132, "conversation-wide"),
+            (26, 60, "conversation-narrow"),
+        ] {
+            let mut state = preview(rows, cols);
+            state.events.clear();
+            state.ui.color = true;
+            state.log_message(
+                "user",
+                "Make the worker log easier to read and show task assignments here.",
+                b"",
+            );
+            state.conversation.worker_activity_fixture = Some(assignment_fixture());
+            let frame = state.chat_frame(Instant::now());
+            std::fs::write(directory.join(format!("{name}.ansi")), frame.diff(None)).unwrap();
+            std::fs::write(
+                directory.join(format!("{name}.json")),
+                serde_json::to_vec(&json!({"rows":rows,"cols":cols})).unwrap(),
+            )
+            .unwrap();
+            state.events.open();
+            let frame = state.chat_frame(Instant::now());
+            std::fs::write(
+                directory.join(format!("{name}-detail.ansi")),
+                frame.diff(None),
+            )
+            .unwrap();
+            std::fs::write(
+                directory.join(format!("{name}-detail.json")),
+                serde_json::to_vec(&json!({"rows":rows,"cols":cols})).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn worker_wait_card_updates_in_place_and_retains_expanded_conditions() {
+        let mut state = preview(36, 100);
+        state.events.clear();
+        state
+            .conversation
+            .composer
+            .set_text("Do not replace this draft");
+        state.conversation.worker_activity_fixture = Some(json!({
+            "generation":"wait-fixture", "manager_operations":[{
+                "operation_id":7,"kind":"wait_for","state":"waiting","mode":"all",
+                "elapsed_ms":500,"wait_ms":5000,
+                "targets":[{"kind":"worker_idle","slot":1,"epoch":41}]
+            }]
+        }));
+        display(&mut state);
+        state.events.open();
+        let before = state.events.snapshot();
+        let id = before["events"][0]["id"].clone();
+        for elapsed in [1000, 2000, 3000] {
+            state.conversation.worker_activity_fixture.as_mut().unwrap()["manager_operations"][0]
+                ["elapsed_ms"] = json!(elapsed);
+            display(&mut state);
+            assert_eq!(state.events.snapshot()["retained_events"], 1);
+            assert_eq!(state.events.snapshot()["events"][0]["id"], id);
+            assert_eq!(state.events.snapshot()["events"][0]["expanded"], true);
+        }
+        state.conversation.worker_activity_fixture.as_mut().unwrap()["manager_operations"][0]["state"] =
+            json!("timed_out");
+        let text = display(&mut state).screen().contents();
+        assert!(text.contains("Timed out"), "{text}");
+        assert!(text.contains("slot 1, epoch 41"), "{text}");
+        assert_eq!(state.events.snapshot()["retained_events"], 1);
+        assert_eq!(
+            state.conversation.composer.text(),
+            "Do not replace this draft"
+        );
     }
 
     #[test]

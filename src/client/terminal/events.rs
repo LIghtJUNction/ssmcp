@@ -276,7 +276,9 @@ impl Event {
                         result = true;
                         continue;
                     }
-                    "RUN" | "REQ" | "OK" | "SAVE" | "READ" | "WRITE" | "EDIT" => continue,
+                    "RUN" | "REQ" | "OK" | "SAVE" | "READ" | "WRITE" | "EDIT" | "WORKER" => {
+                        continue;
+                    }
                     "ERR" | "WARN" => {
                         error_section = true;
                         source = false;
@@ -1027,6 +1029,39 @@ impl EventView {
             bytes,
             Meta {
                 history: self.local_display_history(),
+                ..Meta::default()
+            },
+        );
+    }
+
+    /// An observed worker operation uses the existing bounded conversation
+    /// viewport. Live wait updates replace their own card without moving its
+    /// position or masquerading as an assistant message or executable command.
+    pub(super) fn ingest_worker_operation(&mut self, key: &str, heading: &str, detail: &str) {
+        let body = format!("[WORKER] {heading}\n{detail}\n");
+        if let Some(event) = self
+            .events
+            .iter_mut()
+            .find(|event| event.meta.keys.iter().any(|existing| existing == key))
+        {
+            let (text, truncated) = retained_text(body.as_bytes());
+            let plain = unstyled(&text);
+            event.summary = event_summary(&plain, plain.lines().next().unwrap_or(""));
+            event.lines = plain.lines().count().max(1);
+            event.text = text;
+            event.truncated = truncated;
+            event.cache = None;
+            self.prune();
+            self.preserve_read_selection();
+            return;
+        }
+        self.read_boundary.interrupt();
+        self.ingest_inner(
+            body.as_bytes(),
+            Meta {
+                kind: Kind::Tool,
+                history: self.local_display_history(),
+                keys: vec![key.to_owned()],
                 ..Meta::default()
             },
         );
