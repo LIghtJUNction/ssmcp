@@ -17,7 +17,7 @@ fn start(fixture: &Fixture, arguments: Value) -> JoinHandle<Value> {
 }
 
 fn target(fixture: &Fixture) -> Value {
-    json!({"type":"agent_status","agent_id":fixture.agent_id,"statuses":["display-fixture-ready"]})
+    json!({"type":"agent_status","agent_id":fixture.agent_id,"statuses":["retiring"]})
 }
 
 async fn snapshot(
@@ -124,7 +124,7 @@ async fn public_wait_display_works_with_every_native_slot_held_without_calls_or_
     assert_eq!(display.target_labels.len(), 1);
     assert!(display.target_labels[0].contains("requested status"));
     assert!(display.target_details[0].contains(&fixture.agent_id));
-    assert!(display.target_details[0].contains("display-fixture-ready"));
+    assert!(display.target_details[0].contains("retiring"));
     assert_eq!(display.mode, wire::wait_display::Mode::Any);
     assert_eq!(display.outcome, wire::wait_display::Outcome::Pending);
     assert_eq!(display.window_ms, 5000);
@@ -138,9 +138,24 @@ async fn public_wait_display_works_with_every_native_slot_held_without_calls_or_
     assert!(!encoded.contains(&fixture.token));
     assert!(!encoded.contains(&fixture.agent_token));
     assert!(!encoded.contains("completion_permission"));
-    fixture.session.collaboration.dispatch(&fixture.owner, "update", json!({
-        "agent_id":fixture.agent_id,"token":fixture.agent_token,"status":"display-fixture-ready"
-    })).await.unwrap();
+    let lifecycle = fixture
+        .session
+        .collaboration
+        .lifecycle_snapshot(&fixture.owner, &fixture.agent_id, &fixture.agent_token)
+        .unwrap();
+    fixture
+        .session
+        .collaboration
+        .dispatch(
+            &fixture.owner,
+            "update",
+            json!({
+                "agent_id":fixture.agent_id,"token":fixture.agent_token,"status":"retiring",
+                "expected_revision":lifecycle["lifecycle"]["revision"]
+            }),
+        )
+        .await
+        .unwrap();
     let response = waiting.await.unwrap();
     assert_eq!(response["structuredContent"]["status"], "ready");
     assert_eq!(response["structuredContent"]["wait_id"], display.wait_id);

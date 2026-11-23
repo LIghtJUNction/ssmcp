@@ -236,7 +236,7 @@ impl Arguments {
                         Target::Finish { .. } => return Err("tool_retired: await finish targets are disabled".into()),
                         Target::AgentStatus { agent_id, statuses } if !identifier(agent_id, 64)
                             || statuses.is_empty() || statuses.len() > 16
-                            || statuses.iter().any(|s| s.trim().is_empty() || s.len() > 128 || s.chars().any(char::is_control)) => return Err("agent_status requires a registered agent_id and 1..=16 status strings".into()),
+                            || statuses.iter().any(|s| s.len() > 128 || serde_json::from_value::<crate::collab::lifecycle::Status>(json!(s)).is_err()) => return Err("agent_status requires a registered agent_id and 1..=16 lifecycle values: working, idle, offline, dreaming, retiring".into()),
                         Target::AgentMessages { after, limit } if *limit == 0 || *limit > 64
                             || after.is_some_and(|cursor| cursor > (1_u64 << 53) - 1) => return Err("agent_messages requires limit 1..=64 and a valid receive cursor".into()),
                         Target::Event { subscription_id, limit } if !identifier(subscription_id, 128)
@@ -2003,7 +2003,7 @@ pub(super) fn tool() -> Value {
                 {"type":"object","additionalProperties":false,"required":["type","id"],"properties":{"type":{"const":"job"},"id":{"type":"string","minLength":1,"maxLength":128}}},
                 {"type":"object","additionalProperties":false,"required":["type","task_id"],"properties":{"type":{"const":"worker_result"},"task_id":{"type":"string","minLength":1,"maxLength":128}}},
                 {"type":"object","additionalProperties":false,"required":["type","request_id"],"properties":{"type":{"const":"worker_assignment"},"request_id":{"type":"string","minLength":1,"maxLength":128}}},
-                {"type":"object","additionalProperties":false,"required":["type","agent_id","statuses"],"properties":{"type":{"const":"agent_status"},"agent_id":{"type":"string","minLength":1,"maxLength":64},"statuses":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","minLength":1,"maxLength":128}}}},
+                {"type":"object","additionalProperties":false,"required":["type","agent_id","statuses"],"properties":{"type":{"const":"agent_status"},"agent_id":{"type":"string","minLength":1,"maxLength":64},"statuses":{"type":"array","minItems":1,"maxItems":16,"items":crate::collab::lifecycle::status_schema()}}},
                 {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"agent_messages"},"after":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":64,"default":32}}},
                 {"type":"object","additionalProperties":false,"required":["type","subscription_id"],"properties":{"type":{"const":"event"},"subscription_id":{"type":"string","minLength":1,"maxLength":128},"limit":{"type":"integer","minimum":1,"maximum":64,"default":32}}},
                 {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"user_input"},"reason":{"type":"string","minLength":1,"maxLength":512},"notify":{"type":"boolean","default":true}}},

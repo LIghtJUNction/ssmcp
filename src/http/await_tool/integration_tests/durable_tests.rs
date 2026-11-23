@@ -2,7 +2,7 @@ use super::*;
 
 fn request(fixture: &Fixture, request_id: &str) -> Value {
     json!({"request_id":request_id,"lifetime_ms":600_000,"window_ms":55_000,
-        "targets":[{"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["ready"]}]})
+        "targets":[{"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["idle"]}]})
 }
 
 async fn created(fixture: &Fixture, request_id: &str) -> Arc<Record> {
@@ -59,7 +59,7 @@ async fn dropped_http_create_completes_in_background_and_reconnect_reuses_its_sn
     first.abort();
     assert!(first.await.unwrap_err().is_cancelled());
     // No await read is alive when the real collaboration notification arrives.
-    fixture.update(&fixture.peer, "ready").await;
+    fixture.update(&fixture.peer, "idle").await;
     settled(&record).await;
     let status = fixture
         .public(&fixture.member, json!({"op":"status","wait_id":record.id}))
@@ -118,7 +118,7 @@ async fn dropping_the_code_mode_helper_future_does_not_own_the_durable_observer(
     drop(future);
     drop(report);
     assert!(record.active.load(Ordering::Acquire));
-    fixture.update(&fixture.peer, "ready").await;
+    fixture.update(&fixture.peer, "idle").await;
     settled(&record).await;
     assert_eq!(
         fixture
@@ -157,7 +157,7 @@ async fn cancel_deadline_and_unknown_target_are_cached_without_restarting_target
         "cancelled"
     );
     settled(&record).await;
-    fixture.update(&fixture.peer, "still_alive").await;
+    fixture.update(&fixture.peer, "working").await;
     let cancelled = fixture
         .public(&fixture.member, json!({"wait_id":record.id,"after":0}))
         .await;
@@ -179,7 +179,7 @@ async fn cancel_deadline_and_unknown_target_are_cached_without_restarting_target
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["still_alive"]
+            "type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["working"]
         }));
     let deadline = fixture.public(&fixture.member, deadline_request).await;
     assert_eq!(deadline["status"], "timed_out");

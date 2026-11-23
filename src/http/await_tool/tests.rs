@@ -44,7 +44,7 @@ fn arguments_accept_typed_targets_and_apply_bounded_defaults() {
     let args = create(json!([
         {"type":"exec", "job_id":"exec_1"},
         {"type":"job", "id":"relay_1"},
-        {"type":"agent_status", "agent_id":"agent_1", "statuses":["done", "failed"]},
+        {"type":"agent_status", "agent_id":"agent_1", "statuses":["working", "offline"]},
         {"type":"agent_messages"},
         {"type":"event", "subscription_id":"events_1"}
     ]));
@@ -64,7 +64,7 @@ fn arguments_accept_typed_targets_and_apply_bounded_defaults() {
             },
             Target::AgentStatus {
                 agent_id: "agent_1".into(),
-                statuses: vec!["done".into(), "failed".into()]
+                statuses: vec!["working".into(), "offline".into()]
             },
             Target::AgentMessages {
                 after: None,
@@ -128,7 +128,7 @@ fn arguments_reject_unknown_fields_and_untyped_target_aliases() {
     for target in [
         json!({"type":"exec", "job_id":"exec_1", "cancel":true}),
         json!({"type":"job", "id":"job_1", "command":"true"}),
-        json!({"type":"agent_status", "agent_id":"agent_1", "statuses":["done"], "owner":"user"}),
+        json!({"type":"agent_status", "agent_id":"agent_1", "statuses":["working"], "owner":"user"}),
         json!({"type":"agent_messages", "acknowledge":true}),
         json!({"type":"event", "subscription_id":"events_1", "acknowledge":true}),
         json!({"type":"event", "subscription_id":"events_1", "client_ids":["other_client"]}),
@@ -188,6 +188,25 @@ fn user_input_stays_single_target_and_finish_is_retired_in_both_modes() {
             .expect("finish target is retired");
             assert!(error.starts_with("tool_retired:"), "{error}");
         }
+    }
+}
+
+#[test]
+fn agent_status_targets_accept_only_the_five_lifecycle_states() {
+    for state in ["working", "idle", "offline", "dreaming", "retiring"] {
+        let arguments = json!({
+            "client_id":"fixture_client",
+            "agent":{"id":"agent_1","token":"a".repeat(64)},
+            "targets":[{"type":"agent_status","agent_id":"agent_2","statuses":[state]}]
+        });
+        assert!(Arguments::parse(arguments).is_ok(), "{state}");
+    }
+    for state in ["done", "failed", "joined", "running", "standby", "exited"] {
+        reject(json!({
+            "client_id":"fixture_client",
+            "agent":{"id":"agent_1","token":"a".repeat(64)},
+            "targets":[{"type":"agent_status","agent_id":"agent_2","statuses":[state]}]
+        }));
     }
 }
 
@@ -674,7 +693,7 @@ fn target_payloads_cannot_promote_ready_to_completion_permission() {
         },
         Target::AgentStatus {
             agent_id: "agent_1".into(),
-            statuses: vec!["done".into()],
+            statuses: vec!["working".into()],
         },
         Target::AgentMessages {
             after: None,
