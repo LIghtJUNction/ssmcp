@@ -545,8 +545,16 @@ def main():
             preview.send(b"\x1b[D")
             statistics = preview.until(
                 lambda s: column(s) == ("statistics", 1, 7)
-                and "Statistics" in body_text(s),
-                "Left entering the first Statistics column",
+                and "Enter diagnostics" in body_text(s),
+                "Left entering the first Statistics column summary",
+            )
+            check("Tool calls · retained in this window" in body_text(statistics)
+                  and "Session process ID" not in body_text(statistics),
+                  "Statistics summary presents retained calls without diagnostic identifiers")
+            preview.send(b"\r")
+            statistics = preview.until(
+                lambda s: view(s, "statistics") and "Enter summary" in body_text(s),
+                "Enter opening exact Statistics diagnostics",
             )
             check("Preview · sample data" in body_text(statistics)
                   and re.search(r"Session process ID\s+unbound\b", body_text(statistics))
@@ -559,6 +567,9 @@ def main():
                   and statistics["hide_cursor"],
                   "Statistics labels retained tool counts and uses read-only content focus")
             save_shot(args.out, "statistics", statistics)
+            preview.send(b"\x1b")
+            preview.until(lambda s: view(s, "statistics") and "Enter diagnostics" in body_text(s),
+                          "Escape closing Statistics diagnostics")
             preview.send(b"\x1b")
             returned = preview.until(lambda s: view(s, "conversation") and not s["hide_cursor"],
                                      "Escape returning from Statistics to the conversation")
@@ -599,6 +610,9 @@ def main():
             preview.until(lambda s: column(s) == ("statistics", 1, 8)
                           and "切换保留 界" in prompt_text(s),
                           "Statistics opened with an explicit recipient and a Unicode draft")
+            preview.send(b"\r")
+            preview.until(lambda s: view(s, "statistics") and "Enter summary" in body_text(s),
+                          "Statistics diagnostics opened before resizing")
             preview.resize(18, 52)
             narrow_statistics = preview.until(
                 lambda s: s["size"] == [18, 52] and view(s, "statistics")
@@ -616,6 +630,9 @@ def main():
             preview.resize(30, 120)
             preview.until(lambda s: s["size"] == [30, 120] and view(s, "statistics"),
                           "Statistics restored to the original terminal size")
+            preview.send(b"\r")
+            preview.until(lambda s: view(s, "statistics") and "Enter diagnostics" in body_text(s),
+                          "Enter returning from diagnostics to the Statistics summary")
             preview.send(b"\x1b[C")
             after_statistics = preview.until(
                 lambda s: view(s, "conversation") and not s["hide_cursor"]
