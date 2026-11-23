@@ -663,7 +663,8 @@ async fn local_composer_delivers_at_response_boundary_and_exact_targets_require_
         .await
         .unwrap();
     assert_eq!(snapshot.agents[0].agent_id, agent_id);
-    assert_eq!(snapshot.agents[0].status, "available");
+    // Publish captures presence before the queued-input wake changes the live member.
+    assert_eq!(snapshot.agents[0].status, "idle");
     assert!(!serde_json::to_string(&snapshot).unwrap().contains(token));
     let unbound = server
         .call(
