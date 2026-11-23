@@ -258,6 +258,7 @@ mod tests {
     }
     fn message(text: &str) -> history::Message {
         history::Message {
+            input_origin: None,
             id: "message_00000000000000000000000000000001".into(),
             role: "assistant".into(),
             kind: "agent_message".into(),
