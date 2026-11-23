@@ -33,6 +33,10 @@ pub struct Process {
     harness: Option<crate::client::agent::Selection>,
 }
 impl Process {
+    pub(crate) fn local_command_stats(&self) -> shell::LocalCommandStats {
+        self.shell.local_command_stats()
+    }
+
     pub async fn start(shell_path: &Path) -> crate::Result<Arc<Self>> {
         Self::with_output(
             shell_path,

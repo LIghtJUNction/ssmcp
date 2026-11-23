@@ -278,7 +278,14 @@ async fn execute_shell(runtime: Arc<Runtime>, raw: String, arguments: Value) -> 
 
 /// Run only a command the local user explicitly submitted with the ASCII ! prefix.
 pub(crate) fn submit_shell(raw: &str) -> Result<(), String> {
-    let arguments = shell_arguments(raw)?;
+    submit_shell_with_tracking(raw, false)
+}
+
+pub(crate) fn submit_shell_with_tracking(raw: &str, track: bool) -> Result<(), String> {
+    let mut arguments = shell_arguments(raw)?;
+    if track {
+        arguments["track_artifacts"] = json!(true);
+    }
     let binding = binding()?;
     let runtime = binding
         .runtime
@@ -291,6 +298,11 @@ pub(crate) fn submit_shell(raw: &str) -> Result<(), String> {
     let slot = Slot::acquire()?;
     let raw = raw.trim().to_owned();
     let source = crate::runtime::call_scope::Source::capture();
+    let source = if track {
+        source.with_local_artifact_tracking()
+    } else {
+        source
+    };
     handle.spawn(source.scope(async move {
         let _slot = slot;
         if let Err(error) = execute_shell(runtime, raw, arguments).await {

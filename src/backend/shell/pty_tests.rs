@@ -535,3 +535,138 @@ while True: signal.pause()
     assert_eq!(stopped["running"], false);
     shell.shutdown().await;
 }
+
+#[tokio::test]
+async fn local_statistics_unify_pty_starts_without_counting_observations_or_main() {
+    let shell = Shell::with_terminal(
+        Path::new("/bin/sh"),
+        std::env::current_dir().unwrap(),
+        OutputStore::new_connection().unwrap(),
+    )
+    .unwrap();
+    for _ in 0..3 {
+        shell.call("terminal.list", json!({})).await.unwrap();
+        shell.call("terminal.status", json!({})).await.unwrap();
+        shell.call("ssmcp.exec.list", json!({})).await.unwrap();
+        shell
+            .call("ssmcp.exec.status", json!({"job_id":"main"}))
+            .await
+            .unwrap();
+        let stats = shell.local_command_stats();
+        assert_eq!((stats.calls, stats.spawned, stats.start_errors), (0, 0, 0));
+        assert!(stats.jobs.is_empty());
+    }
+
+    let explicit = start(&shell, json!(["/bin/sh", "-c", "sleep 0.02; exit 7"])).await;
+    let id = explicit["job_id"].as_str().unwrap();
+    assert_eq!(wait(&shell, id).await["exit_code"], 7);
+    let compatibility = shell
+        .call("terminal.open", json!({"name":"statistics fixture"}))
+        .await
+        .unwrap();
+    let alias = compatibility["job_id"].as_str().unwrap();
+    assert_eq!(compatibility["terminal_id"], alias);
+    shell
+        .call(
+            "terminal.write",
+            json!({"terminal_id":alias,"data":"exit 0\n"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wait(&shell, alias).await["exit_code"], 0);
+
+    // Both validation paths reject before spawning and each counts once.
+    assert!(
+        shell
+            .call(
+                "ssmcp.exec.start",
+                json!({"mode":"pty","command":["must-not-spawn"],"stdin":"pipe"})
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        shell
+            .call("terminal.open", json!({"name":""}))
+            .await
+            .is_err()
+    );
+
+    // Explicit caller identity must survive the compatibility route, even
+    // when call_scoped is entered outside that caller's task-local scope.
+    let remote = crate::runtime::call_scope::CallScope::from_relay_for_client(
+        91,
+        Some("statistics-remote"),
+        1,
+        None,
+        None,
+    )
+    .unwrap();
+    let source = remote
+        .scope(async { crate::runtime::call_scope::Source::capture() })
+        .await;
+    let hidden = shell
+        .call_scoped(
+            "terminal.open",
+            json!({"name":"remote fixture"}),
+            source.clone(),
+        )
+        .await
+        .unwrap();
+    let hidden_exec = shell
+        .call_scoped(
+            "ssmcp.exec.start",
+            json!({"mode":"pty","command":["/bin/sh","-c","exit 0"]}),
+            source,
+        )
+        .await
+        .unwrap();
+    wait(&shell, hidden_exec["job_id"].as_str().unwrap()).await;
+
+    let before = shell.local_command_stats();
+    let duration = before
+        .jobs
+        .iter()
+        .find(|job| job.id == id)
+        .unwrap()
+        .duration_ms;
+    assert!(duration >= 10);
+    for _ in 0..3 {
+        for job in [id, alias] {
+            shell
+                .call("ssmcp.exec.status", json!({"job_id":job}))
+                .await
+                .unwrap();
+            shell
+                .call("ssmcp.exec.read", json!({"job_id":job,"max_bytes":1024}))
+                .await
+                .unwrap();
+            shell
+                .call("ssmcp.exec.wait", json!({"job_id":job,"wait_ms":0}))
+                .await
+                .unwrap();
+            shell
+                .call("terminal.status", json!({"terminal_id":job}))
+                .await
+                .unwrap();
+        }
+        shell.call("terminal.list", json!({})).await.unwrap();
+        shell.call("ssmcp.exec.list", json!({})).await.unwrap();
+        let stats = shell.local_command_stats();
+        assert_eq!((stats.calls, stats.spawned, stats.start_errors), (4, 2, 2));
+        assert_eq!(stats.jobs.len(), 2);
+        assert!(stats.jobs.iter().all(|job| job.id != "main"
+            && job.id != hidden["job_id"].as_str().unwrap()
+            && job.id != hidden_exec["job_id"].as_str().unwrap()));
+        let failed = stats.jobs.iter().find(|job| job.id == id).unwrap();
+        assert_eq!(failed.state, "failed");
+        assert_eq!(failed.mode, "pty");
+        assert_eq!(failed.duration_ms, duration);
+        assert!(failed.usage.is_none(), "PTY has no wait4 accounting report");
+        assert_eq!(
+            stats.jobs.iter().find(|job| job.id == alias).unwrap().state,
+            "completed"
+        );
+    }
+    shell.shutdown().await;
+}

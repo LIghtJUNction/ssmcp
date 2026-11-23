@@ -157,6 +157,7 @@ struct PtyStart {
 
 struct State {
     running: bool,
+    usage: Option<super::process::ResourceUsage>,
     #[cfg(target_os = "linux")]
     tree_reaped: bool,
     exit_code: Option<i32>,
@@ -193,6 +194,8 @@ struct Job {
     artifacts: Option<Mutex<artifacts::Artifacts>>,
     #[cfg(target_os = "linux")]
     temporary_artifacts: bool,
+    #[cfg(target_os = "linux")]
+    disk_delta: std::sync::OnceLock<(Option<u64>, bool)>,
 }
 impl Job {
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -287,10 +290,31 @@ fn same_artifact_owner(
 }
 
 #[derive(Default)]
+pub(crate) struct LocalCommandStats {
+    pub calls: u64,
+    pub spawned: u64,
+    pub start_errors: u64,
+    pub jobs: Vec<LocalCommandRow>,
+}
+
+pub(crate) struct LocalCommandRow {
+    pub id: String,
+    pub mode: &'static str,
+    pub duration_ms: u64,
+    pub state: &'static str,
+    pub usage: Option<super::process::ResourceUsage>,
+    pub disk_delta: Option<(Option<u64>, bool)>,
+    pub disk_tracking: bool,
+}
+
+#[derive(Default)]
 struct Registry {
     jobs: HashMap<String, Arc<Job>>,
     selected: String,
     closed: bool,
+    local_calls: u64,
+    local_spawned: u64,
+    local_start_errors: u64,
     #[cfg(target_os = "linux")]
     retired_temporary: VecDeque<Arc<Job>>,
 }
@@ -478,6 +502,11 @@ impl Shell {
                 return Err(format!("could not start PTY command: {error}"));
             }
         };
+        // The connection's implicit main terminal is infrastructure, not a
+        // submitted command. Compatibility terminal.open shares this spawn.
+        if creator.call.is_none() && args.id != "main" {
+            registry.local_spawned = registry.local_spawned.saturating_add(1);
+        }
         let (cancel, mut cancel_rx) = watch::channel(false);
         let (input_stopped, _) = watch::channel(false);
         let mut stderr = Output::new(&self.output, format!("job:{}:stderr", args.id));
@@ -491,6 +520,7 @@ impl Shell {
             cwd: args.cwd,
             timing,
             state: Mutex::new(State {
+                usage: None,
                 running: true,
                 #[cfg(target_os = "linux")]
                 tree_reaped: false,
@@ -518,6 +548,8 @@ impl Shell {
             artifacts: None,
             #[cfg(target_os = "linux")]
             temporary_artifacts: false,
+            #[cfg(target_os = "linux")]
+            disk_delta: std::sync::OnceLock::new(),
         });
         if let Some(id) = evicted {
             registry.forget(&id);
@@ -662,7 +694,12 @@ impl Shell {
         Ok(result)
     }
 
-    async fn terminal_call(&self, name: &str, args: Value) -> Result<Value, String> {
+    async fn terminal_call(
+        &self,
+        name: &str,
+        args: Value,
+        creator: crate::runtime::call_scope::Source,
+    ) -> Result<Value, String> {
         match name {
             "terminal.open" => {
                 #[derive(Deserialize)]
@@ -722,7 +759,7 @@ impl Shell {
                         live: true,
                         compatibility_limit: true,
                     },
-                    crate::runtime::call_scope::Source::capture(),
+                    creator,
                 )?;
                 if args.select {
                     let mut registry = self.registry();
@@ -966,6 +1003,88 @@ impl Shell {
             ),
         ]
     }
+    pub(crate) fn local_command_stats(&self) -> LocalCommandStats {
+        // Copy the bounded registry projection before inspecting job state.
+        // This path never starts a process, samples disk, or increments counters.
+        let (calls, spawned, start_errors, mut jobs) = {
+            let registry = self.registry();
+            let jobs: Vec<_> = registry
+                .jobs
+                .values()
+                .filter(|job| job.id != "main" && job.creator.call.is_none())
+                .cloned()
+                .collect();
+            (
+                registry.local_calls,
+                registry.local_spawned,
+                registry.local_start_errors,
+                jobs,
+            )
+        };
+        let now = Instant::now();
+        jobs.sort_unstable_by_key(|job| std::cmp::Reverse(job.timing.started));
+        let jobs = jobs
+            .into_iter()
+            .take(20)
+            .map(|job| {
+                let state = job.state();
+                let through = state.finished.unwrap_or(now).into_std();
+                LocalCommandRow {
+                    id: job.id.clone(),
+                    mode: if job.terminal.is_some() {
+                        "pty"
+                    } else {
+                        "pipes"
+                    },
+                    duration_ms: job.timing.elapsed_ms(through),
+                    usage: state.usage,
+                    disk_tracking: {
+                        #[cfg(target_os = "linux")]
+                        {
+                            job.artifacts.is_some()
+                        }
+                        #[cfg(not(target_os = "linux"))]
+                        {
+                            false
+                        }
+                    },
+                    disk_delta: {
+                        #[cfg(target_os = "linux")]
+                        {
+                            job.disk_delta.get().copied()
+                        }
+                        #[cfg(not(target_os = "linux"))]
+                        {
+                            None
+                        }
+                    },
+                    state: if state.running {
+                        "running"
+                    } else if state.cancelled {
+                        "cancelled"
+                    } else if state.timed_out {
+                        "timed out"
+                    } else if state.error.is_some()
+                        || state.exit_signal.is_some()
+                        || state.exit_code.is_some_and(|code| code != 0)
+                    {
+                        "failed"
+                    } else if state.exit_code == Some(0) {
+                        "completed"
+                    } else {
+                        "unknown"
+                    },
+                }
+            })
+            .collect();
+        LocalCommandStats {
+            calls,
+            spawned,
+            start_errors,
+            jobs,
+        }
+    }
+
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
         self.call_scoped(name, args, crate::runtime::call_scope::Source::capture())
             .await
@@ -979,8 +1098,30 @@ impl Shell {
         args: Value,
         creator: crate::runtime::call_scope::Source,
     ) -> Result<Value, String> {
+        // Count explicit native admission once, before validation. Observation
+        // calls and compatibility views of the same job never create work.
+        let local_start =
+            creator.call.is_none() && matches!(name, "ssmcp.exec.start" | "terminal.open");
+        if local_start {
+            let mut registry = self.registry();
+            registry.local_calls = registry.local_calls.saturating_add(1);
+        }
+        let result = self.call_inner(name, args, creator).await;
+        if local_start && result.is_err() {
+            let mut registry = self.registry();
+            registry.local_start_errors = registry.local_start_errors.saturating_add(1);
+        }
+        result
+    }
+
+    async fn call_inner(
+        &self,
+        name: &str,
+        args: Value,
+        creator: crate::runtime::call_scope::Source,
+    ) -> Result<Value, String> {
         if name.starts_with("terminal.") {
-            return self.terminal_call(name, args).await;
+            return self.terminal_call(name, args, creator).await;
         }
         match name {
             "ssmcp.exec.start" => self.start(args, creator).await,
@@ -1286,11 +1427,12 @@ impl Shell {
             if !cfg!(target_os = "linux") {
                 return Err("task artifact budgets are available on Linux".into());
             }
-            if creator
-                .call
-                .as_ref()
-                .and_then(|scope| scope.thread())
-                .is_none()
+            if (args.temporary_artifacts || !creator.allows_local_artifact_tracking())
+                && creator
+                    .call
+                    .as_ref()
+                    .and_then(|scope| scope.thread())
+                    .is_none()
             {
                 return Err("task artifact budgets require a verified Agent thread".into());
             }
@@ -1443,8 +1585,19 @@ impl Shell {
                 .env("TMPDIR", &artifacts.path)
                 .env("SSMCP_ARTIFACT_DIR", &artifacts.path);
         }
+        #[cfg(target_os = "linux")]
+        let spawn = if creator.call.is_none() {
+            Managed::spawn_accounted
+        } else {
+            Managed::spawn
+        };
+        #[cfg(not(target_os = "linux"))]
+        let spawn = Managed::spawn;
         let mut process =
-            Managed::spawn(&mut command).map_err(|e| format!("could not start command: {e}"))?;
+            spawn(&mut command).map_err(|e| format!("could not start command: {e}"))?;
+        if creator.call.is_none() {
+            registry.local_spawned = registry.local_spawned.saturating_add(1);
+        }
         #[cfg(target_os = "linux")]
         if let Some(artifacts) = &mut artifacts {
             artifacts.mark_started();
@@ -1482,6 +1635,7 @@ impl Shell {
             cwd,
             timing,
             state: Mutex::new(State {
+                usage: None,
                 running: true,
                 #[cfg(target_os = "linux")]
                 tree_reaped: false,
@@ -1509,6 +1663,8 @@ impl Shell {
             artifacts: artifacts.map(Mutex::new),
             #[cfg(target_os = "linux")]
             temporary_artifacts: args.temporary_artifacts,
+            #[cfg(target_os = "linux")]
+            disk_delta: std::sync::OnceLock::new(),
         });
         // A failed spawn must leave the retained history untouched.
         if let Some(id) = &evicted {
@@ -1547,6 +1703,8 @@ impl Shell {
             worker.stop_input();
             worker.stdin.lock().await.take();
             process.shutdown().await;
+            #[cfg(target_os = "linux")]
+            let usage = process.take_usage();
             tokio::join!(
                 drain(&mut out, &worker, "stdout"),
                 drain(&mut err, &worker, "stderr")
@@ -1563,6 +1721,7 @@ impl Shell {
                 #[cfg(target_os = "linux")]
                 {
                     state.tree_reaped = outcome.0 == Some(0);
+                    state.usage = usage;
                 }
                 state.exit_code = outcome.0;
                 state.cancelled = outcome.1;
@@ -1570,6 +1729,28 @@ impl Shell {
                 state.error = outcome.3;
                 state.exit_signal = outcome.4;
                 state.finished = Some(Instant::now());
+            }
+            // Terminal Stats reads only the completed projection. A blocked
+            // filesystem does not hold the UI thread or the command wait path.
+            #[cfg(target_os = "linux")]
+            if worker.creator.call.is_none() && worker.artifacts.is_some() {
+                static SAMPLES: Semaphore = Semaphore::const_new(MAX_JOBS);
+                if let Ok(permit) = SAMPLES.try_acquire() {
+                    let job = worker.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let _permit = permit;
+                        let mut artifacts = job
+                            .artifacts
+                            .as_ref()
+                            .unwrap()
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        let delta = artifacts.completion_delta();
+                        let _ = job.disk_delta.set(delta);
+                    });
+                } else {
+                    let _ = worker.disk_delta.set((None, true));
+                }
             }
             let status = {
                 let state = worker.state();
@@ -2005,6 +2186,7 @@ mod tests {
             cwd: std::env::current_dir().unwrap(),
             timing: ExecutionTiming::new(Instant::now().into_std(), 0),
             state: Mutex::new(State {
+                usage: None,
                 running: false,
                 #[cfg(target_os = "linux")]
                 tree_reaped: false,
@@ -2032,7 +2214,183 @@ mod tests {
             artifacts: None,
             #[cfg(target_os = "linux")]
             temporary_artifacts: false,
+            #[cfg(target_os = "linux")]
+            disk_delta: std::sync::OnceLock::new(),
         })
+    }
+
+    #[test]
+    fn local_command_statistics_preserve_unknown_outcomes_and_finished_duration() {
+        let shell = Shell::new();
+        let job = completed_job(&shell.output);
+        shell.registry().jobs.insert(job.id.clone(), job.clone());
+        let duration = shell.local_command_stats().jobs[0].duration_ms;
+        for (code, signal, error, cancelled, timed_out, expected) in [
+            (None, None, None, false, false, "unknown"),
+            (Some(0), None, None, false, false, "completed"),
+            (Some(7), None, None, false, false, "failed"),
+            (None, Some(15), None, false, false, "failed"),
+            (None, None, Some("wait failed"), false, false, "failed"),
+            (None, None, None, true, false, "cancelled"),
+            (None, None, None, false, true, "timed out"),
+        ] {
+            {
+                let mut state = job.state();
+                state.exit_code = code;
+                state.exit_signal = signal;
+                state.error = error.map(str::to_owned);
+                state.cancelled = cancelled;
+                state.timed_out = timed_out;
+            }
+            let observed = shell.local_command_stats();
+            assert_eq!(observed.jobs[0].state, expected);
+            assert_eq!(observed.jobs[0].duration_ms, duration);
+            assert_eq!(
+                (observed.calls, observed.spawned, observed.start_errors),
+                (0, 0, 0)
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_statistics_attribute_reaped_usage_and_preserve_outcomes() {
+        let shell = Shell::new();
+        let light = start_fixture(&shell, "next", 0).await;
+        let heavy = start_fixture(&shell, "resource-load", 0).await;
+        for id in [&light, &heavy] {
+            let status = shell
+                .call("ssmcp.exec.wait", json!({"job_id":id}))
+                .await
+                .unwrap();
+            assert_eq!(status["exit_code"], 0);
+        }
+        let cancelled = start_fixture(&shell, "wait", 0).await;
+        let status = shell
+            .call("ssmcp.exec.cancel", json!({"job_id":cancelled}))
+            .await
+            .unwrap();
+        assert_eq!(status["cancelled"], true);
+        let failed = start_fixture(&shell, "resource-failure", 0).await;
+        let status = shell
+            .call("ssmcp.exec.wait", json!({"job_id":failed}))
+            .await
+            .unwrap();
+        assert_eq!(status["exit_code"], 7);
+        let timed = start_fixture(&shell, "wait", 50).await;
+        let timed_status = shell
+            .call("ssmcp.exec.wait", json!({"job_id":timed,"wait_ms":5000}))
+            .await
+            .unwrap();
+        assert_eq!(timed_status["timed_out"], true);
+        let signaled = shell
+            .call(
+                "ssmcp.exec.start",
+                json!({"command":["/bin/sh","-c","kill -TERM $$"]}),
+            )
+            .await
+            .unwrap();
+        let signaled = signaled["job_id"].as_str().unwrap();
+        let signal_status = shell
+            .call("ssmcp.exec.wait", json!({"job_id":signaled,"wait_ms":5000}))
+            .await
+            .unwrap();
+        assert_eq!(signal_status["exit_signal"], libc::SIGTERM);
+        let remote = crate::runtime::call_scope::CallScope::from_relay_for_client(
+            45,
+            Some("remote"),
+            1,
+            None,
+            None,
+        )
+        .unwrap();
+        let hidden = remote.scope(start_fixture(&shell, "next", 0)).await;
+        shell
+            .call("ssmcp.exec.wait", json!({"job_id":hidden}))
+            .await
+            .unwrap();
+        let stats = shell.local_command_stats();
+        let job = |id: &str| stats.jobs.iter().find(|job| job.id == id).unwrap();
+        let light = job(&light).usage.unwrap();
+        let heavy = job(&heavy).usage.unwrap();
+        assert!(heavy.cpu_us > light.cpu_us, "{heavy:?} versus {light:?}");
+        assert!(heavy.peak_rss_bytes >= light.peak_rss_bytes + 16 * 1024 * 1024);
+        assert_eq!(job(&cancelled).state, "cancelled");
+        assert_eq!(job(&failed).state, "failed");
+        assert!(job(&failed).usage.is_some());
+        assert_eq!(job(&timed).state, "timed out");
+        assert!(job(&timed).duration_ms >= 50);
+        assert_eq!(job(signaled).state, "failed");
+        assert!(!stats.jobs.iter().any(|job| job.id == hidden));
+        assert!(shell.job(&hidden).unwrap().state().usage.is_none());
+    }
+
+    #[tokio::test]
+    async fn local_command_statistics_count_start_calls_and_hide_other_callers() {
+        let shell = Shell::new();
+        assert!(
+            shell
+                .call("ssmcp.exec.start", json!({"command":[]}))
+                .await
+                .is_err()
+        );
+        assert!(
+            shell
+                .call(
+                    "ssmcp.exec.start",
+                    json!({"command":["/ssmcp-statistics-fixture/nonexistent-command"]})
+                )
+                .await
+                .is_err()
+        );
+        let args = json!({"command":[std::env::current_exe().unwrap(), "--exact",
+            "backend::shell::tests::fixture_process", "--nocapture"],
+            "env":{"SSMCP_SHELL_TEST_FIXTURE":"next"}});
+        let job = shell.call("ssmcp.exec.start", args.clone()).await.unwrap();
+        let id = job["job_id"].as_str().unwrap();
+        for _ in 0..3 {
+            shell
+                .call("ssmcp.exec.wait", json!({"job_id": id}))
+                .await
+                .unwrap();
+            shell
+                .call("ssmcp.exec.status", json!({"job_id":id}))
+                .await
+                .unwrap();
+            shell
+                .call("ssmcp.exec.read", json!({"job_id":id,"max_bytes":1024}))
+                .await
+                .unwrap();
+            shell.call("ssmcp.exec.list", json!({})).await.unwrap();
+            let observed = shell.local_command_stats();
+            assert_eq!(
+                (observed.calls, observed.spawned, observed.start_errors),
+                (3, 1, 2)
+            );
+        }
+        for (connection, client) in [(3, "worker-other"), (4, "different-client")] {
+            let remote = crate::runtime::call_scope::CallScope::from_relay_for_client(
+                connection,
+                Some(client),
+                1,
+                None,
+                None,
+            )
+            .unwrap();
+            let job = remote
+                .scope(shell.call("ssmcp.exec.start", args.clone()))
+                .await
+                .unwrap();
+            remote
+                .scope(shell.call("ssmcp.exec.wait", json!({"job_id": job["job_id"]})))
+                .await
+                .unwrap();
+        }
+        let stats = shell.local_command_stats();
+        assert_eq!((stats.calls, stats.spawned, stats.start_errors), (3, 1, 2));
+        assert_eq!(stats.jobs.len(), 1);
+        assert_eq!(stats.jobs[0].id, id);
+        assert_eq!(stats.jobs[0].state, "completed");
     }
 
     #[test]
@@ -2485,6 +2843,22 @@ mod tests {
                 std::io::stdout().flush().unwrap();
             }
             std::process::exit(0);
+        }
+        #[cfg(target_os = "linux")]
+        if fixture == "resource-load" {
+            let mut memory = vec![0u8; 48 * 1024 * 1024];
+            for page in memory.chunks_mut(4096) {
+                page[0] = 1;
+            }
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_millis(200) {
+                std::hint::black_box(&mut memory);
+            }
+            std::process::exit(0);
+        }
+        #[cfg(target_os = "linux")]
+        if fixture == "resource-failure" {
+            std::process::exit(7);
         }
         let (stdout, stderr) = match fixture.as_str() {
             "alpha" | "beta" => {

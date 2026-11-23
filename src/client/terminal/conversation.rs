@@ -861,6 +861,13 @@ impl State {
             "/pi" | "/cc" | "/codex" | "/opencode" => {
                 return Err("Embedded harness commands were removed. Use ! to run a local command explicitly, or connect an external MCP client.".into());
             }
+            "/track-command" => {
+                if self.preview {
+                    return Err("Preview does not execute shell commands".into());
+                }
+                crate::client::interface::harness::submit_shell_with_tracking(rest, true)?;
+                self.notice = Some("Tracked shell command started".into());
+            }
             "/command" => {
                 if rest.split_whitespace().count() > 1 {
                     return Err("Use /command [JOB_ID] to inspect a complete command".into());

@@ -2,7 +2,7 @@
 #[cfg(target_os = "linux")]
 use std::{
     io,
-    os::fd::{AsRawFd, OwnedFd},
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
     process::ExitStatus,
     time::{Duration, Instant},
 };
@@ -15,25 +15,68 @@ mod portable;
 #[cfg(not(target_os = "linux"))]
 pub use portable::Managed;
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ResourceUsage {
+    pub cpu_us: u64,
+    pub peak_rss_bytes: u64,
+}
+
+#[cfg(target_os = "linux")]
+fn accounting_channel() -> io::Result<(OwnedFd, OwnedFd)> {
+    let mut ends = [-1; 2];
+    // SAFETY: socketpair writes two newly owned descriptors on success.
+    unsafe {
+        if libc::socketpair(
+            libc::AF_UNIX,
+            libc::SOCK_DGRAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+            0,
+            ends.as_mut_ptr(),
+        ) != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok((OwnedFd::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1])))
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub struct Managed {
     pub child: Child,
     pid: libc::pid_t,
     leader: OwnedFd,
     stopped: bool,
+    accounting: Option<OwnedFd>,
 }
 
 #[cfg(target_os = "linux")]
 impl Managed {
     pub fn spawn(command: &mut Command) -> io::Result<Self> {
+        Self::spawn_inner(command, false)
+    }
+
+    pub(crate) fn spawn_accounted(command: &mut Command) -> io::Result<Self> {
+        Self::spawn_inner(command, true)
+    }
+
+    fn spawn_inner(command: &mut Command, account: bool) -> io::Result<Self> {
         // Only the guardian is a direct child. Killing it first would orphan
         // detached grandchildren, so all exits go through its bounded cleanup.
         command.kill_on_drop(false);
         let parent = std::process::id() as libc::pid_t;
         let max_fd = guardian::descriptor_limit()?;
+        // Accounting is optional. Keep the parent write end alive through spawn.
+        let accounting = account
+            .then(accounting_channel)
+            .transpose()
+            .ok()
+            .flatten()
+            .filter(|(_, write)| write.as_raw_fd() >= 3);
+        let report_fd = accounting
+            .as_ref()
+            .map_or(-1, |(_, write)| write.as_raw_fd());
         // SAFETY: guardian::prepare contains only stack data and libc operations.
         unsafe {
-            command.pre_exec(move || guardian::prepare(parent, max_fd));
+            command.pre_exec(move || guardian::prepare(parent, max_fd, report_fd));
         }
         let child = command.spawn()?;
         let pid = child
@@ -55,6 +98,7 @@ impl Managed {
             pid,
             leader,
             stopped: false,
+            accounting: accounting.map(|(read, _)| read),
         })
     }
 
@@ -101,6 +145,26 @@ impl Managed {
             );
             crate::pty::stop_session(self.pid, &self.leader);
         }
+    }
+
+    /// Read the one fixed-size report after shutdown or a successful wait.
+    /// A lost or incomplete report cannot affect the command's exit status.
+    pub(crate) fn take_usage(&mut self) -> Option<ResourceUsage> {
+        let read = self.accounting.take()?;
+        let mut record = [0_u64; 2];
+        // SAFETY: the initialized buffer is writable for exactly one record.
+        let received = unsafe {
+            libc::recv(
+                read.as_raw_fd(),
+                record.as_mut_ptr().cast(),
+                std::mem::size_of_val(&record),
+                libc::MSG_TRUNC,
+            )
+        };
+        (received == std::mem::size_of_val(&record) as isize).then_some(ResourceUsage {
+            cpu_us: record[0],
+            peak_rss_bytes: record[1],
+        })
     }
 
     pub async fn shutdown(&mut self) {
@@ -175,7 +239,11 @@ mod guardian {
         }
     }
 
-    pub fn prepare(parent: libc::pid_t, max_fd: libc::rlim_t) -> io::Result<()> {
+    pub fn prepare(
+        parent: libc::pid_t,
+        max_fd: libc::rlim_t,
+        report_fd: libc::c_int,
+    ) -> io::Result<()> {
         // SAFETY: this is the single thread created by Command's fork. Every
         // operation until the command returns to exec is a libc syscall wrapper
         // or stack-only operation. In particular SYS_clone avoids libc atfork
@@ -218,6 +286,9 @@ mod guardian {
                 return Err(io::Error::last_os_error());
             }
             if child == 0 {
+                if report_fd >= 3 {
+                    libc::close(report_fd);
+                }
                 // The actual command retains Command's CLOEXEC error pipe.
                 // Its exec failure therefore still fails Command::spawn.
                 if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) < 0
@@ -235,16 +306,43 @@ mod guardian {
             // Closing the guardian's copy of the exec-error pipe is essential:
             // otherwise spawn waits for the entire job instead of only exec.
             // Also release every unrelated SSH, output, and reactor descriptor.
-            if libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, 0_u32) != 0 {
-                let mut fd = 3;
-                while (fd as libc::rlim_t) < max_fd {
-                    libc::close(fd);
+            let report = report_fd as u32;
+            if report_fd < 3 {
+                close_range(3, u32::MAX, max_fd);
+            } else {
+                if report > 3 {
+                    close_range(3, report - 1, max_fd);
+                }
+                close_range(report + 1, u32::MAX, max_fd);
+            }
+            libc::close(libc::STDIN_FILENO);
+            supervise(child as libc::pid_t, parent, &blocked, report_fd)
+        }
+    }
+
+    fn close_range(first: u32, last: u32, max_fd: libc::rlim_t) {
+        // SAFETY: called only by the guardian in its isolated descriptor table.
+        unsafe {
+            if libc::syscall(libc::SYS_close_range, first, last, 0_u32) != 0 {
+                let mut fd = libc::rlim_t::from(first);
+                while fd < max_fd && fd <= libc::rlim_t::from(last) {
+                    libc::close(fd as libc::c_int);
                     fd += 1;
                 }
             }
-            libc::close(libc::STDIN_FILENO);
-            supervise(child as libc::pid_t, parent, &blocked)
         }
+    }
+
+    fn usage_record(usage: libc::rusage) -> Option<[u64; 2]> {
+        fn micros(time: libc::timeval) -> Option<u64> {
+            u64::try_from(time.tv_sec)
+                .ok()?
+                .checked_mul(1_000_000)?
+                .checked_add(u64::try_from(time.tv_usec).ok()?)
+        }
+        let cpu_us = micros(usage.ru_utime)?.checked_add(micros(usage.ru_stime)?)?;
+        let rss = u64::try_from(usage.ru_maxrss).ok()?.checked_mul(1024)?;
+        Some([cpu_us, rss])
     }
 
     fn milliseconds() -> i64 {
@@ -459,19 +557,36 @@ mod guardian {
         }
     }
 
-    fn supervise(command: libc::pid_t, parent: libc::pid_t, blocked: &libc::sigset_t) -> ! {
+    fn supervise(
+        command: libc::pid_t,
+        parent: libc::pid_t,
+        blocked: &libc::sigset_t,
+        report_fd: libc::c_int,
+    ) -> ! {
         // SAFETY: all signals are blocked, so inherited runtime handlers cannot
         // execute. The loop uses only fixed-size stack data and libc operations.
         unsafe {
             let mut command_status = None;
+            let mut command_usage = None;
             let mut stopping = false;
             let mut deadline = 0;
             loop {
                 loop {
                     let mut status = 0;
-                    let reaped = libc::waitpid(-1, &mut status, libc::WNOHANG | libc::__WALL);
+                    let mut usage: libc::rusage = std::mem::zeroed();
+                    let reaped = libc::wait4(
+                        -1,
+                        &mut status,
+                        libc::WNOHANG | libc::__WALL,
+                        if report_fd >= 3 {
+                            &mut usage
+                        } else {
+                            std::ptr::null_mut()
+                        },
+                    );
                     if reaped == command {
                         command_status = Some(status);
+                        command_usage = usage_record(usage);
                         stopping = true;
                     } else if reaped == 0 {
                         break;
@@ -480,6 +595,16 @@ mod guardian {
                             libc::EINTR => continue,
                             libc::ECHILD => {
                                 if let Some(status) = command_status {
+                                    if report_fd >= 3
+                                        && let Some(record) = command_usage
+                                    {
+                                        libc::send(
+                                            report_fd,
+                                            record.as_ptr().cast(),
+                                            std::mem::size_of_val(&record),
+                                            libc::MSG_NOSIGNAL,
+                                        );
+                                    }
                                     exit_like(status);
                                 }
                                 diagnostic(b"ssmcp: supervisor lost the native exit status\n");

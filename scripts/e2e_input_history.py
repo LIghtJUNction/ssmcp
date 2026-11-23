@@ -660,6 +660,64 @@ class InputHistory(Composer):
                    "/tasks remains a local command instead of an agent requirement")
         self.save_shot("tasks", front)
 
+    def command_stats_scenario(self):
+        self.prepare()
+        self.workspace = self.directory / "workspace"
+        self.workspace.mkdir()
+        front = self.start_front("command-stats")
+        front.resize(50, 140)
+        front.until(empty_composer_ready, "wide live composer for command Statistics")
+        front.send('/track-command printf abc > "$TMPDIR/stats-proof"')
+        front.send(ENTER)
+        completed = front.until(lambda shot: "command · exit 0" in text(shot),
+                                "tracked command completes")
+        job_ids = set(re.findall(r"Job: ([0-9a-f]+-[0-9a-f]+)", text(completed)))
+        self.check(len(job_ids) == 1, "the terminal reports exactly one completed native job")
+        identity = job_ids.pop()
+        front.send("/tasks")
+        front.send(ENTER)
+        front.until(lambda shot: view(shot, "tasks") and identity in text(shot)
+                    and "stats-proof" in text(shot),
+                    "native Tasks displays the same tracked command")
+        front.send(ENTER)
+        front.until(lambda shot: f"Job: {identity}" in text(shot)
+                    and "complete argv · read only" in text(shot) and "stats-proof" in text(shot),
+                    "read-only command details identify the same native job")
+        self.save_shot("command-stats-detail", front)
+        front.send(ESC)
+        front.send(ESC)
+        front.until(lambda shot: "Message the agent" in text(shot) and not shot["hide_cursor"],
+                    "restore the editor from command details")
+        front.send("! exit 7")
+        front.send(ENTER)
+        failed = front.until(lambda shot: "command · exit 7" in text(shot),
+                             "a second real command preserves its failure")
+        failed_ids = set(re.findall(r"Job: ([0-9a-f]+-[0-9a-f]+)", text(failed))) - {identity}
+        self.check(len(failed_ids) == 1, "one additional failed native job is reported")
+        failed_identity = failed_ids.pop()
+        front.send("/new statistics")
+        front.send(ENTER)
+        front.send(END)
+        shot = front.until(lambda shot: "Start calls 2 · Spawned 2 · Start errors 0" in text(shot)
+                           and f"{identity} · disk +3 logical bytes" in text(shot)
+                           and re.search(rf"failed · pipes · \d+ ms · {re.escape(failed_identity)}", text(shot))
+                           and "CPU time rank · Linux wait4 user + system" in text(shot)
+                           and "Peak RSS rank · Linux wait4" in text(shot)
+                           and re.search(r"CPU \d+ µs · peak RSS [1-9]\d* KiB", text(shot)) is not None,
+                           "Statistics displays two starts, the failed outcome and measured disk delta")
+        self.check("stats-proof" not in text(shot) and "$TMPDIR" not in text(shot),
+                   "Statistics stays a redacted projection of the command")
+        self.save_shot("command-stats", front)
+        for _ in range(2):
+            front.send(HOME)
+            front.send(END)
+            observed = front.until(
+                lambda shot: "Start calls 2 · Spawned 2 · Start errors 0" in text(shot)
+                and f"{identity} · disk +3 logical bytes" in text(shot),
+                "read-only Statistics navigation leaves native start counts unchanged")
+            self.check("stats-proof" not in text(observed) and "$TMPDIR" not in text(observed),
+                       "repeated Statistics reads remain redacted")
+
     def run(self):
         self.prepare()
         self.workspace = self.directory / "workspace"
@@ -726,6 +784,7 @@ def main():
     parser.add_argument("--decoder", type=Path, help="defaults to BIN_DIR/examples/vt_snapshot")
     parser.add_argument("--out", type=Path, required=True, help="write JSON report and actual VT snapshots")
     parser.add_argument("--report", type=Path, help="also write the report at this location")
+    parser.add_argument("--command-stats", action="store_true", help="run the tracked-command Statistics PTY scenario only")
     args = parser.parse_args()
     decoder = args.decoder or args.bin_dir / "examples/vt_snapshot"
     binaries = {"ssmcp": args.bin_dir / "ssmcp", "ssmcpd": args.bin_dir / "ssmcpd", "vt_snapshot": decoder}
@@ -753,7 +812,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix="ssmcp-input-history-e2e-") as directory:
         harness = InputHistory(Path(directory), args.bin_dir, decoder, args.out)
         try:
-            harness.run()
+            if args.command_stats:
+                report["scope"] = "tracked and failed commands, read-only details and repeated disk Statistics observations in a real owned PTY"
+                harness.command_stats_scenario()
+            else:
+                harness.run()
             report["status"] = "passed"
         except Exception as error:
             description = f"{type(error).__name__}: {error}"

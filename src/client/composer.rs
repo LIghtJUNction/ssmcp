@@ -230,6 +230,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "List or resize worker stations: /worker ls | +N | -N",
     },
     SlashCommand {
+        name: "/track-command",
+        description: "Run a local command with Linux task artifact accounting",
+    },
+    SlashCommand {
         name: "/handoff",
         description: "Prepare a context file and editable handoff draft",
     },
