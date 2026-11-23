@@ -62,7 +62,7 @@ class Replies(Composer):
         return {"record": final_record, "delivery": self.messages(response)[0]}
 
     def marker(self, front, marker):
-        pane = self.ui("/display")["panes"]["activity"]
+        pane = self.ui("/display/panes/activity")
         found = []
         def locate(shot):
             found.clear()
@@ -92,7 +92,7 @@ class Replies(Composer):
         if activation == "R":
             front.send(b"R")
         else:
-            pane = self.ui("/display")["panes"]["input"]
+            pane = self.ui("/display/panes/input")
             x, y = pane["col"] + pane["cols"] - 6, pane["row"] - 1
             shot = front.snapshot(cells=True)
             self.check("[R 引用]" in shot["rows"][y], "the actual input header exposes the quote button")
