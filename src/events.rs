@@ -255,8 +255,7 @@ impl Hub {
         actor_id: Option<&str>,
         kind: &str,
         data: Value,
-        audience: Option<Vec<String>>,
-        dedupe_key: Option<&str>,
+        (audience, dedupe_key): (Option<Vec<String>>, Option<&str>),
     ) -> Result<Value, String> {
         owner_identity(owner)?;
         identity(client_id, "client_id", 256, false)?;

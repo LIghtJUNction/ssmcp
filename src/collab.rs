@@ -243,7 +243,7 @@ impl Hub {
             // The membership mutation has already committed. Journal capacity
             // must never turn it into a failed operation that a caller retries.
             let _ =
-                events.publish_system(owner, &self.session_id, Some(id), kind, data, None, None);
+                events.publish_system(owner, &self.session_id, Some(id), kind, data, (None, None));
         }
     }
 
@@ -287,8 +287,7 @@ impl Hub {
             Some(actor),
             kind,
             data.clone(),
-            Some(audience.clone()),
-            None,
+            (Some(audience.clone()), None),
         );
         if recipient_owner != message.sender_owner {
             let _ = events.publish_system(
@@ -297,8 +296,7 @@ impl Hub {
                 Some(actor),
                 kind,
                 data,
-                Some(audience),
-                None,
+                (Some(audience), None),
             );
         }
     }

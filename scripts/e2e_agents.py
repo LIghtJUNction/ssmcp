@@ -60,13 +60,13 @@ def native_defaults(harness, label, context):
 def catalog(harness, mode, label):
     native_defaults(harness, label, mode)
     status, value, _ = harness.rpc("tools/list", modern=True)
-    harness.check(status == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["link", "list", "code_mode", "collab", "await", "messages"],
-                  f"{mode}: public MCP catalog contains exactly link, list, code_mode, collab, await and messages")
+    harness.check(status == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["link", "list", "code_mode", "collab", "await", "events", "messages"],
+                  f"{mode}: public MCP catalog contains exactly link, list, code_mode, collab, await, events and messages")
     inventory = harness.public_call("list")
     harness.check(len(inventory["clients"]) == 1
                   and inventory["clients"][0]["id"] == harness.client_id
                   and inventory["clients"][0]["type"] == "shell",
-                  f"{mode}: list discovers the shell client with installed harness tools")
+                  f"{mode}: list discovers the shell client with native tools")
     tools = []
     cursor = None
     seen = set()
@@ -112,7 +112,7 @@ def local_log(harness, label):
 
 def check_shell(harness, label, tools, _directory):
     harness.check({tool["name"] for tool in tools} == SHELL_TOOLS | BUILTIN_TOOLS,
-                  "shell: four native PTY capabilities plus exact shared builtins are available through code_mode")
+                  "shell: native PTY capabilities plus exact shared builtins are available through code_mode")
     harness.call("terminal.write", {"data": (
         "stty -echo; printf 'SSMCP_SHELL_PID:%s\\n' \"$$\"; "
         "sleep 60 & printf 'SSMCP_CHILD_PID:%s\\n' \"$!\"; "

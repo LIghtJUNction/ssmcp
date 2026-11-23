@@ -84,40 +84,40 @@ pub(super) fn spec(name: &str, arguments: &Value) -> Option<ObservationSpec> {
             references.push(format!("{key}: {id}"));
         }
     }
-    if name == "ssmcp.worker.wait_for" {
-        if let Some(conditions) = arguments["conditions"].as_array() {
-            targets.clear();
-            for condition in conditions.iter().take(8) {
-                match condition["type"].as_str() {
-                    Some("task_finished") => {
-                        targets.push("Worker task finishes".into());
-                        if let Some(id) = reference(&condition["task_id"]) {
-                            references.push(format!("task_id: {id}"));
-                        }
+    if name == "ssmcp.worker.wait_for"
+        && let Some(conditions) = arguments["conditions"].as_array()
+    {
+        targets.clear();
+        for condition in conditions.iter().take(8) {
+            match condition["type"].as_str() {
+                Some("task_finished") => {
+                    targets.push("Worker task finishes".into());
+                    if let Some(id) = reference(&condition["task_id"]) {
+                        references.push(format!("task_id: {id}"));
                     }
-                    Some("worker_idle") => {
-                        if let (Some(slot), Some(epoch)) =
-                            (condition["slot"].as_u64(), condition["epoch"].as_u64())
-                        {
-                            targets.push(format!(
-                                "Worker #{:02} becomes idle",
-                                slot.saturating_add(1)
-                            ));
-                            references.push(format!("slot {slot}, epoch {epoch}"));
-                        }
-                    }
-                    _ => {}
                 }
+                Some("worker_idle") => {
+                    if let (Some(slot), Some(epoch)) =
+                        (condition["slot"].as_u64(), condition["epoch"].as_u64())
+                    {
+                        targets.push(format!(
+                            "Worker #{:02} becomes idle",
+                            slot.saturating_add(1)
+                        ));
+                        references.push(format!("slot {slot}, epoch {epoch}"));
+                    }
+                }
+                _ => {}
             }
-            if conditions.len() > 8 {
-                targets.push(format!(
-                    "+{} conditions; full list in the worker wait card",
-                    conditions.len() - 8
-                ));
-            }
-            if targets.is_empty() {
-                return None;
-            }
+        }
+        if conditions.len() > 8 {
+            targets.push(format!(
+                "+{} conditions; full list in the worker wait card",
+                conditions.len() - 8
+            ));
+        }
+        if targets.is_empty() {
+            return None;
         }
     }
     Some(ObservationSpec {

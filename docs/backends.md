@@ -1,6 +1,6 @@
 # 统一客户端、Harness 与代码模式
 
-本开发分支对外提供 `list`、`code_mode`、`collab`、`await` 和 `messages` 五个 MCP 工具。`list` 枚举当前获准客户端；`code_mode` 编排原生操作；`collab` 管理现有参与者；`await` 观察任务、协作对象或用户输入；`messages` 按明确收件人处理原生消息。每条新连接显示为 `shell`，提供交互式终端和独立命令任务。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
+本开发分支对外提供 `link`、`list`、`code_mode`、`collab`、`await`、`events` 和 `messages` 七个 MCP 工具。`list` 枚举当前获准客户端；`code_mode` 编排原生操作；`collab` 管理现有参与者；`await` 观察任务、协作对象或用户输入；`messages` 按明确收件人处理原生消息。每条新连接显示为 `shell`，提供交互式终端和独立命令任务。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
 
 <a id="启动参数"></a>
 
@@ -32,7 +32,7 @@ ssmcp --server https://relay.example --allow alice@relay.example --name dev --ti
 # 不连接 SSH，先检查这台电脑实际发现了什么。
 ssmcp --list-tools
 
-# 同一连接提供 shell 和成功初始化的原生适配器。
+# 同一连接提供原生 shell、命令任务和工作区能力。
 ssmcp --server https://relay.example --name dev --title "继续项目开发" --allow alice@relay.example
 ```
 
@@ -71,7 +71,7 @@ ssmcp --server https://relay.example --name dev --title "继续项目开发" --a
 {"name":"list","arguments":{"client_id":"CLIENT_ID_FROM_LIST","cursor":"NEXT_CURSOR_FROM_RESULT"}}
 ```
 
-MCP 协议本身的 `tools/list` 返回上述五个工具，没有后续页。`collab` 的 `action` 选择加入、成员发现、发送、接收或确认等会话内 agent 操作；它不代替控制端登录。`terminal.write`、`claude.Read` 等原生名称供代码模式内部调用，完整参数以当前原生目录为准。
+MCP 协议本身的 `tools/list` 返回上述七个工具，没有后续页。`collab` 的 `action` 选择加入、成员发现、发送、接收或确认等会话内 agent 操作；它不代替控制端登录。`terminal.write`、`ssmcp.fs.read` 等原生名称供代码模式内部调用，完整参数以当前原生目录为准。
 
 ## 3. 用 code_mode 编排调用
 

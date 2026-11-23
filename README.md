@@ -329,7 +329,7 @@ printf 'a\nb\n' | count-lines
 
 SSMCP 默认启用原生命令、文件、会话和 Zuse CLI 管理工具。第三方工具可以使用独立的 MCP 客户端接入；`ssmcp.harnesses.load` 仅支持显式配置的 SSMCP peer。[迁移与连接说明](docs/optional-harnesses.md)
 
-`--input` 默认从终端接收聊天消息，`--agent` 默认由下一位调用方领取。使用 `ssmcp --list-harnesses` 查看支持项。`--load-harness ssmcp` 可以连接明确指定并已认证的 MCP 网关。[客户端输入](docs/client-input.md) · [协议加载](docs/agent-entry.md)
+`--input` 默认从终端接收聊天消息，`--agent` 默认由下一位调用方领取。用 `ssmcp --list-harnesses` 查看支持项；启动时可用 `--load-harness ssmcp` 连接明确指定并已认证的 MCP 网关，连接参数放在 `--` 之后。[客户端输入](docs/client-input.md) · [连接参数](docs/agent-entry.md)
 
 `ssmcp local --socket` 提供默认路径的本机 HTTP/MCP Unix socket，`--socket PATH` 可指定私有路径。时间工具支持当前 UTC、跨时区时间差和倒计时，终端直接显示运行时长与剩余时间，`/wait` 可查看详情。[本机连接](docs/local-mode.md) · [时间原语](docs/time-primitives.md)
 

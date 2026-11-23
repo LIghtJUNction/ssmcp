@@ -5,8 +5,8 @@ Reuse the existing private local OAuth/MCP fixture. Each case starts only its
 own client, changes its private context store, reloads it through the real
 public tool, and verifies the replacement. No browser, remote account, model,
 installed service or existing client is used. HTTPS argv is covered by the
-Rust reload tests; the explicit-context case also exercises a fake Claude
-protocol over the real local MCP Unix socket before and after reload.
+Rust reload tests; the explicit-context case also exercises authenticated
+native execution over the real local MCP Unix socket before and after reload.
 """
 
 import argparse
@@ -91,6 +91,22 @@ class ContextReload(Local):
         result = self.call("ssmcp.exec.wait", {"job_id": job["job_id"]})
         self.check(result.get("exit_code") == 0 and result.get("wait_status") == "ready",
                    "authenticated native execution completes over the owned MCP socket")
+        stdout = stderr = ""
+        stdout_cursor = stderr_cursor = 0
+        read = {}
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            read = self.call("ssmcp.exec.read", {"job_id": job["job_id"],
+                "stdout_cursor": stdout_cursor, "stderr_cursor": stderr_cursor,
+                "wait_ms": 1000, "max_bytes": 4096})
+            stdout += read["stdout"]
+            stderr += read["stderr"]
+            stdout_cursor, stderr_cursor = read["stdout_cursor"], read["stderr_cursor"]
+            if read["stdout_eof"] and read["stderr_eof"]:
+                break
+        self.check(read.get("stdout_eof") and read.get("stderr_eof")
+                   and stdout == f"{marker}\n" and stderr == "",
+                   "native output identifies the current connection generation without lost streams")
 
     def read_replacement(self):
         with selectors.DefaultSelector() as selector:
