@@ -38,10 +38,10 @@
 </section>
 <section id="devices" aria-labelledby="devices-title">
   <div class="section-heading"><p class="eyebrow">开始 / 02</p><h2 id="devices-title">连接另一台设备</h2></div>
-  <p>在被控设备安装并运行客户端。通过明确的允许名单，指定同一中继上已注册的控制账户；被控设备可以不登录，控制者需要登录自己的服务器账户。</p>
+  <p>由被控设备的用户在愿意开放的项目目录中主动运行客户端。把 <code>yourname</code> 换成控制者在同一中继上已注册的用户名。被控端无需登录账号，也无需服务器邀请码。控制者仍须登录自己的服务器账户，MCP 应用须完成该中继的 OAuth 授权。</p>
   <pre><code>ssmcp --server {{gateway_origin}} --allow yourname@{{gateway_authority}}</code></pre>
   <p>重复 <code>--allow</code> 或用逗号分隔可列出最多 32 个账户。显式名单只授权列出的人；已有有效登录时，省略名单只允许自己。结束该客户端进程即可关闭设备连接。</p>
-  <details><summary>账户、设备和协作成员有什么区别？</summary><p>服务器账户决定谁能连接设备；客户端代表一台正在连接的电脑。会话内的协作成员由 <code>collab.join</code> 登记，用于消息与任务协作，不会替代设备授权。</p><p>CLI 的 <code>invite</code> / <code>join</code> 及 MCP 的 <code>invite</code> 已移除。允许名单不接受裸用户名、<code>@github</code> 或其他服务器的账户。流量按实际控制账户计费，一个账户的额度或权限变化不会断开其他获准控制者。</p></details>
+  <details><summary>账户、设备和协作成员有什么区别？</summary><p>服务器账户决定谁能连接设备；客户端代表一台正在连接的电脑。会话内的协作成员由 <code>collab.join</code> 登记，用于消息与任务协作，不会替代设备授权。</p><p>主窗口中的 <code>/invite</code> 生成会话内工作组协作说明。设备访问仍由该连接的允许名单和现有权限检查决定。允许名单不接受裸用户名、<code>@github</code> 或其他服务器的账户。流量按实际控制账户计费，一个账户的额度或权限变化不会断开其他获准控制者。</p></details>
 </section>
 <section id="basics" aria-labelledby="basics-title">
   <div class="section-heading"><p class="eyebrow">日常使用 / 01</p><h2 id="basics-title">写需求，带上必要上下文</h2></div>
@@ -83,6 +83,8 @@
     <tr><td><code>/worker +2</code></td><td>增加两个离线席位；尚无池时创建关联窗口</td></tr>
     <tr><td><code>/worker -1</code></td><td>请求减少一个席位，等待任务完成与退役确认</td></tr>
   </tbody></table></div>
+  <p>在已连接的主窗口输入 <code>/invite</code> 并按 Enter，把说明粘贴到已获准接入的主 Agent 对话；主 Agent 在控制会话以 <code>main</code> 加入并绑定自己的凭据。邀请外部 worker 前，用 <code>/worker ls</code> 确认关联池在线且有空位，再输入 <code>/invite worker</code> 并按 Enter，把说明交给每个独立、已获准接入的 worker 对话。</p>
+  <p>两个邀请命令都会打开可滚动面板并尝试复制；剪贴板不可用时手动复制，按 Esc 关闭。各 Agent 私下保管自己的凭据；池满员、离线或正在调整席位时，先等待状态恢复。</p>
   <p>把说明交给对应的 Agent。外部 worker 在池连接中用 <code>collab.join</code> 登记 <code>role: "worker"</code>，绑定自己的私有凭据，再调用 <code>ssmcp.worker.wait</code> 注册席位并等候任务。<code>registered_workers</code> 计注册人数，<code>working</code> 计执行中的任务，<code>standby</code>／<code>idle</code> 才是待命容量；创建席位或复制邀请不代表已有 worker 接入。</p>
   <p>协调者在池中完成管理者绑定后，用 <code>ssmcp.worker.submit</code> 派发任务。Worker 保留完整 claim，用 <code>ssmcp.worker.complete</code> 报告实际结果，再换新请求 ID 等待；等待重试复用原 ID。取消要等执行者确认，断线造成的 <code>unknown</code> 不自动重放。窗口退出、重载和缩容的完整行为见 <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/workers.md">Worker 指南</a>。</p>
   <h3 class="subheading">按真实事件等待</h3>

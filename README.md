@@ -94,7 +94,9 @@ ssmcp whoami    # 查看当前账号
 
 `link` 的候选实现调用目标客户端的图片读取工具，单图上限 400 KiB；默认 120 秒失效，首次 GET 会消费链接，HEAD 不消费。创建返回 URL、资源链接和清理 ID，不返回图片 base64。是否已部署须查看当前服务目录。[临时图片链接 API](docs/image-links.md)
 
-被控设备可以不登录，直接运行 `ssmcp --allow 用户名@中继服务器`；控制者必须登录该服务器的既有账号。显式名单仅授权列出的人，已登录客户端省略名单时仅允许自己。获准接入的 Agent 用 `collab.join` 登记会话内身份；主窗口中的 `/invite` 用于生成协作说明。[账号与授权](docs/client-accounts.md)
+由被控端用户在愿意开放的项目目录主动运行 `ssmcp --allow 用户名@中继服务器`。这里填写控制者在同一中继上已注册的用户名。被控端无需登录账号，设备接入无需服务器邀请码。控制者仍须登录该账号，MCP 应用须完成该中继的 OAuth 授权。显式名单仅允许列出的账号访问这条设备连接，既有权限检查仍然适用。已有有效登录时，省略名单只允许自己。
+
+主窗口中的 `/invite` 生成会话内工作组协作说明，Agent 通过 `collab.join` 登记会话身份。协作邀请与设备授权各自独立。[账号与授权](docs/client-accounts.md)
 
 先从 `list` 选择确切的客户端 ID，再查询工具的原始 schema：
 
@@ -180,6 +182,12 @@ Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重
 ~~~sh
 ssmcp --worker 3
 ~~~
+
+1. 连接主窗口。若要邀请主 Agent，在主窗口输入 `/invite` 并按 Enter。复制面板中的说明并粘贴到已获准接入的主 Agent 对话。主 Agent 按说明在控制会话以 `main` 身份加入，再用自己的凭据绑定。
+2. 若需要外部 worker，先用 `ssmcp --worker 3` 启动关联池，或在已连接的主窗口用 `/worker +N` 开启席位。用 `/worker ls` 确认池在线且有空位，然后在主窗口输入 `/invite worker` 并按 Enter。把说明粘贴到每个独立、已获准接入的 worker 对话。每个 worker 用自己的凭据在池中加入并绑定为 `worker`，然后调用 `ssmcp.worker.wait` 等任务。
+3. 两个命令都会显示可滚动的本地面板并尝试复制。剪贴板不可用时手动复制，按 Esc 关闭面板。凭据由各 Agent 私下保存。池满员、离线或正在调整席位时，等状态恢复再生成 worker 邀请。
+
+退出或重载主窗口会清理它启动的 worker 窗口。单独关闭监控窗口后，主聊天仍可使用。[Worker 接入、任务回执与窗口生命周期](docs/workers.md)
 
 这会创建三个初始离线的席位。默认 worker 是外部 Agent，继续使用它自己的应用和模型；SSMCP 提供任务队列、工具与回执，不启动模型。主窗口保留聊天输入，worker 窗口显示实际任务状态和日志。
 
@@ -275,6 +283,43 @@ ssmcp ui check
 ```
 
 内置 `dark`、`codex-dark`、`nord`、`solarized`、`light`、`minimal` 六种主题。通过 `[ui]` 配置调整侧栏、面板顺序和颜色，F5 应用显示配置；`/reload` 则重新启动客户端。终端支持原生图片且侧栏空间足够时显示方形像素二维码，窄窗口显示完整链接；网关提供教程时进入中英文指南，旧网关暂未提供教程时进入门户首页。[界面配置](docs/client-ui.md)
+
+## 启动环境与可执行工具
+
+SSMCP 正常启动时复用 `$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml`；未设置或置空 `XDG_CONFIG_HOME` 时，默认读取 `~/.config/ssmcp/ssmcprc.toml`。主目录取 `HOME`，仅在其缺失时回退到 `USERPROFILE`。若要指定这些定位变量，应在启动前设为绝对路径，不能放进 `[env]`。已有配置保留原 `[tools]`，合并环境条目即可。[配置定位与解析](src/tool_repository.rs)
+
+```toml
+version = 1
+
+[env]
+COUNT_LABEL = '行数'
+```
+
+`[env]` 的变量名使用英文字母、数字和下划线，首字符不能是数字。值必须是字符串，按字面量传入：`$HOME`、`${NAME}`、`~` 不会展开，也不会执行命令。它只补充继承环境中缺失的变量；已有值即使为空也优先。`PATH` 同样遵守这一规则，再按以下顺序加入可执行目录：**项目 `.ssmcp/bin` → 主目录 `.ssmcp/bin` → 有效原 PATH**。只有未继承 `PATH` 时，才使用配置中的 `PATH` 作为尾部。[环境合成](src/client/environment.rs)
+
+这里的项目是启动工作目录，不会向上寻找 Git 根目录。两个 bin 路径在启动时固定为绝对路径，即使目录尚不存在也会预置，但启动过程不创建它们。路径通过平台的拆分、拼接规则处理：Linux 使用冒号，Windows 使用分号。配置只影响新启动的 SSMCP 及其子进程；父终端和系统 PATH 保持原状，已有进程需重新启动才能读取新配置。[启动入口](src/bin/ssmcp.rs)
+
+AI 可以把确定性的重复工作写成小程序，后续按命令名复用。下面提供完整的行数统计程序：在项目目录启动新的 SSMCP 后，于它创建的 Linux 终端执行；需要已安装 `rustc`。
+
+```sh
+mkdir -p tools .ssmcp/bin
+cat > tools/count_lines.rs <<'RS'
+use std::io::{self, Read};
+fn main() -> io::Result<()> {
+    let mut text = String::new();
+    io::stdin().read_to_string(&mut text)?;
+    let label = std::env::var("COUNT_LABEL").unwrap_or_else(|_| "lines".into());
+    println!("{label}: {}", text.lines().count());
+    Ok(())
+}
+RS
+rustc tools/count_lines.rs -o .ssmcp/bin/count-lines
+printf 'a\nb\n' | count-lines
+```
+
+未在外层另设 `COUNT_LABEL` 时，预期输出为 `行数: 2`。Linux 程序需要可执行权限，必要时运行 `chmod +x .ssmcp/bin/count-lines`。Windows 编译输出使用 `.ssmcp\bin\count-lines.exe`；父 PowerShell 中可用 `& .\.ssmcp\bin\count-lines.exe` 显式调用。
+
+将 `tools/count_lines.rs` 等源码和构建说明正常纳入 Git，把 `/.ssmcp/bin/` 加入项目 `.gitignore`，生成的二进制留在本机。跨项目复用时可放入 `~/.ssmcp/bin/`；项目中的同名工具优先。这样每个工具都保留可读源码，并通过普通进程执行获得结果。
 
 ## 复用现有工具
 

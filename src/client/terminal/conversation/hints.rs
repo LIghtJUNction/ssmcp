@@ -14,7 +14,88 @@ enum Hint {
     QueueInspect,
 }
 
+const IDLE_DELAY: Duration = Duration::from_secs(5);
+const TIP_PERIOD: Duration = Duration::from_secs(8);
+
+#[derive(Default)]
+pub(super) struct IdleTips {
+    last: Option<Instant>,
+    elapsed: Duration,
+}
+
+impl IdleTips {
+    pub(super) fn pause(&mut self) {
+        self.last = None;
+    }
+
+    pub(super) fn tick(&mut self, now: Instant, eligible: bool) -> Option<u64> {
+        if !eligible {
+            self.pause();
+            return None;
+        }
+        if let Some(previous) = self.last.replace(now) {
+            self.elapsed = self
+                .elapsed
+                .saturating_add(now.saturating_duration_since(previous));
+        }
+        let visible = self.elapsed.checked_sub(IDLE_DELAY)?;
+        Some(visible.as_secs() / TIP_PERIOD.as_secs())
+    }
+}
+
+pub(super) fn idle_tip_key(index: u64, pool: Option<&Value>) -> &'static str {
+    let live = pool.filter(|pool| pool["connected"] == true && pool["closed"] != true);
+    let can_invite_worker = live.is_some_and(|pool| {
+        pool["stopping"] != true
+            && pool["retiring"].as_u64() == Some(0)
+            && matches!(
+                (pool["registered_workers"].as_u64(), pool["desired_total"].as_u64(), pool["total"].as_u64()),
+                (Some(registered), Some(desired), Some(total))
+                    if total == desired && registered < desired
+            )
+    });
+    let tips: &[&str] = if can_invite_worker {
+        &[
+            "tip.help",
+            "tip.invite",
+            "tip.worker_list",
+            "tip.worker_invite",
+        ]
+    } else if live.is_some() {
+        &["tip.help", "tip.invite", "tip.worker_list"]
+    } else {
+        &["tip.help", "tip.invite"]
+    };
+    tips[(index % tips.len() as u64) as usize]
+}
+
 impl State {
+    pub(super) fn chat_idle_tip(
+        &mut self,
+        now: Instant,
+        connected: bool,
+        priority: bool,
+    ) -> Option<&'static str> {
+        let eligible = connected
+            && !priority
+            && !self.preview
+            && !self.help
+            && !self.selection
+            && !self.sleep_wants_overlay()
+            && self.conversation.view == View::Activity
+            && !self.conversation.content_focus
+            && self.conversation.composer.is_empty()
+            && !self.chat_menu_visible()
+            && !self.conversation.composer.completion_loading()
+            && !self.keyboard.pasting;
+        let index = self.conversation.idle_tips.tick(now, eligible)?;
+        let pool = crate::client::worker_window::linked_snapshot();
+        Some(crate::client::terminal::locale::text(idle_tip_key(
+            index,
+            pool.as_ref(),
+        )))
+    }
+
     pub(super) fn chat_contextual_hint(&self, status: &str) -> Option<String> {
         if self.help
             || self.selection
@@ -124,6 +205,72 @@ fn shortcuts(hint_kind: Hint, width: u16, status: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_idle_tip_yields_to_notice_draft_and_copy_mode() {
+        let mut state = State::new(24, 100, &Ui::default());
+        let start = Instant::now();
+        assert!(state.chat_idle_tip(start, true, false).is_none());
+        let mature = start + IDLE_DELAY;
+        assert!(
+            state
+                .chat_idle_tip(mature, true, false)
+                .unwrap()
+                .starts_with("/help")
+        );
+        assert!(state.chat_idle_tip(mature, true, true).is_none());
+        state.conversation.composer.set_text("unfinished");
+        assert!(
+            state
+                .chat_idle_tip(mature + TIP_PERIOD, true, false)
+                .is_none()
+        );
+        assert_eq!(state.conversation.composer.text(), "unfinished");
+        state.conversation.composer.set_text("");
+        state.selection = true;
+        assert!(
+            state
+                .chat_idle_tip(mature + TIP_PERIOD, true, false)
+                .is_none()
+        );
+        state.selection = false;
+        assert!(
+            state
+                .chat_idle_tip(mature + TIP_PERIOD, false, false)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn idle_tips_rotate_after_the_delay_and_pause_without_catching_up() {
+        let start = Instant::now();
+        let mut tips = IdleTips::default();
+        assert_eq!(tips.tick(start, true), None);
+        assert_eq!(tips.tick(start + IDLE_DELAY, true), Some(0));
+        assert_eq!(tips.tick(start + IDLE_DELAY + TIP_PERIOD, true), Some(1));
+        assert_eq!(tips.tick(start + Duration::from_secs(14), false), None);
+        let resume = start + Duration::from_secs(100);
+        assert_eq!(tips.tick(resume, true), Some(1));
+        assert_eq!(tips.tick(resume + TIP_PERIOD, true), Some(2));
+    }
+
+    #[test]
+    fn idle_tips_use_only_current_worker_capabilities() {
+        for index in 0..8 {
+            assert!(matches!(
+                idle_tip_key(index, None),
+                "tip.help" | "tip.invite"
+            ));
+        }
+        let mut pool = json!({"connected":true,"total":2,"desired_total":2,
+                              "retiring":0,"registered_workers":1});
+        assert_eq!(idle_tip_key(2, Some(&pool)), "tip.worker_list");
+        assert_eq!(idle_tip_key(3, Some(&pool)), "tip.worker_invite");
+        pool["registered_workers"] = json!(2);
+        assert_eq!(idle_tip_key(3, Some(&pool)), "tip.help");
+        pool["connected"] = json!(false);
+        assert_eq!(idle_tip_key(2, Some(&pool)), "tip.help");
+    }
 
     #[test]
     fn shortcut_hints_match_editor_and_content_actions() {
