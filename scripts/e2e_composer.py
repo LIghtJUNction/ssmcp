@@ -515,7 +515,7 @@ class Composer(Dashboard):
         members = []
         expected_statuses = {}
         subtitles = []
-        for role, status in (("review", "reviewing"), ("build", "testing")):
+        for role, status in (("review", "idle"), ("build", "working")):
             member = self.public_call("collab", {"action": "join", "client_id": self.client_id,
                                                   "name": "Shared name", "role": role})
             self.sensitive.append(member["token"])

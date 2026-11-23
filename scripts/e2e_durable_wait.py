@@ -244,8 +244,14 @@ class DurableWait(Harness):
         for name in ("ssmcp.exec.start", "ssmcp.exec.read", "ssmcp.exec.list"):
             if name not in self.native_tools:
                 raise CapabilityUnavailable("missing native capability " + name)
-        self.check(self.native("ssmcp.exec.list")["jobs"] == [],
-                   "fresh owned native session starts without execution jobs")
+        jobs = self.native("ssmcp.exec.list")["jobs"]
+        self.check(len(jobs) == 1 and jobs[0].get("job_id") == "main"
+                   and jobs[0].get("mode") == "pty" and jobs[0].get("running") is True
+                   and jobs[0].get("command") == ["/bin/sh", "-i"],
+                   "fresh owned native session contains only its original interactive shell")
+        self.baseline_main_pid = jobs[0]["pid"]
+        self.report["baseline_shell"] = {key: jobs[0].get(key) for key in
+                                         ("job_id", "pid", "mode", "command", "running")}
 
     def conflict(self, original, field, value):
         changed = {**original, field: value}
@@ -428,8 +434,10 @@ class DurableWait(Harness):
         self.check(lower <= cached_metadata["elapsed_total_ms"] <= upper,
                    "cached elapsed time agrees with the actual native completion interval")
         jobs = self.native("ssmcp.exec.list")["jobs"]
-        self.check(len(jobs) == 1 and jobs[0]["job_id"] == self.job_id and self.exec_dispatches == 1,
-                   "reconnect, replay, conflicts and ACK created no second native execution")
+        self.check(len(jobs) == 2 and {job["job_id"] for job in jobs} == {"main", self.job_id}
+                   and next(job["pid"] for job in jobs if job["job_id"] == "main")
+                   == self.baseline_main_pid and self.exec_dispatches == 1,
+                   "reconnect, replay, conflicts and ACK retain the original shell and one native execution")
         for name, data in (("native.stdout.log", stdout), ("native.stderr.log", stderr),
                            ("native-marker.jsonl", marker_path.read_bytes())):
             path = self.options.evidence / name
@@ -589,7 +597,10 @@ class DurableWait(Harness):
         self.check(self.external_invocations("client") == [],
                    "owned model canaries recorded no external agent invocation")
         jobs = self.native("ssmcp.exec.list")["jobs"]
-        self.check(self.exec_dispatches == 1 and len(jobs) == 1 and jobs[0]["job_id"] == self.job_id,
+        self.check(self.exec_dispatches == 1 and len(jobs) == 2
+                   and {job["job_id"] for job in jobs} == {"main", self.job_id}
+                   and next(job["pid"] for job in jobs if job["job_id"] == "main")
+                   == self.baseline_main_pid,
                    "entire acceptance performed exactly one native exec and started no model")
 
     def finish(self):
