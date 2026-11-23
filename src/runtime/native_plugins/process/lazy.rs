@@ -227,7 +227,7 @@ mod tests {
         let entered = Arc::new(Notify::new());
         let release = Arc::new(Semaphore::new(0));
         let first = loads
-            .request(Provider::Codex, false, {
+            .request(Provider::Peer, false, {
                 let count = count.clone();
                 let entered = entered.clone();
                 let release = release.clone();
@@ -241,12 +241,12 @@ mod tests {
             .unwrap();
         entered.notified().await;
         let second = loads
-            .request(Provider::Codex, false, async {
+            .request(Provider::Peer, false, async {
                 Err("duplicate initialization".into())
             })
             .unwrap();
         let refreshing = loads
-            .request(Provider::Codex, true, async {
+            .request(Provider::Peer, true, async {
                 Err("refresh duplicated an in-flight initialization".into())
             })
             .unwrap();
@@ -258,7 +258,7 @@ mod tests {
         assert_eq!(c.unwrap(), json!({"peer":17}));
         assert_eq!(
             loads
-                .request(Provider::Codex, false, async {
+                .request(Provider::Peer, false, async {
                     Err("cached success was restarted".into())
                 })
                 .unwrap()
@@ -275,7 +275,7 @@ mod tests {
         let entered = Arc::new(Notify::new());
         let release = Arc::new(Semaphore::new(0));
         let pending = loads
-            .request(Provider::Claude, false, {
+            .request(Provider::Peer, false, {
                 let entered = entered.clone();
                 let release = release.clone();
                 async move {
@@ -298,7 +298,7 @@ mod tests {
         let loads = Loads::default();
         let count = Arc::new(AtomicUsize::new(0));
         let first = loads
-            .request(Provider::Pi, false, {
+            .request(Provider::Peer, false, {
                 let count = count.clone();
                 async move {
                     count.fetch_add(1, Ordering::SeqCst);
@@ -308,7 +308,7 @@ mod tests {
             .unwrap();
         assert_eq!(first.await.unwrap_err(), "fixture unavailable");
         let cached = loads
-            .request(Provider::Pi, false, {
+            .request(Provider::Peer, false, {
                 let count = count.clone();
                 async move {
                     count.fetch_add(1, Ordering::SeqCst);
@@ -319,7 +319,7 @@ mod tests {
         assert_eq!(cached.await.unwrap_err(), "fixture unavailable");
         assert_eq!(count.load(Ordering::SeqCst), 1);
         let retried = loads
-            .request(Provider::Pi, true, {
+            .request(Provider::Peer, true, {
                 let count = count.clone();
                 async move {
                     count.fetch_add(1, Ordering::SeqCst);
@@ -329,16 +329,6 @@ mod tests {
             .unwrap();
         assert_eq!(retried.await.unwrap(), json!({"ready":true}));
         assert_eq!(count.load(Ordering::SeqCst), 2);
-        assert_eq!(
-            loads
-                .request(Provider::Claude, false, async {
-                    Ok(json!({"independent":true}))
-                })
-                .unwrap()
-                .await
-                .unwrap(),
-            json!({"independent":true})
-        );
     }
 
     #[tokio::test]
@@ -353,7 +343,7 @@ mod tests {
         let entered = Arc::new(Notify::new());
         let dropped = Arc::new(AtomicBool::new(false));
         let pending = loads
-            .request(Provider::Claude, false, {
+            .request(Provider::Peer, false, {
                 let entered = entered.clone();
                 let dropped = dropped.clone();
                 async move {
@@ -370,7 +360,7 @@ mod tests {
         assert!(dropped.load(Ordering::SeqCst));
         assert!(
             loads
-                .request(Provider::Codex, false, async {
+                .request(Provider::Peer, false, async {
                     panic!("closed loader must never poll this work")
                 })
                 .is_err()
