@@ -176,6 +176,8 @@ jobs:
           python3 scripts/e2e_unified.py --bin-dir target/debug --report "$RUNNER_TEMP/ssmcp-unified-report.json" --revision "$(git rev-parse HEAD)"
       - name: Exercise terminal dashboard and Git observer through a real PTY
         run: python3 scripts/e2e_dashboard.py --bin-dir target/debug --report "$RUNNER_TEMP/ssmcp-dashboard-report.json"
+      - name: Exercise command Statistics through a real PTY
+        run: python3 scripts/e2e_input_history.py --command-stats --bin-dir target/debug --out "$RUNNER_TEMP/ssmcp-command-stats"
       - name: Exercise conversation UI and account relay request queues
         run: make test-client-ui
       - name: Exercise background sessions and watchdog with real user systemd
@@ -226,6 +228,7 @@ jobs:
           path: |
             ${{ runner.temp }}/ssmcp-unified-report*
             ${{ runner.temp }}/ssmcp-dashboard-report*
+            ${{ runner.temp }}/ssmcp-command-stats/
             ${{ runner.temp }}/ssmcp-account-relay-report.json
             ${{ runner.temp }}/ssmcp-account-names-report.json
             ${{ runner.temp }}/ssmcp-daemon-report*
