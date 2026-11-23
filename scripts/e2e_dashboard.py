@@ -448,7 +448,7 @@ class Dashboard(Harness):
         titles = ("silent-alpha", "silent-bravo")
         first, second = [
             self.call("ssmcp.exec.start", {
-                "title": title, "command": [sys.executable, "-c", "import time; time.sleep(12)"],
+                "title": title, "command": ["sleep", "12"],
                 "timeout_ms": 20000,
             })
             for title in titles
