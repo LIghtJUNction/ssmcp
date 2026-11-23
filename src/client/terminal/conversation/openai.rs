@@ -171,7 +171,7 @@ mod tests {
         fn new() -> Self {
             let mut random = [0_u8; 16];
             crate::platform::random_bytes(&mut random).unwrap();
-            let suffix = random.map(|byte| format!("{byte:02x}")).join("");
+            let suffix = crate::hex::encode(random);
             let path = std::env::temp_dir()
                 .canonicalize()
                 .unwrap()

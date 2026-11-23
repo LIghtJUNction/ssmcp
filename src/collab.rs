@@ -922,7 +922,7 @@ fn validate_capabilities(capabilities: &[String]) -> Result<(), String> {
 fn random(size: usize) -> Result<String, String> {
     let mut bytes = vec![0; size];
     crate::platform::random_bytes(&mut bytes).map_err(|e| e.to_string())?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(crate::hex::encode(bytes))
 }
 
 fn now_ms() -> u64 {

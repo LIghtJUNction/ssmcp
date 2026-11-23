@@ -998,7 +998,7 @@ fn now() -> u64 {
 fn random_suffix() -> Result<String> {
     let mut bytes = [0; 16];
     platform::random_bytes(&mut bytes)?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(crate::hex::encode(bytes))
 }
 
 fn private_open(path: &Path, write: bool, create: bool, append: bool) -> Result<File> {

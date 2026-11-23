@@ -515,13 +515,7 @@ fn page(value: &Value, previous: Option<&Cursor>) -> Result<Page, &'static str> 
 
 fn source_key(client_id: &str, generation: &str, seq: u64) -> String {
     let bytes = serde_json::to_vec(&(client_id, generation, seq)).expect("typed cursor serializes");
-    format!(
-        "worker_{}",
-        Sha256::digest(bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    )
+    format!("worker_{}", crate::hex::encode(Sha256::digest(bytes)))
 }
 
 fn error_state(error: &str) -> &'static str {

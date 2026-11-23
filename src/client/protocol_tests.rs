@@ -131,7 +131,7 @@ impl Fixture {
     fn new() -> Self {
         let mut random = [0u8; 16];
         crate::platform::random_bytes(&mut random).unwrap();
-        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let suffix: String = crate::hex::encode(random);
         let directory = std::env::temp_dir().join(format!("ssmcp-protocol-{suffix}"));
         fs::create_dir(&directory).unwrap();
         // A fixed Unix system interpreter avoids unrelated PATH-mutating tests.

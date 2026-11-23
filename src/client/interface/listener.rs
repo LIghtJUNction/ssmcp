@@ -311,7 +311,7 @@ fn now_ms() -> u64 {
 fn random(bytes: usize) -> Result<String, String> {
     let mut data = vec![0u8; bytes];
     crate::platform::random_bytes(&mut data).map_err(|_| "cannot allocate listener identity")?;
-    Ok(data.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(crate::hex::encode(data))
 }
 
 fn same_token(expected: &str, supplied: &str) -> bool {

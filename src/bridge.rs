@@ -240,7 +240,7 @@ impl Bridges {
         std::fs::File::open("/dev/urandom")
             .and_then(|mut f| f.read_exact(&mut bytes))
             .map_err(|e| e.to_string())?;
-        let id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        let id: String = crate::hex::encode(bytes);
         let (cancel, receiver) = watch::channel(false);
         let task = Arc::new(Task {
             id: id.clone(),

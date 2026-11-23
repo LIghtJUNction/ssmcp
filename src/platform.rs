@@ -317,7 +317,7 @@ mod tests {
 
         let mut random = [0u8; 16];
         random_bytes(&mut random).unwrap();
-        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let suffix: String = crate::hex::encode(random);
         let directory = std::env::temp_dir().join(format!("ssmcp-shim-test-{suffix}"));
         let bin = directory.join("bin");
         std::fs::create_dir_all(&bin).unwrap();

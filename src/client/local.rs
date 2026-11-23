@@ -136,7 +136,7 @@ impl SocketDirectory {
         for _ in 0..16 {
             let mut random = [0_u8; 16];
             getrandom::fill(&mut random).map_err(|error| io::Error::other(error.to_string()))?;
-            let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+            let suffix: String = crate::hex::encode(random);
             let path = parent.join(format!("ssmcp-local-{uid}-{suffix}"));
             match fs::DirBuilder::new().mode(0o700).create(&path) {
                 Ok(()) => {

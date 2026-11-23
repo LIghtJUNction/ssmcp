@@ -321,7 +321,7 @@ impl Clock {
         crate::platform::random_bytes(&mut bytes)
             .map_err(|error| format!("could not allocate a time namespace: {error}"))?;
         Ok(Arc::new(Self {
-            id: bytes.iter().map(|byte| format!("{byte:02x}")).collect(),
+            id: crate::hex::encode(bytes),
             started: Instant::now(),
             state: Mutex::new(State::default()),
         }))

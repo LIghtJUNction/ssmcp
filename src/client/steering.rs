@@ -342,7 +342,7 @@ fn random_id() -> Result<String, String> {
     let mut bytes = [0u8; 16];
     crate::platform::random_bytes(&mut bytes)
         .map_err(|_| "cannot create local request identity")?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(crate::hex::encode(bytes))
 }
 pub(super) fn validate_text(text: &str) -> Result<(), String> {
     if text.trim().is_empty()

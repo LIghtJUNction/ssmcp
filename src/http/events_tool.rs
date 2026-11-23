@@ -1058,13 +1058,7 @@ impl<'a> DirectObservation<'a> {
         let mut bytes = [0u8; 16];
         crate::platform::random_bytes(&mut bytes)
             .map_err(|_| "events observation ID unavailable")?;
-        let id = format!(
-            "event_wait_{}",
-            bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        );
+        let id = format!("event_wait_{}", crate::hex::encode(bytes));
         wait_transition(
             broker,
             &actor.owner,

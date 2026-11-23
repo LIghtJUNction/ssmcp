@@ -383,7 +383,7 @@ mod tests {
         use std::{fs, os::unix::fs::PermissionsExt};
         let mut random = [0u8; 16];
         crate::platform::random_bytes(&mut random).unwrap();
-        let id: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let id: String = crate::hex::encode(random);
         let root = std::env::temp_dir().join(format!("ssmcp-handoff-test-{id}"));
         fs::create_dir(&root).unwrap();
         struct Cleanup(std::path::PathBuf);

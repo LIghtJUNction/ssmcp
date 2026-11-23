@@ -74,18 +74,12 @@ fn now() -> u64 {
     crate::management::now()
 }
 fn hash(raw: &str) -> String {
-    Sha256::digest(raw.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    crate::hex::encode(Sha256::digest(raw.as_bytes()))
 }
 fn secret(prefix: &str) -> Result<String, Problem> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).map_err(|_| Problem::Storage)?;
-    Ok(format!(
-        "{prefix}{}",
-        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-    ))
+    Ok(format!("{prefix}{}", crate::hex::encode(bytes)))
 }
 fn valid_hash(key: &str) -> bool {
     key.len() == 64

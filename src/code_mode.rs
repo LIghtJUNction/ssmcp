@@ -89,7 +89,7 @@ impl AuditRun {
         let context = crate::wire::CodeContext {
             session_id: None,
             thread_id: None,
-            run_id: bytes.iter().map(|byte| format!("{byte:02x}")).collect(),
+            run_id: crate::hex::encode(bytes),
             code: code.into(),
             timestamp_ms: SystemTime::now()
                 .duration_since(UNIX_EPOCH)

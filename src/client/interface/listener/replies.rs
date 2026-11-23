@@ -183,10 +183,7 @@ impl Hub {
         identity.update(connection_id.as_bytes());
         identity.update(epoch.to_be_bytes());
         identity.update(reply.delivery_id.as_bytes());
-        let suffix: String = identity.finalize()[..16]
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let suffix = crate::hex::encode(&identity.finalize()[..16]);
         let message_id = format!("message_{suffix}");
         // Lock order here is Hub -> in-memory history. This function never renders under either.
         // The user source is committed first, even when a fast provider beats the sender task.

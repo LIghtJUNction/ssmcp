@@ -9,7 +9,7 @@ impl Fixture {
     fn new() -> Self {
         let mut nonce = [0_u8; 16];
         getrandom::fill(&mut nonce).unwrap();
-        let name = nonce.iter().map(|n| format!("{n:02x}")).collect::<String>();
+        let name = crate::hex::encode(nonce);
         let path = std::env::temp_dir().join(format!("ssmcp-commerce-{name}"));
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         Self { path }

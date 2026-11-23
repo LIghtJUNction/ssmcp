@@ -908,7 +908,7 @@ fn encoded_len(value: &Value) -> Result<usize, String> {
 fn nonce() -> Result<String, String> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).map_err(|error| format!("events_randomness: {error}"))?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(crate::hex::encode(bytes))
 }
 
 fn now_ms() -> u64 {
