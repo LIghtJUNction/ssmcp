@@ -38,12 +38,39 @@ $stderrTask = $null
 $testRoot = $null
 $frameReceiptsPath = $null
 $previousDpi = [IntPtr]::Zero
+$script:presentReadDiagnostics = [ordered]@{ io_errors = 0; last_error = $null }
 function Read-PresentReceipts {
     param([string]$Path, [int]$OwnedProcess)
     if (-not (Test-Path -LiteralPath $Path)) { return @() }
-    if ((Get-Item -LiteralPath $Path).Length -gt 1048576) { throw 'The presented-frame journal exceeded its size bound.' }
-    try { $raw = [IO.File]::ReadAllText($Path) }
-    catch [IO.IOException] { return @() }
+    $reader = $null
+    try {
+        # The application keeps its writer open. Windows requires the new reader
+        # to share that existing write access as well as allowing other readers.
+        $reader = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        $length = $reader.Length
+        if ($length -gt 1048576) { throw 'The presented-frame journal exceeded its size bound.' }
+        $buffer = [byte[]]::new([int]$length)
+        $read = 0
+        while ($read -lt $buffer.Length) {
+            $count = $reader.Read($buffer, $read, $buffer.Length - $read)
+            if ($count -eq 0) { break }
+            $read += $count
+        }
+        # Snapshot the opened length; concurrent appends cannot extend this read.
+        # Decode only complete records, including when the trailing UTF-8 is partial.
+        $end = $read - 1
+        while ($end -ge 0 -and $buffer[$end] -ne 10) { $end-- }
+        if ($end -lt 0) { return @() }
+        $raw = [Text.UTF8Encoding]::new($false, $true).GetString($buffer, 0, $end + 1)
+    } catch [IO.IOException] {
+        $script:presentReadDiagnostics.io_errors = [Math]::Min(4096, $script:presentReadDiagnostics.io_errors + 1)
+        $script:presentReadDiagnostics.last_error = @{
+            type = $_.Exception.GetType().FullName; hresult = $_.Exception.HResult
+        }
+        return @()
+    } finally {
+        if ($null -ne $reader) { $reader.Dispose() }
+    }
     # Ignore an incomplete trailing write; complete malformed records fail.
     $completeEnd = $raw.LastIndexOf([char]10)
     if ($completeEnd -lt 0) { return @() }
@@ -59,6 +86,37 @@ function Read-PresentReceipts {
         }
         $previousFrame = $row['frame_index']
         $row
+    }
+}
+function Test-PresentJournalReader {
+    param([string]$Path)
+    $writer = [IO.FileStream]::new($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+    try {
+        $record = @{ schema = 'ssmcp-desktop-present-v1'; stage = 'present_returned'; pid = $PID
+            frame_index = 1; width = 1008; height = 681; elapsed_ms = 1 } | ConvertTo-Json -Compress
+        $bytes = [Text.Encoding]::UTF8.GetBytes($record + [char]10)
+        $writer.Write($bytes, 0, $bytes.Length); $writer.Flush()
+        $rows = @(Read-PresentReceipts -Path $Path -OwnedProcess $PID)
+        if ($rows.Count -ne 1 -or $rows[0]['width'] -ne 1008) { throw 'A live writer blocked the complete frame receipt.' }
+        $partial = [byte[]]@(123, 34, 120, 34, 58, 34, 240, 159)
+        $writer.Write($partial, 0, $partial.Length); $writer.Flush()
+        $rows = @(Read-PresentReceipts -Path $Path -OwnedProcess $PID)
+        if ($rows.Count -ne 1) { throw 'A partial trailing UTF-8 record hid a complete receipt.' }
+        $writer.SetLength(0); [void]$writer.Seek(0, [IO.SeekOrigin]::Begin)
+        $bad = [Text.Encoding]::UTF8.GetBytes('invalid-json' + [char]10)
+        $writer.Write($bad, 0, $bad.Length); $writer.Flush()
+        $rejected = $false
+        try { $null = @(Read-PresentReceipts -Path $Path -OwnedProcess $PID) } catch { $rejected = $true }
+        if (-not $rejected) { throw 'A malformed complete frame was accepted.' }
+        $writer.SetLength(1048577); $writer.Flush()
+        $rejected = $false
+        try { $null = @(Read-PresentReceipts -Path $Path -OwnedProcess $PID) } catch { $rejected = $true }
+        if (-not $rejected) { throw 'An oversized frame journal was accepted.' }
+        return @{ status = 'passed'; writer_open = $true; complete_frame = $true
+            partial_utf8_ignored = $true; malformed_rejected = $true; byte_bound = $true }
+    } finally {
+        $writer.Dispose()
+        [IO.File]::Delete($Path)
     }
 }
 try {
@@ -133,6 +191,7 @@ public static class SsmcpWindowProbe {
     foreach ($directory in @($testRoot, "$testRoot/home", "$testRoot/roaming", "$testRoot/local")) {
         New-Item -ItemType Directory -Path $directory | Out-Null
     }
+    $report.frame_reader_probe = Test-PresentJournalReader -Path (Join-Path $testRoot 'reader-probe.jsonl')
     $configuration = Join-Path $testRoot 'client.toml'
     [IO.File]::WriteAllText($configuration, '')
     $process = [Diagnostics.Process]::new()
@@ -390,6 +449,7 @@ public static class SsmcpWindowProbe {
     $report.error = $_.Exception.Message
     if ($report.status -ne 'blocked') { $report.status = 'failed' }
 } finally {
+    $report.frame_reader_io = $script:presentReadDiagnostics
     if ($previousDpi -ne [IntPtr]::Zero) { [void][SsmcpWindowProbe]::SetThreadDpiAwarenessContext($previousDpi) }
     if ($null -ne $process -and $report.process_started) {
         try {
