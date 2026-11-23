@@ -26,8 +26,8 @@ import time
 import zlib
 
 from e2e_account_relay import wait_for
-from e2e_composer import Composer, DOWN, ENTER, ESC, HOME, RIGHT
-from e2e_client_ui import column, empty_composer_ready, view
+from e2e_composer import Composer, DOWN, ENTER, ESC, HOME, RIGHT, conversation_question_banner
+from e2e_client_ui import column, empty_composer_ready, prompt_text, view
 from e2e_dashboard import sha256, text
 
 
@@ -575,9 +575,13 @@ class InputHistory(Composer):
         self.agents(front)
         self.highlight_recipient(front)
         front.send(ENTER)
-        front.until(empty_composer_ready, "the next-caller composer before restart")
+        front.until(lambda shot: empty_composer_ready(shot) or (
+            shot["alternate_screen"] and conversation_question_banner(shot)
+            and "Message the agent" in prompt_text(shot) and not shot["hide_cursor"]
+        ), "the next-caller composer before restart")
         selected = self.ui("/display/conversation")
-        self.check(selected["target"] == "next" and selected["native_recipient"] is None,
+        self.check(selected["target"] == "next" and selected["native_recipient"] is None
+                   and selected["canvas"]["columns"][selected["canvas"]["active"]] == "conversation",
                    "the restart fixture selects the exact next-caller route")
         pending_text = "LIVE_PENDING_MUST_NOT_REDELIVER 界"
         pending = self.submit_source(front, pending_text)

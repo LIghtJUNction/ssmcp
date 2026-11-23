@@ -76,6 +76,12 @@ def visible_record(snapshot, request_text, status, message_id=None, *, selected=
     return False
 
 
+def conversation_question_banner(shot):
+    # Activity's pending-question alert intentionally replaces its title row.
+    header = shot["rows"][0].lstrip()
+    return header.startswith("!") and "问题待答" in header and "Shift+↑" in header
+
+
 class Composer(Dashboard):
     # Keep the router available for graceful stop after the scenario deadline.
     fixture_timeout_seconds = COMPOSER_TIMEOUT_SECONDS + 30
@@ -224,7 +230,8 @@ class Composer(Dashboard):
             front.send((ALT_RIGHT if distance > 0 else ALT_LEFT) * abs(distance))
         expected = (name, index + 1, len(state["columns"]))
         front.until(lambda shot: column(shot) == expected
-                    or (name == "conversation" and view(shot, "conversation")),
+                    or (name == "conversation" and (view(shot, "conversation")
+                                                   or conversation_question_banner(shot))),
                     f"horizontal navigation to the existing {name} column")
         observed = self.ui("/display/conversation")["canvas"]
         if observed["active"] != index or observed["columns"] != state["columns"]:
