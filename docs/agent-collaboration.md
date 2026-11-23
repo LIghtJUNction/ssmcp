@@ -72,7 +72,7 @@ return { client_id: clientId, ...joined };
 return await collab.list("CLIENT_ID_FROM_LIST");
 ~~~
 
-公开资料包含 `agent_id`、`name`、`role`、`status`、`capabilities`、加入时间、最近活动时间和租约到期时间。`status` 初始为 `available`；角色、能力与状态都是成员自行填写的工作信息。名称允许重复，消息目标始终使用 `agent_id`。
+公开资料包含 `agent_id`、`name`、`role`、`status`、`capabilities`、加入时间、最近活动时间和租约到期时间。新成员的状态为 `idle`，生命周期版本为 1；状态只接受 `working`、`idle`、`offline`、`dreaming` 和 `retiring`，并随实际工作、输入、维护期限与退休过程转换。角色和能力仍是协调资料。名称允许重复，消息目标始终使用 `agent_id`。[生命周期与版本条件更新](workers.md#agent-lifecycle)
 
 ## 绑定本次编排并接收用户要求
 
@@ -262,7 +262,7 @@ return await collab.update("CLIENT_ID_FROM_LIST", {
 
 协作消息作为 JSON 数据交给收件者，收件者决定如何处理。`send` 不会执行消息中的命令、启动模型或唤起一个已经停止运行的 agent；调用方需要安排收件循环，或在任务阶段之间主动检查邮箱。
 
-这组原语负责成员、消息和确认。任务分配、领导者选择、代码所有权以及并行修改策略由调用方约定，可以直接放进 `role`、`status` 和 `payload`，无需为每一种协作方式添加新的服务端工作流。
+这组原语负责成员、消息和确认。任务分配、领导者选择、代码所有权以及并行修改策略由调用方约定，可以放进 `role`、`capabilities` 和 `payload`；`status` 专用于有版本条件的生命周期更新，不能承载任意任务描述。
 
 实现与验证入口：
 

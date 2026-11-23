@@ -30,7 +30,7 @@
 | 客户端 | 发布附件 | 构建与验证范围 |
 | --- | --- | --- |
 | Linux x86_64 桌面 | `ssmcp-desktop-x86_64-unknown-linux-gnu-release.tar.gz` | Ubuntu 22.04 上的原生 Release 构建、Rust 测试，以及 Xvfb/Mesa llvmpipe 下的真实 X11/OpenGL 窗口 |
-| Windows x86_64 桌面 | `ssmcp-desktop-x86_64-pc-windows-msvc-debug.zip` | 原生 MSVC Debug 构建与 Rust 测试；此 CI job 不启动交互窗口 |
+| Windows x86_64 桌面 | `ssmcp-desktop-x86_64-pc-windows-msvc-debug.zip` | 原生 MSVC Debug 构建与 Rust 测试；实际启动本次构建的自有窗口，核对初始及调整尺寸后的呈现回执、非均匀窗口像素与正常退出 |
 | Android | `ssmcp-android-debug.apk` | Debug APK；API 35 x86_64 模拟器上运行实际自定义 Instrumentation，协议与控制器测试使用注入网关 |
 | iOS | `ssmcp-gui-ios.json` 验证收据 | 未签名 simulator 构建与 XCTest；没有可安装到真机的 IPA |
 

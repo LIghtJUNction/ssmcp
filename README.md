@@ -311,7 +311,7 @@ return await events.policy(controlId, {
 });
 ~~~
 
-`enabled`、`window_ms`、`kinds` 和 `strategy` 可调整；`strategy` 是建议文本。长等待使用公开 `await` 或 `events` 工具，默认且最长为 55 秒；JavaScript 内的 `events.wait` 默认且最多等待 1 秒。跨窗口保留 `wait_id`，处理事件后分别确认事件与等待结果游标；输入事件只负责唤醒，正文仍通过原输入通道领取。[订阅、绑定与等待示例](docs/events.md) · [JavaScript 短等待](docs/code-mode.md#events)
+`enabled`、`window_ms`、`kinds` 和 `strategy` 可调整；`strategy` 是建议文本。长等待使用公开 `await` 或 `events` 工具：`await` 的单次读取窗口默认 20 秒、最长 55 秒，公开 `events.wait` 默认且最长 55 秒；JavaScript 内的 `events.wait` 默认且最多等待 1 秒。后台观察期限与这些读取窗口分别计算。跨窗口保留 `wait_id`，处理事件后分别确认事件与等待结果游标；输入事件只负责唤醒，正文仍通过原输入通道领取。[订阅、绑定与等待示例](docs/events.md) · [JavaScript 短等待](docs/code-mode.md#events)
 
 ### 从命令行连接对话与传递结果
 
