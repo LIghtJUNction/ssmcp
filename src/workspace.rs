@@ -59,6 +59,7 @@ struct Root {
     #[cfg(not(target_os = "linux"))]
     directory: cap_std::fs::Dir,
     audit: audit::FileAudit,
+    safety_events: Arc<crate::backend::events::EventLog>,
 }
 struct Listener {
     socket: TcpListener,
@@ -138,6 +139,7 @@ impl Workspace {
                 path,
                 directory,
                 audit: audit::FileAudit::new(events.clone(), output),
+                safety_events: crate::backend::events::EventLog::memory_only("workspace safety"),
             }),
             events,
             handles: StdMutex::new(HashMap::new()),
@@ -281,8 +283,12 @@ impl Workspace {
         ];
         tools.push(tool(
             "ssmcp.fs.events",
-            "Read native file safety decisions, successful file access/write audit events, and complete inline diffs or output artifact references. Unknown/binary/sensitive snapshots have null line counts; external file effects are not inferred.",
-            crate::backend::events::schema()["properties"].clone(),
+            "Read successful native file access/write events and diffs. Set stream to safety to read redacted safety decisions with a separate cursor. External effects are unknown.",
+            {
+                let mut properties = crate::backend::events::schema()["properties"].clone();
+                properties["stream"] = json!({"type":"string","enum":["files","safety"],"default":"files"});
+                properties
+            },
             &[],
             true,
         ));
@@ -316,12 +322,20 @@ impl Workspace {
             .map_err(|error| error.to_string())?
     }
 
-    pub async fn perform(&self, name: &str, arguments: Value) -> Result<Value, String> {
+    pub async fn perform(&self, name: &str, mut arguments: Value) -> Result<Value, String> {
         if self.closed.load(Ordering::Acquire) {
             return Err("workspace is closed".into());
         }
         if name == "ssmcp.fs.events" {
-            return self.events.read(arguments).await;
+            let stream = arguments
+                .as_object_mut()
+                .and_then(|args| args.remove("stream"));
+            let events = match stream.as_ref().map(Value::as_str) {
+                None | Some(Some("files")) => &self.events,
+                Some(Some("safety")) => &self.root.safety_events,
+                _ => return Err("unknown filesystem event stream".into()),
+            };
+            return events.read(arguments).await;
         }
         if name.starts_with("ssmcp.fs.") {
             let root = self.root.clone();
@@ -541,6 +555,7 @@ impl Workspace {
         let mut handles = self.handles.lock().unwrap();
         self.closed.store(true, Ordering::Release);
         self.events.close();
+        self.root.safety_events.close();
         for (_, handle) in handles.drain() {
             handle.close();
         }
@@ -1412,7 +1427,7 @@ mod managed_file_integration_tests {
         assert_eq!(decision, "native file mutation blocked by safety policy");
         assert!(!scratch.0.join(".ssmcp/safety").exists());
         let page = workspace
-            .perform("ssmcp.fs.events", json!({}))
+            .perform("ssmcp.fs.events", json!({"stream":"safety"}))
             .await
             .unwrap();
         let entries = page["events"].as_array().unwrap();

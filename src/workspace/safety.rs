@@ -105,7 +105,7 @@ pub(crate) fn run(args: &[OsString]) -> crate::Result<()> {
         "{}",
         json!({
             "covered": OPERATIONS,
-            "evidence": "ssmcp.safety.decision events in the owning workspace stream",
+            "evidence": "ssmcp.safety.decision events via ssmcp.fs.events with stream=safety",
             "approval": "unavailable",
             "custom_rules": "unavailable",
             "uncovered": ["external processes", "transfers", "deletion", "secret egress"],
