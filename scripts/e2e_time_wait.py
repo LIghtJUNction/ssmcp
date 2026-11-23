@@ -199,8 +199,9 @@ class TimeWait(Interactions):
         discovered = self.response("return await tools.search(%s,{name_prefix:'ssmcp.time.',include_schemas:true});" % json.dumps(self.client_id))
         advertised = discovered["structuredContent"]["result"]
         self.check(advertised.get("complete") is True
-                   and {tool["name"] for tool in advertised["tools"]} == {"ssmcp.time.now", "ssmcp.time.wait"},
-                   "the real native catalog advertises exactly both time primitives")
+                   and {tool["name"] for tool in advertised["tools"]} == {
+                       "ssmcp.time.now", "ssmcp.time.wait", "ssmcp.time.prompt"},
+                   "the real native catalog advertises all three time primitives")
         queued = self.submit_source(front, "TIME_REQUIREMENT_MUST_STAY_QUEUED")
         self.save_draft(front)
         self.verify_clock_layout()
