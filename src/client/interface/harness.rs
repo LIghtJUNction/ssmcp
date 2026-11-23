@@ -212,6 +212,66 @@ pub(crate) fn provider_tools(
     )
 }
 
+/// Read only current catalog metadata; never load a harness or invoke a primitive.
+pub(crate) type CompletionCatalog = (u64, Vec<(String, String)>);
+
+pub(crate) fn completion_candidates(
+    provider_name: &str,
+    prefix: &str,
+    known_generation: Option<u64>,
+) -> Result<Option<CompletionCatalog>, String> {
+    let runtime = runtime()?;
+    completion_catalog(
+        &runtime.local_registry(),
+        provider(provider_name)?,
+        prefix,
+        known_generation,
+    )
+}
+
+fn completion_catalog(
+    registry: &Registry,
+    provider: Provider,
+    prefix: &str,
+    known_generation: Option<u64>,
+) -> Result<Option<CompletionCatalog>, String> {
+    let generation = registry.generation();
+    if known_generation == Some(generation) {
+        return Ok(None);
+    }
+    let mut candidates = Vec::new();
+    for id in names(registry, provider)? {
+        let tool = registry.lookup(&id)?;
+        if tool.provider != provider {
+            return Err("harness catalog changed; refresh it".into());
+        }
+        if !id.starts_with(prefix)
+            && !short_name(provider, &id).starts_with(prefix)
+            && !tool.native_name.starts_with(prefix)
+        {
+            continue;
+        }
+        registry.validate(&tool)?;
+        let description = crate::client::panel::safe_text(
+            tool.description
+                .as_deref()
+                .unwrap_or("Inspect the registered native schema"),
+        )
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(180)
+        .collect();
+        // Fully qualified names remain unambiguous when short names collide.
+        candidates.push((id, description));
+        if candidates.len() == 64 {
+            break;
+        }
+    }
+    Ok(Some((generation, candidates)))
+}
+
 pub(crate) fn inspect(provider_name: &str, name: &str) -> Result<Value, String> {
     let runtime = runtime()?;
     Ok(resolve(&runtime.local_registry(), provider(provider_name)?, name)?.descriptor)
@@ -798,6 +858,97 @@ mod tests {
     fn tool(name: &str) -> Value {
         json!({"name":name,"description":"Native description remains unchanged.",
             "inputSchema":{"type":"object","required":["input"],"properties":{"input":{"type":"string"}},"additionalProperties":false}})
+    }
+
+    #[test]
+    fn completion_metadata_contains_only_current_resolvable_provider_tools() {
+        let registry = Registry::new();
+        registry
+            .replace(Provider::Claude, vec![tool("cc.LSP")])
+            .unwrap();
+        registry
+            .replace(
+                Provider::Pi,
+                vec![tool("pi.events"), tool("ssmcp.pi.events")],
+            )
+            .unwrap();
+        registry
+            .replace(Provider::Codex, vec![tool("codex.command_exec")])
+            .unwrap();
+        for prefix in ["L", "cc.L", "claude.L"] {
+            let (generation, items) = completion_catalog(&registry, Provider::Claude, prefix, None)
+                .unwrap()
+                .unwrap();
+            assert_eq!(generation, registry.generation());
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].0, "claude.LSP");
+            assert_eq!(
+                resolve(&registry, Provider::Claude, &items[0].0)
+                    .unwrap()
+                    .native_name,
+                "cc.LSP"
+            );
+            assert_eq!(
+                parse(&items[0].0).unwrap(),
+                Action::Inspect(items[0].0.clone())
+            );
+        }
+        let (_, items) = completion_catalog(&registry, Provider::Pi, "events", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(items.len(), 2);
+        for (name, _) in items {
+            assert_eq!(resolve(&registry, Provider::Pi, &name).unwrap().id, name);
+            assert_eq!(parse(&name).unwrap(), Action::Inspect(name));
+        }
+        assert!(
+            completion_catalog(&registry, Provider::Pi, "LSP", None)
+                .unwrap()
+                .unwrap()
+                .1
+                .is_empty()
+        );
+        assert!(
+            completion_catalog(&registry, Provider::Pi, "get_commands", None)
+                .unwrap()
+                .unwrap()
+                .1
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn completion_metadata_is_bounded_after_filtering_and_refreshes_on_invalidation() {
+        let registry = Registry::new();
+        let mut descriptors: Vec<_> = (0..80)
+            .map(|i| tool(&format!("pi.command_{i:03}")))
+            .collect();
+        let mut last = tool("pi.z_last");
+        last["description"] = json!(format!("\u{1b}[2J\n{}", "界".repeat(250)));
+        descriptors.push(last);
+        registry.replace(Provider::Pi, descriptors).unwrap();
+        let (generation, items) = completion_catalog(&registry, Provider::Pi, "", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(items.len(), 64);
+        assert!(
+            completion_catalog(&registry, Provider::Pi, "", Some(generation))
+                .unwrap()
+                .is_none()
+        );
+        let (_, items) = completion_catalog(&registry, Provider::Pi, "z_", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].0, "pi.z_last");
+        assert!(items[0].1.chars().count() <= 180);
+        assert!(!items[0].1.chars().any(char::is_control));
+        registry.invalidate(Provider::Pi);
+        let (next, items) = completion_catalog(&registry, Provider::Pi, "", Some(generation))
+            .unwrap()
+            .unwrap();
+        assert_ne!(next, generation);
+        assert!(items.is_empty());
     }
 
     #[test]

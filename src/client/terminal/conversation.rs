@@ -1158,7 +1158,9 @@ impl State {
             self.chat_block_replacement();
             return;
         }
-        let text = if self.chat_menu_visible() {
+        let text = if self.chat_menu_visible()
+            && self.conversation.composer.primary_command_suggestion()
+        {
             self.conversation
                 .composer
                 .selected_suggestion()
@@ -1183,7 +1185,7 @@ impl State {
             return;
         }
         if self.conversation.editing.is_none() && self.chat_native_is_command(&text) {
-            match self.chat_command(&text) {
+            match self.chat_command(text.trim_start()) {
                 Ok(true) => {
                     if let Some(lookup) = &mut self.conversation.native_lookup {
                         lookup.clear_command = true;
@@ -5526,6 +5528,92 @@ mod tests {
         assert!(state.conversation.composer.cursor() > 0);
         input(&mut state, b"\x1b[H\x1b[A");
         assert_eq!(state.conversation.composer.text(), "previous request");
+    }
+
+    #[test]
+    fn slash_secondary_tab_only_inserts_and_enter_uses_the_actual_arguments() {
+        let mut state = preview(32, 100);
+        input(&mut state, b"/new a\x1b[B");
+        assert_eq!(state.conversation.composer.text(), "/new a");
+        assert!(state.chat_menu_visible());
+        input(&mut state, b"\t");
+        assert_eq!(state.conversation.composer.text(), "/new audit ");
+        assert_eq!(state.conversation.view, View::Activity);
+        assert!(state.actions.is_empty());
+        assert!(state.conversation.submitting.is_none());
+        input(&mut state, b"\r");
+        assert_eq!(state.conversation.view, View::Audit);
+        assert!(state.conversation.composer.is_empty());
+
+        let mut state = preview(32, 100);
+        input(&mut state, b"/new \x1b[B");
+        assert_eq!(
+            state
+                .conversation
+                .composer
+                .selected_suggestion()
+                .unwrap()
+                .name,
+            "/new statistics"
+        );
+        input(&mut state, b"\r");
+        assert_eq!(
+            state.conversation.view,
+            View::Activity,
+            "Enter must use the typed default command"
+        );
+        assert!(state.conversation.composer.is_empty());
+    }
+
+    #[test]
+    fn slash_secondary_local_modes_apply_only_after_explicit_enter() {
+        let mut state = preview(26, 60);
+        state.events.set_diff_mode(events::DiffMode::Single);
+        input(&mut state, b"  /diff sp\t");
+        assert_eq!(state.conversation.composer.text(), "  /diff split ");
+        assert_eq!(state.events.diff_mode(), events::DiffMode::Single);
+        assert!(state.actions.is_empty());
+        input(&mut state, b"\r");
+        assert_eq!(state.events.diff_mode(), events::DiffMode::Split);
+        assert!(state.conversation.composer.is_empty());
+        assert!(state.conversation.submitting.is_none());
+    }
+
+    #[test]
+    fn slash_secondary_menu_respects_queued_request_editing() {
+        let mut state = preview(26, 60);
+        state.conversation.composer.set_text("/plugin lo");
+        state.conversation.editing = Some("request-being-edited".into());
+        assert!(!state.chat_menu_visible());
+        input(&mut state, b"\t");
+        assert_eq!(state.conversation.composer.text(), "/plugin lo");
+        assert!(state.actions.is_empty());
+        assert!(state.conversation.submitting.is_none());
+    }
+
+    #[test]
+    #[ignore = "writes production slash completion frames to SSMCP_WORKER_SNAPSHOT_DIR"]
+    fn slash_subcommand_visual_fixture() {
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("SSMCP_WORKER_SNAPSHOT_DIR").expect("snapshot output directory"),
+        );
+        std::fs::create_dir_all(&directory).unwrap();
+        for (rows, cols, name, draft) in [
+            (32, 132, "slash-wide", "/group "),
+            (26, 60, "slash-narrow", "/plugin lo"),
+        ] {
+            let mut state = preview(rows, cols);
+            state.events.clear();
+            state.ui.color = true;
+            state.conversation.composer.set_text(draft);
+            let frame = state.chat_frame(Instant::now());
+            std::fs::write(directory.join(format!("{name}.ansi")), frame.diff(None)).unwrap();
+            std::fs::write(
+                directory.join(format!("{name}.json")),
+                serde_json::to_vec(&json!({"rows":rows,"cols":cols})).unwrap(),
+            )
+            .unwrap();
+        }
     }
 
     #[test]
