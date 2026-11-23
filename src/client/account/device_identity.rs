@@ -106,6 +106,7 @@ pub(crate) async fn proof_header(
 
 /// Recheck the saved grant without OAuth, credential replacement or key creation.
 /// Recovery must not use a currently signed-in different account as a substitute.
+#[cfg(target_os = "linux")]
 pub(crate) async fn verified_device_id(server: &str) -> Result<String> {
     let credential = credentials(Some(server)).await?.ok_or(
         "recovery authorization is unavailable; explicitly reauthorize the original account",

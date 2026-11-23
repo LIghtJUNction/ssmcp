@@ -505,6 +505,7 @@ pub async fn start_saved(name: &str) -> Result<Value> {
 
 /// Recovery differs from an explicit Start: it never clears a stop request,
 /// never replaces a definition, and never restarts an already active manager.
+#[cfg(target_os = "linux")]
 pub(crate) async fn recover_saved(name: &str, expected_definition_id: &str) -> Result<Value> {
     crate::wire::device_address::decode::<32>(expected_definition_id)?;
     let root = session_root(false)?;
