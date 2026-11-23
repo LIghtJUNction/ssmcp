@@ -512,6 +512,25 @@ Linux 上的已验证 Agent 可用 `exec.start(clientId, { …, track_artifacts:
 未配置策略时保留普通文件操作；配置失效后的阻止与恢复方式、只读裁决查询和覆盖范围见
 [原生文件安全预检](docs/workspace-safety.md)。
 
+[安全与隔离 RFC](docs/safety-rfc.md) 记录威胁模型、阶段门槛与实验设计。
+
+#### 文件隔离覆盖范围
+
+现有规则预检约束原生变更请求。原生读取、目录枚举和传输尚未接入安全目录的
+内容隔离，`.ssmcp/safety/` 也未在普通 Agent 的执行视图中替换为空占位。
+当前没有由服务端签发的专用安全 Agent 权限。协作角色文本不授予规则文件的访问权。
+查看脱敏裁决仍通过所属会话的授权事件流，或者本地私有 attach 只读租约。
+
+Code Mode 的 JavaScript 沙箱不挂载工作区。由它发起的原生工具调用在宿主侧执行。
+原生 Shell、PTY 和 Worker 执行路径仍可获得客户端 OS 用户已有的文件访问权限。
+Worker cgroup 约束资源用量，文件隔离尚未接入。当前部署不能依靠此预检向普通
+Agent 隐藏安全目录原始数据，或强制 Git 元数据只读。
+
+Git 元数据隔离还需覆盖工作树中的 `.git` 目录或指针文件，以及仓库解析后的
+gitdir 和 common-dir。普通仓库、链接 worktree 和 submodule 的这些路径可不同。
+现有宿主 Git 状态查看禁用可选锁。已有的客户端后台 fetch 可更新 Git 对象和
+远程跟踪引用，属于另一条宿主路径。本草稿未新增任何可代 Agent 写 Git 元数据的接口。
+
 ## 开发
 
 ```sh

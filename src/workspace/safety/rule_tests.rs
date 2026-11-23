@@ -1,9 +1,13 @@
 use super::*;
 use std::{
     cell::Cell,
+    ffi::OsStr,
     fs::{self, FileTimes, OpenOptions},
     io::Write,
-    os::unix::fs::{PermissionsExt, symlink},
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{PermissionsExt, symlink},
+    },
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime},
 };
@@ -164,6 +168,283 @@ async fn absent_baseline_preserves_native_paths_with_missing_or_writable_home() 
             .join("workspace/.SSMCP/SAFETY/ordinary.toml")
             .is_file()
     );
+}
+
+const UNDISCOVERABLE_HOME: [&str; 9] = [
+    "unset",
+    "missing",
+    "home_symlink",
+    "ancestor_symlink",
+    "dangling_home_symlink",
+    "config_symlink",
+    "safety_symlink",
+    "home_file",
+    "config_file",
+];
+
+fn undiscoverable_home(fixture: &Fixture, shape: &str) -> Option<PathBuf> {
+    let linked = fixture.root.join("linked");
+    match shape {
+        "unset" => return None,
+        "missing" => return Some(fixture.root.join("missing")),
+        "home_symlink" => {
+            symlink(&fixture.home, &linked).unwrap();
+            return Some(linked);
+        }
+        "ancestor_symlink" => {
+            symlink(&fixture.root, &linked).unwrap();
+            return Some(linked.join("home"));
+        }
+        "dangling_home_symlink" => {
+            symlink(fixture.root.join("missing"), &linked).unwrap();
+            return Some(linked);
+        }
+        "home_file" => {
+            put(&linked, "");
+            return Some(linked);
+        }
+        "config_symlink" | "config_file" | "safety_symlink" => {
+            let path = if shape == "safety_symlink" {
+                fixture.home.join(".ssmcp/safety")
+            } else {
+                fixture.home.join(".ssmcp")
+            };
+            let displaced = fixture.root.join("displaced");
+            fs::rename(&path, &displaced).unwrap();
+            if shape == "config_file" {
+                put(&path, "");
+            } else {
+                symlink(displaced, &path).unwrap();
+            }
+        }
+        _ => panic!("unknown discovery fixture: {shape}"),
+    }
+    Some(fixture.home.clone())
+}
+
+async fn assert_native_mutations(fixture: &Fixture, allowed: bool) {
+    let root = fixture.root.join("workspace");
+    put(&root.join("preexisting.txt"), "before");
+    let requests = [
+        (
+            "ssmcp.fs.write",
+            json!({"path":".ssmcp/safety/discovery/binary","data_base64":"eA==","create_parents":true}),
+        ),
+        (
+            OP,
+            json!({"path":".SSMCP/SAFETY/discovery/text","text":"after","create_parents":true}),
+        ),
+        (
+            "ssmcp.fs.edit_text",
+            json!({"path":"preexisting.txt","old_text":"before","new_text":"after"}),
+        ),
+        (
+            "ssmcp.fs.mkdir",
+            json!({"path":"created/directory","parents":true}),
+        ),
+    ];
+    for (operation, args) in requests {
+        let result = fixture.workspace.perform(operation, args).await;
+        if allowed {
+            assert!(result.is_ok(), "{operation}: {result:?}");
+        } else {
+            assert_eq!(
+                result.unwrap_err(),
+                "native file mutation blocked by safety policy",
+                "{operation}"
+            );
+        }
+    }
+    assert_eq!(
+        fs::read_to_string(root.join("preexisting.txt")).unwrap(),
+        if allowed { "after" } else { "before" }
+    );
+    if allowed {
+        assert_eq!(
+            fs::read(root.join(".ssmcp/safety/discovery/binary")).unwrap(),
+            b"x"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join(".SSMCP/SAFETY/discovery/text")).unwrap(),
+            "after"
+        );
+        assert!(root.join("created/directory").is_dir());
+    } else {
+        for path in [".ssmcp/safety/discovery", ".SSMCP", "created"] {
+            assert!(!root.join(path).exists(), "{path}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn cold_discovery_failures_preserve_all_native_mutations() {
+    for shape in UNDISCOVERABLE_HOME {
+        for hidden_baseline in [false, true] {
+            let fixture = Fixture::new();
+            put(&fixture.project, rule("deny"));
+            if hidden_baseline {
+                put(&fixture.baseline, rule("deny"));
+            }
+            let home = undiscoverable_home(&fixture, shape);
+            let snapshot = fixture.refresh_with(|| {
+                linux::load_at(home.as_deref(), &fixture.workspace.root.directory)
+            });
+            assert_eq!(snapshot.state, "builtin", "{shape}: {hidden_baseline}");
+            assert!(!snapshot.deny_all, "{shape}: {hidden_baseline}");
+            assert_native_mutations(&fixture, true).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn active_policy_stays_closed_when_discovery_becomes_unavailable() {
+    for shape in UNDISCOVERABLE_HOME {
+        let fixture = Fixture::new();
+        put(&fixture.baseline, rule("allow"));
+        let active = fixture.refresh();
+        assert_eq!(active.state, "active");
+        let home = undiscoverable_home(&fixture, shape);
+        let unavailable = fixture
+            .refresh_with(|| linux::load_at(home.as_deref(), &fixture.workspace.root.directory));
+        assert_eq!(unavailable.state, "active_unavailable", "{shape}");
+        assert!(unavailable.deny_all, "{shape}");
+        assert!(unavailable.revision > active.revision, "{shape}");
+        assert_native_mutations(&fixture, false).await;
+    }
+}
+
+#[tokio::test]
+async fn non_utf8_home_can_select_its_real_baseline() {
+    let mut fixture = Fixture::new();
+    let home = fixture.root.join(OsStr::from_bytes(b"home-\xff"));
+    fs::rename(&fixture.home, &home).unwrap();
+    fixture.home = home;
+    fixture.baseline = fixture.home.join(".ssmcp/safety/baseline.toml");
+    assert!(fixture.home.to_str().is_none());
+    let absent = fixture.refresh();
+    assert_eq!(absent.state, "builtin");
+    assert!(!absent.deny_all);
+    assert_native_mutations(&fixture, true).await;
+
+    put(&fixture.baseline, rule("deny"));
+    let active = fixture.refresh();
+    assert_eq!(active.state, "active");
+    assert_eq!(active.rules.decisions(OP), [Some(Decision::Deny), None]);
+    assert!(!fixture.is_allowed(active));
+    assert!(fixture.write("denied/data").await.is_err());
+    assert!(!fixture.root.join("workspace/denied").exists());
+}
+
+#[tokio::test]
+async fn selected_baseline_disappearance_does_not_become_absence_in_the_same_load() {
+    let fixture = Fixture::new();
+    put(&fixture.baseline, "");
+    let mut discovered = false;
+    let failed = fixture.refresh_with(|| {
+        linux::load_at_with_hooks(
+            Some(&fixture.home),
+            &fixture.workspace.root.directory,
+            &mut || {
+                // Keep the selected inode linked so its metadata remains valid;
+                // opening the original name must now fail after selection.
+                fs::rename(&fixture.baseline, fixture.root.join("selected-away.toml")).unwrap();
+                discovered = true;
+            },
+            &mut |_| {},
+        )
+    });
+    assert!(discovered);
+    assert_eq!(failed.state, "configured_unavailable");
+    assert!(failed.deny_all);
+    assert_native_mutations(&fixture, false).await;
+
+    let absent = fixture.refresh();
+    assert_eq!(absent.state, "builtin");
+    assert!(!absent.deny_all);
+    assert_native_mutations(&fixture, true).await;
+}
+
+#[tokio::test]
+async fn explicit_approval_blocks_all_native_mutations() {
+    let fixture = Fixture::new();
+    let source = format!(
+        "[operations]\n{}",
+        OPERATIONS
+            .map(|operation| format!("\"{operation}\" = \"require_approval\"\n"))
+            .join("")
+    );
+    put(&fixture.baseline, source);
+    let snapshot = fixture.refresh();
+    assert_eq!(snapshot.state, "active");
+    assert!(!snapshot.deny_all);
+    for operation in OPERATIONS {
+        let verdict = authorize(operation, &json!({"path":"ordinary/file"}), snapshot);
+        assert_eq!(verdict.decision, Decision::RequireApproval);
+        assert!(!verdict.is_allowed(), "{operation}");
+    }
+    assert_native_mutations(&fixture, false).await;
+}
+
+#[tokio::test]
+async fn selected_baseline_replacement_cannot_change_the_pinned_candidate() {
+    let fixture = Fixture::new();
+    put(&fixture.baseline, rule("deny"));
+    let mut replaced = false;
+    let snapshot = fixture.refresh_with(|| {
+        linux::load_at_with_hooks(
+            Some(&fixture.home),
+            &fixture.workspace.root.directory,
+            &mut || {
+                // Preserve the selected inode, then put an independently valid
+                // permissive file at its old name. The read fd must not replace
+                // the candidate's identity even when both files are trusted.
+                fs::rename(&fixture.baseline, fixture.root.join("selected-away.toml")).unwrap();
+                put(&fixture.baseline, "");
+                replaced = true;
+            },
+            &mut |_| {},
+        )
+    });
+    assert!(replaced);
+    assert_eq!(snapshot.state, "configured_unavailable");
+    assert!(snapshot.deny_all);
+    assert_native_mutations(&fixture, false).await;
+
+    let replacement = fixture.refresh();
+    assert_eq!(replacement.state, "active");
+    assert!(!replacement.deny_all);
+    assert_native_mutations(&fixture, true).await;
+}
+
+#[test]
+fn searchable_unreadable_directories_still_discover_the_baseline() {
+    for directory in ["home", "home/.ssmcp", "home/.ssmcp/safety"] {
+        let fixture = Fixture::new();
+        put(&fixture.baseline, rule("deny"));
+        let path = fixture.root.join(directory);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o100)).unwrap();
+        let snapshot = fixture.refresh();
+        // Restore traversal/read permissions before any assertion or cleanup.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(snapshot.state, "active", "{directory}");
+        assert!(!fixture.is_allowed(snapshot), "{directory}");
+    }
+}
+
+#[test]
+fn discovered_baseline_keeps_directory_trust_failures_closed() {
+    for directory in ["home", "home/.ssmcp", "home/.ssmcp/safety"] {
+        let fixture = Fixture::new();
+        put(&fixture.baseline, "");
+        fs::set_permissions(
+            fixture.root.join(directory),
+            fs::Permissions::from_mode(0o770),
+        )
+        .unwrap();
+        let snapshot = fixture.refresh();
+        assert_eq!(snapshot.state, "configured_unavailable", "{directory}");
+        assert!(snapshot.deny_all, "{directory}");
+    }
 }
 
 #[test]
@@ -399,10 +680,31 @@ fn directory_trust_is_rechecked_after_the_policy_read() {
     }
 }
 
+#[tokio::test]
+async fn rule_sources_must_be_regular_files() {
+    let fixture = Fixture::new();
+    let name = std::ffi::CString::new(fixture.baseline.as_os_str().as_bytes()).unwrap();
+    // SAFETY: the fixture path is a valid C string in a private directory.
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let rejected = fixture.refresh();
+    assert_eq!(rejected.state, "configured_unavailable");
+    assert!(rejected.deny_all);
+    assert_native_mutations(&fixture, false).await;
+
+    fs::remove_file(&fixture.baseline).unwrap();
+    put(&fixture.baseline, rule("deny"));
+    let regular = fixture.refresh();
+    assert_eq!(regular.state, "active");
+    assert!(!regular.deny_all);
+    assert!(!fixture.is_allowed(regular));
+}
+
 #[test]
 fn policy_files_remain_bounded_regular_single_link_and_no_follow() {
     for invalid in [
         "symlink",
+        "dangling_symlink",
+        "permissions",
         "hardlink",
         "directory",
         "oversize",
@@ -413,6 +715,13 @@ fn policy_files_remain_bounded_regular_single_link_and_no_follow() {
             "symlink" => {
                 put(&fixture.project, "");
                 symlink(&fixture.project, &fixture.baseline).unwrap();
+            }
+            "dangling_symlink" => {
+                symlink(fixture.root.join("missing"), &fixture.baseline).unwrap();
+            }
+            "permissions" => {
+                put(&fixture.baseline, "");
+                fs::set_permissions(&fixture.baseline, fs::Permissions::from_mode(0o660)).unwrap();
             }
             "hardlink" => {
                 put(&fixture.baseline, "");
@@ -425,7 +734,9 @@ fn policy_files_remain_bounded_regular_single_link_and_no_follow() {
             "invalid_utf8" => put(&fixture.baseline, [0xff]),
             _ => unreachable!(),
         }
-        assert!(fixture.load().is_err(), "{invalid}");
+        let snapshot = fixture.refresh();
+        assert_eq!(snapshot.state, "configured_unavailable", "{invalid}");
+        assert!(snapshot.deny_all, "{invalid}");
     }
     let fixture = Fixture::new();
     put(
