@@ -43,6 +43,9 @@ fn computer_cli_keeps_json_operation_errors_and_local_diagnostics_distinct() {
         let mut command = Command::new(env!("CARGO_BIN_EXE_ssmcp"));
         command
             .env_clear()
+            // Tool repositories need an absolute home even when computer data
+            // locations are deliberately absent.
+            .env("USERPROFILE", &scratch.0)
             .env("PATH", &scratch.0)
             .current_dir(&scratch.0)
             .arg("computer")
