@@ -232,6 +232,9 @@ unicode-width = "0.2"
 vt100 = "0.18.1"
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "signal", "time", "fs"] }
 
+[dev-dependencies]
+tokio = { version = "1.54", features = ["test-util"] }
+
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 portable-pty = "0.9"
 cap-std = "4.0.3"

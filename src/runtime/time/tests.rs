@@ -496,11 +496,22 @@ async fn remote_time_catalog_and_hard_coded_calls_fail_closed_without_negotiatio
                     .unwrap()
                     .iter()
                     .all(|tool| tool["name"] != "ssmcp.time.wait"
-                        && tool["name"] != "ssmcp.time.now")
+                        && tool["name"] != "ssmcp.time.now"
+                        && tool["name"] != "ssmcp.time.prompt")
             );
             assert!(
                 runtime
                     .perform(operation())
+                    .await
+                    .unwrap_err()
+                    .starts_with("time_observation_not_negotiated:")
+            );
+            assert!(
+                runtime
+                    .perform(crate::wire::Operation::CallTool {
+                        name: "ssmcp.time.prompt".into(),
+                        arguments: json!({"action":"list"}),
+                    })
                     .await
                     .unwrap_err()
                     .starts_with("time_observation_not_negotiated:")
@@ -515,10 +526,10 @@ async fn remote_time_catalog_and_hard_coded_calls_fail_closed_without_negotiatio
                     .iter()
                     .filter(|tool| matches!(
                         tool["name"].as_str(),
-                        Some("ssmcp.time.now" | "ssmcp.time.wait")
+                        Some("ssmcp.time.now" | "ssmcp.time.wait" | "ssmcp.time.prompt")
                     ))
                     .count(),
-                2
+                3
             );
             runtime.configure_chat(false).unwrap();
             let tools = runtime.tools().await.unwrap();
@@ -587,6 +598,16 @@ async fn remote_time_catalog_and_hard_coded_calls_fail_closed_without_negotiatio
             assert!(
                 runtime
                     .perform(operation())
+                    .await
+                    .unwrap_err()
+                    .starts_with("time_observation_not_negotiated:")
+            );
+            assert!(
+                runtime
+                    .perform(crate::wire::Operation::CallTool {
+                        name: "ssmcp.time.prompt".into(),
+                        arguments: json!({"action":"list"}),
+                    })
                     .await
                     .unwrap_err()
                     .starts_with("time_observation_not_negotiated:")
@@ -720,7 +741,7 @@ async fn interval_and_timer_list_extend_the_existing_passive_tool_names() {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["ssmcp.time.now", "ssmcp.time.wait"]
+        ["ssmcp.time.now", "ssmcp.time.wait", "ssmcp.time.prompt"]
     );
     assert!(observation("ssmcp.time.now", &json!({"op":"interval"})).is_none());
     assert!(observation("ssmcp.time.wait", &json!({"op":"list"})).is_none());

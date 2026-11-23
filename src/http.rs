@@ -30,6 +30,7 @@ const CAPABILITIES_META: &str = "io.modelcontextprotocol/clientCapabilities";
 pub(crate) mod await_tool;
 mod coordination_policy;
 pub(crate) mod events_tool;
+pub(crate) mod prompt_hooks;
 #[cfg(test)]
 mod question_delivery_tests;
 #[cfg(test)]
@@ -1583,11 +1584,13 @@ async fn eligible_user_response(report: &CodeRunReport) -> Result<Vec<EligibleUs
 }
 
 async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value {
+    let response = prompt_hooks::without_native_metadata(response);
     tool_summaries::collect(report).await;
     collect_question_answers(report).await;
     match eligible_user_response(report).await {
         Ok(eligible) => {
             let response = worker_reminders::append(report, response, &eligible).await;
+            let response = prompt_hooks::append(report, response, &eligible).await;
             commit_user_response(report, response, eligible)
         }
         Err(()) => await_tool::commit_user_delivery(report, || response),

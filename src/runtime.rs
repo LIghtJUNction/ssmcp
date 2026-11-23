@@ -815,8 +815,10 @@ impl Runtime {
             }
             Operation::Status {} => ("terminal.status".into(), json!({})),
         };
-        if matches!(name.as_str(), "ssmcp.time.now" | "ssmcp.time.wait")
-            && !self.time.time_tools_enabled()
+        if matches!(
+            name.as_str(),
+            "ssmcp.time.now" | "ssmcp.time.wait" | "ssmcp.time.prompt"
+        ) && !self.time.time_tools_enabled()
         {
             return Err("time_observation_not_negotiated: remote time tools require an explicit time_observation_v2 server acknowledgement; old server delivery policies still apply to hard-coded unsupported calls".into());
         }

@@ -193,6 +193,7 @@ pub struct Session {
     chat_disabled: bool,
     tool_summary_advertised: AtomicBool,
     io_reply_advertised: AtomicBool,
+    prompt_hooks_advertised: AtomicBool,
     thread_events_advertised: AtomicBool,
     login: Mutex<Option<LoginCode>>,
     // Membership may change, but grants always identify immutable provider subjects.
@@ -259,6 +260,10 @@ impl Session {
             return Err(wire::CHAT_DISABLED.into());
         }
         Ok(())
+    }
+
+    pub(crate) fn prompt_hooks_advertised(&self) -> bool {
+        self.prompt_hooks_advertised.load(Ordering::Acquire)
     }
 
     pub(crate) fn io_reply_advertised(&self) -> bool {
@@ -714,6 +719,9 @@ impl Session {
             {
                 self.io_reply_advertised.store(true, Ordering::Release);
             }
+            if tools.iter().any(crate::http::prompt_hooks::advertises) {
+                self.prompt_hooks_advertised.store(true, Ordering::Release);
+            }
             if tools.iter().any(advertises_thread_events) {
                 self.thread_events_advertised.store(true, Ordering::Release);
             }
@@ -733,6 +741,13 @@ impl Session {
                     && crate::code_mode::tool_summaries::valid_native_receipt(value)))
         {
             self.tool_summary_advertised.store(true, Ordering::Release);
+        }
+        if audit_tool.as_deref() == Some(crate::http::prompt_hooks::TOOL)
+            && result
+                .as_ref()
+                .is_ok_and(crate::http::prompt_hooks::valid_native_receipt)
+        {
+            self.prompt_hooks_advertised.store(true, Ordering::Release);
         }
         if let Some(run) = audit_run.as_ref() {
             run.native_tool_summary_reply(
@@ -979,6 +994,7 @@ impl Broker {
             chat_disabled: false,
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
+            prompt_hooks_advertised: AtomicBool::new(false),
             thread_events_advertised: AtomicBool::new(false),
             login: Mutex::new(Some(LoginCode {
                 value: login_code.into(),
@@ -1430,6 +1446,7 @@ impl Broker {
                 chat_disabled,
                 tool_summary_advertised: AtomicBool::new(false),
                 io_reply_advertised: AtomicBool::new(false),
+                prompt_hooks_advertised: AtomicBool::new(false),
                 thread_events_advertised: AtomicBool::new(false),
                 login: Mutex::new((!restricted).then(|| LoginCode {
                     value: login_code.clone(),
@@ -2334,6 +2351,7 @@ mod tests {
             chat_disabled: false,
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
+            prompt_hooks_advertised: AtomicBool::new(false),
             thread_events_advertised: AtomicBool::new(false),
             login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),

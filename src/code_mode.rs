@@ -76,6 +76,7 @@ tokio::task_local! {
     // Set only around the private response collector's read-only probe. A
     // caller tool name or returned JSON cannot establish this provenance.
     static PASSIVE_SUMMARY_PROBE: (Arc<crate::wire::CodeContext>, String);
+    static PASSIVE_PROMPT_PROBE: (Arc<crate::wire::CodeContext>, String);
 }
 
 impl AuditRun {
@@ -148,6 +149,15 @@ impl AuditRun {
                     Arc::ptr_eq(context, &self.context) && client == client_id
                 })
                 .unwrap_or(false);
+        let passive_prompt_probe = tool == Some("ssmcp.time.prompt")
+            && PASSIVE_PROMPT_PROBE
+                .try_with(|(context, client)| {
+                    Arc::ptr_eq(context, &self.context) && client == client_id
+                })
+                .unwrap_or(false);
+        if passive_prompt_probe {
+            return;
+        }
         if let Some(name) = tool
             && !passive_summary_probe
         {
@@ -155,7 +165,10 @@ impl AuditRun {
                 .time_observation_activity
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            if matches!(name, "ssmcp.time.now" | "ssmcp.time.wait") {
+            if matches!(
+                name,
+                "ssmcp.time.now" | "ssmcp.time.wait" | "ssmcp.time.prompt"
+            ) {
                 activity.entry(client_id.into()).or_insert(true);
             } else {
                 // Any other actual tool keeps its existing delivery rules.
@@ -177,6 +190,7 @@ impl AuditRun {
                         | "ssmcp.ui.tool_summary"
                         | "ssmcp.time.now"
                         | "ssmcp.time.wait"
+                        | "ssmcp.time.prompt"
                 )
             }) {
                 activity.entry(client_id.into()).or_insert(false);
@@ -195,6 +209,7 @@ impl AuditRun {
                         | "ssmcp.resources.read"
                         | "ssmcp.time.now"
                         | "ssmcp.time.wait"
+                        | "ssmcp.time.prompt"
                 )
         }) {
             self.interacted(client_id);
@@ -250,6 +265,17 @@ impl AuditRun {
         operation: impl Future<Output = T>,
     ) -> T {
         PASSIVE_SUMMARY_PROBE
+            .scope((self.context.clone(), client_id.into()), operation)
+            .await
+    }
+
+    /// A private read-only timer probe cannot change human-input eligibility.
+    pub(crate) async fn passive_prompt_probe<T>(
+        &self,
+        client_id: &str,
+        operation: impl Future<Output = T>,
+    ) -> T {
+        PASSIVE_PROMPT_PROBE
             .scope((self.context.clone(), client_id.into()), operation)
             .await
     }
@@ -1204,7 +1230,7 @@ mod tests {
                 run.bind("clock", "verified-owner", "clock-agent", "private-token")
                     .unwrap();
             }
-            for tool in ["ssmcp.time.now", "ssmcp.time.wait"] {
+            for tool in ["ssmcp.time.now", "ssmcp.time.wait", "ssmcp.time.prompt"] {
                 run.native_dispatched("clock", Some(tool));
                 assert_eq!(run.targets(), ["clock"]);
                 assert!(run.steering_targets().is_empty());
@@ -1261,6 +1287,35 @@ mod tests {
             })
             .await;
         assert!(!mixed.time_observation_only("clock"));
+        assert_eq!(mixed.steering_targets(), ["clock"]);
+    }
+
+    #[tokio::test]
+    async fn private_prompt_probe_preserves_only_the_exact_run_client_and_tool() {
+        let run = AuditRun::new("return null;", None).unwrap();
+        run.bind("clock", "owner", "agent", "token").unwrap();
+        assert!(run.question_delivery_eligible("clock"));
+        let other = AuditRun::new("return null;", None).unwrap();
+        run.passive_prompt_probe("clock", async {
+            run.native_dispatched("clock", Some("ssmcp.time.prompt"));
+            other.native_dispatched("clock", Some("ssmcp.time.prompt"));
+            run.native_dispatched("other-client", Some("ssmcp.time.prompt"));
+        })
+        .await;
+        assert!(!run.time_observation_only("clock"));
+        assert_eq!(run.steering_targets(), ["clock"]);
+        assert!(run.question_delivery_eligible("clock"));
+        assert!(other.time_observation_only("clock"));
+        assert!(run.time_observation_only("other-client"));
+        run.native_dispatched("clock", Some("ssmcp.time.prompt"));
+        assert!(run.time_observation_only("clock"));
+        assert!(run.steering_targets().is_empty());
+        let mixed = AuditRun::new("return null;", None).unwrap();
+        mixed
+            .passive_prompt_probe("clock", async {
+                mixed.native_dispatched("clock", Some("ssmcp.exec.run"));
+            })
+            .await;
         assert_eq!(mixed.steering_targets(), ["clock"]);
     }
 
