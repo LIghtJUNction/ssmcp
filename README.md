@@ -184,12 +184,30 @@ Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重
 
 ### 从命令行连接对话与传递结果
 
-`ssmcp list` 按进程和已登记线程显示树形目录，远程 `attach` 默认连接所选对象的聊天输入与输出。进程输入发给选定目录中的主接收入口及已登记线程；线程输入只发给确切的成员 ID。数字引用最近一次列表，保留 5 分钟；显示名称不会被当成线程身份。[选择规则](docs/client-accounts.md#选择进程与线程)
+`ssmcp list` 把当前账号可控制的在线进程及其已登记线程自动组织成树。例如，两条连接各有一个登记成员时，默认输出如下；名称和主机名取自实际连接：
+
+~~~text
+  #  NAME / HOST
+  1  workstation [process] · devbox
+  2  ├─ Main / next unbound caller [main]
+  3  └─ reviewer [thread]
+  4  worker-pool [process] · devbox
+  5  ├─ Main / next unbound caller [main]
+  6  └─ worker-a [thread]
+Numbers identify this exact list for 5 minutes. Use ssmcp list --json for full IDs.
+Process chat input fans out to its listed main and registered threads.
+~~~
+
+每个 `[process]` 是一条在线客户端连接，后面显示主机名。其子项 `[main]` 是未绑定成员调用的主接收入口，`[thread]` 是通过 `collab.join` 登记的成员。不同进程各自成树；层级只表示线程登记在哪条连接上。同名进程或线程仍保留各自的编号。[目录来源](src/broker/session_io.rs)
+
+左列数字可直接用于 `attach` 和 `send`：例如 `thread 3` 只选择 reviewer，`process 1` 选择 workstation 及该次列表中的主入口和登记成员。每次 `list`（含 `--json`）保存新的五分钟编号快照；远端顺序变化不会改写已有快照的目标。需要完整进程或线程 ID 时使用 `ssmcp list --json`，在 `selection.entries` 中按 `number` 查找 `id`。显示名称不会被当成线程身份。[选择规则](docs/client-accounts.md#选择进程与线程)
+
+远程 `attach` 默认连接所选对象的聊天输入与输出：
 
 ~~~sh
 ssmcp list
-ssmcp attach thread THREAD_ID
-ssmcp send process PROCESS_ID '检查当前改动' | ssmcp wait --any
+ssmcp attach thread 3
+ssmcp send process 1 '检查当前改动' | ssmcp wait --any
 ssmcp send thread THREAD_ID '整理当前结论' |
   ssmcp wait --gather |
   ssmcp send thread NEXT_THREAD_ID --stdin
