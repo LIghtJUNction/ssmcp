@@ -194,6 +194,7 @@ impl CallScope {
         Source {
             call: Some(self.clone()),
             history: self.history.clone(),
+            local_artifact_tracking: false,
         }
         .scope(future)
         .await
@@ -204,6 +205,7 @@ impl CallScope {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Source {
     pub(crate) call: Option<Arc<CallScope>>,
+    local_artifact_tracking: bool,
     history: Option<Result<HistoryOwner, String>>,
 }
 
@@ -213,7 +215,17 @@ impl Source {
         CURRENT.try_with(Clone::clone).unwrap_or_else(|_| Self {
             call: None,
             history: Some(history::capture(None)),
+            local_artifact_tracking: false,
         })
+    }
+
+    pub(crate) fn with_local_artifact_tracking(mut self) -> Self {
+        self.local_artifact_tracking = self.call.is_none();
+        self
+    }
+
+    pub(crate) fn allows_local_artifact_tracking(&self) -> bool {
+        self.call.is_none() && self.local_artifact_tracking
     }
 
     pub(crate) fn owner(&self) -> Option<&HistoryOwner> {

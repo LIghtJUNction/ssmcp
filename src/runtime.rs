@@ -284,6 +284,10 @@ pub struct Runtime {
     workers: Mutex<Option<Arc<crate::worker::Pool>>>,
 }
 impl Runtime {
+    pub(crate) fn local_command_stats(&self) -> crate::backend::shell::LocalCommandStats {
+        self.backend.local_command_stats()
+    }
+
     pub(crate) async fn safety_events(&self, cursor: u64, limit: usize) -> Result<Value, String> {
         self.files.safety_events(cursor, limit).await
     }
