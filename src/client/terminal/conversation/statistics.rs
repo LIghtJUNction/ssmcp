@@ -518,7 +518,7 @@ fn command_rows(
     };
     push("Command execution", PanelTone::Heading);
     push(
-        "Scope · native local execution, including terminal !",
+        "Scope · local exec.start and terminal.open, including terminal !; connection main excluded",
         PanelTone::Muted,
     );
     if let Some(stats) = stats {
@@ -596,8 +596,8 @@ fn command_rows(
             );
             push(
                 &format!(
-                    "{} · {} ms · {} · {disk}",
-                    job.state, job.duration_ms, job.id
+                    "{} · {} · {} ms · {} · {disk}",
+                    job.state, job.mode, job.duration_ms, job.id
                 ),
                 PanelTone::Normal,
             );
@@ -607,7 +607,7 @@ fn command_rows(
         push("Local execution data unavailable", PanelTone::Muted);
     }
     for line in [
-        "Resource scope · direct command’s wait4 record; Linux may include children it waited for. No live CPU % or tree-wide RSS peak.",
+        "Resource scope · Linux pipe command wait4 record; may include waited-for children. PTY CPU/RSS unavailable. No live CPU % or tree-wide RSS peak.",
         "Disk net change · Linux /track-command · job-exclusive directory only · logical bytes above empty baseline",
         "Cache hits, refreshes, invalidation and avoided execution · not instrumented",
         "Browser, relay and worker calls · outside this panel’s scope",
@@ -678,6 +678,67 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_statistics_show_measured_units_and_unknown_pty_outcomes() {
+        use crate::backend::shell::{LocalCommandRow, LocalCommandStats};
+        let stats = || LocalCommandStats {
+            calls: 3,
+            spawned: 2,
+            start_errors: 1,
+            jobs: vec![
+                LocalCommandRow {
+                    id: "pipe-fixture".into(),
+                    mode: "pipes",
+                    duration_ms: 12,
+                    state: "failed",
+                    usage: Some(crate::backend::process::ResourceUsage {
+                        cpu_us: 2000,
+                        peak_rss_bytes: 8192,
+                    }),
+                    disk_delta: Some((Some(3), false)),
+                    disk_tracking: true,
+                },
+                LocalCommandRow {
+                    id: "pty-fixture".into(),
+                    mode: "pty",
+                    duration_ms: 25,
+                    state: "unknown",
+                    usage: None,
+                    disk_delta: None,
+                    disk_tracking: false,
+                },
+            ],
+        };
+        let rendered = command_rows(Some(stats()), 160)
+            .into_iter()
+            .map(|(line, _)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for expected in [
+            "Start calls 3 · Spawned 2 · Start errors 1",
+            "failed · pipes · 12 ms · pipe-fixture · disk +3 logical bytes",
+            "unknown · pty · 25 ms · pty-fixture · disk tracking off",
+            "CPU 2000 µs · peak RSS 8 KiB",
+            "CPU/RSS unavailable",
+            "connection main excluded",
+        ] {
+            assert!(rendered.contains(expected), "{expected}: {rendered}");
+        }
+        assert!(!rendered.contains("completed"));
+        assert!(
+            command_rows(Some(stats()), 38)
+                .iter()
+                .all(|(line, _)| line.chars().count() <= 38)
+        );
+        let unavailable = command_rows(None, 160)
+            .into_iter()
+            .map(|(line, _)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(unavailable.contains("Local execution data unavailable"));
+        assert!(!unavailable.contains("Start calls 0"));
+    }
 
     fn density_fixture() -> (Value, Value) {
         let session = "c".repeat(64);
