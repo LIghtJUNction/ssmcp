@@ -271,6 +271,36 @@ fn command_rows(
                 PanelTone::Normal,
             );
         }
+        push(
+            "CPU time rank · Linux wait4 user + system",
+            PanelTone::Muted,
+        );
+        let mut measured: Vec<_> = stats
+            .jobs
+            .iter()
+            .filter_map(|job| job.usage.map(|usage| (job, usage)))
+            .collect();
+        measured.sort_unstable_by_key(|(_, usage)| std::cmp::Reverse(usage.cpu_us));
+        if measured.is_empty() {
+            push("CPU time unavailable", PanelTone::Muted);
+        }
+        for (job, usage) in measured.iter().take(5) {
+            push(
+                &format!("{} µs · {}", usage.cpu_us, job.id),
+                PanelTone::Normal,
+            );
+        }
+        push("Peak RSS rank · Linux wait4", PanelTone::Muted);
+        measured.sort_unstable_by_key(|(_, usage)| std::cmp::Reverse(usage.peak_rss_bytes));
+        if measured.is_empty() {
+            push("Peak RSS unavailable", PanelTone::Muted);
+        }
+        for (job, usage) in measured.iter().take(5) {
+            push(
+                &format!("{} KiB · {}", usage.peak_rss_bytes / 1024, job.id),
+                PanelTone::Normal,
+            );
+        }
         push("Recent tasks · local native execution", PanelTone::Muted);
         for job in stats.jobs {
             let disk = match job.disk_delta {
@@ -280,6 +310,16 @@ fn command_rows(
                 None if job.disk_tracking => "disk pending completion sample".into(),
                 None => "disk tracking off".into(),
             };
+            let usage = job.usage.map_or_else(
+                || "CPU/RSS unavailable".into(),
+                |usage| {
+                    format!(
+                        "CPU {} µs · peak RSS {} KiB",
+                        usage.cpu_us,
+                        usage.peak_rss_bytes / 1024
+                    )
+                },
+            );
             push(
                 &format!(
                     "{} · {} ms · {} · {disk}",
@@ -287,12 +327,13 @@ fn command_rows(
                 ),
                 PanelTone::Normal,
             );
+            push(&usage, PanelTone::Muted);
         }
     } else {
         push("Local execution data unavailable", PanelTone::Muted);
     }
     for line in [
-        "CPU time and peak memory · unavailable",
+        "Resource scope · direct command’s wait4 record; Linux may include children it waited for. No live CPU % or tree-wide RSS peak.",
         "Disk net change · Linux /track-command · job-exclusive directory only · logical bytes above empty baseline",
         "Cache hits, refreshes, invalidation and avoided execution · not instrumented",
         "Browser, relay and worker calls · outside this panel’s scope",

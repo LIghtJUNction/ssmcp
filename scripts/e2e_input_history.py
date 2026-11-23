@@ -685,7 +685,10 @@ class InputHistory(Composer):
         front.send("/new statistics")
         front.send(ENTER)
         shot = front.until(lambda shot: "Start calls 1 · Spawned 1 · Start errors 0" in text(shot)
-                           and f"{identity} · disk +3 logical bytes" in text(shot),
+                           and f"{identity} · disk +3 logical bytes" in text(shot)
+                           and "CPU time rank · Linux wait4 user + system" in text(shot)
+                           and "Peak RSS rank · Linux wait4" in text(shot)
+                           and re.search(r"CPU \d+ µs · peak RSS [1-9]\d* KiB", text(shot)) is not None,
                            "Statistics displays one start and the same job's measured disk delta")
         self.check("stats-proof" not in text(shot) and "$TMPDIR" not in text(shot),
                    "Statistics stays a redacted projection of the command")

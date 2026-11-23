@@ -135,6 +135,7 @@ impl InputMode {
 
 struct State {
     running: bool,
+    usage: Option<super::process::ResourceUsage>,
     #[cfg(target_os = "linux")]
     tree_reaped: bool,
     exit_code: Option<i32>,
@@ -274,6 +275,7 @@ pub(crate) struct LocalCommandRow {
     pub id: String,
     pub duration_ms: u64,
     pub state: &'static str,
+    pub usage: Option<super::process::ResourceUsage>,
     pub disk_delta: Option<(Option<u64>, bool)>,
     pub disk_tracking: bool,
 }
@@ -462,6 +464,7 @@ impl Shell {
                 LocalCommandRow {
                     id: job.id.clone(),
                     duration_ms: job.timing.elapsed_ms(through),
+                    usage: state.usage,
                     disk_tracking: {
                         #[cfg(target_os = "linux")]
                         {
@@ -887,8 +890,16 @@ impl Shell {
                 .env("TMPDIR", &artifacts.path)
                 .env("SSMCP_ARTIFACT_DIR", &artifacts.path);
         }
+        #[cfg(target_os = "linux")]
+        let spawn = if creator.call.is_none() {
+            Managed::spawn_accounted
+        } else {
+            Managed::spawn
+        };
+        #[cfg(not(target_os = "linux"))]
+        let spawn = Managed::spawn;
         let mut process =
-            Managed::spawn(&mut command).map_err(|e| format!("could not start command: {e}"))?;
+            spawn(&mut command).map_err(|e| format!("could not start command: {e}"))?;
         if creator.call.is_none() {
             registry.local_spawned = registry.local_spawned.saturating_add(1);
         }
@@ -929,6 +940,7 @@ impl Shell {
             cwd,
             timing,
             state: Mutex::new(State {
+                usage: None,
                 running: true,
                 #[cfg(target_os = "linux")]
                 tree_reaped: false,
@@ -995,6 +1007,8 @@ impl Shell {
             worker.stop_input();
             worker.stdin.lock().await.take();
             process.shutdown().await;
+            #[cfg(target_os = "linux")]
+            let usage = process.take_usage();
             tokio::join!(
                 drain(&mut out, &worker, "stdout"),
                 drain(&mut err, &worker, "stderr")
@@ -1011,6 +1025,7 @@ impl Shell {
                 #[cfg(target_os = "linux")]
                 {
                     state.tree_reaped = outcome.0 == Some(0);
+                    state.usage = usage;
                 }
                 state.exit_code = outcome.0;
                 state.cancelled = outcome.1;
@@ -1420,6 +1435,7 @@ mod tests {
             cwd: std::env::current_dir().unwrap(),
             timing: ExecutionTiming::new(Instant::now().into_std(), 0),
             state: Mutex::new(State {
+                usage: None,
                 running: false,
                 #[cfg(target_os = "linux")]
                 tree_reaped: false,
@@ -1449,6 +1465,57 @@ mod tests {
             #[cfg(target_os = "linux")]
             disk_delta: std::sync::OnceLock::new(),
         })
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_statistics_attribute_reaped_usage_and_preserve_outcomes() {
+        let shell = Shell::new();
+        let light = start_fixture(&shell, "next", 0).await;
+        let heavy = start_fixture(&shell, "resource-load", 0).await;
+        for id in [&light, &heavy] {
+            let status = shell
+                .call("ssmcp.exec.wait", json!({"job_id":id}))
+                .await
+                .unwrap();
+            assert_eq!(status["exit_code"], 0);
+        }
+        let cancelled = start_fixture(&shell, "wait", 0).await;
+        let status = shell
+            .call("ssmcp.exec.cancel", json!({"job_id":cancelled}))
+            .await
+            .unwrap();
+        assert_eq!(status["cancelled"], true);
+        let failed = start_fixture(&shell, "resource-failure", 0).await;
+        let status = shell
+            .call("ssmcp.exec.wait", json!({"job_id":failed}))
+            .await
+            .unwrap();
+        assert_eq!(status["exit_code"], 7);
+        let remote = crate::runtime::call_scope::CallScope::from_relay_for_client(
+            45,
+            Some("remote"),
+            1,
+            None,
+            None,
+        )
+        .unwrap();
+        let hidden = remote.scope(start_fixture(&shell, "next", 0)).await;
+        shell
+            .call("ssmcp.exec.wait", json!({"job_id":hidden}))
+            .await
+            .unwrap();
+        let stats = shell.local_command_stats();
+        let job = |id: &str| stats.jobs.iter().find(|job| job.id == id).unwrap();
+        let light = job(&light).usage.unwrap();
+        let heavy = job(&heavy).usage.unwrap();
+        assert!(heavy.cpu_us > light.cpu_us, "{heavy:?} versus {light:?}");
+        assert!(heavy.peak_rss_bytes >= light.peak_rss_bytes + 16 * 1024 * 1024);
+        assert_eq!(job(&cancelled).state, "cancelled");
+        assert_eq!(job(&failed).state, "failed");
+        assert!(job(&failed).usage.is_some());
+        assert!(!stats.jobs.iter().any(|job| job.id == hidden));
+        assert!(shell.job(&hidden).unwrap().state().usage.is_none());
     }
 
     #[tokio::test]
@@ -1870,6 +1937,22 @@ mod tests {
                 std::io::stdout().flush().unwrap();
             }
             std::process::exit(0);
+        }
+        #[cfg(target_os = "linux")]
+        if fixture == "resource-load" {
+            let mut memory = vec![0u8; 48 * 1024 * 1024];
+            for page in memory.chunks_mut(4096) {
+                page[0] = 1;
+            }
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_millis(200) {
+                std::hint::black_box(&mut memory);
+            }
+            std::process::exit(0);
+        }
+        #[cfg(target_os = "linux")]
+        if fixture == "resource-failure" {
+            std::process::exit(7);
         }
         let (stdout, stderr) = match fixture.as_str() {
             "alpha" | "beta" => {
