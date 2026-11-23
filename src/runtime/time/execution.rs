@@ -1,5 +1,7 @@
 //! Native-only execution timing. Never reconstructed from provider event JSON.
-use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::time::Duration;
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ExecutionTiming {
