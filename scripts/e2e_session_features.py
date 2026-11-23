@@ -27,6 +27,10 @@ LARGE_BYTES = 1152 * 1024
 TITLE = "修复客户端：会话标题、重载与长输出护卫"
 BEGIN = b"SSMCP_LARGE_BEGIN"
 END = b"SSMCP_LARGE_END"
+OUTPUT_READ_BYTES = 32768
+OUTPUT_RETENTION_SECS = 900
+OUTPUT_MAX_BYTES = 8 * 1024 * 1024
+OUTPUT_RETAINED_BYTES = 32 * 1024 * 1024
 
 
 class ConnectionReader:
@@ -83,17 +87,82 @@ class SessionFeatures(Harness):
         }, client_id=client_id)
         self.read_until(r"SSMCP_READY", client_id=client_id)
 
-    def artifact_path(self, metadata):
+    def artifact_metadata(self, metadata, *, client_id=None):
         artifact_id = metadata.get("id", "")
-        path = Path(metadata.get("path", ""))
-        expected = Path(f"/tmp/ssmcp-{os.geteuid()}") / f"output-{artifact_id}.log"
-        if not re.fullmatch(r"[a-f0-9]{32}", artifact_id) or path != expected or path.is_symlink():
-            raise AssertionError("output artifact is outside the private managed directory")
-        stat = path.stat()
-        if stat.st_uid != os.geteuid() or stat.st_mode & 0o077 or stat.st_nlink != 1:
-            raise AssertionError("output artifact is not private and singly linked")
-        self.artifacts[artifact_id] = path
-        return path
+        size = metadata.get("bytes")
+        if (metadata.get("schema") != "ssmcp.output.v1"
+                or not isinstance(artifact_id, str) or not re.fullmatch(r"[a-f0-9]{32}", artifact_id)
+                or metadata.get("storage") != "memory" or "path" not in metadata or metadata["path"] is not None
+                or not isinstance(size, int) or not 0 <= size <= OUTPUT_MAX_BYTES
+                or metadata.get("observed_bytes") != size or metadata.get("error") is not None
+                or not isinstance(metadata.get("complete"), bool)
+                or not isinstance(metadata.get("lines"), int) or metadata["lines"] < 0
+                or not re.fullmatch(r"[a-f0-9]{64}", str(metadata.get("sha256", "")))
+                or metadata.get("sha256_scope") != "first_bytes_snapshot"
+                or metadata.get("retention_secs") != OUTPUT_RETENTION_SECS
+                or metadata.get("max_bytes") != OUTPUT_MAX_BYTES):
+            raise AssertionError("output artifact is not an intact bounded memory snapshot")
+        owner = client_id or self.client_id
+        if not owner or self.artifacts.setdefault(artifact_id, owner) != owner:
+            raise AssertionError("output snapshot was attributed to a different owning connection")
+        return metadata
+
+    def artifact_page(self, metadata, page, offset, maximum):
+        chunk = base64.b64decode(page["data_base64"], validate=True)
+        end = offset + len(chunk)
+        if (page.get("id") != metadata["id"] or page.get("storage") != "memory"
+                or "path" not in page or page["path"] is not None
+                or page.get("offset") != offset or page.get("bytes") != len(chunk)
+                or page.get("next_offset") != end or not 0 <= len(chunk) <= maximum
+                or end > metadata["bytes"] or (not chunk and offset < metadata["bytes"])
+                or page.get("size") != metadata["bytes"]
+                or page.get("observed_bytes") != metadata["observed_bytes"]
+                or page.get("complete") is not metadata["complete"]
+                or page.get("truncated") is not False
+                or page.get("eof") is not (end == metadata["bytes"])
+                or page.get("sha256") != hashlib.sha256(chunk).hexdigest()
+                or page.get("sha256_scope") != "returned_chunk"):
+            raise AssertionError("output page changed its memory snapshot, bytes, cursor or digest")
+        return chunk
+
+    def read_artifact_page(self, metadata, offset, maximum, *, client_id=None, secret=None):
+        self.artifact_metadata(metadata, client_id=client_id)
+        page = super().call("ssmcp.output.read", {
+            "id": metadata["id"], "offset": offset, "max_bytes": maximum,
+        }, client_id=client_id, secret=secret)
+        return self.artifact_page(metadata, page, offset, maximum)
+
+    def artifact_bytes(self, metadata, *, client_id=None, secret=None):
+        self.artifact_metadata(metadata, client_id=client_id)
+        result = bytearray()
+        while len(result) < metadata["bytes"]:
+            result.extend(self.read_artifact_page(
+                metadata, len(result), min(OUTPUT_READ_BYTES, metadata["bytes"] - len(result)),
+                client_id=client_id, secret=secret))
+        if not result:
+            self.read_artifact_page(metadata, 0, 1, client_id=client_id, secret=secret)
+        lines = result.count(b"\n") + int(bool(result) and not result.endswith(b"\n"))
+        if (len(result) != metadata["bytes"] or lines != metadata["lines"]
+                or hashlib.sha256(result).hexdigest() != metadata["sha256"]):
+            raise AssertionError("output pages do not reconstruct the full advertised byte snapshot")
+        return bytes(result)
+
+    def output_unavailable(self, metadata, *, client_id=None, secret=None):
+        selected = client_id or self.client_id
+        code = """
+            return await Promise.all(['ssmcp.output.read','ssmcp.output.stat'].map(async name => {
+                try {
+                    const value = await call(%s, name, {id:%s});
+                    return {name, rejected:value.isError === true, detail:JSON.stringify(value)};
+                } catch (error) { return {name, rejected:true, detail:String(error)}; }
+            }));
+        """ % (json.dumps(selected), json.dumps(metadata["id"]))
+        rows = self.public_call("code_mode", {"code": code}, secret=secret)["result"]
+        if (len(rows) != 2 or {row["name"] for row in rows} != {"ssmcp.output.read", "ssmcp.output.stat"}
+                or not all(row.get("rejected") is True
+                           and "output is unavailable in this connection" in row.get("detail", "") for row in rows)):
+            raise AssertionError("the new or foreign connection did not reject the actual old output ID")
+        return rows
 
     def settled_output(self, client_id, marker, minimum):
         previous = None
@@ -109,10 +178,8 @@ class SessionFeatures(Harness):
             metadata = status.get("output_artifact")
             if cursor < minimum or not metadata or time.monotonic() - stable_since < 0.15:
                 return False
-            path = self.artifact_path(metadata)
-            with path.open("rb") as output:
-                output.seek(max(0, path.stat().st_size - 1024))
-                tail = output.read()
+            tail = self.read_artifact_page(metadata, max(0, metadata["bytes"] - 1024), 1024,
+                                           client_id=client_id)
             return status if marker in tail else False
 
         return wait_for(settled, timeout=20.0, description="complete stable terminal output")
@@ -124,7 +191,7 @@ class SessionFeatures(Harness):
                    and result["data_base64"] == "" and not result["truncated"],
                    "long terminal read returns metadata without inline body or lost prefix")
         metadata = result["artifact"]
-        data = self.artifact_path(metadata).read_bytes()
+        data = self.artifact_bytes(metadata, client_id=client_id)
         lines = data.count(b"\n") + int(bool(data) and not data.endswith(b"\n"))
         self.check(metadata["bytes"] == len(data)
                    and metadata["lines"] == lines
@@ -138,24 +205,22 @@ class SessionFeatures(Harness):
         return metadata, data
 
     def verify_pagination(self, client_id, metadata):
+        self.artifact_metadata(metadata, client_id=client_id)
         digest = hashlib.sha256()
         cursor = 0
         pages = 0
-        chunk_size = 32768
+        chunk_size = OUTPUT_READ_BYTES
         while cursor < metadata["bytes"]:
             offsets = list(range(cursor, min(metadata["bytes"], cursor + 8 * chunk_size), chunk_size))
             # Eight bounded pages remain below code_mode's 1 MiB result limit.
-            code = "return await Promise.all(%s.map(offset => outputs.read(%s, {id:%s, offset, max_bytes:%d})));" % (
-                json.dumps(offsets), json.dumps(client_id), json.dumps(metadata["id"]), chunk_size,
+            code = "return await Promise.all(%s.map(offset => outputs.read(%s, {id:%s, offset, max_bytes:Math.min(%d,%d-offset)})));" % (
+                json.dumps(offsets), json.dumps(client_id), json.dumps(metadata["id"]), chunk_size, metadata["bytes"],
             )
             results = self.public_call("code_mode", {"code": code})["result"]
+            if len(results) != len(offsets):
+                raise AssertionError("outputs.read returned a missing or duplicate pagination result")
             for result in results:
-                data = base64.b64decode(result["data_base64"], validate=True)
-                if (result["offset"] != cursor or result["bytes"] != len(data)
-                        or result["next_offset"] != cursor + len(data)
-                        or not 0 < len(data) <= chunk_size
-                        or result["sha256"] != hashlib.sha256(data).hexdigest()):
-                    raise AssertionError("output pagination changed bytes or cursor semantics")
+                data = self.artifact_page(metadata, result, cursor, min(chunk_size, metadata["bytes"] - cursor))
                 digest.update(data)
                 cursor = result["next_offset"]
                 pages += 1
@@ -188,8 +253,11 @@ class SessionFeatures(Harness):
                    "real command output exceeding 1.1 MiB retains deterministic beginning, body and ending")
         pages = self.verify_pagination(self.client_id, artifact)
         code = "return await outputs.cleanup(%s);" % json.dumps(self.client_id)
-        self.public_call("code_mode", {"code": code})
-        self.check(self.artifact_path(artifact).is_file(),
+        cleanup = self.public_call("code_mode", {"code": code})["result"]
+        retained = self.call("ssmcp.output.stat", {"id": artifact["id"]})
+        self.check(cleanup["storage"] == "memory" and cleanup["retention_secs"] == OUTPUT_RETENTION_SECS
+                   and cleanup["max_retained_bytes"] == OUTPUT_RETAINED_BYTES
+                   and retained == artifact and self.artifact_bytes(retained) == data,
                    "retention cleanup preserves the active terminal artifact")
 
         line_client, _, line_credentials = self.titled_client("line-threshold", "验证行数阈值", workspace)
@@ -235,29 +303,32 @@ class SessionFeatures(Harness):
         listed = self.public_call("list")["clients"]
         self.check(all(item["id"] != old_id for item in listed),
                    "the disconnected client ID is absent after reload")
-        code = "return await outputs.stat(%s, {id:%s});" % (
-            json.dumps(self.client_id), json.dumps(artifact["id"]),
-        )
-        retained = self.public_call("code_mode", {"code": code})["result"]
-        self.check(retained["bytes"] == artifact["bytes"]
-                   and retained["sha256"] == artifact["sha256"]
-                   and retained["path"] == artifact["path"],
-                   "the reloaded client can still inspect the previous output artifact before expiry")
+        self.output_unavailable(artifact)
+        self.check(True, "the reloaded connection rejects the actual previous memory output ID through read and stat")
+        self.quiet_terminal(self.client_id)
+        self.call("terminal.write", {"data":
+            "i=0; while [ \"$i\" -lt 600 ]; do printf 'r\\n'; i=$((i+1)); done; "
+            "printf 'SSMCP_RELOADED_OUTPUT\\n'\n",
+        })
+        fresh, fresh_data = self.inspect_spill(self.client_id, marker=b"SSMCP_RELOADED_OUTPUT", minimum=1200)
+        self.check(fresh["id"] != artifact["id"] and b"SSMCP_RELOADED_OUTPUT" in fresh_data,
+                   "the replacement connection creates and reads its own fresh memory output")
+        self.verify_pagination(self.client_id, fresh)
         self.metrics = {
             "large_output_bytes": artifact["bytes"], "large_output_lines": artifact["lines"],
             "large_output_sha256": artifact["sha256"], "artifact_read_pages": pages,
             "line_threshold_bytes": line_artifact["bytes"], "line_threshold_lines": line_artifact["lines"],
             "client_id_changed": True, "same_process_reconnected": True,
-            "previous_oauth_status": 200, "artifact_survived_reload": True,
+            "previous_oauth_status": 200, "artifact_survived_reload": False,
+            "old_output_read_and_stat_rejected": True, "replacement_output_id": fresh["id"],
         }
 
     def remove_test_artifacts(self):
-        # Only artifacts identified and verified by this test are removed, after
-        # all clients stop. Never run broad /tmp cleanup or delete unrelated logs.
-        for artifact_id, path in self.artifacts.items():
-            for candidate in (path, path.with_name(f"output-{artifact_id}.meta.json")):
-                if candidate.is_file() and not candidate.is_symlink():
-                    candidate.unlink(missing_ok=True)
+        # Output has no filesystem path. Its owning processes must finish before
+        # the harness drops its ID bookkeeping; Harness.cleanup owns that shutdown.
+        self.check(all(process.poll() is not None for process in self.processes),
+                   "all owned fixture processes stop before memory-output bookkeeping is cleared")
+        self.artifacts.clear()
 
 
 def main():

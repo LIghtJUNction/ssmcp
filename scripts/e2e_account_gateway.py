@@ -8,6 +8,7 @@ This module deliberately imports no scenario modules.
 
 import base64
 import hashlib
+from html import escape
 from html.parser import HTMLParser
 import http.client
 import json
@@ -300,8 +301,10 @@ class AccountGateway:
             raise AssertionError("the provider callback differs from the real router issuer")
         h.sensitive.extend(value for values in parse_qs(parsed.query).values() for value in values)
         status, consent, _ = h.oauth_request(parsed.path + "?" + parsed.query, cookie=cookie)
+        address = escape(f"{h.identity['username']}@{h.origin}")
         h.check(status == 200 and isinstance(consent, str)
-                and "name=decision value=allow" in consent and "fixture@github" in consent,
+                and "name=decision value=allow" in consent
+                and f"<strong>{address}</strong>" in consent and "@github" not in consent,
                 "real identity exchange validates provider PKCE and requires explicit consent")
         status, _, headers = h.oauth_request(authorize, "POST",
             {"transaction_id": transaction, "decision": "allow"}, cookie=cookie, headers=origin, form=True)
