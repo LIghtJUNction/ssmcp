@@ -1185,12 +1185,16 @@ fn compact_details(
         ));
     }
     if budget >= 3 {
-        rows.push(detail("Client CPU", &cpu_text(resources.latest()), width));
+        rows.push(detail(
+            "Shared client CPU",
+            &cpu_text(resources.latest()),
+            width,
+        ));
     }
     if budget >= 4 {
         rows.push((
             PanelTone::Muted,
-            clipped("Enlarge for full metrics and chart", width),
+            clipped("SSMCP process · agents not sampled", width),
         ));
     }
     rows
@@ -1255,13 +1259,14 @@ fn station_details(
         rows.extend(activity_field("Command", Some(&summary), "", width, 2));
     }
     rows.push((PanelTone::Normal, String::new()));
+    rows.push((PanelTone::Heading, clipped("Shared SSMCP client", width)));
     rows.push((
         PanelTone::Muted,
-        clipped("Agent CPU / RAM unavailable", width),
+        clipped(&format!("PID {process_id} · process sample"), width),
     ));
     rows.push((
         PanelTone::Muted,
-        clipped(&format!("Shared client PID {process_id}"), width),
+        clipped("External agents are not sampled", width),
     ));
     let cpu = cpu_text(resources.latest());
     rows.push(detail("CPU", &format!("{cpu} of machine"), width));
@@ -1288,7 +1293,7 @@ fn station_details(
     let chart_rows = remaining.saturating_sub(memory_rows + 2).min(3);
     rows.push((
         PanelTone::Muted,
-        clipped(&format!("CPU trend · {valid} samples"), width),
+        clipped(&format!("Client CPU trend · {valid} samples"), width),
     ));
     if valid > 0 && chart_rows > 0 {
         let (plot, upper) = resource_chart(samples, width, chart_rows, |sample| sample.cpu_percent);
@@ -1321,7 +1326,7 @@ fn station_details(
             .count();
         rows.push((
             PanelTone::Muted,
-            clipped(&format!("RSS trend · {valid} samples"), width),
+            clipped(&format!("Client RSS trend · {valid} samples"), width),
         ));
         if valid > 0 {
             let (plot, upper) = resource_chart(
@@ -2125,8 +2130,8 @@ mod tests {
         assert!(!fixed(&updated).contains("9.0s"));
         assert_eq!(state.worker.as_ref().unwrap().anchors[&0], anchor);
         let text = screen(&updated).screen().contents();
-        assert!(text.contains("Agent CPU / RAM unavailable"));
-        assert!(text.contains("Shared client PID"));
+        assert!(text.contains("External agents are not sampled"));
+        assert!(text.contains("Shared SSMCP client"));
     }
 
     fn log_body(lines: &[LogLine]) -> String {
@@ -2240,8 +2245,9 @@ mod tests {
             .map(|(_, text)| text)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("Agent CPU / RAM unavailable"));
-        assert!(text.contains("Shared client PID 42"));
+        assert!(text.contains("External agents are not sampled"));
+        assert!(text.contains("Shared SSMCP client"));
+        assert!(text.contains("PID 42 · process sample"));
         assert!(text.contains("CPU samples unavailable"));
         assert!(!text.contains("0.0%"));
         assert!(!text.contains("0.0 MiB"));
@@ -2434,7 +2440,7 @@ mod tests {
             assert!(text.contains(label), "{text}");
         }
         assert!(!text.contains("FULL_SCRIPT_BODY"));
-        assert!(text.contains("Agent CPU / RAM unavailable"));
+        assert!(text.contains("External agents are not sampled"));
         assert!(!text.contains("0.0%"));
         assert!(tall.len() <= 48 && tall.iter().all(|(_, text)| text.width() <= 44));
     }

@@ -121,6 +121,8 @@ pub(super) struct Conversation {
     worker_assignments: worker_operations::ConversationFeed,
     #[cfg(test)]
     worker_activity_fixture: Option<Value>,
+    #[cfg(test)]
+    statistics_fixture: Option<Value>,
     pub(super) preferred_input_rows: Option<u16>,
     pub(super) view: View,
     pub(super) content_focus: bool,
@@ -1415,7 +1417,15 @@ impl State {
                     self.events.open();
                 }
             }
-            View::Statistics => self.canvas_move(1),
+            View::Statistics => {
+                if edit {
+                    self.conversation.detail = !self.conversation.detail;
+                    self.conversation.detail_scroll = 0;
+                    self.notice = None;
+                } else {
+                    self.canvas_move(1);
+                }
+            }
             View::Questions => {}
         }
     }
@@ -2031,7 +2041,13 @@ impl State {
             return;
         }
         if self.conversation.view == View::Statistics {
-            self.chat_change_view(View::Activity);
+            if self.conversation.detail {
+                self.conversation.detail = false;
+                self.conversation.detail_scroll = 0;
+                self.notice = None;
+            } else {
+                self.chat_change_view(View::Activity);
+            }
             return;
         }
         if self.conversation.view == View::Agents {
@@ -3219,7 +3235,11 @@ impl State {
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
                     if self.conversation.view == View::Statistics {
-                        return "Statistics · ↑↓ / PgUp/PgDn scroll · Esc conversation · ←/→ panels".into();
+                        return if self.conversation.detail {
+                            "Diagnostics · Enter summary · Esc back · ↑↓ scroll · ←/→ panels".into()
+                        } else {
+                            "Statistics · Enter diagnostics · ↑↓ scroll · Esc conversation · ←/→ panels".into()
+                        };
                     }
                     if self.conversation.view == View::Tasks {
                         return if self.conversation.content_focus {
