@@ -222,8 +222,9 @@ class Composer(Dashboard):
         distance = index - state["active"]
         if distance:
             front.send((ALT_RIGHT if distance > 0 else ALT_LEFT) * abs(distance))
-        front.until(lambda shot: (view(shot, "conversation") if name == "conversation"
-                                  else column(shot) == (name, index + 1, len(state["columns"]))),
+        expected = (name, index + 1, len(state["columns"]))
+        front.until(lambda shot: column(shot) == expected
+                    or (name == "conversation" and view(shot, "conversation")),
                     f"horizontal navigation to the existing {name} column")
         observed = self.ui("/display/conversation")["canvas"]
         if observed["active"] != index or observed["columns"] != state["columns"]:
