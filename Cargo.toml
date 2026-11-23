@@ -197,7 +197,8 @@ resolver = "3"
 [dependencies]
 zbridge = { git = "https://github.com/LIghtJUNction/zbridge.git" }
 ztuio = { git = "https://github.com/LIghtJUNction/ztuio.git" }
-zi18n = { git = "https://github.com/LIghtJUNction/zi18n.git", tag = "v0.1.0" }
+zi18n = { git = "https://github.com/LIghtJUNction/zi18n.git" }
+zhex = { git = "https://github.com/LIghtJUNction/zhex.git" }
 zharness = { git = "https://github.com/LIghtJUNction/zharness.git", default-features = false, features = ["std"] }
 zplugin = { git = "https://github.com/LIghtJUNction/zplugin.git", default-features = false, features = ["std", "macros"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }

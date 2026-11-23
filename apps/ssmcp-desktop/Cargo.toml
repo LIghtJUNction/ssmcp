@@ -19,7 +19,7 @@ linux-software = ["zgpui/linux-software"]
 
 [dependencies]
 ssmcp = { path = "../.." }
-zgpui = { git = "https://github.com/LIghtJUNction/zgpui.git", rev = "d34c41f79ddab343e7468c5192885a82ca487687", default-features = false, features = ["native", "bridge"] }
+zgpui = { git = "https://github.com/LIghtJUNction/zgpui.git", default-features = false, features = ["native", "bridge"] }
 serde_json = "1"
 base64 = { version = "0.23.1", default-features = false, features = ["std"] }
 vt100 = "0.18.1"
