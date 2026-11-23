@@ -318,7 +318,7 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
 
         # The existing user-wait UI gets a live countdown without acquiring an
         # input reservation or producing any task-completion permission here.
-        wait_id = "timer_fixture_user_wait"
+        wait_id = "fixture_user_wait"
         future = self.background("ssmcp.ui.wait", {"op":"wait", "wait_id":wait_id,
             "episode_id":"a" * 64, "intent":"need_user", "recipient":"next",
             "reason":"Owned countdown display fixture", "timeout_ms":20_000, "notify":False})
