@@ -1,7 +1,7 @@
 #requires -Version 7.0
 <#
 Launch the real Windows executable in a disposable home. This checks window
-creation, waits for an application first-present receipt, requires nonuniform
+creation, waits for a presented frame matching the resized client, requires nonuniform
 client-area pixels, captures the owned window, and checks bounded normal exit.
 It does not connect to a live session or certify the complete visual layout.
 Exit codes: 0 passed, 1 failed, 2 blocked by the execution environment.
@@ -26,7 +26,7 @@ $report = [ordered]@{
     platform = [Environment]::OSVersion.VersionString
     powershell = $PSVersionTable.PSVersion.ToString()
     status = 'failed'
-    scope = 'Owned Windows process, first-present receipt, nonuniform client pixels, screenshot, and bounded normal exit; no live session or complete layout assertion.'
+    scope = 'Owned Windows process, first-present and resized-present receipts, nonuniform client pixels, screenshot, and bounded normal exit; no live session or complete layout assertion.'
     process_started = $false
     forced_termination = $false
     window = $null
@@ -36,7 +36,31 @@ $process = $null
 $stdoutTask = $null
 $stderrTask = $null
 $testRoot = $null
+$frameReceiptsPath = $null
 $previousDpi = [IntPtr]::Zero
+function Read-PresentReceipts {
+    param([string]$Path, [int]$OwnedProcess)
+    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    if ((Get-Item -LiteralPath $Path).Length -gt 1048576) { throw 'The presented-frame journal exceeded its size bound.' }
+    try { $raw = [IO.File]::ReadAllText($Path) }
+    catch [IO.IOException] { return @() }
+    # Ignore an incomplete trailing write; complete malformed records fail.
+    $completeEnd = $raw.LastIndexOf([char]10)
+    if ($completeEnd -lt 0) { return @() }
+    $lines = $raw.Substring(0, $completeEnd).Split([char]10)
+    if ($lines.Length -gt 4096) { throw 'The presented-frame journal exceeded its record bound.' }
+    [long]$previousFrame = 0
+    foreach ($line in $lines) {
+        $row = $line | ConvertFrom-Json -AsHashtable
+        if ($row['schema'] -ne 'ssmcp-desktop-present-v1' -or
+            $row['stage'] -ne 'present_returned' -or $row['pid'] -ne $OwnedProcess -or
+            $row['frame_index'] -le $previousFrame -or $row['width'] -le 0 -or $row['height'] -le 0) {
+            throw 'The frame journal did not identify ordered present calls from the owned process.'
+        }
+        $previousFrame = $row['frame_index']
+        $row
+    }
+}
 try {
     if (-not $IsWindows) {
         $report.status = 'blocked'
@@ -122,6 +146,9 @@ public static class SsmcpWindowProbe {
     $firstFramePath = Join-Path $testRoot 'first-frame.json'
     $process.StartInfo.ArgumentList.Add('--first-frame-receipt')
     $process.StartInfo.ArgumentList.Add($firstFramePath)
+    $frameReceiptsPath = Join-Path $testRoot 'presented-frames.jsonl'
+    $process.StartInfo.ArgumentList.Add('--frame-receipts')
+    $process.StartInfo.ArgumentList.Add($frameReceiptsPath)
     foreach ($entry in @{
         HOME = "$testRoot/home"; USERPROFILE = "$testRoot/home"
         APPDATA = "$testRoot/roaming"; LOCALAPPDATA = "$testRoot/local"
@@ -132,7 +159,7 @@ public static class SsmcpWindowProbe {
     if (-not $process.Start()) { throw 'Process.Start did not start the desktop executable.' }
     $report.process_started = $true
     $report.pid = $process.Id
-    $report.arguments = @('--exit-after-ms', '20000', '--first-frame-receipt', '<owned-test-root>/first-frame.json')
+    $report.arguments = @('--exit-after-ms', '20000', '--first-frame-receipt', '<owned-test-root>/first-frame.json', '--frame-receipts', '<owned-test-root>/presented-frames.jsonl')
     # Drain both streams concurrently; waiting first can deadlock a noisy child.
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
@@ -248,6 +275,32 @@ public static class SsmcpWindowProbe {
             -not [SsmcpWindowProbe]::ClientToScreen($window, [ref]$clientOrigin)) {
             throw 'Could not map the owned client area to screen pixels.'
         }
+        # Geometry alone can precede the resize repaint. Wait for an actual
+        # completed present of this client size, rather than capture its old frame.
+        $renderClock = [Diagnostics.Stopwatch]::StartNew()
+        $captureFrame = $null
+        do {
+            $process.Refresh()
+            if ($process.HasExited) { break }
+            $frames = @(Read-PresentReceipts -Path $frameReceiptsPath -OwnedProcess $process.Id)
+            foreach ($frame in $frames) {
+                if ($frame['width'] -eq $client.Right - $client.Left -and
+                    $frame['height'] -eq $client.Bottom - $client.Top) {
+                    $captureFrame = $frame
+                }
+            }
+            if ($null -ne $captureFrame) { break }
+            Start-Sleep -Milliseconds 50
+        } while ($renderClock.Elapsed.TotalSeconds -lt 5)
+        if ($null -eq $captureFrame) { throw 'The application did not present the resized client dimensions within the bound.' }
+        $captureReceiptPath = Join-Path $evidence 'capture-frame.json'
+        $captureFrame | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $captureReceiptPath -Encoding utf8
+        $report.capture_frame = [ordered]@{
+            receipt = $captureFrame; file = 'capture-frame.json'
+            client_width = $client.Right - $client.Left; client_height = $client.Bottom - $client.Top
+            sha256 = (Get-FileHash -LiteralPath $captureReceiptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            wait_ms = [int]$renderClock.Elapsed.TotalMilliseconds
+        }
         $inset = 12
         $clientLeft = [Math]::Max($clientOrigin.X + $inset, $left)
         $clientTop = [Math]::Max($clientOrigin.Y + $inset, $top)
@@ -349,6 +402,16 @@ public static class SsmcpWindowProbe {
             }
         } catch { $report.cleanup_error = $_.Exception.Message; $report.status = 'failed' }
         finally { $process.Dispose() }
+    }
+    if ($null -ne $frameReceiptsPath -and (Test-Path -LiteralPath $frameReceiptsPath)) {
+        try {
+            $journal = Join-Path $evidence 'presented-frames.jsonl'
+            Copy-Item -LiteralPath $frameReceiptsPath -Destination $journal
+            $report.frame_receipts = @{
+                file = 'presented-frames.jsonl'; bytes = (Get-Item -LiteralPath $journal).Length
+                sha256 = (Get-FileHash -LiteralPath $journal -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+        } catch { $report.cleanup_error = $_.Exception.Message; $report.status = 'failed' }
     }
     if ($null -ne $testRoot) {
         try { Remove-Item -LiteralPath $testRoot -Recurse -Force }

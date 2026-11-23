@@ -493,10 +493,11 @@ class ReleaseTests(unittest.TestCase):
                 "INSTRUMENTATION_RESULT: stream=SSMCP protocol and controller checks passed: fixture\n"
                 if platform == "android" else "test result: ok. 1 passed; 0 failed;\n"
                 if platform in {"linux", "windows"} else "Executed 1 test, with 0 failures (0 unexpected)\n")
-            (directory / "result.json").write_text(json.dumps({
-                "source_commit": sha, "target": spec["target"], "profile": spec["profile"],
-                "build_exit": 0, "test_exit": 0,
-            }))
+            result = {"source_commit": sha, "target": spec["target"], "profile": spec["profile"],
+                      "build_exit": 0, "test_exit": 0}
+            if platform == "windows":
+                result.update(cli_test_exit=0, cli_build_exit=0, native_plugin_exit=0)
+            (directory / "result.json").write_text(json.dumps(result))
             binary = None
             # Structural fixture bytes only; these are not native acceptance tests.
             if platform == "linux":
@@ -613,6 +614,45 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Actions run"):
                 release.package_gui("windows", evidence, binary, self.root)
         self.assertFalse((self.root / "dist").exists())
+
+    def test_windows_packaging_and_release_require_all_native_exit_receipts(self):
+        fixtures = self.gui_fixtures()
+        evidence, binary = fixtures["windows"]
+        result_path = evidence / "result.json"
+        receipt_path = self.root / "dist" / release.gui_receipt_name("windows")
+        original_result = result_path.read_bytes()
+        original_receipt = receipt_path.read_bytes()
+        valid = json.loads(original_result)
+        source = release.gui_source(self.root, "windows")
+        failures = []
+        for field in ("build_exit", "test_exit", "cli_test_exit", "cli_build_exit", "native_plugin_exit"):
+            missing = dict(valid)
+            del missing[field]
+            failures.append((field + ":missing", missing))
+            for value in (1, False, 0.0, "0", None):
+                failures.append((field + ":" + repr(value), {**valid, field: value}))
+        for field, value in (("source_commit", "0" * 40), ("target", "other-target"),
+                             ("profile", "release"), ("unchecked_exit", 0)):
+            failures.append((field, {**valid, field: value}))
+        for label, checks in failures:
+            with self.subTest(label=label):
+                result_path.write_text(json.dumps(checks))
+                with self.assertRaisesRegex(ValueError, "exit receipts"):
+                    release.package_gui("windows", evidence, binary, self.root)
+                result_path.write_bytes(original_result)
+                receipt = json.loads(original_receipt)
+                receipt["checks"] = checks
+                receipt_path.write_text(json.dumps(receipt))
+                with self.assertRaisesRegex(ValueError, "GUI build or tests did not succeed"):
+                    release.verified_gui_receipts(self.root, source)
+                receipt_path.write_bytes(original_receipt)
+        # The real Windows producer emits eight fields; both consumers accept
+        # that complete receipt and preserve all five successful native gates.
+        packaged = release.package_gui("windows", evidence, binary, self.root)
+        verified = next(row for row in release.verified_gui_receipts(self.root, source)
+                        if row["platform"] == "windows")
+        self.assertEqual(packaged["checks"], valid)
+        self.assertEqual(verified["checks"], valid)
 
     def test_android_custom_runner_requires_explicit_success_even_with_adb_exit_zero(self):
         passed = "INSTRUMENTATION_RESULT: stream=SSMCP protocol and controller checks passed: fixture\n"
