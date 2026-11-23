@@ -1,8 +1,9 @@
 #requires -Version 7.0
 <#
 Launch the real Windows executable in a disposable home. This checks window
-creation, captures its visible pixels, and requires the application's bounded
-normal exit. It does not connect to a live session or certify visual correctness.
+creation, waits for an application first-present receipt, requires nonuniform
+client-area pixels, captures the owned window, and checks bounded normal exit.
+It does not connect to a live session or certify the complete visual layout.
 Exit codes: 0 passed, 1 failed, 2 blocked by the execution environment.
 #>
 [CmdletBinding()]
@@ -25,7 +26,7 @@ $report = [ordered]@{
     platform = [Environment]::OSVersion.VersionString
     powershell = $PSVersionTable.PSVersion.ToString()
     status = 'failed'
-    scope = 'Actual owned desktop process, visible window capture, and bounded normal exit; no live session or visual correctness assertion.'
+    scope = 'Owned Windows process, first-present receipt, nonuniform client pixels, screenshot, and bounded normal exit; no live session or complete layout assertion.'
     process_started = $false
     forced_termination = $false
     window = $null
@@ -61,14 +62,41 @@ using System;
 using System.Runtime.InteropServices;
 public static class SsmcpWindowProbe {
     [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] public struct Point { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] public struct MonitorInfo { public int Size; public Rect Monitor, Work; public uint Flags; }
     [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
     [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr desktop);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
     [DllImport("user32.dll", SetLastError=true)] public static extern bool GetWindowRect(IntPtr window, out Rect bounds);
+    [DllImport("user32.dll", SetLastError=true)] public static extern bool GetClientRect(IntPtr window, out Rect bounds);
+    [DllImport("user32.dll", SetLastError=true)] public static extern bool ClientToScreen(IntPtr window, ref Point point);
+    [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
+    [DllImport("user32.dll", EntryPoint="GetMonitorInfoW", SetLastError=true)] public static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+    [DllImport("user32.dll", SetLastError=true)] public static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr window, uint command);
+    // Zero means that the current geometry and unobscured screen region belong
+    // to the exact owned foreground window. Check on both sides of the capture.
+    public static int CheckCapture(IntPtr window, uint process, Rect expected, Rect region) {
+        uint owner;
+        if (!IsWindowVisible(window) || GetWindowThreadProcessId(window, out owner) == 0 || owner != process) return 1;
+        if (GetForegroundWindow() != window) return 2;
+        Rect current;
+        if (!GetWindowRect(window, out current) || current.Left != expected.Left || current.Top != expected.Top ||
+            current.Right != expected.Right || current.Bottom != expected.Bottom) return 3;
+        IntPtr above = GetWindow(window, 3); // GW_HWNDPREV: windows above this one.
+        for (int count = 0; above != IntPtr.Zero; count++) {
+            if (count >= 256) return 5;
+            Rect overlay;
+            if (IsWindowVisible(above) && GetWindowRect(above, out overlay) &&
+                overlay.Left < region.Right && overlay.Right > region.Left &&
+                overlay.Top < region.Bottom && overlay.Bottom > region.Top) return 4;
+            above = GetWindow(above, 3);
+        }
+        return 0;
+    }
     [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
 }
 '@
@@ -90,7 +118,10 @@ public static class SsmcpWindowProbe {
     $process.StartInfo.RedirectStandardOutput = $true
     $process.StartInfo.RedirectStandardError = $true
     $process.StartInfo.ArgumentList.Add('--exit-after-ms')
-    $process.StartInfo.ArgumentList.Add('10000')
+    $process.StartInfo.ArgumentList.Add('20000')
+    $firstFramePath = Join-Path $testRoot 'first-frame.json'
+    $process.StartInfo.ArgumentList.Add('--first-frame-receipt')
+    $process.StartInfo.ArgumentList.Add($firstFramePath)
     foreach ($entry in @{
         HOME = "$testRoot/home"; USERPROFILE = "$testRoot/home"
         APPDATA = "$testRoot/roaming"; LOCALAPPDATA = "$testRoot/local"
@@ -101,7 +132,7 @@ public static class SsmcpWindowProbe {
     if (-not $process.Start()) { throw 'Process.Start did not start the desktop executable.' }
     $report.process_started = $true
     $report.pid = $process.Id
-    $report.arguments = @('--exit-after-ms', '10000')
+    $report.arguments = @('--exit-after-ms', '20000', '--first-frame-receipt', '<owned-test-root>/first-frame.json')
     # Drain both streams concurrently; waiting first can deadlock a noisy child.
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
@@ -129,9 +160,52 @@ public static class SsmcpWindowProbe {
         $previousDpi = [SsmcpWindowProbe]::SetThreadDpiAwarenessContext([IntPtr](-4))
         $bounds = [SsmcpWindowProbe+Rect]::new()
         if (-not [SsmcpWindowProbe]::GetWindowRect($window, [ref]$bounds)) { throw 'GetWindowRect failed.' }
-        $report.window = [ordered]@{
-            handle = $window.ToInt64(); pid = $windowOwner; title = $process.MainWindowTitle
-            left = $bounds.Left; top = $bounds.Top; right = $bounds.Right; bottom = $bounds.Bottom
+        # Fit the owned window inside its monitor work area. This excludes the
+        # taskbar; native decorations are excluded from the client-pixel test.
+        $monitor = [SsmcpWindowProbe]::MonitorFromWindow($window, 2)
+        $monitorInfo = [SsmcpWindowProbe+MonitorInfo]::new()
+        $monitorInfo.Size = [Runtime.InteropServices.Marshal]::SizeOf($monitorInfo)
+        if ($monitor -eq [IntPtr]::Zero -or -not [SsmcpWindowProbe]::GetMonitorInfo($monitor, [ref]$monitorInfo)) {
+            throw 'Could not obtain the owned window monitor work area.'
+        }
+        $work = $monitorInfo.Work
+        $fitWidth = [Math]::Min($bounds.Right - $bounds.Left, $work.Right - $work.Left)
+        $fitHeight = [Math]::Min($bounds.Bottom - $bounds.Top, $work.Bottom - $work.Top)
+        if (-not [SsmcpWindowProbe]::SetWindowPos($window, [IntPtr]::Zero, $work.Left, $work.Top, $fitWidth, $fitHeight, 0x4014)) {
+            throw 'Could not fit the owned window inside the monitor work area.'
+        }
+        $frameClock = [Diagnostics.Stopwatch]::StartNew()
+        $firstFrame = $null
+        while ($frameClock.Elapsed.TotalSeconds -lt 10) {
+            $process.Refresh()
+            if ($process.HasExited) { break }
+            if (Test-Path -LiteralPath $firstFramePath) {
+                $candidate = $null
+                # The application creates a new file and writes once. A partial
+                # read is retried; a complete receipt must identify this PID.
+                try { $candidate = Get-Content -LiteralPath $firstFramePath -Raw | ConvertFrom-Json -AsHashtable }
+                catch { $candidate = $null }
+                if ($null -ne $candidate) {
+                    if ($candidate['schema'] -ne 'ssmcp-desktop-first-frame-v1' -or
+                        $candidate['stage'] -ne 'present_returned' -or
+                        $candidate['pid'] -ne $process.Id -or $candidate['frame_index'] -ne 1 -or
+                        $candidate['width'] -le 0 -or $candidate['height'] -le 0) {
+                        throw 'The first-frame receipt did not identify this owned process and a completed present call.'
+                    }
+                    $firstFrame = $candidate
+                    break
+                }
+            }
+            Start-Sleep -Milliseconds 50
+        }
+        if ($null -eq $firstFrame) { throw 'The application did not provide its first-present receipt within the bound.' }
+        $receiptPath = Join-Path $evidence 'first-frame.json'
+        Copy-Item -LiteralPath $firstFramePath -Destination $receiptPath
+        $report.first_frame = [ordered]@{
+            receipt = $firstFrame
+            file = 'first-frame.json'
+            sha256 = (Get-FileHash -LiteralPath $receiptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            wait_ms = [int]$frameClock.Elapsed.TotalMilliseconds
         }
         for ($attempt = 0; $attempt -lt 5; $attempt++) {
             [void][SsmcpWindowProbe]::SetForegroundWindow($window)
@@ -142,26 +216,114 @@ public static class SsmcpWindowProbe {
             $report.status = 'blocked'
             throw 'The runner did not grant foreground capture of the observed owned window.'
         }
-        $left = [Math]::Max($bounds.Left, [SsmcpWindowProbe]::GetSystemMetrics(76))
-        $top = [Math]::Max($bounds.Top, [SsmcpWindowProbe]::GetSystemMetrics(77))
-        $right = [Math]::Min($bounds.Right, [SsmcpWindowProbe]::GetSystemMetrics(76) + [SsmcpWindowProbe]::GetSystemMetrics(78))
-        $bottom = [Math]::Min($bounds.Bottom, [SsmcpWindowProbe]::GetSystemMetrics(77) + [SsmcpWindowProbe]::GetSystemMetrics(79))
+        # SWP_ASYNCWINDOWPOS avoids blocking this harness on a hung app thread.
+        # A queued resize is not evidence that the requested geometry applied.
+        $geometryClock = [Diagnostics.Stopwatch]::StartNew()
+        $geometryApplied = $false
+        do {
+            $process.Refresh()
+            if ($process.HasExited) { break }
+            if ([SsmcpWindowProbe]::GetWindowRect($window, [ref]$bounds) -and
+                $bounds.Left -eq $work.Left -and $bounds.Top -eq $work.Top -and
+                $bounds.Right - $bounds.Left -eq $fitWidth -and $bounds.Bottom - $bounds.Top -eq $fitHeight) {
+                $geometryApplied = $true
+                break
+            }
+            Start-Sleep -Milliseconds 50
+        } while ($geometryClock.Elapsed.TotalSeconds -lt 2)
+        if (-not $geometryApplied) { throw 'The asynchronously requested window geometry did not apply within the bound.' }
+        $report.window = [ordered]@{
+            handle = $window.ToInt64(); pid = $windowOwner; title = $process.MainWindowTitle
+            left = $bounds.Left; top = $bounds.Top; right = $bounds.Right; bottom = $bounds.Bottom
+            monitor_work_area = @{ left = $work.Left; top = $work.Top; right = $work.Right; bottom = $work.Bottom }
+        }
+        $left = [Math]::Max($bounds.Left, $work.Left)
+        $top = [Math]::Max($bounds.Top, $work.Top)
+        $right = [Math]::Min($bounds.Right, $work.Right)
+        $bottom = [Math]::Min($bounds.Bottom, $work.Bottom)
         if ($right - $left -lt 200 -or $bottom - $top -lt 150) { throw 'Too little of the owned window is on screen.' }
-        $bitmap = [Drawing.Bitmap]::new($right - $left, $bottom - $top)
-        $graphics = [Drawing.Graphics]::FromImage($bitmap)
-        try {
-            $graphics.CopyFromScreen($left, $top, 0, 0, $bitmap.Size)
-            $image = Join-Path $evidence 'window.png'
-            $bitmap.Save($image, [Drawing.Imaging.ImageFormat]::Png)
-        } finally { $graphics.Dispose(); $bitmap.Dispose() }
+        $client = [SsmcpWindowProbe+Rect]::new()
+        $clientOrigin = [SsmcpWindowProbe+Point]::new()
+        if (-not [SsmcpWindowProbe]::GetClientRect($window, [ref]$client) -or
+            -not [SsmcpWindowProbe]::ClientToScreen($window, [ref]$clientOrigin)) {
+            throw 'Could not map the owned client area to screen pixels.'
+        }
+        $inset = 12
+        $clientLeft = [Math]::Max($clientOrigin.X + $inset, $left)
+        $clientTop = [Math]::Max($clientOrigin.Y + $inset, $top)
+        $clientRight = [Math]::Min($clientOrigin.X + $client.Right - $inset, $right)
+        $clientBottom = [Math]::Min($clientOrigin.Y + $client.Bottom - $inset, $bottom)
+        if ($clientRight - $clientLeft -lt 160 -or $clientBottom - $clientTop -lt 100) {
+            throw 'Too little application client area is available for a content check.'
+        }
+        $clientRegion = [SsmcpWindowProbe+Rect]::new()
+        $clientRegion.Left = $clientLeft; $clientRegion.Top = $clientTop
+        $clientRegion.Right = $clientRight; $clientRegion.Bottom = $clientBottom
+        $captureClock = [Diagnostics.Stopwatch]::StartNew()
+        $captureAttempts = 0
+        $nonblank = $false
+        $image = Join-Path $evidence 'window.png'
+        do {
+            $process.Refresh()
+            if ($process.HasExited) { throw 'The owned process exited before client-pixel capture.' }
+            $captureState = [SsmcpWindowProbe]::CheckCapture($window, $windowOwner, $bounds, $clientRegion)
+            if ($captureState -ne 0) {
+                $report.status = 'blocked'
+                throw "The owned client region is unavailable or obscured before capture (state $captureState)."
+            }
+            $bitmap = [Drawing.Bitmap]::new($right - $left, $bottom - $top)
+            $graphics = [Drawing.Graphics]::FromImage($bitmap)
+            try {
+                $graphics.CopyFromScreen($left, $top, 0, 0, $bitmap.Size)
+                $captureState = [SsmcpWindowProbe]::CheckCapture($window, $windowOwner, $bounds, $clientRegion)
+                if ($captureState -ne 0) {
+                    $report.status = 'blocked'
+                    throw "The owned client region changed or became obscured during capture (state $captureState)."
+                }
+                $captureAttempts++
+                $histogram = [Collections.Generic.Dictionary[int,int]]::new()
+                $samples = [Collections.Generic.List[int]]::new()
+                for ($row = 0; $row -lt 48; $row++) {
+                    $y = $clientTop - $top + [int][Math]::Floor(($row + 0.5) * ($clientBottom - $clientTop) / 48)
+                    for ($column = 0; $column -lt 64; $column++) {
+                        $x = $clientLeft - $left + [int][Math]::Floor(($column + 0.5) * ($clientRight - $clientLeft) / 64)
+                        $rgb = $bitmap.GetPixel($x, $y).ToArgb() -band 0xFFFFFF
+                        $samples.Add($rgb)
+                        if ($histogram.ContainsKey($rgb)) { $histogram[$rgb]++ } else { $histogram[$rgb] = 1 }
+                    }
+                }
+                $dominant = ($histogram.GetEnumerator() | Sort-Object -Property Value -Descending | Select-Object -First 1).Key
+                $contrasting = 0
+                foreach ($rgb in $samples) {
+                    $red = [Math]::Abs((($rgb -shr 16) -band 255) - (($dominant -shr 16) -band 255))
+                    $green = [Math]::Abs((($rgb -shr 8) -band 255) - (($dominant -shr 8) -band 255))
+                    $blue = [Math]::Abs(($rgb -band 255) - ($dominant -band 255))
+                    if ([Math]::Max($red, [Math]::Max($green, $blue)) -ge 24) { $contrasting++ }
+                }
+                $requiredContrast = [Math]::Max(12, [int][Math]::Ceiling($samples.Count * 0.005))
+                $nonblank = $histogram.Count -ge 3 -and $contrasting -ge $requiredContrast
+                $report.client_pixels = [ordered]@{
+                    ready = $nonblank; sample_count = $samples.Count; distinct_colors = $histogram.Count
+                    dominant_rgb = ('{0:X6}' -f $dominant); contrasting_samples = $contrasting
+                    minimum_channel_difference = 24; required_contrasting_samples = $requiredContrast
+                    inset = $inset; left = $clientLeft; top = $clientTop; right = $clientRight; bottom = $clientBottom
+                    attempts = $captureAttempts; owned_unobscured_checks = 'before_and_after_capture'
+                }
+                # Keep the last real frame even on a failed nonblank check.
+                $bitmap.Save($image, [Drawing.Imaging.ImageFormat]::Png)
+            } finally { $graphics.Dispose(); $bitmap.Dispose() }
+            if ($nonblank) { break }
+            Start-Sleep -Milliseconds 100
+        } while ($captureClock.Elapsed.TotalSeconds -lt 6)
         $report.screenshot = [ordered]@{
-            file = 'window.png'; method = 'CopyFromScreen of the foreground owned window'
+            file = 'window.png'; method = 'CopyFromScreen of the foreground owned window inside the monitor work area'
             left = $left; top = $top; right = $right; bottom = $bottom
-            clipped_to_screen = ($left -ne $bounds.Left -or $top -ne $bounds.Top -or $right -ne $bounds.Right -or $bottom -ne $bounds.Bottom)
+            clipped_to_work_area = ($left -ne $bounds.Left -or $top -ne $bounds.Top -or $right -ne $bounds.Right -or $bottom -ne $bounds.Bottom)
             sha256 = (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash.ToLowerInvariant()
         }
+        if (-not $nonblank) { throw 'The application client area remained blank after its first-present receipt.' }
     }
-    if (-not $process.WaitForExit(15000)) { throw 'The bounded desktop process did not exit normally.' }
+    if (-not $process.WaitForExit(25000)) { throw 'The bounded desktop process did not exit normally.' }
     $report.exit_code = $process.ExitCode
     if ($report.status -ne 'blocked') {
         if ($process.ExitCode -ne 0) { throw "The desktop executable exited with $($process.ExitCode)." }

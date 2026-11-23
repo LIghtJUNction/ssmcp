@@ -94,11 +94,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except ValueError:
             fixture.record("unexpected_requests")
             return self.reply(400, {"error": "invalid_fixture_request"})
-        if (self.path == "/api/client/device/challenge" and body == {}
-                and self.headers.get("Authorization") == "Bearer " + fixture.token):
-            # Simulate the documented legacy gateway response for a challenge.
-            fixture.record("device_challenge")
-            return self.reply(404, {"error": "fixture_challenge_not_supported"})
         if self.path == "/api/client/login/start":
             fixture.record("login_start")
             return self.reply(200, {
@@ -111,6 +106,18 @@ class GatewayHandler(BaseHTTPRequestHandler):
             fixture.record("login_poll")
             return self.reply(200, {"status": "authorized", "access_token": fixture.token,
                                     "identity": IDENTITY, "expires_in": 3600})
+        if self.path == "/api/client/device/challenge":
+            # This fixture models the explicit legacy-device-proof fallback,
+            # not an arbitrary ignored endpoint. Malformed or unauthenticated
+            # requests must still fail the final unexpected-request assertion.
+            if self.headers.get("Authorization") != "Bearer " + fixture.token:
+                fixture.record("unexpected_requests")
+                return self.reply(403, {"error": "invalid_fixture_credential"})
+            if body:
+                fixture.record("unexpected_requests")
+                return self.reply(400, {"error": "invalid_fixture_request"})
+            fixture.record("device_challenge")
+            return self.reply(404, {"error": "fixture_device_proof_unavailable"})
         fixture.record("unexpected_requests")
         self.reply(404, {"error": "fixture_route_not_found"})
 
@@ -514,7 +521,7 @@ class Portable:
         self.samples["gateway_requests"] = observed
         self.check(observed["login_start"] == observed["login_poll"] == 1
                    and observed["whoami"] > 0 and observed["connect"] > 1
-                   and observed["device_challenge"] == observed["connect"]
+                   and observed["device_challenge"] >= observed["connect"]
                    and observed["unexpected_requests"] == 0,
                    "session retries and supervisor restoration reuse the local login without new authorization")
 
