@@ -157,6 +157,8 @@ Online client metadata snapshot; select a client by id from list.
 
 await call(clientId, toolName, arguments = {}) returns short native MCP results unchanged. Long backend output returns artifact metadata in structuredContent; inspect isError, spilled and completeness. Use outputs.read for raw PTY bytes or the retained MCP JSON of other oversized backend results.
 
+For a running PTY job, `await call(clientId, "ssmcp.exec.resize", { job_id, rows, cols })` updates its terminal dimensions. This uses the selected client's native execution registry. The operation rejects pipe jobs.
+
 ### tools
 
 await tools.search(clientId,{query,name_prefix,limit:20,include_schemas:false,cursor:null,max_pages:32}) returns concise registered names, routing namespaces and descriptions. Optional name_prefix filters registered names only, case-insensitively, and combines with query. Set include_schemas:true for complete unchanged native descriptors. Continue with nextCursor and the same client/query/name_prefix/limit/schema options. Original tools(clientId,cursor?) returns full native pages. Search reduces model-visible output, not the first native page scan; see ssmcp://limits.

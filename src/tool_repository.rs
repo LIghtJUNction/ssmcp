@@ -793,9 +793,12 @@ async fn ensure_official(directory: &Path) -> Result<PathBuf, String> {
         return Ok(path);
     }
     let stage = Temporary::new(directory)?;
-    let bundle = stage.0.join("official.bundle");
-    write_new(&bundle, SEED)?;
-    let clone = stage.0.join("checkout");
+    const BUNDLE: &str = "official.bundle";
+    const CHECKOUT: &str = "checkout";
+    write_new(&stage.0.join(BUNDLE), SEED)?;
+    let clone = stage.0.join(CHECKOUT);
+    // Git runs inside this private stage. Pass single relative components so
+    // Git for Windows does not reinterpret canonical verbatim absolute paths.
     git::run(
         &stage.0,
         &[
@@ -804,8 +807,8 @@ async fn ensure_official(directory: &Path) -> Result<PathBuf, String> {
             "--branch".into(),
             "main".into(),
             "--".into(),
-            bundle.into_os_string(),
-            clone.clone().into_os_string(),
+            BUNDLE.into(),
+            CHECKOUT.into(),
         ],
         false,
     )

@@ -361,7 +361,11 @@ mod tests {
         pool["threads"][1]["name"] = json!("worker-a");
         let directory = Directory::parse(&json!({"clients":[workstation,pool]})).unwrap();
         let tree = directory.table();
-        assert!(include_str!("../../../README.md").contains(&format!("~~~text\n{tree}~~~")));
+        assert!(
+            include_str!("../../../README.md")
+                .replace("\r\n", "\n")
+                .contains(&format!("~~~text\n{tree}~~~"))
+        );
         let selection = directory.selection_json();
         for (index, entry) in directory.entries.iter().enumerate() {
             assert_eq!(selection["entries"][index]["number"], json!(index + 1));

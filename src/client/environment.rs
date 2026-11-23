@@ -13,6 +13,14 @@ pub(super) fn startup() -> crate::Result<Vec<(OsString, OsString)>> {
     if skips_environment(&args)? {
         return Ok(Vec::new());
     }
+    // The standalone computer command owns its syntax and storage diagnostics.
+    // With no home, there is no tool RC or global bin to load for this command.
+    if args.first().is_some_and(|arg| arg == "computer")
+        && std::env::var_os("HOME").is_none()
+        && std::env::var_os("USERPROFILE").is_none()
+    {
+        return Ok(Vec::new());
+    }
     let workspace = std::env::current_dir()?;
     let (global_bin, defaults) = crate::tool_repository::startup_environment(&workspace)?;
     let mut inherited = std::env::vars_os().collect::<Vec<_>>();
