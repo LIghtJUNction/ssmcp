@@ -1,0 +1,513 @@
+{
+  "snapshot_utc": "2026-11-21 15:15:36 UTC",
+  "branch": "work/zuse-cli-only-20261121",
+  "source": "659354f9b6361b862bd3069c1df47fdf7d65b2bd",
+  "tree": "67553bd824a1206db424643d7462ba67a76a585a",
+  "base": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+  "status": "in-progress development snapshot; not a final candidate or validation result",
+  "ahead_by": 7,
+  "behind_by": 0,
+  "total_commits": 7,
+  "file_count": 43,
+  "additions": 947,
+  "deletions": 10161,
+  "commits": [
+    {
+      "sha": "3f437e6978c3ad43e46490595c5321d6d916c77a",
+      "message": "refactor: limit computer provider to Zuse CLI lifecycle [skip ci]\n\nRetire the built-in browser, Omarchy and Playwright routes from the native runtime. Keep exec and model harness dispatch unchanged, and remove only Playwright-specific tracking from generic RPC.",
+      "date": "2026-11-21T15:05:11Z"
+    },
+    {
+      "sha": "e2ab9224aa421960fc39b1aa8fb5f9d0d03b1aaa",
+      "message": "refactor: remove embedded desktop and browser engines [skip ci]\n\nDelete the built-in CDP, Omarchy and Playwright implementations and the SSMCP Zuse worker entry. Remove the Rust zuse-computer dependency and submodule declaration; independent Zuse CLI lifecycle management is provided separately.",
+      "date": "2026-11-21T15:06:09Z"
+    },
+    {
+      "sha": "881d5f092bfd332e03e613d195c72384685b7b63",
+      "message": "Retire embedded control facades and expose Zuse CLI lifecycle",
+      "date": "2026-11-21T15:07:54Z"
+    },
+    {
+      "sha": "3533ce65cfef234b48a768c3ed2545b016eaf82a",
+      "message": "Add bounded official Zuse release and archive verification",
+      "date": "2026-11-21T15:10:07Z"
+    },
+    {
+      "sha": "07bbe42874a438599f951dc9e11a3440251ca2f8",
+      "message": "refactor: preserve local helpers outside computer actions [skip ci]\n\nMove the bounded clipboard and notification subprocess helper to the generic backend, retaining its existing error, deadline and literal-input regressions. Add the archive dependencies used by the standalone Zuse CLI lifecycle manager.",
+      "date": "2026-11-21T15:10:43Z"
+    },
+    {
+      "sha": "2c235bdd198eb2fba0ce2e111751760bd88d2ad9",
+      "message": "Replace local computer controls with Zuse CLI lifecycle commands",
+      "date": "2026-11-21T15:11:31Z"
+    },
+    {
+      "sha": "659354f9b6361b862bd3069c1df47fdf7d65b2bd",
+      "message": "fix: advertise only computer lifecycle helpers [skip ci]\n\nReplace retired cua/browser facade names in resource limits with the four standalone Zuse lifecycle helpers.",
+      "date": "2026-11-21T15:13:02Z"
+    }
+  ],
+  "files": [
+    {
+      "name": ".gitmodules",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 3,
+      "patch_available": true
+    },
+    {
+      "name": "Cargo.toml",
+      "status": "modified",
+      "additions": 4,
+      "deletions": 3,
+      "patch_available": true
+    },
+    {
+      "name": "packaging/ssmcp-computer.lua",
+      "status": "removed",
+      "additions": 0,
+      "deletions": 9,
+      "patch_available": true
+    },
+    {
+      "name": "scripts/e2e.py",
+      "status": "modified",
+      "additions": 3,
+      "deletions": 61,
+      "patch_available": true
+    },
+    {
+      "name": "scripts/test_cua_facade.mjs",
+      "status": "modified",
+      "additions": 54,
+      "deletions": 91,
+      "patch_available": true
+    },
+    {
+      "name": "src/backend.rs",
+      "status": "modified",
+      "additions": 145,
+      "deletions": 1,
+      "patch_available": true
+    },
+    {
+      "name": "src/backend/playwright.rs",
+      "status": "removed",
+      "additions": 0,
+      "deletions": 650,
+      "patch_available": true
+    },
+    {
+      "name": "src/backend/rpc.rs",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 106,
+      "patch_available": true
+    },
+    {
+      "name": "src/bin/ssmcp.rs",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 10,
+      "patch_available": true
+    },
+    {
+      "name": "src/browser.rs",
+      "status": "removed",
+      "additions": 0,
+      "deletions": 3502,
+      "patch_available": false
+    },
+    {
+      "name": "src/browser/actions.rs",
+      "status": "removed",
+      "additions": 0,
+      "deletions": 405,
+      "patch_available": true
+    },
+    {
+      "name": "src/browser/discovery.rs",
+      "status": "removed",
+      "additions": 0,
+      "deletions": 1022,
+      "patch_available": true
+    },
+    {
+      "name": "src/browser/routing.rs",
+      "status": "removed",
+      "additions": 0,
+      "deletions": 88,
+      "patch_available": true
+    },
+    {
+      "name": "src/client.rs",
+      "status": "modified",
+      "additions": 17,
+      "deletions": 17,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/agent.rs",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/browser_setup.rs",
+      "status": "removed",
+      "additions": 0,
+      "deletions": 623,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/clipboard.rs",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/composer.rs",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 4,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/computer_control.rs",
+      "status": "modified",
+      "additions": 104,
+      "deletions": 60,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/config.rs",
+      "status": "modified",
+      "additions": 17,
+      "deletions": 169,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/interface.rs",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 1,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/interface/computer.rs",
+      "status": "removed",
+      "additions": 0,
+      "deletions": 91,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/notification.rs",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/terminal.rs",
+      "status": "modified",
+      "additions": 45,
+      "deletions": 51,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/terminal/computer.rs",
+      "status": "removed",
+      "additions": 0,
+      "deletions": 289,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/terminal/computer_keys.rs",
+      "status": "removed",
+      "additions": 0,
+      "deletions": 133,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/terminal/conversation.rs",
+      "status": "modified",
+      "additions": 6,
+      "deletions": 24,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/terminal/conversation/timing/tests.rs",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 10,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/ui.rs",
+      "status": "modified",
+      "additions": 13,
+      "deletions": 12,
+      "patch_available": true
+    },
+    {
+      "name": "src/client/version.rs",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 2,
+      "patch_available": true
+    },
+    {
+      "name": "src/code_mode.js",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 14,
+      "patch_available": true
+    },
+    {
+      "name": "src/computer/archive.rs",
+      "status": "added",
+      "additions": 224,
+      "deletions": 0,
+      "patch_available": true
+    },
+    {
+      "name": "src/computer/release.rs",
+      "status": "added",
+      "additions": 253,
+      "deletions": 0,
+      "patch_available": true
+    },
+    {
+      "name": "src/lib.rs",
+      "status": "modified",
+      "additions": 0,
+      "deletions": 2,
+      "patch_available": true
+    },
+    {
+      "name": "src/omarchy.rs",
+      "status": "removed",
+      "additions": 0,
+      "deletions": 2213,
+      "patch_available": true
+    },
+    {
+      "name": "src/registry.rs",
+      "status": "modified",
+      "additions": 9,
+      "deletions": 15,
+      "patch_available": true
+    },
+    {
+      "name": "src/resources.rs",
+      "status": "modified",
+      "additions": 2,
+      "deletions": 1,
+      "patch_available": true
+    },
+    {
+      "name": "src/runtime.rs",
+      "status": "modified",
+      "additions": 3,
+      "deletions": 26,
+      "patch_available": true
+    },
+    {
+      "name": "src/runtime/capabilities.rs",
+      "status": "modified",
+      "additions": 19,
+      "deletions": 41,
+      "patch_available": true
+    },
+    {
+      "name": "src/runtime/native_plugins/desktop.rs",
+      "status": "modified",
+      "additions": 11,
+      "deletions": 74,
+      "patch_available": true
+    },
+    {
+      "name": "src/runtime/native_plugins/process.rs",
+      "status": "modified",
+      "additions": 9,
+      "deletions": 304,
+      "patch_available": true
+    },
+    {
+      "name": "src/runtime/native_plugins/process/lazy.rs",
+      "status": "modified",
+      "additions": 5,
+      "deletions": 4,
+      "patch_available": true
+    },
+    {
+      "name": "tests/zuse_worker_entry.rs",
+      "status": "removed",
+      "additions": 0,
+      "deletions": 27,
+      "patch_available": true
+    }
+  ],
+  "root_actual_patch_reads": [
+    "Cargo.toml",
+    ".gitmodules",
+    "src/lib.rs",
+    "src/runtime/native_plugins/desktop.rs",
+    "src/runtime.rs",
+    "src/registry.rs",
+    "src/code_mode.js",
+    "src/resources.rs",
+    "src/bin/ssmcp.rs"
+  ],
+  "remaining_review": "Direct read-only reviewers checking archive/release helpers, changed message/UI paths and removed validation targets. Core integration and final source identity remain with source owner.",
+  "root_execution": {
+    "native": 0,
+    "Cargo": 0,
+    "metadata": 0,
+    "build": 0,
+    "product": 0,
+    "test": 0,
+    "source_write": 0,
+    "target_write": 0,
+    "H2": 0,
+    "release_dispatch": 0
+  },
+  "actual_source_authorship": "Original source coordinator reports direct ChatGPT collaborator GitHub commits; no native model started and original native T not resumed.",
+  "validation": "None executed on this snapshot by report owner. Old Gate20 and N20 stay bound to old source.",
+  "schema": "ssmcp-zuse-cli-migration-development-snapshot-v1",
+  "report_updated_utc": "2026-11-21 15:19:08 UTC",
+  "static_findings": {
+    "source": "659354f9b6361b862bd3069c1df47fdf7d65b2bd",
+    "type": "static source review, not product execution",
+    "root_native_reproduction": false,
+    "windows_zip": {
+      "status": "confirmed rule/recipe incompatibility in fixed sources; actual asset header not downloaded",
+      "paths": [
+        "src/computer/archive.rs"
+      ],
+      "mechanism": "Windows ZIP creator defaults DOS origin; zip 6.0.0 maps DOS regular entries to 0664, while archive member() requires Unix executable bits even for zuse.exe.",
+      "upstream_release_commit": "830fcefd2277cbba46536c67d206f29058ba7fb3",
+      "cpython_commit": "ebf955df7a89ed0c7968f79faec1de49f61ed7cb",
+      "zip6_commit": "abfc23d19e5c6038cba27eb3a897bc34c6d5bf86"
+    },
+    "retired_key_sequence": {
+      "status": "confirmed statically reachable when legacy Kitty chord reaches application outside bracketed paste",
+      "paths": [
+        "src/client/terminal.rs",
+        "src/client/terminal/conversation.rs"
+      ],
+      "sequence": "ESC[99;11u",
+      "mechanism": "Removed decoder lets prefix fall through to ordinary output; ESC routes to chat_escape, remaining [99;11u enters draft.",
+      "scope": "No statement about every terminal/desktop key binding; preserve literal paste bytes."
+    },
+    "validation_scope": {
+      "removed_worker_target": "integration-zuse_worker_entry",
+      "old_counts_not_transferable": true,
+      "H2": "Four gitlink and submodule_count assumptions require actual final source review; PROJECT_Z_DIRECT itself skips absent zuse.",
+      "final_new_counts": null
+    }
+  },
+  "github_release_channel": {
+    "snapshot_utc": "2026-11-21 15:09:24 UTC",
+    "GitHub_release": {
+      "tag_name": "v0.3.0",
+      "name": "zuse 0.3.0",
+      "published_at": "2026-11-21T06:48:10Z",
+      "draft": false,
+      "prerelease": false,
+      "html_url": "https://github.com/LIghtJUNction/zuse/releases/tag/v0.3.0",
+      "target_commitish": "main",
+      "assets": [
+        {
+          "name": "zuse-v0.3.0-aarch64-apple-darwin.tar.gz",
+          "size": 760671,
+          "browser_download_url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.3.0/zuse-v0.3.0-aarch64-apple-darwin.tar.gz"
+        },
+        {
+          "name": "zuse-v0.3.0-aarch64-unknown-linux-gnu.tar.gz",
+          "size": 859609,
+          "browser_download_url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.3.0/zuse-v0.3.0-aarch64-unknown-linux-gnu.tar.gz"
+        },
+        {
+          "name": "zuse-v0.3.0-x86_64-apple-darwin.tar.gz",
+          "size": 820022,
+          "browser_download_url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.3.0/zuse-v0.3.0-x86_64-apple-darwin.tar.gz"
+        },
+        {
+          "name": "zuse-v0.3.0-x86_64-pc-windows-msvc.zip",
+          "size": 791398,
+          "browser_download_url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.3.0/zuse-v0.3.0-x86_64-pc-windows-msvc.zip"
+        },
+        {
+          "name": "zuse-v0.3.0-x86_64-unknown-linux-gnu.tar.gz",
+          "size": 918041,
+          "browser_download_url": "https://github.com/LIghtJUNction/zuse/releases/download/v0.3.0/zuse-v0.3.0-x86_64-unknown-linux-gnu.tar.gz"
+        }
+      ]
+    },
+    "registry_versions": [
+      {
+        "name": "zuse-computer",
+        "version": "0.1.0",
+        "yanked": false,
+        "cksum": "d8213abf0138ae60e79b92c51dcc2b0d7942f6c61edf96e00f86ac3a5d97d109"
+      },
+      {
+        "name": "zuse-computer",
+        "version": "0.1.1",
+        "yanked": false,
+        "cksum": "47d2e9c8845b5f8b0c58335e4824bb118227957a4f42da4c6ad59abeab3d8f2f"
+      },
+      {
+        "name": "zuse-computer",
+        "version": "0.2.0",
+        "yanked": false,
+        "cksum": "143c841259023ef3e78b10bba3219224c50c85096c883193d46764625dcdcd7f"
+      },
+      {
+        "name": "zuse-computer",
+        "version": "0.2.1",
+        "yanked": false,
+        "cksum": "8da9a00ef8468d196234a99cb4d7f47991d9fb1ef704f67da2ce63d46395ea04"
+      },
+      {
+        "name": "zuse-computer",
+        "version": "0.2.2",
+        "yanked": false,
+        "cksum": "16d3bf8c73bf64721672bf0483899b796967c8d3b53fa0ea934b3e705d6e2fde"
+      },
+      {
+        "name": "zuse-computer",
+        "version": "0.4.0",
+        "yanked": false,
+        "cksum": "1740c35125296b7a0abd065c8fe2de7e269f0d59f7e804e92ac59a2c845af985"
+      }
+    ],
+    "read_method": "Independent root GitHub connector reads; no downloads, installation or native/product execution."
+  },
+  "old_candidate_results": {
+    "source": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "Gate20": {
+      "status": "passed",
+      "stages": 35,
+      "root_originals_read": true,
+      "report_file": "current-iteration-Gate20-passed.md"
+    },
+    "N20": {
+      "status": "passed as reported by original acceptance coordinator",
+      "root_originals_read": false,
+      "executions": 1,
+      "product_executions": 0
+    },
+    "transferred_to_migration_snapshot": false
+  },
+  "integration_and_cleanup": {
+    "ownership": "Original source coordinator",
+    "state": "Source coordinator reports implementation and preparation to remove confirmed idle build caches. Report owner has not read an executed cleanup receipt.",
+    "source_and_evidence_preserved": "Required scope; not a new cleanup completion claim.",
+    "new_native_model_or_original_native_author_resumed_by_report_owner": false
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "schema": "ssmcp.007.official-candidate.v1",
+  "captured_at": "2026-11-19T22:00:06.005021+00:00",
+  "release_url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.13",
+  "asset_url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.13/ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+  "archive_sha256": "b5042d0125a70356f83b2995453d377ae4ffcbb079aaade53abe896133fbf12b",
+  "archive_bytes": 9529375,
+  "archive_digest_matched_official_metadata": true,
+  "archive_member": "ssmcp",
+  "binary_sha256": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+  "binary_bytes": 12946488,
+  "version": "ssmcp 0.10.13",
+  "version_exit_code": 0,
+  "service_mutations": [],
+  "installation_performed": false
+}

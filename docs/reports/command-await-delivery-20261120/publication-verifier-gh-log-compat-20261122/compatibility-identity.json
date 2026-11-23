@@ -1,0 +1,65 @@
+{
+  "schema": "ssmcp-h2-gh-captured-raw-log-compat-public.v1",
+  "original_commit": "432900420ef4fbe093ad284cb49e66e1e2892800",
+  "original_directory": "docs/reports/command-await-delivery-20261120/publication-verifier-git-source-zuse-cli-v26-unbound",
+  "only_change": "api_bytes adds documented --allow-escape-sequences; stdout remains captured bytes and is never rendered as raw terminal output",
+  "original_verifier": {
+    "bytes": 48801,
+    "sha256": "04945d54734ce8b6c62900d71ca365217030cda486ed204e76cafa6972a59e12",
+    "git_blob": "ad2f35265bff0d375d5cff07c2ae1bfd8b38542a"
+  },
+  "files": [
+    {
+      "name": "verify_published_manual_main.py",
+      "bytes": 48829,
+      "sha256": "ed11f433e549419c2f11b35fb6ca9358822caa8d17356b56df2713930c6ff1d0",
+      "git_blob": "d150d82804b2e981179a759381a65a8237c1e8e2",
+      "changed": true
+    },
+    {
+      "name": "manual_main_provenance.py",
+      "bytes": 43709,
+      "sha256": "4683164cc124e4f048f6d64c8fd481f1b9970be0ff4c2364607039f6b24d9bcf",
+      "git_blob": "93d0d50774a0345ab8f3706238305f4a1a9a522b",
+      "changed": false
+    },
+    {
+      "name": "dispatch_receipt_adapter.py",
+      "bytes": 14758,
+      "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4",
+      "git_blob": "e5c0d908de62996c1a1f49e4b9449385bb7f20bd",
+      "changed": false
+    },
+    {
+      "name": "reviewed-recipe.json",
+      "bytes": 3506,
+      "sha256": "58529002b276cb8584e833cb23fc81a37ea807b51d8c8a422b4c9266fbc8bdfd",
+      "git_blob": "34ecefb5a75b3bf67b5981e6412c8e0ce89ff102",
+      "changed": false
+    }
+  ],
+  "AST_identical_after_removing_one_argv_literal": true,
+  "verification_predicates_changed": false,
+  "original_package_preserved": true,
+  "diagnostic": {
+    "job_id": 137064905326,
+    "original_H2_error": "gh api job-log request exited 1; underlying stderr not included in original exception",
+    "same_endpoint_default_read": "EOF",
+    "http1_read": "CLI refused terminal escape sequences",
+    "documented_flag_with_default_environment": {
+      "exit_code": 0,
+      "bytes": 78834,
+      "sha256": "baab687a7abf2ab15117529cca6086640f514f5bab84c826014881ce50197351",
+      "escape_bytes": 1412,
+      "stderr_bytes": 0
+    }
+  },
+  "verification_input": {
+    "source": "1d6b55320fff6533663dad2627891960b3b5c5cc",
+    "workflow_sha": "c26b37fc3912cf1ed5e8d2a6143c5c857446f6ce",
+    "run_id": 44975626721,
+    "run_attempt": 1,
+    "tag": "v0.10.26"
+  },
+  "successor_execution_result": "See final report; preparation does not claim a verification pass."
+}

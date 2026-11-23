@@ -1,0 +1,419 @@
+{
+  "schema": "ssmcp.007-upgrade.validation.v1",
+  "status": "passed",
+  "pr": 98,
+  "branch": "feat/007-recovery-upgrade-20261119",
+  "head": "230993bb22768cade567e0a5fbfacbef45a68621",
+  "rust_checkpoint": "92e6c83f41b1105bf17a579aabe8baa048c296d8",
+  "script_checkpoint": "3d3ef383fd72d87940fc686affddb77fe63672d5",
+  "build_source": "21ea0acc365b413dfa237387960b7441ab1ba529",
+  "scope": {
+    "live_upgrade_performed": false,
+    "real_credentials_used": false,
+    "models_invoked": false,
+    "real_systemd_mutations": false,
+    "upgrade_fixture_same_binary_baseline": true,
+    "idle_timeout_flag_run": false,
+    "native_systemd_units_tested": false,
+    "tls_tested": false
+  },
+  "results": {
+    "upgrade_transaction": {
+      "passed": 14,
+      "total": 14,
+      "native_job": "507205f6137df8c5168ea3b72a3f442d-97",
+      "cleanup_confirmed": true
+    },
+    "recovery_and_production_router": {
+      "passed": 47,
+      "total": 47,
+      "lifecycle_checks": 32,
+      "production_router_checks": 15,
+      "native_job": "507205f6137df8c5168ea3b72a3f442d-b2",
+      "cleanup_errors": [],
+      "router_fixture_exit_code": 0
+    },
+    "first_regression_attempt": {
+      "status": "failed",
+      "checks": 0,
+      "reason": "stale v5 assertion; corrected to current v7 in 3d3ef383",
+      "preserved": true
+    }
+  },
+  "evidence": {
+    "upgrade-report.json": {
+      "sha256": "1ed06c7f4e5d5e07d2cdddc96a0c4781166cff4c9d9bbe5292929b15998fb7eb",
+      "report": {
+        "schema": "ssmcp.007.upgrade.e2e.v1",
+        "success": true,
+        "binary_sha256": "354c1a7697f346cadc1f90428b0ce8fb1ba0fb6dd531873b3a38b7f16f3bf6ec",
+        "script_sha256": "f2708a15015364b60d87623abda064ece47fb7419e26f2f73860b587ccf7f16a",
+        "service_manager": "private systemctl test double; no real systemd commands or unit mutations",
+        "transport": "real recovery and saved-session processes; private synthetic account WebSocket gateway",
+        "real_credentials_used": false,
+        "models_invoked": false,
+        "checks": [
+          "dry-run reports the actual current CLI and private recovery process",
+          "dry-run neither replaces an image nor stops a process",
+          "the real saved session has a definition and an executable snapshot",
+          "successful upgrade reports the actual new owned process",
+          "success matches a fresh authenticated v7 connection and observation",
+          "the previous image remains an independent, exact backup",
+          "the saved recovery image is byte-for-byte the invoked candidate",
+          "upgrade preserves the formal session, connection, snapshot and ongoing job",
+          "upgrade preserves configuration and unit definition",
+          "a different installation is rejected before backup, stop or replacement",
+          "a failed activation exits unsuccessfully and separately confirms restoration and reconnection",
+          "rollback restores exact bytes, verifies its new process, and retains both backups",
+          "rollback also leaves formal session identity and its ongoing job intact",
+          "every manager mutation targets only the private recovery unit"
+        ],
+        "same_binary_baseline": true,
+        "live_007_changed": false,
+        "manager_commands": [
+          {
+            "operation": "show",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "show",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "show",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "stop",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "start",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "show",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "show",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "show",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "show",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "stop",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "start",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "show",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "stop",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "start",
+            "unit": "ssmcp-007.service"
+          },
+          {
+            "operation": "show",
+            "unit": "ssmcp-007.service"
+          }
+        ],
+        "blocked_real_systemd_probes": 0,
+        "cleanup_errors": [],
+        "cleanup_confirmed": true,
+        "duration_seconds": 16.085
+      }
+    },
+    "e2e-v7-report.json": {
+      "sha256": "b9605c574ee519ea900dca68b9c43adee77b9d63164b7136e16bd74b46bc2708",
+      "report": {
+        "schema": "ssmcp.007.e2e.v1",
+        "binary_sha256": "354c1a7697f346cadc1f90428b0ce8fb1ba0fb6dd531873b3a38b7f16f3bf6ec",
+        "success": false,
+        "checks": [],
+        "error": "AssertionError: the actual recovery Hello advertises v5 without full-client audit or steering",
+        "cleanup_errors": [],
+        "native_systemd_units_tested": false,
+        "real_credentials_used": false
+      }
+    },
+    "e2e-v7-retry1-report.json": {
+      "sha256": "fb47ac01253e9ffb11c5ac3341b1eaa4c9e8c3eadff8bcdb1316f33d0d8d1248",
+      "report": {
+        "schema": "ssmcp.007.e2e.v1",
+        "binary": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/bin/ssmcp",
+        "binary_sha256": "354c1a7697f346cadc1f90428b0ce8fb1ba0fb6dd531873b3a38b7f16f3bf6ec",
+        "fixture": "loopback synthetic account relay and independent private session manager",
+        "native_systemd_units_tested": false,
+        "real_credentials_used": false,
+        "routing_only": false,
+        "real_router": {
+          "requested": true,
+          "success": true,
+          "fixture_binary": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/ssmcp-lib-tests",
+          "fixture_binary_sha256": "c9e5a10776af44fe9d500adbde2e14aad92da55a4b6859c199df74f3099784dd",
+          "scope": "production Broker and HTTP router in a library test executable; synthetic GitHub; loopback HTTP/WS",
+          "tls_tested": false,
+          "real_credentials_used": false,
+          "fixture_exit_code": 0,
+          "check_count": 15
+        },
+        "checks": [
+          "the actual recovery Hello advertises v7 with only recovery capabilities",
+          "idle 007 starts no relay child, PTY or tool backend",
+          "007 exposes exactly five narrow recovery tools",
+          "007 status returns an object",
+          "007 rejects general command execution",
+          "wake rejects arbitrary startup arguments",
+          "wake rejects traversal in session names",
+          "wake rejects workspace traversal",
+          "wake rejects an escaping cwd symlink",
+          "007 relies on relay pings without a second heartbeat source",
+          "closed relay transport reconnects automatically",
+          "an unwritable observation cache does not prevent reconnection or status RPC",
+          "oversized frame is rejected and the recovery loop reconnects",
+          "wake starts a real formal session in the approved workspace",
+          "repeated wake preserves the worker process and broker connection",
+          "wake retry keeps the saved session identity",
+          "stopping 007 preserves the independent formal session",
+          "restarting 007 preserves the same formal-session process and connection",
+          "formal-session relay transport stays connected across 007 restart",
+          "an in-flight formal-session job survives 007 stop and restart",
+          "a failed installed client reports failure without stopping 007",
+          "007 remains controllable after a broken normal-client upgrade",
+          "the fixed recovery image survives installed-client replacement",
+          "recovery=true starts a usable formal session from the fixed image",
+          "close persists stopped intent and confirms the worker stopped",
+          "wake restarts an existing saved session while the installed client is broken",
+          "authorization refusal keeps 007 alive with bounded retries",
+          "reconnection reloads repaired credentials from the private account store",
+          "remove explicitly stops and deletes a running recovery session",
+          "remove clears only the private recovery-session inventory",
+          "007 returns to child-free idle after session management",
+          "fixture observed no protocol errors",
+          "the owned router fixture exposes credentials only in a private ready file",
+          "the isolated named account has the expected stable identity and handle",
+          "the real production router is healthy",
+          "the real router registers an MCP OAuth client",
+          "the shared identity endpoint requires provider consent instead of a connection login code",
+          "the real identity exchange validates synthetic GitHub PKCE and requires explicit consent",
+          "OAuth consent returns the registered consumer callback with state and issuer binding",
+          "the real OAuth endpoint issues an identity-scoped MCP access token",
+          "the account relay credential is not mistaken for an MCP access token",
+          "real-router 007 reports the owned process and one live connection",
+          "the actual account endpoint discovers the recovery connection",
+          "the first real HTTP code_mode call reaches 007 and returns its native status",
+          "a second real code_mode request reaches the original 007 connection after completion",
+          "completed code_mode calls preserve the same recovery process and broker client ID",
+          "real gateway dispatch leaves recovery without a PTY, backend, or child process"
+        ],
+        "success": true,
+        "cleanup_errors": []
+      }
+    },
+    "progress.json": {
+      "sha256": "b67ccad8d543f1f23421b224167c856423622d955c531e34615fa38d8472825e",
+      "report": {
+        "phase": "finished_upgrade_fixture",
+        "exit_code": 0,
+        "duration_seconds": 16.399,
+        "log": "<native-repository>/.worktrees/007-recovery-upgrade-20261119/.local/007-upgrade-checks/upgrade.log",
+        "report": "<native-repository>/.worktrees/007-recovery-upgrade-20261119/.local/007-upgrade-checks/upgrade-report.json",
+        "script_sha256": "f2708a15015364b60d87623abda064ece47fb7419e26f2f73860b587ccf7f16a",
+        "success": true,
+        "checks": 14,
+        "error": null,
+        "cleanup_confirmed": true,
+        "cleanup_errors": []
+      }
+    },
+    "e2e-v7-retry1-progress.json": {
+      "sha256": "8cd903bd8654e6303c98405b26919cd4e3105adca12bd66107ff39a163a27cda",
+      "report": {
+        "status": "passed",
+        "head": "3d3ef383fd72d87940fc686affddb77fe63672d5",
+        "binary_source": "21ea0acc365b413dfa237387960b7441ab1ba529",
+        "script_sha256": "c594be12442f6d65d2302aadeb7f47c2b211caf897c1af056dbc8aca5082a8fd",
+        "started": 1795117188.410384,
+        "report": "<native-repository>/.worktrees/007-recovery-upgrade-20261119/.local/007-upgrade-checks/e2e-v7-retry1-report.json",
+        "log": "<native-repository>/.worktrees/007-recovery-upgrade-20261119/.local/007-upgrade-checks/e2e-v7-retry1.log",
+        "real_systemd_blocked": true,
+        "exit_code": 0,
+        "finished": 1795117228.569015
+      }
+    },
+    "no_real_manager": {
+      "blocked_command_probes": [],
+      "guarded_commands": [
+        "systemctl",
+        "systemd-run"
+      ]
+    },
+    "frozen_provenance_files": [
+      "fmt.log",
+      "clippy.log",
+      "lib-build.log",
+      "ssmcp-lib-tests",
+      "007-unit.log",
+      "saved-session-unit.log",
+      "cli-build.log",
+      "build-progress.json",
+      "provenance.json"
+    ]
+  },
+  "build": {
+    "provenance": {
+      "source": "21ea0acc365b413dfa237387960b7441ab1ba529",
+      "input_007_head": "92e6c83f41b1105bf17a579aabe8baa048c296d8",
+      "base_validated_source": "a7f9077d92b093dbc90d1cd09cfb666fa55468af",
+      "steps": [
+        {
+          "name": "fmt",
+          "command": [
+            "cargo",
+            "fmt",
+            "--all",
+            "--check"
+          ],
+          "exit_code": 0,
+          "seconds": 2.103,
+          "test_results": []
+        },
+        {
+          "name": "clippy",
+          "command": [
+            "cargo",
+            "clippy",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0,
+          "seconds": 61.073,
+          "test_results": []
+        },
+        {
+          "name": "lib-build",
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "--lib",
+            "--no-run",
+            "--message-format=json"
+          ],
+          "exit_code": 0,
+          "seconds": 96.675,
+          "test_results": []
+        },
+        {
+          "name": "007-unit",
+          "command": [
+            "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/ssmcp-lib-tests",
+            "client::zero::",
+            "--test-threads=1"
+          ],
+          "exit_code": 0,
+          "seconds": 0.02,
+          "test_results": [
+            "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 1361 filtered out; finished in 0.00s"
+          ]
+        },
+        {
+          "name": "saved-session-unit",
+          "command": [
+            "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/ssmcp-lib-tests",
+            "session::",
+            "--test-threads=1"
+          ],
+          "exit_code": 0,
+          "seconds": 0.295,
+          "test_results": [
+            "test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 1327 filtered out; finished in 0.29s"
+          ]
+        },
+        {
+          "name": "cli-build",
+          "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "--bins"
+          ],
+          "exit_code": 0,
+          "seconds": 68.553,
+          "test_results": []
+        }
+      ],
+      "binaries": {
+        "ssmcp-lib-tests": {
+          "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/ssmcp-lib-tests",
+          "sha256": "c9e5a10776af44fe9d500adbde2e14aad92da55a4b6859c199df74f3099784dd",
+          "size": 261879816
+        },
+        "bin/ssmcp": {
+          "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/bin/ssmcp",
+          "sha256": "354c1a7697f346cadc1f90428b0ce8fb1ba0fb6dd531873b3a38b7f16f3bf6ec",
+          "size": 181164328
+        },
+        "bin/ssmcpd": {
+          "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/bin/ssmcpd",
+          "sha256": "8eabf905ca7bf859f64299ccad4a66aa15a0f47be4f6d89ba4f2b2f0a4f447c3",
+          "size": 135174088
+        },
+        "bin/code-mode.js": {
+          "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-007-upgrade-21ea0acc365b/bin/code-mode.js",
+          "sha256": "6e169387073dfb5919f6714658ac28781cfe04c7e5800ada690c0c67fed3d4d0",
+          "size": 41662
+        }
+      },
+      "scope": "Isolated build and targeted tests; no live service changes or model calls",
+      "all_planned_gates_passed": true
+    },
+    "007_rust_equivalence": [
+      {
+        "path": "src/client/zero.rs",
+        "compiled_source_sha256": "3c8d2b704cb798c5badd9a06ac7ec351005710649fcd8ac0f39a3e1fdba9c747",
+        "pr_head_sha256": "3c8d2b704cb798c5badd9a06ac7ec351005710649fcd8ac0f39a3e1fdba9c747",
+        "equal": true
+      },
+      {
+        "path": "src/client/zero/install.rs",
+        "compiled_source_sha256": "e7ffb2ce362afb0ad7ed2d60735b16a10385dfc7a4a8083731ec4260d694f288",
+        "pr_head_sha256": "e7ffb2ce362afb0ad7ed2d60735b16a10385dfc7a4a8083731ec4260d694f288",
+        "equal": true
+      },
+      {
+        "path": "src/client/zero/install/upgrade.rs",
+        "compiled_source_sha256": "9de1a21fae61c4018106c48d780a4db942d525ab3893538a2b40a78abe4c4f47",
+        "pr_head_sha256": "9de1a21fae61c4018106c48d780a4db942d525ab3893538a2b40a78abe4c4f47",
+        "equal": true
+      }
+    ],
+    "test_summaries": {
+      "007-unit.log": [
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 1361 filtered out; finished in 0.00s"
+      ],
+      "saved-session-unit.log": [
+        "test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 1327 filtered out; finished in 0.29s"
+      ]
+    }
+  },
+  "publication_note": "Native absolute paths are replaced with descriptive placeholders. Embedded source-report hashes refer to the retained original files; hashes of these published files are in evidence-manifest.json."
+}

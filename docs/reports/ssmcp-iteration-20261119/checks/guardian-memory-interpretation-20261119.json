@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "branch": "perf/exec-guardian-address-space",
+  "head": "d45aa226b857a29efa41a3b46c36b78c73ecddda",
+  "rust_head": "dfdf512df91b475e8d307630fc986afec1724d4c",
+  "correctness_checks_passed": 524,
+  "duration_seconds": 62.032,
+  "memory_goal_met": false,
+  "interpretation": "Same-profile debug measurements do not demonstrate a memory reduction. Both default and small-output median guardian and owned-tree PSS increased. This candidate must not be represented as a measured memory optimization.",
+  "summary": {
+    "default": {
+      "baseline": {
+        "parent": {
+          "pss_kib": 19354,
+          "private_kib": 9280,
+          "swap_pss_kib": 0
+        },
+        "guardian": {
+          "pss_kib": 1995,
+          "private_kib": 780,
+          "swap_pss_kib": 0
+        },
+        "parent_and_guardian": {
+          "pss_kib": 21351,
+          "private_kib": 10060,
+          "swap_pss_kib": 0
+        },
+        "owned_tree": {
+          "pss_kib": 40436,
+          "private_kib": 19344,
+          "swap_pss_kib": 0
+        }
+      },
+      "candidate": {
+        "parent": {
+          "pss_kib": 19290,
+          "private_kib": 10748,
+          "swap_pss_kib": 0
+        },
+        "guardian": {
+          "pss_kib": 3487,
+          "private_kib": 1748,
+          "swap_pss_kib": 0
+        },
+        "parent_and_guardian": {
+          "pss_kib": 22818,
+          "private_kib": 12496,
+          "swap_pss_kib": 0
+        },
+        "owned_tree": {
+          "pss_kib": 41174,
+          "private_kib": 21856,
+          "swap_pss_kib": 0
+        }
+      }
+    },
+    "small_output": {
+      "baseline": {
+        "parent": {
+          "pss_kib": 19910,
+          "private_kib": 9772,
+          "swap_pss_kib": 0
+        },
+        "guardian": {
+          "pss_kib": 2413,
+          "private_kib": 1240,
+          "swap_pss_kib": 0
+        },
+        "parent_and_guardian": {
+          "pss_kib": 22332,
+          "private_kib": 11012,
+          "swap_pss_kib": 0
+        },
+        "owned_tree": {
+          "pss_kib": 41640,
+          "private_kib": 20376,
+          "swap_pss_kib": 0
+        }
+      },
+      "candidate": {
+        "parent": {
+          "pss_kib": 19851,
+          "private_kib": 11580,
+          "swap_pss_kib": 0
+        },
+        "guardian": {
+          "pss_kib": 3430,
+          "private_kib": 1696,
+          "swap_pss_kib": 0
+        },
+        "parent_and_guardian": {
+          "pss_kib": 23367,
+          "private_kib": 13276,
+          "swap_pss_kib": 0
+        },
+        "owned_tree": {
+          "pss_kib": 41965,
+          "private_kib": 22704,
+          "swap_pss_kib": 0
+        }
+      }
+    }
+  },
+  "guardian_components": [
+    {
+      "scenario": "default",
+      "variant": "baseline",
+      "pss_anon_kib": 1856,
+      "pss_file_kib": 2,
+      "pss_kib_range": [
+        1994,
+        1997
+      ]
+    },
+    {
+      "scenario": "default",
+      "variant": "candidate",
+      "pss_anon_kib": 1684,
+      "pss_file_kib": 16,
+      "pss_kib_range": [
+        3486,
+        3587
+      ]
+    },
+    {
+      "scenario": "small_output",
+      "variant": "baseline",
+      "pss_anon_kib": 2268,
+      "pss_file_kib": 2,
+      "pss_kib_range": [
+        2397,
+        2422
+      ]
+    },
+    {
+      "scenario": "small_output",
+      "variant": "candidate",
+      "pss_anon_kib": 1684,
+      "pss_file_kib": 17,
+      "pss_kib_range": [
+        3421,
+        3516
+      ]
+    }
+  ],
+  "faults": [
+    {
+      "fault": "fallback",
+      "start_request_seconds": 0.081,
+      "actual_command_ran": true,
+      "native_rejected": false,
+      "exit_code": 0,
+      "exit_signal": null
+    },
+    {
+      "fault": "exit",
+      "start_request_seconds": 0.08,
+      "actual_command_ran": false,
+      "native_rejected": false,
+      "exit_code": 86,
+      "exit_signal": null
+    },
+    {
+      "fault": "hang",
+      "start_request_seconds": 10.074,
+      "actual_command_ran": false,
+      "native_rejected": false,
+      "exit_code": null,
+      "exit_signal": 14
+    }
+  ],
+  "all_cleanup_confirmed": true,
+  "report_sha256": "29ac90173db6b6e7f3035e2136170e00dd861287be733e9b65a4ff766cb2f728",
+  "report_path": "checks/guardian-same-profile-debug-validation-20261119.json"
+}

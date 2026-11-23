@@ -1,0 +1,128 @@
+{
+  "status": "passed",
+  "check_count": 68,
+  "execution": {
+    "exit": 0,
+    "seconds": 11.99
+  },
+  "provenance": {
+    "binary_source": "24a4d502739bdc8707a686c6585e4ebeb9f69948",
+    "script_head": "302bd2b3e02b593aa6f6c04195fd26376b0c9ffa",
+    "script_sha256": "c189cc822ba8d77e5cfdfc4df757275d4b487f378d7c7a65cf017ba27032e6b8",
+    "files": {
+      "ssmcp": "dca924a390ed440afde776f419e357739e6f7cc27c30166e3af36c2f00697527",
+      "ssmcp-lib-tests": "8f7a75ce6978543224dbc22f2cc7852bc2b84d7a92528c39db9a9923e4c8328a",
+      "vt_snapshot": "c44c9227316af21adc6a4bb08f78880e9d8aca34d0973e4475886049fa286a97"
+    }
+  },
+  "report": {
+    "status": "passed",
+    "mode": "real CLI and PTY; production account router over loopback HTTP/WebSocket; synthetic GitHub provider",
+    "binary_sha256": "dca924a390ed440afde776f419e357739e6f7cc27c30166e3af36c2f00697527",
+    "checks": [
+      "the owned account router keeps its credentials in a private ready record",
+      "the isolated account has the expected stable provider identity and handle",
+      "the real production account router is healthy",
+      "the account connection advertises its exact identity-scoped MCP resource",
+      "MCP 401 advertises protected-resource metadata",
+      "resource metadata binds the exact account endpoint and OAuth issuer",
+      "OAuth discovery advertises authorization-code PKCE S256",
+      "public MCP client registers through OAuth DCR",
+      "the account OAuth endpoint requires provider consent instead of a connection login code",
+      "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+      "OAuth pages cannot be cached and bind same-origin form submission",
+      "real identity exchange validates provider PKCE and requires explicit consent",
+      "OAuth consent preserves the registered callback, state and issuer",
+      "the real OAuth endpoint issues an identity-scoped MCP access token",
+      "OAuth access expires in eight hours and supplies a refresh token",
+      "OAuth token responses cannot be cached",
+      "the account relay credential cannot authenticate as an MCP access token",
+      "Enter completes @notes.txt at its correct UTF-8 cursor",
+      "the first Enter accepts @notes.txt without queuing a requirement",
+      "accepting a file-only reference preserves the exact recipient",
+      "the exact user draft is present before submission",
+      "only the expected queued identity is included in the tool response",
+      "delivery retains the exact revised text and authenticated recipient",
+      "the tool response contains a conspicuous separate user-requirements text block",
+      "delivery preserves the user's text and includes explicit reference data",
+      "delivered references identify the exact UTF-8 source",
+      "the second Enter delivers exactly the selected file-only reference",
+      "Enter completes @目录/含 空格 界.txt at its correct UTF-8 cursor",
+      "the first Enter accepts @目录/含 空格 界.txt without queuing a requirement",
+      "accepting a file-only reference preserves the exact recipient",
+      "the exact user draft is present before submission",
+      "only the expected queued identity is included in the tool response",
+      "delivery retains the exact revised text and authenticated recipient",
+      "the tool response contains a conspicuous separate user-requirements text block",
+      "delivery preserves the user's text and includes explicit reference data",
+      "delivered references identify the exact UTF-8 source",
+      "the second Enter delivers exactly the selected file-only reference",
+      "Enter completes @vanishes.txt at its correct UTF-8 cursor",
+      "the first Enter accepts @vanishes.txt without queuing a requirement",
+      "validation failure preserves the exact selected reference in the composer",
+      "validation failure preserves the exact selected recipient",
+      "failed validation retains the exact request as a non-deliverable edit",
+      "a failed file validation delivers no request",
+      "retry preserves the held request identity",
+      "only the expected queued identity is included in the tool response",
+      "delivery retains the exact revised text and authenticated recipient",
+      "the tool response contains a conspicuous separate user-requirements text block",
+      "delivery preserves the user's text and includes explicit reference data",
+      "delivered references identify the exact UTF-8 source",
+      "mouse completion preserves the exact recipient and UTF-8 cursor",
+      "clicking a file suggestion does not submit the draft",
+      "the exact user draft is present before submission",
+      "only the expected queued identity is included in the tool response",
+      "delivery retains the exact revised text and authenticated recipient",
+      "the tool response contains a conspicuous separate user-requirements text block",
+      "delivery preserves the user's text and includes explicit reference data",
+      "delivered references identify the exact UTF-8 source",
+      "Enter after mouse selection delivers the clicked file rather than the first suggestion",
+      "mouse completion preserves the exact recipient and UTF-8 cursor",
+      "clicking a file suggestion does not submit the draft",
+      "the exact user draft is present before submission",
+      "only the expected queued identity is included in the tool response",
+      "delivery retains the exact revised text and authenticated recipient",
+      "the tool response contains a conspicuous separate user-requirements text block",
+      "delivery preserves the user's text and includes explicit reference data",
+      "delivered references identify the exact UTF-8 source",
+      "Enter after mouse selection delivers the clicked file rather than the first suggestion",
+      "the isolated reference client restores its owned terminal"
+    ],
+    "metrics": {},
+    "duration_seconds": 11.601
+  },
+  "images": [
+    {
+      "image": "images/at-mouse-completed-wide.png",
+      "size": [
+        58,
+        106
+      ],
+      "snapshot": "input-history-mouse-completed-wide.json",
+      "snapshot_sha256": "2b775f63f17063c5c9179b845d131ef03b1a8fd059caed7d11fe0dc86eca80a6",
+      "image_sha256": "7dde10786817f123afcd67194b64c79826c0cbc2c80676772f1c7d7eac78b59e",
+      "synthetic_fixture_only": true,
+      "rendering": "Actual independent VT decoder cells from owned PTY; no source text or colors changed; blinking cursor omitted."
+    },
+    {
+      "image": "images/at-mouse-completed-narrow.png",
+      "size": [
+        18,
+        48
+      ],
+      "snapshot": "input-history-mouse-completed-narrow.json",
+      "snapshot_sha256": "c0e43071d6fabd3c8c1478c5c254cc8c396e766d01260e301fa25e85c200631e",
+      "image_sha256": "170a77bc542b7c7eb99b20f1e18cb7d3cedb297d295065ba33bf9c78109250a9",
+      "synthetic_fixture_only": true,
+      "rendering": "Actual independent VT decoder cells from owned PTY; no source text or colors changed; blinking cursor omitted."
+    }
+  ],
+  "review": {
+    "actual_vt_cells": true,
+    "synthetic_data": true,
+    "root_visually_reviewed": true
+  },
+  "pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/88",
+  "merged_main": "6510c2a2624ca0a656c3d14cd46e6771620d5955"
+}

@@ -46,3 +46,5 @@ OAuth CLI 的 19 项检查、7 次调用覆盖 `client_registrations_only`；包
 | [v0.10.25 原准备包](https://github.com/LIghtJUNction/ssmcp/tree/840629d64e3915bbe2b17496aa600d067e34b7e3/docs/reports/command-await-delivery-20261120/publication-verifier-git-source-zuse-cli-unbound) | 保留旧版本的来源与说明 |
 
 成功 H2 的回执为 399,189 B，SHA-256 `4da9ac1e13589786b76308e61f3a5c41b0a2b2a3a5452bc4a3f1cfa4c9a78a14`。本次仅整合矩阵、事实 JSON 和此短索引，完整历史与核验代码保留在上面的固定提交。
+
+[Original release report and iteration checkpoints](iteration-record.md)

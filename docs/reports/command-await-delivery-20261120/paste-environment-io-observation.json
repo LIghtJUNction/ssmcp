@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "scope": "environment-only measurements; not a product acceptance run",
+  "job_id": "1c828d2fc3165848bd0b270a25c57148-e5",
+  "exit_code": 0,
+  "sample_bytes": 2738,
+  "same_filesystem_device": true,
+  "measurements": [
+    {
+      "sample": 0,
+      "bytes": 2738,
+      "write_ms": 0.027,
+      "fsync_ms": 10842.582,
+      "total_ms": 10842.609
+    },
+    {
+      "sample": 1,
+      "bytes": 2738,
+      "write_ms": 0.465,
+      "fsync_ms": 290.753,
+      "total_ms": 291.218
+    },
+    {
+      "sample": 2,
+      "bytes": 2738,
+      "write_ms": 0.057,
+      "fsync_ms": 1088.451,
+      "total_ms": 1088.508
+    }
+  ],
+  "thread_observation": [
+    {
+      "tid": 1011457,
+      "comm": "tokio-rt-worker",
+      "wchan": "wait_log_commit",
+      "syscall_error": "PermissionError"
+    }
+  ],
+  "io_pressure": "some avg10=57.22 avg60=69.46 avg300=66.78 total=8709682006\nfull avg10=54.29 avg60=65.88 avg300=62.97 total=7580436827\n",
+  "limitations": [
+    "Three samples under the observed host load; no percentile or general latency claim.",
+    "Exact blocked client file was not determined because syscall inspection was denied.",
+    "No production/client restart, no source changes, and no change to paste durability.",
+    "Synthetic payload only; user paste log is not included."
+  ],
+  "owned_probe_directory_removed": true
+}

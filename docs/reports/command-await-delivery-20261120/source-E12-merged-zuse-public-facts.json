@@ -1,0 +1,558 @@
+{
+  "schema_version": 1,
+  "kind": "E12 zuse source synchronization, narrow checks and actual PR167 merge",
+  "observed_utc": "2026-11-21T09:40:23Z",
+  "source_stage": {
+    "name": "E12",
+    "original_author_continued": true,
+    "started_utc": "2026-11-21T09:26:19.086982+00:00",
+    "finished_utc": "2026-11-21T09:31:02.124809+00:00",
+    "exit_code": 0,
+    "error": null,
+    "author_wrapper_unchanged": true,
+    "rustc_wrapper_unchanged": true,
+    "start": {
+      "commit": "814c07c4374b3a800e3842f5cd676af7cfc1f32d",
+      "tree": "98f89ac6be9dd4867d45b017ea56c687f7a55147",
+      "parents": [
+        "5623e52a48a03727f3341613beaa767bd94ea98d"
+      ],
+      "subject": "test: exercise Playwright lost reply with invalid JSON [skip ci]"
+    },
+    "final": {
+      "commit": "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc",
+      "tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+      "parents": [
+        "814c07c4374b3a800e3842f5cd676af7cfc1f32d"
+      ],
+      "subject": "chore: synchronize zuse to ac5713 [skip ci]"
+    },
+    "commit_time": "2026-11-21T09:28:30Z",
+    "observed_main_at_start": "f69db30c3a9e461c48731c81dbde5a35ea176dc2",
+    "ordinary_push_count": 1,
+    "ordinary_push_exit_codes": [
+      0
+    ],
+    "remote_branch_readback": "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc",
+    "status": {
+      "porcelain": "",
+      "worktree_and_index_clean": true,
+      "four_submodules_clean": true
+    },
+    "package_version": "0.10.25",
+    "changed_files": [
+      {
+        "path": "Cargo.lock",
+        "additions": 1,
+        "deletions": 1,
+        "status": "modified"
+      },
+      {
+        "path": "crates/zuse",
+        "additions": 1,
+        "deletions": 1,
+        "status": "modified"
+      },
+      {
+        "path": "docs/dependencies.md",
+        "additions": 2,
+        "deletions": 2,
+        "status": "modified"
+      },
+      {
+        "path": "docs/release-notes-0.10.25.md",
+        "additions": 1,
+        "deletions": 1,
+        "status": "modified"
+      }
+    ]
+  },
+  "lock": {
+    "byte_change_only_in_one_source_sha": true,
+    "before_sha256": "0f213ad0db728a3448d70009141375711b098f4e9fd69b1334cc8217746e4f14",
+    "after_sha256": "0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992",
+    "zuse_before": {
+      "name": "zuse-computer",
+      "version": "0.3.0",
+      "source": "git+https://github.com/LIghtJUNction/zuse.git#830fcefd2277cbba46536c67d206f29058ba7fb3",
+      "dependencies": [
+        "z64",
+        "zclap",
+        "zmcpio",
+        "zsys"
+      ]
+    },
+    "zuse_after": {
+      "name": "zuse-computer",
+      "version": "0.3.0",
+      "source": "git+https://github.com/LIghtJUNction/zuse.git#ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc",
+      "dependencies": [
+        "z64",
+        "zclap",
+        "zmcpio",
+        "zsys"
+      ]
+    },
+    "other_internal_git_repositories_unchanged": {
+      "https://github.com/LIghtJUNction/z64.git": [
+        "7e9cff67beae2c484f8b9749b83ae24a1d0e1bbd"
+      ],
+      "https://github.com/LIghtJUNction/zcall.git": [
+        "199678d08104bed588e5d10b2c0634a47d7c8417"
+      ],
+      "https://github.com/LIghtJUNction/zclap.git": [
+        "4d87f3ae3743e81509d5ac5500909955667c860f"
+      ],
+      "https://github.com/LIghtJUNction/zconv.git": [
+        "0af1f7eb0766ff0ce9db5cee7c6184eff511a8c1"
+      ],
+      "https://github.com/LIghtJUNction/zguard.git": [
+        "6772b932a65e18f64e13591dee6edb2f6b099406"
+      ],
+      "https://github.com/LIghtJUNction/zharness.git": [
+        "fb2948f78467dd92b216aabda6f18a5645f0e7f6"
+      ],
+      "https://github.com/LIghtJUNction/zmcpio.git": [
+        "04bb6cd05c5295ab41a892a76cbef10b8ac07402"
+      ],
+      "https://github.com/LIghtJUNction/zplugin.git": [
+        "592a1be623b81a775026c470e6f0efe91fcf78f3"
+      ],
+      "https://github.com/LIghtJUNction/zsys.git": [
+        "808fcfdb73584ca7ca122e20b76f0209f56ab0f7"
+      ],
+      "https://github.com/LIghtJUNction/ztuio.git": [
+        "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e"
+      ]
+    },
+    "other_packages_versions_sources_checksums_and_dependencies_unchanged": true
+  },
+  "gitlinks": {
+    "crates/zharness": {
+      "before": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "after": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "checkout": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "clean": true
+    },
+    "crates/zplugin": {
+      "before": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "after": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "checkout": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "clean": true
+    },
+    "crates/ztuio": {
+      "before": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "after": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "checkout": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "clean": true
+    },
+    "crates/zuse": {
+      "before": "830fcefd2277cbba46536c67d206f29058ba7fb3",
+      "after": "ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc",
+      "checkout": "ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc",
+      "clean": true
+    }
+  },
+  "protected_manifest_and_h2": {
+    "Cargo.toml": {
+      "before": {
+        "blob": "9e51d222b8049615691a6830e0447ec275e27058",
+        "bytes": 10109,
+        "sha256": "c7e9fa819512800dfee8704f22b4c2d0db74713622a0e0d82be6dea96007e8d1"
+      },
+      "after": {
+        "blob": "9e51d222b8049615691a6830e0447ec275e27058",
+        "bytes": 10109,
+        "sha256": "c7e9fa819512800dfee8704f22b4c2d0db74713622a0e0d82be6dea96007e8d1"
+      },
+      "byte_identical": true
+    },
+    ".github/workflows/release.yml": {
+      "before": {
+        "blob": "41968605ad5d459d07ae599fccb1fb3d89a848d8",
+        "bytes": 24312,
+        "sha256": "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"
+      },
+      "after": {
+        "blob": "41968605ad5d459d07ae599fccb1fb3d89a848d8",
+        "bytes": 24312,
+        "sha256": "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"
+      },
+      "byte_identical": true
+    },
+    ".github/workflows/ci.yml": {
+      "before": {
+        "blob": "e4bad0fe9c19f451cd597678a4e8c7cdc9bedfce",
+        "bytes": 14941,
+        "sha256": "d6d920faddfa8840a1ec4b37d54fddb6d169335139fa1bf241d04d716a753873"
+      },
+      "after": {
+        "blob": "e4bad0fe9c19f451cd597678a4e8c7cdc9bedfce",
+        "bytes": 14941,
+        "sha256": "d6d920faddfa8840a1ec4b37d54fddb6d169335139fa1bf241d04d716a753873"
+      },
+      "byte_identical": true
+    },
+    ".github/workflows/deploy-server.yml": {
+      "before": {
+        "blob": "a550ffbfb4b915af8d6922bdf0f05ba5c58763ca",
+        "bytes": 4499,
+        "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+      },
+      "after": {
+        "blob": "a550ffbfb4b915af8d6922bdf0f05ba5c58763ca",
+        "bytes": 4499,
+        "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+      },
+      "byte_identical": true
+    },
+    "scripts/release.py": {
+      "before": {
+        "blob": "1197f9b919f6fdfbbbb339a859fb50e63d17cfd9",
+        "bytes": 65061,
+        "sha256": "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"
+      },
+      "after": {
+        "blob": "1197f9b919f6fdfbbbb339a859fb50e63d17cfd9",
+        "bytes": 65061,
+        "sha256": "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"
+      },
+      "byte_identical": true
+    },
+    "scripts/install.sh": {
+      "before": {
+        "blob": "7620b1d29b87173492ea9d8b74d846f8d9c3c185",
+        "bytes": 6783,
+        "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+      },
+      "after": {
+        "blob": "7620b1d29b87173492ea9d8b74d846f8d9c3c185",
+        "bytes": 6783,
+        "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+      },
+      "byte_identical": true
+    },
+    "scripts/install.ps1": {
+      "before": {
+        "blob": "eb13725db6cb24c06a137f1ff2129649d2c25515",
+        "bytes": 29653,
+        "sha256": "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"
+      },
+      "after": {
+        "blob": "eb13725db6cb24c06a137f1ff2129649d2c25515",
+        "bytes": 29653,
+        "sha256": "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"
+      },
+      "byte_identical": true
+    }
+  },
+  "upstream": {
+    "canonical_url": "https://github.com/LIghtJUNction/zuse.git",
+    "package": "zuse-computer",
+    "version": "0.3.0",
+    "rust_version": "1.100",
+    "old": {
+      "commit": "830fcefd2277cbba46536c67d206f29058ba7fb3",
+      "tree": "3c110034f10ba5f35b0e18ac6b890d533121a473",
+      "parents": [
+        "687c6349cffb45947bce5ae922f44523acca9465"
+      ],
+      "subject": "Release GitHub binaries from rolling Project Z sources"
+    },
+    "intermediate": {
+      "commit": "ba09bf0723939c9eb4d0d3e0dd9d61ee6cd62e7f",
+      "tree": "b7ac572a342a3be098fe20256265acb87d52e5eb",
+      "parents": [
+        "830fcefd2277cbba46536c67d206f29058ba7fb3"
+      ],
+      "subject": "fix: preserve active keyboard state and add Wayland markers [skip ci]"
+    },
+    "new": {
+      "commit": "ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc",
+      "tree": "d3f22715d767828d3f1ea32f7ddc4086b6096abe",
+      "parents": [
+        "ba09bf0723939c9eb4d0d3e0dd9d61ee6cd62e7f"
+      ],
+      "subject": "feat: add reusable local programs and bounded observation [skip ci]"
+    },
+    "upstream_manifest": {
+      "before": {
+        "blob": "f119b496d7a37efd5bdab6e8f8a37c3e9f3d4d59",
+        "bytes": 1426,
+        "sha256": "9b40ab589644944eec27178eb21bd801adc64fe6b63f2193465fa416af54c136"
+      },
+      "after": {
+        "blob": "938eb0d45ba19508617abf171d07505bbcefdeb6",
+        "bytes": 1456,
+        "sha256": "c112e48ffff19e191a03ec4d6f161da25c55f9598d8b259d65e1d84b0aa1bdd4"
+      },
+      "byte_identical": false
+    },
+    "upstream_lock": {
+      "before": {
+        "blob": "6ee12abdf65ea21dfe5588f1476da08c1bc77694",
+        "bytes": 1138,
+        "sha256": "7abe8013fb42d6da496b7d8cc359bb6caaad156933661e2eb18009afb37781ac"
+      },
+      "after": {
+        "blob": "6ee12abdf65ea21dfe5588f1476da08c1bc77694",
+        "bytes": 1138,
+        "sha256": "7abe8013fb42d6da496b7d8cc359bb6caaad156933661e2eb18009afb37781ac"
+      },
+      "byte_identical": true
+    },
+    "ssmcp_requested_features": [
+      "std"
+    ],
+    "new_optional_vision_enabled_by_ssmcp": false,
+    "cargo_cache_tree_verification": {
+      "source_receipt_reports_verified": true,
+      "independently_recreated_by_reporting_root": false
+    },
+    "manifest_clarification": "The upstream manifest changed, while its lock stayed byte-identical. SSMCP still requests only std with default-features=false; this is not a claim that the complete upstream manifest is unchanged or that all new upstream behavior has runtime coverage."
+  },
+  "documentation": "Updated the current release-note SHA and the current manifest link and matching source SHA in dependencies.md. Historical reports were untouched.",
+  "static_review": {
+    "status": "no blocking mismatch found",
+    "source_scope": "Root read the complete exact single-commit comparison and all four patches. Independent direct reviewer checked the fixed comparison and current SSMCP dependency declaration.",
+    "ssmcp_rust_source_edits": [],
+    "ssmcp_feature_declaration_unchanged": true,
+    "ssmcp_default_features": false,
+    "ssmcp_requested_features": [
+      "std"
+    ],
+    "ssmcp_new_vision_feature_enabled": false,
+    "six_fixed_release_recipes_unchanged": true,
+    "upstream_all_feature_runtime_verification_claimed": false,
+    "product_or_test_execution": false
+  },
+  "narrow_checks": {
+    "schema": "ssmcp-e9-author-checks-v1",
+    "started_utc": "2026-11-21T09:29:06.153014+00:00",
+    "finished_utc": "2026-11-21T09:30:26.952873+00:00",
+    "status": "passed",
+    "exit_code": 0,
+    "error": null,
+    "check_commands_started": 2,
+    "final_35_stage_gate_executed": false,
+    "owned_cleanup_complete": true,
+    "target_lock_acquired": true,
+    "target_lock_held_until_owned_cleanup": true,
+    "stop_signal": null,
+    "source": "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc",
+    "source_tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+    "stages": [
+      {
+        "name": "release-policy",
+        "status": "passed",
+        "source_unchanged": true,
+        "inputs_unchanged": true,
+        "actual": {
+          "argv": [
+            "python3",
+            "-B",
+            "scripts/test_release.py"
+          ],
+          "exit_code": 0,
+          "succeeded": true,
+          "timed_out": false,
+          "error": null,
+          "started_utc": "2026-11-21T09:29:07.013760+00:00",
+          "finished_utc": "2026-11-21T09:29:13.939386+00:00",
+          "duration_seconds": 6.925626118987566,
+          "stop_signal": null
+        },
+        "cleanup": {
+          "all_owned_descendants_reaped": true,
+          "errors": [],
+          "process_count": 280
+        },
+        "source_before": {
+          "head": "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc",
+          "tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+          "sha256": "6dc409bbac607100d593c4a352097e61f16014bbac653c3ee1174d61b13a0b82",
+          "untracked_files": 0
+        },
+        "source_after": {
+          "head": "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc",
+          "tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+          "sha256": "6dc409bbac607100d593c4a352097e61f16014bbac653c3ee1174d61b13a0b82",
+          "untracked_files": 0
+        }
+      },
+      {
+        "name": "cargo-check-tests",
+        "status": "passed",
+        "source_unchanged": true,
+        "inputs_unchanged": true,
+        "actual": {
+          "argv": [
+            "cargo",
+            "check",
+            "--tests",
+            "--locked",
+            "--offline",
+            "--jobs",
+            "1"
+          ],
+          "exit_code": 0,
+          "succeeded": true,
+          "timed_out": false,
+          "error": null,
+          "started_utc": "2026-11-21T09:29:15.093335+00:00",
+          "finished_utc": "2026-11-21T09:30:25.998066+00:00",
+          "duration_seconds": 70.90478020301089,
+          "stop_signal": null
+        },
+        "cleanup": {
+          "all_owned_descendants_reaped": true,
+          "errors": [],
+          "process_count": 51
+        },
+        "source_before": {
+          "head": "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc",
+          "tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+          "sha256": "6dc409bbac607100d593c4a352097e61f16014bbac653c3ee1174d61b13a0b82",
+          "untracked_files": 0
+        },
+        "source_after": {
+          "head": "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc",
+          "tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+          "sha256": "6dc409bbac607100d593c4a352097e61f16014bbac653c3ee1174d61b13a0b82",
+          "untracked_files": 0
+        }
+      }
+    ],
+    "release_policy_test_count": 106,
+    "release_policy_stderr_summary": "Ran 106 tests in 6.726s; OK",
+    "rust_test_execution": false,
+    "outputs": [
+      {
+        "file": "024-release-policy.stdout",
+        "bytes": 4856,
+        "sha256": "5f83459da58f5aaf5506b6e1c58193d13ea90e995f448560c8e796ea2c669368",
+        "full_text_read": true
+      },
+      {
+        "file": "024-release-policy.stderr",
+        "bytes": 890,
+        "sha256": "04e774ee2eafc1427952269ab741445003da6842787e78eec2326a6afbf3c643",
+        "full_text_read": true
+      },
+      {
+        "file": "071-cargo-check-tests.stdout",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "full_text_read": true
+      },
+      {
+        "file": "071-cargo-check-tests.stderr",
+        "bytes": 272,
+        "sha256": "7e79a7b2fb7f33d7e8727a4d54563d2a4a32d78f2da24df06867e915dffa5534",
+        "full_text_read": true
+      }
+    ],
+    "inputs_snapshot": {
+      "bytes": 2077,
+      "sha256": "6c9e9392240301124a8ef08a3a9213e108eb45a08ded04562fc599a54b05c4a7",
+      "before_after_equal": true,
+      "read_scope": "identity and before/after equality fields read; snapshot files not independently reopened"
+    },
+    "results_not_reassigned_to_future_merge": true,
+    "fixture_outputs_are_not_real_tag_crate_or_release_evidence": true
+  },
+  "historical_preflight": {
+    "source": "f69db30c3a9e461c48731c81dbde5a35ea176dc2",
+    "record": {
+      "file": "root-observed-failure.json",
+      "bytes": 16005,
+      "sha256": "1a697591aacc61f4c1ed74e91e7a4308da6928bd049e1ad30b8a7eb0ca1973e1"
+    },
+    "status": "retained original; only zuse default branch differed from then-locked source; preparation stopped before worktree/head freeze/gate",
+    "rewritten": false
+  },
+  "evidence": {
+    "author_launch": {
+      "file": "launch-receipt.json",
+      "bytes": 2012,
+      "sha256": "df1ae1060869c164b9c443d7790915943a9906e5e76a8e30e9dab7eb408d2fae",
+      "read": "full original JSON"
+    },
+    "author_exit": {
+      "file": "author-exit.json",
+      "bytes": 2172,
+      "sha256": "9dc97fd4307d83ef5ecf42730df3a85179fcfc072d41e254d60509fb25800c94",
+      "read": "full original JSON"
+    },
+    "source_changes": {
+      "file": "source-changes-receipt.json",
+      "bytes": 41111,
+      "sha256": "3e212360861c0618623968a44b036d0fb7d60e7309e9a2d2dacd12e31de7c006",
+      "read": "full bytes hashed; selected source identities, lock, gitlinks, protected recipes, upstream metadata, push, clean status, scope and check fields read; not all 82 static command records independently reviewed"
+    },
+    "final_checks": {
+      "file": "result.json",
+      "bytes": 86343,
+      "sha256": "5e9d2a7b50676a18e9b1f4074c30a72f9a99e26813ca1f34956602d3149f728d",
+      "read": "full bytes hashed; selected actual stage/source/input/cleanup fields read; all four original stdout/stderr logs read in full"
+    },
+    "source_snapshot": {
+      "sha256": "6dc409bbac607100d593c4a352097e61f16014bbac653c3ee1174d61b13a0b82",
+      "read": "before/after source identity fields; complete source snapshots not independently reopened"
+    }
+  },
+  "merge": {
+    "pull_request": 167,
+    "url": "https://github.com/LIghtJUNction/ssmcp/pull/167",
+    "merged": true,
+    "merged_at": "2026-11-21T09:35:30Z",
+    "commit_timestamp": "2026-11-21T09:35:29Z",
+    "commit": "64738751cb59af9ef0d467ce34c50f091d2f6fa4",
+    "tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+    "parents": [
+      "f69db30c3a9e461c48731c81dbde5a35ea176dc2",
+      "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc"
+    ],
+    "author_branch_is_real_parent": true,
+    "tree_equals_author_tree": true,
+    "squash_merge": false,
+    "main_ref_observed": "64738751cb59af9ef0d467ce34c50f091d2f6fa4",
+    "root_evidence": "Independently read actual GitHub main ref, immutable merge commit and PR167; commit timestamp and PR merge timestamp are distinct source fields."
+  },
+  "final_acceptance": {
+    "status": "Merged candidate selected; fresh upstream and gate binding preparation in progress; full gate not yet run as of coordinator message",
+    "gate_round": 16,
+    "gate_bound": false,
+    "full_35_stage_gate": "not_run",
+    "runtime_18": "not_run",
+    "ui_24": "not_run",
+    "P1": "not_run",
+    "multi_uid_runtime": "not_run",
+    "version_tree_command": "not_run",
+    "prior_W_results_reassigned": false,
+    "source_branch_checks_reassigned": false,
+    "prior_candidate_ack_reused": false,
+    "selected_source": "64738751cb59af9ef0d467ce34c50f091d2f6fa4",
+    "source_tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+    "fresh_root_and_three_direct_group_window_ack": true,
+    "window_ack_recorded_utc": "2026-11-21T09:40:23Z",
+    "status_snapshot_utc": "2026-11-21T09:39:02Z"
+  },
+  "release_verifier": {
+    "h2_fixed_preparation_commit": "2e8e58ac1a7047900feac8501878b80e64f4bd52",
+    "six_recipe_bytes_unchanged": true,
+    "executed": false,
+    "dispatch_performed": false,
+    "release_publication": false,
+    "server_deployment": false
+  },
+  "control_boundary_design": {
+    "file": "computer-use-permission-boundary-design-draft.md",
+    "status": "future design, statically reviewed only",
+    "bytes": 8416,
+    "sha256": "de11976c202ebec49a54c3fb69e60c90de40336b98879af9cbc31255f7a32532",
+    "operating_system_isolation_implemented": false,
+    "production_permissions_changed": false,
+    "additional_gate16_requirements": false
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "schema": "ssmcp-h2-static-review-v1",
+  "reviewed_recipe": "879ba17fc3ba4bad6a26a85494b79e29acf1938a",
+  "reviewer_scope": "independent full static read of main/provenance and unchanged adapter identity, plus root final byte/AST/interface/recipe check",
+  "reviewed_modules": [
+    {
+      "name": "verify_published_manual_main.py",
+      "bytes": 48867,
+      "sha256": "17f99f187074ab8285c8b386a644c3fd334ccccc8ac2bf0920c074644de6bd26",
+      "ast_parse": true
+    },
+    {
+      "name": "manual_main_provenance.py",
+      "bytes": 43619,
+      "sha256": "fee247f4ddec119be9d7a2fb98b7d4bb455fb1fd45590e1dcd3fc22c3a6822c9",
+      "ast_parse": true
+    },
+    {
+      "name": "dispatch_receipt_adapter.py",
+      "bytes": 14758,
+      "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4",
+      "ast_parse": true
+    }
+  ],
+  "confirmed_blocking_contract_mismatches": 0,
+  "ast_only": true,
+  "modules_imported": false,
+  "helper_executed": false,
+  "tests_run": false,
+  "actual_actions_log_compatibility_verified": false,
+  "formal_publication_verified": false,
+  "reviewed_contract": [
+    "19 jobs: 17 successful and two skipped",
+    "16 public assets, eight manifest records and ten publication documents",
+    "eight required release artifacts; auxiliary CI artifacts may coexist",
+    "full source/lock/gitlink/graph binding and eight artifact byte bridges",
+    "original dispatch and independent native receipt binding preserved",
+    "real S ancestor of P and six pre-reviewed recipe byte identities"
+  ],
+  "limitations": [
+    "Final S, P, tag, run and original dispatch are unbound.",
+    "No Cargo metadata, binary, helper or formal workflow was executed in this static preparation.",
+    "Metadata features/kinds and Git trees without a source gitlink remain formal workflow receipt evidence; upstream latest branches are not re-queried by H2."
+  ]
+}

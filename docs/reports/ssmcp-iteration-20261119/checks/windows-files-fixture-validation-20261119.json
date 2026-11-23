@@ -1,0 +1,101 @@
+{
+  "source": "4fac84fb4f263196f02b8d693bc4de36f552e0c9",
+  "pr_head": "0dc0ce992721ab52c38ca1976b007ed4fb3703c3",
+  "formal_failed_source": "c57fb6d7a25cb5967811180cfc77214ade63c0d2",
+  "platform": "Linux",
+  "scope": "Local test-contract validation; no model calls, live service mutation, or CI dispatch",
+  "previous_attempt": {
+    "status": "interrupted without final exit status; no matching build process remained after client reconnection",
+    "progress": {
+      "source": "4fac84fb4f263196f02b8d693bc4de36f552e0c9",
+      "pr_head": "0dc0ce992721ab52c38ca1976b007ed4fb3703c3",
+      "formal_failed_source": "c57fb6d7a25cb5967811180cfc77214ade63c0d2",
+      "platform": "Linux",
+      "scope": "Only test-contract changes; no model calls, live service mutation or CI dispatch",
+      "steps": [
+        {
+          "name": "fmt",
+          "command": [
+            "cargo",
+            "fmt",
+            "--all",
+            "--check"
+          ],
+          "exit_code": 0,
+          "seconds": 1.915,
+          "test_results": []
+        }
+      ]
+    },
+    "clippy_log_sha256": "3638bdfd74b83e495c8dee7708e9c7dff553b2a037aa075a4682014b7274b829",
+    "evidence_retained": true
+  },
+  "build_coordination": "Separate target directory from the concurrent listener worktree; existing global rustc-serial wrapper preserved",
+  "steps": [
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 268.989,
+      "test_results": []
+    },
+    {
+      "name": "lib-build",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 304.655,
+      "test_results": []
+    },
+    {
+      "name": "files-contracts",
+      "command": [
+        "native_repo/.worktrees/plugin-two-layer-20261119/.local/windows-files-fixture-validation-4fac84fb4f26-resume1/ssmcp-lib-tests",
+        "runtime::native_plugins::files::tests::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 5.09,
+      "test_results": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1370 filtered out; finished in 4.03s"
+      ]
+    }
+  ],
+  "test_binary_sha256": "b45814467c80cd2e79ac2247c9dde147365a443348d4cf8def25b8194afc6497",
+  "files_rs_sha256": "209b04b62c7767c77b5521aaff6a55bb497882a41c7b1e359d11e8f228e04d98",
+  "passed": true,
+  "files_test_output": "\nrunning 3 tests\ntest runtime::native_plugins::files::tests::native_files_cancellation_and_shutdown_release_owned_listener ... ok\ntest runtime::native_plugins::files::tests::native_files_frontends_share_state_without_extending_context_grants ... [EDIT] workspace notes.txt 25 bytes\n[DIFF] workspace +1 / -0 notes.txt\n--- /dev/null\n+++ b/notes.txt\n@@ -0,0 +1,1 @@\n          1 │ +shared workspace contents\n\\ No newline at end of file\n[READ] workspace notes.txt\n[READ] workspace .ssmcp/inputs/paste-3a34530915defa31b8efd8e887bb4280.txt\n[READ] workspace SKILL.md\n[READ] workspace SKILL.md\nok\ntest runtime::native_plugins::files::tests::native_files_host_preserves_large_results_images_and_catalogs ... [EDIT] workspace large.txt 200000 bytes\n[DIFF] workspace +10000 / -0 large.txt\n--- /dev/null\n+++ b/large.txt\n@@ -0,0 +1,10000 @@\n          1 │ +native file payload\n          2 │ +native file payload\n          3 │ +native file payload\n          4 │ +native file payload\n          5 │ +native file payload\n          6 │ +native file payload\n          7 │ +native file payload\n          8 │ +native file payload\n          9 │ +native file payload\n         10 │ +native file payload\n         11 │ +native file payload\n         12 │ +native file payload\n         13 │ +native file payload\n         14 │ +native file payload\n         15 │ +native file payload\n         16 │ +native file payload\n         17 │ +native file payload\n         18 │ +native file payload\n         19 │ +native file payload\n         20 │ +native file payload\n         21 │ +native file payload\n         22 │ +native file payload\n         23 │ +native file payload\n         24 │ +native file payload\n         25 │ +native file payload\n         26 │ +native file payload\n         27 │ +native file payload\n         28 │ +native file payload\n         29 │ +native file payload\n         30 │ +native file payload\n         31 │ +native file payload\n         32 │ +native file payload\n         33 │ +native file payload\n         34 │ +native file payload\n         35 │ +native file payload\n         36 │ +native file payload\n         37 │ +native file payload\n         38 │ +native file payload\n         39 │ +native file payload\n         40 │ +native file payload\n         41 │ +native file payload\n         42 │ +native file payload\n         43 │ +native file payload\n         44 │ +native file payload\n         45 │ +native file payload\n         46 │ +native file payload\n         47 │ +native file payload\n         48 │ +native file payload\n         49 │ +native file payload\n         50 │ +native file payload\n         51 │ +native file payload\n         52 │ +native file payload\n         53 │ +native file payload\n         54 │ +native file payload\n         55 │ +native file payload\n         56 │ +native file payload\n         57 │ +native file payload\n         58 │ +native file payload\n         59 │ +native file payload\n         60 │ +native file payload\n         61 │ +native file payload\n         62 │ +native file payload\n         63 │ +native file payload\n         64 │ +native file payload\n         65 │ +native file payload\n         66 │ +native file payload\n         67 │ +native file payload\n         68 │ +native file payload\n         69 │ +native file payload\n         70 │ +native file payload\n         71 │ +native file payload\n         72 │ +native file payload\n         73 │ +native file payload\n         74 │ +native file payload\n         75 │ +native file payload\n         76 │ +native file payload\n         77 │ +native file payload\n         78 │ +native file payload\n         79 │ +native file payload\n         80 │ +native file payload\n         81 │ +native file payload\n         82 │ +native file payload\n         83 │ +native file payload\n         84 │ +native file payload\n         85 │ +native file payload\n         86 │ +native file payload\n         87 │ +native file payload\n         88 │ +native file payload\n         89 │ +native file payload\n         90 │ +native file payload\n         91 │ +native file payload\n         92 │ +native file payload\n         93 │ +native file payload\n         94 │ +native file payload\n         95 │ +native file payload\n         96 │ +native file payload\n         97 │ +native file payload\n         98 │ +native file payload\n         99 │ +native file payload\n        100 │ +native file payload\n        101 │ +native file payload\n        102 │ +native file payload\n        103 │ +native file payload\n        104 │ +native file payload\n        105 │ +native file payload\n        106 │ +native file payload\n        107 │ +native file payload\n        108 │ +native file payload\n        109 │ +native file payload\n        110 │ +native file payload\n        111 │ +native file payload\n        112 │ +native file payload\n        113 │ +native file payload\n        114 │ +native file payload\n        115 │ +native file payload\n        116 │ +native file payload\n        117 │ +native file payload\n        118 │ +native file payload\n        119 │ +native file payload\n        120 │ +native file payload\n        121 │ +native file payload\n        122 │ +native file payload\n        123 │ +native file payload\n        124 │ +native file payload\n        125 │ +native file payload\n        126 │ +native file payload\n        127 │ +native file payload\n        128 │ +native file payload\n        129 │ +native file payload\n        130 │ +native file payload\n        131 │ +native file payload\n        132 │ +native file payload\n        133 │ +native file payload\n        134 │ +native file payload\n        135 │ +native file payload\n        136 │ +native file payload\n        137 │ +native file payload\n        138 │ +native file payload\n        139 │ +native file payload\n        140 │ +native file payload\n        141 │ +native file payload\n        142 │ +native file payload\n        143 │ +native file payload\n        144 │ +native file payload\n        145 │ +native file payload\n        146 │ +native file payload\n        147 │ +native file payload\n        148 │ +native file payload\n        149 │ +native file payload\n        150 │ +native file payload\n        151 │ +native file payload\n        152 │ +native file payload\n        153 │ +native file payload\n        154 │ +native file payload\n        155 │ +native file payload\n        156 │ +native file payload\n        157 │ +native file payload\n[SAVE] workspace diff saved 210050 bytes · 10003 lines\n       <isolated-files-fixture>/output/output-0d91686d07445ff47d67b09c25a2dc53.log\n       artifact 0d91686d07445ff47d67b09c25a2dc53 · outputs.read\n[SAVE] workspace diff preview folded; full diff: outputs.read · 0d91686d07445ff47d67b09c25a2dc53\n[READ] workspace large.txt\n[READ] workspace image.png\nok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1370 filtered out; finished in 4.03s\n\n",
+  "product_tree_equals_pr_head": true,
+  "logs": {
+    "clippy.log": {
+      "sha256": "7bec9b7cbf8542d065e2b78b10bbd02ea54eabc156148a3950f5d30f8cea6eea",
+      "bytes": 481
+    },
+    "lib-build.log": {
+      "sha256": "8fe4fb5cb7c112fe52ad3d2147374d5cc7bf7adae64af74e4d7750036b4f8a4d",
+      "bytes": 182040
+    },
+    "files-contracts.log": {
+      "sha256": "b183dc9d8d0b82ffe437b9f0efad8f2e6b6aa71583f2efff100e32858d9890a3",
+      "bytes": 7104
+    }
+  },
+  "manifest_warning": "cargo::unused_dependencies: qrcodegen; Clippy exit0",
+  "public_evidence_redactions": [
+    "The private temporary Files fixture directory is replaced by <isolated-files-fixture>; original log hashes and test results are preserved."
+  ]
+}

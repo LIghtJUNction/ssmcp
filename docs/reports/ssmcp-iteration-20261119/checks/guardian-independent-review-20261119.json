@@ -1,0 +1,270 @@
+{
+  "schema_version": 1,
+  "reviewed_driver_commit": "d45aa226b857a29efa41a3b46c36b78c73ecddda",
+  "reviewed_rust_commit": "dfdf512df91b475e8d307630fc986afec1724d4c",
+  "driver_blob_sha": "7199b6fd2a0de8805541c8eee1629d3697a334d6",
+  "driver_sha256": "abad22342cdfa3ab8927ce9eaacc09897638a451f235ff3084d9924a03c2fe13",
+  "source_report": "guardian-same-profile-debug-validation-20261119.json",
+  "source_report_sha256": "29ac90173db6b6e7f3035e2136170e00dd861287be733e9b65a4ff766cb2f728",
+  "baseline_source": "68e52bdd3ea779ee65d32d50db77678e0a6d1dc7",
+  "candidate_source": "68cc1ffcd5524a055e486e2a9648696802497146",
+  "profile": "debug",
+  "method_review": {
+    "scenarios": 2,
+    "pairs_per_scenario": 3,
+    "variant_order": "alternates by pair",
+    "stable_samples_per_measurement": 5,
+    "measurement_runs": 12,
+    "total_samples": 60,
+    "metric": "PSS, private resident memory and swap PSS from smaps_rollup",
+    "groups": [
+      "parent",
+      "guardian",
+      "parent_and_guardian",
+      "owned_tree"
+    ],
+    "data_bounds_unchanged": true,
+    "source_delta": "Guardian implementation and CLI initialization; the additional conversation.rs delta is inside cfg(test).",
+    "limits": [
+      "This is a bounded local debug-profile experiment, not a production-release memory result.",
+      "PSS sharing can also vary with unrelated processes; no improvement is claimed from these samples.",
+      "Each reported measurement is a median of five samples, then compared across three paired repeats."
+    ]
+  },
+  "correctness_review": {
+    "assertions": 524,
+    "isolated_cases": 17,
+    "all_cleanup_confirmed": true,
+    "scope": [
+      "native missing-executable failure",
+      "same guardian PID and real private self-exec mode",
+      "nonzero native exit and stdout/stderr EOF",
+      "setsid and double-fork descendants",
+      "explicit cancellation and timeout",
+      "signal exit",
+      "11-second command survives cancelled bootstrap alarm",
+      "single WSS disconnection and sibling isolation",
+      "abrupt client parent death",
+      "pinned executable inode across atomic replacement",
+      "execveat fallback",
+      "loader exit and loader hang"
+    ],
+    "count_note": "The 524 assertion count includes repeated OAuth and fixture setup checks, not 524 independent lifecycle scenarios.",
+    "faults": [
+      {
+        "fault": "fallback",
+        "start_request_seconds": 0.081,
+        "actual_command_ran": true,
+        "native_rejected": false,
+        "exit_code": 0,
+        "exit_signal": null
+      },
+      {
+        "fault": "exit",
+        "start_request_seconds": 0.08,
+        "actual_command_ran": false,
+        "native_rejected": false,
+        "exit_code": 86,
+        "exit_signal": null
+      },
+      {
+        "fault": "hang",
+        "start_request_seconds": 10.074,
+        "actual_command_ran": false,
+        "native_rejected": false,
+        "exit_code": null,
+        "exit_signal": 14
+      }
+    ]
+  },
+  "paired_comparison": {
+    "default": {
+      "guardian": {
+        "variants": {
+          "baseline": {
+            "repeat_median_pss_kib": [
+              1997,
+              1994,
+              1995
+            ],
+            "median_pss_kib": 1995,
+            "min_pss_kib": 1994,
+            "max_pss_kib": 1997
+          },
+          "candidate": {
+            "repeat_median_pss_kib": [
+              3587,
+              3486,
+              3487
+            ],
+            "median_pss_kib": 3487,
+            "min_pss_kib": 3486,
+            "max_pss_kib": 3587
+          }
+        },
+        "paired_delta_pss_kib": [
+          1590,
+          1492,
+          1492
+        ],
+        "median_paired_delta_pss_kib": 1492
+      },
+      "parent_and_guardian": {
+        "variants": {
+          "baseline": {
+            "repeat_median_pss_kib": [
+              21351,
+              21457,
+              21246
+            ],
+            "median_pss_kib": 21351,
+            "min_pss_kib": 21246,
+            "max_pss_kib": 21457
+          },
+          "candidate": {
+            "repeat_median_pss_kib": [
+              22877,
+              22515,
+              22818
+            ],
+            "median_pss_kib": 22818,
+            "min_pss_kib": 22515,
+            "max_pss_kib": 22877
+          }
+        },
+        "paired_delta_pss_kib": [
+          1526,
+          1058,
+          1572
+        ],
+        "median_paired_delta_pss_kib": 1526
+      },
+      "owned_tree": {
+        "variants": {
+          "baseline": {
+            "repeat_median_pss_kib": [
+              40436,
+              40600,
+              40304
+            ],
+            "median_pss_kib": 40436,
+            "min_pss_kib": 40304,
+            "max_pss_kib": 40600
+          },
+          "candidate": {
+            "repeat_median_pss_kib": [
+              41138,
+              41218,
+              41174
+            ],
+            "median_pss_kib": 41174,
+            "min_pss_kib": 41138,
+            "max_pss_kib": 41218
+          }
+        },
+        "paired_delta_pss_kib": [
+          702,
+          618,
+          870
+        ],
+        "median_paired_delta_pss_kib": 702
+      }
+    },
+    "small_output": {
+      "guardian": {
+        "variants": {
+          "baseline": {
+            "repeat_median_pss_kib": [
+              2397,
+              2413,
+              2422
+            ],
+            "median_pss_kib": 2413,
+            "min_pss_kib": 2397,
+            "max_pss_kib": 2422
+          },
+          "candidate": {
+            "repeat_median_pss_kib": [
+              3421,
+              3430,
+              3516
+            ],
+            "median_pss_kib": 3430,
+            "min_pss_kib": 3421,
+            "max_pss_kib": 3516
+          }
+        },
+        "paired_delta_pss_kib": [
+          1024,
+          1017,
+          1094
+        ],
+        "median_paired_delta_pss_kib": 1024
+      },
+      "parent_and_guardian": {
+        "variants": {
+          "baseline": {
+            "repeat_median_pss_kib": [
+              22462,
+              22108,
+              22332
+            ],
+            "median_pss_kib": 22332,
+            "min_pss_kib": 22108,
+            "max_pss_kib": 22462
+          },
+          "candidate": {
+            "repeat_median_pss_kib": [
+              23571,
+              23209,
+              23367
+            ],
+            "median_pss_kib": 23367,
+            "min_pss_kib": 23209,
+            "max_pss_kib": 23571
+          }
+        },
+        "paired_delta_pss_kib": [
+          1109,
+          1101,
+          1035
+        ],
+        "median_paired_delta_pss_kib": 1101
+      },
+      "owned_tree": {
+        "variants": {
+          "baseline": {
+            "repeat_median_pss_kib": [
+              41640,
+              41047,
+              41688
+            ],
+            "median_pss_kib": 41640,
+            "min_pss_kib": 41047,
+            "max_pss_kib": 41688
+          },
+          "candidate": {
+            "repeat_median_pss_kib": [
+              41965,
+              41571,
+              42100
+            ],
+            "median_pss_kib": 41965,
+            "min_pss_kib": 41571,
+            "max_pss_kib": 42100
+          }
+        },
+        "paired_delta_pss_kib": [
+          325,
+          524,
+          412
+        ],
+        "median_paired_delta_pss_kib": 412
+      }
+    }
+  },
+  "memory_goal_met": false,
+  "decision": "Retain the experiment as evidence; do not merge or publish its candidate CLI. Rebuild the formal release from main without this experiment.",
+  "production_modified": false,
+  "additional_tests_started_by_reviewer": false
+}

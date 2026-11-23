@@ -1,0 +1,368 @@
+{
+  "schema": "ssmcp-main-c53-source-identity-v1",
+  "observed_utc": "2026-11-20T19:14:33.467009+00:00",
+  "reviewer_task": "/root/baseline_failure_review",
+  "scope": {
+    "comparison_is_for_pinned_main_snapshot": true,
+    "git_objects_read_only": true,
+    "fetch_executed": false,
+    "checkout_executed": false,
+    "refs_modified": false,
+    "tests_builds_pty_ci_executed": 0,
+    "previous_five_artifacts_reverified": false,
+    "only_output_mutation": "this independent identity receipt"
+  },
+  "main_commit": {
+    "sha": "cbe3d0ef1f7fbe1a26ebe367edc646cd8ef429c3",
+    "tree": "ce92d08ad71dc1d7a26c68725f45a64ff6351763",
+    "parents": [
+      "cace37c7f7c8c2ad60c9ec712d39f77bc172b88b"
+    ],
+    "subject": "Finish interaction fixes and verified dependency updates (#152)",
+    "author_date_utc": "2026-11-20T19:09:18Z",
+    "committer_date_utc": "2026-11-20T19:09:18Z",
+    "canonical_url": "https://github.com/LIghtJUNction/ssmcp/commit/cbe3d0ef1f7fbe1a26ebe367edc646cd8ef429c3",
+    "github_plugin_and_native_git_metadata_match": true
+  },
+  "baseline_commit": {
+    "sha": "c53c5ea681cb0840f1c41c9e8d31489abac4fd37",
+    "tree": "6f6fce9c24f7b4042854a7ee5b3920faf6333f3e"
+  },
+  "conclusion": {
+    "source_identical": true,
+    "cargo_manifest_and_lock_identical": true,
+    "four_gitlinks_identical": true,
+    "entire_scripts_subtree_identical": true,
+    "tests_examples_and_workflows_identical": true,
+    "complete_repository_tree_identical": false,
+    "commit_identity_identical": false,
+    "only_complete_tree_difference": "added docs/reports/source-dependency-compat-20261121.md",
+    "c53_build_receipt_rebound_to_main": false,
+    "main_acceptance_claimed": false
+  },
+  "full_tree_comparison": {
+    "base_entries": 1062,
+    "changed_count": 1,
+    "changes": [
+      {
+        "base": null,
+        "head": {
+          "mode": "100644",
+          "oid": "24b205a9b18eb6c106b482f48741d989b6f19488",
+          "type": "blob"
+        },
+        "path": "docs/reports/source-dependency-compat-20261121.md"
+      }
+    ],
+    "head_entries": 1063
+  },
+  "compared_subtrees": {
+    ".github": {
+      "base_tree": "7a4472b1532bdc1982be332cb8f6e82986a615f5",
+      "head_tree": "7a4472b1532bdc1982be332cb8f6e82986a615f5",
+      "equal": true,
+      "counts": {
+        "base": 5,
+        "head": 5
+      }
+    },
+    "crates": {
+      "base_tree": "3f9dc7c9473cd4dfd7eee220acc53694367478f8",
+      "head_tree": "3f9dc7c9473cd4dfd7eee220acc53694367478f8",
+      "equal": true
+    },
+    "docs": {
+      "base_tree": "7b7f9f1b7a9176d6490066cc8480b97c8196dbc1",
+      "head_tree": "5dff967446abfc9ed252e3214fbbfd1133ac268b",
+      "equal": false
+    },
+    "examples": {
+      "base_tree": "62398d75c03b0cd5a47803043e61c041a6e10554",
+      "head_tree": "62398d75c03b0cd5a47803043e61c041a6e10554",
+      "equal": true,
+      "counts": {
+        "base": 1,
+        "head": 1
+      }
+    },
+    "scripts": {
+      "base_tree": "e726005d50f5b70c4bf9abb43c8f5c5e81231032",
+      "head_tree": "e726005d50f5b70c4bf9abb43c8f5c5e81231032",
+      "equal": true,
+      "counts": {
+        "base": 99,
+        "head": 99
+      }
+    },
+    "src": {
+      "base_tree": "5a6190a52992182b078611f051f55d0935f1ad1f",
+      "head_tree": "5a6190a52992182b078611f051f55d0935f1ad1f",
+      "equal": true,
+      "counts": {
+        "base": 338,
+        "head": 338
+      }
+    },
+    "tests": {
+      "base_tree": "748e46450ac9f3b1419155ce562b1e710c335f05",
+      "head_tree": "748e46450ac9f3b1419155ce562b1e710c335f05",
+      "equal": true,
+      "counts": {
+        "base": 34,
+        "head": 34
+      }
+    }
+  },
+  "cargo": {
+    ".gitmodules": {
+      "mode": "100644",
+      "base_blob": "72c5d9dd141d149549133a0b1ecc3b5f3203aa77",
+      "head_blob": "72c5d9dd141d149549133a0b1ecc3b5f3203aa77",
+      "equal": true
+    },
+    "Cargo.lock": {
+      "mode": "100644",
+      "base_blob": "81933ac3af5746370494945a592a032aa801eae9",
+      "head_blob": "81933ac3af5746370494945a592a032aa801eae9",
+      "equal": true
+    },
+    "Cargo.toml": {
+      "mode": "100644",
+      "base_blob": "b7e8f32c3955839de09eec453de7e5058c500e00",
+      "head_blob": "b7e8f32c3955839de09eec453de7e5058c500e00",
+      "equal": true
+    }
+  },
+  "gitlinks": {
+    "crates/zharness": {
+      "mode": "160000",
+      "base_commit": "cb63a9a0aa163214c6062664cd62fefb357be5a8",
+      "head_commit": "cb63a9a0aa163214c6062664cd62fefb357be5a8",
+      "equal": true
+    },
+    "crates/zplugin": {
+      "mode": "160000",
+      "base_commit": "cf02c1d9db575b92b36297dfe1fde72de9ee51e4",
+      "head_commit": "cf02c1d9db575b92b36297dfe1fde72de9ee51e4",
+      "equal": true
+    },
+    "crates/ztuio": {
+      "mode": "160000",
+      "base_commit": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "head_commit": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "equal": true
+    },
+    "crates/zuse": {
+      "mode": "160000",
+      "base_commit": "0fc2d9cb61feb27c49a797e2dcaa8f805ec89460",
+      "head_commit": "0fc2d9cb61feb27c49a797e2dcaa8f805ec89460",
+      "equal": true
+    }
+  },
+  "acceptance_helpers": {
+    "scripts/e2e.py": {
+      "exists_in_both": true,
+      "equal": true,
+      "base_blob": "9330396e876406a4c259b30dab67afff3eae8f78",
+      "head_blob": "9330396e876406a4c259b30dab67afff3eae8f78",
+      "mode": "100644"
+    },
+    "scripts/e2e_account_gateway.py": {
+      "exists_in_both": true,
+      "equal": true,
+      "base_blob": "65d46dd51970d86467c1133e99dece0f37342d81",
+      "head_blob": "65d46dd51970d86467c1133e99dece0f37342d81",
+      "mode": "100644"
+    },
+    "scripts/e2e_account_relay.py": {
+      "exists_in_both": true,
+      "equal": true,
+      "base_blob": "2ffcec90038be088082085543e06e4a3d411e394",
+      "head_blob": "2ffcec90038be088082085543e06e4a3d411e394",
+      "mode": "100644"
+    },
+    "scripts/e2e_client_ui.py": {
+      "exists_in_both": true,
+      "equal": true,
+      "base_blob": "2e57c878e9d97708a63d25830088f597cc7a5732",
+      "head_blob": "2e57c878e9d97708a63d25830088f597cc7a5732",
+      "mode": "100644"
+    },
+    "scripts/e2e_composer.py": {
+      "exists_in_both": true,
+      "equal": true,
+      "base_blob": "020d371b92136b83b662f0c8ee1a7efdd3df86cf",
+      "head_blob": "020d371b92136b83b662f0c8ee1a7efdd3df86cf",
+      "mode": "100644"
+    },
+    "scripts/e2e_dashboard.py": {
+      "exists_in_both": true,
+      "equal": true,
+      "base_blob": "93064ef7bc24a54d5e8203104bb9cf31336a1bc3",
+      "head_blob": "93064ef7bc24a54d5e8203104bb9cf31336a1bc3",
+      "mode": "100644"
+    },
+    "scripts/e2e_file_paste.py": {
+      "exists_in_both": true,
+      "equal": true,
+      "base_blob": "34ac0995989bacb5d3873bdd16d718dd53b59a5a",
+      "head_blob": "34ac0995989bacb5d3873bdd16d718dd53b59a5a",
+      "mode": "100755"
+    },
+    "scripts/e2e_input_history.py": {
+      "exists_in_both": true,
+      "equal": true,
+      "base_blob": "4ae2315293b75d7910f76176c3f5d1a879484292",
+      "head_blob": "4ae2315293b75d7910f76176c3f5d1a879484292",
+      "mode": "100755"
+    },
+    "scripts/e2e_interactions.py": {
+      "exists_in_both": true,
+      "equal": true,
+      "base_blob": "f4cee53350a52ea9239264d16ad581c09bccca9b",
+      "head_blob": "f4cee53350a52ea9239264d16ad581c09bccca9b",
+      "mode": "100755"
+    },
+    "scripts/e2e_paste_performance.py": {
+      "exists_in_both": false,
+      "equal": true,
+      "base_blob": null,
+      "head_blob": null,
+      "mode": null
+    },
+    "scripts/e2e_time_wait.py": {
+      "exists_in_both": true,
+      "equal": true,
+      "base_blob": "465c45270f7ca1e719fdf3b33aeab27a2e559c38",
+      "head_blob": "465c45270f7ca1e719fdf3b33aeab27a2e559c38",
+      "mode": "100644"
+    },
+    "scripts/release.py": {
+      "exists_in_both": true,
+      "equal": true,
+      "base_blob": "7b5b1f8bfb68665af8ac2475e5580416b20b28c7",
+      "head_blob": "7b5b1f8bfb68665af8ac2475e5580416b20b28c7",
+      "mode": "100644"
+    },
+    "scripts/test_release.py": {
+      "exists_in_both": true,
+      "equal": true,
+      "base_blob": "321329393d0dd5db2fe7faa73e99f85a9e78428f",
+      "head_blob": "321329393d0dd5db2fe7faa73e99f85a9e78428f",
+      "mode": "100644"
+    }
+  },
+  "added_document": {
+    "bytes": 2433,
+    "git_blob": "24b205a9b18eb6c106b482f48741d989b6f19488",
+    "headings": [
+      "# Source dependency compatibility — 2026-11-21",
+      "## Changes",
+      "## Local validation"
+    ],
+    "path": "docs/reports/source-dependency-compat-20261121.md",
+    "sha256": "175c94f35c422b8e0867d1819531edf812ef3fbd7eead8561fbd951aed3aaa96"
+  },
+  "main_first_parent_delta": {
+    "changed_count": 83,
+    "files": [
+      "M\t.github/workflows/release.yml",
+      "M\tCargo.lock",
+      "M\tCargo.toml",
+      "M\tcrates/zharness",
+      "M\tcrates/zplugin",
+      "M\tcrates/zuse",
+      "M\tdocs/dependencies.md",
+      "A\tdocs/dependency-migration-20261120.md",
+      "M\tscripts/e2e.py",
+      "M\tscripts/e2e_account_compat.py",
+      "M\tscripts/e2e_local.py",
+      "A\tscripts/e2e_time_wait.py",
+      "M\tscripts/release.py",
+      "M\tscripts/test_release.py",
+      "M\tsrc/backend/codex.rs",
+      "M\tsrc/backend/opencode.rs",
+      "M\tsrc/broker.rs",
+      "A\tsrc/broker/wait_display.rs",
+      "M\tsrc/client.rs",
+      "M\tsrc/client/account.rs",
+      "M\tsrc/client/account/named_tests.rs",
+      "M\tsrc/client/composer.rs",
+      "M\tsrc/client/interface.rs",
+      "M\tsrc/client/interface/questions/delivery.rs",
+      "M\tsrc/client/messaging/groups.rs",
+      "M\tsrc/client/references.rs",
+      "M\tsrc/client/relay.rs",
+      "M\tsrc/client/render/diagnostics.rs",
+      "M\tsrc/client/steering.rs",
+      "M\tsrc/client/terminal.rs",
+      "M\tsrc/client/terminal/conversation.rs",
+      "M\tsrc/client/terminal/conversation/tests/tool_groups.rs",
+      "A\tsrc/client/terminal/conversation/timing.rs",
+      "A\tsrc/client/terminal/conversation/timing/tests.rs",
+      "M\tsrc/client/terminal/conversation/user_wait.rs",
+      "M\tsrc/client/terminal/events.rs",
+      "M\tsrc/client/terminal/events/read_activity.rs",
+      "M\tsrc/client/terminal/events/tool_summaries/tests.rs",
+      "M\tsrc/client/trust/tests.rs",
+      "M\tsrc/client/zero/install/upgrade.rs",
+      "M\tsrc/client_downloads.rs",
+      "M\tsrc/code_mode.rs",
+      "M\tsrc/code_mode/user_wait.rs",
+      "M\tsrc/commerce/pancake/tests.rs",
+      "M\tsrc/commerce/store.rs",
+      "M\tsrc/context.rs",
+      "M\tsrc/device.rs",
+      "D\tsrc/digest.rs",
+      "A\tsrc/hex.rs",
+      "M\tsrc/http.rs",
+      "M\tsrc/http/await_tool.rs",
+      "M\tsrc/http/question_delivery_tests.rs",
+      "A\tsrc/http/question_delivery_tests/time_primitives.rs",
+      "A\tsrc/http/question_delivery_tests/wait_display.rs",
+      "M\tsrc/http/tool_summaries.rs",
+      "M\tsrc/lib.rs",
+      "M\tsrc/messaging/broadcast.rs",
+      "M\tsrc/oauth_github_tests.rs",
+      "M\tsrc/observability.rs",
+      "M\tsrc/output.rs",
+      "M\tsrc/portal/assets.rs",
+      "M\tsrc/portal/frontend.rs",
+      "M\tsrc/portal/frontend/tests.rs",
+      "M\tsrc/portal/guide.rs",
+      "M\tsrc/pty.rs",
+      "M\tsrc/registry.rs",
+      "M\tsrc/runtime.rs",
+      "M\tsrc/runtime/capabilities.rs",
+      "A\tsrc/runtime/time.rs",
+      "A\tsrc/runtime/time/relay.rs",
+      "A\tsrc/runtime/time/tests.rs",
+      "M\tsrc/session.rs",
+      "M\tsrc/steering.rs",
+      "M\tsrc/steering/waiting.rs",
+      "M\tsrc/wire.rs",
+      "A\tsrc/wire/wait_display.rs",
+      "M\tsrc/workspace.rs",
+      "M\ttests/collaboration.rs",
+      "M\ttests/oauth_security.rs",
+      "M\ttests/resources.rs",
+      "A\ttests/support/http_client.rs",
+      "M\ttests/two_tools.rs",
+      "M\ttests/workspace_bridge.rs"
+    ],
+    "parent": "cace37c7f7c8c2ad60c9ec712d39f77bc172b88b"
+  },
+  "interpretation": [
+    "The 83 changed paths in the main commit's first-parent diff describe integration relative to cace37c7f7c8c2ad60c9ec712d39f77bc172b88b. They are not 83 changes relative to the built c53 baseline.",
+    "The direct c53-to-cbe comparison covers every recursive tree entry, including modes, object types and object IDs. Only one documentation file is added.",
+    "The previously verified build receipt remains bound to c53 and its tree. Source equality does not make the distinct cbe commit/tree the build's recorded identity.",
+    "scripts/e2e_paste_performance.py is absent in both pinned commits. Any externally frozen paste-performance driver must retain its separate binding.",
+    "No claim about current mutable main beyond the supplied pinned cbe snapshot, current worktree state, untracked files, runtime behavior or newly built binaries is made."
+  ],
+  "evidence": {
+    "github_git_commit_endpoint": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/commits/cbe3d0ef1f7fbe1a26ebe367edc646cd8ef429c3",
+    "native_complete_comparison_job": "1c828d2fc3165848bd0b270a25c57148-1d3",
+    "full_output_read": true,
+    "used_old_356_main_identity_claim": false
+  }
+}

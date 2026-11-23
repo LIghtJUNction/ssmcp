@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "status": "definitions_prepared_all_final_bindings_pending",
+  "ci_reuse": [
+    {
+      "case": "client_ui",
+      "path": "target/acceptance/client-ui/ui-smoke.json",
+      "fields": "ok, count, checks; count must equal len(checks)",
+      "cleanup": "existing checks: termios restored, normal exit, mouse mode off; no independent cleanup object",
+      "final_result": null
+    },
+    {
+      "case": "canvas_logs",
+      "path": "target/acceptance/canvas-logs/report.json",
+      "fields": "status, check_count, checks; check_count must equal len(checks)",
+      "cleanup": "original terminal-restoration assertions; no uniform top-level cleanup",
+      "final_result": null
+    },
+    {
+      "case": "composer",
+      "path": "target/acceptance/composer.json",
+      "fields": "status, len(checks), metrics, duration_seconds",
+      "cleanup": "retain original checks/metrics; do not invent cleanup bool",
+      "final_result": null
+    },
+    {
+      "case": "questions",
+      "path": "target/acceptance/questions.json",
+      "fields": "status, len(checks), metrics, duration_seconds",
+      "cleanup": "retain original checks/metrics; do not invent cleanup bool",
+      "final_result": null
+    },
+    {
+      "case": "input_history",
+      "path": "target/acceptance/input-history/report.json",
+      "fields": "status, len(checks), metrics, duration_seconds",
+      "cleanup": "retain original checks/metrics; do not invent cleanup bool",
+      "final_result": null
+    },
+    {
+      "case": "WorkerWindows",
+      "path": "target/acceptance/worker-windows-*/report.json",
+      "fields": "status, len(checks), source_revision, script_sha256, executables, cases; case count is not check count",
+      "cleanup": "cleanup.errors and cleanup.live_owned_processes",
+      "final_result": null
+    },
+    {
+      "case": "account-names",
+      "path": "$RUNNER_TEMP/ssmcp-account-names-report.json",
+      "fields": "UNKNOWN in existing read records",
+      "cleanup": "UNKNOWN",
+      "final_result": null
+    }
+  ],
+  "ci_timeout": {
+    "linux_job_minutes": 30,
+    "ui_step": "no explicit per-step timeout in read definition",
+    "account_names_step": "no explicit per-step timeout in read definition"
+  },
+  "native": {
+    "cases": [
+      "agent_panel",
+      "at_completion"
+    ],
+    "controllers": [
+      {
+        "name": "run_case_archive.py",
+        "bytes": 25115,
+        "sha256": "d35efc37e54b05aea4ba3685c93c4ec0eed2e16085ac7d4c56eaec550f107b14"
+      },
+      {
+        "name": "run_cli_archive.py",
+        "bytes": 8123,
+        "sha256": "0b8e13f40a4fb0c63b2d472d6d66dfef0431bc79fce1cb1c1fc9d9af027d579e"
+      }
+    ],
+    "execution_allowed": false,
+    "pty_child_seconds": 840,
+    "planned_outer_pty_seconds": 900,
+    "cli_cases": 6,
+    "help_cases": 1,
+    "total_cli_receipt_rows": 7,
+    "cli_each_seconds": 10,
+    "planned_outer_cli_seconds": 180,
+    "final_result": null
+  },
+  "visual": {
+    "fixture": "client::terminal::worker::tests::worker_layout_visual_fixture",
+    "expected_from_source": 8,
+    "manager_operations_in_fixture": "empty; frames alone do not prove live managerbar interactions",
+    "stage_path": "unknown",
+    "original_per_invocation_timeout": "unknown",
+    "final_result": null
+  },
+  "worker_windows_frame_pointers": [
+    "/cases/manager-any-all/parent_frame_after_completion",
+    "/cases/manager-wait-deadlines/native_timeout/first_frame",
+    "/cases/manager-wait-deadlines/native_timeout/later_frame",
+    "/cases/manager-wait-deadlines/native_timeout/parent_frame",
+    "/cases/manager-wait-deadlines/native_timeout/targets_frame",
+    "/cases/manager-wait-deadlines/native_timeout/terminal_frame",
+    "/cases/manager-wait-deadlines/outer_timeout/terminal_frame"
+  ],
+  "binding_required": [
+    "final source SHA/tree/source_digest",
+    "raw successful CI run/attempt/job with relevant steps",
+    "actual kit/archive hashes and original manifest/index",
+    "five binary descriptors and helper pins",
+    "matching report artifact/member provenance",
+    "original owner runtime allocation",
+    "actual cleanup and before/after identities"
+  ],
+  "boundaries": [
+    "statistics preview layout is not real-account evidence",
+    "protocol response objects are not cell frames",
+    "unit resource chart checks are not measured host resource evidence",
+    "old17 count is stale; final exact test rows must be recounted"
+  ]
+}

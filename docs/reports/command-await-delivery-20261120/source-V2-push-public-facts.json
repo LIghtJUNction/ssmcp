@@ -1,0 +1,232 @@
+{
+  "schema": "ssmcp-native-recipient-V2-public-source-facts-v1",
+  "observed_utc": "2026-11-21T05:03:17Z",
+  "scope": "Immutable GitHub source comparison and necessary patches only; no build, test, product, helper or Gate execution.",
+  "source": {
+    "baseline": {
+      "label": "U",
+      "commit": "784370b5fe1b817c788273a5f7b1ab826c743965"
+    },
+    "first_fix": {
+      "label": "V1",
+      "commit": "18f43d69715538582ddc2806434009170f188e3c",
+      "tree": "00e632183775ee7e7e38c64177e68734679250d6",
+      "parent": "784370b5fe1b817c788273a5f7b1ab826c743965"
+    },
+    "current": {
+      "label": "V2",
+      "commit": "f42baae1d5227bd6db8315aef778160b80b57274",
+      "tree": "64b40eb8a3e0188076cf376229d3d87074d27dcc",
+      "parent": "18f43d69715538582ddc2806434009170f188e3c"
+    },
+    "github_object_chain_independently_read": true,
+    "public_commit_visible": true,
+    "normal_push_and_freeze": "Reported by the source owner; native push/freeze receipts were not independently re-read for this source summary."
+  },
+  "comparison": {
+    "status": "ahead",
+    "ahead_by": 2,
+    "behind_by": 0,
+    "commit_count": 2,
+    "changed_files": [
+      {
+        "path": "src/client/messaging.rs",
+        "additions": 123,
+        "deletions": 15,
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/messaging.rs"
+      },
+      {
+        "path": "src/client/messaging/test_connection.rs",
+        "additions": 22,
+        "deletions": 0,
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/messaging/test_connection.rs"
+      },
+      {
+        "path": "src/client/messaging/tests.rs",
+        "additions": 95,
+        "deletions": 0,
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/messaging/tests.rs"
+      },
+      {
+        "path": "src/client/terminal.rs",
+        "additions": 4,
+        "deletions": 0,
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/terminal.rs"
+      },
+      {
+        "path": "src/client/terminal/conversation.rs",
+        "additions": 19,
+        "deletions": 2,
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/terminal/conversation.rs"
+      },
+      {
+        "path": "src/client/terminal/conversation/canvas.rs",
+        "additions": 1,
+        "deletions": 0,
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/terminal/conversation/canvas.rs"
+      },
+      {
+        "path": "src/client/terminal/conversation/messaging.rs",
+        "additions": 409,
+        "deletions": 17,
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/terminal/conversation/messaging.rs"
+      }
+    ],
+    "rust_files_changed": 7,
+    "additions": 673,
+    "deletions": 34,
+    "changes_outside_src": false,
+    "session_groups_script_changed": false,
+    "release_recipe_changed": false
+  },
+  "behavior_from_source": [
+    {
+      "topic": "Query-specific directory completion",
+      "observation": "A nonempty explicit query that misses the local directory now waits for the associated List request. The waiter is bound to the messaging connection; an unrelated response does not complete it. Valid exact recipient syntax matches the exact recipient ID rather than a display name.",
+      "files": [
+        "src/client/messaging.rs",
+        "src/client/terminal/conversation/messaging.rs"
+      ]
+    },
+    {
+      "topic": "Bounded confirmation of a pre-query miss",
+      "observation": "If the lookup joined a List that already existed before the query and its result misses, one post-query List is reused or started. The confirmation lookup has no further confirmation token. A fresh miss ends the lookup; no concurrent duplicate refresh is added for that confirmation.",
+      "maximum_query_associated_fresh_confirmations": 1,
+      "files": [
+        "src/client/messaging.rs",
+        "src/client/terminal/conversation/messaging.rs"
+      ]
+    },
+    {
+      "topic": "Cancellation and draft ownership",
+      "observation": "Pending lookup requires the original InputStamp, history owner, content focus and eligible UI state. Keyboard bytes cancel before decoding, including an Escape prefix; editing, submit, recipient change, canvas restore, navigation and layout change cancel pending lookup. A late result must not replace a newer draft or reopen the picker.",
+      "files": [
+        "src/client/terminal.rs",
+        "src/client/terminal/conversation.rs",
+        "src/client/terminal/conversation/canvas.rs",
+        "src/client/terminal/conversation/messaging.rs"
+      ]
+    },
+    {
+      "topic": "Highlighting is separate from selecting and sending",
+      "observation": "Successful lookup highlights the verified recipient's actual merged row. It does not automatically select the recipient or send a message. Only the still-matching explicit command is cleared on successful completion; failure retains the draft.",
+      "files": [
+        "src/client/terminal/conversation/messaging.rs",
+        "src/client/terminal/conversation.rs"
+      ]
+    },
+    {
+      "topic": "Unchanged empty-query limit",
+      "observation": "An empty query with an empty directory still requests a refresh and returns the existing retry notice. This source change is not a claim that an empty /message now waits asynchronously.",
+      "files": [
+        "src/client/terminal/conversation/messaging.rs"
+      ]
+    }
+  ],
+  "tests": {
+    "new_definitions_relative_to_u": 7,
+    "new_definitions_in_v1": 6,
+    "new_definitions_in_v2": 1,
+    "existing_new_definitions_extended_in_v2": 3,
+    "definitions": [
+      {
+        "file": "src/client/messaging/tests.rs",
+        "name": "lookup_waits_for_the_coalesced_quiet_list_even_when_the_directory_is_unchanged",
+        "fully_qualified_name": "client::messaging::tests::lookup_waits_for_the_coalesced_quiet_list_even_when_the_directory_is_unchanged",
+        "introduced_in": "V1",
+        "extended_in_v2": false,
+        "static_coverage": "复用在途quiet List；不被无关Inbox响应提前完成；目录未变化时仍唤醒等待界面。",
+        "execution_result": "not_asserted_by_this_source_review",
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/messaging/tests.rs"
+      },
+      {
+        "file": "src/client/messaging/tests.rs",
+        "name": "lookup_rejects_invalid_and_timed_out_replies_and_does_not_cross_connections",
+        "fully_qualified_name": "client::messaging::tests::lookup_rejects_invalid_and_timed_out_replies_and_does_not_cross_connections",
+        "introduced_in": "V1",
+        "extended_in_v2": false,
+        "static_coverage": "拒绝无效描述符和超时回复；迟到List不替换目录；旧查询不跨连接。",
+        "execution_result": "not_asserted_by_this_source_review",
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/messaging/tests.rs"
+      },
+      {
+        "file": "src/client/terminal/conversation/messaging.rs",
+        "name": "cold_exact_lookup_highlights_merged_process_row_without_selecting_or_sending",
+        "fully_qualified_name": "client::terminal::conversation::messaging::tests::cold_exact_lookup_highlights_merged_process_row_without_selecting_or_sending",
+        "introduced_in": "V1",
+        "extended_in_v2": true,
+        "static_coverage": "旧List未命中后等待新List；精确ID不被同名文本替代；高亮合并后的进程行但不选取或发送，保留草稿与已有组选项。",
+        "execution_result": "not_asserted_by_this_source_review",
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/terminal/conversation/messaging.rs"
+      },
+      {
+        "file": "src/client/terminal/conversation/messaging.rs",
+        "name": "explicit_lookup_reports_fresh_miss_or_failure_without_clearing_the_command",
+        "fully_qualified_name": "client::terminal::conversation::messaging::tests::explicit_lookup_reports_fresh_miss_or_failure_without_clearing_the_command",
+        "introduced_in": "V1",
+        "extended_in_v2": false,
+        "static_coverage": "新鲜目录未命中或查询失败时保留命令、光标及草稿，不产生额外确认请求。",
+        "execution_result": "not_asserted_by_this_source_review",
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/terminal/conversation/messaging.rs"
+      },
+      {
+        "file": "src/client/terminal/conversation/messaging.rs",
+        "name": "coalesced_miss_joins_a_query_after_list_and_finishes_on_its_empty_reply",
+        "fully_qualified_name": "client::terminal::conversation::messaging::tests::coalesced_miss_joins_a_query_after_list_and_finishes_on_its_empty_reply",
+        "introduced_in": "V2",
+        "extended_in_v2": false,
+        "static_coverage": "复用查询后已经发起的List；其空结果终结查找，避免并发重复或无限确认。",
+        "execution_result": "not_asserted_by_this_source_review",
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/terminal/conversation/messaging.rs"
+      },
+      {
+        "file": "src/client/terminal/conversation/messaging.rs",
+        "name": "queued_lookup_reply_cannot_override_escape_navigation_or_a_newer_draft",
+        "fully_qualified_name": "client::terminal::conversation::messaging::tests::queued_lookup_reply_cannot_override_escape_navigation_or_a_newer_draft",
+        "introduced_in": "V1",
+        "extended_in_v2": true,
+        "static_coverage": "确认阶段的就绪回复不能覆盖Escape前缀、导航、新草稿或接收者切换。",
+        "execution_result": "not_asserted_by_this_source_review",
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/terminal/conversation/messaging.rs"
+      },
+      {
+        "file": "src/client/terminal/conversation/messaging.rs",
+        "name": "newer_query_coalesces_the_list_and_consumes_only_its_own_command",
+        "fully_qualified_name": "client::terminal::conversation::messaging::tests::newer_query_coalesces_the_list_and_consumes_only_its_own_command",
+        "introduced_in": "V1",
+        "extended_in_v2": true,
+        "static_coverage": "新查询复用在途List，仅处理自己的查询及命令草稿，不自动选中接收者。",
+        "execution_result": "not_asserted_by_this_source_review",
+        "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/f42baae1d5227bd6db8315aef778160b80b57274/src/client/terminal/conversation/messaging.rs"
+      }
+    ],
+    "counts_are_source_definitions_only": true
+  },
+  "validation_boundary": {
+    "build_result_asserted": false,
+    "test_pass_asserted": false,
+    "gate_pass_asserted": false,
+    "old_u_results_transferred_to_v2": false,
+    "old_paste_ab_or_core_results_transferred": false,
+    "product_source_repair_not_fixture_warmup": true,
+    "report_does_not_add_an_acceptance_gate": true
+  },
+  "sources": [
+    {
+      "kind": "cumulative_compare",
+      "url": "https://github.com/LIghtJUNction/ssmcp/compare/784370b5fe1b817c788273a5f7b1ab826c743965...f42baae1d5227bd6db8315aef778160b80b57274"
+    },
+    {
+      "kind": "v2_incremental_compare",
+      "url": "https://github.com/LIghtJUNction/ssmcp/compare/18f43d69715538582ddc2806434009170f188e3c...f42baae1d5227bd6db8315aef778160b80b57274"
+    },
+    {
+      "kind": "v1_commit",
+      "url": "https://github.com/LIghtJUNction/ssmcp/commit/18f43d69715538582ddc2806434009170f188e3c"
+    },
+    {
+      "kind": "v2_commit",
+      "url": "https://github.com/LIghtJUNction/ssmcp/commit/f42baae1d5227bd6db8315aef778160b80b57274"
+    }
+  ]
+}

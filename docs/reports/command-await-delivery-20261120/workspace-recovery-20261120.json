@@ -1,0 +1,152 @@
+{
+  "schema": "ssmcp.workspace-recovery-checkpoint.v1",
+  "recorded_utc": "2026-11-20T19:58:10.626125+00:00",
+  "scope": "historical evidence preservation; no product execution or release acceptance",
+  "native_observation": {
+    "previous_directory_read_succeeded_job": "6497d7965777f413ec1f3bb6d937b37d-11",
+    "later_directory_and_receipt_missing_job": "6497d7965777f413ec1f3bb6d937b37d-2e",
+    "additional_missing_paths_job": "6497d7965777f413ec1f3bb6d937b37d-36",
+    "failure": "ENOENT",
+    "cause": "unknown"
+  },
+  "archive": {
+    "bytes": 158998,
+    "sha256": "d23a92ff837f26bff83eaf7094c92f412c218105308ffeff6ce0056bf1fb89da",
+    "members": 18,
+    "original_files": 16,
+    "files": [
+      {
+        "path": "paste/ssmcp-paste-performance-20261121.patch",
+        "bytes": 45899,
+        "sha256": "6733bef7448dab15eea316061c78ca78f8e69111bd0dd0df64fc6a918200b6bc"
+      },
+      {
+        "path": "paste/e2e_paste_performance.py",
+        "bytes": 29856,
+        "sha256": "07af1a3298ee75bbd5be31624a344aa265eb4a6ff73474020f8eff451cfe297e"
+      },
+      {
+        "path": "paste/e2e_clipboard_paste_performance.py",
+        "bytes": 14624,
+        "sha256": "434348a28727c717179ff6e49f322e8692a8e88a4107fcbcc12fc53cef298437"
+      },
+      {
+        "path": "paste/ssmcp-paste-performance-20261121-manifest.json",
+        "bytes": 3310,
+        "sha256": "4d3d43b16f109e119177df48f9e250305b38013f3c7839cf843cdbec23a00971"
+      },
+      {
+        "path": "paste/README-original.md",
+        "bytes": 4957,
+        "sha256": "220f6a48233e128a55e0c23201e04ce2439d547ef111b5a66181505bac30c222"
+      },
+      {
+        "path": "reports/iteration-report-a581.md",
+        "bytes": 31299,
+        "sha256": "5067e29681bc514b112a2ecc451f2b6cdeeb27c6a26c2f72426af47362aee6ee"
+      },
+      {
+        "path": "reports/baseline-b156-failure-review-20261120.json",
+        "bytes": 21709,
+        "sha256": "e51d24b7457aa3d41644bd39c31ade88b9c470da90be654f26dcc57e5dc35fb0"
+      },
+      {
+        "path": "reports/paste-benchmark-filesystem-observation.json",
+        "bytes": 1655,
+        "sha256": "86707d4b704872c29ddcfb5b23360fb7f82aea46568f6635202ab2e5051dee0c"
+      },
+      {
+        "path": "reports/baseline-c53-build-review-20261120.json",
+        "bytes": 14367,
+        "sha256": "4f0bf7c09caf7cca83faacdaaf230a72deefd1de72406e9dbdc2a28917c3829a"
+      },
+      {
+        "path": "reports/main-cbe-vs-baseline-c53-identity-20261120.json",
+        "bytes": 12936,
+        "sha256": "6616c4ed0f9466c1a0fbec9530a413e335011bedb728b84fec322f9bf239787a"
+      },
+      {
+        "path": "reports/independent-review-final25-2e917-v1.json",
+        "bytes": 10214,
+        "sha256": "3fb18f1a62992e085d6d91ab810c06fb89327eb50bf3b1089fe568ab4ea34e45"
+      },
+      {
+        "path": "publication/verify_published_candidate.py",
+        "bytes": 28307,
+        "sha256": "a23827c06034964c6ef8aa3299613f7d50cafbd6ddfb2bafeb7b50d814889394"
+      },
+      {
+        "path": "publication/test_verify_published_candidate.py",
+        "bytes": 14547,
+        "sha256": "595f0d7bceb6d1ea4819fc3940c329c420d798551169b78f5c4ce4b0d49160f0"
+      },
+      {
+        "path": "publication/verified-crate-contract-validation.json",
+        "bytes": 2478,
+        "sha256": "8ca8bc597824821a3f0ba7261e16db313e99b1bfc412fb8551e0a7e12ee5790f"
+      },
+      {
+        "path": "publication/verified-crate-contract-handoff.zip",
+        "bytes": 75956,
+        "sha256": "3a0a941d36e22b09422f83621d9b8584aea3b4fe5d0c4fc5b7c23d5e3504a044"
+      },
+      {
+        "path": "publication/source-schema-recheck-c53.json",
+        "bytes": 9097,
+        "sha256": "aa341ed9af8c55288f3033ace4629fe26407287a4fea33a081f1864d65a65e2d"
+      }
+    ],
+    "drive_file_id": "13Q7GXA2gBBpFnThVfL-auILA4FrL3zI0",
+    "library_file_id": "libfile_fde3_f-50324c9ad36c8191bd578d1b1139d078_e58c93d727108191bbc40d6c0d09ec81",
+    "drive_downloaded_bytes_equal": true,
+    "original_bytes_and_members_rechecked": true
+  },
+  "baseline_build": {
+    "original_scope": "build_only",
+    "source_revision": "c53c5ea681cb0840f1c41c9e8d31489abac4fd37",
+    "build_completed_utc": "2026-11-20T19:09:09.362449+00:00",
+    "historical_independent_review_recovered": true,
+    "original_build_receipt_recovered": false,
+    "original_build_receipt_sha256": "16da6d1611355d18721582451326195629a87060f6b7e9f3ccf16bdf5cd9daaa",
+    "tests_executed_in_that_build": 0
+  },
+  "first_performance_run": {
+    "scope": "owner-reported partial baseline; original report not independently read by this root",
+    "service": "ssmcp-paste-baseline-c53-20261121.service",
+    "exit_code": 1,
+    "owner_reported_passed_cases": 4,
+    "owner_reported_failed_case": "ordinary-16k",
+    "owner_reported_failure": "full draft projection exceeded 8 KiB read limit",
+    "owner_reported_checks": 57,
+    "owner_reported_inputs_unchanged": true,
+    "owner_reported_original_report_bytes": 16024,
+    "owner_reported_original_report_sha256": "76e4a54d52164c89a57be0a3eba10c11138e3c20d8f730113e4ec047d5476309",
+    "original_report_recovered": false,
+    "complete_baseline_accepted": false
+  },
+  "not_recovered_by_this_reviewer": [
+    "original c53 build receipt",
+    "original source and dependency manifests",
+    "five originally preserved build binaries",
+    "original first performance report",
+    "original first performance VT frames"
+  ],
+  "not_claimed": [
+    "cause of native path loss",
+    "original receipt reconstructed",
+    "native old paths recreated",
+    "cache binaries equal original build",
+    "paste speedup",
+    "new final-candidate product acceptance",
+    "release published"
+  ],
+  "newer_main_checkpoint": {
+    "source": "GitHub API directly read at this checkpoint",
+    "sha": "b0a07b047b1532688f06b9df8423e9bfc044c405",
+    "tree": "37b33d06c09dcadb6315f98b9c06d54d040822b2",
+    "parent": "4237eea2cab8253b8dff84d81861ba1e1adf4246",
+    "pr153_merged": true,
+    "final_acceptance_claimed": false,
+    "old_c53_lock_not_current_identity": true
+  }
+}

@@ -1,0 +1,595 @@
+{
+  "schema_version": 1,
+  "status": "verified",
+  "version": "0.10.13",
+  "provenance": {
+    "approved_base": "3e84fe481fa49fc7093e880ff213909e46df35a6",
+    "tag_object": "0c45ca98a9c4f389ddbff1b58797aed235fee422",
+    "source_commit": "4e3132d60600dca5053af81cdefa6962c3058ac4",
+    "source_tree": "f122be555b8e0ea597b4561b63d2acb574057e57",
+    "version_only_change_verified": true,
+    "changed_files": [
+      "Cargo.lock",
+      "Cargo.toml"
+    ],
+    "preserved_failed_release_tags": {
+      "v0.10.11": {
+        "sha": "e88b03c98fe849e1abe402d9fb078cb18e128f6f",
+        "type": "tag",
+        "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/tags/e88b03c98fe849e1abe402d9fb078cb18e128f6f"
+      },
+      "v0.10.12": {
+        "sha": "ea3a4baebcc3bb2eb66c27b8c641d6b51469e4ee",
+        "type": "tag",
+        "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/tags/ea3a4baebcc3bb2eb66c27b8c641d6b51469e4ee"
+      }
+    },
+    "dispatch_count": 1,
+    "old_run_retries": 0
+  },
+  "publication": {
+    "schema_version": 1,
+    "checked_at": "2026-11-19T22:03:40.058569+00:00",
+    "version": "0.10.13",
+    "source_commit": "4e3132d60600dca5053af81cdefa6962c3058ac4",
+    "release_run": {
+      "id": 44610211292,
+      "html_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44610211292",
+      "status": "completed",
+      "conclusion": "success",
+      "run_attempt": 1,
+      "created_at": "2026-11-19T20:35:24Z",
+      "updated_at": "2026-11-19T20:51:54Z"
+    },
+    "jobs": [
+      {
+        "id": 135864481262,
+        "name": "validate",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135864845447,
+        "name": "Build x86_64-pc-windows-msvc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135864845458,
+        "name": "Build aarch64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135864845519,
+        "name": "Build aarch64-apple-darwin",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135864845520,
+        "name": "Build aarch64-pc-windows-msvc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135864845587,
+        "name": "Build x86_64-apple-darwin",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135864845875,
+        "name": "checks / linux (ubuntu-24.04)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135864845883,
+        "name": "checks / Client (windows-11-arm)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135864845967,
+        "name": "checks / Client (windows-2025)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135864846016,
+        "name": "checks / Client (macos-15-intel)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135864846272,
+        "name": "checks / linux (ubuntu-24.04-arm)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135864846358,
+        "name": "Build x86_64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135864848079,
+        "name": "checks / Client (macos-15)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135869099271,
+        "name": "Verify installed server aarch64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135869099390,
+        "name": "Verify installed server x86_64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135872545799,
+        "name": "finalize",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135873448238,
+        "name": "publish_release",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135873448336,
+        "name": "publish_crates",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 135873866357,
+        "name": "deploy_server / deploy",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ],
+    "github_release": {
+      "id": 451914506,
+      "url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.13",
+      "tag": "v0.10.13",
+      "draft": false,
+      "prerelease": false,
+      "published_at": "2026-11-19T20:51:25Z",
+      "asset_count": 16
+    },
+    "official_linux_x64_asset_metadata": {
+      "id": 769221718,
+      "name": "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 9529375,
+      "digest": "sha256:b5042d0125a70356f83b2995453d377ae4ffcbb079aaade53abe896133fbf12b",
+      "browser_download_url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.13/ssmcp-x86_64-unknown-linux-gnu.tar.gz"
+    },
+    "crates": [
+      {
+        "package": "ssmcp",
+        "version": "0.10.13",
+        "registry_url": "https://crates.io/api/v1/crates/ssmcp/0.10.13",
+        "checksum": "2daa35a8ce6731c694416f0474135e4a31d53570f726874feff83fcf10fc71dd",
+        "yanked": false,
+        "created_at": "2026-11-19T20:51:14.092252Z",
+        "entry_verified": true
+      },
+      {
+        "package": "ztui-core",
+        "version": "0.1.2",
+        "registry_url": "https://crates.io/api/v1/crates/ztui-core/0.1.2",
+        "checksum": "5556e2536ee8fc39841e25b24d7a63f60b02f486f6664bef09c5d923a0ccf492",
+        "yanked": false,
+        "created_at": "2026-11-19T20:51:11.029524Z",
+        "entry_verified": true
+      }
+    ],
+    "old_runtime_local_backup_still_verified": true,
+    "old_runtime_backup_sha256": "39183599d07a8d86fca51875f4f5e3fea8438447edae52d2d05ad88d1b87b3e4",
+    "production_cleanup": {
+      "read_only": true,
+      "large_temporary_files_absent": true,
+      "stage_removed": true,
+      "previous_managed_runtime_removed": true,
+      "remaining_files": [
+        {
+          "name": "intent.json",
+          "bytes": 109
+        },
+        {
+          "name": "receipt.json",
+          "bytes": 7198
+        }
+      ],
+      "remaining_bytes": 7307,
+      "free_bytes": 17453576192
+    },
+    "real_007_upgrade": "not operated by this task"
+  },
+  "deployment": {
+    "receipt_artifact": {
+      "id": 14573132700,
+      "name": "production-deployment-v0.10.13-1",
+      "zip_sha256": "9917a0bfca9d533683f1e3b09232a61c900b152f62ecef7f2ad4666cae57bb85",
+      "receipt_sha256": "36de8a276ffd903d226cfd9b64de3590c70fa2ef7de8d7027c07e9b9a148b609",
+      "download_and_digest_verified": true
+    },
+    "receipt": {
+      "assets": {
+        "brand-mark.png": {
+          "bytes": 492111,
+          "content_types": [
+            "image/png"
+          ],
+          "sha256": "434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a"
+        },
+        "client-install-copy.js": {
+          "bytes": 681,
+          "content_types": [
+            "text/javascript",
+            "application/javascript"
+          ],
+          "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96"
+        },
+        "copy-command.js": {
+          "bytes": 707,
+          "content_types": [
+            "text/javascript",
+            "application/javascript"
+          ],
+          "sha256": "391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558"
+        },
+        "portal-refresh.css": {
+          "bytes": 26131,
+          "content_types": [
+            "text/css"
+          ],
+          "sha256": "fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88"
+        },
+        "portal.css": {
+          "bytes": 24806,
+          "content_types": [
+            "text/css"
+          ],
+          "sha256": "860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26"
+        },
+        "traffic-meter.js": {
+          "bytes": 1418,
+          "content_types": [
+            "text/javascript",
+            "application/javascript"
+          ],
+          "sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c"
+        }
+      },
+      "cleanup": {
+        "other_task_files_touched": false,
+        "previous_managed_runtime": "removed_recoverable_release_cache",
+        "stage_stopped_before_removal": true,
+        "temporary_bytes_removed": 23015657
+      },
+      "commit": "4e3132d60600dca5053af81cdefa6962c3058ac4",
+      "completed": true,
+      "configuration_unchanged": true,
+      "direct_checks": {
+        "admin_rejects_unauthenticated": true,
+        "assets": {
+          "brand-mark.png": {
+            "bytes": 492111,
+            "html_url_verified": true,
+            "sha256": "434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a"
+          },
+          "client-install-copy.js": {
+            "bytes": 681,
+            "html_url_verified": true,
+            "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96"
+          },
+          "copy-command.js": {
+            "bytes": 707,
+            "html_url_verified": true,
+            "sha256": "391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558"
+          },
+          "portal-refresh.css": {
+            "bytes": 26131,
+            "html_url_verified": true,
+            "sha256": "fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88"
+          },
+          "portal.css": {
+            "bytes": 24806,
+            "html_url_verified": true,
+            "sha256": "860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26"
+          },
+          "traffic-meter.js": {
+            "bytes": 1418,
+            "html_url_verified": true,
+            "sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c"
+          }
+        },
+        "health": true,
+        "homepage": true,
+        "mcp_rejects_unauthenticated": true,
+        "oauth_issuer": true,
+        "proxy_pricing_policy_preserved": false,
+        "single_public_footer": false
+      },
+      "expected_live_sha256": "c0dd811b8fd51aea45c80ff22c771c1a205d8fc8dfb24f977a6fc97bccf13b79",
+      "finished_utc": "2026-11-19T20:51:45Z",
+      "free_bytes_after": 17430884352,
+      "free_bytes_before": 17454813184,
+      "original_runners_preserved": true,
+      "original_units_preserved": true,
+      "proxy_unchanged": true,
+      "public_checks": {
+        "admin_rejects_unauthenticated": true,
+        "assets": {
+          "brand-mark.png": {
+            "bytes": 492111,
+            "html_url_verified": true,
+            "sha256": "434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a"
+          },
+          "client-install-copy.js": {
+            "bytes": 681,
+            "html_url_verified": true,
+            "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96"
+          },
+          "copy-command.js": {
+            "bytes": 707,
+            "html_url_verified": true,
+            "sha256": "391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558"
+          },
+          "portal-refresh.css": {
+            "bytes": 26131,
+            "html_url_verified": true,
+            "sha256": "fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88"
+          },
+          "portal.css": {
+            "bytes": 24806,
+            "html_url_verified": true,
+            "sha256": "860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26"
+          },
+          "traffic-meter.js": {
+            "bytes": 1418,
+            "html_url_verified": true,
+            "sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c"
+          }
+        },
+        "health": true,
+        "homepage": true,
+        "mcp_rejects_unauthenticated": true,
+        "oauth_issuer": true,
+        "proxy_pricing_policy_preserved": true,
+        "single_public_footer": true
+      },
+      "release": {
+        "archive": "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+        "archive_bytes": 9529375,
+        "archive_prefix": "",
+        "archive_sha256": "b5042d0125a70356f83b2995453d377ae4ffcbb079aaade53abe896133fbf12b",
+        "archive_url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.13/ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+        "commit": "4e3132d60600dca5053af81cdefa6962c3058ac4",
+        "repository": "LIghtJUNction/ssmcp",
+        "tag": "v0.10.13"
+      },
+      "rollback_checkpoint_verified": true,
+      "runner_sha256": "6e169387073dfb5919f6714658ac28781cfe04c7e5800ada690c0c67fed3d4d0",
+      "running_sha256": "e8f59d66493e68ba3c196a72ae3733b8b7336fbfb1da0cf92960069637f1f7bf",
+      "schema": "ssmcp.release-deployment.v1",
+      "stage_checks": {
+        "admin_rejects_unauthenticated": true,
+        "assets": {
+          "brand-mark.png": {
+            "bytes": 492111,
+            "html_url_verified": true,
+            "sha256": "434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a"
+          },
+          "client-install-copy.js": {
+            "bytes": 681,
+            "html_url_verified": true,
+            "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96"
+          },
+          "copy-command.js": {
+            "bytes": 707,
+            "html_url_verified": true,
+            "sha256": "391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558"
+          },
+          "portal-refresh.css": {
+            "bytes": 26131,
+            "html_url_verified": true,
+            "sha256": "fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88"
+          },
+          "portal.css": {
+            "bytes": 24806,
+            "html_url_verified": true,
+            "sha256": "860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26"
+          },
+          "traffic-meter.js": {
+            "bytes": 1418,
+            "html_url_verified": true,
+            "sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c"
+          }
+        },
+        "candidate_runtime_preflight": true,
+        "commerce_disabled": true,
+        "dcr_survives_restart": true,
+        "fresh_state": true,
+        "health": true,
+        "homepage": true,
+        "matched_runner_sha256": "6e169387073dfb5919f6714658ac28781cfe04c7e5800ada690c0c67fed3d4d0",
+        "mcp_rejects_unauthenticated": true,
+        "oauth_issuer": true,
+        "production_state_inaccessible": true,
+        "proxy_pricing_policy_preserved": false,
+        "single_public_footer": false
+      },
+      "started_utc": "2026-11-19T20:51:42Z",
+      "status": "deployed",
+      "step": "switch_and_verify",
+      "target_sha256": "e8f59d66493e68ba3c196a72ae3733b8b7336fbfb1da0cf92960069637f1f7bf",
+      "version": "0.10.13"
+    }
+  },
+  "independent_production_verification": {
+    "process_stable_during_verification": true,
+    "read_only": true,
+    "service_active": true,
+    "sha256": "e8f59d66493e68ba3c196a72ae3733b8b7336fbfb1da0cf92960069637f1f7bf",
+    "surfaces": {
+      "direct": {
+        "assets": [
+          {
+            "bytes": 492111,
+            "cache_control": "no-store",
+            "content_type": "image/png",
+            "name": "brand-mark.png",
+            "sha256": "434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a",
+            "status": 200,
+            "url": "/account/assets/434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a/brand-mark.png"
+          },
+          {
+            "bytes": 681,
+            "cache_control": "no-store",
+            "content_type": "text/javascript; charset=utf-8",
+            "name": "client-install-copy.js",
+            "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96",
+            "status": 200,
+            "url": "/account/assets/4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96/client-install-copy.js"
+          },
+          {
+            "bytes": 707,
+            "cache_control": "no-store",
+            "content_type": "text/javascript; charset=utf-8",
+            "name": "copy-command.js",
+            "sha256": "391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558",
+            "status": 200,
+            "url": "/account/assets/391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558/copy-command.js"
+          },
+          {
+            "bytes": 26131,
+            "cache_control": "no-store",
+            "content_type": "text/css; charset=utf-8",
+            "name": "portal-refresh.css",
+            "sha256": "fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88",
+            "status": 200,
+            "url": "/account/assets/fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88/portal-refresh.css"
+          },
+          {
+            "bytes": 24806,
+            "cache_control": "no-store",
+            "content_type": "text/css; charset=utf-8",
+            "name": "portal.css",
+            "sha256": "860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26",
+            "status": 200,
+            "url": "/account/assets/860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26/portal.css"
+          },
+          {
+            "bytes": 1418,
+            "cache_control": "no-store",
+            "content_type": "text/javascript; charset=utf-8",
+            "name": "traffic-meter.js",
+            "sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c",
+            "status": 200,
+            "url": "/account/assets/52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c/traffic-meter.js"
+          }
+        ],
+        "health": true,
+        "homepage_bytes": 10828,
+        "homepage_sha256": "b4ffc68c29d9ad2b79531a0a272eec309a92a57eabc03264dba3a1965ee9a269"
+      },
+      "public": {
+        "assets": [
+          {
+            "bytes": 492111,
+            "cache_control": "no-store",
+            "content_type": "image/png",
+            "name": "brand-mark.png",
+            "sha256": "434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a",
+            "status": 200,
+            "url": "/account/assets/434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a/brand-mark.png"
+          },
+          {
+            "bytes": 681,
+            "cache_control": "no-store",
+            "content_type": "text/javascript; charset=utf-8",
+            "name": "client-install-copy.js",
+            "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96",
+            "status": 200,
+            "url": "/account/assets/4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96/client-install-copy.js"
+          },
+          {
+            "bytes": 707,
+            "cache_control": "no-store",
+            "content_type": "text/javascript; charset=utf-8",
+            "name": "copy-command.js",
+            "sha256": "391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558",
+            "status": 200,
+            "url": "/account/assets/391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558/copy-command.js"
+          },
+          {
+            "bytes": 26131,
+            "cache_control": "no-store",
+            "content_type": "text/css; charset=utf-8",
+            "name": "portal-refresh.css",
+            "sha256": "fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88",
+            "status": 200,
+            "url": "/account/assets/fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88/portal-refresh.css"
+          },
+          {
+            "bytes": 24806,
+            "cache_control": "no-store",
+            "content_type": "text/css; charset=utf-8",
+            "name": "portal.css",
+            "sha256": "860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26",
+            "status": 200,
+            "url": "/account/assets/860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26/portal.css"
+          },
+          {
+            "bytes": 1418,
+            "cache_control": "no-store",
+            "content_type": "text/javascript; charset=utf-8",
+            "name": "traffic-meter.js",
+            "sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c",
+            "status": 200,
+            "url": "/account/assets/52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c/traffic-meter.js"
+          }
+        ],
+        "health": true,
+        "homepage_bytes": 11575,
+        "homepage_sha256": "25b4d08ad967146dd92b4a6cea71da7fd79008974f908b6a41ac79386be4851e"
+      }
+    },
+    "version": "ssmcpd 0.10.13",
+    "checked_at": "2026-11-19T21:59:23.272232+00:00",
+    "source_commit": "4e3132d60600dca5053af81cdefa6962c3058ac4",
+    "cd_receipt_running_sha256": "e8f59d66493e68ba3c196a72ae3733b8b7336fbfb1da0cf92960069637f1f7bf"
+  },
+  "recovery": {
+    "schema_version": 1,
+    "status": "verified",
+    "created_at": "2026-11-19T20:34:15.303712+00:00",
+    "version": "0.10.10",
+    "runtime_sha256": "c0dd811b8fd51aea45c80ff22c771c1a205d8fc8dfb24f977a6fc97bccf13b79",
+    "archive_sha256": "39183599d07a8d86fca51875f4f5e3fea8438447edae52d2d05ad88d1b87b3e4",
+    "archive_bytes": 6778880,
+    "file_count": 15,
+    "symlink_count": 0,
+    "content_permissions_links_verified": true,
+    "same_pid_and_lease_verified": true,
+    "database_included": false,
+    "production_modified": false
+  },
+  "scope_notes": [
+    "The formal release ran once from the approved source plus the version-only commit.",
+    "GitHub release, crates.io publication, automated deployment and current production verification are recorded separately.",
+    "The final production read was performed after control resumed; no claim of uninterrupted monitoring is made.",
+    "Developer-machine 007 service changes are outside this server-deployment evidence."
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "schema": "ssmcp-zuse-update-source-observation-v1",
+  "observed_at_utc": "2026-11-21T06:41:24Z",
+  "default_branch_read_at_utc": "2026-11-21T06:40:59Z",
+  "conclusion": "观察时 C 的 zuse gitlink、Cargo.lock 和 canonical zuse 默认分支 main 均为同一提交 a1bb8fd2cbce0a9d85134999883c578358065242，包版本均为 0.2.2。未发现默认分支相对当前 pin 的源码差异；本次没有实施依赖更新或验证兼容性。",
+  "ssmcp": {
+    "commit": "cb67a9aacdb16dbd612a877208c1db6221860483",
+    "tree": "2d8eb258c41fe89774b3b3102ad1fa53f15b5332",
+    "parent": "ea2bfcae6aea9672d8955f832a8ec5bd1e0749f4",
+    "version": "0.10.25",
+    "commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/cb67a9aacdb16dbd612a877208c1db6221860483",
+    "zuse_gitlink": {
+      "path": "crates/zuse",
+      "commit": "a1bb8fd2cbce0a9d85134999883c578358065242",
+      "canonical_url": "https://github.com/LIghtJUNction/zuse.git",
+      "source_url": "https://api.github.com/repos/LIghtJUNction/ssmcp/contents/crates/zuse?ref=cb67a9aacdb16dbd612a877208c1db6221860483"
+    },
+    "cargo_dependency": {
+      "name": "zuse",
+      "package": "zuse-computer",
+      "version_requirement": "=0.2.2",
+      "git": "https://github.com/LIghtJUNction/zuse.git",
+      "default_features": false,
+      "features": [
+        "std"
+      ],
+      "path_dependency": false,
+      "submodule_excluded_from_workspace": true,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/cb67a9aacdb16dbd612a877208c1db6221860483/Cargo.toml#L199-L208"
+    },
+    "cargo_locked": {
+      "name": "zuse-computer",
+      "version": "0.2.2",
+      "source": "git+https://github.com/LIghtJUNction/zuse.git#a1bb8fd2cbce0a9d85134999883c578358065242",
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/cb67a9aacdb16dbd612a877208c1db6221860483/Cargo.lock#L2603-L2612"
+    }
+  },
+  "canonical": {
+    "repository": "LIghtJUNction/zuse",
+    "default_branch": "main",
+    "head": "a1bb8fd2cbce0a9d85134999883c578358065242",
+    "tree": "62c26269d54b443addcd9da7bebc7a5a8d0fd645",
+    "commit_time": "2026-11-20T19:37:13Z",
+    "commit_subject": "test: verify native target movement end to end [skip ci]",
+    "repo_pushed_at": "2026-11-21T06:37:08Z",
+    "pushed_at_is_not_default_branch_head_evidence": true,
+    "repository_metadata_url": "https://api.github.com/repos/LIghtJUNction/zuse",
+    "observed_branch_endpoint": "https://api.github.com/repos/LIghtJUNction/zuse/branches/main",
+    "immutable_commit_url": "https://github.com/LIghtJUNction/zuse/commit/a1bb8fd2cbce0a9d85134999883c578358065242",
+    "manifest_url": "https://github.com/LIghtJUNction/zuse/blob/a1bb8fd2cbce0a9d85134999883c578358065242/Cargo.toml",
+    "package": "zuse-computer",
+    "version": "0.2.2",
+    "edition": "2024",
+    "rust_version": "1.100",
+    "library": {
+      "name": "zuse",
+      "path": "src/lib.rs"
+    },
+    "features": {
+      "default": [
+        "std"
+      ],
+      "std": [
+        "dep:zmcpio",
+        "dep:zclap",
+        "dep:z64",
+        "dep:zsys"
+      ]
+    }
+  },
+  "compatibility": {
+    "baseline_pin_equals_observed_default_head": true,
+    "gitlink_equals_cargo_locked_commit": true,
+    "source_delta_between_current_pin_and_observed_head": "none (identical full commit SHA)",
+    "observed_new_api_or_feature_changes": "没有相对该 pin 的新提交，因此没有可归属于本次默认分支更新的 API/功能差异。",
+    "existing_requirements": "zuse 的 Rust 1.100、edition 2024 及 std 可选依赖来自同一已固定 manifest，不是新升级要求。",
+    "inference_from_manifest": "SSMCP 的 zuse 依赖使用 git source，Cargo.lock 固定 revision；crates/zuse 是另一个 gitlink 且被 workspace 排除。仅更新 gitlink 本身不等于变更 Cargo 实际锁定依赖。",
+    "transitive_scope": "只记录 C 已锁定的直接依赖包；没有核验各依赖仓库的新 HEAD，也没有声称整个依赖闭包已经最新或通过兼容性验证。",
+    "locked_package_observation": [
+      {
+        "name": "z64",
+        "version": "0.1.2",
+        "source": "git+https://github.com/LIghtJUNction/z64.git#7e9cff67beae2c484f8b9749b83ae24a1d0e1bbd",
+        "line": 2421
+      },
+      {
+        "name": "zclap",
+        "version": "0.1.4",
+        "source": "git+https://github.com/LIghtJUNction/zclap.git#4d87f3ae3743e81509d5ac5500909955667c860f",
+        "line": 2434
+      },
+      {
+        "name": "zmcpio",
+        "version": "0.4.0",
+        "source": "git+https://github.com/LIghtJUNction/zmcpio.git#84fc4978a248c2a3e2dd110f4f26fa52dd8b6890",
+        "line": 2545
+      },
+      {
+        "name": "zsys",
+        "version": "0.1.1",
+        "source": "git+https://github.com/LIghtJUNction/zsys.git#808fcfdb73584ca7ca122e20b76f0209f56ab0f7",
+        "line": 2578
+      },
+      {
+        "name": "zuse-computer",
+        "version": "0.2.2",
+        "source": "git+https://github.com/LIghtJUNction/zuse.git#a1bb8fd2cbce0a9d85134999883c578358065242",
+        "line": 2603
+      }
+    ]
+  },
+  "followup_boundary": [
+    "保留用户的 zuse 更新需求，由同一 source owner 整合；本次相等观察不等于宣告需求已完成。",
+    "若 canonical main 后续前进，按新的明确观察时刻记录目标提交，分别核对 gitlink 与 Cargo.lock；此文件不预选尚未观察到的提交。",
+    "仓库 pushed_at 的变化不能单独证明 main 前进；没有将未合入分支、tag 或其他作者的运行成绩冒充默认分支更新。"
+  ],
+  "scope": {
+    "read_only_source_observation": true,
+    "source_or_lock_mutations": false,
+    "cargo_or_build": false,
+    "product_or_test_execution": false,
+    "ci_or_release_execution": false,
+    "ssmcp_model_started": false,
+    "linux_incident_investigation": false,
+    "dependency_update_implemented": false,
+    "compatibility_verified": false
+  }
+}

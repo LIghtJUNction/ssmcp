@@ -1,0 +1,519 @@
+{
+  "schema": "ssmcp-v25-Q-gate-checkpoint-v1",
+  "recorded_at_utc": "2026-11-21T02:28:33.615Z",
+  "source": {
+    "label": "Q",
+    "revision": "647bce2ec9cf74beab43adea831c2e0712d28ea8",
+    "tree": "5143f90c05066c95b2df58a9eab1831e05888a62",
+    "previous_revision": "d29dae7e2b9ff6794f17f3c96c0cc37977936084",
+    "version": "0.10.25",
+    "frozen_at_utc": "2026-11-21T02:07:14.989741+00:00",
+    "clean_at_freeze": true,
+    "commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/647bce2ec9cf74beab43adea831c2e0712d28ea8",
+    "changed_file": "src/session/service.rs",
+    "change": {
+      "before": "let mut cases = vec![vec![\"--agent\", \"codex\"]];",
+      "after": "let mut cases = vec![vec![\"--input\", \"terminal\", \"--agent\", \"codex\"]];",
+      "additions": 1,
+      "deletions": 1,
+      "product_logic_changed": false
+    },
+    "freeze_receipt": {
+      "name": "source-freeze-647bce2.json",
+      "bytes": 3242,
+      "sha256": "0eebae75a3f8f5ce772958e5f897c0ebc6652c245fd6a32285680e5e11f0db00"
+    },
+    "static_review_receipt": {
+      "name": "independent-fix-and-host-partition-review.json",
+      "bytes": 5680,
+      "sha256": "19f5acd8063d92259c03af8cc32a36db146bf7db9f080bca3cbf2df1230035e5"
+    },
+    "static_fix_scope": "Explicit input selects the intended foreground-mode validation. The existing no-session-directory assertion is retained; no-spawn is supported by control flow, not an added spawn-counter assertion."
+  },
+  "gate": {
+    "run_id": "ecfe8f69dcb362096018be9a632ff96c",
+    "source_revision": "647bce2ec9cf74beab43adea831c2e0712d28ea8",
+    "status": "passed",
+    "started_at_epoch": 1795227009.4109368,
+    "finished_at_epoch": 1795227737.5537446,
+    "finished_utc": "2026-11-21T02:22:17.674951+00:00",
+    "receipt": {
+      "name": "candidate-gates.json",
+      "bytes": 1282803,
+      "sha256": "645dd18969232888cbb393e4193542b421706161eaf6ef2af0af6acca553d7ec"
+    },
+    "review_scope": "Full receipt bytes hashed; identity, status and all 35 check outcomes read. The full 1,282,803-byte JSON body was not reproduced or independently reviewed field by field.",
+    "checks": [
+      {
+        "exit_code": 0,
+        "name": "release-policy"
+      },
+      {
+        "exit_code": 0,
+        "name": "deployment-policy"
+      },
+      {
+        "exit_code": 0,
+        "name": "fmt"
+      },
+      {
+        "exit_code": 0,
+        "name": "library-compile"
+      },
+      {
+        "exit_code": 0,
+        "name": "library-private"
+      },
+      {
+        "exit_code": 0,
+        "name": "library-host"
+      },
+      {
+        "exit_code": 0,
+        "name": "clippy"
+      },
+      {
+        "exit_code": 0,
+        "name": "windows-gnu-clippy"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-compile"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-allow_account"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-cc_backend"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-client_resources"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-client_server_config"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-codex_backend"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-collaboration"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-connection_context"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-context"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-context_helpers"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-context_runtime"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-oauth_security"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-pi_backend"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-release_client"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-resources"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-rsync"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-server_runtime"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-terminals"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-two_tools"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-workspace_bridge"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-zuse_worker_entry"
+      },
+      {
+        "exit_code": 0,
+        "name": "library-code-mode-ignored"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-two_tools-ignored"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-workspace_bridge-ignored"
+      },
+      {
+        "exit_code": 0,
+        "name": "integration-context_helpers-ignored"
+      },
+      {
+        "exit_code": 0,
+        "name": "release"
+      },
+      {
+        "exit_code": 0,
+        "name": "decoder"
+      }
+    ],
+    "stages": 35,
+    "rust_stages": 26,
+    "integration_targets": 20,
+    "ordinary_library_private": {
+      "passed": 2050,
+      "failed": 0,
+      "ignored": 23,
+      "filtered_out": 6,
+      "rust_seconds": 34.49,
+      "source": "original private library log"
+    },
+    "ordinary_library_host": {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 2073,
+      "rust_seconds": 0.01,
+      "source": "complete original host log"
+    },
+    "ordinary_integration": {
+      "passed": 101,
+      "targets": 19,
+      "source": "completed Gate count clarification receipt"
+    },
+    "mandatory_ignored": {
+      "passed": 14,
+      "source": "completed Gate review receipt",
+      "scope": "Four separate mandatory-ignored groups; excludes the separately counted worker test."
+    },
+    "launcher": {
+      "name": "release25-final11-launch/exit.json",
+      "bytes": 4792,
+      "sha256": "72b5f78ea2deedeb6f8998315c1a2df617809ceb6d1220ff8112b1840847b36c"
+    },
+    "outer": {
+      "name": "owned/exit.json",
+      "bytes": 1167,
+      "sha256": "37e9a0929b8b6ea71bf158c5d758a4ebad0f056d63c781f4de7828be0d01885d"
+    },
+    "outer_exit_code": 0,
+    "launcher_exit_code": 0,
+    "driver_exit_code": 0,
+    "nine_input_hashes_before": {
+      "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+      "cargo_lock": "0b6f1d93e319b27163106ce79475b37f3e737ff89f7a9ca8d35c09e8ad649608",
+      "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+      "driver": "729f242ffd2580ee0e72e1790b0df950b3961fd83fa8c1f215410d99c3ee5fbd",
+      "git_heads": "e9a5366eb04267e66d09c512f955aa59423330de029a85e5f4d6cbdae4e8db90",
+      "owner_agreement": "b8559d1d1005fe2a22c295bc57f97d6e2c562cad260cbc1a2f161119fe32fcf6",
+      "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+      "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+      "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+    },
+    "nine_input_hashes_after": {
+      "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+      "cargo_lock": "0b6f1d93e319b27163106ce79475b37f3e737ff89f7a9ca8d35c09e8ad649608",
+      "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+      "driver": "729f242ffd2580ee0e72e1790b0df950b3961fd83fa8c1f215410d99c3ee5fbd",
+      "git_heads": "e9a5366eb04267e66d09c512f955aa59423330de029a85e5f4d6cbdae4e8db90",
+      "owner_agreement": "b8559d1d1005fe2a22c295bc57f97d6e2c562cad260cbc1a2f161119fe32fcf6",
+      "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+      "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+      "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+    },
+    "source_head_after": "647bce2ec9cf74beab43adea831c2e0712d28ea8",
+    "source_clean_after": true,
+    "exclusive_target_lock_held_for_entire_batch": true,
+    "completed_review": {
+      "name": "root-completed-gate-review.json",
+      "bytes": 7663,
+      "sha256": "d34195f917a33264fc9d6618fa5f90149fc28521c58c12e8a53eb5acd840e60b"
+    },
+    "five_build_artifacts": {
+      "library-test-fixture": {
+        "stage": "library-compile",
+        "fresh": false,
+        "copy": {
+          "bytes": 166657104,
+          "sha256": "2b2771c074ffbd8c4a73b9ea8805df162ba86190bebe52a4e69b66d2653fc7b8",
+          "mode": "0o700"
+        },
+        "link_output": {
+          "bytes": 166657104,
+          "sha256": "2b2771c074ffbd8c4a73b9ea8805df162ba86190bebe52a4e69b66d2653fc7b8"
+        },
+        "actual_invocation_receipt": {
+          "bytes": 739,
+          "sha256": "b10a2633c82ec368c823512e55ff040151fc440901fce84d898ca31a9be4fb56"
+        }
+      },
+      "ssmcp": {
+        "stage": "release",
+        "fresh": false,
+        "copy": {
+          "bytes": 15738696,
+          "sha256": "2dbab2aa293ae411de20f9839d574bf62ef79a644710884a81f6fe6239717e35",
+          "mode": "0o700"
+        },
+        "link_output": {
+          "bytes": 15738696,
+          "sha256": "2dbab2aa293ae411de20f9839d574bf62ef79a644710884a81f6fe6239717e35"
+        },
+        "actual_invocation_receipt": {
+          "bytes": 718,
+          "sha256": "c2df69d55544771016583a20b26c54adba483196d494f6138ed7b66d51e65596"
+        }
+      },
+      "ssmcp-frontend": {
+        "stage": "release",
+        "fresh": false,
+        "copy": {
+          "bytes": 1386584,
+          "sha256": "2e19f8ad2fea673f899bbfc44449161e072381571946b85e3c6a5dc7e8325a06",
+          "mode": "0o700"
+        },
+        "link_output": {
+          "bytes": 1386584,
+          "sha256": "2e19f8ad2fea673f899bbfc44449161e072381571946b85e3c6a5dc7e8325a06"
+        },
+        "actual_invocation_receipt": {
+          "bytes": 736,
+          "sha256": "e5c315796f879e387e57dfdfa01ace89b16e04bbb4daac3282b1c5280d962298"
+        }
+      },
+      "ssmcpd": {
+        "stage": "release",
+        "fresh": false,
+        "copy": {
+          "bytes": 8176168,
+          "sha256": "e2e63fcfc63c05ca81907c976f8f3dda2aee65db9efa6d0d242fba69b95271b0",
+          "mode": "0o700"
+        },
+        "link_output": {
+          "bytes": 8176168,
+          "sha256": "e2e63fcfc63c05ca81907c976f8f3dda2aee65db9efa6d0d242fba69b95271b0"
+        },
+        "actual_invocation_receipt": {
+          "bytes": 720,
+          "sha256": "8a18f91e3c0812871529f12b9e54abf0ee673e8452c3f92bc82e937ba7562971"
+        }
+      },
+      "vt_snapshot": {
+        "stage": "decoder",
+        "fresh": false,
+        "copy": {
+          "bytes": 440984,
+          "sha256": "efdbeb3f200fcf4404b2612d836433047ecc90eb0744f345fc971ee7441db97f",
+          "mode": "0o700"
+        },
+        "link_output": {
+          "bytes": 440984,
+          "sha256": "efdbeb3f200fcf4404b2612d836433047ecc90eb0744f345fc971ee7441db97f"
+        },
+        "actual_invocation_receipt": {
+          "bytes": 731,
+          "sha256": "ab79217a3ceda4175191789dee54048c7414b0b8e829cb007d60e7367f13f599"
+        }
+      }
+    },
+    "five_artifact_review_scope": "Original completed review receipt read in full, including the producer's independent ELF/hash/rustc checks. This reporting reader did not hash the five binaries again.",
+    "dependency_counts": {
+      "resolved_packages": 277,
+      "registry_packages": 264,
+      "git_checkouts": 11,
+      "source": "completed Gate review receipt"
+    },
+    "library_partition": {
+      "complete": true,
+      "disjoint": true,
+      "host": 6,
+      "private": 2073,
+      "total": 2079
+    },
+    "explicit_ignored_worker": {
+      "passed": 1,
+      "name": "integration-zuse_worker_entry",
+      "arguments": [
+        "--ignored",
+        "--exact",
+        "missing_worker_entry_is_recoverable_without_spawning_the_embedding_binary",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "log": {
+        "name": "candidate2-integration-zuse_worker_entry.log",
+        "bytes": 198,
+        "sha256": "f00d1baea7ad85a902f12159066b4b6b74520492ca7965519efbf4752b0561d7"
+      },
+      "raw_log": "\nrunning 1 test\ntest missing_worker_entry_is_recoverable_without_spawning_the_embedding_binary ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s\n\n",
+      "source": "original worker log and count clarification"
+    },
+    "integration_passed_including_worker": 102
+  },
+  "original_goal_tests": {
+    "map_receipt": {
+      "name": "Q-original-goals-library-result-map.json",
+      "bytes": 6058,
+      "sha256": "5214c32c1178d446d9b0c4e2b4ddb2a32d4a1e48e958dc1924adaa2a3960eb59"
+    },
+    "private_log": {
+      "name": "candidate2-library-private.log",
+      "bytes": 557308,
+      "sha256": "3294ceafe0afe1a59db4a985c42a67b2fc0d3a498dd8764621d8b3513c3735c6"
+    },
+    "host_log": {
+      "name": "candidate2-library-host.log",
+      "bytes": 2069,
+      "sha256": "ce3be8a1ea8c13b3dcbd6c35260c2072772dde98e9f98ab758478eadb8ec4318"
+    },
+    "exact_17_rows_verified": [
+      {
+        "raw_line": "test client::completion::tests::send_body_completes_references_without_changing_the_command ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::completion::tests::send_completion_rejects_commands_shell_currency_and_code ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::interface::history::ownership::tests::program_reply_keeps_original_owner_and_one_copy_after_selection_changes ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::interface::messages::tests::final_reply_retry_receipts_cannot_be_borrowed_by_another_thread ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::messaging::tests::mismatched_receipt_preserves_draft_and_idempotent_retry_cannot_change_target ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::references::tests::full_budget_unavailable_references_keep_exact_text_and_local_warnings ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::references::tests::missing_reference_retries_remain_frozen_until_source_is_edited ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::references::tests::skill_names_use_effective_precedence_and_explicit_roots ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::references::tests::unavailable_files_keep_source_and_warn_without_read_actions ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::references::tests::unavailable_metadata_cannot_crowd_out_readable_reference_contents ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::steering::tests::full_budget_missing_reference_reaches_real_queue_once_with_ack_notice ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::terminal::conversation::messaging::tests::a_mismatched_or_failed_native_receipt_never_clears_the_draft ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::terminal::conversation::messaging::tests::missing_native_recipients_never_fall_back_to_next_caller ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::terminal::conversation::messaging::tests::native_mentions_require_selection_and_file_syntax_remains_literal ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::terminal::conversation::messaging::tests::service_receipt_clears_only_the_exact_submitted_native_draft ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::terminal::conversation::skill_picker_tests::send_reference_picker_preserves_drafts_and_delivers_only_after_explicit_send ... ok",
+        "exact_line_count": 1
+      },
+      {
+        "raw_line": "test client::terminal::conversation::skill_picker_tests::skill_picker_keys_only_deliver_the_explicitly_sent_selection ... ok",
+        "exact_line_count": 1
+      }
+    ],
+    "all_17_found_exactly_once": true,
+    "subset_of_library_private_2050": true,
+    "scope": "Library executions only; not extra tests added to the 2050 count, and not proof of PTY/UI/P1 behavior.",
+    "native_reference_boundary": "Native inbox retains literal @ and $ syntax; it does not automatically expand local files or attachments.",
+    "fixed_session_case": "test session::service::tests::create_rejects_foreground_chat_modes_before_saving_or_spawning ... ok"
+  },
+  "next_step": {
+    "status": "new_source_pending_for_stale_UI_fixture",
+    "owner_report": "The remaining E2E fixture still expects null for an explicitly selected Next caller; the existing UI state uses next. The original source author is preparing a minimal Python fixture correction.",
+    "successor_source_revision": null,
+    "successor_gate_run_id": null,
+    "Q_runtime_UI_P1_executed": false,
+    "Q_result_transferred_to_successor": false,
+    "formal_publication_executed": false,
+    "old_C_failure_retained": true
+  },
+  "release_verifier": {
+    "existing_push_only_helper_unchanged": true,
+    "manual_main_successor": "static draft in progress; not executed",
+    "workflow_definition_sha": null,
+    "final_tag_source_sha": null,
+    "formal_run_id": null,
+    "required_split": "P = actual main workflow definition; S = final candidate/tag/checkout/manifest/crate/source. Require S ancestor of P and reviewed recipe bytes at both.",
+    "explicit_dispatch_false_evidence": "Required original dispatch request with explicit deploy_server=false, not inferred from the deferred policy or a skipped job.",
+    "review_note": "publication-route-review-0227.md"
+  },
+  "github_snapshot": {
+    "observed_at_utc": "2026-11-21T02:28:34Z",
+    "main_sha": "f33ed8f14fc14aff05a2e4098743eb07e8527c06",
+    "pr": {
+      "number": 159,
+      "head": "647bce2ec9cf74beab43adea831c2e0712d28ea8",
+      "base": "f33ed8f14fc14aff05a2e4098743eb07e8527c06",
+      "state": "open",
+      "draft": true,
+      "merged": false
+    }
+  },
+  "count_clarification": {
+    "read_at_utc": "2026-11-21T02:34:05.729182+00:00",
+    "recorded_at_utc": "2026-11-21T02:35:05.760Z",
+    "receipt": {
+      "name": "root-completed-gate-count-clarification.json",
+      "bytes": 1792,
+      "sha256": "c683c79e718368c28264f05e9b0101d4d409f986f125684b35590e5a25746fad"
+    },
+    "source_revision": "647bce2ec9cf74beab43adea831c2e0712d28ea8",
+    "gate_sha256": "645dd18969232888cbb393e4193542b421706161eaf6ef2af0af6acca553d7ec",
+    "previous_report_commit": "0c8cfaa02e6c32845b7a456d68045b787a9a9559",
+    "original_completed_review_retained_unchanged": true,
+    "test_execution_and_total_passes_unchanged": true
+  }
+}

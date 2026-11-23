@@ -1,0 +1,154 @@
+{
+  "schema": "ssmcp.account-compat-diagnostic-public-facts.v1",
+  "status": "diagnostic_passed_once",
+  "evidence_read_utc": "2026-11-21T06:41:09.998814+00:00",
+  "source": {
+    "execution_receipt_revision": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+    "execution_label": "W account_compat diagnostic v1"
+  },
+  "diagnostic_result": {
+    "check_records": 69,
+    "passed_records": 69,
+    "failed_records": 0,
+    "legacy_0_10_13_records": 36,
+    "new_main_records": 33,
+    "producer_passed": true,
+    "producer_elapsed_seconds": 1.52,
+    "invocation_mode_reported_by_execution_owner": "both/check-default",
+    "coverage_evidence": "The report contains both old-0.10.13 and new-main check groups and the legacy zero-argument/default-login checks. The command manifest was not reopened by this extractor.",
+    "selected_actual_http_results": [
+      {
+        "check": "old-0.10.13:another_subject_cannot_list_connection",
+        "passed": true,
+        "http_status": 200,
+        "response": {
+          "clients": []
+        }
+      },
+      {
+        "check": "new-main:another_subject_cannot_list_connection",
+        "passed": true,
+        "http_status": 200,
+        "response": {
+          "clients": []
+        }
+      }
+    ],
+    "known_client_cross_subject_call": {
+      "check": "new-main:another_subject_cannot_call_known_client_id",
+      "passed": true,
+      "numeric_http_status_recorded_in_this_check": false,
+      "http_status": null,
+      "status_404_reported_by_execution_owner": true,
+      "evidence_boundary": "The report preserves passed=true for this check but not the numeric response status. 404 is attributed to the original executor's completion notice, not to a directly recorded operand in this report."
+    },
+    "interpretation": "This single diagnostic did not reproduce the original W UI failure; it does not establish the original cause or replace the failed full UI run.",
+    "original_W_UI_status": "failed",
+    "original_failure_cause": "unresolved_not_reproduced_once",
+    "count_boundary": "These 69 diagnostic checks are not added to the original UI run's 503 passed checks and do not make its failed account_compat suite pass."
+  },
+  "execution": {
+    "observed_utc": "2026-11-21T06:37:16.936186+00:00",
+    "cancelled": false,
+    "duration_ms": 2670,
+    "error": null,
+    "exit_code": 0,
+    "running": false,
+    "state": "completed",
+    "stderr_cursor": 0,
+    "stderr_eof": true,
+    "stdout_cursor": 6735,
+    "stdout_eof": true,
+    "timed_out": false,
+    "stderr_bytes": 0,
+    "recorded_stdout_artifact": {
+      "bytes": 6735,
+      "complete": true,
+      "observed_bytes": 6735,
+      "sha256": "2eb0ba61b13b1ca24cb2db4c18515fbf251d82ee0dcf93f5b34100c9dbefcca4",
+      "sha256_scope": "first_bytes_snapshot",
+      "lines": 70
+    },
+    "raw_stdout_artifact_read_by_this_extractor": false,
+    "evidence_boundary": "Exit, EOF, timing and output-artifact metadata were read from the durable native execution receipt; no job polling or execution was performed by this extractor."
+  },
+  "cleanup_and_input_records": {
+    "native_supervisor_absent": true,
+    "matching_candidate_process_count": 0,
+    "inputs_after_unchanged": true,
+    "source": "The supplied durable actual-execution receipt.",
+    "independent_new_process_scan_performed": false
+  },
+  "recorded_bindings": {
+    "report_bytes": 9078,
+    "report_sha256": "eb7109754559f6e6cd937f61a83fc32f0254ea1eb4ae84a67f71bf6342d7f313",
+    "diagnostic_candidate_sha256": "792baa38960f7491e72e3a826b83d3e5a399abcf9e23d54357b243d1f7519c3a",
+    "command_manifest_sha256": "295a9f87514b35a57a7c1c5a8677d968c82b41d5773c0b223636ed87afda2e88",
+    "client_sha256": "d654703a12f9479e97b9807ac8d61f370bd5c413963bf6e5b6e45dfbd8434f41",
+    "old_server_sha256": "e8f59d66493e68ba3c196a72ae3733b8b7336fbfb1da0cf92960069637f1f7bf",
+    "new_server_sha256": "c1991fac3c0c6aa0a229781c87fe67ef24c028fd5ffc88b0c50dc413baaa5527",
+    "candidate_source_manifest_and_binary_files_read_by_this_extractor": false
+  },
+  "producer_isolation_recorded": {
+    "production_state_used": false,
+    "production_connections_opened": false,
+    "global_configuration_modified": false
+  },
+  "prior_failed_ui_execution_addendum": {
+    "evidence_read_utc": "2026-11-21T06:41:09.998814+00:00",
+    "scope": "Newly available durable execution fields supplement the earlier first-attempt public facts. The original public facts file is not edited, and the original failure remains a failure.",
+    "prior_public_facts_file": "ui24-W-account-compat-first-public-facts.json",
+    "prior_public_facts_bytes": 7630,
+    "prior_public_facts_sha256": "911d57c96e811c01593ac7162037f87398ecda0a2d2f7825a9d7661fb47fb983",
+    "source_revision": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+    "acceptance_sha256": "d7aad6e79802b14164b0811dd358bcab68312b23245038d1de2166b9575d304c",
+    "exit_code": 1,
+    "running": false,
+    "stdout_eof": true,
+    "stderr_eof": true,
+    "stdout_bytes": 2094,
+    "stdout_sha256": "e77ec671ab4fc5bb85e834bfb37f257541dbfcf80ba71dff67eaa8e9b6222331",
+    "stderr_bytes": 0,
+    "all_seven_owned_children_reaped": true,
+    "inputs_unchanged": true,
+    "executed": 7,
+    "passed": 6,
+    "not_run": 17,
+    "passed_suite_checks": 503,
+    "failed_producer_records": 62,
+    "failed_producer_passed": 61,
+    "failed_producer_failed": 1,
+    "failed_suite_controller_checks": null,
+    "p1_executed": false
+  },
+  "originals_read": [
+    {
+      "role": "diagnostic_report",
+      "file": "w-account-compat-diagnostic-v1/run-once/evidence/report.json",
+      "bytes": 9078,
+      "sha256": "eb7109754559f6e6cd937f61a83fc32f0254ea1eb4ae84a67f71bf6342d7f313",
+      "full_bytes_read_and_expected_sha256_verified": true
+    },
+    {
+      "role": "diagnostic_execution",
+      "file": "w-account-compat-diagnostic-v1/root-actual-execution.json",
+      "bytes": 1994,
+      "sha256": "8802c300eba769edfb9cb6f5b48d5f166ae1ae1a30a3db72025c077113f738c6",
+      "full_bytes_read_and_expected_sha256_verified": true
+    },
+    {
+      "role": "prior_failed_ui_execution_addendum",
+      "file": "w-ui24-acceptance-mesa-v1/root-actual-execution.json",
+      "bytes": 6147,
+      "sha256": "62edf5ef523b67ba4976557e3afce754e2542bda58870eeb784a2818ebf79c7c",
+      "full_bytes_read_and_expected_sha256_verified": true
+    }
+  ],
+  "boundaries": [
+    "This extractor read the diagnostic report and the two newly supplied durable execution JSON receipts only; it did not run or repeat any product, test, Cargo, helper, model or diagnostic.",
+    "The successful one-off diagnostic did not reproduce the original W UI failure; it does not identify that failure's cause or validate a correction.",
+    "The original UI result remains 7 started, 6 passed, 1 failed and 17 not run, with 503 passed-suite checks and 61 true plus 1 false in the failed producer.",
+    "P1 was not executed by either recorded run. Neither UI24 nor P1 completion is inferred from this diagnostic.",
+    "Native job, agent, session, client and process identifiers, private absolute paths, account identifiers and synthetic test-chat text are omitted."
+  ]
+}

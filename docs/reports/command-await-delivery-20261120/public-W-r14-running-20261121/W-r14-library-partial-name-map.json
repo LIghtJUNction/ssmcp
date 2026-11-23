@@ -1,0 +1,228 @@
+{
+  "schema": "ssmcp.partial-library-name-result-map.v1",
+  "status": "all_24_selected_names_match_once_in_observed_log",
+  "observed_at_utc": "2026-11-21T05:52:46.237179+00:00",
+  "execution_label": "W / r14",
+  "source_binding": {
+    "commit": null,
+    "tree": null,
+    "confirmation": "Pending the final r14 source-bound receipt. The directory label alone is not a confirmed source identity."
+  },
+  "final_gate_completion_confirmed": false,
+  "name_catalog": {
+    "file": "public-V-r13-completed-20261121/gate-V-r13-completed-public-facts.json",
+    "bytes": 15559,
+    "sha256": "5edbbc60b513c9245904014c7a6c5951f69d5e06a44285ea53131c4d0ed03d00",
+    "usage": "Names only; no V result reused."
+  },
+  "actual_log": {
+    "file": "release25-final14/logs/candidate2-library-private.log",
+    "bytes": 558263,
+    "sha256": "fe9de2041cbfbce0c7610e854d8a25955d86cd41303827dfdb3eac30de404cfe",
+    "full_bytes_read_once": true,
+    "size_and_mtime_stable_during_read": true,
+    "last_test_result": {
+      "line_number": 7922,
+      "line": "test result: ok. 2057 passed; 0 failed; 23 ignored; 0 measured; 6 filtered out; finished in 36.63s"
+    },
+    "read_boundary": "The entire UTF-8 log was read and hashed once. File size and modification time were stable across that read. Only exact named test-result lines and the last parent libtest summary are reproduced here."
+  },
+  "library_parent_summary": {
+    "passed": 2057,
+    "failed": 0,
+    "ignored": 23,
+    "measured": 0,
+    "filtered_out": 6,
+    "seconds": 36.63,
+    "summary_line_number": 7922
+  },
+  "mapping": {
+    "selected_total": 24,
+    "distinct_names": 24,
+    "prior_target_names": 17,
+    "new_regression_names": 7,
+    "each_exact_ok_line_occurs_once": true,
+    "exact_matching_rule": "Whole line equals: test <full Rust test name> ... ok",
+    "groups": {
+      "prior_seventeen": [
+        {
+          "name": "client::terminal::conversation::messaging::tests::native_mentions_require_selection_and_file_syntax_remains_literal",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5642
+          ]
+        },
+        {
+          "name": "client::terminal::conversation::messaging::tests::missing_native_recipients_never_fall_back_to_next_caller",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5641
+          ]
+        },
+        {
+          "name": "client::terminal::conversation::messaging::tests::service_receipt_clears_only_the_exact_submitted_native_draft",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5647
+          ]
+        },
+        {
+          "name": "client::terminal::conversation::messaging::tests::a_mismatched_or_failed_native_receipt_never_clears_the_draft",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5636
+          ]
+        },
+        {
+          "name": "client::messaging::tests::mismatched_receipt_preserves_draft_and_idempotent_retry_cannot_change_target",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5326
+          ]
+        },
+        {
+          "name": "client::interface::history::ownership::tests::program_reply_keeps_original_owner_and_one_copy_after_selection_changes",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5152
+          ]
+        },
+        {
+          "name": "client::interface::messages::tests::final_reply_retry_receipts_cannot_be_borrowed_by_another_thread",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5205
+          ]
+        },
+        {
+          "name": "client::references::tests::unavailable_files_keep_source_and_warn_without_read_actions",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5405
+          ]
+        },
+        {
+          "name": "client::references::tests::full_budget_unavailable_references_keep_exact_text_and_local_warnings",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5384
+          ]
+        },
+        {
+          "name": "client::references::tests::unavailable_metadata_cannot_crowd_out_readable_reference_contents",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5414
+          ]
+        },
+        {
+          "name": "client::references::tests::missing_reference_retries_remain_frozen_until_source_is_edited",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5389
+          ]
+        },
+        {
+          "name": "client::steering::tests::full_budget_missing_reference_reaches_real_queue_once_with_ack_notice",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5544
+          ]
+        },
+        {
+          "name": "client::references::tests::skill_names_use_effective_precedence_and_explicit_roots",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5409
+          ]
+        },
+        {
+          "name": "client::completion::tests::send_body_completes_references_without_changing_the_command",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5016
+          ]
+        },
+        {
+          "name": "client::completion::tests::send_completion_rejects_commands_shell_currency_and_code",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5017
+          ]
+        },
+        {
+          "name": "client::terminal::conversation::skill_picker_tests::skill_picker_keys_only_deliver_the_explicitly_sent_selection",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5674
+          ]
+        },
+        {
+          "name": "client::terminal::conversation::skill_picker_tests::send_reference_picker_preserves_drafts_and_delivers_only_after_explicit_send",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5673
+          ]
+        }
+      ],
+      "new_seven": [
+        {
+          "name": "client::messaging::tests::lookup_waits_for_the_coalesced_quiet_list_even_when_the_directory_is_unchanged",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5325
+          ]
+        },
+        {
+          "name": "client::messaging::tests::lookup_rejects_invalid_and_timed_out_replies_and_does_not_cross_connections",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5323
+          ]
+        },
+        {
+          "name": "client::terminal::conversation::messaging::tests::cold_exact_lookup_highlights_merged_process_row_without_selecting_or_sending",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5639
+          ]
+        },
+        {
+          "name": "client::terminal::conversation::messaging::tests::explicit_lookup_reports_fresh_miss_or_failure_without_clearing_the_command",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5640
+          ]
+        },
+        {
+          "name": "client::terminal::conversation::messaging::tests::coalesced_miss_joins_a_query_after_list_and_finishes_on_its_empty_reply",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5638
+          ]
+        },
+        {
+          "name": "client::terminal::conversation::messaging::tests::queued_lookup_reply_cannot_override_escape_navigation_or_a_newer_draft",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5646
+          ]
+        },
+        {
+          "name": "client::terminal::conversation::messaging::tests::newer_query_coalesces_the_list_and_consumes_only_its_own_command",
+          "exact_ok_count": 1,
+          "line_numbers": [
+            5645
+          ]
+        }
+      ]
+    }
+  },
+  "boundaries": [
+    "The older V public record supplies names only. Every success in this mapping comes from the newly read r14 library log.",
+    "These 24 results are a subset of the observed 2057 library passes; they are not additional executions or passes.",
+    "This is a partial mapping, not a final 35-stage Gate result. Release/build completion and source identity await the final receipts.",
+    "No product, test, Cargo, helper, model or new gate was executed. No ELF bytes were read or rehashed, and no shared lock or source was changed.",
+    "Private native job, agent, session and process identities and private absolute paths are omitted."
+  ]
+}

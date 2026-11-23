@@ -1,0 +1,412 @@
+{
+  "schema_version": 1,
+  "kind": "Gate19-final-library-failure",
+  "observed_utc": "2026-11-21T13:26:26Z",
+  "source": {
+    "commit": "cf358f00f84b73e9892e62dd9b50b0dcc218201c",
+    "tree": "a9b283173ee46cff86ca4a119566f0ebc488292a",
+    "PR": 172,
+    "PR_merged_at": "2026-11-21T12:56:33Z",
+    "parents": [
+      "9362d2232e1ca57d976308b10df6ed6b4b167332",
+      "183d7ada89d88e53b30c4d4bc8c4aef62c1e8d91"
+    ],
+    "package_version": "0.10.25",
+    "zuse_pin": "8d37a7df6fd94df1d0939eb6800c238e71f5835d"
+  },
+  "run": {
+    "id": "1ecdfff7f26545fce5f1e8f2c6ebdb04",
+    "status": "failed",
+    "driver_started_utc": "2026-11-21T13:04:19.413Z",
+    "driver_finished_utc": "2026-11-21T13:10:20.359Z",
+    "owned_started_utc": "2026-11-21T13:04:16.681655+00:00",
+    "owned_finished_utc": "2026-11-21T13:10:20.501836+00:00",
+    "owned_exit_code": 1,
+    "owned_error": null,
+    "launcher_started_utc": "2026-11-21T13:04:17.882Z",
+    "launcher_finished_utc": "2026-11-21T13:10:20.463Z",
+    "launcher_exit_code": 1,
+    "launcher_error": "AssertionError: gate did not pass",
+    "stages_total": 35,
+    "stages_passed": 4,
+    "stages_failed": 1,
+    "stages_not_run": 30
+  },
+  "stage_results": [
+    {
+      "name": "release-policy",
+      "exit_code": 0,
+      "seconds": 14.97,
+      "test_results": null
+    },
+    {
+      "name": "deployment-policy",
+      "exit_code": 0,
+      "seconds": 12.89,
+      "test_results": null
+    },
+    {
+      "name": "fmt",
+      "exit_code": 0,
+      "seconds": 9.87,
+      "test_results": null
+    },
+    {
+      "name": "library-compile",
+      "exit_code": 0,
+      "seconds": 201.65,
+      "test_results": null
+    },
+    {
+      "name": "library-private",
+      "exit_code": 101,
+      "seconds": 72.85,
+      "test_results": [
+        {
+          "failed": 2,
+          "filtered": 6,
+          "ignored": 26,
+          "measured": 0,
+          "passed": 2102,
+          "result": "FAILED"
+        }
+      ]
+    }
+  ],
+  "stages_not_run": [
+    "library-host",
+    "clippy",
+    "windows-gnu-clippy",
+    "integration-compile",
+    "integration-allow_account",
+    "integration-cc_backend",
+    "integration-client_resources",
+    "integration-client_server_config",
+    "integration-codex_backend",
+    "integration-collaboration",
+    "integration-connection_context",
+    "integration-context",
+    "integration-context_helpers",
+    "integration-context_runtime",
+    "integration-oauth_security",
+    "integration-pi_backend",
+    "integration-release_client",
+    "integration-resources",
+    "integration-rsync",
+    "integration-server_runtime",
+    "integration-terminals",
+    "integration-two_tools",
+    "integration-workspace_bridge",
+    "integration-zuse_worker_entry",
+    "library-code-mode-ignored",
+    "integration-two_tools-ignored",
+    "integration-workspace_bridge-ignored",
+    "integration-context_helpers-ignored",
+    "release",
+    "decoder"
+  ],
+  "library_private": {
+    "exit_code": 101,
+    "stage_seconds": 72.85,
+    "parent_result": {
+      "result": "FAILED",
+      "passed": 2102,
+      "failed": 2,
+      "ignored": 26,
+      "measured": 0,
+      "filtered": 6,
+      "parent_report_seconds": 72.83
+    },
+    "expected_parent_result": {
+      "result": "ok",
+      "passed": 2104,
+      "failed": 0,
+      "ignored": 26,
+      "measured": 0,
+      "filtered": 6
+    },
+    "child_summaries": [
+      {
+        "line_number": 5289,
+        "parsed": {
+          "failed": 0,
+          "filtered": 2135,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "result": "ok"
+        },
+        "raw_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2135 filtered out; finished in 0.00s"
+      },
+      {
+        "line_number": 5298,
+        "parsed": {
+          "failed": 0,
+          "filtered": 2135,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "result": "ok"
+        },
+        "raw_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2135 filtered out; finished in 0.00s"
+      },
+      {
+        "line_number": 5302,
+        "parsed": {
+          "failed": 0,
+          "filtered": 2135,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "result": "ok"
+        },
+        "raw_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2135 filtered out; finished in 0.01s"
+      }
+    ],
+    "child_passes_added_to_parent": false
+  },
+  "failures": [
+    {
+      "name": "http::question_delivery_tests::tool_summary_code_mode_wait_for_keeps_the_native_delivery_boundary",
+      "location": "src/http/question_delivery_tests.rs:959:5",
+      "diagnostic": "assertion left == right failed; left String(\"timed_out\"), right \"ready\"",
+      "static_observation": {
+        "inner_waitFor_timeout_ms": 1000,
+        "outer_CodeArguments_timeout_ms": 10000,
+        "assertion_before_summary_and_ACK_checks": true,
+        "actual_delay_cause_unresolved": true
+      }
+    },
+    {
+      "name": "http::question_delivery_tests::tool_summary_passive_await_rechecks_oauth_and_binding_after_probe",
+      "location": "src/http/question_delivery_tests.rs:1007:14",
+      "diagnostic": "the final native summary probe must reach the authenticated peer: Elapsed(())",
+      "static_observation": {
+        "inner_await_timeout_ms": 1000,
+        "final_probe_arrival_barrier_ms": 3000,
+        "revocation_is_after_that_barrier": true,
+        "failure_does_not_identify_which_revocation_iteration": true,
+        "probe_permanently_absent_not_proven": true
+      }
+    }
+  ],
+  "newly_added_regressions": {
+    "lines": [
+      "test client::terminal::conversation::questions::history_tests::full_keyboard_empty_questions_list_arrows_move_between_panels ... ok",
+      "test client::terminal::conversation::questions::history_tests::full_keyboard_questions_list_arrows_preserve_selection_until_enter ... ok",
+      "test computer::zuse_backend::tests::cancellation_returns_while_native_submit_is_blocked_and_preserves_its_error ... ok"
+    ],
+    "all_three_reported_ok": true,
+    "compiled": true,
+    "executed": true,
+    "included_in_parent_2102_not_additional": true,
+    "not_full_gate_or_UI_acceptance": true
+  },
+  "policy_counts": {
+    "release": {
+      "passed": 106,
+      "seconds": 14.614,
+      "result": "OK"
+    },
+    "deployment": {
+      "passed": 35,
+      "seconds": 12.607,
+      "result": "OK"
+    }
+  },
+  "bindings": {
+    "manifest": {
+      "bytes": 16562,
+      "sha256": "a4ebb9f9023af2ba65276eeee0c236aa94915f176306f69b85292a050095fbf6",
+      "read_scope": "Full file hashed; selected source, original-control, stage-contract and fixed-input fields read, not a new execution of byte/AST comparison."
+    },
+    "stage_contract": {
+      "integration_targets": 20,
+      "mandatory_ignored_tests": 14,
+      "rust_stages": 26,
+      "stages": 35
+    },
+    "inverse_bytes_and_normalized_AST_identical_recorded": true,
+    "source_freeze_validation": "exact caller-supplied file hash; actual Git source checked separately",
+    "prepared_execution_started_false_is_historical": true,
+    "actual_start_proved_by_separate_launches": true,
+    "source_lock_acquired_by_owned_controller": true,
+    "source_lock_held_until_child_return": true,
+    "target_lock_held_for_entire_batch": true,
+    "all_descendants_independently_proven_reaped": false,
+    "nine_inputs_before": {
+      "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+      "cargo_lock": "b8caf2e4f747094a0bcd12842b1fe7894d7d956efa1f8b756f17a16518b9d393",
+      "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+      "driver": "be850f2c0b62e04623f15382b78f061ef8dde94e6ef39f68be477f2925196254",
+      "git_heads": "b074856fd99838b2f47f5a732490baf318128cfad4ae261521e5f59278b66e92",
+      "owner_agreement": "b8b32b4a81be2ea1fb0c7983fdd879d741cea511205006fad40bcd6c466acc93",
+      "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+      "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+      "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+    },
+    "nine_inputs_after": {
+      "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+      "cargo_lock": "b8caf2e4f747094a0bcd12842b1fe7894d7d956efa1f8b756f17a16518b9d393",
+      "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+      "driver": "be850f2c0b62e04623f15382b78f061ef8dde94e6ef39f68be477f2925196254",
+      "git_heads": "b074856fd99838b2f47f5a732490baf318128cfad4ae261521e5f59278b66e92",
+      "owner_agreement": "b8b32b4a81be2ea1fb0c7983fdd879d741cea511205006fad40bcd6c466acc93",
+      "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+      "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+      "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+    },
+    "nine_inputs_match": true,
+    "midrun_nine_inputs_independently_hashed": true,
+    "worktree_head_after": "cf358f00f84b73e9892e62dd9b50b0dcc218201c",
+    "worktree_status_after": ""
+  },
+  "evidence": {
+    "gate": {
+      "file": "candidate-gates.json",
+      "bytes": 934590,
+      "sha256": "da18fa551856991da17b4cfd9f93b91c7f63b287b843d95836da77f79a07126f",
+      "read_scope": "Full original file hashed; selected binding/status/timing/stage and parent result fields read."
+    },
+    "launcher_launch": {
+      "file": "launch.json",
+      "bytes": 3636,
+      "sha256": "ea743796fc6c2336ef4155a367d11807048d24135858d7adc4c272fb7eedc78f",
+      "read_scope": "Full original read."
+    },
+    "owned_launch": {
+      "file": "owned/launch.json",
+      "bytes": 1007,
+      "sha256": "f61c629908503d13f23ccfc62d2ef4aaf363077918ba71eb6191fd9b3d8e38ac",
+      "read_scope": "Full original read."
+    },
+    "launcher_exit": {
+      "file": "exit.json",
+      "bytes": 4862,
+      "sha256": "47938143b5499680bb7fa47134fd1d8d061419763c81e74bb71a031755e490e2",
+      "read_scope": "Full original read."
+    },
+    "owned_exit": {
+      "file": "owned/exit.json",
+      "bytes": 1171,
+      "sha256": "879375e853aff7b72e89535bd90e31e59ff6c2a06a36c29adc6c51ca81a097eb",
+      "read_scope": "Full original read."
+    },
+    "logs": [
+      {
+        "name": "release-policy",
+        "bytes": 22851,
+        "sha256": "c2fbe31e463de27a9c1e2682c2cfb09d3c19d1155b5cd3c68fa7cb7637767598",
+        "read_scope": "Full log hashed; parent unittest summary lines and selected tail read."
+      },
+      {
+        "name": "deployment-policy",
+        "bytes": 5661,
+        "sha256": "443ef7108ec2a94f75afe4807e3c38a66f5bc2b2502d127d7ed0222db3eebee7",
+        "read_scope": "Full log hashed; parent unittest summary lines and selected tail read."
+      },
+      {
+        "name": "library-private",
+        "bytes": 568953,
+        "sha256": "60ee3d5aefad1984a4e487e74213dbd9452ccb5121a546d5a8c8650784877cad",
+        "read_scope": "Full log hashed; selected failure headings, assertions, final parent/child summaries and exact three new regression result lines read."
+      }
+    ],
+    "preparation": [
+      {
+        "file": "source-final-r19-freeze.json",
+        "bytes": 179976,
+        "sha256": "b5ce31874c2624dc3db14a848e786d8d7d40f787c4e3da585a6b6cd482d1d2dd",
+        "read_scope": "Full file hashed; scalar identity and time fields read."
+      },
+      {
+        "file": "source-final-r19-object-prefetch.json",
+        "bytes": 11462,
+        "sha256": "3afba7f4eceb0b85aa5f23337d2db9b99cb0f25030c4d6f1b667f349004bb764",
+        "read_scope": "Full file hashed; scalar identity and time fields read."
+      },
+      {
+        "file": "root-continuation-final19-running-20261121-v1.json",
+        "bytes": 17408,
+        "sha256": "d5bb049e8040ea6fff7ef817d930aa0e19ba22b9a662bbaf69abc9e25d85ad67",
+        "read_scope": "Full file hashed; scalar identity and time fields read."
+      }
+    ]
+  },
+  "acquisition": {
+    "original_gate_executed_once": true,
+    "report_root_only_read_existing_records": true,
+    "primary_read_queries_timed_out": true,
+    "continued_through_existing_authorized_maintenance_session": true,
+    "no_new_model_or_gate_launch_by_report_root": true,
+    "query_timeouts_not_attributed_as_cause_of_test_failures": true,
+    "single_execution_evidence_scope": "One original run is recorded with matching launch/exit identities and reported by the source coordinator; reporting root did not perform an independent census of all machine processes."
+  },
+  "next": {
+    "source_owner_readonly_diagnosis_then_original_author_continuation": true,
+    "new_author_phase_not_yet_observed_started": true,
+    "no_blind_rerun_or_relaxed_assertion_or_skip": true,
+    "N19_executed": false,
+    "runtime_executed": false,
+    "UI24_executed": false,
+    "controls_multiUID_version_P1_and_two_native_supplements_executed": false,
+    "consumers_paused": true,
+    "release_dispatch": false,
+    "H2_executed": false,
+    "production_install_reload_deploy": false
+  },
+  "native_supplement_preparation": {
+    "prepared": true,
+    "execution_allowed": false,
+    "final_binding": null,
+    "runtime_execution": false,
+    "reference_source_only": "9362d2232e1ca57d976308b10df6ed6b4b167332",
+    "this_reference_is_not_a_runtime_source_binding": true,
+    "strict_total_deadline": false,
+    "counts_unchanged": true,
+    "manifest": {
+      "bytes": 1547,
+      "sha256": "611fd05a32567f5362fd999a5e4862320c9e2d965cdef92cca83b015823f1203"
+    },
+    "pending_fields": {
+      "bytes": 1466,
+      "sha256": "053cb2b4f80a8a51e43552d0049ef3a2c80ba9a8ca25143408b28e85f4c2ff1d"
+    },
+    "read_scope": "Manifest and pending fields fully read; source files hashed, not imported or executed. Does not add passed tests."
+  },
+  "recovery_last_original_read": {
+    "file": "continuation.json",
+    "bytes": 22519,
+    "sha256": "de8f0ad9e51bd2297574387c4ca02faff5d74602093a6079599fca0dcee55589",
+    "checkpoint_phase": "Gate19 running snapshot saved before final failure",
+    "source_checkpoint": {
+      "file": "root-continuation-final19-running-20261121-v1.json",
+      "bytes": 17408,
+      "sha256": "d5bb049e8040ea6fff7ef817d930aa0e19ba22b9a662bbaf69abc9e25d85ad67",
+      "saved_utc": "2026-11-21T13:08:05.759058+00:00"
+    },
+    "this_snapshot_does_not_override_final_gate_failure": true,
+    "read_scope": "Full files hashed; selected next-action and timing fields read.",
+    "boot_unchanged_observed": true,
+    "report_root_restarted_or_reloaded": false
+  },
+  "previous_source_results": {
+    "source": "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+    "Gate18": "35 passed",
+    "N18": "passed readonly parse;0product",
+    "runtime18": "18 passed",
+    "UI24": "3passed, fourth failed,20notrun;264 parent assertions;5child cases separate",
+    "old_results_transferred_to_new_source": false
+  },
+  "release_authorization": {
+    "direct_publish_request_recorded_by_source_owner": true,
+    "original_delivery_independently_read_by_reporting_root": false,
+    "checkpoint_request_record_read": true,
+    "prior_cross_project_relay_hold_cleared": true,
+    "dispatch_performed": false,
+    "H2_executed": false,
+    "production_install_reload_deploy_performed_in_this_flow": false
+  },
+  "report_root_heavy_or_queued_work": 0,
+  "stages_not_run_read_scope": "Names are mapped from the previously verified Gate18 original 35-stage sequence. The Gate19 binding records the same stage contract and inverse byte/normalized AST equivalence; reporting root did not rerun that comparison. Gate19 actually stopped at library-private. These names describe remaining planned stages, not current invocations or results."
+}

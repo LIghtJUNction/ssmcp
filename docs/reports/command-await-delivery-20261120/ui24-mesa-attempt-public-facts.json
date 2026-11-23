@@ -1,0 +1,241 @@
+{
+  "schema": "ssmcp.ui-acceptance-public-facts.v1",
+  "scope": "Read-only extraction of the second full UI acceptance attempt with the Mesa display environment; this is a failed, partial acceptance result.",
+  "status": "failed",
+  "source_revision": "784370b5fe1b817c788273a5f7b1ab826c743965",
+  "product_version": "0.10.25",
+  "expected_engine_version": "0.2.2",
+  "execution": {
+    "started_utc": "2026-11-21T03:53:48Z",
+    "finished_utc": "2026-11-21T03:56:39Z",
+    "controller_seconds": 171.074,
+    "exit_code": 1,
+    "running": false,
+    "stdout_eof": true,
+    "stderr_eof": true,
+    "stdout_truncated": false,
+    "stderr_truncated": false,
+    "stderr_empty": true,
+    "error": "acceptance stopped at session_groups"
+  },
+  "counts": {
+    "logical_suites_including_alias": 25,
+    "planned_independent_executions": 24,
+    "actual_independent_executions": 10,
+    "independent_passes": 9,
+    "failed_executions": 1,
+    "not_run": 14,
+    "passed_checks_in_fully_passed_suites": 758,
+    "alias_coverage_count": 1,
+    "counting_rule": "758 counts only the nine passed suites. The failed producer's 21 prerequisite checks and the human_finish alias are not added."
+  },
+  "passed_suites": [
+    {
+      "name": "message_references",
+      "checks": 53,
+      "seconds": 12.336,
+      "exit_code": 0,
+      "report_sha256_recorded_in_acceptance": "1ecb8b47e3937a2404cc8758c4e03a2d67f9e733b9cdff7decf2bdb0484abb4c"
+    },
+    {
+      "name": "force_send",
+      "checks": 137,
+      "seconds": 24.26,
+      "exit_code": 0,
+      "report_sha256_recorded_in_acceptance": "ce7194a307f42219d25f6d873542aca133bcfb73b97b115af0dcd93538dde6cd"
+    },
+    {
+      "name": "listener_transports",
+      "checks": 74,
+      "seconds": 7.672,
+      "exit_code": 0,
+      "report_sha256_recorded_in_acceptance": "c9b86f51ef84ced9e86de3f5174eeabbd55ae0d0d3f0713828a5ea3eff092e8a"
+    },
+    {
+      "name": "zuse_worker",
+      "checks": 31,
+      "seconds": 2.647,
+      "exit_code": 0,
+      "report_sha256_recorded_in_acceptance": "c98830f4a6e61418dbd934f64dd1fd799be74c4b9068a9dfdeb079bf87bf9218"
+    },
+    {
+      "name": "interactions",
+      "checks": 172,
+      "seconds": 55.32,
+      "exit_code": 0,
+      "report_sha256_recorded_in_acceptance": "76813bd7578af243d4b87e2bd714463a4c904f32ada7cb052e03e2286f7dcdba"
+    },
+    {
+      "name": "private_desktop",
+      "checks": 35,
+      "seconds": 3.334,
+      "exit_code": 0,
+      "report_sha256_recorded_in_acceptance": "0ce1075bdd1c69bfff096ba7c429d406ef9eedaff1c2f2f42585b3246d8bdb0b"
+    },
+    {
+      "name": "account_compat",
+      "checks": 69,
+      "seconds": 2.87,
+      "exit_code": 0,
+      "report_sha256_recorded_in_acceptance": "84e1a8b7edee3e85d19bec1b9ea66115d961e6e046abbdb2522e048709c4cf44"
+    },
+    {
+      "name": "input_history",
+      "checks": 150,
+      "seconds": 23.578,
+      "exit_code": 0,
+      "report_sha256_recorded_in_acceptance": "8f165b96f4c8fe1a4b2f349d10436f26e63a63714866704b1e3cf16363898d26"
+    },
+    {
+      "name": "reload_state",
+      "checks": 37,
+      "seconds": 8.027,
+      "exit_code": 0,
+      "report_sha256_recorded_in_acceptance": "629cc66d1e67fa6f249187d54f7c9fbf2c0205d67a67b9ef1564962ba7e6ebcb"
+    }
+  ],
+  "failed_suite": {
+    "name": "session_groups",
+    "controller_exit_code": 1,
+    "controller_seconds": 11.118,
+    "controller_checks": null,
+    "controller_checks_note": "The failed acceptance entry does not contain a checks field. The progress stream's fallback 0 is not a measured check count.",
+    "controller_error": "RuntimeError: suite process did not complete successfully",
+    "producer_status": "failed",
+    "producer_seconds": 9.768,
+    "producer_prerequisite_checks": 21,
+    "producer_frames": 0,
+    "producer_groups": 0,
+    "producer_receipts": 0,
+    "phase": "Opening the explicit verified native-recipient picker, before session-group interaction.",
+    "failed_assertion": "the explicit native recipient picker",
+    "observed_state": "The terminal reported no matching verified native recipient and retained the draft.",
+    "trace": [
+      {
+        "file": "scripts/e2e_session_groups.py",
+        "line": 317,
+        "function": "main -> run"
+      },
+      {
+        "file": "scripts/e2e_session_groups.py",
+        "line": 179,
+        "function": "run -> select"
+      },
+      {
+        "file": "scripts/e2e_session_groups.py",
+        "line": 90,
+        "function": "select -> open_picker"
+      },
+      {
+        "file": "scripts/e2e_interactions.py",
+        "line": 115,
+        "function": "open_picker -> wait_state(view == agents)"
+      },
+      {
+        "file": "scripts/e2e_input_history.py",
+        "line": 151,
+        "function": "wait_state -> AssertionError"
+      }
+    ],
+    "script_sha256": "6377ecff80b3da6be16f9017e74c7f548d12e6c3df3a62e0e8567ce4981c9924",
+    "classification": "Observed failure stage only; this review does not determine whether the product or fixture requires a change."
+  },
+  "not_run_suites": [
+    "client_ui",
+    "canvas_logs",
+    "composer",
+    "questions",
+    "presentations",
+    "context_memory",
+    "file_paste",
+    "relay_composer",
+    "goal_startup",
+    "tool_summaries",
+    "readable_commands",
+    "summary_commands",
+    "physical_latency",
+    "time_wait"
+  ],
+  "alias": {
+    "name": "human_finish",
+    "status": "covered_by",
+    "covered_by": "interactions",
+    "independently_executed": false,
+    "independent_pass": false,
+    "source_revision": "784370b5fe1b817c788273a5f7b1ab826c743965",
+    "alias_file": {
+      "relative_path": "scripts/e2e_human_finish.py",
+      "bytes": 544,
+      "sha256": "a6103ab116650dfb0afeef211be7e7f94f28ec904d90f484d38824670437709f"
+    },
+    "target_file": {
+      "relative_path": "scripts/e2e_interactions.py",
+      "bytes": 44311,
+      "sha256": "8bfd7e5ac4519be9e186e3361e8e683b47e8b396a8b7df880035ecc6e8ba43e5"
+    },
+    "target_entrypoint": "main",
+    "target_report_sha256": "76813bd7578af243d4b87e2bd714463a4c904f32ada7cb052e03e2286f7dcdba"
+  },
+  "input_and_cleanup": {
+    "all_ten_started_suite_processes_reaped": true,
+    "all_ten_suite_input_before_after_comparisons_equal": true,
+    "acceptance_inputs_unchanged": true,
+    "acceptance_changed_inputs": [],
+    "input_set_sha256_before": "19e4cefb584e1ec5fc0d01274f517e4794c21c18dad74879656dad9ffc320907",
+    "input_set_sha256_after": "19e4cefb584e1ec5fc0d01274f517e4794c21c18dad74879656dad9ffc320907",
+    "failed_producer_inputs_unchanged": true,
+    "evidence_boundary": "These facts come from the acceptance entries and complete execution API response. No separate integration or provider-postflight file was read for this public extract."
+  },
+  "source_and_build_binding_recorded_in_acceptance": {
+    "source_revision": "784370b5fe1b817c788273a5f7b1ab826c743965",
+    "source_files": 1545,
+    "tested_source_manifest": {
+      "path": "source-manifest.json",
+      "bytes": 320140,
+      "sha256": "332aa41a2650bffc7c69213dacf381817b8ef0b59b37d62be2e5e038fdcf9b7f",
+      "entries": 1849,
+      "source_files": 1545,
+      "normalized_source_sha256": "8e909b206d372757eaaf719e8fe585007d680f6491f045806dc7a7e45ced6675"
+    },
+    "binary_sha256": {
+      "ssmcp": "2dbab2aa293ae411de20f9839d574bf62ef79a644710884a81f6fe6239717e35",
+      "ssmcpd": "e2e63fcfc63c05ca81907c976f8f3dda2aee65db9efa6d0d242fba69b95271b0",
+      "ssmcp-frontend": "2e19f8ad2fea673f899bbfc44449161e072381571946b85e3c6a5dc7e8325a06",
+      "vt_snapshot": "efdbeb3f200fcf4404b2612d836433047ecc90eb0744f345fc971ee7441db97f",
+      "library_fixture": "da95c523626a6de2fdeeb7372992b8a3678e7348ce84c42f367fe7fc4dec2be0"
+    },
+    "referenced_candidate_gates": {
+      "bytes": 1282781,
+      "sha256": "cf17822a03c045fff67b2015e196fee0e1edaf45df55b0761331080eac496000"
+    },
+    "verification_boundary": "The acceptance file records these build and source identities. The referenced gate receipt, manifests and binary files were not reopened or rehashed in this review; no gate-test result is added here."
+  },
+  "review_inputs": [
+    {
+      "relative_path": "acceptance.json",
+      "bytes": 921146,
+      "sha256": "8821744cc88365371f588aed69862029195a3295d6cd9d88981991dc9c2d9fd3",
+      "full_bytes_read_and_sha256_verified": true
+    },
+    {
+      "relative_path": "suites/session_groups/run.log",
+      "bytes": 10563,
+      "sha256": "18f2fed2e00bff5823288f6a2d089ef37b85a048f7c48400c3f4a68fe2c41fe4",
+      "full_bytes_read_and_sha256_verified": true
+    },
+    {
+      "relative_path": "suites/session_groups/evidence/report.json",
+      "bytes": 10203,
+      "sha256": "596b28ea409652392d6f001632c003c83c697c54e8e180585fc8b7c69b40f031",
+      "full_bytes_read_and_sha256_verified": true
+    }
+  ],
+  "limitations": [
+    "No product, fixture, controller, helper, build or test was executed by this review.",
+    "This partial result does not establish that all 24 independent UI suites pass.",
+    "P1 is not run by this controller and is not covered by this result.",
+    "The earlier runtime 18-pass result and the separate display diagnostic are not included in the 758-check count.",
+    "No proposed readiness change is represented as applied, tested or fixed here."
+  ],
+  "redaction": "Native execution, agent and session identities, private absolute paths, process IDs and test-chat content are omitted."
+}

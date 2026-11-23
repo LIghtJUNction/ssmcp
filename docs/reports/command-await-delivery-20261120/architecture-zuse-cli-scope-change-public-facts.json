@@ -1,0 +1,60 @@
+{
+  "schema": "ssmcp-zuse-cli-architecture-scope-change-v1",
+  "snapshot_utc": "2026-11-21T14:54:00Z",
+  "requirements_received_by_report_owner_utc": "2026-11-21T14:48:23Z",
+  "requirements_source": "Original acceptance coordinator reported two new verified client_user requests in the original task.",
+  "requested_direction": [
+    "Remove built-in SSMCP desktop computer-control implementation.",
+    "Use Zuse CLI directly for actual desktop computer use.",
+    "Apply the same migration to browser control.",
+    "Retain computer tooling only for version lookup, download, installation, and uninstallation."
+  ],
+  "implementation_status": "Migration authorized and original source window returned; no new fixed source or completed implementation observed by the report owner.",
+  "new_source_commit": null,
+  "new_source_tree": null,
+  "old_candidate": {
+    "version": "0.10.25",
+    "source": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "tree": "167e9976d2ac334fb3dfbd58f82288baf0eb9b17",
+    "Gate20": {
+      "status": "passed",
+      "stages_passed": 35,
+      "root_independently_read": true,
+      "report_commit": "54c41536411ba96e65a1cd0d47e3705a38991640",
+      "report_file": "current-iteration-Gate20-passed.md"
+    },
+    "N20": {
+      "status": "passed",
+      "executions": 1,
+      "errors": [],
+      "product_executions": 0,
+      "proof": {
+        "bytes": 639363,
+        "sha256": "44134c7ce555345ad2d778a1af614474e8e6bf6ea3a3e48ca979af863bc76355"
+      },
+      "receipt": {
+        "bytes": 68180,
+        "sha256": "2eaff8f3420c5ef1dceb683cf226f4c67e18c77bc87df606aeaab322c02b5a08"
+      },
+      "source_of_result": "Original acceptance coordinator's completion report.",
+      "root_original_proof_and_receipt_read": false
+    },
+    "runtime_UI_product_runs_started": false,
+    "subsequent_acceptance_and_publication": "Paused following the new architecture requirements."
+  },
+  "evidence_rules": {
+    "prior_results_remain_bound_to_old_source": true,
+    "prior_results_transferred_to_new_source": false,
+    "legacy_embedded_control_validation_not_assumed_applicable_to_removed_features": true,
+    "unchanged_features_not_implicitly_removed": true,
+    "current_H2_preparation": "Old recipe contract; static, unbound and unexecuted by report owner; requires scope review if new source changes recipes or assets.",
+    "legacy_SSMCP_input_generation_or_OnOff_gate_not_claimed_to_control_external_Zuse_CLI": true,
+    "new_OS_isolation_or_permission_enforcement_not_claimed": true
+  },
+  "execution_ownership": {
+    "source_window": "Original source owner",
+    "report_group": "No Cargo, metadata, build, product, test, source or target writes, H2 execution or release dispatch.",
+    "new_model_or_native_subagent_started_by_report_owner": false
+  },
+  "next": "Wait for the original author's actual migration source and receipts; update the necessary validation and publication scope from the real change."
+}

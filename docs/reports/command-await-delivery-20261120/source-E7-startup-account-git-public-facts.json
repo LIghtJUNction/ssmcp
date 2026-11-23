@@ -1,0 +1,286 @@
+{
+  "schema": "ssmcp-E7-startup-account-git-source-checkpoint-v1",
+  "observed_at_utc": "2026-11-21 07:16:30 UTC",
+  "checkpoint_status": "public source checkpoints; author phase completed; not a final freeze or release-ready result",
+  "base": {
+    "commit": "3f678a7fca7ea64d220454f1723189e43d3b5546",
+    "tree": "51a73774a9880fcb2b62be3c3d95e719e349c761"
+  },
+  "source_end": {
+    "commit": "1a2f7591ad0abb53907c048dcaed028434e17c47",
+    "tree": "cb24179edb9900c591afdabfe1b4678c2d50c5f9",
+    "version_recorded_in_source_receipt": "0.10.25",
+    "worktree_clean_recorded_in_receipt": true
+  },
+  "commits": [
+    {
+      "commit": "7c1cd94e08636617f4fded83f86048d3c012c7c3",
+      "tree": "b19d43f1497500b76490df4ecb12383c8ae1b3f9",
+      "parents": [
+        "3f678a7fca7ea64d220454f1723189e43d3b5546"
+      ],
+      "committed_at_utc": "2026-11-21T07:02:10Z",
+      "subject": "fix: stop reconnecting on local output directory refusal [skip ci]",
+      "additions": 167,
+      "deletions": 34,
+      "changed_paths": [
+        "src/client.rs",
+        "src/client/attachments.rs",
+        "src/client/interface/history.rs",
+        "src/client/terminal/conversation/openai.rs",
+        "src/output.rs",
+        "src/runtime/native_plugins/process.rs"
+      ],
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/commit/7c1cd94e08636617f4fded83f86048d3c012c7c3",
+      "evidence": "GitHub commit metadata and complete returned per-file patches read directly"
+    },
+    {
+      "commit": "a53a0c5047833ded61193a0b0ce548937e89e959",
+      "tree": "4cee964804d0d906750118bb9fe0b27f2b41d507",
+      "parents": [
+        "7c1cd94e08636617f4fded83f86048d3c012c7c3"
+      ],
+      "committed_at_utc": "2026-11-21T07:03:37Z",
+      "subject": "test: wait for anonymous account fixture retirement [skip ci]",
+      "additions": 95,
+      "deletions": 35,
+      "changed_paths": [
+        "scripts/e2e_account_compat.py"
+      ],
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/commit/a53a0c5047833ded61193a0b0ce548937e89e959",
+      "evidence": "GitHub commit metadata and complete returned per-file patches read directly"
+    },
+    {
+      "commit": "1a2f7591ad0abb53907c048dcaed028434e17c47",
+      "tree": "cb24179edb9900c591afdabfe1b4678c2d50c5f9",
+      "parents": [
+        "a53a0c5047833ded61193a0b0ce548937e89e959"
+      ],
+      "committed_at_utc": "2026-11-21T07:06:48Z",
+      "subject": "deps: follow canonical Project Z Git defaults and update zuse [skip ci]",
+      "additions": 13,
+      "deletions": 13,
+      "changed_paths": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "crates/zuse",
+        "docs/computer-use.md",
+        "docs/dependencies.md"
+      ],
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/commit/1a2f7591ad0abb53907c048dcaed028434e17c47",
+      "evidence": "GitHub commit metadata and complete returned per-file patches read directly"
+    }
+  ],
+  "source_behavior": [
+    {
+      "commit": "7c1cd94e08636617f4fded83f86048d3c012c7c3",
+      "theme": "Local startup refusal and actionable diagnostics",
+      "changes": [
+        "输出目录创建、打开、metadata 检查和所有权/权限拒绝使用 StartupDirectoryError，保留具体目录、操作和底层 I/O 错误。Process 初始化采用 start_connection 传递该类型。",
+        "watchdog_retries 对 StartupDirectoryError、UnsupportedWireProtocol 和 PermanentFailure 返回 false；瞬态传输错误仍按原 watchdog 设置允许重试。这是本地目录拒绝停止重连的源码改动，尚无本轮运行通过结论。",
+        "Local memory 警告不再保证历史和草稿可用；明确保存历史也依赖可访问工作区。工作区解析错误补充 current_dir/canonicalize 的步骤、失败路径和 OS 错误。",
+        "显式网页打开失败时保留失败结果，同时提供 /chatgpt copy 或插件文档 URL 的手动打开提示。"
+      ],
+      "regression_definitions_not_run": [
+        "watchdog_keeps_retrying_transient_transport_errors (added)",
+        "conversation_workspace_reports_the_failing_path_and_os_error (added)",
+        "per_user_directory_rejects_symlinks_and_public_permissions (extended)",
+        "explicit_web_effects_report_real_launcher_and_clipboard_outcomes (extended)"
+      ],
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/commit/7c1cd94e08636617f4fded83f86048d3c012c7c3"
+    },
+    {
+      "commit": "a53a0c5047833ded61193a0b0ce548937e89e959",
+      "theme": "Account compatibility fixture retirement barrier",
+      "changes": [
+        "仅修改 scripts/e2e_account_compat.py。匿名 wire peer 关闭并确认其 worker 退出后，使用现有 wait_for 等待该匿名 client ID 从对应 subject 的服务端会话列表消失，再进入后续 self-only 场景。",
+        "等待逻辑拒绝非 200、非列表、无有效字符串 ID 的会话响应，并在失败时保留经过 redact 和长度限制的 status/response 诊断。",
+        "原 another_subject_cannot_list_connection 的 status==200 且 clients==[] 断言保持；没有把其它仍在列表中的会话过滤掉，也没有放宽 known-client 调用的 404 断言。",
+        "cleanup 尝试所有清理步骤并收集失败，已有主异常保留；匿名 worker 两秒 join 未退出也会报错。"
+      ],
+      "product_server_acl_changed": false,
+      "fixture_executed_in_this_phase": false,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/commit/a53a0c5047833ded61193a0b0ce548937e89e959"
+    },
+    {
+      "commit": "1a2f7591ad0abb53907c048dcaed028434e17c47",
+      "theme": "Project Z Git source declarations and zuse pin",
+      "changes": [
+        "移除 zuse、ztuio、zharness、zplugin 四项直接 Git 依赖的精确 registry version 字段，保留 canonical Git URL、zuse 包别名和既有 feature 选择；没有增加 branch/tag/rev 字段。",
+        "Cargo.lock 的 zuse-computer 从 0.2.2/a1bb8fd2cbce0a9d85134999883c578358065242 改为 0.3.0/830fcefd2277cbba46536c67d206f29058ba7fb3；crates/zuse gitlink 同步到 830fcefd。",
+        "此提交的 Cargo.lock patch 仅上述 version/source 两行；另外三个 gitlink 不在本轮改动路径中。Git 默认来源声明不表示 Cargo.lock 会自行更新。",
+        "更新 computer-use/dependencies 文档，并明确现有 registry 发布预检与新的 Git-only manifest 仍需后续适配。"
+      ],
+      "zuse": {
+        "before": {
+          "version": "0.2.2",
+          "commit": "a1bb8fd2cbce0a9d85134999883c578358065242"
+        },
+        "after": {
+          "version_recorded_in_lock": "0.3.0",
+          "cargo_locked_commit": "830fcefd2277cbba46536c67d206f29058ba7fb3",
+          "gitlink": "830fcefd2277cbba46536c67d206f29058ba7fb3"
+        }
+      },
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/commit/1a2f7591ad0abb53907c048dcaed028434e17c47"
+    }
+  ],
+  "receipt_evidence": {
+    "originals": [
+      {
+        "name": "launch-receipt.json",
+        "exists": true,
+        "bytes": 813,
+        "sha256": "500a458be6f18445268a77738c9605d79c54079ea710ead9aa11fee74bcfa7c1",
+        "read_scope": "Complete JSON read"
+      },
+      {
+        "name": "author-exit.json",
+        "exists": true,
+        "bytes": 931,
+        "sha256": "ef8f4be080d15af40b04634832c7588c62abc6897849fd4475a37d5298b2394e",
+        "read_scope": "Complete JSON read"
+      },
+      {
+        "name": "source-changes-receipt.json",
+        "exists": true,
+        "bytes": 38832,
+        "sha256": "b6697c4d033e04a9816440b8099316deb13d35b1222fe12818ce0f8278e440d3",
+        "read_scope": "Full-file SHA256 plus selected source, dependency, static-check, not-run and push-status fields; not a full textual review"
+      }
+    ],
+    "author_phase": {
+      "started_utc": "2026-11-21T06:57:54.340697+00:00",
+      "finished_utc": "2026-11-21T07:08:21.662917+00:00",
+      "exit_code": 0,
+      "error": null,
+      "wrapper_unchanged": true,
+      "compilation_or_tests_allowed": false,
+      "cargo_resolution_only_allowed": true
+    },
+    "ordinary_pushes_recorded": [
+      {
+        "commit": "7c1cd94e08636617f4fded83f86048d3c012c7c3",
+        "push_exit_code": 0
+      },
+      {
+        "commit": "a53a0c5047833ded61193a0b0ce548937e89e959",
+        "push_exit_code": 0
+      },
+      {
+        "commit": "1a2f7591ad0abb53907c048dcaed028434e17c47",
+        "push_exit_code": 0
+      }
+    ],
+    "push_evidence_boundary": "The source receipt records ordinary pushes with exit 0, and the immutable GitHub commits were read directly. Individual original push logs were not read by this task.",
+    "cargo_resolution_commands_recorded": [
+      {
+        "program": "cargo",
+        "arguments": [
+          "update",
+          "-p",
+          "zuse-computer",
+          "--precise",
+          "830fcefd2277cbba46536c67d206f29058ba7fb3"
+        ],
+        "exit_code": 0,
+        "stdout": {
+          "file": "cargo-update-zuse.stdout",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "file": "cargo-update-zuse.stderr",
+          "bytes": 677,
+          "sha256": "795ce669d88b0541b6546cad030e53024652da6e8cca63013209467ca77ab557"
+        }
+      },
+      {
+        "program": "cargo",
+        "arguments": [
+          "fetch",
+          "--locked"
+        ],
+        "exit_code": 0,
+        "stdout": {
+          "file": "cargo-fetch-locked.stdout",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "file": "cargo-fetch-locked.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      {
+        "program": "cargo",
+        "arguments": [
+          "metadata",
+          "--offline",
+          "--locked",
+          "--format-version",
+          "1"
+        ],
+        "exit_code": 0,
+        "stdout": {
+          "file": "cargo-metadata-locked-offline.stdout",
+          "bytes": 1485599,
+          "sha256": "95fb2cfca63ce70b22b2e9622aa33d93aa68af8443c320566e679b21942041e7"
+        },
+        "stderr": {
+          "file": "cargo-metadata-locked-offline.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    ],
+    "cargo_evidence_boundary": "These command results are recorded in the directly read source-changes receipt. Referenced command stdout/stderr files, the 1485599-byte metadata document, dependency-verification file and default-head observation files were not opened by this task. No independent full graph/latest-head/same-lock result is claimed.",
+    "final_static_checks_recorded": {
+      "rustfmt": {
+        "changed_rust_files": 6,
+        "exit_code": 0
+      },
+      "git_diff_check": {
+        "exit_code": 0
+      },
+      "boundary": "Final formatting and diff status recorded in the receipt; not compilation, Rust test execution or fixture execution."
+    },
+    "lock_sha256_recorded": {
+      "before_sha256": "0b6f1d93e319b27163106ce79475b37f3e737ff89f7a9ca8d35c09e8ad649608",
+      "after_sha256": "5e9d5cecd724991e310e2ec34867545cf6efed7b1a2a24e2e15ca628e2efceb6"
+    },
+    "independently_reviewed_full_metadata_graph": false,
+    "independently_verified_all_default_heads": false,
+    "independently_verified_same_lock": false
+  },
+  "publication": {
+    "recipe_adaptation": "pending the same source author's next increment after the designated release-contract design",
+    "release_recipe_or_workflow_in_these_commit_diffs": false,
+    "remaining_issue_recorded": "The unchanged registry_dependencies precheck requires an exact registry version for each direct Project Z Git dependency; the new Git-only manifest does not satisfy that existing expectation. Source receipt explicitly leaves release-path adaptation and actual external-package verification pending.",
+    "final_freeze_claimed": false,
+    "release_ready_claimed": false,
+    "published_release_claimed": false
+  },
+  "bounds": {
+    "author_receipt_not_run": [
+      "Compilation",
+      "Rust/Python tests",
+      "Product, UI, runtime, P1 or release gates",
+      "Installed-client or relay actions"
+    ],
+    "compilation_or_test_pass_claimed": false,
+    "runtime_ui_p1_or_release_pass_claimed": false,
+    "new_upstream_head_refresh_performed": false,
+    "previous_zuse_observation_not_rewritten": "Earlier a1bb default-head observation remains historical; this checkpoint records the later public lock/gitlink change, without repeating a live upstream audit.",
+    "this_task": {
+      "cargo": false,
+      "product_execution": false,
+      "tests": false,
+      "models": false,
+      "source_mutations": false,
+      "git_drive_publication": false
+    },
+    "private_native_paths_ids_or_raw_messages_included": false
+  }
+}

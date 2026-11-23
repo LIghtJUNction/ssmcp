@@ -1,0 +1,55 @@
+{
+  "observed_utc": "2026-11-21T06:28:57Z",
+  "tested_W": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+  "expected_tree": "5be29af415b915ef3307bfed08c6cefec2798898",
+  "pr": {
+    "head": "f1de4bf70d5406cf9f38347e298a829456b92e57",
+    "base": "c12fdf1d413501ddeb03a2dd2fb8c47731d2129f",
+    "draft": false,
+    "merged": true,
+    "merge_commit_sha": "ea2bfcae6aea9672d8955f832a8ec5bd1e0749f4",
+    "merged_at": "2026-11-21T06:13:34Z",
+    "state": "closed",
+    "updated_at": "2026-11-21T06:13:35Z"
+  },
+  "F": {
+    "commit": "f1de4bf70d5406cf9f38347e298a829456b92e57",
+    "tree": "5be29af415b915ef3307bfed08c6cefec2798898",
+    "parents": [
+      "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+      "c12fdf1d413501ddeb03a2dd2fb8c47731d2129f"
+    ],
+    "url": "https://github.com/LIghtJUNction/ssmcp/commit/f1de4bf70d5406cf9f38347e298a829456b92e57"
+  },
+  "P": {
+    "commit": "ea2bfcae6aea9672d8955f832a8ec5bd1e0749f4",
+    "tree": "5be29af415b915ef3307bfed08c6cefec2798898",
+    "parents": [
+      "c12fdf1d413501ddeb03a2dd2fb8c47731d2129f"
+    ],
+    "url": "https://github.com/LIghtJUNction/ssmcp/commit/ea2bfcae6aea9672d8955f832a8ec5bd1e0749f4"
+  },
+  "main_head": "ea2bfcae6aea9672d8955f832a8ec5bd1e0749f4",
+  "W_is_parent_of_F": true,
+  "P_has_only_c12_parent": true,
+  "scope": "Public commit graph, PR metadata and tree identities only. Existing Gate/runtime/UI results retain W as their executed source. No additional test, merge, push, tag, workflow dispatch or publication was performed by this source inspection.",
+  "comparison": {
+    "status": "diverged",
+    "ahead_by": 2,
+    "behind_by": 46,
+    "total_commits": 2,
+    "merge_base_commit": "f33ed8f14fc14aff05a2e4098743eb07e8527c06",
+    "base_commit": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+    "changed_files": 84,
+    "semantics": "GitHub three-dot comparison uses the merge base; its changed_files field is not an endpoint-tree diff. F, P and W have the same verified root tree."
+  },
+  "W_is_ancestor_of_P": false,
+  "ancestry_proof_basis": "Comparison status diverged, merge-base f33ed8f, 46 behind and 2 ahead; direct public Git parents also read.",
+  "schema": "ssmcp.merged-source-public-facts.v1",
+  "comparison_observed_utc": "2026-11-21T06:29:55Z",
+  "release_binding": {
+    "product_tag_S": null,
+    "workflow_commit_P": null,
+    "status": "Unbound; final source and workflow provenance must use actual publication identities and ancestry."
+  }
+}

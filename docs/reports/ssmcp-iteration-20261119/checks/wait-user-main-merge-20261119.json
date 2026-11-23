@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-19",
+  "repository": "LIghtJUNction/ssmcp",
+  "pr": 97,
+  "pr_url": "https://github.com/LIghtJUNction/ssmcp/pull/97",
+  "branch": "feat/wait-user-primitive-20261119",
+  "head": "12db358ccd1938d9939f6588efe431fb618f65ee",
+  "tree_sha": "8c81ca25082090ec668aa3de4b162b5639e8c048",
+  "parents": [
+    "27279596347871f5e15654770da1d7635a1a78fc",
+    "80e534c8aee62a5b77bc1816b95a0e33722ffc5f"
+  ],
+  "tree_elements": [
+    {
+      "path": "docs/force-send-listener.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d33894ca4b8ad9c0adaaf3b83030e7ccc1969b8c"
+    },
+    {
+      "path": "scripts/e2e.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a5cf8b22f2ce4d5dbc1cfd60ad331c123713c167"
+    },
+    {
+      "path": "scripts/e2e_force_send.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "293c015cc01e3526de8f1d56faddf78e311225f1"
+    },
+    {
+      "path": "src/client/composer.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f1179d46b5aa252a33f46a5354f23d1f6a199bea"
+    },
+    {
+      "path": "src/client/interface.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6809d4e0fd1702be3ce3cb2c34694e880b7d947b"
+    },
+    {
+      "path": "src/client/interface/listener.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "91187378126fc0690af51d5a9b6d0862e8e207e4"
+    },
+    {
+      "path": "src/client/steering.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "96560ebe036470187f3b43f15c55fa605c846d61"
+    },
+    {
+      "path": "src/client/terminal/conversation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7fe5c6e70602055dbbadb8ee18ead2215adb8ecf"
+    },
+    {
+      "path": "src/client/terminal/conversation/listener.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5d5d8c936167114b80304a5b9f693e861148e801"
+    }
+  ],
+  "owned_sha256": {
+    "docs/code-mode.md": "5fbcf5dc687ecf72d04f52a8cc4a31320080fa519d06fda81d34ccfc5a554774",
+    "src/code_mode.rs": "c02ad97b0faac549a28d37aec7a0bf13e9b24297cfc03034b22bb2d9aceb3885",
+    "src/code_mode.js": "6e169387073dfb5919f6714658ac28781cfe04c7e5800ada690c0c67fed3d4d0",
+    "src/code_mode/user_wait.rs": "8b8ccc46ddbfa29a0ae271608d3eb05cbfceea7a9d189422f29a25bed52b606b",
+    "src/http.rs": "94c83d00683a1b62afd24603d32871014fbde989fd283a94e8dd553258028dc4",
+    "src/http/user_wait.rs": "71326aa166e3be936415b533bc8be565877821dcbb624a9c665469d35ceaef07",
+    "src/broker.rs": "9cfed34392c122eca906b03094e30d8bc1baa5cb99f04d93054bec3eca36621d",
+    "src/broker/access.rs": "2c739b647b9ad2eab9b4ddbf6fb57c3b8db482ae085122e7cc156232152824b9",
+    "src/steering.rs": "f7485db9b9ea4cc9792dc544723141d9348fd2067914eda85b74d408bfa73ac3",
+    "src/steering/waiting.rs": "5e904abf85bdea9f7c4f02ddef018fbbb69fa5f253911c3e40d0eb54f85b52f9"
+  },
+  "owned_files_unchanged": true,
+  "diff_check_exit_code": 0,
+  "native_worktree": "<native-repository>/.worktrees/wait-user-primitive-merge-20261119",
+  "native_final_status": "clean",
+  "git_hub_observed": {
+    "head": "12db358ccd1938d9939f6588efe431fb618f65ee",
+    "base": "80e534c8aee62a5b77bc1816b95a0e33722ffc5f",
+    "mergeable": true,
+    "mergeable_state": "clean",
+    "draft": true
+  },
+  "conflict_resolution": "The existing recorded resolution retained one ssmcp.ui.listener and one ssmcp.ui.wait observation case. Reviewed result has no conflict markers or unmerged index entries.",
+  "new_product_logic": false,
+  "cargo_started": false
+}

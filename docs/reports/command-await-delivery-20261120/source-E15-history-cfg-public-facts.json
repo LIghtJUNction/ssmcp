@@ -1,0 +1,282 @@
+{
+  "schema_version": 1,
+  "kind": "ssmcp-e15-source-only-fix-and-normal-merge",
+  "observed_utc": "2026-11-21T11:15:57Z",
+  "author_phase": {
+    "same_original_author_continuation": true,
+    "started_utc": "2026-11-21T11:00:18.362404+00:00",
+    "finished_utc": "2026-11-21T11:02:38.850542+00:00",
+    "exit_code": 0,
+    "error": null,
+    "allowed_checks": [],
+    "final_acceptance_allowed": false,
+    "author_wrapper_unchanged": true,
+    "rustc_wrapper_unchanged": true,
+    "launch": {
+      "file": "launch-receipt.json",
+      "bytes": 1927,
+      "sha256": "313efd4feb5a8b618a745d137bf1abb69bdfcac4954c0602ae8307deaeeaed51"
+    },
+    "exit": {
+      "file": "author-exit.json",
+      "bytes": 2087,
+      "sha256": "6574e51b585bde69b991681d2939b3deb7f16912a0eb8b30b7d2550993950fa1"
+    }
+  },
+  "source": {
+    "start": {
+      "commit": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+      "tree": "be0e7801b3455d406781cde880824fc937c1b8f4",
+      "parents": [
+        "662c34c298fedc4b3ab28fc77015bd81f41f6ee4"
+      ],
+      "subject": "test: synchronize the exact E2E computer tool catalog [skip ci]"
+    },
+    "fixed_main_fast_forward": {
+      "commit": "401581267005e64f1ccf99e1590df285a9d7c158",
+      "tree": "be0e7801b3455d406781cde880824fc937c1b8f4",
+      "parents": [
+        "5f4a35482c6353750248ddee8761e5fd3daffad6",
+        "5a45be0401caf7fcd462fa1783c157e7f4c77019"
+      ],
+      "subject": "Merge pull request #168: browser, input cleanup and CI fixes [skip ci]"
+    },
+    "fast_forward_found_no_tree_changes": true,
+    "final": {
+      "commit": "bef89f57aea0167b830096d596a2cb39fd86f5cd",
+      "tree": "1391701c52db5066e7a25bbe3a32c1d5a82c47d5",
+      "parents": [
+        "401581267005e64f1ccf99e1590df285a9d7c158"
+      ],
+      "subject": "fix: scope the history test helper to Linux [skip ci]"
+    },
+    "changed_paths": [
+      "src/client/interface/history.rs"
+    ],
+    "additions": 1,
+    "deletions": 1,
+    "author_commits": 1,
+    "ordinary_push_count": 1,
+    "push": {
+      "exit_code": 0,
+      "ordinary": true,
+      "remote_branch_commit": "bef89f57aea0167b830096d596a2cb39fd86f5cd",
+      "remote_main_commit": "401581267005e64f1ccf99e1590df285a9d7c158",
+      "nonfatal_credential_store_DBus_warning_recorded": true,
+      "push_and_remote_readback_success_preserved": true
+    },
+    "clean_status": {
+      "worktree_and_index_clean": true,
+      "submodules_clean": true,
+      "porcelain": ""
+    },
+    "package_version": "0.10.25"
+  },
+  "change": {
+    "file": "src/client/interface/history.rs",
+    "from": "#[cfg(test)]",
+    "to": "#[cfg(all(test, target_os = \"linux\"))]",
+    "file_before": {
+      "blob": "a6f36b90b953db863bce3b4bbb3948e587989cac",
+      "bytes": 86707,
+      "sha256": "c805ef8400ec0511314d64f8955219ddaf6006f045a45f2ac6d803757f8afc71"
+    },
+    "file_after": {
+      "blob": "48a80630aeeca83157d62592c93b58c99519e20a",
+      "bytes": 86733,
+      "sha256": "73d2dfe970a9b86705f2b001c995b04bacea9af5a62a3f0241d671b3fbb0f6fc"
+    },
+    "function_body_byte_identical_reported": true,
+    "complete_fixed_GitHub_diff_read": true,
+    "only_callers_in_linux_gated_device_module": true,
+    "root_read_all_three_call_locations_and_module_cfg": true,
+    "production_code_and_lint_levels_unchanged": true,
+    "linux_helper_and_callers_preserved": true,
+    "new_test_definitions": 0,
+    "rationale": "The helper definition previously compiled for all test targets, while its three callers were in a Linux-only module. On Windows the definition remained unused and -D warnings turned dead_code into the Gate17 failure."
+  },
+  "preserved": {
+    "byte_identical_files": {
+      "Cargo.toml": {
+        "blob": "9e51d222b8049615691a6830e0447ec275e27058",
+        "bytes": 10109,
+        "sha256": "c7e9fa819512800dfee8704f22b4c2d0db74713622a0e0d82be6dea96007e8d1"
+      },
+      "Cargo.lock": {
+        "blob": "2ed60ee961afd9c5bfd4a88d28e291de8100ed28",
+        "bytes": 66476,
+        "sha256": "0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992"
+      },
+      ".github/workflows/ci.yml": {
+        "blob": "762eec62ae3e8d842f1188141ce13a422e931838",
+        "bytes": 15351,
+        "sha256": "d60f0b21ce4c16440d3dd39c1fb3d53fb21de3bb889a30c4ed4f8ae7822f9317"
+      },
+      ".github/workflows/release.yml": {
+        "blob": "41968605ad5d459d07ae599fccb1fb3d89a848d8",
+        "bytes": 24312,
+        "sha256": "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"
+      },
+      ".github/workflows/deploy-server.yml": {
+        "blob": "a550ffbfb4b915af8d6922bdf0f05ba5c58763ca",
+        "bytes": 4499,
+        "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+      },
+      "scripts/release.py": {
+        "blob": "1197f9b919f6fdfbbbb339a859fb50e63d17cfd9",
+        "bytes": 65061,
+        "sha256": "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"
+      },
+      "scripts/install.sh": {
+        "blob": "7620b1d29b87173492ea9d8b74d846f8d9c3c185",
+        "bytes": 6783,
+        "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+      },
+      "scripts/install.ps1": {
+        "blob": "eb13725db6cb24c06a137f1ff2129649d2c25515",
+        "bytes": 29653,
+        "sha256": "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"
+      },
+      "src/computer/host_control.rs": {
+        "blob": "d1fce5ebbd57028aa4b531c642a5b13eed808da2",
+        "bytes": 10870,
+        "sha256": "0e12445ab3f3d805712438c513b04b4b0ced2cd7a52f63b9ee4f069548a745a9"
+      },
+      "src/computer/zuse_backend.rs": {
+        "blob": "ee42b7250ec8f3c8e9e9e90e36c9d4349bd8ab96",
+        "bytes": 97062,
+        "sha256": "e29f1bf5721c5306fd9070953b5f58198f376ebdb9f0794e4897be4677c4d9b5"
+      },
+      "scripts/e2e.py": {
+        "blob": "58481fe227a3e19370cd864d6ab442ed9989ebef",
+        "bytes": 49927,
+        "sha256": "294c9fd997f30fba7f7046ef3b4f93e0876121655d952797bdb47222e9cd9c19"
+      }
+    },
+    "internal_git_sources": {
+      "https://github.com/LIghtJUNction/z64.git": "7e9cff67beae2c484f8b9749b83ae24a1d0e1bbd",
+      "https://github.com/LIghtJUNction/zcall.git": "199678d08104bed588e5d10b2c0634a47d7c8417",
+      "https://github.com/LIghtJUNction/zclap.git": "4d87f3ae3743e81509d5ac5500909955667c860f",
+      "https://github.com/LIghtJUNction/zconv.git": "0af1f7eb0766ff0ce9db5cee7c6184eff511a8c1",
+      "https://github.com/LIghtJUNction/zguard.git": "6772b932a65e18f64e13591dee6edb2f6b099406",
+      "https://github.com/LIghtJUNction/zharness.git": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "https://github.com/LIghtJUNction/zmcpio.git": "04bb6cd05c5295ab41a892a76cbef10b8ac07402",
+      "https://github.com/LIghtJUNction/zplugin.git": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "https://github.com/LIghtJUNction/zsys.git": "808fcfdb73584ca7ca122e20b76f0209f56ab0f7",
+      "https://github.com/LIghtJUNction/ztuio.git": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "https://github.com/LIghtJUNction/zuse.git": "ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc"
+    },
+    "all_gitlinks_unchanged_by_complete_commit_diff": true
+  },
+  "checks": {
+    "source_receipt_scope": {
+      "new_tests": 0,
+      "helper_executed": false,
+      "cargo_or_compilation_executed": false,
+      "product_or_acceptance_executed": false,
+      "windows_gnu_clippy_recheck_pending": true
+    },
+    "format_and_diff_checks": [
+      {
+        "argv": [
+          "rustfmt",
+          "--check",
+          "--edition",
+          "2024",
+          "--config",
+          "skip_children=true",
+          "src/client/interface/history.rs"
+        ],
+        "exit_code": 0,
+        "output": ""
+      },
+      {
+        "argv": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "output": ""
+      }
+    ],
+    "post_commit_git_inspection_record_count": 106,
+    "post_commit_git_record_all_exit_zero": true,
+    "git_inspection_count_is_not_a_test_count": true,
+    "release_policy_tests_run_in_E15": false,
+    "cargo_or_compilation_run_in_E15": false,
+    "rust_tests_run_in_E15": false,
+    "windows_gnu_clippy_recheck": "pending",
+    "full_gate18": "prepared_by_source_owner_but_no_binding_or_launch_observed_in_snapshot",
+    "runtime_ui_multi_uid_P1": "not_run_for_this_new_source"
+  },
+  "github_observation": {
+    "main_commit": "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+    "author_branch_commit": "bef89f57aea0167b830096d596a2cb39fd86f5cd",
+    "main_commit_and_PR_read_utc": "2026-11-21T11:15:57Z",
+    "new_pull_request_observed": true,
+    "merged_successor_observed": true
+  },
+  "evidence": {
+    "source_receipt": {
+      "file": "source-changes-receipt.json",
+      "bytes": 42150,
+      "sha256": "db2be1c75eced427b99b655bc6c7d920308d812ac68acf8c3fe1bf6fbfd3c79a",
+      "read_scope": "Whole original hashed; selected revision, path, exact change, preservation, scope, ordinary push and remote-readback fields read. Not every recorded static command output independently audited."
+    },
+    "launch_and_exit_read_in_full": true,
+    "format_and_diff_records_read_in_full": true,
+    "diffs": {
+      "author-final.full.diff": {
+        "file": "author-final.full.diff",
+        "bytes": 685,
+        "sha256": "9aa345f0dc47c047f6b59a51c42905a35b351066a708a3c473e6906278bda81c"
+      },
+      "author-own-fixes.full.diff": {
+        "file": "author-own-fixes.full.diff",
+        "bytes": 685,
+        "sha256": "9aa345f0dc47c047f6b59a51c42905a35b351066a708a3c473e6906278bda81c"
+      }
+    },
+    "source_reported_full_file_hashes_independently_recomputed_by_reporting_root": false
+  },
+  "H2": {
+    "unchanged_static_successor_commit": "6f6bb09bace5b54c82f47f7eb0ae245f17d5ff2d",
+    "recipe_files_unchanged_in_E15": true,
+    "helper_executed": false,
+    "modules_imported": false,
+    "S_P_run_dispatch_binding": null,
+    "actual_release": false
+  },
+  "recovery": {
+    "ssmcp_connection_briefly_unavailable": true,
+    "same_project_connection_recovered": true,
+    "reporting_root_started_model": false,
+    "reporting_root_reloaded_client": false,
+    "reporting_group_heavy_or_queued_work": 0,
+    "prior_gate_failures_and_receipts_preserved": true,
+    "one_time_setup_facts": "reboot-once-prepared-public-facts.json"
+  },
+  "prior_github_observation": {
+    "main_commit": "401581267005e64f1ccf99e1590df285a9d7c158",
+    "author_branch_commit": "bef89f57aea0167b830096d596a2cb39fd86f5cd",
+    "author_branch_read_utc": "2026-11-21T11:04:21Z",
+    "main_and_pull_collection_read_utc": "2026-11-21T11:09:15Z",
+    "new_pull_request_observed": false,
+    "merged_successor_observed": false
+  },
+  "actual_main_merge": {
+    "commit": "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+    "tree": "1391701c52db5066e7a25bbe3a32c1d5a82c47d5",
+    "parents": [
+      "401581267005e64f1ccf99e1590df285a9d7c158",
+      "bef89f57aea0167b830096d596a2cb39fd86f5cd"
+    ],
+    "pr": 169,
+    "merged_at": "2026-11-21T11:12:59Z",
+    "commit_time": "2026-11-21T11:12:58Z",
+    "author_commit_is_real_merge_parent": true,
+    "tree_equals_author_tree": true,
+    "full_gate_passed": false
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "schema": "ssmcp-h2-cli-reviewed-recipe-v1",
+  "recipe_source_commit": "35ff6e4eb8b463aeb090230e9557fb08fb22b458",
+  "scope": "0.10.25 manual-main git-source-v1; deferred crate publication; no deployment",
+  "files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "bytes": 22724,
+      "sha256": "ba51af5f000826fcf31455591af2de5de2256cdaa5846e51eaeeb0e5241dbe8c"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "bytes": 14994,
+      "sha256": "e7c753ca1a058b43f798cb1f31bc2b8980a09b3bc72cdb1996ef6eaadb5a7172"
+    },
+    {
+      "path": ".github/workflows/deploy-server.yml",
+      "bytes": 4499,
+      "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+    },
+    {
+      "path": "scripts/release.py",
+      "bytes": 65003,
+      "sha256": "3d0361e548bf78f0a7e4657e7ccab870c9698fe3b8d91c9ab72c62b9375b976e"
+    },
+    {
+      "path": "scripts/install.sh",
+      "bytes": 6783,
+      "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "bytes": 12928,
+      "sha256": "e2c0607275d6b04315e4ddce85d01280dcc56b2bb2710be0849fbaeee626d051"
+    }
+  ],
+  "candidate_sha": null,
+  "workflow_sha": null,
+  "run_id": null,
+  "execution_performed": false,
+  "previous_recipe_source_commit": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+  "previous_static_helper_commit": "6f6bb09bace5b54c82f47f7eb0ae245f17d5ff2d",
+  "independent_ci_candidate_step": {
+    "yaml_step": 19,
+    "expected_api_step": 20,
+    "name": "Preserve the Linux candidate client",
+    "standalone_workflow_name": "CI",
+    "caller_workflow_name": "Release",
+    "release_linux_jobs_expected_conclusion": "skipped",
+    "expected_release_linux_uploads": {
+      "ubuntu-24.04": 2,
+      "ubuntu-24.04-arm": 1
+    },
+    "auxiliary_artifact_name": "ssmcp-linux-x86_64-candidate",
+    "auxiliary_artifact_downloaded_or_used_as_release_evidence": false
+  },
+  "official_context_source": "https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context",
+  "CLI_migration": {
+    "source_tree": "38cf85469fc3b2f92efc61009652baa1bf669274",
+    "gitlink_count": 3,
+    "observed_gitlinks": [
+      {
+        "path": "crates/zharness",
+        "commit": "5f9a9f58f090326bf2d43f4df2cc90c1bc674c21"
+      },
+      {
+        "path": "crates/zplugin",
+        "commit": "592a1be623b81a775026c470e6f0efe91fcf78f3"
+      },
+      {
+        "path": "crates/ztuio",
+        "commit": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e"
+      }
+    ],
+    "release_build_upload": {
+      "step": 8,
+      "occurrence": 0,
+      "total": 1
+    },
+    "retired_release_build_diagnostic_steps": [
+      10,
+      11
+    ],
+    "finalize_upload_steps_retained": [
+      10,
+      11
+    ],
+    "final_candidate_not_selected": true
+  }
+}

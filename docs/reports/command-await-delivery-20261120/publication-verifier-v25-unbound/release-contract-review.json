@@ -1,0 +1,534 @@
+{
+  "schema_version": 1,
+  "review_kind": "immutable-source-release-contract-compatibility",
+  "status": "source-compatible",
+  "reviewed_at_utc": "2026-11-21 01:55:57 UTC",
+  "source_reviewed": "d29dae7e2b9ff6794f17f3c96c0cc37977936084",
+  "source_tree": "bf393700928fd9aa37f2dea8b8683ebe13b114cd",
+  "source_parent": "c0152934838f755453413975e31de2449a4398a9",
+  "comparison_source": "f4e6ff043eef6686a9013750ffcb8ab66926b9d4",
+  "execution_binding": false,
+  "formal_run": null,
+  "verifier_execution": null,
+  "policy_execution": null,
+  "product_execution": null,
+  "tests_executed": [],
+  "prior_v11_policy_results_relabelled_as_c": false,
+  "concrete_blockers": [],
+  "method": "Read exact GitHub commit/tree/blob objects and source text; read the existing local verifier. No product/helper validation script, test, build, tag or publication was executed.",
+  "compared_files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "c_git_blob": "f085a990058d6b5fe76fd5f08ce37a3deffcadf0",
+      "v_git_blob": "f085a990058d6b5fe76fd5f08ce37a3deffcadf0",
+      "git_blob_equal": true,
+      "decoded_content_equal": true
+    },
+    {
+      "path": "scripts/release.py",
+      "c_git_blob": "7b5b1f8bfb68665af8ac2475e5580416b20b28c7",
+      "v_git_blob": "7b5b1f8bfb68665af8ac2475e5580416b20b28c7",
+      "git_blob_equal": true,
+      "decoded_content_equal": true
+    },
+    {
+      "path": "Cargo.toml",
+      "c_git_blob": "9f9d656ad9a19c5acd5d893d9e243040b09820fc",
+      "v_git_blob": "9f9d656ad9a19c5acd5d893d9e243040b09820fc",
+      "git_blob_equal": true,
+      "decoded_content_equal": true
+    },
+    {
+      "path": "Cargo.lock",
+      "c_git_blob": "c2a982f5f06fdab726b969495647515b130fe8f1",
+      "v_git_blob": "c2a982f5f06fdab726b969495647515b130fe8f1",
+      "git_blob_equal": true,
+      "decoded_content_equal": true
+    },
+    {
+      "path": "scripts/test_release.py",
+      "c_git_blob": "95d1f060e02384efcb89a16917f78b5e24e4a1d5",
+      "v_git_blob": "95d1f060e02384efcb89a16917f78b5e24e4a1d5",
+      "git_blob_equal": true,
+      "decoded_content_equal": true
+    }
+  ],
+  "helper": {
+    "path": "/workspace/scratch/18a2b71ce5be/ssmcp-publication-verifier-v25-unbound-20261121/verify_published_candidate.py",
+    "sha256": "9f75533684446080b4ae6ec82f17d245b174541a23a29a2c3399536680c95109",
+    "release_version": "0.10.25",
+    "state": "UNBOUND",
+    "execution_binding": false,
+    "candidate_argument": null,
+    "formal_run": null,
+    "historical_receipt_schema_source": "5d087d1f7363fe5741f6080168037623362280e7",
+    "historical_schema_label_is_not_a_c_execution_claim": true,
+    "line_references": {
+      "version": 378,
+      "jobs": [
+        390,
+        408
+      ],
+      "assets": [
+        418,
+        446
+      ],
+      "gitlinks": [
+        447,
+        460
+      ],
+      "verified_crate_contract": [
+        195,
+        333
+      ]
+    }
+  },
+  "workflow_contract": {
+    "compatibility": "compatible from source",
+    "expected_total_jobs": 19,
+    "expected_success_jobs": 18,
+    "expected_success_job_names": [
+      "validate",
+      "finalize",
+      "publish_release",
+      "publish_crates",
+      "Build x86_64-unknown-linux-gnu",
+      "Build aarch64-unknown-linux-gnu",
+      "Build x86_64-apple-darwin",
+      "Build aarch64-apple-darwin",
+      "Build x86_64-pc-windows-msvc",
+      "Build aarch64-pc-windows-msvc",
+      "Verify installed server x86_64-unknown-linux-gnu",
+      "Verify installed server aarch64-unknown-linux-gnu",
+      "checks / linux (ubuntu-24.04)",
+      "checks / linux (ubuntu-24.04-arm)",
+      "checks / Client (macos-15)",
+      "checks / Client (macos-15-intel)",
+      "checks / Client (windows-2025)",
+      "checks / Client (windows-11-arm)"
+    ],
+    "expected_skipped_job_names": [
+      "deploy_server"
+    ],
+    "tag_push_only_for_this_verifier": true,
+    "required_event": "push",
+    "required_head_branch": "v0.10.25",
+    "required_run_path": ".github/workflows/release.yml",
+    "explanation": "validate + six reusable checks + six builds + two installed-server checks + finalize + two publication jobs + skipped deployment = 19. These are expected future formal-run conclusions, not observed C execution results.",
+    "source_references": [
+      {
+        "path": ".github/workflows/release.yml",
+        "start_line": 137,
+        "end_line": 169,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/release.yml#L137-L169"
+      },
+      {
+        "path": ".github/workflows/release.yml",
+        "start_line": 232,
+        "end_line": 244,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/release.yml#L232-L244"
+      },
+      {
+        "path": ".github/workflows/release.yml",
+        "start_line": 284,
+        "end_line": 286,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/release.yml#L284-L286"
+      },
+      {
+        "path": ".github/workflows/release.yml",
+        "start_line": 336,
+        "end_line": 338,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/release.yml#L336-L338"
+      },
+      {
+        "path": ".github/workflows/release.yml",
+        "start_line": 370,
+        "end_line": 375,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/release.yml#L370-L375"
+      },
+      {
+        "path": ".github/workflows/release.yml",
+        "start_line": 415,
+        "end_line": 424,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/release.yml#L415-L424"
+      },
+      {
+        "path": ".github/workflows/ci.yml",
+        "start_line": 35,
+        "end_line": 46,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/ci.yml#L35-L46"
+      },
+      {
+        "path": ".github/workflows/ci.yml",
+        "start_line": 232,
+        "end_line": 244,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/ci.yml#L232-L244"
+      }
+    ]
+  },
+  "deployment_policy": {
+    "version": "0.10.25",
+    "expected_output": "deploy_server=false",
+    "deferral_preserved": true,
+    "independent_of_explicit_true_request": true,
+    "expected_deploy_job_conclusion": "skipped",
+    "source_references": [
+      {
+        "path": ".github/workflows/release.yml",
+        "start_line": 98,
+        "end_line": 122,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/release.yml#L98-L122"
+      },
+      {
+        "path": ".github/workflows/release.yml",
+        "start_line": 415,
+        "end_line": 421,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/release.yml#L415-L421"
+      }
+    ],
+    "test_definition": {
+      "name": "DeploymentPolicyTests.test_deferred_version_cannot_be_deployed_by_tag_or_dispatch",
+      "source": {
+        "path": "scripts/test_release.py",
+        "start_line": 120,
+        "end_line": 134,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/scripts/test_release.py#L120-L134"
+      },
+      "executed": false
+    }
+  },
+  "artifact_contract": {
+    "compatibility": "compatible from source",
+    "expected_release_asset_count": 16,
+    "expected_manifest_record_count": 8,
+    "expected_release_asset_names": [
+      "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+      "ssmcp-aarch64-unknown-linux-gnu.tar.gz",
+      "ssmcp-x86_64-apple-darwin.tar.gz",
+      "ssmcp-aarch64-apple-darwin.tar.gz",
+      "ssmcp-x86_64-pc-windows-msvc.zip",
+      "ssmcp-aarch64-pc-windows-msvc.zip",
+      "ssmcp-x86_64-unknown-linux-gnu.tar.gz.sha256",
+      "ssmcp-aarch64-unknown-linux-gnu.tar.gz.sha256",
+      "ssmcp-x86_64-apple-darwin.tar.gz.sha256",
+      "ssmcp-aarch64-apple-darwin.tar.gz.sha256",
+      "ssmcp-x86_64-pc-windows-msvc.zip.sha256",
+      "ssmcp-aarch64-pc-windows-msvc.zip.sha256",
+      "install.sh",
+      "install.ps1",
+      "SHA256SUMS",
+      "release-manifest.json"
+    ],
+    "expected_manifest_record_names": [
+      "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+      "ssmcp-aarch64-unknown-linux-gnu.tar.gz",
+      "ssmcp-x86_64-apple-darwin.tar.gz",
+      "ssmcp-aarch64-apple-darwin.tar.gz",
+      "ssmcp-x86_64-pc-windows-msvc.zip",
+      "ssmcp-aarch64-pc-windows-msvc.zip",
+      "install.sh",
+      "install.ps1"
+    ],
+    "record_fields": [
+      "name",
+      "sha256",
+      "bytes"
+    ],
+    "archive_checksum_sidecars": 6,
+    "checksum_format": "<sha256>  <filename>\\n",
+    "source_references": [
+      {
+        "path": "scripts/release.py",
+        "start_line": 23,
+        "end_line": 30,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/scripts/release.py#L23-L30"
+      },
+      {
+        "path": "scripts/release.py",
+        "start_line": 486,
+        "end_line": 494,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/scripts/release.py#L486-L494"
+      },
+      {
+        "path": "scripts/release.py",
+        "start_line": 551,
+        "end_line": 584,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/scripts/release.py#L551-L584"
+      }
+    ],
+    "test_definition": {
+      "name": "test_checksums_require_every_platform_and_match_manifest",
+      "source": {
+        "path": "scripts/test_release.py",
+        "start_line": 354,
+        "end_line": 365,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/scripts/test_release.py#L354-L365"
+      },
+      "executed": false
+    }
+  },
+  "gitlink_contract": {
+    "compatibility": "compatible from source",
+    "candidate_tree_listing_truncated": false,
+    "expected_count": 4,
+    "gitlinks": [
+      {
+        "path": "crates/zharness",
+        "commit": "cb63a9a0aa163214c6062664cd62fefb357be5a8",
+        "mode": "160000",
+        "same_as_v": true,
+        "nested_gitlink_count": 0,
+        "subrepository_listing_truncated": false
+      },
+      {
+        "path": "crates/zplugin",
+        "commit": "cf02c1d9db575b92b36297dfe1fde72de9ee51e4",
+        "mode": "160000",
+        "same_as_v": true,
+        "nested_gitlink_count": 0,
+        "subrepository_listing_truncated": false
+      },
+      {
+        "path": "crates/ztuio",
+        "commit": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+        "mode": "160000",
+        "same_as_v": true,
+        "nested_gitlink_count": 0,
+        "subrepository_listing_truncated": false
+      },
+      {
+        "path": "crates/zuse",
+        "commit": "a1bb8fd2cbce0a9d85134999883c578358065242",
+        "mode": "160000",
+        "same_as_v": true,
+        "nested_gitlink_count": 0,
+        "subrepository_listing_truncated": false
+      }
+    ],
+    "same_gitlinks_as_v": true,
+    "actual_formal_manifest_submodule_trees_not_yet_observed": true,
+    "source_references": [
+      {
+        "path": "scripts/release.py",
+        "start_line": 160,
+        "end_line": 194,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/scripts/release.py#L160-L194"
+      },
+      {
+        "path": "scripts/release.py",
+        "start_line": 577,
+        "end_line": 582,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/scripts/release.py#L577-L582"
+      }
+    ],
+    "note": "All four fixed subrepository tree listings were complete and contained no nested gitlinks. The verifier will still require each formal manifest tree receipt to match the locally available fixed submodule object."
+  },
+  "verified_crate_schema": {
+    "compatibility": "compatible from source",
+    "application_name": "ssmcp",
+    "version_in_cargo_toml": "0.10.25",
+    "version_in_cargo_lock": "0.10.25",
+    "release_manifest_fields": [
+      "package",
+      "version",
+      "commit",
+      "submodules",
+      "dependency_graph",
+      "verified_crate",
+      "artifacts"
+    ],
+    "verified_crate_fields": [
+      "source",
+      "name",
+      "sha256",
+      "bytes",
+      "normalized",
+      "registry_graph"
+    ],
+    "source_fields": [
+      "commit",
+      "tree",
+      "manifest_sha256",
+      "dependency_graph",
+      "cargo",
+      "rustc"
+    ],
+    "development_graph_fields": [
+      "cargo_lock_sha256",
+      "packages"
+    ],
+    "graph_package_fields": [
+      "name",
+      "version",
+      "source",
+      "dependencies",
+      "features"
+    ],
+    "graph_git_package_additional_fields": [
+      "commit",
+      "tree",
+      "manifest"
+    ],
+    "graph_dependency_fields": [
+      "name",
+      "package",
+      "kinds"
+    ],
+    "dependency_package_identity": [
+      "name",
+      "version",
+      "source"
+    ],
+    "dependency_kind_fields": [
+      "kind",
+      "target"
+    ],
+    "normalized_fields": [
+      "manifest_sha256",
+      "lock_sha256",
+      "packages",
+      "direct_project_z"
+    ],
+    "source_references": [
+      {
+        "path": "Cargo.toml",
+        "start_line": 1,
+        "end_line": 5,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/Cargo.toml#L1-L5"
+      },
+      {
+        "path": "Cargo.lock",
+        "start_line": 1583,
+        "end_line": 1585,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/Cargo.lock#L1583-L1585"
+      },
+      {
+        "path": "scripts/release.py",
+        "start_line": 296,
+        "end_line": 361,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/scripts/release.py#L296-L361"
+      },
+      {
+        "path": "scripts/release.py",
+        "start_line": 630,
+        "end_line": 644,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/scripts/release.py#L630-L644"
+      },
+      {
+        "path": "scripts/release.py",
+        "start_line": 647,
+        "end_line": 718,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/scripts/release.py#L647-L718"
+      },
+      {
+        "path": "scripts/release.py",
+        "start_line": 728,
+        "end_line": 797,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/scripts/release.py#L728-L797"
+      }
+    ],
+    "required_later_observation": "The official crate bytes, VCS identity, source commit/tree, candidate Cargo.toml and Cargo.lock, normalized registry lock/manifest and both receipt graphs must come from the actual owner-bound successful formal publication. Cargo metadata features and transitive Git tree receipts were not executed or reproduced in this review.",
+    "test_definition": {
+      "name": "test_normalized_crate_must_match_original_source_and_registry_contract",
+      "source": {
+        "path": "scripts/test_release.py",
+        "start_line": 845,
+        "end_line": 901,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/scripts/test_release.py#L845-L901"
+      },
+      "executed": false
+    }
+  },
+  "concurrency": {
+    "workflow": {
+      "source": {
+        "path": ".github/workflows/release.yml",
+        "start_line": 28,
+        "end_line": 30,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/release.yml#L28-L30"
+      },
+      "group": "release-${{ github.event.inputs.tag || github.ref_name }}",
+      "cancel_in_progress": false,
+      "tag24_group": "release-v0.10.24",
+      "tag25_group": "release-v0.10.25",
+      "different_tag_workflow_groups": true
+    },
+    "github_publication_job": {
+      "source": {
+        "path": ".github/workflows/release.yml",
+        "start_line": 370,
+        "end_line": 375,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/release.yml#L370-L375"
+      },
+      "group": "github-release-publication",
+      "cancel_in_progress": false,
+      "shared_between_release_tags": true,
+      "queue_property_present": false,
+      "running_job_is_not_cancelled_by_this_configuration": true,
+      "pending_job_replacement_possible": true
+    },
+    "reusable_checks": {
+      "source": {
+        "path": ".github/workflows/ci.yml",
+        "start_line": 30,
+        "end_line": 32,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/ci.yml#L30-L32"
+      },
+      "group": "ci-${{ github.workflow }}-${{ inputs.ref || github.ref }}",
+      "cancel_in_progress": true,
+      "input_ref_is_validated_exact_source": {
+        "path": ".github/workflows/release.yml",
+        "start_line": 137,
+        "end_line": 142,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/release.yml#L137-L142"
+      },
+      "different_candidate_shas_have_different_groups": true
+    },
+    "operational_constraint": "Before a future v0.10.25 tag, coordinate with the other owner and confirm the actual v0.10.24 formal-run and publication-queue state. If the v0.10.24 formal run has been started, wait for its actual completion. Do not cancel another owner's workflow or publication job.",
+    "official_documentation": "https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency",
+    "documented_limit": "cancel-in-progress:false protects an already running member; the default shared group still has a single pending slot, and a later queued member can replace a pending member.",
+    "current_v24_formal_run_asserted": false,
+    "live_status_scope": "This immutable-source review does not establish that a v0.10.24 formal run currently exists or that the repository or shared publication queue is idle.",
+    "test_definition": {
+      "name": "test_only_publication_is_serialized_across_release_tags",
+      "source": {
+        "path": "scripts/test_release.py",
+        "start_line": 62,
+        "end_line": 68,
+        "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/scripts/test_release.py#L62-L68"
+      },
+      "executed": false
+    }
+  },
+  "d4_unix_input_lease": {
+    "comparison_commit": "d4c4b9c6fe09a4d7b246ca54a08f5c7b258289fb",
+    "implementation_commit": "10fdc1c10888c59799bb98908911033bacc3f046",
+    "path": "src/computer/host_control/storage.rs",
+    "c_git_blob": "2b81a6559e7b9650bbb70266eed0c1039cdea821",
+    "d4_git_blob": "2b81a6559e7b9650bbb70266eed0c1039cdea821",
+    "entire_file_git_blob_equal": true,
+    "entire_file_decoded_content_equal": true,
+    "conclusion": "The complete file is byte-identical by Git blob identity and content equality. The Unix Drop for InputLease explicitly unlocks before its File field is dropped, retries Interrupted errors, and stops on other errors.",
+    "source_reference": {
+      "path": "src/computer/host_control/storage.rs",
+      "start_line": 48,
+      "end_line": 65,
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/src/computer/host_control/storage.rs#L48-L65"
+    },
+    "runtime_test_executed": false
+  },
+  "existing_helper_bundle_files_modified": [],
+  "preserved_existing_helper_files": [
+    "README.md",
+    "preparation-manifest.json",
+    "verify_published_candidate.py"
+  ],
+  "not_claimed": [
+    "C policy test execution",
+    "C build or runtime acceptance",
+    "V11 test results as C execution",
+    "An observed successful C formal release run",
+    "Published C release or crate assets",
+    "A native InputLease runtime reproduction"
+  ]
+}

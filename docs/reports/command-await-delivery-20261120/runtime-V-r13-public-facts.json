@@ -1,0 +1,182 @@
+{
+  "schema": "ssmcp.runtime-V-r13.public-facts.v1",
+  "evidence_basis": {
+    "kind": "Existing completed runtime and outer launch reports; no product execution by this extraction",
+    "full_json_originals_read": [
+      "launch-result.json",
+      "run/report.json"
+    ],
+    "originals_hashed": true,
+    "separate_module_evidence_files_reread": false,
+    "large_binaries_rehashed": false,
+    "native_job_completion": "Existing runner reported exit0, nonrunning, both output streams EOF; this extraction independently verifies original report and launch result bytes"
+  },
+  "source": {
+    "commit": "f42baae1d5227bd6db8315aef778160b80b57274",
+    "tree": "64b40eb8a3e0188076cf376229d3d87074d27dcc",
+    "label": "V / r13"
+  },
+  "result": {
+    "passed": true,
+    "errors": [],
+    "started_utc": "2026-11-21T05:25:12Z",
+    "finished_utc": "2026-11-21T05:25:19Z",
+    "duration_ms": 7764,
+    "check_count": 18,
+    "outer_launch": {
+      "passed": true,
+      "errors": [],
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_ms": 8120,
+      "cleanup": {
+        "spawned": true,
+        "reaped": true,
+        "exit_code": 0,
+        "termination_requested": false
+      }
+    }
+  },
+  "input_guards": {
+    "inputs_before_equal_after": true,
+    "source_identity_from_both_reports_matches": true
+  },
+  "modules": {
+    "private_mcp": {
+      "status": "passed",
+      "source_revision": "f42baae1d5227bd6db8315aef778160b80b57274",
+      "check_count": 12,
+      "checks": [
+        {
+          "name": "private_mcp.owned_account_and_two_clients",
+          "passed": true
+        },
+        {
+          "name": "private_mcp.chat_history_draft_queue_baseline",
+          "passed": true
+        },
+        {
+          "name": "private_mcp.globally_retired_native_tools_absent",
+          "passed": true
+        },
+        {
+          "name": "private_mcp.none_remaining_human_tools_hidden",
+          "passed": true
+        },
+        {
+          "name": "private_mcp.concurrent_chat_remaining_human_tools_present",
+          "passed": true
+        },
+        {
+          "name": "private_mcp.none_stale_human_reply_rejected",
+          "passed": true
+        },
+        {
+          "name": "private_mcp.none_stale_human_wait_rejected",
+          "passed": true
+        },
+        {
+          "name": "private_mcp.none_exec_roundtrip",
+          "passed": true
+        },
+        {
+          "name": "private_mcp.none_time_roundtrip",
+          "passed": true
+        },
+        {
+          "name": "private_mcp.none_native_messages_roundtrip",
+          "passed": true
+        },
+        {
+          "name": "private_mcp.none_reload_reconnect_preserves_none",
+          "passed": true
+        },
+        {
+          "name": "private_mcp.chat_history_draft_queue_unchanged",
+          "passed": true
+        }
+      ],
+      "cleanup": {
+        "passed": true,
+        "errors": []
+      }
+    },
+    "transport": {
+      "status": "passed",
+      "source_revision": "f42baae1d5227bd6db8315aef778160b80b57274",
+      "check_count": 6,
+      "checks": [
+        {
+          "name": "mcp_stdio_protocol_only",
+          "passed": true
+        },
+        {
+          "name": "pipe_mcp_literal_and_warnings",
+          "passed": true
+        },
+        {
+          "name": "fake_exec_argv_literal",
+          "passed": true
+        },
+        {
+          "name": "fake_exec_nonzero_bounded_diagnostics",
+          "passed": true
+        },
+        {
+          "name": "unix_socket_write_half_close_once",
+          "passed": true
+        },
+        {
+          "name": "terminal_original_history_and_current_draft",
+          "passed": true
+        }
+      ],
+      "cleanup": {
+        "passed": true,
+        "errors": []
+      },
+      "models_started": false,
+      "tls_verified": false,
+      "helper_inputs_before_equal_after": true,
+      "socket_directories_removed": true
+    }
+  },
+  "cleanup": {
+    "short_temp_root_removed": true,
+    "module_cleanup_passed": true,
+    "outer_namespace_reaped": true
+  },
+  "scope": {
+    "runtime_report_declared_scope": "Separate input/recipient runtime smoke; not Gate35, final25, P1, publication or a human finish approval.",
+    "outer_launch_declared_scope": "Separate prepared smoke; not Gate35/final25/P1 or finish approval",
+    "not_covered": [
+      "Full UI24 acceptance",
+      "P1",
+      "Publication",
+      "Installation",
+      "Human finish approval"
+    ],
+    "models_started": false,
+    "tls_verified": false,
+    "raw_ready_frame": "Not established by this public projection; no claim of raw frame capture",
+    "production_switch_claim": false
+  },
+  "originals": [
+    {
+      "file": "launch-result.json",
+      "bytes": 12612,
+      "sha256": "a295675c21c79c72cd9faaebb3966edf17601ca97ed9488c57c4134bc1c51ee9"
+    },
+    {
+      "file": "run/report.json",
+      "bytes": 62204,
+      "sha256": "7920cfcab677eea3419b4d0bef8449c63ef57702c102d171e40fa043990fe814"
+    }
+  ],
+  "redactions": [
+    "Private absolute paths",
+    "Native client, connection, process and message identities",
+    "Raw chat contents and draft text",
+    "Command line and environment"
+  ]
+}

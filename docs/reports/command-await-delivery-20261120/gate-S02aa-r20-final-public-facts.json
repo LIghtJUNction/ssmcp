@@ -1,0 +1,1008 @@
+{
+  "schema": "ssmcp-gate20-final-public-facts-v1",
+  "snapshot_utc": "2026-11-21T14:26:05Z",
+  "source": {
+    "repository": "LIghtJUNction/ssmcp",
+    "version": "0.10.25",
+    "commit": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "tree": "167e9976d2ac334fb3dfbd58f82288baf0eb9b17",
+    "parents": [
+      "cf358f00f84b73e9892e62dd9b50b0dcc218201c",
+      "8521fc1a9a81788cc93e727b66b4dfcbcc5660c5"
+    ],
+    "pull_request": 173,
+    "merged_at": "2026-11-21T13:44:16Z",
+    "author_commit": "8521fc1a9a81788cc93e727b66b4dfcbcc5660c5",
+    "author_tree": "167e9976d2ac334fb3dfbd58f82288baf0eb9b17",
+    "main_ref_readback_equal": true,
+    "author_and_merge_tree_and_patch_equal": true,
+    "read_scope": "Independent full GitHub commit responses, current main ref, and actual merged PR record; no preview merge identity used."
+  },
+  "gate": {
+    "status": "passed",
+    "run_id": "2f9197c074824f45545f28952342f25d",
+    "started_unix_seconds": 1795268965.825525,
+    "finished_unix_seconds": 1795270942.9197855,
+    "owned_started_utc": "2026-11-21T13:49:25.180585+00:00",
+    "owned_finished_utc": "2026-11-21T14:22:23.093866+00:00",
+    "owned_elapsed_seconds_approx": 1977.913,
+    "stages_passed": 35,
+    "stages_failed": 0,
+    "stage_count": 35,
+    "scope": {
+      "stages": 35,
+      "rust_result_stages": 26,
+      "integration_targets": 20,
+      "mandatory_ignored": 14,
+      "host_tests": 6
+    },
+    "checks": [
+      {
+        "name": "release-policy",
+        "exit_code": 0,
+        "seconds": 10.62
+      },
+      {
+        "name": "deployment-policy",
+        "exit_code": 0,
+        "seconds": 0.62
+      },
+      {
+        "name": "fmt",
+        "exit_code": 0,
+        "seconds": 4.66
+      },
+      {
+        "name": "library-compile",
+        "exit_code": 0,
+        "seconds": 278.12
+      },
+      {
+        "name": "library-private",
+        "exit_code": 0,
+        "seconds": 78.77
+      },
+      {
+        "name": "library-host",
+        "exit_code": 0,
+        "seconds": 0.05
+      },
+      {
+        "name": "clippy",
+        "exit_code": 0,
+        "seconds": 622.62
+      },
+      {
+        "name": "windows-gnu-clippy",
+        "exit_code": 0,
+        "seconds": 91.67
+      },
+      {
+        "name": "integration-compile",
+        "exit_code": 0,
+        "seconds": 129.68
+      },
+      {
+        "name": "integration-allow_account",
+        "exit_code": 0,
+        "seconds": 0.06
+      },
+      {
+        "name": "integration-cc_backend",
+        "exit_code": 0,
+        "seconds": 1.13
+      },
+      {
+        "name": "integration-client_resources",
+        "exit_code": 0,
+        "seconds": 0.13
+      },
+      {
+        "name": "integration-client_server_config",
+        "exit_code": 0,
+        "seconds": 0.54
+      },
+      {
+        "name": "integration-codex_backend",
+        "exit_code": 0,
+        "seconds": 20.86
+      },
+      {
+        "name": "integration-collaboration",
+        "exit_code": 0,
+        "seconds": 0.16
+      },
+      {
+        "name": "integration-connection_context",
+        "exit_code": 0,
+        "seconds": 0.26
+      },
+      {
+        "name": "integration-context",
+        "exit_code": 0,
+        "seconds": 0.16
+      },
+      {
+        "name": "integration-context_helpers",
+        "exit_code": 0,
+        "seconds": 0.01
+      },
+      {
+        "name": "integration-context_runtime",
+        "exit_code": 0,
+        "seconds": 0.18
+      },
+      {
+        "name": "integration-oauth_security",
+        "exit_code": 0,
+        "seconds": 1.16
+      },
+      {
+        "name": "integration-pi_backend",
+        "exit_code": 0,
+        "seconds": 0.39
+      },
+      {
+        "name": "integration-release_client",
+        "exit_code": 0,
+        "seconds": 0.08
+      },
+      {
+        "name": "integration-resources",
+        "exit_code": 0,
+        "seconds": 0.3
+      },
+      {
+        "name": "integration-rsync",
+        "exit_code": 0,
+        "seconds": 0.21
+      },
+      {
+        "name": "integration-server_runtime",
+        "exit_code": 0,
+        "seconds": 0.05
+      },
+      {
+        "name": "integration-terminals",
+        "exit_code": 0,
+        "seconds": 0.81
+      },
+      {
+        "name": "integration-two_tools",
+        "exit_code": 0,
+        "seconds": 0.06
+      },
+      {
+        "name": "integration-workspace_bridge",
+        "exit_code": 0,
+        "seconds": 0.01
+      },
+      {
+        "name": "integration-zuse_worker_entry",
+        "exit_code": 0,
+        "seconds": 0.54
+      },
+      {
+        "name": "library-code-mode-ignored",
+        "exit_code": 0,
+        "seconds": 0.74
+      },
+      {
+        "name": "integration-two_tools-ignored",
+        "exit_code": 0,
+        "seconds": 2.49
+      },
+      {
+        "name": "integration-workspace_bridge-ignored",
+        "exit_code": 0,
+        "seconds": 3.35
+      },
+      {
+        "name": "integration-context_helpers-ignored",
+        "exit_code": 0,
+        "seconds": 0.38
+      },
+      {
+        "name": "release",
+        "exit_code": 0,
+        "seconds": 414.05
+      },
+      {
+        "name": "decoder",
+        "exit_code": 0,
+        "seconds": 211.61
+      }
+    ],
+    "driver_sha256": "17e246cab3a155737bfa25783eabd5392c934ddd041969d0ef93431f7f8c7cc5",
+    "receipt": {
+      "bytes": 1311388,
+      "sha256": "a6adc20c1e712c546017c5a7f6d47fde806771d5ef3db4eada49c31a83f20c8c"
+    },
+    "inner_exit": {
+      "bytes": 4805,
+      "sha256": "e12792c7ddb46646169756934cfb3d8f2fcbff3ee412c023abe055c3584d7c59",
+      "exit_code": 0,
+      "gate_status": "passed",
+      "gate_run_id": "2f9197c074824f45545f28952342f25d",
+      "gate_receipt_sha256": "a6adc20c1e712c546017c5a7f6d47fde806771d5ef3db4eada49c31a83f20c8c"
+    },
+    "owned_exit": {
+      "bytes": 1172,
+      "sha256": "c1c2ab0cfed19f890b6d189afa4bcbe4b0296a38b8e853ba2b799dba72cc62b0",
+      "exit_code": 0,
+      "error": null,
+      "launcher_returncode": 0
+    }
+  },
+  "tests": {
+    "policy": {
+      "release": {
+        "passed": 106,
+        "seconds": 10.324
+      },
+      "deployment": {
+        "passed": 35,
+        "seconds": 0.345
+      }
+    },
+    "private_parent": {
+      "passed": 2104,
+      "failed": 0,
+      "ignored": 26,
+      "measured": 0,
+      "filtered": 6,
+      "seconds": 78.72
+    },
+    "host_parent": {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered": 2130,
+      "seconds": 0.03
+    },
+    "private_child_summaries": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2135 filtered out; finished in 0.00s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2135 filtered out; finished in 0.00s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2135 filtered out; finished in 0.01s"
+    ],
+    "private_child_results_added_to_parent": false,
+    "selected_seven_test_lines": [
+      "test client::terminal::conversation::questions::history_tests::full_keyboard_empty_questions_list_arrows_move_between_panels ... ok",
+      "test client::terminal::conversation::questions::history_tests::full_keyboard_questions_list_arrows_preserve_selection_until_enter ... ok",
+      "test computer::zuse_backend::tests::cancellation_returns_while_native_submit_is_blocked_and_preserves_its_error ... ok",
+      "test http::question_delivery_tests::tool_summary_passive_timeout_resume_and_cancel_do_not_redeliver_or_consume_input ... ok",
+      "test http::question_delivery_tests::tool_summary_code_mode_wait_for_keeps_the_native_delivery_boundary ... ok",
+      "test http::question_delivery_tests::tool_summary_passive_await_rechecks_oauth_and_binding_after_probe ... ok",
+      "test http::question_delivery_tests::tool_summary_public_await_delivers_the_eleventh_call_without_consuming_user_input ... ok"
+    ],
+    "selected_tests_included_in_parent": true,
+    "ordinary_integration": {
+      "targets": 19,
+      "passed": 101,
+      "results": {
+        "integration-allow_account": {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.05
+        },
+        "integration-cc_backend": {
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 1.12
+        },
+        "integration-client_resources": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.12
+        },
+        "integration-client_server_config": {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.53
+        },
+        "integration-codex_backend": {
+          "passed": 14,
+          "failed": 0,
+          "ignored": 2,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 20.85
+        },
+        "integration-collaboration": {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.15
+        },
+        "integration-connection_context": {
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.25
+        },
+        "integration-context": {
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.16
+        },
+        "integration-context_helpers": {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 2,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0
+        },
+        "integration-context_runtime": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.17
+        },
+        "integration-oauth_security": {
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 1.15
+        },
+        "integration-pi_backend": {
+          "passed": 9,
+          "failed": 0,
+          "ignored": 1,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.38
+        },
+        "integration-release_client": {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.07
+        },
+        "integration-resources": {
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.29
+        },
+        "integration-rsync": {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.2
+        },
+        "integration-server_runtime": {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 1,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.04
+        },
+        "integration-terminals": {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.8
+        },
+        "integration-two_tools": {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 7,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.05
+        },
+        "integration-workspace_bridge": {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 3,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0
+        }
+      }
+    },
+    "zuse_worker_entry": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "measured": 0,
+      "filtered": 0,
+      "seconds": 0.53
+    },
+    "mandatory_ignored": {
+      "groups": 4,
+      "passed": 14,
+      "library_passed": 2,
+      "integration_passed": 12,
+      "results": {
+        "library-code-mode-ignored": {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 2134,
+          "seconds": 0.72
+        },
+        "integration-two_tools-ignored": {
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 2,
+          "seconds": 2.49
+        },
+        "integration-workspace_bridge-ignored": {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 3.34
+        },
+        "integration-context_helpers-ignored": {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0,
+          "seconds": 0.37
+        }
+      }
+    },
+    "counts_from_current_source_only": true,
+    "grand_total_across_categories_not_claimed": true
+  },
+  "log_records": [
+    {
+      "stage": "release-policy",
+      "bytes": 22851,
+      "sha256": "68bde769d4f4036c57c7ddfda84bbe81a74bbe219e90b72b021f9425d4cc68b9",
+      "summaries": [
+        "Ran 106 tests in 10.324s",
+        "OK"
+      ]
+    },
+    {
+      "stage": "deployment-policy",
+      "bytes": 5660,
+      "sha256": "6ccb9ac6377e1c7675fde10a1542611e89fda5c6134a4795aaf8307bdaee686f",
+      "summaries": [
+        "Ran 35 tests in 0.345s",
+        "OK"
+      ]
+    },
+    {
+      "stage": "fmt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "stage": "library-compile",
+      "bytes": 213954,
+      "sha256": "595174e939f460076d46a4d51d4d28ec3efbc81c7ee468556f4f6a8400de89b8",
+      "summaries": []
+    },
+    {
+      "stage": "library-private",
+      "bytes": 565684,
+      "sha256": "5a35d6f413635db4d504ceaaf47f570ea5b90a663e0f4dcf837996bc932cb930",
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2135 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2135 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2135 filtered out; finished in 0.01s",
+        "test result: ok. 2104 passed; 0 failed; 26 ignored; 0 measured; 6 filtered out; finished in 78.72s"
+      ]
+    },
+    {
+      "stage": "library-host",
+      "bytes": 2079,
+      "sha256": "835dbabb2d161afc31f968d2be9c83073e128757205bff564b48c833ad445f5f",
+      "summaries": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 2130 filtered out; finished in 0.03s"
+      ]
+    },
+    {
+      "stage": "clippy",
+      "bytes": 585,
+      "sha256": "a9a882d6cc8f8293faa83e539c8a99e83263af01cd7575d66b4752a9ed88f86c",
+      "summaries": []
+    },
+    {
+      "stage": "windows-gnu-clippy",
+      "bytes": 584,
+      "sha256": "50ebccb219147b9f03f5df73b16a7d4a2c02206d472983cc584b737f3015a87c",
+      "summaries": []
+    },
+    {
+      "stage": "integration-compile",
+      "bytes": 235554,
+      "sha256": "8c3e81806941f302cf395d53c5d1028046535f1a46456a24f01a02b0ad7f78a2",
+      "summaries": []
+    },
+    {
+      "stage": "integration-allow_account",
+      "bytes": 331,
+      "sha256": "301b0461905dc7ab3cd9f6ae04abb15c271b680df7e4975ac5b14239acdd4c4e",
+      "summaries": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s"
+      ]
+    },
+    {
+      "stage": "integration-cc_backend",
+      "bytes": 2053,
+      "sha256": "2fde7193c1162164c6fab3f1038e7038a4578d718aefff0e97a9b96dd7d3b36d",
+      "summaries": [
+        "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.12s"
+      ]
+    },
+    {
+      "stage": "integration-client_resources",
+      "bytes": 251,
+      "sha256": "fd153ac34fd8204588752cc52a0b646d20e2abe2f2791421daba9270004f64c2",
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s"
+      ]
+    },
+    {
+      "stage": "integration-client_server_config",
+      "bytes": 512,
+      "sha256": "771f9dedd61089d8026906bf25d19e5bbb0ec6a8dc1cf6335504dc21da3adc43",
+      "summaries": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s"
+      ]
+    },
+    {
+      "stage": "integration-codex_backend",
+      "bytes": 9635,
+      "sha256": "a58272f43061f3704fac3e84ac58dfcd719a80f1dba963e2cac9ae30604a0d7f",
+      "summaries": [
+        "test result: ok. 14 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 20.85s"
+      ]
+    },
+    {
+      "stage": "integration-collaboration",
+      "bytes": 24261,
+      "sha256": "8141cb20716196a9080f4cefb973e0b241310f2b95f00eae3abbbcad5bad9c38",
+      "summaries": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s"
+      ]
+    },
+    {
+      "stage": "integration-connection_context",
+      "bytes": 893,
+      "sha256": "5bc3cd22520ee827d51a123d1d1bbbec1df435f74bf94d946f85b3f53f446f98",
+      "summaries": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s"
+      ]
+    },
+    {
+      "stage": "integration-context",
+      "bytes": 9635,
+      "sha256": "c890c24ebdd5abec4b9420b1872b3f9383e35fdb2f363c10dc9ac6fa2b28fd47",
+      "summaries": [
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s"
+      ]
+    },
+    {
+      "stage": "integration-context_helpers",
+      "bytes": 470,
+      "sha256": "d97772d6536da9b8f88482e90b8e19d8e60b8dca14361909d1e1e7ba08fe8512",
+      "summaries": [
+        "test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "stage": "integration-context_runtime",
+      "bytes": 387,
+      "sha256": "9789110f82fb675acd27dba6f295b31e50fba6537b88c5c581fddce5b46e9ca4",
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s"
+      ]
+    },
+    {
+      "stage": "integration-oauth_security",
+      "bytes": 24289,
+      "sha256": "979fb8be394fb37bcd6c19df8b438d37d44c4b7fefef50c882767d908e1b99aa",
+      "summaries": [
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s"
+      ]
+    },
+    {
+      "stage": "integration-pi_backend",
+      "bytes": 5283,
+      "sha256": "39f92a0ddc20fb619eba759ff3fc01aa4298d65b1eb1d452c9141229742ecaf4",
+      "summaries": [
+        "test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.38s"
+      ]
+    },
+    {
+      "stage": "integration-release_client",
+      "bytes": 2846,
+      "sha256": "3065ebad4517e6405bf7e60c7b0dcc7872ded24e7b4053e5a2635a595bef6042",
+      "summaries": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s"
+      ]
+    },
+    {
+      "stage": "integration-resources",
+      "bytes": 65447,
+      "sha256": "98b0bbadfebc6efbd3a7a7651d7ea368d576adfe64a42509abf8c94a367f289d",
+      "summaries": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s"
+      ]
+    },
+    {
+      "stage": "integration-rsync",
+      "bytes": 309,
+      "sha256": "f893182e1d8650ce6ad2ff26108524e6321e1e78bbd099835e54d19eafc8ac38",
+      "summaries": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s"
+      ]
+    },
+    {
+      "stage": "integration-server_runtime",
+      "bytes": 484,
+      "sha256": "956117c37e36279bbbaf565b7a4d4402397fa00f3d325cacbe4c9f47bd162b90",
+      "summaries": [
+        "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.04s"
+      ]
+    },
+    {
+      "stage": "integration-terminals",
+      "bytes": 1003,
+      "sha256": "3be558894a7766e21c4ebc583f07d30b447ad7daade91e54c76d8b3a684bed6d",
+      "summaries": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s"
+      ]
+    },
+    {
+      "stage": "integration-two_tools",
+      "bytes": 7535,
+      "sha256": "c2d49bf6d4bee60a767266042ccf1217730a30d37a848e77000c6c9afa6ade64",
+      "summaries": [
+        "test result: ok. 2 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 0.05s"
+      ]
+    },
+    {
+      "stage": "integration-workspace_bridge",
+      "bytes": 574,
+      "sha256": "a016ef16e661a8133328e13bbf46a3c8360c174db26c22b61328bd62e02b6bbd",
+      "summaries": [
+        "test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "stage": "integration-zuse_worker_entry",
+      "bytes": 198,
+      "sha256": "409977b329d9f2879ec1247cdd6d573ba46528722f9282214be6c1d159135f4e",
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s"
+      ]
+    },
+    {
+      "stage": "library-code-mode-ignored",
+      "bytes": 272,
+      "sha256": "3d384bed8ce4f5bd20b44db96574b12246d2547e035dfb0a6e6eeb356fe56cc8",
+      "summaries": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2134 filtered out; finished in 0.72s"
+      ]
+    },
+    {
+      "stage": "integration-two_tools-ignored",
+      "bytes": 32142,
+      "sha256": "a5fda7fcc5fe09a02896011a9adb3a17c72d83011c041f03c20dd2460d178fd6",
+      "summaries": [
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.49s"
+      ]
+    },
+    {
+      "stage": "integration-workspace_bridge-ignored",
+      "bytes": 12939,
+      "sha256": "f96d6bad76812f0b50ee7b07eb6bbdd403ac73a0f0be16029062f4f6af3dfeb3",
+      "summaries": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.34s"
+      ]
+    },
+    {
+      "stage": "integration-context_helpers-ignored",
+      "bytes": 1738,
+      "sha256": "92744c7e0cbb03801049d92737e37f50d76d31e0e12ea91e406bb089a3b01bea",
+      "summaries": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s"
+      ]
+    },
+    {
+      "stage": "release",
+      "bytes": 217837,
+      "sha256": "37139ec4765167894d9e598a80ff155b7deb91c6594de7c5f578dfd5862fc398",
+      "summaries": []
+    },
+    {
+      "stage": "decoder",
+      "bytes": 216107,
+      "sha256": "2c495acccf0d2a3431e903226a2df6e3b1d4ab16790bd59c2ba8ca987e403568",
+      "summaries": []
+    }
+  ],
+  "commands": [
+    {
+      "stage": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--offline",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--jobs",
+        "1",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "stage": "windows-gnu-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--offline",
+        "--locked",
+        "--target",
+        "x86_64-pc-windows-gnu",
+        "--workspace",
+        "--all-targets",
+        "--jobs",
+        "1",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    }
+  ],
+  "input_integrity": {
+    "input_count": 9,
+    "hashes_before": {
+      "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+      "cargo_lock": "b8caf2e4f747094a0bcd12842b1fe7894d7d956efa1f8b756f17a16518b9d393",
+      "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+      "driver": "17e246cab3a155737bfa25783eabd5392c934ddd041969d0ef93431f7f8c7cc5",
+      "git_heads": "63fda4f8fdb92d0e471c1a3862c9e157c8f3c4f2c68bf6ba9254ec8ab38ed00d",
+      "owner_agreement": "706fed42afcf5a704974f310121eeba84e9414c712b2a5fb748bf7577535aeb0",
+      "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+      "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+      "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+    },
+    "hashes_after": {
+      "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+      "cargo_lock": "b8caf2e4f747094a0bcd12842b1fe7894d7d956efa1f8b756f17a16518b9d393",
+      "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+      "driver": "17e246cab3a155737bfa25783eabd5392c934ddd041969d0ef93431f7f8c7cc5",
+      "git_heads": "63fda4f8fdb92d0e471c1a3862c9e157c8f3c4f2c68bf6ba9254ec8ab38ed00d",
+      "owner_agreement": "706fed42afcf5a704974f310121eeba84e9414c712b2a5fb748bf7577535aeb0",
+      "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+      "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+      "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+    },
+    "before_after_equal": true,
+    "root_midrun_independent_rehash": {
+      "record": "midrun_input_hashes",
+      "observed_utc": "2026-11-21T13:58:09.264221+00:00",
+      "inputs": {
+        "cargo_config": {
+          "bytes": 925,
+          "sha256": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+          "equals_launch_before": true,
+          "equals_binding_expected": true
+        },
+        "cargo_lock": {
+          "bytes": 66476,
+          "sha256": "b8caf2e4f747094a0bcd12842b1fe7894d7d956efa1f8b756f17a16518b9d393",
+          "equals_launch_before": true,
+          "equals_binding_expected": true
+        },
+        "dependency_auditor": {
+          "bytes": 14653,
+          "sha256": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+          "equals_launch_before": true,
+          "equals_binding_expected": true
+        },
+        "driver": {
+          "bytes": 83641,
+          "sha256": "17e246cab3a155737bfa25783eabd5392c934ddd041969d0ef93431f7f8c7cc5",
+          "equals_launch_before": true,
+          "equals_binding_expected": true
+        },
+        "git_heads": {
+          "bytes": 19053,
+          "sha256": "63fda4f8fdb92d0e471c1a3862c9e157c8f3c4f2c68bf6ba9254ec8ab38ed00d",
+          "equals_launch_before": true,
+          "equals_binding_expected": true
+        },
+        "owner_agreement": {
+          "bytes": 8663,
+          "sha256": "706fed42afcf5a704974f310121eeba84e9414c712b2a5fb748bf7577535aeb0",
+          "equals_launch_before": true,
+          "equals_binding_expected": true
+        },
+        "reviewed_baseline": {
+          "bytes": 56086,
+          "sha256": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+          "equals_launch_before": true,
+          "equals_binding_expected": true
+        },
+        "workspace_wrapper": {
+          "bytes": 3569,
+          "sha256": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+          "equals_launch_before": true,
+          "equals_binding_expected": true
+        },
+        "wrapper": {
+          "bytes": 272,
+          "sha256": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43",
+          "equals_launch_before": true,
+          "equals_binding_expected": true
+        }
+      }
+    },
+    "final_worktree_head": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "final_worktree_status_porcelain": "",
+    "root_worktree_heads": {
+      "after_export": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+      "before_export": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+      "final": "02aa4dcd18786062ef44be6c76422dff054fbfed"
+    }
+  },
+  "lock_records": {
+    "source_lock_held_until_child_return": true,
+    "target_owner_lock_held_for_entire_batch": true,
+    "exclusive_target_lock": true,
+    "compiler_jobs": "1",
+    "all_descendants_reaped_independently_proven": false
+  },
+  "binding": {
+    "bytes": 16561,
+    "sha256": "8918b7e3b1b9b23a1c52ba00bcdb6ff3c65ee9b013ea5f356e8d121c281e96be",
+    "stage_contract_independently_read": true,
+    "inverse_bytes_and_normalized_ast_identical_recorded": true,
+    "comparison_reexecuted_by_report_owner": false,
+    "only_added_outer_environment": "PYTHONDONTWRITEBYTECODE=1",
+    "old_scores_copied": false
+  },
+  "producer_binary_records": {
+    "ssmcp": {
+      "bytes": 16249416,
+      "sha256": "f355a5271f350b11dc19c61fd9c675b0e456627f90d29f7a4ece34d0fb76a203"
+    },
+    "ssmcp-frontend": {
+      "bytes": 1386584,
+      "sha256": "d3069119110ea265a021ae654dfb783d9db4c32b1f2f4e5f4758fc4ee7c8cbda"
+    },
+    "ssmcpd": {
+      "bytes": 8396368,
+      "sha256": "ee168b83cfce41802c6ce5654bf7c22f373d781e676868c6799b4d32a2beee14"
+    },
+    "vt_snapshot": {
+      "bytes": 440984,
+      "sha256": "efdbeb3f200fcf4404b2612d836433047ecc90eb0744f345fc971ee7441db97f"
+    }
+  },
+  "library_binary_record": {
+    "sha256": "bf7598d81818e604ea8c75b33d957fb938c7f71181f00487980adda1743a13a0",
+    "partition": {
+      "complete": true,
+      "disjoint": true,
+      "host": 6,
+      "private": 2130,
+      "total": 2136
+    }
+  },
+  "producer_binary_read_scope": "Values selected from the final Gate receipt. Report owner did not independently rehash the compiled binaries; these are not a claim that the downstream private copies or runtime bindings have already been verified.",
+  "source_budget_notice": {
+    "E18_author_commit": "8521fc1a9a81788cc93e727b66b4dfcbcc5660c5",
+    "only_test_fixture_changed": true,
+    "new_test_definitions": 0,
+    "success_fixture_count": 3,
+    "target_input_before_ms": 1000,
+    "target_input_after_ms": 5000,
+    "observation_guard_ms": 9000,
+    "guard_is_strict_whole_test_deadline": false,
+    "code_mode_outer_input_ms_unchanged": 10000,
+    "default_public_await_guard_ms_unchanged": 5000,
+    "timeout_resume_cancel_inputs_ms_unchanged": 1000,
+    "old_one_second_condition_pass_not_claimed": true,
+    "production_performance_root_cause_fix_not_claimed": true,
+    "fixture_details_file": "source-E18-summary-fixture-merged-public-facts.json"
+  },
+  "history": {
+    "Gate19": {
+      "source": "cf358f00f84b73e9892e62dd9b50b0dcc218201c",
+      "status": "failed",
+      "stages_passed": 4,
+      "stages_failed": 1,
+      "stages_not_run": 30,
+      "private_parent": {
+        "passed": 2102,
+        "failed": 2,
+        "ignored": 26,
+        "filtered": 6
+      },
+      "preserved": true
+    },
+    "Gate18_and_runtime18_on_Sb8_not_transferred": true,
+    "earlier_13_52_and_13_58_snapshots_preserved": true
+  },
+  "handoff": {
+    "source_owner_reported_formal_source_and_target_handoff_to_original_acceptance_owner": true,
+    "source_of_handoff": "Original source coordinator message following its own final read; execution does not wait for the report.",
+    "N20_result_observed_by_report_owner": false,
+    "current_runtime_UI_controls_multiUID_version_all_P1_native_supplement_pass_not_claimed": true
+  },
+  "release": {
+    "version": "0.10.25",
+    "GitHub_publication_verified": false,
+    "source_owner_reports_no_tag_dispatch_H2_install_or_restart": true,
+    "report_owner_H2_imported_or_executed": false,
+    "local_release_and_decoder_builds_are_not_GitHub_publication": true,
+    "Windows_GNU_clippy_is_not_native_Windows_runtime": true
+  },
+  "current_messaging_semantics": {
+    "source": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "native_and_group_send_supported": true,
+    "body_literal_in_UI_send_routing": true,
+    "local_listener_prepare_references": true,
+    "native_reference_completion_disabled": true,
+    "group_send_reference_completion_disabled": true,
+    "all_group_plain_input_completion_disabled_claimed": false,
+    "receipt_states_are_delivery_progress_not_execution_completion": true,
+    "read_scope": "Static fixed-source UI routing/body transfer, local preparation, completion conditions and receipt labels; no new backend-delivery or end-to-end execution.",
+    "native_and_group_implicit_local_file_or_skill_preparation": false
+  },
+  "read_scope": {
+    "full_original_launcher_and_owned_exit_read": true,
+    "final_gate_whole_file_hashed": true,
+    "final_gate_selected_fields_read": true,
+    "all_35_log_files_hashed": true,
+    "actual_policy_and_Rust_summary_lines_read": true,
+    "seven_exact_regression_lines_read": true,
+    "all_Gate_JSON_fields_or_log_lines_independently_audited": false,
+    "compiled_binaries_independently_rehashed_by_report_owner": false,
+    "earlier_busy_rejections_were_read_requests_not_product_failures": true
+  }
+}
+

@@ -1,0 +1,25 @@
+{
+  "binary_source": "a7f9077d92b093dbc90d1cd09cfb666fa55468af",
+  "script_source": "d27fe0e81b9a45bdb60b6805af4e0d23e9e6d6a3",
+  "ui_product_source": "d36d09e7c42f876961783cebe7713f193f800ae7",
+  "hashes": {
+    "client": "e156eb24ff27b03f305cf75d40a7d710c280537b255c9fe15263506dbc9df8f8",
+    "fixture": "6c982e9942fab1b9633fd0e09986ed260fb3d1b595d92682da88211fc4fe292f",
+    "runner": "6e169387073dfb5919f6714658ac28781cfe04c7e5800ada690c0c67fed3d4d0",
+    "decoder": "de98418dd3f8c5c7f1b2b6861689e497517f3a9b3d827e7160990314d12e4a28",
+    "script": "997096ffae1d2b5e3e495e2cb41df58124833f619eeda182e380ad0cd7c400f1"
+  },
+  "notify": false,
+  "models_invoked": false,
+  "omitted_checks": [],
+  "transport": "production account router over private loopback HTTP/WebSocket; synthetic GitHub provider",
+  "previous_attempts_preserved": [
+    "../user-wait-pty-ee0d5eb3-8fff4134",
+    "../user-wait-pty-9d7ed0c48710-8b744312",
+    "../user-wait-pty-a7f9077d92b0-8b744312",
+    "../user-wait-roster-diagnostic-a7f9077d",
+    "../user-wait-pty-a7f9077d92b0-df2ecd3f"
+  ],
+  "previous_attempts_note": "These paths identify separately retained original diagnostic directories, not files distributed in this public bundle.",
+  "public_history_summary": "user-wait-acceptance-history-20261119.json"
+}

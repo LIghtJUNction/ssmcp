@@ -1,0 +1,539 @@
+{
+  "schema": "ssmcp.paste-attempts-checkpoint.v1",
+  "document_status": "working_checkpoint",
+  "cutoff_utc": "2026-11-20T23:41:03Z",
+  "previous_checkpoint": {
+    "commit": "7b1ca2093a382b5bde5b7bbe288e39cd06276d6c",
+    "tree": "4bd5114a73c5843c019729fcc78e6b610c0e92b6",
+    "url": "https://github.com/LIghtJUNction/ssmcp/blob/7b1ca2093a382b5bde5b7bbe288e39cd06276d6c/docs/reports/command-await-delivery-20261120/baseline-build-2253.json",
+    "history_copied": false
+  },
+  "base_report": {
+    "bytes": 78660,
+    "sha256": "5cfce64dcb9657935281c9a2cc18c0e6253e3cd1d64e73c7d332b7d37e84d99d",
+    "url": "https://github.com/LIghtJUNction/ssmcp/blob/7b1ca2093a382b5bde5b7bbe288e39cd06276d6c/docs/reports/command-await-delivery-20261120/README.md"
+  },
+  "source": {
+    "commit": "781b87df1d364137b6885f17f631a3e9e991bd58",
+    "tree": "6bf7beb143cfdce3878df856c27785164695430f",
+    "url": "https://github.com/LIghtJUNction/ssmcp/commit/781b87df1d364137b6885f17f631a3e9e991bd58",
+    "pull_request": {
+      "number": 159,
+      "url": "https://github.com/LIghtJUNction/ssmcp/pull/159",
+      "draft": true,
+      "merged": false
+    },
+    "build_receipt_sha256": "d2204375614807af510f6c7fd08ec657d212a98f18f504cb21376c63f47ea7c0",
+    "build_scope": "build_only; five artifact identities remain in previous checkpoint"
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "exit_code": 1,
+      "source_commit": "781b87df1d364137b6885f17f631a3e9e991bd58",
+      "receipt": {
+        "bytes": 23288,
+        "sha256": "23cf70065f3b4aa72beaeb45fefe0a6006da6fa5d5d1b4667249081db1348cb4"
+      },
+      "report": {
+        "bytes": 7946,
+        "sha256": "510422922070d1e6c3d831c3a5d41e91812cfa980d21feb36c082baa194ffcd0"
+      },
+      "status": "failed",
+      "fixture_prechecks_passed": 17,
+      "sample_count": 0,
+      "frame_count": 0,
+      "failure": "Next caller route-ready assertion failed before samples",
+      "inputs_unchanged": true,
+      "cargo_executed": false,
+      "busy_sample_created": false,
+      "ctrlv_executed": false
+    },
+    {
+      "attempt": 2,
+      "exit_code": 1,
+      "source_commit": "781b87df1d364137b6885f17f631a3e9e991bd58",
+      "receipt": {
+        "bytes": 23376,
+        "sha256": "2af5fa2aa4548518480bfdb2bcdaa5954a7cab1db3ebbb6905dffe5cc7e50cf1"
+      },
+      "report": {
+        "bytes": 16393,
+        "sha256": "239b8156043699336cf4befe9cf07d3596b46d670c19aa66dd06c63244cca841"
+      },
+      "status": "failed",
+      "checks": 59,
+      "sample_statuses": [
+        {
+          "name": "multiline-2738",
+          "status": "passed",
+          "ready_frame_grid_confirmed": true
+        },
+        {
+          "name": "multiline-64k",
+          "status": "passed",
+          "ready_frame_grid_confirmed": true
+        },
+        {
+          "name": "multiline-4m-exact",
+          "status": "passed",
+          "ready_frame_grid_confirmed": true
+        },
+        {
+          "name": "multiline-4m-plus-one",
+          "status": "passed",
+          "ready_frame_grid_confirmed": true
+        },
+        {
+          "name": "ordinary-16k",
+          "status": "running",
+          "ready_frame_grid_confirmed": true
+        }
+      ],
+      "frame_count": 4,
+      "failure": "ordinary-16k reached ready but remains status running; queue postcheck received a 33730-byte spilled tool result instead of inline UI state",
+      "postcheck_spill_bytes": 33730,
+      "postcheck_spill_sha256": "e613c04294e1c699e392fa7ff4831f43b12ff268984affb9406ba028320fab26",
+      "inputs_unchanged": true,
+      "cargo_executed": false,
+      "busy_sample_created": false,
+      "ctrlv_executed": false
+    },
+    {
+      "attempt": 3,
+      "exit_code": 1,
+      "source_commit": "781b87df1d364137b6885f17f631a3e9e991bd58",
+      "receipt": {
+        "bytes": 23389,
+        "sha256": "1e3428e06d9e4c178a13303aff02a59b912731c563283ea3aa84a55cd105bb17"
+      },
+      "report": {
+        "bytes": 18666,
+        "sha256": "ec4cdf40b88f80d2179922c20e5e20601f8a2c330087159c18eb965a02981adb"
+      },
+      "status": "failed",
+      "checks": 63,
+      "sample_statuses": [
+        {
+          "name": "multiline-2738",
+          "status": "passed"
+        },
+        {
+          "name": "multiline-64k",
+          "status": "passed"
+        },
+        {
+          "name": "multiline-4m-exact",
+          "status": "passed"
+        },
+        {
+          "name": "multiline-4m-plus-one",
+          "status": "passed"
+        },
+        {
+          "name": "ordinary-16k",
+          "status": "passed"
+        }
+      ],
+      "frame_count": 5,
+      "failure": "prefix preparation timed out before busy sample creation: the required complete marker did not match the collapsed preview; the specific clipping layer is unconfirmed",
+      "inputs_unchanged": true,
+      "cargo_executed": false,
+      "busy_sample_created": false,
+      "ctrlv_executed": false,
+      "stdout_eof": true,
+      "stderr_eof": true
+    },
+    {
+      "attempt": 4,
+      "source_commit": "781b87df1d364137b6885f17f631a3e9e991bd58",
+      "frozen_helper_set": "r3",
+      "exit_code": 0,
+      "stdout_eof": true,
+      "stderr_eof": true,
+      "status": "passed",
+      "receipt": {
+        "bytes": 29263,
+        "sha256": "aefc6b8a20c8bec808057acae758c60fb44630c5912cb1851cced2a7dc2eef63"
+      },
+      "six_cases_report": {
+        "bytes": 19660,
+        "sha256": "7b7c9081616aca563d74efe883cd716e6be8da594e2671e283c904a7b096c64c"
+      },
+      "ctrlv_report": {
+        "bytes": 13333,
+        "sha256": "df1d570ed1bbcf8e47d6a4e99c94d06357319ebc0ca22a9c5e9d3d82b05498d4"
+      },
+      "build_receipt_sha256": "d2204375614807af510f6c7fd08ec657d212a98f18f504cb21376c63f47ea7c0",
+      "source_tree": "6bf7beb143cfdce3878df856c27785164695430f",
+      "inputs_unchanged": true,
+      "cargo_executed": false,
+      "release_gate_executed": false,
+      "steps": [
+        {
+          "name": "six-cases",
+          "status": "completed",
+          "exit_code": 0
+        },
+        {
+          "name": "ctrlv",
+          "status": "completed",
+          "exit_code": 0
+        }
+      ],
+      "six_case_checks": 80,
+      "ctrlv_checks": 31,
+      "checks_include_account_fixture_and_are_not_unit_test_counts": true,
+      "six_case_frame_count": 6,
+      "ctrlv_frame_count": 1,
+      "six_case_samples": [
+        {
+          "name": "multiline-2738",
+          "status": "passed",
+          "expected": "reference",
+          "payload_bytes": 2738,
+          "ready_ms": 67.904495,
+          "pty_write_ms": 0.007923,
+          "ready_frame_grid_confirmed": true,
+          "observations": 1
+        },
+        {
+          "name": "multiline-64k",
+          "status": "passed",
+          "expected": "reference",
+          "payload_bytes": 65536,
+          "ready_ms": 34.839222,
+          "pty_write_ms": 3.789682,
+          "ready_frame_grid_confirmed": true,
+          "observations": 1
+        },
+        {
+          "name": "multiline-4m-exact",
+          "status": "passed",
+          "expected": "reference",
+          "payload_bytes": 4194304,
+          "ready_ms": 370.222459,
+          "pty_write_ms": 330.458831,
+          "ready_frame_grid_confirmed": true,
+          "observations": 1
+        },
+        {
+          "name": "multiline-4m-plus-one",
+          "status": "passed",
+          "expected": "rejected",
+          "payload_bytes": 4194305,
+          "ready_ms": 337.795869,
+          "pty_write_ms": 328.006441,
+          "ready_frame_grid_confirmed": true,
+          "observations": 1
+        },
+        {
+          "name": "ordinary-16k",
+          "status": "passed",
+          "expected": "inline",
+          "payload_bytes": 16384,
+          "ready_ms": 2439.160607,
+          "pty_write_ms": 0.023443,
+          "ready_frame_grid_confirmed": true,
+          "observations": 1
+        },
+        {
+          "name": "busy-multiline-2738",
+          "status": "passed",
+          "expected": "reference",
+          "payload_bytes": 2738,
+          "ready_ms": 43.186361,
+          "pty_write_ms": 0.007733,
+          "ready_frame_grid_confirmed": true,
+          "observations": 1,
+          "busy_output_ticks_during_input": 20,
+          "busy_running_before": true,
+          "busy_running_after": true
+        }
+      ],
+      "ctrlv_sample": {
+        "name": "ctrl-v-multiline-2738",
+        "status": "passed",
+        "expected": "reference",
+        "trigger": "PTY Ctrl+V",
+        "trigger_hex": "16",
+        "clipboard_payload_bytes": 2738,
+        "wire_bytes": 1,
+        "accepted_bytes": 1,
+        "ready_frame_grid_confirmed": true,
+        "ready_ms": 50.066292,
+        "observations": 1
+      },
+      "busy_sample_created": true,
+      "ctrlv_executed": true,
+      "verification_scope": "Primary reviewer actual exit/EOF, complete selected receipt/report reads, complete R3 diff and Ctrl-V identity read."
+    }
+  ],
+  "r2_frozen_helpers": {
+    "files": {
+      "e2e_paste_performance.py": {
+        "bytes": 32716,
+        "sha256": "4d1047059ed7d28d308deefb653d8cde680f486a2f6f22e526ed238a33ea20f6"
+      },
+      "e2e_clipboard_paste_performance.py": {
+        "bytes": 14624,
+        "sha256": "25f200a6afc5b8ee3e0aceffca56402402a0073f7f15e8859fa318be1e9775c3"
+      },
+      "run_frozen_paste.py": {
+        "bytes": 54508,
+        "sha256": "eb062bf26ebc036dcca0b5b4b29f9d4b490b290eb51df496af9a6aadb6b14616"
+      },
+      "manifest.json": {
+        "bytes": 4212,
+        "sha256": "3d25303c334ca7dd785e738f6cc496078462bc0a35c3cd63c76d9ba2433f1e2b"
+      },
+      "static-checks.json": {
+        "bytes": 2910,
+        "sha256": "a0fface7cfa5563f347f4a337bd60955cba736811703c1e8d6938597f15be1f9"
+      },
+      "root-review.json": {
+        "bytes": 1404,
+        "sha256": "9a04fa5c701b9b28d183d9241a3361de617fed961979b9e38031a1ee9b57e60a"
+      },
+      "full.diff": {
+        "bytes": 3480,
+        "sha256": "3da66a40e4c236f67f27b4972f3cae2205dd65eec43b03f3d9f08f4a692d6c8f"
+      }
+    },
+    "tuple": {
+      "driver_sha256": "4d1047059ed7d28d308deefb653d8cde680f486a2f6f22e526ed238a33ea20f6",
+      "ctrlv_sha256": "25f200a6afc5b8ee3e0aceffca56402402a0073f7f15e8859fa318be1e9775c3",
+      "launcher_sha256": "eb062bf26ebc036dcca0b5b4b29f9d4b490b290eb51df496af9a6aadb6b14616"
+    },
+    "original_failed_attempts_preserved": true,
+    "other_helpers_unchanged": true,
+    "preparation_manifest_status": "prepared_not_executed",
+    "preparation_manifest_scope": "captured before execution; not the later third-attempt result",
+    "current": false,
+    "scope": "historical helper set preceding R3; exact tuple preserved"
+  },
+  "queue_static_review": {
+    "passed": true,
+    "scope": "fixed-source and diff review only; not an executed measurement or added runtime gate",
+    "diff_sha256": "3da66a40e4c236f67f27b4972f3cae2205dd65eec43b03f3d9f08f4a692d6c8f",
+    "projection": "one offset=0 limit=4096 snapshot of the same queue; require complete list, matching total and no next_offset; independent draft payload omitted",
+    "source_urls": [
+      "https://github.com/LIghtJUNction/ssmcp/blob/781b87df1d364137b6885f17f631a3e9e991bd58/src/client/interface.rs#L58-L67",
+      "https://github.com/LIghtJUNction/ssmcp/blob/781b87df1d364137b6885f17f631a3e9e991bd58/src/client/interface.rs#L298-L339",
+      "https://github.com/LIghtJUNction/ssmcp/blob/781b87df1d364137b6885f17f631a3e9e991bd58/src/client/interface.rs#L474-L476",
+      "https://github.com/LIghtJUNction/ssmcp/blob/781b87df1d364137b6885f17f631a3e9e991bd58/src/client/steering.rs#L481-L508"
+    ]
+  },
+  "busy_observation_boundary": {
+    "preparation_marker_matched": false,
+    "collapsed_preview_present": true,
+    "specific_clipping_layer_confirmed": false,
+    "product_bug_claimed": false,
+    "fix_verified": false,
+    "sample_created": false,
+    "scope": "historical third-attempt failure only; fourth attempt passed with R3 marker ordering, without establishing the specific earlier clipping layer"
+  },
+  "partial_timing_policy": "partial samples belong to failed historical attempts; not a complete baseline, A/B, speed comparison or final product acceptance; individual timings omitted here",
+  "version_observation": {
+    "observed_at_utc": "2026-11-20T23:41:03Z",
+    "verification_origin": "Primary reviewer actual GitHub metadata reads; latest release, existing jobs and PR refreshed. No publication verification performed.",
+    "tag_v0_10_21": {
+      "object": "30cd49492f2dcf6a1fbd15c216c9865084b863c2",
+      "commit": "147dae309cf37af578c0ac1d3aff2cb6008b0f48",
+      "tagger_at": "2026-11-20T22:53:21Z",
+      "latest_release_at_read": "v0.10.20",
+      "tag_object_url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/tags/30cd49492f2dcf6a1fbd15c216c9865084b863c2",
+      "commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/147dae309cf37af578c0ac1d3aff2cb6008b0f48"
+    },
+    "v0_10_22_create_commit": "57d3f36748f22996d3b161d7a0adf4757e0e4a4c",
+    "v0_10_22_create_commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/57d3f36748f22996d3b161d7a0adf4757e0e4a4c",
+    "release_workflow_runs": [
+      {
+        "id": 44836598784,
+        "head_branch": "main",
+        "head_sha": "f208a03b5403332214f3acf6ee0b176752b5d2c9",
+        "event": "workflow_dispatch",
+        "status": "in_progress",
+        "conclusion": null,
+        "created_at": "2026-11-20T23:24:43Z",
+        "updated_at": "2026-11-20T23:25:25Z",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44836598784"
+      },
+      {
+        "id": 44836596538,
+        "head_branch": "v0.10.22",
+        "head_sha": "57d3f36748f22996d3b161d7a0adf4757e0e4a4c",
+        "event": "create",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-11-20T23:24:42Z",
+        "updated_at": "2026-11-20T23:24:44Z",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44836596538"
+      },
+      {
+        "id": 44832665122,
+        "head_branch": "main",
+        "head_sha": "056b7f28e95f0765710f172740db3bfef7518a46",
+        "event": "workflow_dispatch",
+        "status": "completed",
+        "conclusion": "failure",
+        "created_at": "2026-11-20T22:54:02Z",
+        "updated_at": "2026-11-20T22:59:51Z",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44832665122"
+      },
+      {
+        "id": 44832588612,
+        "head_branch": "v0.10.21",
+        "head_sha": "147dae309cf37af578c0ac1d3aff2cb6008b0f48",
+        "event": "create",
+        "status": "completed",
+        "conclusion": "skipped",
+        "created_at": "2026-11-20T22:53:25Z",
+        "updated_at": "2026-11-20T22:53:26Z",
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44832588612"
+      }
+    ],
+    "latest_published_at_observation": "v0.10.20",
+    "part_of_pr159_acceptance": false,
+    "publication_success_claimed": false,
+    "pending_primary_refresh": false,
+    "jobs_observation": {
+      "observed_at_utc": "2026-11-20T23:41:03Z",
+      "counts": {
+        "total_created": 15,
+        "success": 10,
+        "failure": 3,
+        "in_progress": 2
+      },
+      "failed_jobs": [
+        {
+          "id": 136634680152,
+          "name": "checks / linux (ubuntu-24.04-arm)",
+          "conclusion": "failure",
+          "completed_at": "2026-11-20T23:30:48Z",
+          "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44836598784/job/136634680152"
+        },
+        {
+          "id": 136634680169,
+          "name": "checks / Client (windows-11-arm)",
+          "conclusion": "failure",
+          "completed_at": "2026-11-20T23:31:12Z",
+          "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44836598784/job/136634680169"
+        },
+        {
+          "id": 136634680391,
+          "name": "checks / linux (ubuntu-24.04)",
+          "conclusion": "failure",
+          "completed_at": "2026-11-20T23:30:52Z",
+          "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44836598784/job/136634680391"
+        }
+      ],
+      "full_matrix_complete": false,
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/actions/runs/44836598784/jobs?per_page=100"
+    },
+    "branch_relation": {
+      "base": "781b87df1d364137b6885f17f631a3e9e991bd58",
+      "head": "57d3f36748f22996d3b161d7a0adf4757e0e4a4c",
+      "status": "diverged",
+      "ahead_by": 24,
+      "behind_by": 22,
+      "merge_base": "a19ac040b1c7e9daa6a2144db79cfaa1bee09954"
+    },
+    "latest_release_asset_count": 16
+  },
+  "remaining_status": {
+    "complete_six_case_baseline": true,
+    "ctrlv_baseline": true,
+    "paste_ab_obtained": false,
+    "optimization_patch_6733_applied": null,
+    "runtime18_completed": false,
+    "final_p1_passed": false,
+    "formal_release_verified": false,
+    "optimization_candidate_result": false,
+    "optimization_patch_application_status": "Source owner reports original author port in progress; no independently verified candidate result."
+  },
+  "evidence_scope": "Primary reviewer actually read the four attempt receipts/reports, R3 diff and Ctrl-V identity details. This documentation increment executed no native/product operation, CI workflow or release validation.",
+  "prior_draft_cutoff_utc": "2026-11-20T23:36:03Z",
+  "current_frozen_helper_set": "r3",
+  "r3_frozen_helpers": {
+    "current": true,
+    "files": {
+      "e2e_clipboard_paste_performance.py": {
+        "bytes": 14624,
+        "sha256": "d840813f8135dc5feece1f03e8daff1011726f1144f55ca0f92be271473cbe40"
+      },
+      "e2e_paste_performance.py": {
+        "bytes": 32716,
+        "sha256": "ccdcc2fed932114125bf832be8370bc17ecfd082a18b95822dd2c3153190784e"
+      },
+      "full.diff": {
+        "bytes": 2714,
+        "sha256": "94f9194307b4f0c8522b345ca2878986211c61b29a86ae4985df3f5bdf693335"
+      },
+      "manifest.json": {
+        "bytes": 3538,
+        "sha256": "4408cd67393d1f9e59cdb33637550e0874ff682d3669eb980757d19c999a3970"
+      },
+      "root-review.json": {
+        "bytes": 1777,
+        "sha256": "efb1736ca83fd7ca788017ac1c60440d3a36cf4f1f8c3789a62c725e08a5bf56"
+      },
+      "run_frozen_paste.py": {
+        "bytes": 54508,
+        "sha256": "88b80f5dcf051d059439968b21443537152544bf33b84c44e0d1dbc9d49a3bfa"
+      },
+      "static-checks.json": {
+        "bytes": 2274,
+        "sha256": "85bd4671912cd762992b30b13697e93a553008253f7229e142cfe80339f4805b"
+      }
+    },
+    "tuple": {
+      "driver_sha256": "ccdcc2fed932114125bf832be8370bc17ecfd082a18b95822dd2c3153190784e",
+      "ctrlv_sha256": "d840813f8135dc5feece1f03e8daff1011726f1144f55ca0f92be271473cbe40",
+      "launcher_sha256": "88b80f5dcf051d059439968b21443537152544bf33b84c44e0d1dbc9d49a3bfa"
+    },
+    "source_or_target_mutated": false,
+    "other_helpers_unchanged": true,
+    "case_timeout_and_all_timing_logic_unchanged": true,
+    "marker_predicate_unchanged": true,
+    "old_failures_preserved": true,
+    "busy_line_bytes_including_lf": 152,
+    "busy_sleep_seconds": 0.002,
+    "reviewed_delta": "same marker reordered within the same 152-byte/2ms producer line, plus three dependent SHA pins; no product change",
+    "actual_complete_diff_read_by_primary": true,
+    "full_diff": {
+      "bytes": 2714,
+      "sha256": "94f9194307b4f0c8522b345ca2878986211c61b29a86ae4985df3f5bdf693335"
+    },
+    "preparation_manifest_status": "prepared_not_executed",
+    "preparation_status_is_historical_before_attempt4": true
+  },
+  "baseline_result": {
+    "status": "passed",
+    "attempt": 4,
+    "scope": "six prescribed cases plus one fake-provider Ctrl-V case on fixed 781 build",
+    "observations_per_case": 1,
+    "mean_or_statistical_result": false,
+    "timing_contract": {
+      "pty_last_write": "last byte accepted by PTY; not client read completion or disk fsync",
+      "first_visible": "first decoded paste-specific input/notice frame",
+      "preparing_visible": "first observed Preparing local input frame, or null if superseded",
+      "ready": "physical complete reference/inline/rejection frame before correctness RPCs",
+      "observation": "VT decode cost included; no extra key, resize or UI RPC during timing",
+      "performance_gate": "descriptive comparison only; bounded liveness and correctness asserted"
+    },
+    "ready_origin": "before-timestamp of the first successful PTY write call; Ctrl-V uses exactly one 0x16 byte",
+    "enter_sent": false,
+    "agent_delivery_measured": false,
+    "ctrlv_provider": "private fake wl-paste via PATH; no OS clipboard measurement",
+    "ctrlv_same_build_receipt_sha256": "d2204375614807af510f6c7fd08ec657d212a98f18f504cb21376c63f47ea7c0",
+    "ctrlv_identity_before_equals_after": true,
+    "ctrlv_program_sha256": "bc9b3f87359ec3e02b95b9fb334c007735cb8e5df7a6d51bd9f4af99c80f3951",
+    "over_limit_semantics": "4 MiB + 1 reports rejection feedback, not successful import",
+    "complete_six_case_baseline": true,
+    "ctrlv_baseline": true,
+    "optimization_candidate_result": false,
+    "paste_ab_obtained": false
+  },
+  "candidate_status": "Original source author is porting the paste optimization; no candidate result or A/B received."
+}

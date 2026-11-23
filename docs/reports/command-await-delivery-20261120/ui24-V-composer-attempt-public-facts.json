@@ -1,0 +1,238 @@
+{
+  "schema": "ssmcp.partial-ui-acceptance-public-facts.v1",
+  "status": "failed",
+  "source": {
+    "label": "V",
+    "commit": "f42baae1d5227bd6db8315aef778160b80b57274",
+    "tree": "64b40eb8a3e0188076cf376229d3d87074d27dcc",
+    "product_version": "0.10.25",
+    "tree_basis": "The separately reviewed V r13 completion receipt; this UI report records the same commit and final gate hash."
+  },
+  "period": {
+    "started_utc": "2026-11-21T05:27:26Z",
+    "finished_utc": "2026-11-21T05:31:00Z",
+    "controller_seconds": 214.15
+  },
+  "counts": {
+    "planned_independent_suites": 24,
+    "logical_suites_including_alias": 25,
+    "started": 13,
+    "passed": 12,
+    "failed": 1,
+    "not_run": 11,
+    "checks_in_passed_suites": 996,
+    "failed_composer_completed_producer_checks": 61,
+    "failed_composer_controller_checks": null,
+    "alias_coverage": 1,
+    "counting_rule": "996 includes only the twelve fully passed suites. Neither the failed composer's 61 completed checks nor the alias is added."
+  },
+  "passed_suite_columns": [
+    "name",
+    "checks",
+    "seconds",
+    "exit_code"
+  ],
+  "passed_suites": [
+    [
+      "message_references",
+      53,
+      12.623,
+      0
+    ],
+    [
+      "force_send",
+      137,
+      21.11,
+      0
+    ],
+    [
+      "listener_transports",
+      74,
+      7.675,
+      0
+    ],
+    [
+      "zuse_worker",
+      31,
+      2.788,
+      0
+    ],
+    [
+      "interactions",
+      172,
+      50.286,
+      0
+    ],
+    [
+      "private_desktop",
+      35,
+      4.039,
+      0
+    ],
+    [
+      "account_compat",
+      69,
+      2.882,
+      0
+    ],
+    [
+      "input_history",
+      150,
+      23.441,
+      0
+    ],
+    [
+      "reload_state",
+      37,
+      7.569,
+      0
+    ],
+    [
+      "session_groups",
+      108,
+      13.919,
+      0
+    ],
+    [
+      "client_ui",
+      58,
+      7.333,
+      0
+    ],
+    [
+      "canvas_logs",
+      72,
+      9.871,
+      0
+    ]
+  ],
+  "failed_suite": {
+    "name": "composer",
+    "ordinal": 13,
+    "exit_code": 1,
+    "controller_seconds": 22.754,
+    "controller_checks": null,
+    "controller_checks_field_present": false,
+    "producer_status": "failed",
+    "producer_completed_checks": 61,
+    "producer_seconds": 21.378,
+    "error": "AssertionError: timed out waiting for the explicit Next caller choice returning to the active edit",
+    "observed_title": "Edit queue · Enter sends · Next caller",
+    "cause_recorded_in_execution_receipt": {
+      "kind": "exact label case mismatch",
+      "location": "scripts/e2e_composer.py:515",
+      "expected_label": "next caller",
+      "observed_label": "Next caller",
+      "scope": "The supplied execution receipt records that implicit None cases retain lowercase. This review verified the observed title in the producer report and log, and did not reread or modify the fixture source."
+    },
+    "script_sha256": "b68877f72e05e15745ff893debfd095fbfcae110422b1c96cf56b45dd4c5f3bf",
+    "suite_json_equals_final_acceptance_entry": true,
+    "controller_ui_snapshots": 0,
+    "ui_evidence_scope": "The upstream composer contract exports report/log only; its failure report contains the owned terminal snapshot.",
+    "progress_stream_checks_zero_is_not_a_measurement": true
+  },
+  "not_run_suites": [
+    "questions",
+    "presentations",
+    "context_memory",
+    "file_paste",
+    "relay_composer",
+    "goal_startup",
+    "tool_summaries",
+    "readable_commands",
+    "summary_commands",
+    "physical_latency",
+    "time_wait"
+  ],
+  "alias": {
+    "name": "human_finish",
+    "status": "covered_by",
+    "covered_by": "interactions",
+    "independently_executed": false,
+    "independent_pass": false,
+    "source_revision": "f42baae1d5227bd6db8315aef778160b80b57274",
+    "alias_source_sha256": "a6103ab116650dfb0afeef211be7e7f94f28ec904d90f484d38824670437709f",
+    "target_source_sha256": "8bfd7e5ac4519be9e186e3361e8e683b47e8b396a8b7df880035ecc6e8ba43e5",
+    "target_report_sha256_recorded": "55f462f55883e65326c3e3af3a8733ca6be806da2eae0d8f95c7853c8547ca4c"
+  },
+  "final_native_execution_record": {
+    "source_file": "root-actual-execution.json",
+    "recorded_at": "2026-11-21T05:37:29.270550+00:00",
+    "exit_code": 1,
+    "running": false,
+    "stdout_eof": true,
+    "stderr_eof": true,
+    "stdout_cursor": 3627,
+    "stdout_bytes": 3627,
+    "stdout_sha256": "542131ecbae85ac3a21da4389ecbb8d65f88befa602864c9f38287e2fff4401d",
+    "stderr_cursor": 0,
+    "stderr_empty": true,
+    "final_stdout_status": "failed",
+    "final_stdout_counts_match_acceptance": true,
+    "read_boundary": "The durable final native execution response was read in full; no stale job polling was performed and no intermediate progress line was used as the completion result."
+  },
+  "cleanup_and_inputs": {
+    "started_suite_children": 13,
+    "all_started_owned_children_reaped": true,
+    "all_thirteen_before_and_after_records_present": true,
+    "all_thirteen_input_records_equal": true,
+    "all_thirteen_before_and_after_unchanged_flags_true": true,
+    "acceptance_inputs_unchanged": true,
+    "changed_inputs": [],
+    "input_set_sha256_before": "fb6c84c6d0904c6e0de4f39dc71a19e561440c7840824bbce400d3decabe5c75",
+    "input_set_sha256_after": "fb6c84c6d0904c6e0de4f39dc71a19e561440c7840824bbce400d3decabe5c75",
+    "source": "Final acceptance entries, matching composer suite.json, and closure fields in the persisted execution receipt.",
+    "boundary": "No new live process inspection or independent descendant-cleanup audit was performed."
+  },
+  "binding_recorded": {
+    "final_gate_bytes": 1286399,
+    "final_gate_sha256": "66f3be6c3f0ee4a4bdf9900633b49fa598db8a8545d4b8f67a3ea051b2671b35",
+    "source_revision": "f42baae1d5227bd6db8315aef778160b80b57274",
+    "ssmcp_binary_sha256": "d654703a12f9479e97b9807ac8d61f370bd5c413963bf6e5b6e45dfbd8434f41",
+    "binary_bytes_read_or_rehashed_by_this_review": false
+  },
+  "originals_read": [
+    {
+      "role": "acceptance",
+      "file": "acceptance.json",
+      "bytes": 984372,
+      "sha256": "da801f5209b688130332f3916804fd68ecc4e3643e34db5e6ddc2c4b3fe8eb63",
+      "full_bytes_read_and_hash_verified": true
+    },
+    {
+      "role": "producer",
+      "file": "suites/composer/evidence/report.json",
+      "bytes": 8590,
+      "sha256": "13f17c603c1b6ddba85b5d26df2e202f7698cbf066ec08d79f9ff6e85217757f",
+      "full_bytes_read_and_hash_verified": true
+    },
+    {
+      "role": "log",
+      "file": "suites/composer/run.log",
+      "bytes": 11503,
+      "sha256": "5be585269dab282876c95946da2ced078a9bbc30098e1e046ac392533a328544",
+      "full_bytes_read_and_hash_verified": true
+    },
+    {
+      "role": "execution",
+      "file": "root-actual-execution.json",
+      "bytes": 5282,
+      "sha256": "52eb35f19dfb67406d825904afa86fe5a896330abbba24fc9c5d7f00f7dee2ac",
+      "full_bytes_read_and_hash_verified": true
+    },
+    {
+      "role": "suite",
+      "file": "suites/composer/suite.json",
+      "bytes": 5998,
+      "sha256": "c6a37acaa39ebe30adeafc30fc5487373926c2246c45040f379b2fd9360e3d20",
+      "full_bytes_read_and_hash_verified": true
+    }
+  ],
+  "known_gaps": [
+    "Only the five listed originals were read for this UI extraction. Individual passing producer reports were not reopened; their suite results come from the final acceptance report.",
+    "No product, test, Cargo, helper, model or additional Gate was executed.",
+    "No fixture correction or successor run is represented as validated by this failed attempt.",
+    "P1 was not started according to the persisted execution receipt. Runtime18 and formal publication are outside this UI result.",
+    "Native job, agent, session and process identities, private absolute paths and synthetic test-chat text are omitted."
+  ]
+}

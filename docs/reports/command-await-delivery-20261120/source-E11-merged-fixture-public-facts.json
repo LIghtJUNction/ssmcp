@@ -1,0 +1,627 @@
+{
+  "schema_version": 1,
+  "kind": "E11 fixture correction, narrow checks, actual PR166 merge and subsequent dependency observation",
+  "observed_utc": "2026-11-21T09:19:45Z",
+  "source_stage": {
+    "name": "E11",
+    "original_author_continued": true,
+    "started_utc": "2026-11-21T09:03:00.866643+00:00",
+    "finished_utc": "2026-11-21T09:08:36.057678+00:00",
+    "exit_code": 0,
+    "error": null,
+    "author_wrapper_unchanged": true,
+    "rustc_wrapper_unchanged": true,
+    "source_start": "5623e52a48a03727f3341613beaa767bd94ea98d",
+    "observed_main_at_start": "4b4cbff311e930a8c8280ff1989a7f036ce7a892",
+    "final_commit": "814c07c4374b3a800e3842f5cd676af7cfc1f32d",
+    "final_tree": "98f89ac6be9dd4867d45b017ea56c687f7a55147",
+    "parent": "5623e52a48a03727f3341613beaa767bd94ea98d",
+    "committed_utc": "2026-11-21T09:05:11Z",
+    "ordinary_pushes": 1,
+    "ordinary_push_exit_codes": [
+      0
+    ],
+    "remote_branch_readback": "814c07c4374b3a800e3842f5cd676af7cfc1f32d",
+    "clean_status": {
+      "porcelain": "",
+      "worktree_and_index_clean": true,
+      "submodules_clean": true
+    },
+    "changed_files": [
+      {
+        "path": "docs/release-notes-0.10.25.md",
+        "additions": 1,
+        "deletions": 1,
+        "status": "modified"
+      },
+      {
+        "path": "src/runtime/native_plugins/process.rs",
+        "additions": 7,
+        "deletions": 4,
+        "status": "modified"
+      }
+    ]
+  },
+  "fixture": {
+    "name": "on_playwright_lost_reply_revokes_the_driver_without_inventing_results",
+    "old_failure": "Static diagnosis. The Linux guardian retains stdout while the fixture is alive, so os.close(1) in the Python child does not yield RPC EOF.",
+    "new_signal": "The fixture flushes '!\\n' and stays alive for the owning driver to shut down.",
+    "exact_reason": "native JSON stream failed: expected value at line 1 column 1",
+    "parser": "serde_json 1.0.154; read_json in src/backend/rpc.rs parses the real framed reply",
+    "timeout_seconds": 10,
+    "preserved_assertions": [
+      "argument refusal",
+      "completed native isError",
+      "explicit JSON-RPC error",
+      "switch stays On",
+      "failed status",
+      "unknown or partially executed",
+      "replay_safe false",
+      "no fabricated completion count or failure index",
+      "exact driver removed",
+      "driver shutdown_complete",
+      "owned Process::shutdown"
+    ],
+    "production_and_other_tests_byte_identical": true,
+    "executed": false,
+    "scope": "A sent request followed by an invalid JSON line without a valid corresponding reply. This corrected fixture no longer directly injects stdout EOF.",
+    "exact_rpc_file_unchanged": true,
+    "review": "Root read the exact commit comparison and both complete patches. Independent direct reviewer read the fixed fixture and matching RPC parser/error-prefix source. This was static review, not execution.",
+    "static_status": "no blocking mismatch found",
+    "no_runtime_timeout_observed": true
+  },
+  "narrow_checks": {
+    "schema": "ssmcp-e9-author-checks-v1",
+    "started_utc": "2026-11-21T09:05:51.428353+00:00",
+    "finished_utc": "2026-11-21T09:06:59.205923+00:00",
+    "status": "passed",
+    "exit_code": 0,
+    "error": null,
+    "check_commands_started": 2,
+    "final_35_stage_gate_executed": false,
+    "owned_cleanup_complete": true,
+    "target_lock_acquired": true,
+    "target_lock_held_until_owned_cleanup": true,
+    "stop_signal": null,
+    "source": "814c07c4374b3a800e3842f5cd676af7cfc1f32d",
+    "source_tree": "98f89ac6be9dd4867d45b017ea56c687f7a55147",
+    "stages": [
+      {
+        "name": "release-policy",
+        "status": "passed",
+        "source_unchanged": true,
+        "inputs_unchanged": true,
+        "actual": {
+          "argv": [
+            "python3",
+            "-B",
+            "scripts/test_release.py"
+          ],
+          "exit_code": 0,
+          "succeeded": true,
+          "timed_out": false,
+          "error": null,
+          "started_utc": "2026-11-21T09:05:53.208992+00:00",
+          "finished_utc": "2026-11-21T09:06:00.794687+00:00",
+          "duration_seconds": 7.585693909000838,
+          "stop_signal": null
+        },
+        "cleanup": {
+          "all_owned_descendants_reaped": true,
+          "errors": [],
+          "process_count": 283
+        },
+        "source_before": {
+          "head": "814c07c4374b3a800e3842f5cd676af7cfc1f32d",
+          "tree": "98f89ac6be9dd4867d45b017ea56c687f7a55147",
+          "sha256": "d7f748a7b2298834bf082056ee4f706f5231c21c160c304c6afe95f99c5d020a",
+          "untracked_files": 0
+        },
+        "source_after": {
+          "head": "814c07c4374b3a800e3842f5cd676af7cfc1f32d",
+          "tree": "98f89ac6be9dd4867d45b017ea56c687f7a55147",
+          "sha256": "d7f748a7b2298834bf082056ee4f706f5231c21c160c304c6afe95f99c5d020a",
+          "untracked_files": 0
+        }
+      },
+      {
+        "name": "cargo-check-tests",
+        "status": "passed",
+        "source_unchanged": true,
+        "inputs_unchanged": true,
+        "actual": {
+          "argv": [
+            "cargo",
+            "check",
+            "--tests",
+            "--locked",
+            "--offline",
+            "--jobs",
+            "1"
+          ],
+          "exit_code": 0,
+          "succeeded": true,
+          "timed_out": false,
+          "error": null,
+          "started_utc": "2026-11-21T09:06:03.496824+00:00",
+          "finished_utc": "2026-11-21T09:06:28.329061+00:00",
+          "duration_seconds": 24.83228484998108,
+          "stop_signal": null
+        },
+        "cleanup": {
+          "all_owned_descendants_reaped": true,
+          "errors": [],
+          "process_count": 53
+        },
+        "source_before": {
+          "head": "814c07c4374b3a800e3842f5cd676af7cfc1f32d",
+          "tree": "98f89ac6be9dd4867d45b017ea56c687f7a55147",
+          "sha256": "d7f748a7b2298834bf082056ee4f706f5231c21c160c304c6afe95f99c5d020a",
+          "untracked_files": 0
+        },
+        "source_after": {
+          "head": "814c07c4374b3a800e3842f5cd676af7cfc1f32d",
+          "tree": "98f89ac6be9dd4867d45b017ea56c687f7a55147",
+          "sha256": "d7f748a7b2298834bf082056ee4f706f5231c21c160c304c6afe95f99c5d020a",
+          "untracked_files": 0
+        }
+      }
+    ],
+    "release_policy_test_count": 106,
+    "release_policy_stderr_summary": "Ran 106 tests in 7.373s; OK",
+    "rust_test_execution": false,
+    "outputs": [
+      {
+        "file": "024-release-policy.stdout",
+        "bytes": 4856,
+        "sha256": "d65a15611be4216d06af70ba4505d6a87e03865a93c5147fa885718b0736fbfa",
+        "full_text_read": true
+      },
+      {
+        "file": "024-release-policy.stderr",
+        "bytes": 890,
+        "sha256": "f9922bf82bbef89ce11639f8b509389b6f4a435742a939d9d6c81de4ac494e1a",
+        "full_text_read": true
+      },
+      {
+        "file": "071-cargo-check-tests.stdout",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "full_text_read": true
+      },
+      {
+        "file": "071-cargo-check-tests.stderr",
+        "bytes": 185,
+        "sha256": "89ae44450f5651e115fa736f51c8c2ab10c84963733714f436716a948b336e13",
+        "full_text_read": true
+      }
+    ],
+    "inputs_snapshot": {
+      "bytes": 2101,
+      "sha256": "1894ecd957e5d13ca58e3bd56c742b9a6223c4cb8e0be06a26a3fa5f3c3df4f8",
+      "before_after_equal": true,
+      "read_scope": "identity and equality fields; snapshot content not independently reopened"
+    },
+    "fixture_outputs_are_not_real_tag_crate_or_release_evidence": true,
+    "results_not_reassigned_to_merge_commit": true
+  },
+  "merge": {
+    "pull_request": 166,
+    "url": "https://github.com/LIghtJUNction/ssmcp/pull/166",
+    "merged": true,
+    "merged_at": "2026-11-21T09:13:10Z",
+    "commit": "f69db30c3a9e461c48731c81dbde5a35ea176dc2",
+    "tree": "98f89ac6be9dd4867d45b017ea56c687f7a55147",
+    "parents": [
+      "4b4cbff311e930a8c8280ff1989a7f036ce7a892",
+      "814c07c4374b3a800e3842f5cd676af7cfc1f32d"
+    ],
+    "author_branch_is_real_parent": true,
+    "tree_equals_author_tree": true,
+    "main_ref_observed": "f69db30c3a9e461c48731c81dbde5a35ea176dc2",
+    "squash_merge": false,
+    "root_evidence": "GitHub plugin independently read the actual main ref, merge commit and PR166."
+  },
+  "release_notes": {
+    "paths": [
+      "docs/release-notes-0.10.25.md"
+    ],
+    "scope": "Only two explanatory clauses changed: Omarchy holds the input lease until the cleanup flow returns; Playwright error or revocation with a possible write and no valid reply produces an unknown outcome and cleans its owned driver.",
+    "cleanup_limit_preserved": "Managed.shutdown does not propagate wait errors; no claim that all abnormal helper cleanup is proved successful.",
+    "all_previous_features_retained": true
+  },
+  "unchanged_source_bindings": {
+    "Cargo.toml": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "9e51d222b8049615691a6830e0447ec275e27058",
+      "bytes": 10109,
+      "sha256": "c7e9fa819512800dfee8704f22b4c2d0db74713622a0e0d82be6dea96007e8d1"
+    },
+    "Cargo.lock": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "5cfd13289784a9da530c25fcf33d3d9aeee500bd",
+      "bytes": 66476,
+      "sha256": "0f213ad0db728a3448d70009141375711b098f4e9fd69b1334cc8217746e4f14"
+    },
+    ".github/workflows/release.yml": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "41968605ad5d459d07ae599fccb1fb3d89a848d8",
+      "bytes": 24312,
+      "sha256": "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"
+    },
+    ".github/workflows/ci.yml": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "e4bad0fe9c19f451cd597678a4e8c7cdc9bedfce",
+      "bytes": 14941,
+      "sha256": "d6d920faddfa8840a1ec4b37d54fddb6d169335139fa1bf241d04d716a753873"
+    },
+    ".github/workflows/deploy-server.yml": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "a550ffbfb4b915af8d6922bdf0f05ba5c58763ca",
+      "bytes": 4499,
+      "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+    },
+    "scripts/release.py": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "1197f9b919f6fdfbbbb339a859fb50e63d17cfd9",
+      "bytes": 65061,
+      "sha256": "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"
+    },
+    "scripts/install.sh": {
+      "mode": "100755",
+      "type": "blob",
+      "object": "7620b1d29b87173492ea9d8b74d846f8d9c3c185",
+      "bytes": 6783,
+      "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+    },
+    "scripts/install.ps1": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "eb13725db6cb24c06a137f1ff2129649d2c25515",
+      "bytes": 29653,
+      "sha256": "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"
+    },
+    "crates/zharness": {
+      "mode": "160000",
+      "type": "commit",
+      "object": "fb2948f78467dd92b216aabda6f18a5645f0e7f6"
+    },
+    "crates/zplugin": {
+      "mode": "160000",
+      "type": "commit",
+      "object": "592a1be623b81a775026c470e6f0efe91fcf78f3"
+    },
+    "crates/ztuio": {
+      "mode": "160000",
+      "type": "commit",
+      "object": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e"
+    },
+    "crates/zuse": {
+      "mode": "160000",
+      "type": "commit",
+      "object": "830fcefd2277cbba46536c67d206f29058ba7fb3"
+    }
+  },
+  "new_integration_targets": 0,
+  "evidence": {
+    "author_launch": {
+      "file": "launch-receipt.json",
+      "bytes": 2029,
+      "sha256": "7f1bf1c2d3f943d5c25b32c030151b24fdda824ba983e1391183f2b45272dc44",
+      "read": "full original JSON"
+    },
+    "author_exit": {
+      "file": "author-exit.json",
+      "bytes": 2189,
+      "sha256": "d8a10913aa478f137101b9d643ed4254b85743767b6cd888808000c0b8d12dac",
+      "read": "full original JSON"
+    },
+    "source_changes": {
+      "file": "source-changes-receipt.json",
+      "bytes": 29216,
+      "sha256": "7f9414327f1ae8d0167106352ec99da74ee343b7abca4c716fc76f5b38c5c355",
+      "read": "full bytes hashed; selected commit, push completion, clean status, fixture, notes, checks and scope fields read; not all source command records independently reviewed"
+    },
+    "final_checks": {
+      "file": "result.json",
+      "bytes": 87206,
+      "sha256": "06a6fa0d521b3f05a007278a6e2987f679a568951cc6863d657a65e54c7b75fb",
+      "read": "full bytes hashed; selected actual stage, source, input and cleanup fields read; all four original stdout/stderr logs read in full"
+    },
+    "source_snapshot": {
+      "sha256": "d7f748a7b2298834bf082056ee4f706f5231c21c160c304c6afe95f99c5d020a",
+      "read": "before/after identity fields read from original check result; full snapshots not independently reopened"
+    }
+  },
+  "final_acceptance": {
+    "selected_merge_observed": "f69db30c3a9e461c48731c81dbde5a35ea176dc2",
+    "source_status": "merged but unvalidated candidate; dependency freshness mismatch discovered before gate binding",
+    "gate_round": 16,
+    "gate_bound": false,
+    "full_35_stage_gate": "not_run",
+    "runtime_18": "not_run",
+    "ui_24": "not_run",
+    "P1": "not_run",
+    "multi_uid_runtime": "not_run",
+    "version_tree_command": "not_run",
+    "fresh_root_and_three_direct_group_window_ack": true,
+    "all_groups_heavy_and_target_writers": 0,
+    "prior_round_15": "4b4cbff preparation retained; full gate not run",
+    "old_W_results_reassigned": false,
+    "branch_narrow_checks_reassigned": false
+  },
+  "dependency_observation": {
+    "status": "preparation stopped before gate binding",
+    "source": "Root independently read all eleven original HEAD stdout/stderr files, source-identity stdout/stderr and merge-tree-diff stdout/stderr. The full lock and failure receipt were hashed; Git source entries and actual failure/stop fields were read.",
+    "observation_directory_timestamp": "2026-11-21T09:14:07Z",
+    "preparation_exit_code": 1,
+    "preparation_both_eof": true,
+    "repositories_checked": 11,
+    "other_ten_match_locked_sources": true,
+    "changed_repository": "LIghtJUNction/zuse",
+    "locked_commit": "830fcefd2277cbba46536c67d206f29058ba7fb3",
+    "observed_default_branch_commit": "ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc",
+    "next_action": "Original source owner reviews the new upstream delta and, if needed, continues the same author for the lock/gitlink update; final merged candidate and fresh evidence must then be selected again.",
+    "new_source_change_already_claimed": false,
+    "failure_recorded_utc": "2026-11-21T09:18:51.963833+00:00",
+    "original_failure": {
+      "file": "root-observed-failure.json",
+      "bytes": 16005,
+      "sha256": "1a697591aacc61f4c1ed74e91e7a4308da6928bd049e1ad30b8a7eb0ca1973e1",
+      "read_scope": "full bytes hashed; selected actual exit, EOF, source, mismatch and pre-gate stop fields"
+    },
+    "preparation_error": "AssertionError: fresh upstream heads differ from final lock",
+    "source_worktree_created": false,
+    "frozen_heads_file_created": false,
+    "main_ref": {
+      "file": "actual-main.stdout",
+      "bytes": 57,
+      "sha256": "f27ba0e58f429855016fafa76bb7c140fef0976f01e2b7b6e50c56c44d341f5c",
+      "text": "f69db30c3a9e461c48731c81dbde5a35ea176dc2\trefs/heads/main\n"
+    },
+    "source_identity": {
+      "file": "final-source-identity.stdout",
+      "bytes": 164,
+      "sha256": "65932ae7684778dd0f4766fbe2022c463412e21945fe2e3c415170b48cb1cda5",
+      "text": "f69db30c3a9e461c48731c81dbde5a35ea176dc2\n98f89ac6be9dd4867d45b017ea56c687f7a55147\n4b4cbff311e930a8c8280ff1989a7f036ce7a892 814c07c4374b3a800e3842f5cd676af7cfc1f32d\n"
+    },
+    "merge_tree_diff": {
+      "file": "merge-tree-diff.stdout",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": ""
+    },
+    "lock": {
+      "file": "final-lock.stdout",
+      "bytes": 66476,
+      "sha256": "0f213ad0db728a3448d70009141375711b098f4e9fd69b1334cc8217746e4f14",
+      "read_scope": "full bytes hashed and Git source entries parsed; complete non-Git lock contents not reproduced"
+    },
+    "observations": [
+      {
+        "repository": "https://github.com/LIghtJUNction/z64",
+        "default_branch": "main",
+        "observed_head": "7e9cff67beae2c484f8b9749b83ae24a1d0e1bbd",
+        "locked_revision": "7e9cff67beae2c484f8b9749b83ae24a1d0e1bbd",
+        "matches_locked_source": true,
+        "stdout": {
+          "file": "head-z64.stdout",
+          "bytes": 129,
+          "sha256": "a89bc6385ab77b86730c65d87617c6335c781e920735d72960661e3f09ae1196",
+          "text": "ref: refs/heads/main\tHEAD\n7e9cff67beae2c484f8b9749b83ae24a1d0e1bbd\tHEAD\n7e9cff67beae2c484f8b9749b83ae24a1d0e1bbd\trefs/heads/main\n"
+        },
+        "stderr": {
+          "file": "head-z64.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "text": ""
+        }
+      },
+      {
+        "repository": "https://github.com/LIghtJUNction/zcall",
+        "default_branch": "main",
+        "observed_head": "199678d08104bed588e5d10b2c0634a47d7c8417",
+        "locked_revision": "199678d08104bed588e5d10b2c0634a47d7c8417",
+        "matches_locked_source": true,
+        "stdout": {
+          "file": "head-zcall.stdout",
+          "bytes": 129,
+          "sha256": "16f453f6f799ea89678450ad64d2eff8078802661401dabb4201bc3de8df5c2b",
+          "text": "ref: refs/heads/main\tHEAD\n199678d08104bed588e5d10b2c0634a47d7c8417\tHEAD\n199678d08104bed588e5d10b2c0634a47d7c8417\trefs/heads/main\n"
+        },
+        "stderr": {
+          "file": "head-zcall.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "text": ""
+        }
+      },
+      {
+        "repository": "https://github.com/LIghtJUNction/zclap",
+        "default_branch": "main",
+        "observed_head": "4d87f3ae3743e81509d5ac5500909955667c860f",
+        "locked_revision": "4d87f3ae3743e81509d5ac5500909955667c860f",
+        "matches_locked_source": true,
+        "stdout": {
+          "file": "head-zclap.stdout",
+          "bytes": 129,
+          "sha256": "fcb7a63177cc558ab38afab6a6d9aa6c8743112c4fa810253f6d202c73f37dc5",
+          "text": "ref: refs/heads/main\tHEAD\n4d87f3ae3743e81509d5ac5500909955667c860f\tHEAD\n4d87f3ae3743e81509d5ac5500909955667c860f\trefs/heads/main\n"
+        },
+        "stderr": {
+          "file": "head-zclap.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "text": ""
+        }
+      },
+      {
+        "repository": "https://github.com/LIghtJUNction/zconv",
+        "default_branch": "main",
+        "observed_head": "0af1f7eb0766ff0ce9db5cee7c6184eff511a8c1",
+        "locked_revision": "0af1f7eb0766ff0ce9db5cee7c6184eff511a8c1",
+        "matches_locked_source": true,
+        "stdout": {
+          "file": "head-zconv.stdout",
+          "bytes": 129,
+          "sha256": "742e578b8259c45a5667f984f5c6c32e467220104c674b72d4acf2b04835cdfc",
+          "text": "ref: refs/heads/main\tHEAD\n0af1f7eb0766ff0ce9db5cee7c6184eff511a8c1\tHEAD\n0af1f7eb0766ff0ce9db5cee7c6184eff511a8c1\trefs/heads/main\n"
+        },
+        "stderr": {
+          "file": "head-zconv.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "text": ""
+        }
+      },
+      {
+        "repository": "https://github.com/LIghtJUNction/zguard",
+        "default_branch": "main",
+        "observed_head": "6772b932a65e18f64e13591dee6edb2f6b099406",
+        "locked_revision": "6772b932a65e18f64e13591dee6edb2f6b099406",
+        "matches_locked_source": true,
+        "stdout": {
+          "file": "head-zguard.stdout",
+          "bytes": 129,
+          "sha256": "418190139916b063ffd4b9f06d7d01b82433d4504f47583aeac01aa446063dd3",
+          "text": "ref: refs/heads/main\tHEAD\n6772b932a65e18f64e13591dee6edb2f6b099406\tHEAD\n6772b932a65e18f64e13591dee6edb2f6b099406\trefs/heads/main\n"
+        },
+        "stderr": {
+          "file": "head-zguard.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "text": ""
+        }
+      },
+      {
+        "repository": "https://github.com/LIghtJUNction/zharness",
+        "default_branch": "main",
+        "observed_head": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+        "locked_revision": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+        "matches_locked_source": true,
+        "stdout": {
+          "file": "head-zharness.stdout",
+          "bytes": 129,
+          "sha256": "595031ccbd2284be7cc87b707a9f58839f2a8c967f569eca6d0e4381dd7a382e",
+          "text": "ref: refs/heads/main\tHEAD\nfb2948f78467dd92b216aabda6f18a5645f0e7f6\tHEAD\nfb2948f78467dd92b216aabda6f18a5645f0e7f6\trefs/heads/main\n"
+        },
+        "stderr": {
+          "file": "head-zharness.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "text": ""
+        }
+      },
+      {
+        "repository": "https://github.com/LIghtJUNction/zmcpio",
+        "default_branch": "main",
+        "observed_head": "04bb6cd05c5295ab41a892a76cbef10b8ac07402",
+        "locked_revision": "04bb6cd05c5295ab41a892a76cbef10b8ac07402",
+        "matches_locked_source": true,
+        "stdout": {
+          "file": "head-zmcpio.stdout",
+          "bytes": 129,
+          "sha256": "11fa071eb07b3722c958a8830bd19de58f5fec4b319f5e0d2ef2bfbd92ef7e24",
+          "text": "ref: refs/heads/main\tHEAD\n04bb6cd05c5295ab41a892a76cbef10b8ac07402\tHEAD\n04bb6cd05c5295ab41a892a76cbef10b8ac07402\trefs/heads/main\n"
+        },
+        "stderr": {
+          "file": "head-zmcpio.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "text": ""
+        }
+      },
+      {
+        "repository": "https://github.com/LIghtJUNction/zplugin",
+        "default_branch": "main",
+        "observed_head": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+        "locked_revision": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+        "matches_locked_source": true,
+        "stdout": {
+          "file": "head-zplugin.stdout",
+          "bytes": 129,
+          "sha256": "fd5a3ce8c542185ae25d697b81ad82b2992ac2b0566c2b3b7da265e19a1ae929",
+          "text": "ref: refs/heads/main\tHEAD\n592a1be623b81a775026c470e6f0efe91fcf78f3\tHEAD\n592a1be623b81a775026c470e6f0efe91fcf78f3\trefs/heads/main\n"
+        },
+        "stderr": {
+          "file": "head-zplugin.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "text": ""
+        }
+      },
+      {
+        "repository": "https://github.com/LIghtJUNction/zsys",
+        "default_branch": "main",
+        "observed_head": "808fcfdb73584ca7ca122e20b76f0209f56ab0f7",
+        "locked_revision": "808fcfdb73584ca7ca122e20b76f0209f56ab0f7",
+        "matches_locked_source": true,
+        "stdout": {
+          "file": "head-zsys.stdout",
+          "bytes": 129,
+          "sha256": "aafdc96b7c3716df63c9e2005445e9f8ab73067c9a3cf3d004fc9050ba21930a",
+          "text": "ref: refs/heads/main\tHEAD\n808fcfdb73584ca7ca122e20b76f0209f56ab0f7\tHEAD\n808fcfdb73584ca7ca122e20b76f0209f56ab0f7\trefs/heads/main\n"
+        },
+        "stderr": {
+          "file": "head-zsys.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "text": ""
+        }
+      },
+      {
+        "repository": "https://github.com/LIghtJUNction/ztuio",
+        "default_branch": "main",
+        "observed_head": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+        "locked_revision": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+        "matches_locked_source": true,
+        "stdout": {
+          "file": "head-ztuio.stdout",
+          "bytes": 129,
+          "sha256": "df08da532df7629ad068f7fbb878316732631153119ab94be1f9250242adc698",
+          "text": "ref: refs/heads/main\tHEAD\n9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e\tHEAD\n9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e\trefs/heads/main\n"
+        },
+        "stderr": {
+          "file": "head-ztuio.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "text": ""
+        }
+      },
+      {
+        "repository": "https://github.com/LIghtJUNction/zuse",
+        "default_branch": "main",
+        "observed_head": "ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc",
+        "locked_revision": "830fcefd2277cbba46536c67d206f29058ba7fb3",
+        "matches_locked_source": false,
+        "stdout": {
+          "file": "head-zuse.stdout",
+          "bytes": 129,
+          "sha256": "7110a53335202ea71d9c35b7c36bff5436b84325364a173e9570b5436afd68f0",
+          "text": "ref: refs/heads/main\tHEAD\nac5713c2bfc3cc4848e89107cc1a6929ec48e2dc\tHEAD\nac5713c2bfc3cc4848e89107cc1a6929ec48e2dc\trefs/heads/main\n"
+        },
+        "stderr": {
+          "file": "head-zuse.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "text": ""
+        }
+      }
+    ]
+  },
+  "release_verifier": {
+    "h2_static_preparation_commit": "2e8e58ac1a7047900feac8501878b80e64f4bd52",
+    "six_fixed_recipe_bytes_unchanged": true,
+    "executed": false,
+    "dispatch_performed": false,
+    "release_publication": false,
+    "server_deployment": false,
+    "operating_system_isolation_implemented": false
+  }
+}

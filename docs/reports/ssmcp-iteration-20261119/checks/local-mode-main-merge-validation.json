@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "repository": "LIghtJUNction/ssmcp",
+  "pull_request": 96,
+  "ready_for_review": true,
+  "head": "0c8e5a6016fc19fd421c46bb780b1655c71792a8",
+  "parents": [
+    "34b1f55966b0b5aa0af7c283660a5a56952b3652",
+    "091bfb07a95ae0a194ad4e7333f1c1d75a3d9c2a"
+  ],
+  "tree": "1b6f8997f096d09e73a6ccd6c3d362aaf4942f9a",
+  "worktree_clean": true,
+  "uncommitted_user_files_changed": false,
+  "source_equivalent_to_validated_integration": [
+    "src/http.rs",
+    "src/broker.rs",
+    "src/code_mode.rs",
+    "src/oauth.rs",
+    "src/client/local.rs"
+  ],
+  "validated_integration": "a7f9077d92b093dbc90d1cd09cfb666fa55468af",
+  "actual_acceptance_report": "local-mode-a7f9077-validation.json",
+  "actual_acceptance_checks": 43,
+  "actual_acceptance_status": "passed",
+  "post_merge_rerun": false,
+  "post_merge_verification": "Exact source equivalence for affected backend files and local host; PR diff whitespace check.",
+  "known_pending_integration": "PR95 supplies the user-wait UI and its notification module declaration.",
+  "inherited_main_whitespace_preserved": true,
+  "release_dispatched": false,
+  "production_modified": false
+}

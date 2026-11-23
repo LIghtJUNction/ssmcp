@@ -1,0 +1,325 @@
+{
+  "schema_version": 1,
+  "scope": "Official v0.10.12 release outcome; independent read-only production observation",
+  "observed_at": "2026-11-19T20:02:29.469682+00:00",
+  "workflow": {
+    "id": 44601683739,
+    "run_attempt": 1,
+    "status": "completed",
+    "conclusion": "failure",
+    "head_sha": "c57fb6d7a25cb5967811180cfc77214ade63c0d2",
+    "created_at": "2026-11-19T19:45:52Z",
+    "updated_at": "2026-11-19T20:00:24Z",
+    "html_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44601683739"
+  },
+  "jobs": [
+    {
+      "id": 135834481166,
+      "name": "validate",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135834770780,
+      "name": "Build x86_64-apple-darwin",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135834770788,
+      "name": "Build aarch64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135834770865,
+      "name": "Build aarch64-apple-darwin",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135834770914,
+      "name": "Build x86_64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135834770928,
+      "name": "Build x86_64-pc-windows-msvc",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135834770981,
+      "name": "Build aarch64-pc-windows-msvc",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135834771848,
+      "name": "checks / linux (ubuntu-24.04-arm)",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135834771862,
+      "name": "checks / linux (ubuntu-24.04)",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135834771940,
+      "name": "checks / Client (windows-11-arm)",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Run cargo test --locked --lib --bin ssmcp --test release_client"
+      ]
+    },
+    {
+      "id": 135834772052,
+      "name": "checks / Client (macos-15-intel)",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135834772071,
+      "name": "checks / Client (macos-15)",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135834772125,
+      "name": "checks / Client (windows-2025)",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Run cargo test --locked --lib --bin ssmcp --test release_client"
+      ]
+    },
+    {
+      "id": 135840475600,
+      "name": "Verify installed server x86_64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135840475665,
+      "name": "Verify installed server aarch64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 135843222828,
+      "name": "finalize",
+      "status": "completed",
+      "conclusion": "skipped",
+      "failed_steps": []
+    },
+    {
+      "id": 135843224121,
+      "name": "deploy_server",
+      "status": "completed",
+      "conclusion": "skipped",
+      "failed_steps": []
+    },
+    {
+      "id": 135843224485,
+      "name": "publish_release",
+      "status": "completed",
+      "conclusion": "skipped",
+      "failed_steps": []
+    },
+    {
+      "id": 135843224711,
+      "name": "publish_crates",
+      "status": "completed",
+      "conclusion": "skipped",
+      "failed_steps": []
+    }
+  ],
+  "job_summary": {
+    "success": 13,
+    "failure": 2,
+    "skipped": 4
+  },
+  "tag": {
+    "ref": "refs/tags/v0.10.12",
+    "object": {
+      "sha": "ea3a4baebcc3bb2eb66c27b8c641d6b51469e4ee",
+      "type": "tag",
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/tags/ea3a4baebcc3bb2eb66c27b8c641d6b51469e4ee"
+    },
+    "target": {
+      "sha": "c57fb6d7a25cb5967811180cfc77214ade63c0d2",
+      "type": "commit",
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/commits/c57fb6d7a25cb5967811180cfc77214ade63c0d2"
+    }
+  },
+  "tag_matches_original_target": true,
+  "old_failed_tag_unchanged": true,
+  "workflow_retried": false,
+  "github_release": {
+    "exists": false,
+    "lookup_status": 404
+  },
+  "crates_io": {
+    "lookup_status": 404,
+    "published": false
+  },
+  "candidate_fix": {
+    "pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/99",
+    "head": "0dc0ce992721ab52c38ca1976b007ed4fb3703c3",
+    "scope": "Files cross-platform test expectations; Windows validation requires a later source run."
+  },
+  "production_read_exit": 0,
+  "production": {
+    "process_stable_during_verification": true,
+    "read_only": true,
+    "service_active": true,
+    "sha256": "c0dd811b8fd51aea45c80ff22c771c1a205d8fc8dfb24f977a6fc97bccf13b79",
+    "surfaces": {
+      "direct": {
+        "assets": [
+          {
+            "bytes": 492111,
+            "cache_control": "no-store",
+            "content_type": "image/png",
+            "name": "brand-mark.png",
+            "sha256": "434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a",
+            "status": 200,
+            "url": "/account/assets/434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a/brand-mark.png"
+          },
+          {
+            "bytes": 681,
+            "cache_control": "no-store",
+            "content_type": "text/javascript; charset=utf-8",
+            "name": "client-install-copy.js",
+            "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96",
+            "status": 200,
+            "url": "/account/assets/4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96/client-install-copy.js"
+          },
+          {
+            "bytes": 707,
+            "cache_control": "no-store",
+            "content_type": "text/javascript; charset=utf-8",
+            "name": "copy-command.js",
+            "sha256": "391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558",
+            "status": 200,
+            "url": "/account/assets/391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558/copy-command.js"
+          },
+          {
+            "bytes": 26131,
+            "cache_control": "no-store",
+            "content_type": "text/css; charset=utf-8",
+            "name": "portal-refresh.css",
+            "sha256": "fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88",
+            "status": 200,
+            "url": "/account/assets/fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88/portal-refresh.css"
+          },
+          {
+            "bytes": 24806,
+            "cache_control": "no-store",
+            "content_type": "text/css; charset=utf-8",
+            "name": "portal.css",
+            "sha256": "860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26",
+            "status": 200,
+            "url": "/account/assets/860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26/portal.css"
+          },
+          {
+            "bytes": 1418,
+            "cache_control": "no-store",
+            "content_type": "text/javascript; charset=utf-8",
+            "name": "traffic-meter.js",
+            "sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c",
+            "status": 200,
+            "url": "/account/assets/52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c/traffic-meter.js"
+          }
+        ],
+        "health": true,
+        "homepage_bytes": 10828,
+        "homepage_sha256": "e9267a306879ac741c985782eafa3d7c8f91667a8c62f9f26e8fbd7d8232f9db"
+      },
+      "public": {
+        "assets": [
+          {
+            "bytes": 492111,
+            "cache_control": "no-store",
+            "content_type": "image/png",
+            "name": "brand-mark.png",
+            "sha256": "434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a",
+            "status": 200,
+            "url": "/account/assets/434249fc4c72ce5089756a646b30b0daaec80379a82c2bed2bd8a7fae354c13a/brand-mark.png"
+          },
+          {
+            "bytes": 681,
+            "cache_control": "no-store",
+            "content_type": "text/javascript; charset=utf-8",
+            "name": "client-install-copy.js",
+            "sha256": "4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96",
+            "status": 200,
+            "url": "/account/assets/4d9f2ee4e838903f1a9d5a9c6a8856d77cd41e1a6fa51a3f556f246fdfaeca96/client-install-copy.js"
+          },
+          {
+            "bytes": 707,
+            "cache_control": "no-store",
+            "content_type": "text/javascript; charset=utf-8",
+            "name": "copy-command.js",
+            "sha256": "391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558",
+            "status": 200,
+            "url": "/account/assets/391290293c548fbb870b9a4af9555b39d2ac013c6e9210df9f6aee19a4141558/copy-command.js"
+          },
+          {
+            "bytes": 26131,
+            "cache_control": "no-store",
+            "content_type": "text/css; charset=utf-8",
+            "name": "portal-refresh.css",
+            "sha256": "fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88",
+            "status": 200,
+            "url": "/account/assets/fe26cd6b1847af9efdfc5e4961a13b7096ec38fb553017abd7824e7dde2fbf88/portal-refresh.css"
+          },
+          {
+            "bytes": 24806,
+            "cache_control": "no-store",
+            "content_type": "text/css; charset=utf-8",
+            "name": "portal.css",
+            "sha256": "860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26",
+            "status": 200,
+            "url": "/account/assets/860ff73b265e59e4794f12feb69082d6daff4efad360a6ad94ecca086171aa26/portal.css"
+          },
+          {
+            "bytes": 1418,
+            "cache_control": "no-store",
+            "content_type": "text/javascript; charset=utf-8",
+            "name": "traffic-meter.js",
+            "sha256": "52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c",
+            "status": 200,
+            "url": "/account/assets/52dfb3a58f6199c07509ef36a02ea264b9f5c0b8a00d97bc77570ad1917cf18c/traffic-meter.js"
+          }
+        ],
+        "health": true,
+        "homepage_bytes": 11575,
+        "homepage_sha256": "3e6c0dd7aac143657d996d58dfcc46da303fb3ed0c0312b7efce23434d843a04"
+      }
+    },
+    "version": "ssmcpd 0.10.10"
+  },
+  "production_unchanged_from_v0_10_10": true,
+  "production_modified": false,
+  "deployment_job": "skipped",
+  "publication_job": "skipped",
+  "crates_publication_job": "skipped"
+}

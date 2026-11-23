@@ -1,0 +1,70 @@
+{
+  "schema": "ssmcp.manual-main-verifier.static-preparation.v1",
+  "status": "prepared_static_only",
+  "recorded_at_utc": "2026-11-21T03:00:14.835010+00:00",
+  "active_source_files": {
+    "verify_published_manual_main.py": {
+      "bytes": 45719,
+      "sha256": "d84c6a02b73a9752e0a5b5ad2658deba3afe6c3dcccc83a8b0a1df2d913c0479"
+    },
+    "manual_main_provenance.py": {
+      "bytes": 30695,
+      "sha256": "26c25c00314530ef297fc8d56451ccec696325db7d5ad1140447bce1afc9ca48"
+    },
+    "dispatch_receipt_adapter.py": {
+      "bytes": 14758,
+      "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4"
+    }
+  },
+  "syntax_method": "ast.parse; no import, compile execution, helper CLI or parser invocation",
+  "core_functions_ast_identical_to_baseline": [
+    "download",
+    "digest",
+    "require",
+    "package_identity",
+    "dependency_tables",
+    "locked_packages",
+    "locked_edges",
+    "relative_manifest",
+    "verify_graph",
+    "read_crate_members",
+    "verify_crate_contract"
+  ],
+  "core_baseline_sha256": "9f75533684446080b4ae6ec82f17d245b174541a23a29a2c3399536680c95109",
+  "expected_legacy_changes": [
+    "api: explicit github.com hostname",
+    "parse_arguments: P and original capture/native binding inputs",
+    "main: manual-main identity and provenance bridge, no-replace git reads, target-specific sidecar newline"
+  ],
+  "sidecar_fix": {
+    "windows": "CRLF",
+    "unix": "LF",
+    "scope": "Exact full sidecar bytes; no whitespace stripping",
+    "producer_source": "647bce2ec9cf74beab43adea831c2e0712d28ea8:scripts/release.py:547,569,931-944",
+    "independent_public_format_observation": {
+      "windows_v20": {
+        "bytes": 100,
+        "sha256": "b7e4482a2bea909de8867e8bababf897ec63a5c411fccbd7df5e0ed914ad8931"
+      },
+      "linux_v20": {
+        "bytes": 104,
+        "sha256": "357d7ad3ecfa036ea23856395be38efd9a35b348bfebf6f5bf5f1cc003e6eee4"
+      },
+      "scope": "Root's read-only actual bytes; format evidence only, not modern publication"
+    }
+  },
+  "helper_imported_or_executed": false,
+  "parsers_executed": false,
+  "tests_run": [],
+  "legacy_eight_tests_twenty_three_tamper_cases_rerun": false,
+  "ci_triggered": false,
+  "publication_post_issued_by_this_preparation": false,
+  "publication_pass_claimed": false,
+  "private_recovery_evidence": "Original save and readback receipts retained privately; identifiers excluded from public metadata.",
+  "independent_static_review": {
+    "status": "completed_no_remaining_wiring_blocker",
+    "scope": "Complete three-module source and README CLI review",
+    "helper_execution": false,
+    "publication_pass": false
+  }
+}

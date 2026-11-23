@@ -1,0 +1,362 @@
+{
+  "schema_version": 1,
+  "kind": "ssmcp-E16-worker-EOF-source-fix-merged",
+  "observed_utc": "2026-11-21T12:43:07Z",
+  "source": {
+    "author_start": {
+      "commit": "bef89f57aea0167b830096d596a2cb39fd86f5cd",
+      "tree": "1391701c52db5066e7a25bbe3a32c1d5a82c47d5",
+      "parents": [
+        "401581267005e64f1ccf99e1590df285a9d7c158"
+      ],
+      "subject": "fix: scope the history test helper to Linux [skip ci]"
+    },
+    "fast_forward_base": {
+      "commit": "dae9d52c734b5d316bf90d2317a51e3992f68085",
+      "tree": "2b162a35b90ecea915d1558e11640516f76b75ed",
+      "parents": [
+        "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+        "1e750dd15c3f11865f237dbf4a5c932207fc6cca"
+      ],
+      "subject": "Merge verified Zuse source propagation (#170) [skip ci]"
+    },
+    "author_final": {
+      "commit": "561ef5a94763877893b0575e04b6da480761499c",
+      "tree": "ac58ef7ea25b69033c1f84d69d3ff614f6385473",
+      "parents": [
+        "dae9d52c734b5d316bf90d2317a51e3992f68085"
+      ],
+      "subject": "fix: publish worker EOF cancellation without waiting for native input [skip ci]"
+    },
+    "merged_commit": "9362d2232e1ca57d976308b10df6ed6b4b167332",
+    "merged_tree": "ac58ef7ea25b69033c1f84d69d3ff614f6385473",
+    "merge_parents": [
+      "dae9d52c734b5d316bf90d2317a51e3992f68085",
+      "561ef5a94763877893b0575e04b6da480761499c"
+    ],
+    "merge_commit_time": "2026-11-21T12:34:55Z",
+    "PR": 171,
+    "PR_merged_at": "2026-11-21T12:34:56Z",
+    "merge_tree_equals_author_tree": true,
+    "merge_patch_equals_author_patch": true
+  },
+  "phase": {
+    "started_utc": "2026-11-21T12:27:58.216851+00:00",
+    "finished_utc": "2026-11-21T12:32:05.807571+00:00",
+    "exit_code": 0,
+    "error": null,
+    "same_original_author_resumed": true,
+    "new_model_started_by_reporting_root": false,
+    "author_wrapper_unchanged": true,
+    "rustc_wrapper_unchanged": true,
+    "allowed_checks": [],
+    "final_acceptance_allowed": false
+  },
+  "change": {
+    "own_paths": [
+      "src/computer/zuse_backend.rs"
+    ],
+    "additions": 56,
+    "deletions": 8,
+    "imported_paths_from_D": [
+      "Cargo.lock",
+      "crates/zuse"
+    ],
+    "whole_phase_paths": [
+      "Cargo.lock",
+      "crates/zuse",
+      "src/computer/zuse_backend.rs"
+    ],
+    "source_file": {
+      "before": {
+        "blob": "ee42b7250ec8f3c8e9e9e90e36c9d4349bd8ab96",
+        "bytes": 97062,
+        "sha256": "e29f1bf5721c5306fd9070953b5f58198f376ebdb9f0794e4897be4677c4d9b5"
+      },
+      "after": {
+        "blob": "f18d7e8f723140b06214b294d95f33c237fc414f",
+        "bytes": 99165,
+        "sha256": "8d46d29815fc096e560efee0e9ffbf4336b48c1605c98c1723835ef02f0113e6"
+      }
+    },
+    "static_behavior": {
+      "submission_mutex": "Serializes ticket waiting and the complete native submission.",
+      "cancellation_state_mutex": "Used for short state reads and writes; no longer held across the native operation.",
+      "cancel_check_in_ticket_closure": true,
+      "original_native_result_retained": true,
+      "delay_condition_variable_relationship_unchanged": true,
+      "X11_do_not_retry_and_cleanup_protocol_unchanged": true,
+      "GTK_fixture_07_second_predicate_unchanged": true,
+      "scope_limits": [
+        "cancel returning publishes cancellation; it does not mean an admitted native call or cleanup has finished",
+        "final check and native call are not an atomic operation",
+        "observation cancellation retains its prior behavior; not every cancellation path is claimed immediate"
+      ]
+    }
+  },
+  "regression": {
+    "name": "cancellation_returns_while_native_submit_is_blocked_and_preserves_its_error",
+    "default_lib_test": true,
+    "executed": false,
+    "coverage": "The same production submit entry is held by channels while cancellation returns. Both threads are released and joined before assertions, including on timeout. The admitted native error survives and later submissions are refused.",
+    "added_default_library_tests": 1,
+    "compiled": false,
+    "tests_two_channel_waits_before_release_and_joins": true,
+    "releases_and_joins_before_assertions": true,
+    "join_has_no_timeout": true,
+    "not_a_general_boundedness_proof": true,
+    "post_cancel_new_submission_rejected": true,
+    "concurrently_queued_second_submission_coverage_not_claimed": true
+  },
+  "validation": {
+    "static_commands": [
+      {
+        "argv": [
+          "rustfmt",
+          "--check",
+          "--edition",
+          "2024",
+          "--config",
+          "skip_children=true",
+          "src/computer/zuse_backend.rs"
+        ],
+        "exit_code": 0,
+        "output": ""
+      },
+      {
+        "argv": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "output": ""
+      }
+    ],
+    "git_receipt_checks": {
+      "count": 96,
+      "all_exit_zero": true
+    },
+    "git_receipt_records_are_not_tests": true,
+    "author_check_helper_executed": false,
+    "cargo_executed": false,
+    "compilation_or_tests_executed": false,
+    "product_or_acceptance_executed": false,
+    "static_review": {
+      "status": "ready",
+      "reader": "reporting root and direct source reviewer",
+      "execution": false,
+      "new_acceptance_gate": false
+    }
+  },
+  "push": {
+    "ordinary_pushes": 1,
+    "force_push": false,
+    "exit_code": 0,
+    "remote_author_commit": "561ef5a94763877893b0575e04b6da480761499c",
+    "remote_main_at_push": "dae9d52c734b5d316bf90d2317a51e3992f68085",
+    "nonfatal_credential_storage_DBus_warning_observed": true,
+    "remote_identity_independently_read_from_GitHub": true
+  },
+  "clean": {
+    "index_and_worktree": true,
+    "porcelain": "",
+    "all_four_submodules": true
+  },
+  "package_version": "0.10.25",
+  "unchanged_since_D": {
+    "Cargo.toml": {
+      "blob": "9e51d222b8049615691a6830e0447ec275e27058",
+      "bytes": 10109,
+      "sha256": "c7e9fa819512800dfee8704f22b4c2d0db74713622a0e0d82be6dea96007e8d1"
+    },
+    "Cargo.lock": {
+      "blob": "c64e987b31bb984d9e413164e6c057b027803c8c",
+      "bytes": 66476,
+      "sha256": "b8caf2e4f747094a0bcd12842b1fe7894d7d956efa1f8b756f17a16518b9d393"
+    },
+    ".github/workflows/ci.yml": {
+      "blob": "762eec62ae3e8d842f1188141ce13a422e931838",
+      "bytes": 15351,
+      "sha256": "d60f0b21ce4c16440d3dd39c1fb3d53fb21de3bb889a30c4ed4f8ae7822f9317"
+    },
+    ".github/workflows/release.yml": {
+      "blob": "41968605ad5d459d07ae599fccb1fb3d89a848d8",
+      "bytes": 24312,
+      "sha256": "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"
+    },
+    ".github/workflows/deploy-server.yml": {
+      "blob": "a550ffbfb4b915af8d6922bdf0f05ba5c58763ca",
+      "bytes": 4499,
+      "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+    },
+    "scripts/release.py": {
+      "blob": "1197f9b919f6fdfbbbb339a859fb50e63d17cfd9",
+      "bytes": 65061,
+      "sha256": "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"
+    },
+    "scripts/install.sh": {
+      "blob": "7620b1d29b87173492ea9d8b74d846f8d9c3c185",
+      "bytes": 6783,
+      "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+    },
+    "scripts/install.ps1": {
+      "blob": "eb13725db6cb24c06a137f1ff2129649d2c25515",
+      "bytes": 29653,
+      "sha256": "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"
+    },
+    "scripts/e2e_x11_text.py": {
+      "blob": "31531da68fa06f9f97ff73102fba1bc2a9096e08",
+      "bytes": 35493,
+      "sha256": "0408aa79331bccc611302b09840395eeedb0a03caa33fa9881c827585d6887fa"
+    },
+    "scripts/e2e_zuse_worker.py": {
+      "blob": "2cf496bcbe2f90683322bda1d4dd452dfa2d6bb5",
+      "bytes": 13634,
+      "sha256": "c27ea79cebedf476a726aa839c632d1adef1279a3cb54b1c6a8a4a1636b1a344"
+    },
+    "scripts/e2e.py": {
+      "blob": "58481fe227a3e19370cd864d6ab442ed9989ebef",
+      "bytes": 49927,
+      "sha256": "294c9fd997f30fba7f7046ef3b4f93e0876121655d952797bdb47222e9cd9c19"
+    },
+    "src/computer.rs": {
+      "blob": "906bf9ee1aa6b3156a9e823c4a5581a2188435c1",
+      "bytes": 104464,
+      "sha256": "20279333001cebe586012c62100ec4cd55b9e81a4dca5febc5a66ca0e38680f4"
+    },
+    "src/computer/host_control.rs": {
+      "blob": "d1fce5ebbd57028aa4b531c642a5b13eed808da2",
+      "bytes": 10870,
+      "sha256": "0e12445ab3f3d805712438c513b04b4b0ced2cd7a52f63b9ee4f069548a745a9"
+    },
+    "src/computer/host_control/storage.rs": {
+      "blob": "2468a8261694860fc2752bc8cdb53e5c91effbea",
+      "bytes": 27361,
+      "sha256": "bd9b61c8a5ea59d9016ced974847a22614d5ae95b39952d3738b0faf516921c6"
+    }
+  },
+  "gitlinks": {
+    "crates/zharness": {
+      "start": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "fixed_D": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "final": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "checkout": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "clean": true
+    },
+    "crates/zplugin": {
+      "start": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "fixed_D": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "final": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "checkout": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "clean": true
+    },
+    "crates/ztuio": {
+      "start": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "fixed_D": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "final": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "checkout": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "clean": true
+    },
+    "crates/zuse": {
+      "start": "ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc",
+      "fixed_D": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "final": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "checkout": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "clean": true
+    }
+  },
+  "zuse_dependency": {
+    "previous": "ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc",
+    "current": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+    "imported_by_PR170": true,
+    "preserved_by_E16": true,
+    "package_version": "0.3.0",
+    "Cargo_lock_bytes": 66476,
+    "Cargo_lock_sha256": "b8caf2e4f747094a0bcd12842b1fe7894d7d956efa1f8b756f17a16518b9d393"
+  },
+  "evidence": {
+    "launch": {
+      "file": "launch-receipt.json",
+      "bytes": 1919,
+      "sha256": "77fa8f9879eb920e2cb343a9a50eb12da6c8219108fd44374d72874bdfa15fe3",
+      "read_scope": "entire original"
+    },
+    "exit": {
+      "file": "author-exit.json",
+      "bytes": 2079,
+      "sha256": "c27adc650853a5dc2548a253ecc0f2e5049e6aea7a707c6141c339e8daf2a08d",
+      "read_scope": "entire original"
+    },
+    "source_receipt": {
+      "file": "source-changes-receipt.json",
+      "bytes": 59586,
+      "sha256": "49bf73f25ce08ba7a6f67ec1693b8bc0b3853ea0c423896a03cdb24987f4de3f",
+      "read_scope": "Whole original hashed; selected source/static/change/clean/scope fields and full static/push/commit records read. Not every Git command output independently audited."
+    },
+    "diffs": [
+      {
+        "file": "author-final.full.diff",
+        "bytes": 4724,
+        "sha256": "86302de147c0b9f5faea27ba4e72fbf2cde18ef04cf63ef048deb9d32a1a1011",
+        "read_scope": "Identity recorded in source receipt; actual complete own patch independently read from fixed GitHub commit."
+      },
+      {
+        "file": "author-own-fixes.full.diff",
+        "bytes": 3923,
+        "sha256": "0c3375448fc6132ba1ed73a2e4cf2fd121c67c8c4ff0f70b6cac04f870e40dff",
+        "read_scope": "Identity recorded in source receipt; actual complete own patch independently read from fixed GitHub commit."
+      }
+    ]
+  },
+  "recovery_checkpoint": {
+    "file": "continuation.json",
+    "bytes": 18692,
+    "sha256": "fde3655b67726ad74dbf7d78613ed03f3f9676a2fddc3630de6ccfefb5739622",
+    "saved_utc": "2026-11-21T12:29:58.915519+00:00",
+    "saved_state": "E16 started; later actual author completion is independently recorded above",
+    "source_checkpoint": {
+      "file": "root-continuation-e16-started-20261121-v1.json",
+      "bytes": 11926,
+      "sha256": "ae65430cfa72fa2931a266a4d0e217965d9a0246cabf1b0528c04329a88de341"
+    },
+    "restore_script_unchanged": true,
+    "config_unchanged": true,
+    "natural_restore_triggered": false,
+    "completed_and_logs_absent_at_root_read": true
+  },
+  "release": {
+    "direct_publish_request_recorded_by_source_owner": true,
+    "original_delivery_independently_read_by_reporting_root": false,
+    "checkpoint_request_record_read": true,
+    "prior_cross_project_relay_hold_cleared": true,
+    "dispatch_performed": false,
+    "H2_executed": false,
+    "production_install_reload_deploy_performed_in_this_flow": false
+  },
+  "new_source_validation": {
+    "source": "9362d2232e1ca57d976308b10df6ed6b4b167332",
+    "Gate19": "source_owner_confirmed_not_created_or_started",
+    "original_stage_count": 35,
+    "original_scope_unchanged": true,
+    "new_regression_planned_in_existing_library_private": true,
+    "dependency_object_preparation": "Source owner reported first exact-object preparation attempt exited 75 because the shared target lock was busy, with both output streams complete and zero mutation. This is neither compilation nor a Gate result.",
+    "downstream": "paused until original new-source handoff",
+    "pending_user_feedback": {
+      "description": "Questions page shown as 5/8 does not advance to 6/8 with the right-arrow key.",
+      "source": "Source coordinator relayed a new directly targeted user request and reported viewing its screenshot.",
+      "independently_read_by_reporting_root": false,
+      "status": "Source owner is inspecting key routing read-only; no reproduced cause or fix is claimed.",
+      "effect_on_validation": "If a source fix is required, original author continuation precedes the same original validation scope."
+    }
+  },
+  "old_results": {
+    "source": "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+    "Gate18": "35 passed",
+    "N18": "passed readonly parse;0product",
+    "runtime18": "18 passed",
+    "UI24": "3passed, fourth failed,20notrun;264 parent assertions;5child cases separate",
+    "old_results_transferred_to_new_source": false
+  },
+  "report_root_heavy_or_queued_work": 0
+}

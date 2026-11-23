@@ -1,0 +1,28 @@
+{
+  "date": "2026-11-19",
+  "reviewer": "root",
+  "reviewed_rust_head": "92e6c83f41b1105bf17a579aabe8baa048c296d8",
+  "reviewed_fixture_head": "729c287bfa130c043d99bf80a2f4f91705dba40c",
+  "files": [
+    "src/client/zero.rs",
+    "src/client/zero/install.rs",
+    "src/client/zero/install/upgrade.rs",
+    "scripts/e2e_007_upgrade.py"
+  ],
+  "observations": [
+    "Current CLI is read through /proc/self/exe. The old image is copied to a separate private backup; the staged image is flushed and atomically renamed over only the recovery path.",
+    "Install management mutations share install.lock; ordinary install still preserves an existing snapshot. The running recovery lock is not held by the upgrade across process startup.",
+    "Before stopping, the operation verifies the manager's actual loaded fragment against the owned definition/root, rejects drop-ins and pending reloads, and matches a nonzero running PID's executable identity. The real existing installation passed the separate dry-run.",
+    "Success requires a different MainPID, the expected device/inode of the executable, a matching observation PID and timestamp, connected state and valid client ID. Process active alone does not pass.",
+    "Rollback checks the installation/image again, retains backup files and reports binary restoration, service start and reconnection separately. An old incompatible restored binary is not reported as connected merely because its bytes were restored.",
+    "Connection errors are audit-redacted, stripped of control characters and bounded; old state lacking new version fields remains unknown.",
+    "The isolated fixture replaces systemctl with a private socket service and blocks fallback probes of the real manager. Actual recovery and portable saved-session processes, a synthetic authenticated gateway and an ongoing real job exercise success, rejection and rollback."
+  ],
+  "limits": [
+    "The fixture starts from an independent copy of the same candidate binary; it does not prove migration of the live 0.7.4 image.",
+    "The private manager fixture does not replace validation against real user systemd during the separately authorized live upgrade.",
+    "Management locking coordinates this installation's commands; it is not a global transaction over arbitrary external systemd or filesystem mutations.",
+    "Review and targeted tests are evidence for this patch, not a general security certification."
+  ],
+  "status": "No additional blocker found in the reviewed checkpoint; live upgrade remains a separate recorded action."
+}

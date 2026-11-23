@@ -1,0 +1,391 @@
+{
+  "schema": "ssmcp-final-source-checkpoint-v1",
+  "recorded_at_utc": "2026-11-21T01:54:13.962Z",
+  "source": {
+    "commit": "d29dae7e2b9ff6794f17f3c96c0cc37977936084",
+    "tree": "bf393700928fd9aa37f2dea8b8683ebe13b114cd",
+    "version": "0.10.25",
+    "parent": "c0152934838f755453413975e31de2449a4398a9",
+    "merge_parents": [
+      "f4e6ff043eef6686a9013750ffcb8ab66926b9d4",
+      "d4c4b9c6fe09a4d7b246ca54a08f5c7b258289fb"
+    ],
+    "pr": 159,
+    "pr_state": "open",
+    "pr_draft": true,
+    "pr_merged": false,
+    "pr_base": "f33ed8f14fc14aff05a2e4098743eb07e8527c06"
+  },
+  "freeze": {
+    "frozen_at_utc": "2026-11-21T01:46:07.352796+00:00",
+    "read_at_utc": "2026-11-21T01:50:14.079502+00:00",
+    "reader_exit_code": 0,
+    "reader_output_complete": true,
+    "receipt": {
+      "bytes": 3162,
+      "sha256": "6c8bab3f7b542bc29235e04bcd4ddf25c12d9b3051cc7d7a0a3bb284cc3d29f9"
+    },
+    "source_final_head": "d29dae7e2b9ff6794f17f3c96c0cc37977936084",
+    "source_final_tree": "bf393700928fd9aa37f2dea8b8683ebe13b114cd",
+    "source_final_clean": true,
+    "cargo_lock": "0b6f1d93e319b27163106ce79475b37f3e737ff89f7a9ca8d35c09e8ad649608"
+  },
+  "handoff": {
+    "receipts_read_at_utc": "2026-11-21T01:51:06.878184+00:00",
+    "reader_exit_code": 0,
+    "reader_output_complete": true,
+    "receipts": [
+      {
+        "kind": "author_exit",
+        "filename": "author-exit.json",
+        "bytes": 1463,
+        "sha256": "d2e8a2b14c305959fa7938d1ab0b1584833e4e9357f4c87d7bfb223b20005062"
+      },
+      {
+        "kind": "source_review",
+        "filename": "root-static-review.json",
+        "bytes": 1779,
+        "sha256": "9db2e12c4707692ff979b6df849434d23bcdf15d03b1ccacafc91cfde0083824"
+      },
+      {
+        "kind": "normal_push",
+        "filename": "root-normal-push-receipt.json",
+        "bytes": 746,
+        "sha256": "ed1d08a2397bb7133e6090747a8a73f8ded17e7919b02cdf8940677709d784f4"
+      },
+      {
+        "kind": "github_readback",
+        "filename": "github-C-readback.json",
+        "bytes": 310,
+        "sha256": "a4fb171092c22127c4cd3f651bbe2daa88b5fe429b26126c6e60c163c93c8ad2"
+      }
+    ],
+    "author_exit_code": 0,
+    "author_finished_at_utc": "2026-11-21T01:43:14.966757+00:00",
+    "normal_push_finished_at_utc": "2026-11-21T01:45:16.578711+00:00",
+    "normal_push_exit_code": 0,
+    "force": false,
+    "github_head": "d29dae7e2b9ff6794f17f3c96c0cc37977936084"
+  },
+  "static_review": {
+    "kind": "immutable-source-review-only",
+    "images_and_ui_equal_D4": true,
+    "files": [
+      {
+        "path": "src/client/terminal/events.rs",
+        "blob": "47645d8962054b22c0fde2c9f160d68af3b387b8"
+      },
+      {
+        "path": "src/client/terminal/events/source_tests.rs",
+        "blob": "7124bd2d0d0e77461db15e8cbfbebfa3acf8202f"
+      },
+      {
+        "path": "scripts/e2e_canvas_logs.py",
+        "blob": "ed21d86eaac42810d1e38401fac8dd6bb1b112f4"
+      },
+      {
+        "path": "scripts/e2e_client_ui.py",
+        "blob": "5c7b394823fa4b840be41f7f12a432615ec85815"
+      },
+      {
+        "path": "scripts/e2e_dashboard.py",
+        "blob": "12381f644f81cb458151e4f3872968e2d1362e60"
+      }
+    ],
+    "dashboard": "C adopts D4. Waits for Enter Apply to disappear and hidden cursor; then asserts the complete navigation dictionary, including audit focus and zero scrollback. This differs from the earlier B/V focus-in-wait predicate.",
+    "image_regression_scope": "test + unix; source definitions are not Windows or actual PTY runtime evidence.",
+    "input_lease": "Unix-gated explicit unlock and duplicate-descriptor regression are included; actual historic FD/process cause is not established.",
+    "notes_followup_only": true,
+    "non_blocking_wording": "The release note's package-version-only phrase refers to package/dependency version changes; it must not describe the whole C code delta.",
+    "historical_performance_transferred": false,
+    "unix_input_lease_file_blob": "2b81a6559e7b9650bbb70266eed0c1039cdea821"
+  },
+  "gate_snapshot": {
+    "read_at_utc": "2026-11-21T01:52:15.033104+00:00",
+    "reader_exit_code": 0,
+    "reader_output_complete": true,
+    "reader_chunks": 2,
+    "run_id": "47ff4beb94d03df6834a6460b493a5d7",
+    "status": "running",
+    "source_revision": "d29dae7e2b9ff6794f17f3c96c0cc37977936084",
+    "receipt_snapshot": {
+      "bytes": 32327,
+      "sha256": "67ad7e35cb03cc3bfa63f237ef68f871e05f21071677b4ee61cc380d71b1ef73"
+    },
+    "launch_receipt": {
+      "bytes": 3611,
+      "sha256": "e7299efe8068cfc68c000412425c66e24ae4ea090bc901ad179d0379376c3e68"
+    },
+    "driver_sha256": "66453f8d7c51f9212cd975d7a065eb34c98d2237f2d3a267bbfdfa783aa479ea",
+    "recorded_completed_steps": [
+      {
+        "name": "release-policy",
+        "command": [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_release.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "seconds": 5.19
+      },
+      {
+        "name": "deployment-policy",
+        "command": [
+          "python3",
+          "-W",
+          "error",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_server_deploy.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "seconds": 0.25
+      },
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 2.51
+      }
+    ],
+    "exclusive_target_lock_recorded": true,
+    "lock_for_entire_batch_recorded": true,
+    "hashes_before": {
+      "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+      "cargo_lock": "0b6f1d93e319b27163106ce79475b37f3e737ff89f7a9ca8d35c09e8ad649608",
+      "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+      "driver": "66453f8d7c51f9212cd975d7a065eb34c98d2237f2d3a267bbfdfa783aa479ea",
+      "git_heads": "3cdd40cc24b4d51088bdf34f9ace60ab5c90d8e280ce8864a4eab920dbb53ed4",
+      "owner_agreement": "cd995a33b1b2e3865adfb54c51577944dce09b1a4103a59aa81e2a77bfdf2da8",
+      "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+      "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+      "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+    },
+    "scope": "An in-progress receipt, not a completed Gate or five-binary/runtime acceptance. Recorded step exits were read from the receipt; full step logs were not independently read here.",
+    "superseded_by_final_failure": true
+  },
+  "publication_preparation": {
+    "directory": "publication-verifier-v25-unbound",
+    "status": "UNBOUND",
+    "candidate_sha": null,
+    "formal_release_run_id": null,
+    "helper_sha256": "9f75533684446080b4ae6ec82f17d245b174541a23a29a2c3399536680c95109",
+    "code_change": "Only version literal 0.10.21 to 0.10.25; old original preserved.",
+    "executed": false,
+    "static_contract_review": "publication-verifier-v25-unbound/release-contract-review.json"
+  },
+  "concurrency": {
+    "source_reviewed": "d29dae7e2b9ff6794f17f3c96c0cc37977936084",
+    "workflow_group": "release-${{ github.event.inputs.tag || github.ref_name }}",
+    "workflow_cancel_in_progress": false,
+    "publish_release_job_group": "github-release-publication",
+    "publish_release_cancel_in_progress": false,
+    "queue_property_present": false,
+    "scope": "Tag24 and tag25 have separate top-level groups but share the publication job group. cancel-in-progress:false does not protect a default pending job from replacement. Before tag25, coordinate the other release owner and re-read actual formal runs and the shared publication queue; if a v24 formal run has begun, wait for it to finish. No current v24 formal run is established by this static review.",
+    "official_reference": "https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency",
+    "no_tag_or_cancellation_performed": true
+  },
+  "limitations": [
+    "C Gate completed with failure in library-private. No final runtime/P1 or formal publication success is claimed.",
+    "V's 11 DeploymentPolicyTests remain execution on V; C progress is recorded separately.",
+    "D4 runtime and historical resource figures are not transferred.",
+    "FC/781 A/B results and compiled-but-not-executed seven Rust tests retain their original source identity.",
+    "Publication verification is not executed; release/install/production status remains pending actual receipts."
+  ],
+  "publication_observation": {
+    "observed_utc_minute": "2026-11-21T01:55Z",
+    "v24_tag_ref": "GitHub API 404 at read time",
+    "latest_release": {
+      "tag": "v0.10.20",
+      "asset_count": 16,
+      "url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.20"
+    },
+    "recent_runs_scope": "10 most recent repository workflow runs",
+    "D4_branch_create_run": {
+      "id": 44849649450,
+      "status": "completed",
+      "conclusion": "skipped",
+      "event": "create"
+    },
+    "v24_formal_run_in_bounded_page": false,
+    "global_queue_idle_proven": false
+  },
+  "gate_final_failure": {
+    "observed_at_utc": "2026-11-21T01:58:00.964932+00:00",
+    "status": "failed",
+    "run_id": "47ff4beb94d03df6834a6460b493a5d7",
+    "source_revision": "d29dae7e2b9ff6794f17f3c96c0cc37977936084",
+    "receipt": {
+      "bytes": 909191,
+      "sha256": "42421f9c5d727786b68da62b8ef686807d300f0a8999d1e3369bf4f7afe4daef"
+    },
+    "receipt_read_scope": "Exact full-file SHA; selected final identity/status/check fields, not a complete receipt content review.",
+    "driver_sha256": "66453f8d7c51f9212cd975d7a065eb34c98d2237f2d3a267bbfdfa783aa479ea",
+    "started_at_epoch": 1795225841.5272284,
+    "finished_at_epoch": 1795225972.923553,
+    "checks": [
+      {
+        "name": "release-policy",
+        "command": [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_release.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "seconds": 5.19,
+        "log_filename": "candidate2-release-policy.log"
+      },
+      {
+        "name": "deployment-policy",
+        "command": [
+          "python3",
+          "-W",
+          "error",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "scripts",
+          "-p",
+          "test_server_deploy.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "seconds": 0.25,
+        "log_filename": "candidate2-deployment-policy.log"
+      },
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 2.51,
+        "log_filename": "candidate2-fmt.log"
+      },
+      {
+        "name": "library-compile",
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--lib",
+          "--no-run",
+          "--message-format=json",
+          "--jobs",
+          "1"
+        ],
+        "exit_code": 0,
+        "seconds": 79.11,
+        "log_filename": "candidate2-library-compile.log"
+      },
+      {
+        "name": "library-private",
+        "command": [
+          "/usr/bin/bwrap",
+          "--unshare-user",
+          "--uid",
+          "1000",
+          "--gid",
+          "1000",
+          "--dev-bind",
+          "/",
+          "/",
+          "--bind",
+          "<private-test-tmp>",
+          "/tmp",
+          "--unsetenv",
+          "SSMCP_OUTPUT_RELOAD",
+          "--setenv",
+          "TMPDIR",
+          "/tmp",
+          "--chdir",
+          "<frozen-source>",
+          "<library-test-binary>",
+          "--exact",
+          "--test-threads=4",
+          "--skip",
+          "client::local::tests::bundled_runner_is_private_and_removed_after_failed_startup",
+          "--skip",
+          "client::local::tests::bundled_runner_never_overwrites_or_removes_a_replaced_file",
+          "--skip",
+          "client::local::tests::private_socket_rejects_symlinks_and_exposed_permissions",
+          "--skip",
+          "client::local::tests::gateway_checks_all_origins_and_has_no_portal_routes"
+        ],
+        "exit_code": 101,
+        "seconds": 35.63,
+        "log_filename": "candidate2-library-private.log",
+        "command_representation": "Three private native paths are replaced with explicit placeholders; original argv is retained in the exact hashed native receipt."
+      }
+    ],
+    "library_summary": {
+      "passed": 2049,
+      "failed": 3,
+      "ignored": 23,
+      "measured": 0,
+      "filtered_out": 4,
+      "rust_reported_seconds": 35.62,
+      "outer_step_seconds": 35.63,
+      "exit_code": 101
+    },
+    "failure_log": {
+      "bytes": 559083,
+      "sha256": "35bf0940230057397d500006fe48966214586282fece014709b50ccd5640cde3",
+      "read_at_utc": "2026-11-21T01:58:24.082648+00:00",
+      "read_scope": "All three failure blocks through EOF; not all preceding passing-test output."
+    },
+    "failed_tests": [
+      {
+        "name": "client::local::socket::tests::dropping_the_host_cleans_its_socket_without_explicit_shutdown",
+        "source": "src/client/local/socket/tests.rs",
+        "line": 225,
+        "observed_error": "local socket parent /tmp has unsafe ownership or permissions"
+      },
+      {
+        "name": "client::local::socket::tests::http_socket_uses_the_same_origin_and_authenticated_mcp_router",
+        "source": "src/client/local/socket/tests.rs",
+        "line": 181,
+        "observed_error": "local socket parent /tmp has unsafe ownership or permissions"
+      },
+      {
+        "name": "session::service::tests::create_rejects_foreground_chat_modes_before_saving_or_spawning",
+        "source": "src/session/service.rs",
+        "line": 946,
+        "observed_error": "assertion failed: result.unwrap_err().to_string().contains(\"require the foreground\")",
+        "actual_returned_error_text_logged": false
+      }
+    ],
+    "consequence": "The frozen C gate failed. No five-binary delivery set or final product/P1 acceptance was completed; no publication verifier, tag or release was executed by this reviewer.",
+    "next_step": "Existing source owner diagnoses original failures and uses the same author for a new immutable fix; no unchanged rerun or independent source edit by this reviewer."
+  },
+  "current_status": "C Gate failed; same-author repair pending"
+}

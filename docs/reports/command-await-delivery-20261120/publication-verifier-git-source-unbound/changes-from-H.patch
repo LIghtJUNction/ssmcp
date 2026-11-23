@@ -1,0 +1,1335 @@
+--- H/verify_published_manual_main.py
++++ H2/verify_published_manual_main.py
+@@ -1,20 +1,20 @@
+-"""Verify a manual-main publication with separate workflow and product identities.
++"""Verify the v0.10.25 manual-main Git-source publication with crate deferral.
+ 
+ UNBOUND preparation: final S, workflow P, run and original dispatch evidence have
+ not been selected. Missing or unsupported evidence fails closed. This program
+ never dispatches a workflow, creates a tag, publishes, or deploys.
++Only the reviewed git-source-v1 contract is supported: no legacy, registry or
++build-only mode, and no registry claim or registry package download.
+ """
+ 
+ import argparse
+ import concurrent.futures
+ import datetime
+ import hashlib
+-import io
+ import json
+ from pathlib import Path, PurePosixPath
+ import re
+ import subprocess
+-import tarfile
+ import tomllib
+ import urllib.request
+ 
+@@ -38,13 +38,17 @@
+     return hashlib.sha256(data).hexdigest()
+ 
+ 
+-# Receipt schema from scripts/release.py at 5d087d1f7363fe5741f6080168037623362280e7.
+-CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
++# Source receipt and publication policy from the fixed E8 recipe below.
++RELEASE_CONTRACT = "git-source-v1"
++RELEASE_VERSION = "0.10.25"
++CRATE_PUBLICATION = {
++    "status": "deferred",
++    "reason": "Independent registry dependencies and the external package require separate verification.",
++}
+ PROJECT_Z_DIRECT = {"zplugin": "zplugin", "zharness": "zharness",
+                     "ztuio": "ztuio", "zuse": "zuse-computer"}
+-PROJECT_Z_REPOS = {name: name for name in
+-                   ("zplugin", "zguard", "zcall", "zconv", "zmcpio", "zclap", "z64",
+-                    "zsys", "zharness", "ztuio")}
++PROJECT_Z_PATCHES = {"zplugin", "zguard", "zcall", "zconv", "zmcpio", "zclap", "z64", "zsys"}
++PROJECT_Z_REPOS = {name: name for name in PROJECT_Z_PATCHES | {"zharness", "ztuio"}}
+ PROJECT_Z_REPOS.update({"zuse-computer": "zuse", "zplugin-macros": "zplugin"})
+ 
+ 
+@@ -53,14 +57,14 @@
+         raise ValueError(message)
+ 
+ 
+-# Q is the reviewed recipe source, not a selected release candidate or main SHA.
++# E8 is the reviewed recipe source, not a selected release candidate or main SHA.
+ # Updating any pin requires a new source review; never learn pins from the run.
+-RECIPE_SOURCE_COMMIT = "647bce2ec9cf74beab43adea831c2e0712d28ea8"
++RECIPE_SOURCE_COMMIT = "879ba17fc3ba4bad6a26a85494b79e29acf1938a"
+ REVIEWED_RECIPE = {
+-    ".github/workflows/release.yml": (18881, "6dd28b97b77386edb6fa8d6538ed9954f0ed00b1b97e1baa2651f339415c2295"),
++    ".github/workflows/release.yml": (24312, "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"),
+     ".github/workflows/ci.yml": (14941, "d6d920faddfa8840a1ec4b37d54fddb6d169335139fa1bf241d04d716a753873"),
+     ".github/workflows/deploy-server.yml": (4499, "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"),
+-    "scripts/release.py": (54070, "43e995d675689f3c881f4452172796f4e2f7b195dbceef3dbb9b1ed1d9f95be4"),
++    "scripts/release.py": (65061, "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"),
+     "scripts/install.sh": (6783, "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"),
+     "scripts/install.ps1": (29653, "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"),
+ }
+@@ -104,7 +108,8 @@
+     return {"recipe_source_commit": RECIPE_SOURCE_COMMIT,
+             "candidate_sha": candidate, "workflow_sha": workflow_sha,
+             "candidate_is_ancestor_of_workflow": True,
+-            "deferred_version": "0.10.25", "files": verified}
++            "deferred_version": RELEASE_VERSION, "release_contract": RELEASE_CONTRACT,
++            "crate_publication": dict(CRATE_PUBLICATION), "files": verified}
+ 
+ 
+ def read_original_evidence(path, expected_sha256, label):
+@@ -198,10 +203,11 @@
+ 
+ 
+ def dependency_tables(manifest):
+-    for table in [manifest, *manifest.get("target", {}).values()]:
+-        for key in ("dependencies", "build-dependencies", "dev-dependencies"):
++    for target, table in [(None, manifest), *manifest.get("target", {}).items()]:
++        for key, kind in (("dependencies", "normal"), ("build-dependencies", "build"),
++                          ("dev-dependencies", "dev")):
+             for name, spec in table.get(key, {}).items():
+-                yield name, {"version": spec} if isinstance(spec, str) else spec
++                yield target, kind, name, {"version": spec} if isinstance(spec, str) else spec
+ 
+ 
+ def locked_packages(lock):
+@@ -240,7 +246,7 @@
+             "invalid graph manifest path")
+ 
+ 
+-def verify_graph(graph, lock, release_version, direct, *, registry):
++def verify_graph(graph, lock, release_version, direct):
+     """Check a receipt graph against its own lock; inactive lock rows may be absent."""
+     require(isinstance(graph, list) and bool(graph), "missing receipt graph")
+     locked = locked_packages(lock)
+@@ -252,11 +258,8 @@
+         packages[identity] = row
+     app = ("ssmcp", release_version, None)
+     require(app in packages, "receipt graph is missing the application")
+-    if not registry:
+-        require(packages[app].get("manifest") == "Cargo.toml",
+-                "development graph root manifest differs")
+-    require(all(identity == app or identity[2] == CRATES_IO for identity in packages)
+-            if registry else True, "registry graph contains a non-registry dependency")
++    require(packages[app].get("manifest") == "Cargo.toml",
++            "Git-source graph root manifest differs")
+     for identity, row in packages.items():
+         features = row.get("features")
+         require(isinstance(features, list) and all(isinstance(x, str) for x in features)
+@@ -280,17 +283,19 @@
+                         and kind["kind"] in (None, "dev", "build")
+                         and (kind["target"] is None or isinstance(kind["target"], str)),
+                         "invalid dependency kind")
+-        if not registry:
+-            source = identity[2]
+-            if source is None or source.startswith("git+"):
+-                relative_manifest(row.get("manifest"))
+-            if source and source.startswith("git+"):
+-                revision = source.rpartition("#")[2]
+-                require(re.fullmatch(r"[0-9a-f]{40}", revision) is not None
+-                        and row.get("commit") == revision
+-                        and isinstance(row.get("tree"), str)
+-                        and re.fullmatch(r"[0-9a-f]{40}", row["tree"]) is not None,
+-                        "Git graph revision or tree is invalid")
++        source = identity[2]
++        if source is None or source.startswith("git+"):
++            relative_manifest(row.get("manifest"))
++            require(isinstance(row.get("manifest_sha256"), str)
++                    and re.fullmatch(r"[0-9a-f]{64}", row["manifest_sha256"]) is not None,
++                    "Git-source graph manifest digest is invalid")
++        if source and source.startswith("git+"):
++            revision = source.rpartition("#")[2]
++            require(re.fullmatch(r"[0-9a-f]{40}", revision) is not None
++                    and row.get("commit") == revision
++                    and isinstance(row.get("tree"), str)
++                    and re.fullmatch(r"[0-9a-f]{40}", row["tree"]) is not None,
++                    "Git graph revision or tree is invalid")
+     root_edges = {tuple(edge["package"]) for edge in packages[app]["dependencies"]}
+     for name, version in direct.items():
+         matches = {identity for identity in packages if identity[:2] == (name, version)}
+@@ -307,173 +312,245 @@
+     return packages
+ 
+ 
+-def read_crate_members(crate, release_version):
+-    """Read regular members without extraction; reject ambiguous archive paths."""
+-    prefix = "ssmcp-" + release_version
+-    members = {}
+-    with tarfile.open(fileobj=io.BytesIO(crate), mode="r:gz") as archive:
+-        for entry in archive:
+-            if entry.name == prefix and entry.isdir():
+-                continue
+-            path = PurePosixPath(entry.name)
+-            require("\\" not in entry.name and entry.name == path.as_posix()
+-                    and len(path.parts) >= 2 and path.parts[0] == prefix
+-                    and ".." not in path.parts and (entry.isfile() or entry.isdir()),
+-                    "unsafe crate member: " + entry.name)
+-            if entry.isdir():
+-                continue
+-            name = path.relative_to(prefix).as_posix()
+-            require(name not in members, "duplicate crate member: " + name)
+-            stream = archive.extractfile(entry)
+-            require(stream is not None, "unreadable crate member: " + name)
+-            with stream:
+-                members[name] = stream.read()
+-    require({"Cargo.toml", "Cargo.toml.orig", "Cargo.lock", ".cargo_vcs_info.json",
+-             "src/lib.rs"} <= members.keys(), "crate is missing source or package identity")
+-    require(not {".cargo/config", ".cargo/config.toml"} & members.keys(),
+-            "crate must not carry Cargo source configuration")
+-    return members
+-
+-
+-def verify_crate_contract(manifest, crate, candidate, release_version, candidate_tree,
+-                          candidate_manifest, candidate_lock):
+-    """Bind official crate bytes and both receipt graphs to immutable candidate inputs.
+-
+-    This function performs no I/O or Cargo execution. Graph features, dependency
+-    kinds and transitive Git trees remain the exact formal workflow's metadata
+-    receipt; identities, lock edges, direct edges and declared gitlinks are checked here.
++def project_z_url(package):
++    return f"https://github.com/LIghtJUNction/{PROJECT_Z_REPOS[package]}.git"
++
++
++def require_project_z_git(name, spec, package):
++    """Root declarations select the default Git branch, with no version selector."""
++    allowed = {"package", "git", "default-features", "features", "optional"}
++    require(isinstance(spec, dict) and spec.get("package", name) == package
++            and spec.get("git") == project_z_url(package) and not set(spec) - allowed
++            and all(type(spec.get(key, False)) is bool
++                    for key in ("default-features", "optional"))
++            and isinstance(spec.get("features", []), list)
++            and all(isinstance(feature, str) for feature in spec.get("features", [])),
++            "Project Z declaration is not a canonical unversioned Git source: " + name)
++
++
++def manifest_package_version(manifest, workspace):
++    value = manifest.get("package", {}).get("version")
++    if value == {"workspace": True}:
++        value = workspace.get("workspace", {}).get("package", {}).get("version")
++    require(isinstance(value, str) and bool(value), "missing Git package version metadata")
++    return value
++
++
++def verify_source_gitlinks(checkout, candidate, modules):
++    """Match four recorded gitlinks to S and read their immutable commit trees."""
++    require(isinstance(modules, list) and len(modules) == 4,
++            "Git-source publication requires four recorded submodules")
++    recorded = {}
++    for row in modules:
++        require(isinstance(row, dict) and set(row) == {"path", "commit", "tree"},
++                "invalid source submodule receipt")
++        relative_manifest(row["path"])
++        require(row["path"] not in recorded
++                and all(isinstance(row[key], str)
++                        and re.fullmatch(r"[0-9a-f]{40}", row[key]) is not None
++                        for key in ("commit", "tree")),
++                "duplicate or invalid source submodule identity")
++        recorded[row["path"]] = row
++    require(modules == sorted(modules, key=lambda row: row["path"]),
++            "source submodule order differs from the reviewed receipt")
++    pins = {}
++    for entry in git_read(checkout, "ls-tree", "-r", "-z", candidate).split(b"\0"):
++        if not entry:
++            continue
++        metadata, raw_path = entry.split(b"\t", 1)
++        mode, kind, commit = metadata.split(b" ", 2)
++        if mode == b"160000":
++            path = raw_path.decode("utf-8")
++            relative_manifest(path)
++            require(kind == b"commit" and path not in pins, "invalid source gitlink")
++            pins[path] = commit.decode("ascii")
++    require(len(pins) == 4 and {path: row["commit"] for path, row in recorded.items()} == pins,
++            "manifest submodules differ from the candidate's four gitlinks")
++    for path, row in recorded.items():
++        module = checkout / path
++        require(module.is_dir() and not module.is_symlink()
++                and module.resolve().is_relative_to(checkout),
++                "submodule object checkout is missing or escapes the source checkout: " + path)
++        top = git_read(module, "rev-parse", "--show-toplevel").decode().strip()
++        require(Path(top).resolve() == module.resolve(),
++                "submodule object checkout is not an independent Git root: " + path)
++        require(git_read(module, "cat-file", "-t", row["commit"]).strip() == b"commit",
++                "recorded submodule commit object is missing: " + path)
++        actual_tree = git_read(module, "rev-parse", row["commit"] + "^{tree}").decode().strip()
++        require(row["tree"] == actual_tree, "recorded submodule tree differs: " + path)
++    return recorded
++
++
++def verify_source_contract(manifest, candidate, release_version, checkout):
++    """Bind schema-2 Git-source receipts to S without a registry or Cargo invocation.
++
++    Cargo metadata features/kinds and Git trees without a recorded gitlink remain
++    formal-workflow receipt evidence. All package identities and graph edges are
++    checked against S's lock. Local and gitlink-backed manifests are also read
++    from immutable Git objects, never from a mutable package checkout.
+     """
+-    require(re.fullmatch(r"[0-9a-f]{40}", candidate) is not None
+-            and re.fullmatch(r"[0-9a-f]{40}", candidate_tree) is not None,
+-            "invalid candidate commit or tree")
+-    require(manifest.get("package") == "ssmcp" and manifest.get("version") == release_version
+-            and manifest.get("commit") == candidate, "release manifest identity differs")
+-    verified = manifest.get("verified_crate")
+-    require(isinstance(verified, dict), "missing verified_crate receipt")
+-    require(verified.get("name") == f"ssmcp-{release_version}.crate"
+-            and type(verified.get("bytes")) is int and verified["bytes"] == len(crate)
+-            and verified.get("sha256") == digest(crate), "official crate differs from verified bytes")
+-    source = verified.get("source")
+-    require(isinstance(source, dict), "missing verified source")
+-    require(source.get("commit") == candidate and source.get("tree") == candidate_tree
+-            and source.get("manifest_sha256") == digest(candidate_manifest),
+-            "verified source differs from candidate commit, tree or manifest")
+-    require(all(isinstance(source.get(key), str) and bool(source[key])
+-                for key in ("cargo", "rustc")), "missing recorded verification toolchain")
+-    development = tomllib.loads(candidate_manifest.decode())
+-    require(development["package"]["name"] == "ssmcp"
+-            and development["package"]["version"] == release_version,
++    expected_fields = {
++        "schema_version", "package", "version", "commit", "tree",
++        "source_manifest_sha256", "cargo_lock_sha256", "toolchain", "submodules",
++        "dependency_graph", "crate_publication", "verified_crate", "artifacts",
++    }
++    require(release_version == RELEASE_VERSION
++            and isinstance(manifest, dict) and set(manifest) == expected_fields
++            and type(manifest["schema_version"]) is int and manifest["schema_version"] == 2,
++            "only the reviewed v0.10.25 schema-2 Git-source manifest is supported")
++    require(manifest["crate_publication"] == CRATE_PUBLICATION
++            and manifest["verified_crate"] is None,
++            "v0.10.25 must defer crate publication; registry, legacy and build-only receipts are unsupported")
++    candidate_tree = git_read(checkout, "rev-parse", candidate + "^{tree}").decode().strip()
++    candidate_manifest = git_read(checkout, "show", candidate + ":Cargo.toml")
++    candidate_lock = git_read(checkout, "show", candidate + ":Cargo.lock")
++    require(re.fullmatch(r"[0-9a-f]{40}", candidate_tree) is not None
++            and manifest["package"] == "ssmcp" and manifest["version"] == release_version
++            and manifest["commit"] == candidate and manifest["tree"] == candidate_tree
++            and manifest["source_manifest_sha256"] == digest(candidate_manifest)
++            and manifest["cargo_lock_sha256"] == digest(candidate_lock),
++            "Git-source identity differs from S, its tree, Cargo.toml or Cargo.lock")
++    toolchain = manifest["toolchain"]
++    require(isinstance(toolchain, dict) and set(toolchain) == {"cargo", "rustc"}
++            and all(isinstance(value, str) and bool(value) for value in toolchain.values()),
++            "missing recorded source-verification toolchain")
++    development = tomllib.loads(candidate_manifest.decode("utf-8"))
++    require(development.get("package", {}).get("name") == "ssmcp"
++            and development["package"].get("version") == release_version,
+             "candidate package identity differs")
+-    dev_lock = tomllib.loads(candidate_lock.decode())
+-    graph = manifest.get("dependency_graph")
+-    require(isinstance(graph, dict) and source.get("dependency_graph") == graph,
+-            "release and verified source dependency graphs differ")
+-    require(graph.get("cargo_lock_sha256") == digest(candidate_lock),
+-            "development graph is not bound to candidate Cargo.lock")
++    lock = tomllib.loads(candidate_lock.decode("utf-8"))
++    locked = locked_packages(lock)
++    app = ("ssmcp", release_version, None)
++    require({identity for identity in locked if identity[0] == "ssmcp"} == {app},
++            "Cargo.lock must identify exactly the candidate application")
++    modules = verify_source_gitlinks(checkout, candidate, manifest["submodules"])
++    internal = {}
++    for identity in locked:
++        name, _, source = identity
++        if name not in PROJECT_Z_REPOS:
++            continue
++        canonical = "git+" + project_z_url(name) + "#"
++        require(isinstance(source, str) and source.startswith(canonical)
++                and re.fullmatch(r"[0-9a-f]{40}", source[len(canonical):]) is not None
++                and name not in internal,
++                "Project Z lock has split or noncanonical sources: " + name)
++        internal[name] = identity
++    require(not any(row["name"] in PROJECT_Z_REPOS
++                    for row in lock.get("patch", {}).get("unused", [])),
++            "candidate lock has an unused Project Z override")
++    require(not development.get("replace"), "[replace] bypasses the Git source policy")
++    for target, kind, name, spec in dependency_tables(development):
++        require(isinstance(spec, dict), "invalid candidate dependency declaration: " + name)
++        package = spec.get("package", name)
++        if name in PROJECT_Z_DIRECT or package in PROJECT_Z_REPOS:
++            require(target is None and kind == "normal" and PROJECT_Z_DIRECT.get(name) == package,
++                    "unexpected Project Z dependency declaration: " + name)
++    patches = development.get("patch", {}).get("crates-io", {})
++    for patched_source, entries in development.get("patch", {}).items():
++        for name, spec in entries.items():
++            package = spec.get("package", name) if isinstance(spec, dict) else name
++            if name in PROJECT_Z_REPOS or package in PROJECT_Z_REPOS:
++                require(patched_source == "crates-io" and name in PROJECT_Z_PATCHES and package == name,
++                        "unexpected Project Z patch: " + name)
++                require_project_z_git(name, spec, package)
++                require(not set(spec) - {"git", "package"},
++                        "Project Z patch must select only its Git source: " + name)
++
++    # Version metadata comes from the pinned Git packages, never a root selector.
+     direct = {}
++    root_manifests = {}
++    direct_records = {}
+     for name, package in PROJECT_Z_DIRECT.items():
+         spec = development.get("dependencies", {}).get(name)
+         if spec is None:
+             continue
+-        require(isinstance(spec, dict) and spec.get("package", name) == package
+-                and spec.get("git") == f"https://github.com/LIghtJUNction/{PROJECT_Z_REPOS[package]}.git"
+-                and not set(spec) - {"package", "git", "version", "default-features", "features", "optional"}
+-                and isinstance(spec.get("version"), str) and spec["version"].startswith("="),
+-                "invalid candidate Project Z declaration: " + name)
+-        direct[package] = spec["version"][1:]
+-    dev_packages = verify_graph(graph.get("packages"), dev_lock, release_version,
+-                                direct, registry=False)
+-    modules = manifest.get("submodules")
+-    require(isinstance(modules, list), "missing submodule receipts")
+-    modules_by_path = {row["path"]: row for row in modules}
+-    require(len(modules_by_path) == len(modules), "duplicate submodule receipt")
+-    internal = {}
+-    for identity in locked_packages(dev_lock):
+-        name, _, src = identity
+-        if name not in PROJECT_Z_REPOS:
+-            continue
+-        canonical = f"git+https://github.com/LIghtJUNction/{PROJECT_Z_REPOS[name]}.git#"
+-        require(isinstance(src, str) and src.startswith(canonical)
+-                and re.fullmatch(r"[0-9a-f]{40}", src[len(canonical):]) is not None
+-                and name not in internal, "Project Z lock has split or noncanonical sources")
+-        internal[name] = identity
+-    require(not any(row["name"] in PROJECT_Z_REPOS
+-                    for row in dev_lock.get("patch", {}).get("unused", [])),
+-            "development lock has an unused Project Z override")
+-    actual_internal = {identity[0]: identity for identity in dev_packages
++        require_project_z_git(name, spec, package)
++        path = "crates/" + PROJECT_Z_REPOS[package]
++        module = modules.get(path)
++        identity = internal.get(package)
++        require(module is not None and identity is not None
++                and identity[2].rpartition("#")[2] == module["commit"],
++                "direct Project Z dependency differs from its locked gitlink: " + name)
++        raw = git_read(checkout / path, "show", module["commit"] + ":Cargo.toml")
++        data = tomllib.loads(raw.decode("utf-8"))
++        require(data.get("package", {}).get("name") == package
++                and manifest_package_version(data, data) == identity[1],
++                "direct Project Z Git package version differs from Cargo.lock: " + name)
++        if name == "ztuio":
++            require(data.get("lib", {}).get("name", name) == name,
++                    "ztuio must expose the ztuio library name")
++        root_manifests[path] = (raw, data)
++        direct[package] = identity[1]
++        direct_records[package] = {
++            "version": identity[1], "source": identity[2],
++            "gitlink": path, "commit": module["commit"], "tree": module["tree"],
++            "manifest_sha256": digest(raw),
++        }
++
++    graph = manifest["dependency_graph"]
++    require(isinstance(graph, dict) and set(graph) == {"cargo_lock_sha256", "packages"}
++            and graph["cargo_lock_sha256"] == digest(candidate_lock),
++            "dependency graph is not bound to S's Cargo.lock")
++    packages = verify_graph(graph["packages"], lock, release_version, direct)
++    actual_internal = {identity[0]: identity for identity in packages
+                        if identity[0] in PROJECT_Z_REPOS}
+-    require(internal == actual_internal, "Project Z receipt graph differs from development lock")
+-    patches = development.get("patch", {}).get("crates-io", {})
+-    required = set(direct) | (set(PROJECT_Z_REPOS) & patches.keys())
+-    require(required <= internal.keys(), "development graph is missing a declared Project Z source")
+-    for name, identity in internal.items():
+-        row = dev_packages[identity]
+-        module = modules_by_path.get("crates/" + PROJECT_Z_REPOS[name])
+-        require(module is not None if name in direct else True,
+-                "direct Project Z source has no gitlink")
+-        if module is not None:
+-            require((row["commit"], row["tree"]) == (module["commit"], module["tree"]),
+-                    "Project Z graph differs from declared gitlink")
+-
+-    members = read_crate_members(crate, release_version)
+-    require(members["Cargo.toml.orig"] == candidate_manifest,
+-            "crate Cargo.toml.orig differs from candidate manifest")
+-    vcs = json.loads(members[".cargo_vcs_info.json"])
+-    require(vcs.get("git", {}).get("sha1") == candidate
+-            and vcs["git"].get("dirty", False) is False and vcs.get("path_in_vcs") == "",
+-            "crate VCS identity differs from candidate")
+-    normalized_manifest = tomllib.loads(members["Cargo.toml"].decode())
+-    require(normalized_manifest.get("package", {}).get("name") == "ssmcp"
+-            and normalized_manifest["package"].get("version") == release_version
+-            and not {"patch", "replace", "workspace"} & normalized_manifest.keys(),
+-            "invalid normalized manifest")
+-    for name, spec in dependency_tables(normalized_manifest):
+-        require(isinstance(spec, dict) and isinstance(spec.get("version"), str)
+-                and not {"git", "path", "rev", "tag", "branch", "registry",
+-                         "registry-index", "workspace"} & spec.keys(),
+-                "normalized dependency is not a crates.io version: " + name)
+-    for name, package in PROJECT_Z_DIRECT.items():
+-        if package not in direct:
+-            continue
+-        original = development["dependencies"][name]
+-        normalized = normalized_manifest.get("dependencies", {}).get(name, {})
+-        require(isinstance(normalized, dict) and normalized.get("package", name) == package
+-                and normalized.get("version") == original["version"]
+-                and normalized.get("default-features", True) == original.get("default-features", True)
+-                and sorted(normalized.get("features", [])) == sorted(original.get("features", [])),
+-                "normalized Project Z package, version or features differ: " + name)
+-    registry_lock = tomllib.loads(members["Cargo.lock"].decode())
+-    registry_packages = locked_packages(registry_lock)
+-    app = ("ssmcp", release_version, None)
+-    require(app in registry_packages and "patch" not in registry_lock,
+-            "invalid normalized registry lock")
+-    for identity, row in registry_packages.items():
+-        require(identity == app or identity[2] == CRATES_IO
+-                and isinstance(row.get("checksum"), str)
+-                and re.fullmatch(r"[0-9a-f]{64}", row["checksum"]) is not None,
+-                "normalized lock contains a non-registry dependency or invalid checksum")
+-    require(all((name, version, CRATES_IO) in registry_packages
+-                for name, version in direct.items()), "normalized lock lacks direct Project Z versions")
+-    normalized = {"manifest_sha256": digest(members["Cargo.toml"]),
+-                  "lock_sha256": digest(members["Cargo.lock"]),
+-                  "packages": registry_lock["package"], "direct_project_z": direct}
+-    require(verified.get("normalized") == normalized,
+-            "normalized manifest or lock differs from verified receipt")
+-    registry_graph = verified.get("registry_graph")
+-    registry_nodes = verify_graph(registry_graph, registry_lock, release_version,
+-                                  direct, registry=True)
+-    binding = {"receipt_schema_source": "5d087d1f7363fe5741f6080168037623362280e7",
+-               "source_commit": candidate, "source_tree": candidate_tree,
+-               "source_manifest_sha256": digest(candidate_manifest),
+-               "development_lock_sha256": digest(candidate_lock),
+-               "normalized_manifest_sha256": normalized["manifest_sha256"],
+-               "normalized_lock_sha256": normalized["lock_sha256"],
+-               "verified_crate_sha256": verified["sha256"], "verified_crate_bytes": len(crate),
+-               "development_graph_packages": len(dev_packages),
+-               "registry_graph_packages": len(registry_nodes),
+-               "registry_graph_sha256": digest(json.dumps(registry_graph, sort_keys=True,
+-                                                          separators=(",", ":")).encode())}
+-    return members, binding
++    require(internal == actual_internal, "Project Z graph differs from the candidate lock")
++    required = set(direct) | (PROJECT_Z_PATCHES & patches.keys())
++    require(required <= internal.keys(), "graph is missing a declared Project Z source")
++    checked_manifests = []
++    for identity, row in packages.items():
++        name, resolved_version, source = identity
++        raw = None
++        workspace = None
++        origin = None
++        if source is None:
++            raw = git_read(checkout, "show", candidate + ":" + row["manifest"])
++            workspace = development
++            origin = "candidate"
++        elif name in internal:
++            path = "crates/" + PROJECT_Z_REPOS[name]
++            module = modules.get(path)
++            require(module is not None if name in PROJECT_Z_DIRECT.values() else True,
++                    "direct Project Z graph package has no gitlink: " + name)
++            if module is not None:
++                require((row["commit"], row["tree"]) == (module["commit"], module["tree"]),
++                        "Project Z graph differs from the declared gitlink: " + name)
++                if path not in root_manifests:
++                    root_raw = git_read(checkout / path, "show", module["commit"] + ":Cargo.toml")
++                    root_manifests[path] = (root_raw, tomllib.loads(root_raw.decode("utf-8")))
++                root_raw, workspace = root_manifests[path]
++                raw = (root_raw if row["manifest"] == "Cargo.toml"
++                       else git_read(checkout / path, "show",
++                                     module["commit"] + ":" + row["manifest"]))
++                origin = path
++        if raw is not None:
++            data = tomllib.loads(raw.decode("utf-8"))
++            require(digest(raw) == row["manifest_sha256"]
++                    and data.get("package", {}).get("name") == name
++                    and manifest_package_version(data, workspace) == resolved_version,
++                    "graph manifest differs from the immutable Git object: " + name)
++            checked_manifests.append({"name": name, "source_object": origin,
++                                      "manifest": row["manifest"], "sha256": digest(raw)})
++    return {
++        "contract": RELEASE_CONTRACT, "receipt_schema_source": RECIPE_SOURCE_COMMIT,
++        "source_commit": candidate, "source_tree": candidate_tree,
++        "source_manifest_sha256": digest(candidate_manifest),
++        "cargo_lock_sha256": digest(candidate_lock),
++        "recorded_toolchain": toolchain, "gitlink_count": len(modules),
++        "submodules": manifest["submodules"], "direct_project_z": direct_records,
++        "dependency_graph_packages": len(packages),
++        "dependency_graph_sha256": digest(json.dumps(graph, sort_keys=True,
++                                                     separators=(",", ":")).encode()),
++        "immutable_manifests_checked": checked_manifests,
++        "crate_publication": dict(CRATE_PUBLICATION),
++        "registry_verified": False,
++        "metadata_scope": (
++            "Package identities and dependency edges are checked against S's lock; "
++            "candidate and gitlink-backed manifest bytes are checked against Git objects. "
++            "Feature/kind selection and Git trees without a recorded gitlink rely on the "
++            "reviewed formal workflow receipt and are not recomputed locally."
++        ),
++    }
+ 
+ 
+ def parse_arguments(argv=None):
+@@ -549,13 +626,15 @@
+     candidate, run_id = args.candidate, args.run_id
+     workflow_sha = args.workflow_sha
+     repository = "LIghtJUNction/ssmcp"
+-    version = "0.10.25"
++    version = RELEASE_VERSION
+     tag = "v" + version
+     checkout = args.checkout
+     report_path = args.report_dir / ("verification-" + candidate[:12] + ".json")
+     report = {"schema_version": 2, "status": "checking", "tag": tag, "candidate_sha": candidate,
+               "workflow_sha": workflow_sha, "release_run_id": run_id, "run_attempt": 1,
+-              "route": "manual-main", "provenance_verified": False,
++              "route": "manual-main", "release_contract": RELEASE_CONTRACT,
++              "crate_publication": dict(CRATE_PUBLICATION),
++              "registry_verified": False, "provenance_verified": False,
+               "started_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+ 
+ 
+@@ -618,17 +697,20 @@
+                    and job["status"] == "completed" for job in jobs)
+         targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin",
+                    "aarch64-apple-darwin", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
+-        required = {"validate", "finalize", "publish_release", "publish_crates"}
++        required = {"validate", "finalize", "publish_release"}
+         required.update("Build " + target for target in targets)
+         required.update("Verify installed server " + target for target in targets[:2])
+         required.update("checks / linux (" + image + ")" for image in ["ubuntu-24.04", "ubuntu-24.04-arm"])
+         required.update("checks / Client (" + image + ")" for image in
+                         ["macos-15", "macos-15-intel", "windows-2025", "windows-11-arm"])
+         by_name = {job["name"]: job for job in jobs}
+-        assert set(by_name) == required | {"deploy_server"}
++        skipped = {"publish_crates", "deploy_server"}
++        assert len(required) == 17 and set(by_name) == required | skipped
+         assert all(by_name[name]["conclusion"] == "success" for name in required)
+-        assert by_name["deploy_server"]["conclusion"] == "skipped"
++        assert all(by_name[name]["conclusion"] == "skipped" for name in skipped)
+         report["jobs"] = [{"id": job["id"], "name": job["name"], "conclusion": job["conclusion"]} for job in jobs]
++        report["jobs_summary"] = {"total": len(jobs), "success": len(required),
++                                  "skipped": sorted(skipped)}
+         reference = api(f"repos/{repository}/git/ref/tags/{tag}")
+         target = reference["object"]
+         if target["type"] == "tag":
+@@ -649,13 +731,25 @@
+             assert assets[name].get("digest") == "sha256:" + digest(data), name + " digest differs"
+             return name, data
+ 
+-        small_names = {"release-manifest.json", "SHA256SUMS"} | {name + ".sha256" for name in archives}
++        document_names = ({"release-manifest.json", "SHA256SUMS", "install.sh", "install.ps1"}
++                          | {name + ".sha256" for name in archives})
++        require(len(document_names) == 10, "public document set differs from E8")
+         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+-            small = dict(pool.map(read_asset, sorted(small_names)))
+-        manifest = json.loads(small["release-manifest.json"])
+-        assert manifest["package"] == "ssmcp" and manifest["version"] == version and manifest["commit"] == candidate
++            publication_documents = dict(pool.map(read_asset, sorted(document_names)))
++        manifest = json.loads(publication_documents["release-manifest.json"])
++        report["verified_source_contract"] = verify_source_contract(
++            manifest, candidate, version, checkout)
+         records = manifest["artifacts"]
+-        assert len(records) == 8 and {record["name"] for record in records} == archives | {"install.sh", "install.ps1"}
++        require(isinstance(records, list) and len(records) == 8
++                and all(isinstance(record, dict) and set(record) == {"name", "sha256", "bytes"}
++                        and isinstance(record["name"], str)
++                        and isinstance(record["sha256"], str)
++                        and re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) is not None
++                        and type(record["bytes"]) is int and record["bytes"] > 0
++                        for record in records), "invalid release artifact records")
++        require([record["name"] for record in records]
++                == sorted(archives) + ["install.ps1", "install.sh"],
++                "manifest artifact set/order differs from the reviewed eight-record contract")
+         for record in records:
+             asset = assets[record["name"]]
+             assert asset["size"] == record["bytes"]
+@@ -664,69 +758,26 @@
+                 # package() uses native Path.write_text; Windows emits CRLF.
+                 newline = "\r\n" if record["name"].endswith("-pc-windows-msvc.zip") else "\n"
+                 expected_sidecar = f"{record['sha256']}  {record['name']}{newline}".encode()
+-                assert small[record["name"] + ".sha256"] == expected_sidecar
++                assert publication_documents[record["name"] + ".sha256"] == expected_sidecar
+             else:
+-                assert digest(source("scripts/" + record["name"])) == record["sha256"]
+-        assert small["SHA256SUMS"].decode() == "".join(f"{r['sha256']}  {r['name']}\n" for r in records)
+-        pins = {}
+-        tree = git_read(checkout, "ls-tree", "-r", candidate).decode()
+-        for line in tree.splitlines():
+-            mode, kind, commit_and_path = line.split(" ", 2)
+-            if mode == "160000":
+-                commit, path = commit_and_path.split("\t", 1)
+-                assert kind == "commit"
+-                pins[path] = commit
+-        assert len(pins) == 4
+-        assert {item["path"]: item["commit"] for item in manifest["submodules"]} == pins
+-        for item in manifest["submodules"]:
+-            path = checkout / item["path"]
+-            actual_tree = git_read(path, "rev-parse", item["commit"] + "^{tree}").decode().strip()
+-            assert item["tree"] == actual_tree
++                candidate_installer = source("scripts/" + record["name"])
++                require(publication_documents[record["name"]] == candidate_installer
++                        and digest(candidate_installer) == record["sha256"],
++                        "public installer bytes differ from the candidate: " + record["name"])
++        assert publication_documents["SHA256SUMS"] == "".join(
++            f"{r['sha256']}  {r['name']}\n" for r in records).encode("utf-8")
+         report["github_release"] = {"id": release["id"], "url": release["html_url"], "published_at": release["published_at"],
+-            "asset_count": len(assets), "manifest_sha256": digest(small["release-manifest.json"]),
++            "asset_count": len(assets), "manifest_sha256": digest(publication_documents["release-manifest.json"]),
+             "assets": [{"name": a["name"], "size": a["size"], "digest": a["digest"]} for a in assets.values()]}
++        report["publication_documents"] = {
++            name: {"bytes": len(data), "sha256": digest(data)}
++            for name, data in sorted(publication_documents.items())}
+         report["manifest"] = manifest
+ 
+-        registry_url = f"https://crates.io/api/v1/crates/ssmcp/{version}"
+-        registry = json.loads(download(registry_url))["version"]
+-        assert registry["num"] == version and not registry["yanked"]
+-        crate_url = f"https://static.crates.io/crates/ssmcp/ssmcp-{version}.crate"
+-        crate = download(crate_url)
+-        assert digest(crate) == registry["checksum"]
+-        candidate_tree = git_read(checkout, "rev-parse", candidate + "^{tree}").decode().strip()
+-        _, crate_binding = verify_crate_contract(
+-            manifest, crate, candidate, version, candidate_tree, source("Cargo.toml"), source("Cargo.lock"))
+-        report["verified_crate_contract"] = crate_binding
+-        prefix = "ssmcp-" + version + "/"
+-        with tarfile.open(fileobj=io.BytesIO(crate), mode="r:gz") as archive:
+-            def member(name):
+-                stream = archive.extractfile(prefix + name)
+-                assert stream is not None
+-                return stream.read()
+-            vcs = json.loads(member(".cargo_vcs_info.json"))
+-            assert vcs["git"]["sha1"] == candidate and not vcs["git"].get("dirty", False)
+-            package = tomllib.loads(member("Cargo.toml").decode())["package"]
+-            assert package["name"] == "ssmcp" and package["version"] == version
+-            source_archive = git_read(checkout, "archive", "--format=tar", candidate, "src")
+-            expected_sources = {}
+-            with tarfile.open(fileobj=io.BytesIO(source_archive), mode="r:") as source_tar:
+-                for entry in source_tar.getmembers():
+-                    if entry.isfile():
+-                        assert entry.name.startswith("src/")
+-                        expected_sources[entry.name] = source_tar.extractfile(entry).read()
+-            assert expected_sources, "candidate contains no product source"
+-            actual_sources = {entry.name[len(prefix):] for entry in archive.getmembers()
+-                              if entry.isfile() and entry.name.startswith(prefix + "src/")}
+-            assert actual_sources == set(expected_sources), "published product source file set differs"
+-            source_hashes = {}
+-            for path, expected_bytes in sorted(expected_sources.items()):
+-                assert member(path) == expected_bytes, "published source differs: " + path
+-                source_hashes[path] = digest(expected_bytes)
+-        report["crate"] = {"registry_url": registry_url, "archive_url": crate_url, "version": version,
+-            "bytes": len(crate), "sha256": digest(crate), "yanked": registry["yanked"], "vcs": vcs,
+-            "matched_source_files_sha256": source_hashes}
++        # H2 deliberately does not fetch or validate a registry crate. The exact
++        # deferred policy and null verified_crate were checked in the source contract.
+         report["execution_binding"] = verify_execution(
+-            run, by_name, candidate, version, manifest, assets, crate,
++            run, by_name, candidate, version, manifest, assets, publication_documents,
+             api_json=api, api_bytes=api_bytes, download=download,
+             evidence_dir=args.report_dir / (f"evidence-{run_id}-attempt-1"))
+         require(report["execution_binding"].get("verified") is True,
+@@ -736,7 +787,28 @@
+                     "run_attempt", "status", "conclusion"):
+             require(final_run.get(key) == run.get(key),
+                     "run identity or attempt changed during verification: " + key)
+-        report["verification_scope"] = "Downloaded manifest, SHA256SUMS, six sidecars, six public binary archives, the official crate, 18 exact-attempt job logs and seven Actions artifact ZIPs. Each binary archive is byte-identical across the CI artifact and public asset; outer ZIP digests are independently checked. Installer bytes remain matched using GitHub asset digests and exact candidate source. Every regular src/** file in the official crate is byte-identical to the candidate, with an exact file-set match. The crate and verified receipt also match the finalize artifact; candidate identity, Git development lock/graph, Cargo.toml.orig, and the distinct normalized registry manifest/lock/graph are cross-checked. Cargo metadata feature selection and transitive Git trees remain bound to the successful reviewed formal workflow, not re-executed locally. Original dispatch capture, independent native execution readback, run/attempt, step windows and artifact IDs are required. This is an ordinary reviewed CI chain, not malicious-builder attestation. No binary was installed or production service changed."
++        report["verification_scope"] = (
++            "Downloaded all 16 public assets: manifest, SHA256SUMS, six sidecars, two installers, "
++            "and six binary archives. Public documents and archives are byte-bound to the "
++            "finalized-release-assets Actions ZIP; each binary archive also matches its "
++            "platform build artifact. Outer ZIP digests are checked separately from member hashes. "
++            "Installer bytes equal the immutable S scripts. The verified-source artifact is "
++            "matched to the schema-2 manifest, candidate commit/tree, Cargo.toml, Cargo.lock, "
++            "four gitlinks and dependency graph. Direct Project Z declarations use canonical "
++            "Git URLs with no version/rev/tag/branch/path selector; locked versions and "
++            "gitlink-backed package manifests are independently cross-checked. Graph identities "
++            "and edges are checked against S's lock; feature/kind selection and Git trees without "
++            "a recorded gitlink remain successful reviewed-workflow receipt evidence. "
++            "The original dispatch capture and independent native readback bind P, S and the "
++            "single attempt. All 19 jobs are checked: 17 successful jobs have their initial "
++            "checkout/log windows verified, while publish_crates and deploy_server are skipped. "
++            "Only the reviewed git-source-v1 publication provenance artifacts are required; "
++            "auxiliary CI artifacts do not change that exact subset. Crate publication is "
++            "deferred: no registry metadata, crate bytes, registry graph or registry availability "
++            "was downloaded or verified. Legacy and build-only modes are unsupported. This is "
++            "an ordinary reviewed CI chain, not malicious-builder attestation. No binary was "
++            "installed or production service changed."
++        )
+         report["provenance_verified"] = True
+         require(report["provenance_verified"] is True, "publication provenance remains unverified")
+         report["status"] = "passed"
+@@ -749,7 +821,9 @@
+         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+         print(json.dumps({"status": report["status"], "path": str(report_path), "candidate_sha": candidate,
+                           "release_url": report.get("github_release", {}).get("url"),
+-                          "crate_sha256": report.get("crate", {}).get("sha256"), "error": report.get("error")}))
++                          "release_contract": RELEASE_CONTRACT,
++                          "crate_publication": report["crate_publication"]["status"],
++                          "registry_verified": False, "error": report.get("error")}))
+ 
+ 
+ if __name__ == "__main__":
+--- H/manual_main_provenance.py
++++ H2/manual_main_provenance.py
+@@ -1,9 +1,10 @@
+-"""Read-only provenance checks for the separately pinned publication recipe.
++"""Read-only provenance checks for the pinned E8 Git-source publication recipe.
+ 
+ This is an ordinary reviewed GitHub Actions chain, not an attestation against a
+ malicious runner, build script, or compromised action. Job logs are obtained by
+ the job IDs in one exact attempt. An ambiguous or missing identity is an error;
+ there is no whole-log fallback that searches for a later favorable value.
++Only 0.10.25 / git-source-v1 with registry publication deferred is supported.
+ """
+ 
+ from collections import Counter
+@@ -31,6 +32,12 @@
+ )
+ DEFERRED_REASON = (
+     "Preserve active relay sessions until a separate non-disruptive server switch is verified.")
++RELEASE_VERSION = "0.10.25"
++RELEASE_CONTRACT = "git-source-v1"
++CRATE_DEFERRED_REASON = (
++    "Independent registry dependencies and the external package require separate verification.")
++SOURCE_ARTIFACT = "verified-source"
++FINALIZED_ARTIFACT = "finalized-release-assets"
+ TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z) (.*)$")
+ GIT_LOG = re.compile(
+     r'^\[command\](?:/usr/bin/git|/usr/local/bin/git|/opt/homebrew/bin/git|'
+@@ -121,6 +128,13 @@
+              "API step times are reversed")
+         return step
+ 
++    def skipped(self, number, name):
++        step = self.steps.get(number)
++        need(step is not None and step.get("name") == name
++             and step.get("conclusion") == "skipped",
++             "required deferred or legacy step was not skipped: " + name)
++        return {"step_number": number, "step_name": name, "conclusion": "skipped"}
++
+     def positions(self, header):
+         return [i for i in self.headers if self.lines[i].text == "##[group]Run " + header]
+ 
+@@ -131,7 +145,8 @@
+              "identity line falls outside its API step")
+ 
+     def window(self, number, name, header, *, occurrence=0, total=1,
+-               next_header=None, next_number=None, next_name=None):
++               next_header=None, next_number=None, next_name=None,
++               next_occurrence=0, next_total=None):
+         step = self.step(number, name)
+         starts = self.positions(header)
+         need(len(starts) == total and 0 <= occurrence < total,
+@@ -153,10 +168,14 @@
+             next_step = self.step(next_number, next_name)
+             need(next_steps and next_steps[0]["number"] == next_number,
+                  "next API execution step differs")
+-            expected_total = self.action_counts.get(next_header, 1)
+-            need(len(self.positions(next_header)) == expected_total,
++            expected_total = (self.action_counts.get(next_header, 1)
++                              if next_total is None else next_total)
++            next_positions = self.positions(next_header)
++            need(len(next_positions) == expected_total
++                 and 0 <= next_occurrence < expected_total,
+                  "missing or repeated next-step boundary")
+             need(boundary < len(self.lines)
++                 and boundary == next_positions[next_occurrence]
+                  and self.lines[boundary].text == "##[group]Run " + next_header,
+                  "next actual Run boundary differs from the reviewed recipe")
+             self.timed(self.lines[boundary], next_step)
+@@ -173,13 +192,11 @@
+         self.log, self.step = log, step
+         self.lines = log.lines[start:end]
+ 
+-    def inputs(self, multiline_path=False):
++    def inputs(self):
+         need(len(self.lines) > 2 and self.lines[1].text == "with:",
+              "action has no initial with block")
+         self.log.timed(self.lines[1], self.step)
+         fields = {}
+-        path_continued = False
+-        blank_after_path = False
+         for line in self.lines[2:]:
+             if line.text in ("env:", "##[endgroup]"):
+                 self.log.timed(line, self.step)
+@@ -191,21 +208,29 @@
+                 need(key not in fields, "duplicate action input")
+                 fields[key] = value
+                 continue
+-            # Actual runner multi-line inputs have bare, untimestamped continuation
+-            # lines. Only this exact reviewed two-path value is supported here.
+-            if (multiline_path and fields.get("path") == "target/package/*.crate"
+-                    and not path_continued and line.time is None
+-                    and line.text == "target/package/ssmcp-verified-crate.json"):
+-                fields["path"] += "\n" + line.text
+-                path_continued = True
+-                continue
+-            if (multiline_path and path_continued and not blank_after_path
+-                    and line.time is None and line.text == ""):
+-                blank_after_path = True
+-                continue
+             need(False, "unsupported or ambiguous action input continuation")
+         else:
+             need(False, "unterminated action input block")
++        return fields
++
++    def environment(self):
++        # This is only the initial runner-displayed environment, never a step
++        # boundary inferred from endgroup or a later program's echoed values.
++        ends = [i for i, line in enumerate(self.lines)
++                if line.text == "##[endgroup]"]
++        need(ends, "run step has no initial runner envelope")
++        prefix = self.lines[:ends[0]]
++        starts = [i for i, line in enumerate(prefix) if line.text == "env:"]
++        need(len(starts) == 1, "run step environment is missing or ambiguous")
++        self.log.timed(prefix[starts[0]], self.step)
++        fields = {}
++        for line in prefix[starts[0] + 1:]:
++            match = re.fullmatch(r"  ([A-Za-z_][A-Za-z0-9_]*): (.*)", line.text)
++            need(match is not None, "unexpected run-step environment continuation")
++            self.log.timed(line, self.step)
++            key, value = match.groups()
++            need(key not in fields, "duplicate run-step environment variable")
++            fields[key] = value
+         return fields
+ 
+     def matching(self, pattern):
+@@ -241,9 +266,7 @@
+     if name.startswith("Verify installed server "):
+         return 0, 1, DOWNLOAD
+     if name == "finalize":
+-        return 1, 1, RUST
+-    if name == "publish_crates":
+-        return 0, 1, RUST
++        return 2, 1, RUST
+     if name == "publish_release":
+         return 0, 2, RUST
+     if name.startswith("checks / Client ("):
+@@ -282,25 +305,95 @@
+             "identity_line": log.lines[index + 1].number}
+ 
+ 
++def validated_release(candidate, version):
++    need(version == RELEASE_VERSION and isinstance(candidate, str)
++         and re.fullmatch(r"[0-9a-f]{40}", candidate),
++         "only the reviewed 0.10.25 Git-source candidate is supported")
++    return {"tag": "v" + version, "version": version, "sha": candidate,
++            "submodule_count": 4, "prerelease": "false", "publish": "true",
++            "create_tag": "false", "build_only": "false",
++            "release_contract": RELEASE_CONTRACT, "crate_publication": "deferred"}
++
++
+ def verify_validation(log, candidate, version):
+     window = log.window(
+         4, "Validate the tag, versions, main ancestry and pinned submodules",
+         "python scripts/release.py validate --event", next_header="python - <<'PY'",
+-        next_number=5, next_name="Select deployment after validated publication")
++        next_number=5, next_name="Select the verified source and crate publication contract",
++        next_occurrence=0, next_total=2)
+     value = window.json()
+-    need(value == {"tag": "v" + version, "version": version, "sha": candidate,
+-                   "submodule_count": 4, "prerelease": "false", "publish": "true",
+-                   "create_tag": "false", "build_only": "false"},
++    need(value == validated_release(candidate, version),
+          "validate output differs from the exact release candidate or publication mode")
++    publication = log.window(
++        5, "Select the verified source and crate publication contract", "python - <<'PY'",
++        occurrence=0, total=2, next_header="python - <<'PY'", next_number=6,
++        next_name="Select deployment after validated publication",
++        next_occurrence=1, next_total=2)
++    expected_environment = {
++        "RELEASE_PUBLISH": "true", "RELEASE_BUILD_ONLY": "false",
++        "RELEASE_VERSION": version, "RELEASE_TAG": "v" + version,
++        "RELEASE_CONTRACT": RELEASE_CONTRACT, "CRATE_PUBLICATION": "deferred"}
++    environment = publication.environment()
++    need(all(environment.get(key) == expected for key, expected in expected_environment.items()),
++         "publication-contract step inputs do not match the validated Git-source mode")
++    # The pinned E8 publication step writes GITHUB_OUTPUT; it prints no JSON.
++    # Its successful mapped execution and the downstream receipt/skip checks are
++    # retained without fabricating a stdout receipt for that step.
+     policy = log.window(
+-        5, "Select deployment after validated publication", "python - <<'PY'",
++        6, "Select deployment after validated publication", "python - <<'PY'",
++        occurrence=1, total=2,
+         next_header="python -m unittest discover -s scripts -p 'test_release.py' -v",
+-        next_number=6, next_name="Test publication safeguards").json()
++        next_number=7, next_name="Test publication safeguards").json()
+     need(policy == {"publish": "true", "deploy_server": "false", "version": version,
+                     "deployment_deferred": DEFERRED_REASON},
+          "effective durable deployment deferral is absent")
+-    return {"validate": value, "deployment_policy": policy,
++    return {"validate": value,
++            "publication_contract_step": {"step_number": 5,
++                "observed_environment": {key: environment[key] for key in expected_environment},
++                "stdout_json_emitted_by_reviewed_recipe": False},
++            "deployment_policy": policy,
+             "policy_output_does_not_replace_original_dispatch_inputs": True}
++
++
++def verify_finalize_steps(log, candidate, version):
++    skipped = [
++        log.skipped(8, "Verify the application source package and normalized registry graph"),
++        log.skipped(12, "Retain the verified application crate and frozen registry lock")]
++    recheck = log.window(
++        6, "Recheck the source, submodules and existing release tag",
++        'if [ -n "$RELEASE_TAG" ]; then',
++        next_header="python scripts/release.py verify-source", next_number=7,
++        next_name="Verify and record the fixed Git source and dependency graph").json()
++    need(recheck == validated_release(candidate, version),
++         "finalize rechecked a different candidate or publication mode")
++    log.window(
++        7, "Verify and record the fixed Git source and dependency graph",
++        "python scripts/release.py verify-source",
++        next_header="cp scripts/install.sh scripts/install.ps1 dist/", next_number=9,
++        next_name="Require every verified target archive and record the release manifest")
++    checksums = log.window(
++        9, "Require every verified target archive and record the release manifest",
++        "cp scripts/install.sh scripts/install.ps1 dist/",
++        next_header=UPLOAD, next_number=10,
++        next_name="Retain the verified Git source outside the public asset directory",
++        next_occurrence=0)
++    checksums.one(r"Verified 6 target archives and 2 installers")
++    return {"rechecked_validate": recheck, "registry_steps_skipped": skipped,
++            "source_proof_basis": "verified-source.json artifact bytes, not JSON stdout"}
++
++
++def verify_publish_steps(log, candidate, version):
++    skipped = [log.skipped(7, "Run " + DOWNLOAD), log.skipped(8, "Run " + DOWNLOAD)]
++    recheck = log.window(
++        9, "Recheck tag identity and every target archive",
++        'python scripts/release.py validate --tag "$RELEASE_TAG"',
++        next_header='python scripts/release.py release --tag "$RELEASE_TAG"',
++        next_number=10, next_name="Publish GitHub Release after uploading all verified assets")
++    value = recheck.json()
++    need(value == validated_release(candidate, version),
++         "GitHub publication rechecked a different candidate or publication mode")
++    recheck.one(r"Verified 6 target archives and 2 installers")
++    return {"rechecked_validate": value, "legacy_and_registry_download_steps_skipped": skipped}
+ 
+ 
+ def package_output(log, target):
+@@ -326,14 +419,16 @@
+          "artifact API metadata does not match this run and log identity")
+ 
+ 
+-def upload_output(log, *, number, name, occurrence, total, artifact, run, crate=False):
+-    step_name = ("Retain the verified application crate for publishing" if crate else "Run " + UPLOAD)
+-    window = log.window(number, step_name, UPLOAD, occurrence=occurrence, total=total)
+-    inputs = window.inputs(multiline_path=crate)
+-    expected = {"name": name,
+-                "path": ("target/package/*.crate\ntarget/package/ssmcp-verified-crate.json"
+-                         if crate else "dist/*"),
+-                "compression-level": "0", "if-no-files-found": "error", "retention-days": "14",
++def upload_output(log, *, number, name, occurrence, total, artifact, run,
++                  step_name=None, path="dist/*", compression="0",
++                  next_header=None, next_number=None, next_name=None, next_occurrence=0):
++    step_name = step_name or "Run " + UPLOAD
++    window = log.window(number, step_name, UPLOAD, occurrence=occurrence, total=total,
++                        next_header=next_header, next_number=next_number,
++                        next_name=next_name, next_occurrence=next_occurrence)
++    inputs = window.inputs()
++    expected = {"name": name, "path": path,
++                "compression-level": compression, "if-no-files-found": "error", "retention-days": "14",
+                 "overwrite": "false", "include-hidden-files": "false", "archive": "true"}
+     need(inputs == expected, "artifact upload inputs differ from the reviewed recipe")
+     digest = window.one(r"SHA256 digest of uploaded artifact is ([0-9a-f]{64})")[1]
+@@ -351,9 +446,10 @@
+ 
+ 
+ def download_output(log, *, number, occurrence, total, artifacts, run,
+-                    name=None, path, next_header, next_number, next_name):
++                    name=None, path, next_header, next_number, next_name, next_occurrence=0):
+     window = log.window(number, "Run " + DOWNLOAD, DOWNLOAD, occurrence=occurrence, total=total,
+-                        next_header=next_header, next_number=next_number, next_name=next_name)
++                        next_header=next_header, next_number=next_number, next_name=next_name,
++                        next_occurrence=next_occurrence)
+     inputs = window.inputs()
+     expected = {"path": path, "merge-multiple": "false" if name else "true",
+                 "repository": REPOSITORY, "run-id": str(run["id"]),
+@@ -440,18 +536,108 @@
+     return members
+ 
+ 
+-def verify_execution(run, jobs, candidate, version, manifest, assets, official_crate,
++def source_receipt_from_manifest(manifest, candidate, version):
++    """Reconstruct every producer source field; the wrapper has no schema_version."""
++    validated_release(candidate, version)
++    expected_keys = {
++        "schema_version", "package", "version", "commit", "tree",
++        "source_manifest_sha256", "cargo_lock_sha256", "toolchain",
++        "submodules", "dependency_graph", "crate_publication", "verified_crate", "artifacts"}
++    need(isinstance(manifest, dict) and set(manifest) == expected_keys
++         and type(manifest["schema_version"]) is int and manifest["schema_version"] == 2
++         and manifest["package"] == "ssmcp" and manifest["version"] == version
++         and manifest["commit"] == candidate and manifest["verified_crate"] is None
++         and manifest["crate_publication"] == {
++             "status": "deferred", "reason": CRATE_DEFERRED_REASON},
++         "manifest does not describe the reviewed deferred Git-source publication")
++    need(isinstance(manifest["tree"], str)
++         and re.fullmatch(r"[0-9a-f]{40}", manifest["tree"])
++         and all(isinstance(manifest[key], str) and re.fullmatch(r"[0-9a-f]{64}", manifest[key])
++                 for key in ("source_manifest_sha256", "cargo_lock_sha256")),
++         "manifest source identity is incomplete")
++    toolchain = manifest["toolchain"]
++    need(isinstance(toolchain, dict) and set(toolchain) == {"cargo", "rustc"}
++         and all(isinstance(toolchain[key], str) and toolchain[key] for key in toolchain),
++         "manifest toolchain identity is incomplete")
++    need(isinstance(manifest["submodules"], list) and len(manifest["submodules"]) == 4
++         and isinstance(manifest["dependency_graph"], dict)
++         and manifest["dependency_graph"].get("cargo_lock_sha256") == manifest["cargo_lock_sha256"],
++         "manifest source graph does not bind its development lock and gitlinks")
++    return {"contract": RELEASE_CONTRACT, "source": {
++        "commit": candidate, "tree": manifest["tree"],
++        "manifest_sha256": manifest["source_manifest_sha256"],
++        "cargo_lock_sha256": manifest["cargo_lock_sha256"],
++        "submodules": manifest["submodules"],
++        "dependency_graph": manifest["dependency_graph"],
++        "cargo": toolchain["cargo"], "rustc": toolchain["rustc"]}}
++
++
++def public_inputs(manifest, assets, publication_documents):
++    """Keep the ten downloaded documents distinct from the six binary archives."""
++    archive_names = {"ssmcp-" + target + (".zip" if "windows" in target else ".tar.gz")
++                     for target in TARGETS}
++    installer_names = {"install.sh", "install.ps1"}
++    document_names = {"release-manifest.json", "SHA256SUMS"} | installer_names | {
++        name + ".sha256" for name in archive_names}
++    need(isinstance(assets, dict) and set(assets) == archive_names | document_names
++         and len(assets) == 16, "public release asset set differs")
++    need(isinstance(publication_documents, dict)
++         and set(publication_documents) == document_names and len(publication_documents) == 10,
++         "caller did not supply the exact ten already-downloaded publication documents")
++    for name, data in publication_documents.items():
++        asset = assets[name]
++        need(isinstance(data, bytes) and data
++             and asset.get("name") == name and type(asset.get("size")) is int
++             and len(data) == asset["size"]
++             and asset.get("digest") == "sha256:" + sha256(data),
++             "publication document bytes differ from public asset metadata: " + name)
++    need(unique_json(publication_documents["release-manifest.json"].decode("utf-8")) == manifest,
++         "downloaded manifest document differs from the verified manifest")
++    rows = manifest["artifacts"]
++    need(isinstance(rows, list) and len(rows) == 8
++         and all(isinstance(row, dict) and set(row) == {"name", "bytes", "sha256"}
++                 and isinstance(row["name"], str) and type(row["bytes"]) is int
++                 and row["bytes"] > 0 and isinstance(row["sha256"], str)
++                 and re.fullmatch(r"[0-9a-f]{64}", row["sha256"]) for row in rows),
++         "manifest artifact records differ from the eight source-produced records")
++    records = {row["name"]: row for row in rows}
++    need(set(records) == archive_names | installer_names
++         and [row["name"] for row in rows] == sorted(archive_names) + sorted(installer_names),
++         "manifest archive and installer records are missing, repeated or reordered")
++    sums = "".join(f"{row['sha256']}  {row['name']}\n" for row in rows).encode("utf-8")
++    need(publication_documents["SHA256SUMS"] == sums,
++         "SHA256SUMS does not contain the exact eight manifest records")
++    for name in installer_names:
++        data = publication_documents[name]
++        need(len(data) == records[name]["bytes"] and sha256(data) == records[name]["sha256"],
++             "public installer differs from its manifest record")
++    return archive_names, records, dict(publication_documents)
++
++
++def verify_execution(run, jobs, candidate, version, manifest, assets, publication_documents,
+                      *, api_json, api_bytes, download, evidence_dir):
+-    """Bind a single successful attempt through its real uploads and consumers."""
++    """Bind the successful deferred-registry attempt through eight release artifacts."""
++    expected_source = source_receipt_from_manifest(manifest, candidate, version)
++    archive_names, records, public_bytes = public_inputs(manifest, assets, publication_documents)
+     need(run["event"] == "workflow_dispatch" and run["head_branch"] == "main"
+          and run["run_attempt"] == 1 and run["conclusion"] == "success",
+          "not the original successful manual-main attempt")
+-    need(jobs["deploy_server"]["conclusion"] == "skipped", "deployment did not remain skipped")
++    need(isinstance(jobs, dict) and len(jobs) == 19,
++         "required 19-job graph is incomplete")
++    skipped_jobs = ("publish_crates", "deploy_server")
++    for name in skipped_jobs:
++        job = jobs.get(name)
++        need(isinstance(job, dict) and job.get("status") == "completed"
++             and job.get("conclusion") == "skipped"
++             and job.get("run_id") == run["id"] and job.get("run_attempt") == 1
++             and job.get("head_sha") == run["head_sha"]
++             and not job.get("steps"),
++             "deferred job was executed or belongs to a different attempt: " + name)
+     evidence_dir.mkdir(exist_ok=True)
+     need(evidence_dir.is_dir() and not evidence_dir.is_symlink(), "invalid evidence directory")
+     logs, log_receipts = {}, {}
+     for name, job in sorted(jobs.items()):
+-        if name == "deploy_server":
++        if name in skipped_jobs:
+             continue
+         need(job["run_id"] == run["id"] and job["run_attempt"] == 1
+              and job["head_sha"] == run["head_sha"] and job["conclusion"] == "success",
+@@ -466,18 +652,26 @@
+         log = JobLog(data, job, uploads, downloads)
+         receipt["checkout"] = verify_checkout(log, candidate, "v" + version, next_action)
+         logs[name], log_receipts[name] = log, receipt
+-    need(len(logs) == 18, "required checkout count differs")
++    need(len(logs) == 17, "required successful checkout count differs")
+     validation = verify_validation(logs["validate"], candidate, version)
++    finalization = verify_finalize_steps(logs["finalize"], candidate, version)
++    publication = verify_publish_steps(logs["publish_release"], candidate, version)
+     all_artifacts = list_artifacts(api_json, run)
+     snapshot = json.dumps(all_artifacts, sort_keys=True, ensure_ascii=False, indent=2).encode() + b"\n"
+     artifact_snapshot = save_bytes(evidence_dir, "artifact-api-decoded.json", snapshot)
+     artifact_snapshot["encoding"] = "canonical JSON of decoded API records, not HTTP wire bytes"
+     expected_names = {"ssmcp-" + target for target in TARGETS}
+-    relevant = [a for a in all_artifacts if a["name"].startswith("ssmcp-")
+-                or a["name"] == "verified-crates"]
++    # The pinned workflows also upload terminal-preview, unified-acceptance-*,
++    # native-client-* and windows-*-browser/bootstrap diagnostics. Those remain
++    # outside the release namespace; eight is not the total run artifact count.
++    need(all(isinstance(a.get("name"), str) for a in all_artifacts),
++         "artifact API contains an invalid name")
++    relevant = [a for a in all_artifacts
++                if a["name"].startswith(("ssmcp-", "verified-", "finalized-release-"))]
+     artifacts = {a["name"]: a for a in relevant}
+-    need(set(artifacts) == expected_names | {"verified-crates"}
+-         and len(relevant) == len(artifacts), "release artifact names are missing or duplicated")
++    need(set(artifacts) == expected_names | {SOURCE_ARTIFACT, FINALIZED_ARTIFACT}
++         and len(relevant) == len(artifacts) == 8,
++         "release artifacts are missing, duplicated or outside the reviewed namespace")
+     uploaded, packages = {}, {}
+     for target in TARGETS:
+         name = "ssmcp-" + target
+@@ -487,16 +681,22 @@
+         uploaded[name] = upload_output(log, number=12, name=name, occurrence=count - 1,
+                                        total=count, artifact=artifacts[name], run=run)
+         if "windows" in target:
+-            # The two diagnostic upload headers must precede the final package;
+-            # their API identities are checked without treating them as release assets.
+             for number, step_name, occurrence in (
+                 (10, "Retain real Windows browser dependency evidence", 0),
+                 (11, "Retain Windows browser bootstrap evidence", 1)):
+                 step = log.step(number, step_name)
+                 log.timed(log.lines[log.positions(UPLOAD)[occurrence]], step)
+-    uploaded["verified-crates"] = upload_output(
+-        logs["finalize"], number=9, name="verified-crates", occurrence=0, total=1,
+-        artifact=artifacts["verified-crates"], run=run, crate=True)
++    uploaded[SOURCE_ARTIFACT] = upload_output(
++        logs["finalize"], number=10, name=SOURCE_ARTIFACT, occurrence=0, total=2,
++        artifact=artifacts[SOURCE_ARTIFACT], run=run,
++        step_name="Retain the verified Git source outside the public asset directory",
++        path="target/release-proof/verified-source.json", compression="6",
++        next_header=UPLOAD, next_number=11, next_name="Retain the finalized release assets",
++        next_occurrence=1)
++    uploaded[FINALIZED_ARTIFACT] = upload_output(
++        logs["finalize"], number=11, name=FINALIZED_ARTIFACT, occurrence=1, total=2,
++        artifact=artifacts[FINALIZED_ARTIFACT], run=run,
++        step_name="Retain the finalized release assets", path="dist/")
+     consumed = []
+     release_artifacts = {name: artifacts[name] for name in expected_names}
+     for target in TARGETS[:2]:
+@@ -511,66 +711,87 @@
+         run=run, path="dist", next_header='if [ -n "$RELEASE_TAG" ]; then', next_number=6,
+         next_name="Recheck the source, submodules and existing release tag"))
+     consumed.append(download_output(
+-        logs["publish_crates"], number=5, occurrence=0, total=1,
+-        artifacts={"verified-crates": artifacts["verified-crates"]}, run=run,
+-        name="verified-crates", path="target/package",
+-        next_header='python scripts/release.py validate --tag "$RELEASE_TAG"', next_number=6,
+-        next_name="Recheck release tag identity"))
+-    consumed.append(download_output(
+-        logs["publish_release"], number=5, occurrence=0, total=2, artifacts=release_artifacts,
+-        run=run, path="dist", next_header=DOWNLOAD, next_number=6, next_name="Run " + DOWNLOAD))
++        logs["publish_release"], number=5, occurrence=0, total=2,
++        artifacts={SOURCE_ARTIFACT: artifacts[SOURCE_ARTIFACT]}, run=run,
++        name=SOURCE_ARTIFACT, path="target/release-proof", next_header=DOWNLOAD,
++        next_number=6, next_name="Run " + DOWNLOAD, next_occurrence=1))
+     consumed.append(download_output(
+         logs["publish_release"], number=6, occurrence=1, total=2,
+-        artifacts={"verified-crates": artifacts["verified-crates"]}, run=run,
+-        name="verified-crates", path="target/package",
+-        next_header='python scripts/release.py validate --tag "$RELEASE_TAG"', next_number=7,
++        artifacts={FINALIZED_ARTIFACT: artifacts[FINALIZED_ARTIFACT]}, run=run,
++        name=FINALIZED_ARTIFACT, path="dist",
++        next_header='python scripts/release.py validate --tag "$RELEASE_TAG"', next_number=9,
+         next_name="Recheck tag identity and every target archive"))
+-    records = {record["name"]: record for record in manifest["artifacts"]}
+-    bridges = {}
+-    for name, artifact in sorted(artifacts.items()):
++
++    def artifact_contents(name, expected_members):
++        artifact = artifacts[name]
+         data = api_bytes(f"repos/{REPOSITORY}/actions/artifacts/{artifact['id']}/zip")
+-        need(len(data) == artifact["size_in_bytes"]
++        need(isinstance(data, bytes) and len(data) == artifact["size_in_bytes"]
+              and "sha256:" + sha256(data) == artifact["digest"],
+              "downloaded outer artifact ZIP differs from GitHub metadata")
+         receipt = save_bytes(evidence_dir, f"artifact-{artifact['id']}.zip", data)
+-        if name == "verified-crates":
+-            crate_name = "ssmcp-" + version + ".crate"
+-            contents = read_zip(data, {crate_name, "ssmcp-verified-crate.json"})
+-            need(contents[crate_name] == official_crate,
+-                 "finalize crate bytes differ from the official registry archive")
+-            crate_receipt = unique_json(contents["ssmcp-verified-crate.json"].decode("utf-8"))
+-            need(crate_receipt == manifest["verified_crate"],
+-                 "finalize verified-crate receipt differs from the release manifest")
+-        else:
+-            package = packages[name]
+-            archive_name = package["archive"]
+-            contents = read_zip(data, {archive_name, archive_name + ".sha256"})
+-            archive = contents[archive_name]
+-            archive_sha = sha256(archive)
+-            need(len(archive) == package["bytes"] == records[archive_name]["bytes"]
+-                 and archive_sha == package["sha256"] == records[archive_name]["sha256"],
+-                 "inner release archive differs from package JSON or manifest")
+-            # package() writes through the native platform text stream.
+-            newline = "\r\n" if archive_name.endswith("-pc-windows-msvc.zip") else "\n"
+-            need(contents[archive_name + ".sha256"]
+-                 == f"{archive_sha}  {archive_name}{newline}".encode(),
+-                 "inner release sidecar differs")
+-            public = download(assets[archive_name]["browser_download_url"])
+-            need(public == archive and len(public) == assets[archive_name]["size"]
+-                 and assets[archive_name].get("digest") == "sha256:" + sha256(public),
+-                 "public release archive bytes differ from the CI-produced archive")
+-            receipt["public_archive"] = {"name": archive_name, "bytes": len(public),
+-                                         "sha256": sha256(public), "byte_identical": True}
+-        receipt["members"] = {key: {"bytes": len(value), "sha256": sha256(value)}
+-                              for key, value in sorted(contents.items())}
++        contents = read_zip(data, expected_members)
+         receipt["artifact_id"] = artifact["id"]
++        receipt["members"] = {
++            key: {"bytes": len(value), "sha256": sha256(value)}
++            for key, value in sorted(contents.items())}
++        return receipt, contents
++
++    bridges = {}
++    for name in sorted(expected_names):
++        package = packages[name]
++        archive_name = package["archive"]
++        receipt, contents = artifact_contents(name, {archive_name, archive_name + ".sha256"})
++        archive = contents[archive_name]
++        archive_sha = sha256(archive)
++        need(len(archive) == package["bytes"] == records[archive_name]["bytes"]
++             and archive_sha == package["sha256"] == records[archive_name]["sha256"],
++             "inner release archive differs from package JSON or manifest")
++        newline = "\r\n" if archive_name.endswith("-pc-windows-msvc.zip") else "\n"
++        need(contents[archive_name + ".sha256"]
++             == f"{archive_sha}  {archive_name}{newline}".encode("utf-8")
++             and contents[archive_name + ".sha256"] == public_bytes[archive_name + ".sha256"],
++             "build sidecar differs from its exact platform format or public bytes")
++        public = download(assets[archive_name]["browser_download_url"])
++        need(isinstance(public, bytes) and public == archive
++             and len(public) == assets[archive_name]["size"]
++             and assets[archive_name].get("digest") == "sha256:" + sha256(public),
++             "public release archive bytes differ from the CI-produced archive")
++        public_bytes[archive_name] = public
++        receipt["public_archive"] = {"name": archive_name, "bytes": len(public),
++                                     "sha256": sha256(public), "byte_identical": True}
+         bridges[name] = receipt
++    need(set(public_bytes) == set(assets) and len(public_bytes) == 16
++         and archive_names <= public_bytes.keys(),
++         "the complete public release bytes were not acquired")
++
++    receipt, contents = artifact_contents(SOURCE_ARTIFACT, {"verified-source.json"})
++    source_document = unique_json(contents["verified-source.json"].decode("utf-8"))
++    need(source_document == expected_source,
++         "verified-source contract or complete source differs from candidate and manifest")
++    receipt["contract"] = RELEASE_CONTRACT
++    receipt["candidate_source_sha"] = candidate
++    receipt["complete_source_equals_manifest"] = True
++    bridges[SOURCE_ARTIFACT] = receipt
++
++    receipt, contents = artifact_contents(FINALIZED_ARTIFACT, set(assets))
++    need(all(contents[name] == public_bytes[name] for name in assets),
++         "a finalized release member differs from its actual public asset bytes")
++    receipt["public_members_byte_identical"] = 16
++    receipt["contains_manifest_records"] = 8
++    bridges[FINALIZED_ARTIFACT] = receipt
+     for name, log in logs.items():
+         log_receipts[name]["mapped_windows"] = sorted(log.windows, key=lambda w: w["first_line"])
+-    return {"verified": True, "run_id": run["id"], "run_attempt": 1,
++    return {"verified": True, "release_contract": RELEASE_CONTRACT,
++            "run_id": run["id"], "run_attempt": 1,
+             "workflow_api_head_sha": run["head_sha"], "candidate_source_sha": candidate,
+-            "checkout_count": len(logs), "validation": validation,
++            "checkout_count": len(logs), "skipped_jobs": list(skipped_jobs),
++            "registry_publication": manifest["crate_publication"],
++            "registry_publication_verified": False,
++            "validation": validation, "finalization": finalization, "publication": publication,
+             "job_logs": log_receipts, "artifact_api": artifact_snapshot,
++            "required_release_artifact_count": len(artifacts),
++            "all_run_artifact_count": len(all_artifacts),
++            "public_asset_count": len(public_bytes), "all_public_asset_bytes_verified": True,
+             "producer_uploads": uploaded, "consumer_downloads": consumed,
+             "downloaded_artifact_bytes": bridges,
+             "trust_boundary": "Reviewed recipe, pinned actions and GitHub runner; not malicious-builder attestation"}

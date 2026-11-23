@@ -1,0 +1,422 @@
+{
+  "schema": "ssmcp-e18-merged-source-public-facts-v1",
+  "snapshot_utc": "2026-11-21T13:52:57Z",
+  "status": "E18 merged; original Gate20 running, three completed stages passed; no final result",
+  "source": {
+    "repository": "LIghtJUNction/ssmcp",
+    "version": "0.10.25",
+    "commit": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "tree": "167e9976d2ac334fb3dfbd58f82288baf0eb9b17",
+    "parents": [
+      "cf358f00f84b73e9892e62dd9b50b0dcc218201c",
+      "8521fc1a9a81788cc93e727b66b4dfcbcc5660c5"
+    ],
+    "pull_request": 173,
+    "merged_at": "2026-11-21T13:44:16Z",
+    "author_commit": "8521fc1a9a81788cc93e727b66b4dfcbcc5660c5",
+    "author_tree": "167e9976d2ac334fb3dfbd58f82288baf0eb9b17",
+    "main_ref_readback_equal": true,
+    "author_and_merge_tree_and_patch_equal": true,
+    "read_scope": "Independent full GitHub commit responses, current main ref, and actual merged PR record; no preview merge identity used."
+  },
+  "author_phase": {
+    "original_author_resumed_once_owner_reported": true,
+    "launch_and_exit_originals_root_read": true,
+    "started_utc": "2026-11-21T13:32:04.273349+00:00",
+    "finished_utc": "2026-11-21T13:38:45.338024+00:00",
+    "exit_code": 0,
+    "error": null,
+    "start_commit": "183d7ada89d88e53b30c4d4bc8c4aef62c1e8d91",
+    "start_tree": "a9b283173ee46cff86ca4a119566f0ebc488292a",
+    "fixed_main_fast_forward": "cf358f00f84b73e9892e62dd9b50b0dcc218201c",
+    "fast_forward_tree_unchanged": true,
+    "author_wrapper_unchanged": true,
+    "rustc_wrapper_unchanged": true,
+    "receipts": {
+      "launch": {
+        "bytes": 1934,
+        "sha256": "62290a6a58cda4a45179e4681a4e8e7f267e67e43e4ddfd31b1e2fae68696f0a"
+      },
+      "exit": {
+        "bytes": 2094,
+        "sha256": "2ed51becdfce366f66cf5a7872c417f24875127cf1163bff956817d07039bc4c"
+      },
+      "source": {
+        "bytes": 56579,
+        "sha256": "d0a33c15890a081f2f4a970611e2f9eb9f2c57e759dcb2325e047ae42c88351d"
+      }
+    },
+    "source_receipt_read_scope": "Whole-file bytes and SHA-256, selected source/protocol/scope/fixture fields, all unchanged-file and dependency identity records, all Git record exit-code aggregates, and format/commit/push result fields. Long recorded edit commands and first-format output were excerpted by the reader.",
+    "checks": {
+      "initial_rustfmt_exit": 1,
+      "initial_git_diff_check_exit": 0,
+      "format_adjustment_exit": 0,
+      "diagnostic_wording_exit": 0,
+      "final_rustfmt_exit": 0,
+      "final_git_diff_check_exit": 0,
+      "commit_exit": 0,
+      "normal_push_count": 1,
+      "push_exit": 0,
+      "remote_head_verified": "8521fc1a9a81788cc93e727b66b4dfcbcc5660c5",
+      "credential_store_warning": "D-Bus credential storage warning observed; push completion and remote ref verification exited 0.",
+      "post_commit_git_record_count": 117,
+      "post_commit_git_exit_codes": {
+        "0": 117
+      },
+      "git_records_are_tests": false,
+      "cargo_executed": false,
+      "compiled_or_tests_executed": false,
+      "gate_or_product_acceptance_executed": false,
+      "check_helper_invocations": 0
+    },
+    "clean_index_and_worktree": true,
+    "clean_submodules": 4
+  },
+  "change": {
+    "files": [
+      {
+        "path": "src/http/question_delivery_tests.rs",
+        "additions": 117,
+        "deletions": 36
+      }
+    ],
+    "before": {
+      "blob": "dec92b128fc258337b4b443dbc5d86d3f5e37f11",
+      "bytes": 42957,
+      "sha256": "23a68632de3a35ba00d3014afe4c4260e09431beab3de8f622806ba4e50c5569"
+    },
+    "after": {
+      "blob": "1025d2c2d111292925b38034fcd2751775db513b",
+      "bytes": 46021,
+      "sha256": "5f29c9a8304417a577025d58befb31d6888e32295a6e32e51d70976596f2bb2f"
+    },
+    "new_test_definitions": 0,
+    "production_code_changed": false,
+    "cfg_test_registration_reviewed": true,
+    "diffs": {
+      "author-final.full.diff": {
+        "bytes": 9272,
+        "sha256": "54f784754337cf60ce156bac313e56937e4ecdbfa70ad75655e5d2540cee9e55"
+      },
+      "author-own-fixes.full.diff": {
+        "bytes": 9272,
+        "sha256": "54f784754337cf60ce156bac313e56937e4ecdbfa70ad75655e5d2540cee9e55"
+      }
+    }
+  },
+  "fixture": {
+    "success_tests": [
+      "tool_summary_public_await_delivers_the_eleventh_call_without_consuming_user_input",
+      "tool_summary_code_mode_wait_for_keeps_the_native_delivery_boundary",
+      "tool_summary_passive_await_rechecks_oauth_and_binding_after_probe"
+    ],
+    "target_input_before_ms": 1000,
+    "target_input_after_ms": 5000,
+    "collector_probe_budget_ms_unchanged": 1000,
+    "guard_slack_ms": 3000,
+    "derived_observation_guard_ms": 9000,
+    "code_mode_outer_input_ms_unchanged": 10000,
+    "default_public_await_guard_ms_unchanged": 5000,
+    "existing_timeout_resume_cancel_inputs_ms_unchanged": 1000,
+    "same_deadline_for_probe_and_post_release_observation": true,
+    "completed_observer_preferred_by_biased_select": true,
+    "revocation_requires_actual_probe_arrival_while_observer_pending": true,
+    "early_observer_completion_fails": true,
+    "cleanup": "Release the peer pause before handling results; abort and join only unfinished/unconsumed handles on the handled failure paths; never join a handle whose result was consumed by select a second time.",
+    "guard_is_strict_whole_test_deadline": false,
+    "guard_limits": [
+      "Fixture setup and ten preceding calls occur before the deadline.",
+      "Revocation dispatch is outside timeout_at.",
+      "Abort followed by join has no separate timeout.",
+      "OAuth and agent loop iterations each establish their own deadline.",
+      "The code-mode 10-second input is not a bound on the entire test including finalization and ACK."
+    ],
+    "preserved_assertions": [
+      "ready",
+      "11 calls",
+      "one exec wait",
+      "one summary probe",
+      "summary contents and frame-size constraints",
+      "code-mode ACK",
+      "unauthorized after revocation",
+      "no result data or summary after revocation",
+      "no passive consumption of answers, requirements or inbox",
+      "existing timeout/resume/cancel contract"
+    ],
+    "production_deadline_auth_quota_collector_unchanged": true,
+    "static_review": "READY; no compile/test/runtime result implied.",
+    "old_one_second_failure_preserved": true,
+    "production_performance_or_root_cause_fix_claimed": false,
+    "cleanup_dynamically_tested_in_author_phase": false
+  },
+  "unchanged_since_fixed_main": {
+    "Cargo.toml": {
+      "blob": "9e51d222b8049615691a6830e0447ec275e27058",
+      "bytes": 10109,
+      "sha256": "c7e9fa819512800dfee8704f22b4c2d0db74713622a0e0d82be6dea96007e8d1"
+    },
+    "Cargo.lock": {
+      "blob": "c64e987b31bb984d9e413164e6c057b027803c8c",
+      "bytes": 66476,
+      "sha256": "b8caf2e4f747094a0bcd12842b1fe7894d7d956efa1f8b756f17a16518b9d393"
+    },
+    ".github/workflows/ci.yml": {
+      "blob": "762eec62ae3e8d842f1188141ce13a422e931838",
+      "bytes": 15351,
+      "sha256": "d60f0b21ce4c16440d3dd39c1fb3d53fb21de3bb889a30c4ed4f8ae7822f9317"
+    },
+    ".github/workflows/release.yml": {
+      "blob": "41968605ad5d459d07ae599fccb1fb3d89a848d8",
+      "bytes": 24312,
+      "sha256": "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"
+    },
+    ".github/workflows/deploy-server.yml": {
+      "blob": "a550ffbfb4b915af8d6922bdf0f05ba5c58763ca",
+      "bytes": 4499,
+      "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+    },
+    "scripts/release.py": {
+      "blob": "1197f9b919f6fdfbbbb339a859fb50e63d17cfd9",
+      "bytes": 65061,
+      "sha256": "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"
+    },
+    "scripts/install.sh": {
+      "blob": "7620b1d29b87173492ea9d8b74d846f8d9c3c185",
+      "bytes": 6783,
+      "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+    },
+    "scripts/install.ps1": {
+      "blob": "eb13725db6cb24c06a137f1ff2129649d2c25515",
+      "bytes": 29653,
+      "sha256": "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"
+    },
+    "scripts/e2e.py": {
+      "blob": "58481fe227a3e19370cd864d6ab442ed9989ebef",
+      "bytes": 49927,
+      "sha256": "294c9fd997f30fba7f7046ef3b4f93e0876121655d952797bdb47222e9cd9c19"
+    },
+    "scripts/e2e_x11_text.py": {
+      "blob": "31531da68fa06f9f97ff73102fba1bc2a9096e08",
+      "bytes": 35493,
+      "sha256": "0408aa79331bccc611302b09840395eeedb0a03caa33fa9881c827585d6887fa"
+    },
+    "scripts/e2e_zuse_worker.py": {
+      "blob": "2cf496bcbe2f90683322bda1d4dd452dfa2d6bb5",
+      "bytes": 13634,
+      "sha256": "c27ea79cebedf476a726aa839c632d1adef1279a3cb54b1c6a8a4a1636b1a344"
+    },
+    "src/http/await_tool.rs": {
+      "blob": "430f7902b9b5b2f3989180361e795dd781088bae",
+      "bytes": 44539,
+      "sha256": "f44a557b8b525c091d0556eb2facc1e3ae855869e3182b6d1f8bc9d92da71206"
+    },
+    "src/http/tool_summaries.rs": {
+      "blob": "3f8dedf2b0a0abc348ccc7fa06e9dadf54d53885",
+      "bytes": 4403,
+      "sha256": "bd32fc0bff38cbef51803537a82f3aa5498cb385f2416412cb96e017b49465d2"
+    },
+    "src/code_mode.rs": {
+      "blob": "be29c1b2b0eaa620cfa5a7030d91d35bb20ce968",
+      "bytes": 108749,
+      "sha256": "347760ec58317ca5f5f28b392d429730d21b6cdd2030d806097bb5c36431c7a8"
+    },
+    "src/client/terminal/conversation/questions.rs": {
+      "blob": "a6d135e9684dd670003ea6955896d05039f39bee",
+      "bytes": 41765,
+      "sha256": "c82535139da86bc3d571bce93f90c4f16f8de5b9d8922f2608625d8c4a470c35"
+    },
+    "src/client/terminal/conversation/questions/history_tests.rs": {
+      "blob": "ae96a0fda10939404a984e5eaf39fc1bf669e247",
+      "bytes": 12034,
+      "sha256": "51795f3759c4114e37bf39083ae3eb3856bbf7d0601cf2b69da1fb5315277125"
+    },
+    "src/computer/zuse_backend.rs": {
+      "blob": "f18d7e8f723140b06214b294d95f33c237fc414f",
+      "bytes": 99165,
+      "sha256": "8d46d29815fc096e560efee0e9ffbf4336b48c1605c98c1723835ef02f0113e6"
+    },
+    "src/computer/host_control.rs": {
+      "blob": "d1fce5ebbd57028aa4b531c642a5b13eed808da2",
+      "bytes": 10870,
+      "sha256": "0e12445ab3f3d805712438c513b04b4b0ced2cd7a52f63b9ee4f069548a745a9"
+    }
+  },
+  "gitlinks": {
+    "crates/zharness": {
+      "start": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "fixed_main": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "final": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "checkout": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "clean": true
+    },
+    "crates/zplugin": {
+      "start": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "fixed_main": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "final": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "checkout": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "clean": true
+    },
+    "crates/ztuio": {
+      "start": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "fixed_main": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "final": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "checkout": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "clean": true
+    },
+    "crates/zuse": {
+      "start": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "fixed_main": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "final": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "checkout": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "clean": true
+    }
+  },
+  "internal_git_sources_unchanged": {
+    "https://github.com/LIghtJUNction/z64.git": "7e9cff67beae2c484f8b9749b83ae24a1d0e1bbd",
+    "https://github.com/LIghtJUNction/zcall.git": "199678d08104bed588e5d10b2c0634a47d7c8417",
+    "https://github.com/LIghtJUNction/zclap.git": "4d87f3ae3743e81509d5ac5500909955667c860f",
+    "https://github.com/LIghtJUNction/zconv.git": "0af1f7eb0766ff0ce9db5cee7c6184eff511a8c1",
+    "https://github.com/LIghtJUNction/zguard.git": "6772b932a65e18f64e13591dee6edb2f6b099406",
+    "https://github.com/LIghtJUNction/zharness.git": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+    "https://github.com/LIghtJUNction/zmcpio.git": "04bb6cd05c5295ab41a892a76cbef10b8ac07402",
+    "https://github.com/LIghtJUNction/zplugin.git": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+    "https://github.com/LIghtJUNction/zsys.git": "808fcfdb73584ca7ca122e20b76f0209f56ab0f7",
+    "https://github.com/LIghtJUNction/ztuio.git": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+    "https://github.com/LIghtJUNction/zuse.git": "8d37a7df6fd94df1d0939eb6800c238e71f5835d"
+  },
+  "gate19_historical": {
+    "source": "cf358f00f84b73e9892e62dd9b50b0dcc218201c",
+    "tree": "a9b283173ee46cff86ca4a119566f0ebc488292a",
+    "run_id": "1ecdfff7f26545fce5f1e8f2c6ebdb04",
+    "status": "failed",
+    "stages_passed": 4,
+    "stages_failed": 1,
+    "stages_not_run": 30,
+    "failed_stage": "library-private",
+    "exit_code": 101,
+    "stage_seconds": 72.85,
+    "parent_test_seconds": 72.83,
+    "parent_counts": {
+      "passed": 2102,
+      "failed": 2,
+      "ignored": 26,
+      "measured": 0,
+      "filtered": 6
+    },
+    "failed_tests": [
+      {
+        "name": "http::question_delivery_tests::tool_summary_code_mode_wait_for_keeps_the_native_delivery_boundary",
+        "source_line": 959,
+        "assertion": "expected ready; observed timed_out"
+      },
+      {
+        "name": "http::question_delivery_tests::tool_summary_passive_await_rechecks_oauth_and_binding_after_probe",
+        "source_line": 1007,
+        "assertion": "final native summary probe arrival wait returned Elapsed before this iteration's revocation action"
+      }
+    ],
+    "new_E16_E17_regressions_passed_in_parent_count": 3,
+    "child_summaries_added_to_parent": false,
+    "not_transferred_to_new_source": true,
+    "facts_file": "gate-Scf358-r19-failure-public-facts.json",
+    "facts_commit": "0ac7ba9ae686f78d7ee4772e76bb29d8c4429fa6"
+  },
+  "gate20": {
+    "source": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "tree": "167e9976d2ac334fb3dfbd58f82288baf0eb9b17",
+    "run_id": "2f9197c074824f45545f28952342f25d",
+    "status": "running",
+    "owned_started_utc": "2026-11-21T13:49:25.180585+00:00",
+    "launcher_started_unix_seconds": 1795268965.4480584,
+    "driver_started_unix_seconds": 1795268965.825525,
+    "launch": {
+      "bytes": 3636,
+      "sha256": "7c7596d9f1b33bc3ea0cff99bf3bf45e686432960b75b806bf11010af3919fe2"
+    },
+    "owned_launch": {
+      "bytes": 1008,
+      "sha256": "5d7b288c0e38878bc288c2bd85acef747912153e0f19395d33a0b5f4e71d9ad3"
+    },
+    "candidate_running_snapshot": {
+      "bytes": 32651,
+      "sha256": "28a3b64d69ed691e4cb02bef23e3ebc0a54e0a115fcd67801bb0f73d958532b2",
+      "observed_utc": "2026-11-21T13:52:57Z"
+    },
+    "binding": {
+      "bytes": 16561,
+      "sha256": "8918b7e3b1b9b23a1c52ba00bcdb6ff3c65ee9b013ea5f356e8d121c281e96be",
+      "prepared_utc": "2026-11-21T13:47:37.382872+00:00",
+      "preparation_execution_started_field": false,
+      "preparation_flag_is_historical": true
+    },
+    "completed_stages": [
+      {
+        "name": "release-policy",
+        "exit_code": 0,
+        "seconds": 10.62
+      },
+      {
+        "name": "deployment-policy",
+        "exit_code": 0,
+        "seconds": 0.62
+      },
+      {
+        "name": "fmt",
+        "exit_code": 0,
+        "seconds": 4.66
+      }
+    ],
+    "completed_stage_count": 3,
+    "library_compile_active_source_owner_reported": true,
+    "launcher_exit_present": false,
+    "owned_exit_present": false,
+    "final_result_observed": false,
+    "source_lock_acquired": true,
+    "exclusive_target_lock": true,
+    "target_owner_lock_held_for_entire_batch_recorded": true,
+    "compiler_jobs": "1",
+    "expected_input_sha256": {
+      "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+      "cargo_lock": "b8caf2e4f747094a0bcd12842b1fe7894d7d956efa1f8b756f17a16518b9d393",
+      "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+      "driver": "17e246cab3a155737bfa25783eabd5392c934ddd041969d0ef93431f7f8c7cc5",
+      "git_heads": "63fda4f8fdb92d0e471c1a3862c9e157c8f3c4f2c68bf6ba9254ec8ab38ed00d",
+      "owner_agreement": "706fed42afcf5a704974f310121eeba84e9414c712b2a5fb748bf7577535aeb0",
+      "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+      "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+      "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+    },
+    "launch_before_hashes_match_binding_expected": true,
+    "root_independent_midrun_rehash_completed": false,
+    "read_scope": "Root independently read full original launch records, whole-file hashes and selected current Gate and binding fields. The running candidate file is mutable; this hash is only the stated snapshot. Final exits were absent. A subsequent read for binding details and independent midrun hashes was rejected with code_mode busy before a native job and has not been treated as completed.",
+    "planned_scope": {
+      "stages": 35,
+      "rust_stages": 26,
+      "integration_targets": 20,
+      "mandatory_ignored": 14,
+      "host_serial_tests": 6
+    },
+    "scope_read_evidence": "Original source owner reports unchanged original scope; complete bound stage contract not independently read in this snapshot.",
+    "helper_owner_reported": {
+      "bytes": 20858,
+      "sha256": "e9c4547689dc422862dee9c3843f069a87db5764e25213bc3eb1f34a13c7258b"
+    },
+    "consumers": "N20, runtime, UI24, controls, multiUID, version_all, P1 and two native supplements remain waiting for the actual original Gate result; no previous-source result is transferred."
+  },
+  "release": {
+    "requested_version": "0.10.25",
+    "scope_preserved": true,
+    "H2_status": "Static ready, unbound and unexecuted by report owner.",
+    "release_dispatched_by_report_owner": false,
+    "tag_created_by_report_owner": false,
+    "published": false,
+    "installed_or_reloaded_by_report_owner": false
+  },
+  "sources": {
+    "pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/173",
+    "merged_commit": "https://github.com/LIghtJUNction/ssmcp/commit/02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "author_commit": "https://github.com/LIghtJUNction/ssmcp/commit/8521fc1a9a81788cc93e727b66b4dfcbcc5660c5",
+    "fixture": "https://github.com/LIghtJUNction/ssmcp/blob/02aa4dcd18786062ef44be6c76422dff054fbfed/src/http/question_delivery_tests.rs"
+  }
+}
+

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-19",
+  "scope": "Diagnosis from exact image/source provenance, not a network packet capture",
+  "historical_installation": {
+    "version": "0.7.4",
+    "image_sha256": "e7e3d84b6afc869c5e340fbf9cf0c8c4092e60f6ce68c85379b4b64e8cc0c048",
+    "runtime_source": "f57127bd99fd5eb4aa805d0c68be5c0bbc91a2af",
+    "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/571a9879d804b406d699e3f06ee439833922f5d0/docs/reports/007-recovery-20261118/README.md"
+  },
+  "source_checks": {
+    "old_wire_version": 5,
+    "old_wire_blob": "141cc08b908eae5ef018c25460c76aa3269bd137",
+    "old_wire_url": "https://github.com/LIghtJUNction/ssmcp/blob/f57127bd99fd5eb4aa805d0c68be5c0bbc91a2af/src/wire.rs",
+    "old_recovery_hello": "zero.rs imports wire::VERSION and uses it in Frame::Hello",
+    "old_recovery_blob": "962b73fd52380980ced737f5b761ccffb60a3e4c",
+    "current_wire_version": 7,
+    "current_wire_blob": "a0352f687363831e1ebbe9328e8faedfb987424d",
+    "current_wire_url": "https://github.com/LIghtJUNction/ssmcp/blob/571a9879d804b406d699e3f06ee439833922f5d0/src/wire.rs",
+    "current_acceptance": "Broker accepts Hello only when version == wire::VERSION; otherwise it sends a protocol rejection",
+    "current_broker_blob": "06b30d190360376429a0756c063511d20c742e32",
+    "current_broker_url": "https://github.com/LIghtJUNction/ssmcp/blob/571a9879d804b406d699e3f06ee439833922f5d0/src/broker.rs"
+  },
+  "live_baseline": {
+    "schema": "ssmcp.007.live-readonly-summary.v1",
+    "captured_at": "2026-11-19T19:54:13.941362+00:00",
+    "read_only": true,
+    "service_mutations": 0,
+    "service_state": {
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "SubState": "running",
+      "UnitFileState": "enabled",
+      "NeedDaemonReload": "no"
+    },
+    "connection_state": "reconnecting",
+    "versions": {
+      "command": "0.10.11",
+      "running": null,
+      "running_wire": null,
+      "saved": "0.7.4"
+    },
+    "version_from_running_image": "0.7.4",
+    "saved_image_sha256": "e7e3d84b6afc869c5e340fbf9cf0c8c4092e60f6ce68c85379b4b64e8cc0c048",
+    "running_image_sha256": "e7e3d84b6afc869c5e340fbf9cf0c8c4092e60f6ce68c85379b4b64e8cc0c048",
+    "running_matches_saved": true,
+    "service_pid_stable": true,
+    "known_wire5_image_match": true,
+    "wire_version_directly_observed": null,
+    "saved_sessions": 10,
+    "loaded_session_units": 0,
+    "active_session_units": 0,
+    "session_snapshots_matching_manifest": 10,
+    "existing_image_backups": 0,
+    "saved_sessions_sha256": "808d88b7663bc14173a3c07e97c17fdfe0d5463ec6c434c815da28144ec45d83",
+    "existing_backups_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "preserved_config_and_unit_sha256": "9ea154bc9dc16f99aef6c3428239b16efdf5beee25b0d373f3c7aabca1cc68aa",
+    "collector_sha256": "f02627363794249d757e16d92c9500c0bbac1a1b28b30e24392537a1f156017d",
+    "comparison": null
+  },
+  "interpretation": "Both live images exactly match the historical artifact. Wire 5 is inferred from that exact artifact-to-source mapping. The live running_wire observation is null and is not represented as direct protocol measurement."
+}

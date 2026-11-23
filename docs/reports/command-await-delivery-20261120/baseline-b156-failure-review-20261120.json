@@ -1,0 +1,524 @@
+{
+  "schema": "ssmcp-baseline-failure-independent-review-v1",
+  "reviewer_task": "/root/baseline_failure_review",
+  "observed_utc": "2026-11-20T18:59:47.031404+00:00",
+  "review_scope": {
+    "native_client": "004ff7a3e20889186667dcebc2f3bb222fb884cae86bc63db7b081f366d20704",
+    "product_state_read_only": true,
+    "cargo_commands_executed": 0,
+    "tests_executed": 0,
+    "pty_executed": 0,
+    "ci_started": 0,
+    "units_modified": 0,
+    "source_modified": false,
+    "lock_probes_or_acquisitions": 0,
+    "only_output_mutation": "this independent review receipt"
+  },
+  "evidence_root": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121",
+  "conclusion": {
+    "baseline_usable_for_paste_benchmark": false,
+    "result": "library_test_fixture_compile_failed",
+    "cargo_exit_code": 101,
+    "run2_service_exit_status": 1,
+    "usable_source_bound_ssmcp_artifacts_recorded": 0,
+    "baseline_bin_regular_files": 0,
+    "original_failed_baseline_remains_failed": true,
+    "next_baseline_must_bind_repaired_new_source_revision": true
+  },
+  "source_binding": {
+    "source_revision": "b156254b45c015a3994b8be1475b423167ac980f",
+    "source_tree": "eb1448ca345ada7ad574d9a6c0ef93aeed32af5d",
+    "source_worktree": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/source-final",
+    "git_object_tree_independently_matches": true,
+    "source_manifest": {
+      "bytes": 443804,
+      "sha256": "3d1ab2c4aded918b02ce53b1a843bf56a6fcd2285bd639101075080f056d242c"
+    },
+    "source_manifest_files": 1058,
+    "selected_immutable_git_blobs": {
+      "Cargo.lock": {
+        "bytes": 66476,
+        "exit_code": 0,
+        "matches_source_manifest": true,
+        "selected_source_lines": {},
+        "sha256": "6c76ff5b75b161aeb691ebc6be129ba719aae82b09c8c0d50ae42f6d817c604d"
+      },
+      "Cargo.toml": {
+        "bytes": 9795,
+        "exit_code": 0,
+        "matches_source_manifest": true,
+        "selected_source_lines": {},
+        "sha256": "b2f80da20d96034236ff5c91dba0bf790bf7071eb672a8990c0d2e3b880c09f0"
+      },
+      "src/client/terminal.rs": {
+        "bytes": 166785,
+        "exit_code": 0,
+        "matches_source_manifest": true,
+        "selected_source_lines": {
+          "386": "pub(super) fn invalidate() {"
+        },
+        "sha256": "9e9cb8f509bbd5c65fcea0740968b99c5918377760b9dc8e521e49992d9d6d22"
+      },
+      "src/runtime/native_plugins/process.rs": {
+        "bytes": 25208,
+        "exit_code": 0,
+        "matches_source_manifest": true,
+        "selected_source_lines": {
+          "96": "    pub async fn start_with_tty(shell_path: &Path, tty: Option<&str>) -> crate::Result<Arc<Self>> {"
+        },
+        "sha256": "c9beea2c723ef6bce9b7f6dc619434f535aac5ee0eeb4e0bb66455c17c99c25a"
+      },
+      "src/runtime/time.rs": {
+        "bytes": 26439,
+        "exit_code": 0,
+        "matches_source_manifest": true,
+        "selected_source_lines": {
+          "34": "    crate::client::terminal::invalidate();"
+        },
+        "sha256": "47666ee133963c82652f0a9380df692824577397c35a67ccfff52b3aed729eae"
+      },
+      "src/runtime/time/tests.rs": {
+        "bytes": 15898,
+        "exit_code": 0,
+        "matches_source_manifest": true,
+        "selected_source_lines": {
+          "402": "    let backend = crate::backend::Backend::start_with_tty(\"/bin/sh\", None)"
+        },
+        "sha256": "875626921b1106f9ed7c550e0d49ac5492ffbfbf3ec440fa1ebfbbe6ded88f39"
+      }
+    },
+    "cargo_lock_sha256": "6c76ff5b75b161aeb691ebc6be129ba719aae82b09c8c0d50ae42f6d817c604d",
+    "cargo_manifest_sha256": "b2f80da20d96034236ff5c91dba0bf790bf7071eb672a8990c0d2e3b880c09f0"
+  },
+  "dependency_and_metadata": {
+    "dependency_manifest": {
+      "bytes": 4231018,
+      "sha256": "cf2f97aafba39bd5e0b0be2af15a7bce929156112753aa130e8def81c7997621"
+    },
+    "metadata_stdout": {
+      "bytes": 1454314,
+      "sha256": "bdc2910a074db48bf7dd215e74290d4a4ab791f1d1b6af8e797194aae74f53dc"
+    },
+    "metadata": {
+      "manifest_path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/source-final/Cargo.toml",
+      "name": "ssmcp",
+      "package_count": 277,
+      "package_id": "path+file:///home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/source-final#ssmcp@0.10.21",
+      "resolve_root": "path+file:///home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/source-final#ssmcp@0.10.21",
+      "target_names": [
+        "ssmcp",
+        "ssmcp",
+        "ssmcp-frontend",
+        "ssmcpd",
+        "native_plugin_fixture",
+        "vt_snapshot",
+        "allow_account",
+        "cc_backend",
+        "client_resources",
+        "client_server_config",
+        "codex_backend",
+        "collaboration",
+        "context",
+        "context_helpers",
+        "context_runtime",
+        "oauth_security",
+        "pi_backend",
+        "release_client",
+        "resources",
+        "rsync",
+        "server_runtime",
+        "terminals",
+        "two_tools",
+        "workspace_bridge",
+        "zuse_worker_entry"
+      ],
+      "version": "0.10.21",
+      "workspace_members": [
+        "path+file:///home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/source-final#ssmcp@0.10.21"
+      ],
+      "workspace_root": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/source-final"
+    },
+    "heads": {
+      "basis": "bound preparation observations; no network/head refresh",
+      "document_equals_receipt": true,
+      "file": {
+        "bytes": 4261,
+        "sha256": "d05a722e67e0d2ae9cc9d88293ad99d91a483c732d856ab98e06984fefda51d5"
+      },
+      "lock": "6c76ff5b75b161aeb691ebc6be129ba719aae82b09c8c0d50ae42f6d817c604d",
+      "provisional": true,
+      "refetched": false,
+      "source_revision": "b156254b45c015a3994b8be1475b423167ac980f"
+    },
+    "inputs": {
+      "heads": {
+        "bytes": 4261,
+        "path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/baseline-inputs/git-heads.json",
+        "sha256": "d05a722e67e0d2ae9cc9d88293ad99d91a483c732d856ab98e06984fefda51d5"
+      },
+      "runner": {
+        "bytes": 29731,
+        "path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-tools/build_baseline.py",
+        "sha256": "98ba8f44d9a3ce009d5e2be36983b18ae6b454158f08c27bd9adf40ccae98a38"
+      },
+      "dependency_auditor": {
+        "bytes": 14653,
+        "path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/gate-tools/focused-eed621aa/dependency_audit.py",
+        "sha256": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e"
+      }
+    },
+    "lock_package_count": 277,
+    "resolved_package_count": 277,
+    "git_checkout_count": 11,
+    "heads_are_preparation_observations_not_refetched": true
+  },
+  "original_receipt": {
+    "path": "prepaste-baseline-b156/build-receipt.json",
+    "bytes": 28926,
+    "sha256": "699ed5ee292f636dbdddc4ff0d4a44fb986b34e85cd8e0db835eab017e8cbd7c",
+    "status": "failed",
+    "scope": "build_only",
+    "build_commands_attempted": 1,
+    "artifacts": {},
+    "benchmark_executed": false,
+    "product_tests_executed": 0,
+    "release_gate_executed": false
+  },
+  "cargo_evidence": {
+    "stdout_path": "prepaste-baseline-b156/logs/build-library-fixture.stdout",
+    "stdout_sha256": "6782b076b39d05cc5e0451ded699f062cf60d5e83703bca66e73493123742e54",
+    "stdout_bytes": 214628,
+    "stderr_path": "prepaste-baseline-b156/logs/build-library-fixture.stderr",
+    "stderr_sha256": "b1ba222afc9957a304eccc8c32af47d81e8a7f6bce36746bbdbb3cde536377ce",
+    "stderr_bytes": 6673,
+    "json_records": 231,
+    "all_lines_parsed_as_json": true,
+    "build_finished": [
+      {
+        "reason": "build-finished",
+        "success": false
+      }
+    ],
+    "compiler_messages": [
+      {
+        "code": "E0603",
+        "level": "error",
+        "message": "function `invalidate` is private"
+      },
+      {
+        "code": "E0308",
+        "level": "error",
+        "message": "mismatched types"
+      },
+      {
+        "code": null,
+        "level": "failure-note",
+        "message": "Some errors have detailed explanations: E0308, E0603."
+      },
+      {
+        "code": null,
+        "level": "failure-note",
+        "message": "For more information about an error, try `rustc --explain E0308`."
+      }
+    ],
+    "errors": [
+      {
+        "code": "E0603",
+        "message": "function `invalidate` is private",
+        "rendered": "error[E0603]: function `invalidate` is private\n   --> src/runtime/time.rs:34:30\n    |\n 34 |     crate::client::terminal::invalidate();\n    |                              ^^^^^^^^^^ private function\n    |\nnote: the function `invalidate` is defined here\n   --> src/client/terminal.rs:386:1\n    |\n386 | pub(super) fn invalidate() {\n    | ^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n"
+      },
+      {
+        "code": "E0308",
+        "message": "mismatched types",
+        "rendered": "error[E0308]: mismatched types\n   --> src/runtime/time/tests.rs:402:59\n    |\n402 |     let backend = crate::backend::Backend::start_with_tty(\"/bin/sh\", None)\n    |                   --------------------------------------- ^^^^^^^^^ expected `&Path`, found `&str`\n    |                   |\n    |                   arguments to this function are incorrect\n    |\n    = note: expected reference `&std::path::Path`\n               found reference `&'static str`\nnote: associated function defined here\n   --> src/runtime/native_plugins/process.rs:96:18\n    |\n 96 |     pub async fn start_with_tty(shell_path: &Path, tty: Option<&str>) -> crate::Result<Arc<Self>> {\n    |                  ^^^^^^^^^^^^^^ -----------------\n\n"
+      }
+    ],
+    "root_package_compiler_artifact_count": 0,
+    "build_kind_summary": {
+      "build_command": true,
+      "cargo_test_subcommand": true,
+      "exit_code": 101,
+      "selected_flags": [
+        "--lib",
+        "--no-run",
+        "--offline",
+        "--locked"
+      ]
+    },
+    "release_bin_build_and_vt_snapshot_build_attempted": false
+  },
+  "timestamps": {
+    "locks": [
+      {
+        "acquired_utc": "2026-11-20T18:40:45.852127+00:00",
+        "path": "/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/source-author.lock",
+        "receipt_status": "acquired",
+        "released_utc": "2026-11-20T18:43:07.101016+00:00"
+      },
+      {
+        "acquired_utc": "2026-11-20T18:40:47.198139+00:00",
+        "path": "/var/tmp/project-z-cargo-target/.project-z-cargo-owner.lock",
+        "receipt_status": "acquired",
+        "released_utc": "2026-11-20T18:43:07.101011+00:00"
+      }
+    ],
+    "overall_finished": "2026-11-20T18:43:07.097312+00:00",
+    "overall_started": "2026-11-20T18:40:45.224027+00:00",
+    "steps": [
+      {
+        "finished_utc": "2026-11-20T18:40:47.198164+00:00",
+        "name": "acquire-source-and-target-locks",
+        "started_utc": "2026-11-20T18:40:45.224163+00:00",
+        "status": "completed"
+      },
+      {
+        "finished_utc": "2026-11-20T18:40:50.404086+00:00",
+        "name": "verify-bound-inputs-and-source",
+        "started_utc": "2026-11-20T18:40:48.061823+00:00",
+        "status": "completed"
+      },
+      {
+        "exit_code": 0,
+        "finished_utc": "2026-11-20T18:40:54.995738+00:00",
+        "name": "version-cargo",
+        "started_utc": "2026-11-20T18:40:51.249608+00:00",
+        "status": "completed"
+      },
+      {
+        "exit_code": 0,
+        "finished_utc": "2026-11-20T18:40:57.645673+00:00",
+        "name": "version-rustc",
+        "started_utc": "2026-11-20T18:40:56.023123+00:00",
+        "status": "completed"
+      },
+      {
+        "exit_code": 0,
+        "finished_utc": "2026-11-20T18:40:58.504531+00:00",
+        "name": "metadata-before",
+        "started_utc": "2026-11-20T18:40:57.675225+00:00",
+        "status": "completed"
+      },
+      {
+        "finished_utc": "2026-11-20T18:41:10.570075+00:00",
+        "name": "audit-initial-metadata-and-selected-dependency-sources",
+        "started_utc": "2026-11-20T18:40:58.601034+00:00",
+        "status": "completed"
+      },
+      {
+        "exit_code": 101,
+        "finished_utc": "2026-11-20T18:42:58.926099+00:00",
+        "name": "build-library-fixture",
+        "started_utc": "2026-11-20T18:41:10.572912+00:00",
+        "status": "failed"
+      },
+      {
+        "finished_utc": "2026-11-20T18:43:07.093942+00:00",
+        "name": "failure-readonly-postcheck",
+        "started_utc": "2026-11-20T18:42:58.929419+00:00",
+        "status": "completed"
+      }
+    ]
+  },
+  "first_startup_failure": {
+    "path": "prepaste-launch-b156/observed-startup-failure.json",
+    "bytes": 2402,
+    "sha256": "1b919c818152dcae51dc838273579b3d21c88a1e60df9375c6829befac7d6a82",
+    "observed_properties": {
+      "ActiveState": "failed",
+      "SubState": "failed",
+      "InvocationID": "2519cf25a2df4599a74f7487206621cc",
+      "TimeoutStartUSec": "0",
+      "TimeoutStopUSec": "1min 30s",
+      "TimeoutStartFailureMode": "terminate",
+      "RuntimeMaxUSec": "infinity",
+      "Result": "timeout",
+      "ExecMainStartTimestamp": "Sat 2026-11-21 02:38:14 CST",
+      "ExecMainExitTimestamp": "Sat 2026-11-21 02:38:14 CST",
+      "ExecMainPID": "2097201",
+      "ExecMainCode": "2",
+      "ExecMainStatus": "15"
+    },
+    "baseline_output_existed_at_original_observation": false,
+    "original_logs_object_empty": true,
+    "journal_outcome_lines": [
+      "2026-11-21T02:38:14+08:00 light systemd[1189]: ssmcp-prepaste-baseline-b156-20261121.service: start operation timed out. Terminating.",
+      "2026-11-21T02:38:14+08:00 light systemd[1189]: ssmcp-prepaste-baseline-b156-20261121.service: Main process exited, code=killed, status=15/TERM",
+      "2026-11-21T02:38:14+08:00 light systemd[1189]: ssmcp-prepaste-baseline-b156-20261121.service: Failed with result 'timeout'."
+    ],
+    "interpretation": "The recorded service start operation timed out and its main process was terminated by SIGTERM. No baseline output directory or build log was observed at the original observation. This establishes a service startup failure, separate from the subsequent compiler failure.",
+    "python_execution_before_termination": "not established; no output is not proof the interpreter never executed",
+    "cargo_execution_in_first_attempt": "not evidenced",
+    "timeout_zero_as_sole_cause": "not established by this review; recorded TimeoutStartUSec=0 is an observed property, not a general systemd semantic claim"
+  },
+  "current_service_observations": {
+    "ssmcp-prepaste-baseline-b156-20261121.service": {
+      "read_exit_code": 0,
+      "properties": {
+        "LoadState": "loaded",
+        "ActiveState": "failed",
+        "SubState": "failed",
+        "InvocationID": "2519cf25a2df4599a74f7487206621cc",
+        "TimeoutStartUSec": "0",
+        "TimeoutStartFailureMode": "terminate",
+        "RuntimeMaxUSec": "infinity",
+        "Result": "timeout",
+        "ExecMainStartTimestamp": "Sat 2026-11-21 02:38:14 CST",
+        "ExecMainExitTimestamp": "Sat 2026-11-21 02:38:14 CST",
+        "ExecMainPID": "2097201",
+        "ExecMainCode": "2",
+        "ExecMainStatus": "15"
+      }
+    },
+    "ssmcp-prepaste-baseline-b156-run2-20261121.service": {
+      "read_exit_code": 0,
+      "properties": {
+        "LoadState": "loaded",
+        "ActiveState": "failed",
+        "SubState": "failed",
+        "InvocationID": "94114a37376449118d343a585ad55aaa",
+        "TimeoutStartUSec": "infinity",
+        "TimeoutStartFailureMode": "terminate",
+        "RuntimeMaxUSec": "infinity",
+        "Result": "exit-code",
+        "ExecMainStartTimestamp": "Sat 2026-11-21 02:40:45 CST",
+        "ExecMainExitTimestamp": "Sat 2026-11-21 02:43:07 CST",
+        "ExecMainPID": "2136847",
+        "ExecMainCode": "1",
+        "ExecMainStatus": "1"
+      }
+    }
+  },
+  "launch_comparison": {
+    "same_runner_sha256": "98ba8f44d9a3ce009d5e2be36983b18ae6b454158f08c27bd9adf40ccae98a38",
+    "first_and_run2_launch_exit_code_zero": true,
+    "command_argument_counts": [
+      24,
+      24
+    ],
+    "changed_arguments": [
+      {
+        "first": "--unit=ssmcp-prepaste-baseline-b156-20261121.service",
+        "position": 2,
+        "run2": "--unit=ssmcp-prepaste-baseline-b156-run2-20261121.service"
+      },
+      {
+        "first": "--property=TimeoutStartSec=0",
+        "position": 5,
+        "run2": "--property=TimeoutStartSec=infinity"
+      },
+      {
+        "first": "--property=StandardOutput=append:/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-launch-b156/stdout.log",
+        "position": 7,
+        "run2": "--property=StandardOutput=append:/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-launch-b156-run2/stdout.log"
+      },
+      {
+        "first": "--property=StandardError=append:/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-launch-b156/stderr.log",
+        "position": 8,
+        "run2": "--property=StandardError=append:/home/lightjunction/Documents/GITHUB/ssmcp-release21-root-20261121/prepaste-launch-b156-run2/stderr.log"
+      }
+    ],
+    "launch_exit_zero_does_not_establish_build_success": true
+  },
+  "failure_postcheck": {
+    "receipt_step_completed": true,
+    "checks_in_bound_runner": [
+      "held lock paths match held file descriptor device/inode and remain regular files",
+      "bound inputs equal pre-build snapshot",
+      "source commit/tree/tracked bytes/modes/gitlinks equal source snapshot",
+      "source and dependency evidence file identities unchanged",
+      "selected dependency sources re-audited against cached initial metadata",
+      "preserved artifact identities checked; artifact map is empty in this failed run"
+    ],
+    "postcheck_cargo_command": false,
+    "independent_reexecution_performed": false,
+    "release_evidence": "Runner closes each held lock file descriptor before recording released_at, then saves the receipt. Both release timestamps are present.",
+    "live_lock_availability_probed": false
+  },
+  "evidence_integrity": {
+    "all_original_recorded_stream_and_manifest_hashes_matched": true,
+    "checked_receipt_references": [
+      {
+        "bytes": 443804,
+        "key": "source_manifest",
+        "matches_receipt": true,
+        "sha256": "3d1ab2c4aded918b02ce53b1a843bf56a6fcd2285bd639101075080f056d242c"
+      },
+      {
+        "bytes": 4231018,
+        "key": "dependency_manifest",
+        "matches_receipt": true,
+        "sha256": "cf2f97aafba39bd5e0b0be2af15a7bce929156112753aa130e8def81c7997621"
+      },
+      {
+        "bytes": 37,
+        "matches_receipt": true,
+        "sha256": "d62bac2223cd9bd1a54c0ccd82d4084b7d1d60044855e2f6a1b49f4f77e6f41c",
+        "step": "version-cargo",
+        "stream": "stdout_evidence"
+      },
+      {
+        "bytes": 0,
+        "matches_receipt": true,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "step": "version-cargo",
+        "stream": "stderr_evidence"
+      },
+      {
+        "bytes": 37,
+        "matches_receipt": true,
+        "sha256": "56625f11cb9e645f8e638a6bcdf0565a20a8724585b537b8548886789b9f77be",
+        "step": "version-rustc",
+        "stream": "stdout_evidence"
+      },
+      {
+        "bytes": 0,
+        "matches_receipt": true,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "step": "version-rustc",
+        "stream": "stderr_evidence"
+      },
+      {
+        "bytes": 1454314,
+        "matches_receipt": true,
+        "sha256": "bdc2910a074db48bf7dd215e74290d4a4ab791f1d1b6af8e797194aae74f53dc",
+        "step": "metadata-before",
+        "stream": "stdout_evidence"
+      },
+      {
+        "bytes": 0,
+        "matches_receipt": true,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "step": "metadata-before",
+        "stream": "stderr_evidence"
+      },
+      {
+        "bytes": 214628,
+        "matches_receipt": true,
+        "sha256": "6782b076b39d05cc5e0451ded699f062cf60d5e83703bca66e73493123742e54",
+        "step": "build-library-fixture",
+        "stream": "stdout_evidence"
+      },
+      {
+        "bytes": 6673,
+        "matches_receipt": true,
+        "sha256": "b1ba222afc9957a304eccc8c32af47d81e8a7f6bce36746bbdbb3cde536377ce",
+        "step": "build-library-fixture",
+        "stream": "stderr_evidence"
+      }
+    ],
+    "key_evidence_hashes_stable_across_review_reads": true,
+    "hashes_at_final_read": {
+      "prepaste-baseline-b156/build-receipt.json": "699ed5ee292f636dbdddc4ff0d4a44fb986b34e85cd8e0db835eab017e8cbd7c",
+      "prepaste-baseline-b156/logs/build-library-fixture.stderr": "b1ba222afc9957a304eccc8c32af47d81e8a7f6bce36746bbdbb3cde536377ce",
+      "prepaste-baseline-b156/logs/build-library-fixture.stdout": "6782b076b39d05cc5e0451ded699f062cf60d5e83703bca66e73493123742e54",
+      "prepaste-launch-b156/observed-startup-failure.json": "1b919c818152dcae51dc838273579b3d21c88a1e60df9375c6829befac7d6a82"
+    },
+    "runner_hash_matches_original": true
+  },
+  "limitations": [
+    "This is a read-only independent review of persisted evidence and selected immutable Git blobs; it does not independently rerun Cargo metadata, the dependency auditor, or product tests.",
+    "No assertion is made that the shared Cargo target contains no older binaries or dependency artifacts; the reviewed run recorded no source-bound ssmcp baseline artifact and its preservation directory contains no regular files.",
+    "Current lock freedom is not claimed because the authorized source/build owner may already be running subsequent work.",
+    "No first-attempt process execution trace or systemd causal experiment was performed."
+  ]
+}

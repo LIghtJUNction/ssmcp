@@ -1,0 +1,84 @@
+{
+  "candidate": "a7f9077d92b093dbc90d1cd09cfb666fa55468af",
+  "first_parent": "d27fe0e81b9a45bdb60b6805af4e0d23e9e6d6a3",
+  "second_parent": "87f1eedd2feda8dba9af0c32aa87e4d474904dde",
+  "merge_tree": "ca0a695cb85a4c9d3a0edef97c43540003571377",
+  "src_tree": "4f8edc212ba6b1ee7c36e3c65f31717662b77e52",
+  "candidate_src_tree": "4f8edc212ba6b1ee7c36e3c65f31717662b77e52",
+  "rust_and_manifests_equal": true,
+  "candidate_nonproduct_differences": [
+    "M\tREADME.md",
+    "M\tdocs/local-mode.md",
+    "M\tscripts/e2e_local.py",
+    "M\tscripts/e2e_user_wait.py",
+    "M\ttests/fixtures/local_oauth_browser.mjs"
+  ],
+  "entries": [
+    {
+      "path": "docs/user-wait.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2401ca533dc43e3e0fbf469fe29d1e51a6c6be44"
+    },
+    {
+      "path": "scripts/e2e.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8b8007509b9cb1152e2f74578ab7b2bb65ebdade"
+    },
+    {
+      "path": "scripts/e2e_user_wait.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "20c1445996d8d2d749df5db87ebdf526105cb117"
+    },
+    {
+      "path": "src/client.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1cd23471152685bd5a663ccb18b9897c51f71519"
+    },
+    {
+      "path": "src/client/composer.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "92a5c513e5b71a863b1062232620654c7516b72f"
+    },
+    {
+      "path": "src/client/interface.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6f71a891bf62262bfb17b320e8e7999a845d318d"
+    },
+    {
+      "path": "src/client/interface/user_wait.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e0299921f7923ec1a8c7923f2d3668d01ad4fea4"
+    },
+    {
+      "path": "src/client/steering.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "10b75e0d909de294b45fee7fd9f0ab2d3660711b"
+    },
+    {
+      "path": "src/client/terminal/conversation.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9f0724e7c2f44108310606be2bcd7be9e504324a"
+    },
+    {
+      "path": "src/client/terminal/conversation/user_wait.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e1751a6c43b3d45b929bbb7f2e9c605d070b3dd1"
+    }
+  ],
+  "github_merge_commit": "979fa88dc014653282884902635e4707d5c9900e",
+  "github_tree_verified": "ca0a695cb85a4c9d3a0edef97c43540003571377",
+  "github_parents": [
+    "d27fe0e81b9a45bdb60b6805af4e0d23e9e6d6a3",
+    "87f1eedd2feda8dba9af0c32aa87e4d474904dde"
+  ]
+}

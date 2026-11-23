@@ -1,0 +1,20 @@
+{
+  "binary_source": "acfdc0e6d9ff93cea809022d46372f3a962e52b7",
+  "force_rust": "35f761b717fad83bfb2dd01082a330f08acecfbc",
+  "script_commit": "5d6f213298279716ca1e81eb04e44f3e63322fed",
+  "hashes": {
+    "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/bin/ssmcp": "8746870aa02bbce1652778a7220e33b12044e6126c1d106943a1457ece9d5a9b",
+    "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/ssmcp-lib-tests": "e17a759d91793e00312e2a45b21f03857288c7bcb965bf4e8d815dadf289228d",
+    "<native-repository>/.worktrees/force-send-listener-20261119/scripts/e2e_force_send.py": "7d6d5f4d3fa27bc90e0ddfa1491e377b91415658f18190f268c8d46be15a0497"
+  },
+  "command": [
+    "/usr/bin/python3",
+    "<native-repository>/.worktrees/force-send-listener-20261119/scripts/e2e_force_send.py",
+    "--bin-dir",
+    "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/bin",
+    "--decoder",
+    "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-force-send-baseline/bin/examples/vt_snapshot",
+    "--out",
+    "<native-repository>/.worktrees/force-send-listener-20261119/.local/force-pty-35f761-5d6f213"
+  ]
+}

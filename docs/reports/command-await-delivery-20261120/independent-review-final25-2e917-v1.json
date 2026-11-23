@@ -1,0 +1,190 @@
+{
+  "schema": "ssmcp.independent.final25-static-review.v1",
+  "status": "no_concrete_time_or_legacy_static_blocker_observed",
+  "controller_root": "/home/lightjunction/Documents/GITHUB/ssmcp-root-acceptance-20261121/controller-recovery/final25-reconstructed-20261121",
+  "controller_sha256": "2e9179768f8537f4a23323ed262f6460b8f57cc459130da3e35ba6400cafb399",
+  "contracts_sha256": "611a58b0680a09c4f57dadfaca3dcbf20c3d55e3770ec1d140a848ffb9a41022",
+  "package_sha256": "67b7bcc2c73dc57e305bbc4e932813404709cce169a1e79a6b18bb05b88177ca",
+  "handoff_sha256": "a164c41a7cbc5eb9c2a8d0cfd90529e922571687116e85b7df0fe367d682a04f",
+  "prior_root_review_sha256": "ccba4a47cb99043f36bd05a3efdff73b716926d02f00fcec5173eea246ceef2f",
+  "checks": {
+    "zip_manifest_records": 28,
+    "zip_manifest_records_matched": 28,
+    "existing_pure_receipt_count": 47,
+    "existing_pure_receipt_hashes_match": true,
+    "existing_pure_log_hashes_match": true,
+    "pure_tests_rerun": false,
+    "old_latency_function_ast_identical": true
+  },
+  "suites": [
+    "message_references",
+    "force_send",
+    "listener_transports",
+    "zuse_worker",
+    "interactions",
+    "private_desktop",
+    "account_compat",
+    "input_history",
+    "reload_state",
+    "session_groups",
+    "client_ui",
+    "canvas_logs",
+    "composer",
+    "questions",
+    "presentations",
+    "context_memory",
+    "file_paste",
+    "relay_composer",
+    "human_finish",
+    "goal_startup",
+    "tool_summaries",
+    "readable_commands",
+    "summary_commands",
+    "physical_latency",
+    "time_wait"
+  ],
+  "findings": [
+    {
+      "file": "candidate/controller/run_bound_v5.py",
+      "lines": "28-35,226-237,275-306",
+      "finding": "Exactly 25 suites. time_wait receives all six actual CLI flags; the producer bytes are pinned, and requested flags must be declared."
+    },
+    {
+      "file": "candidate/controller/acceptance_contracts.py",
+      "lines": "300-346,436-477",
+      "finding": "Ten exact scene/width captures are required: countdown, elapsed, native-observer, user-wait and public-await, each at120 and48 columns and32 rows. Only left composer header row27 with input prompt row28 proves a clock; body/draft/footer/sidebar substitutes fail. Full cell grids and matching JSON/PNG hashes are required, PNG decode is checked."
+    },
+    {
+      "file": "candidate/controller/acceptance_contracts.py",
+      "lines": "349-430",
+      "finding": "Native timer receipts require schema_version integer1 and completion_permission false. Public await requires get(completion_permission) is None, matching the producer's absent/null contract. Timeout and ready reuse the same wait_id; cancellation has a different ID; ready target data.matched is true. Passive replies must not consume conversational work."
+    },
+    {
+      "file": "candidate/source/scripts/e2e_time_wait.py",
+      "lines": "215-221,257-262,327-342",
+      "finding": "Static clock text cannot satisfy the fixed producer's strictly decreasing countdown/public-wait predicates or increasing elapsed predicate. The resumed public wait episode must increase in actual producer control flow."
+    },
+    {
+      "file": "scripts/e2e_interactions.py and scripts/e2e_dashboard.py",
+      "lines": "58-66;180-192",
+      "revision": "c350cd96155d8db75df6053602aa05bfec699d4e",
+      "finding": "Actual inheritance reaches e2e_dashboard.Frontend, not Preview. quiet_until checks unchanged input_bytes; until calls snapshot, which only pumps the owned PTY and requests the local decoder snapshot, with no UI/native RPC."
+    },
+    {
+      "file": "candidate/controller/acceptance_contracts.py and run_bound_v5.py",
+      "lines": "349-368;162-193,434-460,487-506,640-657",
+      "finding": "Time report requires exact binary paths/hashes, complete declared e2e_*.py plus renderer inventory, pinned producer and font. The controller additionally binds the entire materialized source tree (including e2e.py), own helpers, gate evidence and binaries before/after each suite and final close. Time frame files are reverified after evidence inventory."
+    },
+    {
+      "file": "candidate/controller/run_bound_v5.py",
+      "lines": "38-51,105-140,265-271,879-883,961",
+      "finding": "Legacy runner is read from cleaned ed067 tree/blob and copied as exact verified bytes. OLD_COMMIT remains4e3132 and daemon SHA remains e8f59d. Actual cleaned object, recomputed blob ID/SHA and retained daemon bytes match; no old Git ref or replacement build was created."
+    },
+    {
+      "file": "candidate/controller/run_bound_v5.py",
+      "lines": "571-660",
+      "finding": "Final success is acceptance.json schema ssmcp.bound-acceptance.v5, all25 fixed checks passed, no error/interruption, inputs_unchanged.unchanged true, and main zero exit. This controller explicitly does not prove separate P1 integration."
+    }
+  ],
+  "legacy_actual": {
+    "source_commit": "ed067954d5279eb23245805e14e761d2e6971e5e",
+    "tree": "1194828778ea2f1c5ad92bf5fdf9fac6b8ea595a",
+    "blob_id": "8d15b56207461ee817635c6b134380e1c2ffdc4d",
+    "computed_blob_id": "8d15b56207461ee817635c6b134380e1c2ffdc4d",
+    "blob_sha256": "6e169387073dfb5919f6714658ac28781cfe04c7e5800ada690c0c67fed3d4d0",
+    "binary_exists": true,
+    "binary_bytes": 6690344,
+    "binary_sha256": "e8f59d66493e68ba3c196a72ae3733b8b7336fbfb1da0cf92960069637f1f7bf"
+  },
+  "legacy_build_identity_retained": "4e3132d60600dca5053af81cdefa6962c3058ac4",
+  "known_blocking_pending": [
+    {
+      "evidence": "run_bound_v5.py:764-827,1045-1066,1089-1133",
+      "reason": "Inherited r3 inventory/provenance/runtime helpers remain in use. Gate10 adapter, actual passed gate/launcher schema, frozen source/dependency cohort and immutable binaries must be reviewed and bound before launch; these old r3 files do not certify Gate10."
+    },
+    {
+      "reason": "No actual Final25 product acceptance was executed by this review. The existing47 tests are synthetic controller contracts, not product results."
+    }
+  ],
+  "receipt_fields_to_check": {
+    "final": "<out>/acceptance.json: schema, source_revision, status, gate_binding, candidate_gates, cli_checks, input_set_sha256_before, inputs_unchanged, checks",
+    "inputs": [
+      "<out>/inputs-before.json",
+      "<out>/inputs-after.json"
+    ],
+    "suites": "checks must be the fixed25 names, each with status passed, actual exit_code0, no timeout/interruption/error, inputs_before/after unchanged, report_sha256 and artifact hashes, required verified_frames/UI evidence",
+    "time": "time_wait must carry ten verified_frames and producer report matching the exact new time contract",
+    "launcher": "External launcher receipt must independently record and bind the actual controller zero exit.",
+    "p1": "separate_p1_evidence.status remains not_run_by_this_controller"
+  },
+  "limits": [
+    "Dynamic clock evidence depends on the fixed executed producer and its input bindings; one screenshot or free-form passed-check label alone is not real-time proof.",
+    "The producer does not serialize separate first/resumed display episodes or the raw quiet tick pair; this review does not fabricate such report fields.",
+    "Transitive quiet helper inspection is bound to immutable c350 source; changes in the eventual final candidate must be reviewed as a new source cohort.",
+    "Gate10 adapter is not yet part of this reviewed frozen bundle.",
+    "No Cargo, PTY, product binary, controller/producer main, CI, network acceptance, model or Git mutation was run.",
+    "The lost114KB Final24 verifier was not reconstructed."
+  ],
+  "frozen_recheck": {
+    "candidate/controller/run_bound_v5.py": {
+      "sha256": "2e9179768f8537f4a23323ed262f6460b8f57cc459130da3e35ba6400cafb399",
+      "unchanged": true
+    },
+    "candidate/controller/acceptance_contracts.py": {
+      "sha256": "611a58b0680a09c4f57dadfaca3dcbf20c3d55e3770ec1d140a848ffb9a41022",
+      "unchanged": true
+    },
+    "candidate/source/scripts/e2e_time_wait.py": {
+      "sha256": "eb42d37fc44762e1bd57e6ba384518afe18d86f38bbfd61d83b249933258bcd7",
+      "unchanged": true
+    },
+    "candidate/source/scripts/e2e_account_compat.py": {
+      "sha256": "6464d132cf6d51777564ddf1245a3a95c3a2cf238c757b813c296c4d412ef5a4",
+      "unchanged": true
+    },
+    "handoff-reconstructed-v5.json": {
+      "sha256": "a164c41a7cbc5eb9c2a8d0cfd90529e922571687116e85b7df0fe367d682a04f",
+      "unchanged": true
+    },
+    "package-manifest-reconstructed-v5.json": {
+      "sha256": "33debd6bc90e2c3cb0d42941ea1086a89f123e2e5e8de9cf8007621479665a72",
+      "unchanged": true
+    },
+    "candidate/preparation.json": {
+      "sha256": "a8b865c183f9ae078d62dcccc36d58862a6eaf6ec048d5312b0841a827040590",
+      "unchanged": true
+    },
+    "contracts-reconstruction-1/receipt.json": {
+      "sha256": "ed3e4a4f513b24e7f7b364e9b93793c07bd59f466211e76f968fa1ece753ab36",
+      "unchanged": true
+    }
+  },
+  "recorded_at_utc": "2026-11-20T19:02:11.317947+00:00",
+  "evidence_files": {
+    "helper-closure-c350.json": {
+      "path": "/var/tmp/ssmcp-final25-independent-review-20261121/helper-closure-c350.json",
+      "bytes": 328773,
+      "sha256": "14a491b4cb0d5f8b04b4061fe5b3be9fe1a85e8ec497cee9d9f8712fec851fa4"
+    },
+    "package-and-latency-2e917.json": {
+      "path": "/var/tmp/ssmcp-final25-independent-review-20261121/package-and-latency-2e917.json",
+      "bytes": 4143,
+      "sha256": "92047418a388e93b211cad2b90eb193c2fea837c76f1ced4f56aaacfd0b3cba7"
+    },
+    "snapshot-185123-2e917.json": {
+      "path": "/var/tmp/ssmcp-final25-independent-review-20261121/snapshot-185123-2e917.json",
+      "bytes": 144868,
+      "sha256": "6fa225b94609291bc2292138b1184bd548e78c53a8cff687cb657a6083fca8d0"
+    },
+    "sources-2e917.json": {
+      "path": "/var/tmp/ssmcp-final25-independent-review-20261121/sources-2e917.json",
+      "bytes": 184869,
+      "sha256": "b49046d8b4f3db7b61abf70239321f939a1ed31b57b6372c81e86803af3ba02d"
+    },
+    "supplemental-c350-quiet-observation.json": {
+      "path": "/var/tmp/ssmcp-final25-independent-review-20261121/supplemental-c350-quiet-observation.json",
+      "bytes": 144742,
+      "sha256": "b23eaa45ccae76286da696ba51dc93eaa0cc1b937b4af402a0d2c5d7b04d6d57"
+    }
+  }
+}

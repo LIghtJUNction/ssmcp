@@ -1,0 +1,964 @@
+{
+  "schema_version": 1,
+  "kind": "ssmcp-gate18-final-35-stage-result",
+  "observed_utc": "2026-11-21T11:52:10Z",
+  "source": {
+    "commit": "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+    "tree": "1391701c52db5066e7a25bbe3a32c1d5a82c47d5"
+  },
+  "run_id": "3084787068b4155c51b6e440b6b66202",
+  "owned_started_utc": "2026-11-21T11:18:15.727562+00:00",
+  "driver_started_utc": "2026-11-21T11:18:16.104Z",
+  "status": "passed",
+  "full_gate_passed": true,
+  "contract": {
+    "integration_targets": 20,
+    "mandatory_ignored_tests": 14,
+    "rust_stages": 26,
+    "stages": 35,
+    "host_library_tests": 6
+  },
+  "source_lock_acquired": true,
+  "target_lock_acquired_by_outer_controller": false,
+  "target_lock_acquired_by_bound_launcher": true,
+  "nine_initial_hashes_match_prepared_inputs": true,
+  "inputs_before": {
+    "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+    "cargo_lock": "0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992",
+    "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+    "driver": "b8ca8da3b47ebe2d314a24dba28a968c7b81904cf82e9b2b679802b377cd2164",
+    "git_heads": "955de3e50c5e120f14bd156b887bd7c763a9d7f3479e07370adb5195003cc605",
+    "owner_agreement": "2e2769b8fb0e18e317134a2a45bbd7ccd36da0f4006a4568150cdb61026b8299",
+    "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+    "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+    "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+  },
+  "completed_stages": [
+    {
+      "name": "release-policy",
+      "exit_code": 0,
+      "seconds": 11.34,
+      "test_results": null
+    },
+    {
+      "name": "deployment-policy",
+      "exit_code": 0,
+      "seconds": 0.46,
+      "test_results": null
+    },
+    {
+      "name": "fmt",
+      "exit_code": 0,
+      "seconds": 4.7,
+      "test_results": null
+    },
+    {
+      "name": "library-compile",
+      "exit_code": 0,
+      "seconds": 141.06,
+      "test_results": null
+    },
+    {
+      "name": "library-private",
+      "exit_code": 0,
+      "seconds": 44.56,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 6,
+          "ignored": 26,
+          "measured": 0,
+          "passed": 2101,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "library-host",
+      "exit_code": 0,
+      "seconds": 0.02,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 2127,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "clippy",
+      "exit_code": 0,
+      "seconds": 88.84,
+      "test_results": null
+    },
+    {
+      "name": "windows-gnu-clippy",
+      "exit_code": 0,
+      "seconds": 53.22,
+      "test_results": null
+    },
+    {
+      "name": "integration-compile",
+      "exit_code": 0,
+      "seconds": 84.04,
+      "test_results": null
+    },
+    {
+      "name": "integration-allow_account",
+      "exit_code": 0,
+      "seconds": 0.1,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-cc_backend",
+      "exit_code": 0,
+      "seconds": 1.15,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 6,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-client_resources",
+      "exit_code": 0,
+      "seconds": 0.11,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-client_server_config",
+      "exit_code": 0,
+      "seconds": 0.43,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-codex_backend",
+      "exit_code": 0,
+      "seconds": 20.81,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 2,
+          "measured": 0,
+          "passed": 14,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-collaboration",
+      "exit_code": 0,
+      "seconds": 0.15,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-connection_context",
+      "exit_code": 0,
+      "seconds": 0.21,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-context",
+      "exit_code": 0,
+      "seconds": 0.21,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 12,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-context_helpers",
+      "exit_code": 0,
+      "seconds": 0.01,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 2,
+          "measured": 0,
+          "passed": 0,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-context_runtime",
+      "exit_code": 0,
+      "seconds": 0.16,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-oauth_security",
+      "exit_code": 0,
+      "seconds": 1.15,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 11,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-pi_backend",
+      "exit_code": 0,
+      "seconds": 0.28,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 9,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-release_client",
+      "exit_code": 0,
+      "seconds": 0.08,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-resources",
+      "exit_code": 0,
+      "seconds": 0.26,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-rsync",
+      "exit_code": 0,
+      "seconds": 0.18,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-server_runtime",
+      "exit_code": 0,
+      "seconds": 0.03,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 3,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-terminals",
+      "exit_code": 0,
+      "seconds": 0.73,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-two_tools",
+      "exit_code": 0,
+      "seconds": 0.07,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 7,
+          "measured": 0,
+          "passed": 2,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-workspace_bridge",
+      "exit_code": 0,
+      "seconds": 0.01,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 3,
+          "measured": 0,
+          "passed": 0,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-zuse_worker_entry",
+      "exit_code": 0,
+      "seconds": 0.26,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "library-code-mode-ignored",
+      "exit_code": 0,
+      "seconds": 0.33,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 2131,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-two_tools-ignored",
+      "exit_code": 0,
+      "seconds": 2.18,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 2,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 7,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-workspace_bridge-ignored",
+      "exit_code": 0,
+      "seconds": 2.89,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-context_helpers-ignored",
+      "exit_code": 0,
+      "seconds": 0.25,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "release",
+      "exit_code": 0,
+      "seconds": 359.88,
+      "test_results": null
+    },
+    {
+      "name": "decoder",
+      "exit_code": 0,
+      "seconds": 129.48,
+      "test_results": null
+    }
+  ],
+  "completed_stage_count": 35,
+  "other_stages_without_completed_results": 0,
+  "preparation": {
+    "file": "binding-manifest.json",
+    "bytes": 16561,
+    "sha256": "77e74decb68b32c562403909cfebeb1279b2f0e49b15f9397d57c03a32fa543a",
+    "prepared_utc": "2026-11-21T11:17:56.811189+00:00",
+    "execution_started": false,
+    "source_lock_acquired": false,
+    "target_lock_acquired": false,
+    "new_gate_run_id": null,
+    "observations_refetched_by_helper": false,
+    "stale_outcomes_copied": false,
+    "meaning": "Preparation fields remain the original pre-launch snapshot; later launches separately establish actual start."
+  },
+  "evidence": {
+    "owned_launch": {
+      "file": "launch.json",
+      "bytes": 1006,
+      "sha256": "4f3fc26174ae5e0de0b1dfc30f9d0b79630040fdd32ff428216ee319b27eac20",
+      "read_scope": "entire original"
+    },
+    "gate_launch": {
+      "file": "launch.json",
+      "bytes": 3636,
+      "sha256": "ab5a314e1b2df311e28a3bc2250e2ca97773160edac18f975afc0a6c2186ad9e",
+      "read_scope": "entire original"
+    },
+    "final_result": {
+      "file": "candidate-gates.json",
+      "bytes": 1309336,
+      "sha256": "a3d70ea494cd3ac0d3a1581c45426030f4d4a75484a4deb97e5b35ab84e534ad",
+      "read_scope": "Whole terminal original hashed; all 35 completed-stage results, source/run identity and selected artifact/provenance fields read."
+    },
+    "launcher_exit": {
+      "file": "exit.json",
+      "bytes": 4804,
+      "sha256": "01ad8335859b3b8e0818de24d64089d6ff54138e2ab5bd2628e3707979a592f3",
+      "read_scope": "entire original"
+    },
+    "owned_exit": {
+      "file": "exit.json",
+      "bytes": 1170,
+      "sha256": "19a7c520b912743f90afab09f29939c1f7ea54e515a3e977dae91ddbc0df90c1",
+      "read_scope": "entire original"
+    },
+    "original_log_selected_lines": [
+      {
+        "name": "release-policy",
+        "file": "candidate2-release-policy.log",
+        "bytes": 22851,
+        "sha256": "88ba53eea3a6ae81d19448901aadb73569d604b320a339a7aa49ef6fe16a8702",
+        "read_scope": "Whole file hashed; selected parent/child summaries and named regression lines read; not all raw log lines reviewed."
+      },
+      {
+        "name": "deployment-policy",
+        "file": "candidate2-deployment-policy.log",
+        "bytes": 5660,
+        "sha256": "d2532d7ece44f770692e0bffd7187ba3d8e3331c6d8eda2350357838833fb36e",
+        "read_scope": "Whole file hashed; selected parent/child summaries and named regression lines read; not all raw log lines reviewed."
+      },
+      {
+        "name": "library-private",
+        "file": "candidate2-library-private.log",
+        "bytes": 565863,
+        "sha256": "99944965e4c1d9b215b7e99999479817d4ad59fea8ad2853a9ce8d40907ed864",
+        "read_scope": "Whole file hashed; selected parent/child summaries and named regression lines read; not all raw log lines reviewed."
+      },
+      {
+        "name": "library-host",
+        "file": "candidate2-library-host.log",
+        "bytes": 2069,
+        "sha256": "6f364fc5c853f32741fb3d62a95a82c3cabe5733497da18fc245292d9ebe5d94",
+        "read_scope": "Whole file hashed; selected parent/child summaries and named regression lines read; not all raw log lines reviewed."
+      },
+      {
+        "name": "windows-gnu-clippy",
+        "file": "candidate2-windows-gnu-clippy.log",
+        "bytes": 497,
+        "sha256": "df618404c558cb6816e8dedd837a977a78942cff94172c1254e6392ecdbe3655",
+        "read_scope": "Whole file hashed; selected parent/child summaries and named regression lines read; not all raw log lines reviewed."
+      }
+    ]
+  },
+  "scope": {
+    "downstream_consumers": "N18 read-only proof passed; original product queue handed off, consumer pass receipts not yet independently read",
+    "two_native_ignored_supplements": "no_independently_verified_result_as_of_cutoff",
+    "H2": "fixed three modules on native independently hash-read; unbound, not imported or executed",
+    "release_dispatch": "not_performed",
+    "root_heavy_or_queued_work": 0,
+    "acceptance_window": "Original consumer queue conditionally handed off; N18 proof required before serial runtime18/UI24/controls/multiUID/version/P1 and two native supplements."
+  },
+  "previous_blocker": {
+    "gate17_source": "401581267005e64f1ccf99e1590df285a9d7c158",
+    "gate17_stage": "windows-gnu-clippy",
+    "gate17_exit_code": 101,
+    "gate18_stage": "windows-gnu-clippy",
+    "gate18_exit_code": 0,
+    "gate18_seconds": 53.22,
+    "warning_policy_unchanged": true,
+    "native_Windows_runtime_test": false
+  },
+  "library": {
+    "private": {
+      "passed": 2101,
+      "failed": 0,
+      "ignored": 26,
+      "filtered": 6
+    },
+    "host": {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 2127
+    },
+    "parent_summaries_read_from_actual_gate": true,
+    "individual_regression_lines_read_for_gate18": true,
+    "private_parent_seconds": 44.53,
+    "private_child_summary_count_not_added": 3,
+    "regressions": [
+      {
+        "name": "browser::tests::browser_dispatch_future_fits_a_small_stack_budget",
+        "result": "ok",
+        "source_log_line": 4826,
+        "raw_line": "test browser::tests::browser_dispatch_future_fits_a_small_stack_budget ... ok"
+      },
+      {
+        "name": "browser::tests::act_deadline_includes_time_queued_without_starting_input",
+        "result": "ok",
+        "source_log_line": 6230,
+        "raw_line": "test browser::tests::act_deadline_includes_time_queued_without_starting_input ... ok"
+      },
+      {
+        "name": "computer::zuse_backend::tests::num_lock_pre_dispatch_cancellation_and_success_preserve_cleanup",
+        "result": "ok",
+        "source_log_line": 6397,
+        "raw_line": "test computer::zuse_backend::tests::num_lock_pre_dispatch_cancellation_and_success_preserve_cleanup ... ok"
+      },
+      {
+        "name": "computer::zuse_backend::tests::num_lock_uncertain_native_write_marks_worker_cleanup_unconfirmed",
+        "result": "ok",
+        "source_log_line": 6398,
+        "raw_line": "test computer::zuse_backend::tests::num_lock_uncertain_native_write_marks_worker_cleanup_unconfirmed ... ok"
+      }
+    ]
+  },
+  "launcher_exit_present": true,
+  "owned_exit_present": true,
+  "integration": {
+    "ordinary_partitions": 19,
+    "ordinary_passed": 101,
+    "explicit_worker_entry_passed": 1,
+    "mandatory_ignored_stages": 4,
+    "mandatory_ignored_passed": 14,
+    "mandatory_library_ignored_passed": 2,
+    "mandatory_integration_ignored_passed": 12,
+    "other_ignored_tests_not_claimed_executed": true
+  },
+  "driver_finished_utc": "2026-11-21T11:34:58.577Z",
+  "owned_finished_utc": "2026-11-21T11:34:58.717774+00:00",
+  "launcher_exit_code": 0,
+  "owned_exit_code": 0,
+  "owned_error": null,
+  "inputs_after": {
+    "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+    "cargo_lock": "0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992",
+    "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+    "driver": "b8ca8da3b47ebe2d314a24dba28a968c7b81904cf82e9b2b679802b377cd2164",
+    "git_heads": "955de3e50c5e120f14bd156b887bd7c763a9d7f3479e07370adb5195003cc605",
+    "owner_agreement": "2e2769b8fb0e18e317134a2a45bbd7ccd36da0f4006a4568150cdb61026b8299",
+    "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+    "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+    "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+  },
+  "nine_inputs_unchanged": true,
+  "source_clean_after": true,
+  "source_revision_after": "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+  "source_lock_held_until_child_return": true,
+  "shared_target_owner_lock_held_for_entire_batch": true,
+  "all_descendant_reaping_proven_by_these_receipts": false,
+  "policies": {
+    "release": {
+      "passed": 106,
+      "seconds": 11.067,
+      "original_parent_summary_read": true
+    },
+    "deployment": {
+      "passed": 35,
+      "seconds": 0.187,
+      "original_parent_summary_read": true
+    }
+  },
+  "artifacts": [
+    {
+      "role": "library",
+      "bytes": 171932288,
+      "sha256": "f329e613d4bbc4fccf5b380107e4e8cbf5f467343c3fcc75453e6299fb40f6c0",
+      "read_scope": "Owner/acceptance actual private-file hash report; reporting root has read the original Gate library artifact metadata but has not independently rehashed these files."
+    },
+    {
+      "role": "ssmcp",
+      "bytes": 16248008,
+      "sha256": "b5113562137983fee8e1e35914e0f5d90e3acc69eecd68473a014ff676d1e794",
+      "read_scope": "Owner/acceptance actual private-file hash report; reporting root has read the original Gate library artifact metadata but has not independently rehashed these files."
+    },
+    {
+      "role": "ssmcpd",
+      "bytes": 8395024,
+      "sha256": "5c3a87c059aaafac8620c471773a764a1680f17ec227db2e8cf5ed3b695d98cb",
+      "read_scope": "Owner/acceptance actual private-file hash report; reporting root has read the original Gate library artifact metadata but has not independently rehashed these files."
+    },
+    {
+      "role": "ssmcp-frontend",
+      "bytes": 1386584,
+      "sha256": "d3069119110ea265a021ae654dfb783d9db4c32b1f2f4e5f4758fc4ee7c8cbda",
+      "read_scope": "Owner/acceptance actual private-file hash report; reporting root has read the original Gate library artifact metadata but has not independently rehashed these files."
+    },
+    {
+      "role": "vt_snapshot",
+      "bytes": 440984,
+      "sha256": "efdbeb3f200fcf4404b2612d836433047ecc90eb0744f345fc971ee7441db97f",
+      "read_scope": "Owner/acceptance actual private-file hash report; reporting root has read the original Gate library artifact metadata but has not independently rehashed these files."
+    }
+  ],
+  "compilation_binding_review": {
+    "all_fresh_false": true,
+    "all_link_and_private_copy_metadata_match": true,
+    "dependency_source_manifest": {
+      "bytes": 4263803,
+      "git_checkouts": 11,
+      "registry_packages": 264,
+      "resolved_packages": 277,
+      "sha256": "9e7684ed7065dd4f8a9941725e5866701297486915a13671c81c1742128ed39b"
+    },
+    "elfs_executed": false,
+    "identity_conflicts": [],
+    "independent_invocation_json": 26,
+    "metadata_before_after": {
+      "bytes": 1489708,
+      "identical": true,
+      "sha256": "224a63c4a4144c688280f2c8df0aab47cb8ad0eda9d56d9ec27762051a711895"
+    },
+    "missing_fields": [],
+    "run_id": "3084787068b4155c51b6e440b6b66202",
+    "selected_compiler_artifacts": 26,
+    "source_heads_before_after_final_match": true,
+    "source_manifest": {
+      "bytes": 333536,
+      "directories": 312,
+      "entries": 1925,
+      "files": 1613,
+      "sha256": "cef4797a70525d99852c394dd0df75393afb793e7d37f2b3c4528373a6e583b1"
+    },
+    "source_revision": "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+    "source_tree": "1391701c52db5066e7a25bbe3a32c1d5a82c47d5",
+    "status": "ready",
+    "read_scope": "Source owner reported independent direct CI review; reporting root did not independently reread every compiler invocation."
+  },
+  "recovery_checkpoint": {
+    "file": "continuation.json",
+    "bytes": 10806,
+    "sha256": "7c01b462a6c7581b6881ae1f3de26f5ae2692b14f13eaf815cdc3cc45fccff37",
+    "updated_utc": "2026-11-21T11:45:19.589019+00:00",
+    "read_scope": "Whole file hashed; selected current Gate18/next/restore semantics and checkpoint fields read.",
+    "gate18_status": "passed",
+    "gate18_completed_stages": 35,
+    "consumer_window_handed_to_acceptance": true,
+    "other_source_and_target_writers_still_paused": true,
+    "completed_present": false,
+    "recovery_log_present": false,
+    "terminal_log_present": false,
+    "source_checkpoint": {
+      "file": "root-continuation-gate18-passed-consumers-20261121T1143.json",
+      "bytes": 33193,
+      "sha256": "92ad33dfc5a06c7dea37fd68e036926001972b166719b9fd77c6ca909541acb8",
+      "saved_utc": "2026-11-21T11:43:24.097240+00:00",
+      "read_scope": "Whole checkpoint hashed; selected consumer-window and next-step fields read."
+    },
+    "unchanged_setup_files": [
+      {
+        "file": "restore.py",
+        "bytes": 3210,
+        "sha256": "17338cd335ff5183fddc4b77399fab74c5f9cc2dd1f225d7cfbc920d80c64af9"
+      },
+      {
+        "file": "config.json",
+        "bytes": 849,
+        "sha256": "deee5596a0f7c7b49957214d82e99d92ff7cdc1bff1329dc6fe8dc492dfda621"
+      },
+      {
+        "file": "continuation-before-gate18-passed-v1.json",
+        "bytes": 6119,
+        "sha256": "4211245cfd7ad4bc91e42461fadd96c52adc05d13a41955f00ab48c781fefa96"
+      }
+    ],
+    "not_triggered": true,
+    "old_zip_is_original_preparation_snapshot": true
+  },
+  "N18": {
+    "status": "passed_readonly_parse",
+    "source_revision": "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+    "source_tree": "1391701c52db5066e7a25bbe3a32c1d5a82c47d5",
+    "started_utc": "2026-11-21T11:44:36.588Z",
+    "finished_utc": "2026-11-21T11:44:40.069Z",
+    "validation_invocations": 1,
+    "errors": [],
+    "cargo_invocations": 0,
+    "product_test_count": 0,
+    "execution_authorized_for_readonly_validator": false,
+    "source_path_role": "Gate18/source",
+    "metadata_workspace_root_equals_proof_source_path": true,
+    "library_sha256": "f329e613d4bbc4fccf5b380107e4e8cbf5f467343c3fcc75453e6299fb40f6c0",
+    "fixed_inputs_count": 16,
+    "controls_count": 6,
+    "after_fields_present": [],
+    "no_before_after_comparison_fabricated_from_missing_fields": true,
+    "report_root_executed_validator": false,
+    "original_native_exit": {
+      "exit_code": 0,
+      "both_streams_eof": true,
+      "read_scope": "Acceptance coordinator report; reporting root independently read the generated proof and receipt, not the original native command stream."
+    },
+    "evidence": [
+      {
+        "file": "proof.json",
+        "bytes": 638379,
+        "sha256": "3c6c57e9ca83b30d24e30c385629cc50f3b6424a495e05b16b1974d02240ca54",
+        "read_scope": "Whole original hashed; source/status/time/scope identity and selected input/compilation metadata fields read, not full proof replay."
+      },
+      {
+        "file": "receipt.json",
+        "bytes": 68141,
+        "sha256": "ea0efb3d1d635c1f40cbbcccef256a4950b310addd826b7c3730cc03415740c5",
+        "read_scope": "Whole original hashed; source/status/time/scope identity and selected input/compilation metadata fields read, not full proof replay."
+      }
+    ],
+    "fixed_inputs_before": [
+      {
+        "file": "rustc-serial",
+        "bytes": 272,
+        "sha256": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+      },
+      {
+        "file": "cargo-home/config.toml",
+        "bytes": 925,
+        "sha256": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3"
+      },
+      {
+        "file": "gate-tools/context20-preparation/workspace-provenance-r4/workspace_rustc.py",
+        "bytes": 3569,
+        "sha256": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0"
+      },
+      {
+        "file": "gate-tools/final-v25-r18-binding/run_bound.py",
+        "bytes": 7785,
+        "sha256": "ac78a869ab8928c6aeb541591f4b11d68d9e6519b5a28835445c0a71dacc438d"
+      },
+      {
+        "file": "gate-tools/focused-eed621aa/dependency_audit.py",
+        "bytes": 14653,
+        "sha256": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e"
+      },
+      {
+        "file": "gate-tools/recovered-gate10/run_gates.py",
+        "bytes": 56086,
+        "sha256": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b"
+      },
+      {
+        "file": "inputs/git-heads-v25-r18.json",
+        "bytes": 16832,
+        "sha256": "955de3e50c5e120f14bd156b887bd7c763a9d7f3479e07370adb5195003cc605"
+      },
+      {
+        "file": "inputs/shared-target-agreement-v25-r18.json",
+        "bytes": 12434,
+        "sha256": "2e2769b8fb0e18e317134a2a45bbd7ccd36da0f4006a4568150cdb61026b8299"
+      },
+      {
+        "file": "release25-final18-launch/exit.json",
+        "bytes": 4804,
+        "sha256": "01ad8335859b3b8e0818de24d64089d6ff54138e2ab5bd2628e3707979a592f3"
+      },
+      {
+        "file": "release25-final18/candidate-gates.json",
+        "bytes": 1309336,
+        "sha256": "a3d70ea494cd3ac0d3a1581c45426030f4d4a75484a4deb97e5b35ab84e534ad"
+      },
+      {
+        "file": "release25-final18/dependency-source-manifest.json",
+        "bytes": 4263803,
+        "sha256": "9e7684ed7065dd4f8a9941725e5866701297486915a13671c81c1742128ed39b"
+      },
+      {
+        "file": "release25-final18/run_gates.py",
+        "bytes": 83641,
+        "sha256": "b8ca8da3b47ebe2d314a24dba28a968c7b81904cf82e9b2b679802b377cd2164"
+      },
+      {
+        "file": "release25-final18/source-manifest.json",
+        "bytes": 333536,
+        "sha256": "cef4797a70525d99852c394dd0df75393afb793e7d37f2b3c4528373a6e583b1"
+      },
+      {
+        "file": "release25-final18/source/Cargo.lock",
+        "bytes": 66476,
+        "sha256": "0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992"
+      },
+      {
+        "file": "release25-final18/source/Cargo.toml",
+        "bytes": 10109,
+        "sha256": "c7e9fa819512800dfee8704f22b4c2d0db74713622a0e0d82be6dea96007e8d1"
+      },
+      {
+        "file": "source-final-r18/Cargo.lock",
+        "bytes": 66476,
+        "sha256": "0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992"
+      }
+    ],
+    "controls_before": [
+      {
+        "file": "binding-v2.json",
+        "bytes": 12056,
+        "sha256": "126ad2adccb1958b59f0d5c8a6b5284f8a60f7d808c90a8e7a475fa9bb9431e6"
+      },
+      {
+        "file": "modules/gate10_binding.py",
+        "bytes": 75805,
+        "sha256": "0717bb57d3b18a591afa447589baf24f97bf0eced67d53d8a67d95f06975a9e1"
+      },
+      {
+        "file": "modules/gate10_dependencies.py",
+        "bytes": 22452,
+        "sha256": "b340c225c1fad3049f75e08f88cd6cf825fde377eec3af73cd6e4e0cb100d62d"
+      },
+      {
+        "file": "modules/gate10_sources.py",
+        "bytes": 11142,
+        "sha256": "d05b3c97044ff0396bd62de46c0942915f10c124c44970a0238c14a439cde9ff"
+      },
+      {
+        "file": "modules/gate_inventory_gate10.py",
+        "bytes": 19921,
+        "sha256": "6a08cb4ffe78ad85e94629880da45a93436f1a0761425c747c86b7dac6e9a442"
+      },
+      {
+        "file": "run_readonly.py",
+        "bytes": 11645,
+        "sha256": "2d50cb59e7522e189dde9a254639092a1157888cf6a79b24f4d0ba58a591d772"
+      }
+    ]
+  },
+  "h2_native_preparation": {
+    "source_commit": "6f6bb09bace5b54c82f47f7eb0ae245f17d5ff2d",
+    "modules": [
+      {
+        "file": "verify_published_manual_main.py",
+        "bytes": 48892,
+        "sha256": "f891a676f5da3d501660e74a443d156445a5ec4cdec254ace0ab7808271aca2f",
+        "mode": "0o444"
+      },
+      {
+        "file": "manual_main_provenance.py",
+        "bytes": 44191,
+        "sha256": "348fd9083d4c55e693925533028d61340e157000508b711778da5e2d7bfe8f33",
+        "mode": "0o444"
+      },
+      {
+        "file": "dispatch_receipt_adapter.py",
+        "bytes": 14758,
+        "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4",
+        "mode": "0o444"
+      }
+    ],
+    "read_scope": "Reporting root independently read full native module bytes for size/SHA/mode at 11:48 UTC; no import or execution.",
+    "runtime_bindings": {
+      "S": null,
+      "P": null,
+      "tag": null,
+      "run_id": null,
+      "dispatch_receipt": null
+    }
+  }
+}

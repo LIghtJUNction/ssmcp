@@ -1,0 +1,3051 @@
+{
+  "schema_version": 1,
+  "measurement": "single-binary-real-PTY-reachability-probe",
+  "valid_ab_comparison": false,
+  "memory_goal_met": null,
+  "cli_sha256": "a6bb622ffaf74bdad2f4e26ed726daf8919d6b6d700346f2d3c4471c2920ee9c",
+  "fixture_sha256": "f2bc0ed8d9a334e9d4f44cf3fa6e0ee318bf13d2068baae1cd69f60bb186cf7e",
+  "decoder_sha256": "ec5bcae1602d160e3b399480ca32187d08876df773aa97663d98a7b9863d26d9",
+  "notes": [
+    "A single probe cannot establish an optimization benefit.",
+    "Phase medians are resident PSS; sampled maxima are not continuous peaks.",
+    "VmHWM is per-process RSS high-water, not PSS and not summed across processes.",
+    "Physical document size is not assumed to equal rendered audit body size."
+  ],
+  "result": {
+    "phases": {
+      "before_scan": {
+        "group": null,
+        "screen_rows": [
+          "  ssmcp  /  workspace                                                                       conversation  ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "  ─────────────────────────────────────────────────────────────────────────账号  未登录 · 本月剩余  未知  ",
+          "❯ Message the agent                                                                                       ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          " @ files · $ skills · / commands · F1 help                     connected · https://relay-composer.example "
+        ],
+        "samples": [
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35256,
+              "rss_kib": 35256,
+              "pss_kib": 22681,
+              "private_kib": 12964,
+              "pss_anon_kib": 4080,
+              "pss_file_kib": 18601,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35256,
+                "rss_kib": 35256,
+                "pss_kib": 22681,
+                "private_kib": 12964,
+                "pss_anon_kib": 4080,
+                "pss_file_kib": 18601,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24624,
+                "rss_kib": 24624,
+                "pss_kib": 12547,
+                "private_kib": 2856,
+                "pss_anon_kib": 2428,
+                "pss_file_kib": 10119,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 36742,
+              "private_kib": 16652,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35256,
+              "rss_kib": 35256,
+              "pss_kib": 22681,
+              "private_kib": 12964,
+              "pss_anon_kib": 4080,
+              "pss_file_kib": 18601,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35256,
+                "rss_kib": 35256,
+                "pss_kib": 22681,
+                "private_kib": 12964,
+                "pss_anon_kib": 4080,
+                "pss_file_kib": 18601,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24624,
+                "rss_kib": 24624,
+                "pss_kib": 12547,
+                "private_kib": 2856,
+                "pss_anon_kib": 2428,
+                "pss_file_kib": 10119,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 36742,
+              "private_kib": 16652,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35256,
+              "rss_kib": 35256,
+              "pss_kib": 22681,
+              "private_kib": 12964,
+              "pss_anon_kib": 4080,
+              "pss_file_kib": 18601,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35256,
+                "rss_kib": 35256,
+                "pss_kib": 22681,
+                "private_kib": 12964,
+                "pss_anon_kib": 4080,
+                "pss_file_kib": 18601,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24624,
+                "rss_kib": 24624,
+                "pss_kib": 12547,
+                "private_kib": 2856,
+                "pss_anon_kib": 2428,
+                "pss_file_kib": 10119,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 36742,
+              "private_kib": 16652,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35256,
+              "rss_kib": 35256,
+              "pss_kib": 22681,
+              "private_kib": 12964,
+              "pss_anon_kib": 4080,
+              "pss_file_kib": 18601,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35256,
+                "rss_kib": 35256,
+                "pss_kib": 22681,
+                "private_kib": 12964,
+                "pss_anon_kib": 4080,
+                "pss_file_kib": 18601,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24624,
+                "rss_kib": 24624,
+                "pss_kib": 12547,
+                "private_kib": 2856,
+                "pss_anon_kib": 2428,
+                "pss_file_kib": 10119,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 36742,
+              "private_kib": 16652,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35256,
+              "rss_kib": 35256,
+              "pss_kib": 22681,
+              "private_kib": 12964,
+              "pss_anon_kib": 4080,
+              "pss_file_kib": 18601,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35256,
+                "rss_kib": 35256,
+                "pss_kib": 22681,
+                "private_kib": 12964,
+                "pss_anon_kib": 4080,
+                "pss_file_kib": 18601,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24624,
+                "rss_kib": 24624,
+                "pss_kib": 12547,
+                "private_kib": 2856,
+                "pss_anon_kib": 2428,
+                "pss_file_kib": 10119,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 36742,
+              "private_kib": 16652,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35256,
+              "rss_kib": 35256,
+              "pss_kib": 22681,
+              "private_kib": 12964,
+              "pss_anon_kib": 4080,
+              "pss_file_kib": 18601,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35256,
+                "rss_kib": 35256,
+                "pss_kib": 22681,
+                "private_kib": 12964,
+                "pss_anon_kib": 4080,
+                "pss_file_kib": 18601,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24624,
+                "rss_kib": 24624,
+                "pss_kib": 12547,
+                "private_kib": 2856,
+                "pss_anon_kib": 2428,
+                "pss_file_kib": 10119,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 36742,
+              "private_kib": 16652,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35260,
+              "rss_kib": 35260,
+              "pss_kib": 22685,
+              "private_kib": 12968,
+              "pss_anon_kib": 4084,
+              "pss_file_kib": 18601,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35260,
+                "rss_kib": 35260,
+                "pss_kib": 22685,
+                "private_kib": 12968,
+                "pss_anon_kib": 4084,
+                "pss_file_kib": 18601,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24624,
+                "rss_kib": 24624,
+                "pss_kib": 12547,
+                "private_kib": 2856,
+                "pss_anon_kib": 2428,
+                "pss_file_kib": 10119,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 36746,
+              "private_kib": 16656,
+              "swap_pss_kib": 0
+            }
+          }
+        ],
+        "median": {
+          "parent": {
+            "pss_kib": 22681,
+            "private_kib": 12964,
+            "swap_pss_kib": 0
+          },
+          "owned_tree": {
+            "pss_kib": 36742,
+            "private_kib": 16652,
+            "swap_pss_kib": 0
+          }
+        },
+        "sampled_parent_pss_max_kib": 22685
+      },
+      "initial_folded": {
+        "group": {
+          "group": {
+            "count": 12,
+            "expanded": false,
+            "id": 4,
+            "members": [
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ]
+          },
+          "members": [
+            {
+              "id": 4,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-000/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 5,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-001/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 6,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-002/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 7,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-003/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 8,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-004/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 9,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-005/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 10,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-006/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 11,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-007/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 12,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-008/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 13,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-009/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 14,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-010/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 15,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-011/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            }
+          ],
+          "member_retained_bytes": 720,
+          "member_retained_lines": 12,
+          "retained_events": 28,
+          "retained_bytes": 4694,
+          "dropped_events": 0
+        },
+        "screen_rows": [
+          "  ssmcp  /  workspace                                                                       conversation  ",
+          "  ▸ Read 12 items · workspace                                                                             ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "  ─────────────────────────────────────────────────────────────────────────账号  未登录 · 本月剩余  未知  ",
+          "❯ Message the agent                                                                                       ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          " @ files · $ skills · / commands · F1 help                     connected · https://relay-composer.example "
+        ],
+        "samples": [
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35708,
+              "rss_kib": 35708,
+              "pss_kib": 23037,
+              "private_kib": 13224,
+              "pss_anon_kib": 4276,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35708,
+                "rss_kib": 35708,
+                "pss_kib": 23037,
+                "private_kib": 13224,
+                "pss_anon_kib": 4276,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37370,
+              "private_kib": 17088,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35708,
+              "rss_kib": 35708,
+              "pss_kib": 23037,
+              "private_kib": 13224,
+              "pss_anon_kib": 4276,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35708,
+                "rss_kib": 35708,
+                "pss_kib": 23037,
+                "private_kib": 13224,
+                "pss_anon_kib": 4276,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37370,
+              "private_kib": 17088,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35724,
+              "rss_kib": 35724,
+              "pss_kib": 23053,
+              "private_kib": 13240,
+              "pss_anon_kib": 4292,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35724,
+                "rss_kib": 35724,
+                "pss_kib": 23053,
+                "private_kib": 13240,
+                "pss_anon_kib": 4292,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37386,
+              "private_kib": 17104,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35724,
+              "rss_kib": 35724,
+              "pss_kib": 23053,
+              "private_kib": 13240,
+              "pss_anon_kib": 4292,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35724,
+                "rss_kib": 35724,
+                "pss_kib": 23053,
+                "private_kib": 13240,
+                "pss_anon_kib": 4292,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37386,
+              "private_kib": 17104,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35724,
+              "rss_kib": 35724,
+              "pss_kib": 23053,
+              "private_kib": 13240,
+              "pss_anon_kib": 4292,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35724,
+                "rss_kib": 35724,
+                "pss_kib": 23053,
+                "private_kib": 13240,
+                "pss_anon_kib": 4292,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37386,
+              "private_kib": 17104,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35728,
+              "rss_kib": 35728,
+              "pss_kib": 23057,
+              "private_kib": 13244,
+              "pss_anon_kib": 4296,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35728,
+                "rss_kib": 35728,
+                "pss_kib": 23057,
+                "private_kib": 13244,
+                "pss_anon_kib": 4296,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37390,
+              "private_kib": 17108,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35732,
+              "rss_kib": 35732,
+              "pss_kib": 23061,
+              "private_kib": 13248,
+              "pss_anon_kib": 4300,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35732,
+                "rss_kib": 35732,
+                "pss_kib": 23061,
+                "private_kib": 13248,
+                "pss_anon_kib": 4300,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37394,
+              "private_kib": 17112,
+              "swap_pss_kib": 0
+            }
+          }
+        ],
+        "median": {
+          "parent": {
+            "pss_kib": 23053,
+            "private_kib": 13240,
+            "swap_pss_kib": 0
+          },
+          "owned_tree": {
+            "pss_kib": 37386,
+            "private_kib": 17104,
+            "swap_pss_kib": 0
+          }
+        },
+        "sampled_parent_pss_max_kib": 23061
+      },
+      "expanded": {
+        "group": {
+          "group": {
+            "count": 12,
+            "expanded": true,
+            "id": 4,
+            "members": [
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ]
+          },
+          "members": [
+            {
+              "id": 4,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-000/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 5,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-001/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 6,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-002/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 7,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-003/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 8,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-004/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 9,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-005/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 10,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-006/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 11,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-007/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 12,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-008/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 13,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-009/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 14,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-010/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 15,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-011/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            }
+          ],
+          "member_retained_bytes": 720,
+          "member_retained_lines": 12,
+          "retained_events": 28,
+          "retained_bytes": 4694,
+          "dropped_events": 0
+        },
+        "screen_rows": [
+          "  ssmcp  /  workspace                                                                       conversation  ",
+          "› ▾ Read 12 items · workspace                                                                             ",
+          "    › workspace .agents/skills/memory-fixture-000/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-001/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-002/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-003/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-004/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-005/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-006/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-007/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-008/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-009/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-010/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-011/SKILL.md                                                ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "  ─────────────────────────────────────────────────────────────────────────账号  未登录 · 本月剩余  未知  ",
+          "❯ Message the agent                                                                                       ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          " Paused · Ctrl+End to follow new activity                      connected · https://relay-composer.example "
+        ],
+        "samples": [
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35664,
+              "rss_kib": 35664,
+              "pss_kib": 22993,
+              "private_kib": 13180,
+              "pss_anon_kib": 4232,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35664,
+                "rss_kib": 35664,
+                "pss_kib": 22993,
+                "private_kib": 13180,
+                "pss_anon_kib": 4232,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37326,
+              "private_kib": 17044,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35692,
+              "rss_kib": 35692,
+              "pss_kib": 23021,
+              "private_kib": 13208,
+              "pss_anon_kib": 4260,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35692,
+                "rss_kib": 35692,
+                "pss_kib": 23021,
+                "private_kib": 13208,
+                "pss_anon_kib": 4260,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37354,
+              "private_kib": 17072,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35692,
+              "rss_kib": 35692,
+              "pss_kib": 23021,
+              "private_kib": 13208,
+              "pss_anon_kib": 4260,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35692,
+                "rss_kib": 35692,
+                "pss_kib": 23021,
+                "private_kib": 13208,
+                "pss_anon_kib": 4260,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37354,
+              "private_kib": 17072,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35692,
+              "rss_kib": 35692,
+              "pss_kib": 23021,
+              "private_kib": 13208,
+              "pss_anon_kib": 4260,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35692,
+                "rss_kib": 35692,
+                "pss_kib": 23021,
+                "private_kib": 13208,
+                "pss_anon_kib": 4260,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37354,
+              "private_kib": 17072,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "R",
+              "rss_high_water_kib": 35692,
+              "rss_kib": 35692,
+              "pss_kib": 23021,
+              "private_kib": 13208,
+              "pss_anon_kib": 4260,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "R",
+                "rss_high_water_kib": 35692,
+                "rss_kib": 35692,
+                "pss_kib": 23021,
+                "private_kib": 13208,
+                "pss_anon_kib": 4260,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37354,
+              "private_kib": 17072,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35692,
+              "rss_kib": 35692,
+              "pss_kib": 23021,
+              "private_kib": 13208,
+              "pss_anon_kib": 4260,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35692,
+                "rss_kib": 35692,
+                "pss_kib": 23021,
+                "private_kib": 13208,
+                "pss_anon_kib": 4260,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37354,
+              "private_kib": 17072,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35692,
+              "rss_kib": 35692,
+              "pss_kib": 23021,
+              "private_kib": 13208,
+              "pss_anon_kib": 4260,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35692,
+                "rss_kib": 35692,
+                "pss_kib": 23021,
+                "private_kib": 13208,
+                "pss_anon_kib": 4260,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37354,
+              "private_kib": 17072,
+              "swap_pss_kib": 0
+            }
+          }
+        ],
+        "median": {
+          "parent": {
+            "pss_kib": 23021,
+            "private_kib": 13208,
+            "swap_pss_kib": 0
+          },
+          "owned_tree": {
+            "pss_kib": 37354,
+            "private_kib": 17072,
+            "swap_pss_kib": 0
+          }
+        },
+        "sampled_parent_pss_max_kib": 23021
+      },
+      "folded": {
+        "group": {
+          "group": {
+            "count": 12,
+            "expanded": false,
+            "id": 4,
+            "members": [
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ]
+          },
+          "members": [
+            {
+              "id": 4,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-000/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 5,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-001/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 6,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-002/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 7,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-003/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 8,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-004/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 9,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-005/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 10,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-006/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 11,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-007/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 12,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-008/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 13,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-009/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 14,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-010/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 15,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-011/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            }
+          ],
+          "member_retained_bytes": 720,
+          "member_retained_lines": 12,
+          "retained_events": 28,
+          "retained_bytes": 4694,
+          "dropped_events": 0
+        },
+        "screen_rows": [
+          "  ssmcp  /  workspace                                                                       conversation  ",
+          "› ▸ Read 12 items · workspace                                                                             ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "  ─────────────────────────────────────────────────────────────────────────账号  未登录 · 本月剩余  未知  ",
+          "❯ Message the agent                                                                                       ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          " Paused · Ctrl+End to follow new activity                      connected · https://relay-composer.example "
+        ],
+        "samples": [
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35692,
+              "rss_kib": 35692,
+              "pss_kib": 23021,
+              "private_kib": 13208,
+              "pss_anon_kib": 4260,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35692,
+                "rss_kib": 35692,
+                "pss_kib": 23021,
+                "private_kib": 13208,
+                "pss_anon_kib": 4260,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37354,
+              "private_kib": 17072,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35708,
+              "rss_kib": 35708,
+              "pss_kib": 23037,
+              "private_kib": 13224,
+              "pss_anon_kib": 4276,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35708,
+                "rss_kib": 35708,
+                "pss_kib": 23037,
+                "private_kib": 13224,
+                "pss_anon_kib": 4276,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37370,
+              "private_kib": 17088,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35708,
+              "rss_kib": 35708,
+              "pss_kib": 23037,
+              "private_kib": 13224,
+              "pss_anon_kib": 4276,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35708,
+                "rss_kib": 35708,
+                "pss_kib": 23037,
+                "private_kib": 13224,
+                "pss_anon_kib": 4276,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37370,
+              "private_kib": 17088,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35708,
+              "rss_kib": 35708,
+              "pss_kib": 23037,
+              "private_kib": 13224,
+              "pss_anon_kib": 4276,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35708,
+                "rss_kib": 35708,
+                "pss_kib": 23037,
+                "private_kib": 13224,
+                "pss_anon_kib": 4276,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37370,
+              "private_kib": 17088,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35708,
+              "rss_kib": 35708,
+              "pss_kib": 23037,
+              "private_kib": 13224,
+              "pss_anon_kib": 4276,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35708,
+                "rss_kib": 35708,
+                "pss_kib": 23037,
+                "private_kib": 13224,
+                "pss_anon_kib": 4276,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1379,
+                "private_kib": 812,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 599,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37235,
+              "private_kib": 17068,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35708,
+              "rss_kib": 35708,
+              "pss_kib": 23037,
+              "private_kib": 13224,
+              "pss_anon_kib": 4276,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35708,
+                "rss_kib": 35708,
+                "pss_kib": 23037,
+                "private_kib": 13224,
+                "pss_anon_kib": 4276,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1380,
+                "private_kib": 812,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 600,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37236,
+              "private_kib": 17068,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35708,
+              "rss_kib": 35708,
+              "pss_kib": 23037,
+              "private_kib": 13224,
+              "pss_anon_kib": 4276,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35708,
+                "rss_kib": 35708,
+                "pss_kib": 23037,
+                "private_kib": 13224,
+                "pss_anon_kib": 4276,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37370,
+              "private_kib": 17088,
+              "swap_pss_kib": 0
+            }
+          }
+        ],
+        "median": {
+          "parent": {
+            "pss_kib": 23037,
+            "private_kib": 13224,
+            "swap_pss_kib": 0
+          },
+          "owned_tree": {
+            "pss_kib": 37370,
+            "private_kib": 17088,
+            "swap_pss_kib": 0
+          }
+        },
+        "sampled_parent_pss_max_kib": 23037
+      },
+      "reexpanded": {
+        "group": {
+          "group": {
+            "count": 12,
+            "expanded": true,
+            "id": 4,
+            "members": [
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ]
+          },
+          "members": [
+            {
+              "id": 4,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-000/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 5,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-001/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 6,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-002/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 7,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-003/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 8,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-004/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 9,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-005/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 10,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-006/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 11,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-007/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 12,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-008/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 13,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-009/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 14,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-010/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            },
+            {
+              "id": 15,
+              "summary": "[READ] workspace .agents/skills/memory-fixture-011/SKILL.md",
+              "lines": 1,
+              "bytes": 60,
+              "truncated": false,
+              "status": null,
+              "command": false,
+              "kind": "tool"
+            }
+          ],
+          "member_retained_bytes": 720,
+          "member_retained_lines": 12,
+          "retained_events": 28,
+          "retained_bytes": 4694,
+          "dropped_events": 0
+        },
+        "screen_rows": [
+          "  ssmcp  /  workspace                                                                       conversation  ",
+          "› ▾ Read 12 items · workspace                                                                             ",
+          "    › workspace .agents/skills/memory-fixture-000/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-001/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-002/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-003/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-004/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-005/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-006/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-007/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-008/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-009/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-010/SKILL.md                                                ",
+          "      workspace .agents/skills/memory-fixture-011/SKILL.md                                                ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          "  ─────────────────────────────────────────────────────────────────────────账号  未登录 · 本月剩余  未知  ",
+          "❯ Message the agent                                                                                       ",
+          "                                                                                                          ",
+          "                                                                                                          ",
+          " Paused · Ctrl+End to follow new activity                      connected · https://relay-composer.example "
+        ],
+        "samples": [
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35700,
+              "rss_kib": 35700,
+              "pss_kib": 23029,
+              "private_kib": 13216,
+              "pss_anon_kib": 4268,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35700,
+                "rss_kib": 35700,
+                "pss_kib": 23029,
+                "private_kib": 13216,
+                "pss_anon_kib": 4268,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37362,
+              "private_kib": 17080,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35716,
+              "rss_kib": 35716,
+              "pss_kib": 23045,
+              "private_kib": 13232,
+              "pss_anon_kib": 4284,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35716,
+                "rss_kib": 35716,
+                "pss_kib": 23045,
+                "private_kib": 13232,
+                "pss_anon_kib": 4284,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37378,
+              "private_kib": 17096,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35716,
+              "rss_kib": 35716,
+              "pss_kib": 23045,
+              "private_kib": 13232,
+              "pss_anon_kib": 4284,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35716,
+                "rss_kib": 35716,
+                "pss_kib": 23045,
+                "private_kib": 13232,
+                "pss_anon_kib": 4284,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37378,
+              "private_kib": 17096,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35716,
+              "rss_kib": 35716,
+              "pss_kib": 23045,
+              "private_kib": 13232,
+              "pss_anon_kib": 4284,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35716,
+                "rss_kib": 35716,
+                "pss_kib": 23045,
+                "private_kib": 13232,
+                "pss_anon_kib": 4284,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37378,
+              "private_kib": 17096,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35716,
+              "rss_kib": 35716,
+              "pss_kib": 23045,
+              "private_kib": 13232,
+              "pss_anon_kib": 4284,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35716,
+                "rss_kib": 35716,
+                "pss_kib": 23045,
+                "private_kib": 13232,
+                "pss_anon_kib": 4284,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37378,
+              "private_kib": 17096,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35716,
+              "rss_kib": 35716,
+              "pss_kib": 23045,
+              "private_kib": 13232,
+              "pss_anon_kib": 4284,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35716,
+                "rss_kib": 35716,
+                "pss_kib": 23045,
+                "private_kib": 13232,
+                "pss_anon_kib": 4284,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37378,
+              "private_kib": 17096,
+              "swap_pss_kib": 0
+            }
+          },
+          {
+            "parent": {
+              "pid": 3627770,
+              "start_ticks": 4298392,
+              "state": "S",
+              "rss_high_water_kib": 35716,
+              "rss_kib": 35716,
+              "pss_kib": 23045,
+              "private_kib": 13232,
+              "pss_anon_kib": 4284,
+              "pss_file_kib": 18761,
+              "swap_pss_kib": 0
+            },
+            "processes": [
+              {
+                "pid": 3627770,
+                "start_ticks": 4298392,
+                "state": "S",
+                "rss_high_water_kib": 35716,
+                "rss_kib": 35716,
+                "pss_kib": 23045,
+                "private_kib": 13232,
+                "pss_anon_kib": 4284,
+                "pss_file_kib": 18761,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627776,
+                "start_ticks": 4298404,
+                "state": "S",
+                "rss_high_water_kib": 24992,
+                "rss_kib": 24992,
+                "pss_kib": 12819,
+                "private_kib": 3032,
+                "pss_anon_kib": 2604,
+                "pss_file_kib": 10215,
+                "swap_pss_kib": 0
+              },
+              {
+                "pid": 3627780,
+                "start_ticks": 4298406,
+                "state": "S",
+                "rss_high_water_kib": 5488,
+                "rss_kib": 5488,
+                "pss_kib": 1514,
+                "private_kib": 832,
+                "pss_anon_kib": 780,
+                "pss_file_kib": 734,
+                "swap_pss_kib": 0
+              }
+            ],
+            "owned_tree": {
+              "pss_kib": 37378,
+              "private_kib": 17096,
+              "swap_pss_kib": 0
+            }
+          }
+        ],
+        "median": {
+          "parent": {
+            "pss_kib": 23045,
+            "private_kib": 13232,
+            "swap_pss_kib": 0
+          },
+          "owned_tree": {
+            "pss_kib": 37378,
+            "private_kib": 17096,
+            "swap_pss_kib": 0
+          }
+        },
+        "sampled_parent_pss_max_kib": 23045
+      }
+    },
+    "checks": [
+      "the owned account router keeps its credentials in a private ready record",
+      "the isolated account has the expected stable provider identity and handle",
+      "the real production account router is healthy",
+      "the account connection advertises its exact identity-scoped MCP resource",
+      "MCP 401 advertises protected-resource metadata",
+      "resource metadata binds the exact account endpoint and OAuth issuer",
+      "OAuth discovery advertises authorization-code PKCE S256",
+      "public MCP client registers through OAuth DCR",
+      "the account OAuth endpoint requires provider consent instead of a connection login code",
+      "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+      "OAuth pages cannot be cached and bind same-origin form submission",
+      "real identity exchange validates provider PKCE and requires explicit consent",
+      "OAuth consent preserves the registered callback, state and issuer",
+      "the real OAuth endpoint issues an identity-scoped MCP access token",
+      "OAuth access expires in eight hours and supplies a refresh token",
+      "OAuth token responses cannot be cached",
+      "the account relay credential cannot authenticate as an MCP access token",
+      "bounded skill listing remains an actual inline native result",
+      "measurement uses real Conversation EventView",
+      "initial_folded native expansion state matches the real frame",
+      "measurement uses real Conversation EventView",
+      "expanded native expansion state matches the real frame",
+      "measurement uses real Conversation EventView",
+      "folded native expansion state matches the real frame",
+      "measurement uses real Conversation EventView",
+      "reexpanded native expansion state matches the real frame",
+      "collapse/reopen preserves every original read event identity",
+      "collapse/reopen preserves retained read summaries, lengths and metadata",
+      "collapse/reopen preserves every original read event identity",
+      "collapse/reopen preserves retained read summaries, lengths and metadata",
+      "reopening renders the same owned file paths",
+      "measurement never invents a user requirement",
+      "measurement never invokes an external coding harness"
+    ],
+    "workload": {
+      "skills": 12,
+      "document_bytes_each": 2048,
+      "paths": [
+        ".agents/skills/memory-fixture-000/SKILL.md",
+        ".agents/skills/memory-fixture-001/SKILL.md",
+        ".agents/skills/memory-fixture-002/SKILL.md",
+        ".agents/skills/memory-fixture-003/SKILL.md",
+        ".agents/skills/memory-fixture-004/SKILL.md",
+        ".agents/skills/memory-fixture-005/SKILL.md",
+        ".agents/skills/memory-fixture-006/SKILL.md",
+        ".agents/skills/memory-fixture-007/SKILL.md",
+        ".agents/skills/memory-fixture-008/SKILL.md",
+        ".agents/skills/memory-fixture-009/SKILL.md",
+        ".agents/skills/memory-fixture-010/SKILL.md",
+        ".agents/skills/memory-fixture-011/SKILL.md"
+      ],
+      "terminal": {
+        "rows": 58,
+        "cols": 106
+      }
+    }
+  },
+  "passed": true,
+  "cleanup_confirmed": true
+}

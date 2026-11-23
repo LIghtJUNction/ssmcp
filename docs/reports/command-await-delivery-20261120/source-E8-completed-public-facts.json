@@ -1,0 +1,333 @@
+{
+  "schema": "ssmcp-source-E8-completion-public-facts-v1",
+  "observation_kind": "source phase completion and static definitions; no compiled/product acceptance",
+  "initial": {
+    "commit": "1a2f7591ad0abb53907c048dcaed028434e17c47",
+    "tree": "cb24179edb9900c591afdabfe1b4678c2d50c5f9",
+    "parents": [
+      "a53a0c5047833ded61193a0b0ce548937e89e959"
+    ],
+    "subject": "deps: follow canonical Project Z Git defaults and update zuse [skip ci]"
+  },
+  "final": {
+    "commit": "f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b",
+    "tree": "4852c9a5c2d928e46ae4b291a4d27e5229998a18",
+    "parents": [
+      "879ba17fc3ba4bad6a26a85494b79e29acf1938a"
+    ],
+    "subject": "test: isolate original history for HTTP caller metadata [skip ci]"
+  },
+  "branch": "work/local-startup-zuse-20261121",
+  "author_receipt": {
+    "bytes": 990,
+    "sha256": "dc79d7e8e2c8d73d9854ac0786152a1cc865d840b8d9d3b52bdcce3fb50a0a8f",
+    "started_utc": "2026-11-21T07:19:03.668725+00:00",
+    "finished_utc": "2026-11-21T07:42:19.334621+00:00",
+    "exit_code": 0,
+    "error": null,
+    "wrapper_unchanged": true,
+    "compilation_or_tests_allowed": false,
+    "entire_receipt_read": true
+  },
+  "source_changes_receipt": {
+    "bytes": 32719,
+    "sha256": "622b17232532927b7635158b6917fca4a63af355cf7190c38830fe73c50f293b",
+    "entire_file_hashed": true,
+    "selected_fields_extracted": true,
+    "all_command_stdout_stderr_independently_reviewed": false
+  },
+  "clean_worktree_and_submodules": true,
+  "changed_paths": [
+    ".github/workflows/release.yml",
+    ".gitignore",
+    "docs/dependencies.md",
+    "docs/releases.md",
+    "scripts/release.py",
+    "scripts/test_release.py",
+    "src/client.rs",
+    "src/client/interface/history.rs",
+    "src/device.rs",
+    "src/output.rs"
+  ],
+  "milestones": [
+    {
+      "revision": {
+        "commit": "9e1a06c4c6a04fe6a7ac7919c9cee9ab497ac95b",
+        "tree": "6e6c0024c494d37b736432ae7d5ea91ad8783310",
+        "parents": [
+          "1a2f7591ad0abb53907c048dcaed028434e17c47"
+        ],
+        "subject": "fix: preserve permanent output cleanup initialization errors [skip ci]"
+      },
+      "paths": [
+        "src/client.rs",
+        "src/output.rs"
+      ],
+      "push_exit_code": 0,
+      "push_kind": "ordinary branch push; not forced",
+      "diff_bytes": 3171,
+      "diff_sha256": "a6cd97c5977276df293e06682fa0b4513b9cc90be02d381d37a33f999869cf72"
+    },
+    {
+      "revision": {
+        "commit": "879ba17fc3ba4bad6a26a85494b79e29acf1938a",
+        "tree": "f746f33fa6a7ded32e9b4d94ece1404dc8ec6786",
+        "parents": [
+          "9e1a06c4c6a04fe6a7ac7919c9cee9ab497ac95b"
+        ],
+        "subject": "fix(release): verify Git binaries separately from registry publication [skip ci]"
+      },
+      "paths": [
+        ".github/workflows/release.yml",
+        ".gitignore",
+        "docs/dependencies.md",
+        "docs/releases.md",
+        "scripts/release.py",
+        "scripts/test_release.py"
+      ],
+      "push_exit_code": 0,
+      "push_kind": "ordinary branch push; not forced",
+      "diff_bytes": 95913,
+      "diff_sha256": "46732fa857459d375d3c3cb9380e0e310bb513cdb7e4697c6b42a06899e36b78"
+    },
+    {
+      "revision": {
+        "commit": "f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b",
+        "tree": "4852c9a5c2d928e46ae4b291a4d27e5229998a18",
+        "parents": [
+          "879ba17fc3ba4bad6a26a85494b79e29acf1938a"
+        ],
+        "subject": "test: isolate original history for HTTP caller metadata [skip ci]"
+      },
+      "paths": [
+        "src/client/interface/history.rs",
+        "src/device.rs"
+      ],
+      "push_exit_code": 0,
+      "push_kind": "ordinary branch push; not forced",
+      "diff_bytes": 9356,
+      "diff_sha256": "f89901352a4560d89c2e61b8930d3164241a32043313b53f9e8edc3b2d2c9181"
+    }
+  ],
+  "command_receipts": {
+    "count": 47,
+    "recorded_exit_codes": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "selected_format_and_diff_records": [
+      {
+        "argv": [
+          "git",
+          "diff",
+          "--check",
+          "1a2f7591ad0abb53907c048dcaed028434e17c47",
+          "f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b",
+          "--"
+        ],
+        "exit_code": 0
+      },
+      {
+        "argv": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0
+      },
+      {
+        "argv": [
+          "rustfmt",
+          "--check",
+          "--edition",
+          "2024",
+          "--config",
+          "skip_children=true",
+          "src/client.rs",
+          "src/output.rs",
+          "src/client/interface/history.rs",
+          "src/device.rs"
+        ],
+        "exit_code": 0
+      }
+    ],
+    "scope": "These are source-operation command records, not 47 executed tests."
+  },
+  "static_checks": {
+    "exit_code": 0,
+    "python": [
+      "AST of release.py and test_release.py",
+      "AST of the two embedded workflow Python bodies"
+    ],
+    "workflow": [
+      "YAML parse",
+      "deployment policy script byte equality",
+      "registry job explicit condition",
+      "verified-source artifact separate from dist and binary archive downloads"
+    ],
+    "python_regressions": {
+      "retained_definitions": 100,
+      "new_definitions": [
+        "GithubReleaseTests.test_unexpected_remote_asset_blocks_publication",
+        "PublicationContractTests.test_legacy_ref_retry_requires_a_matching_explicit_old_tag",
+        "PublicationContractTests.test_missing_or_mismatched_new_policy_cannot_fall_back_to_legacy",
+        "PublicationContractTests.test_v25_binary_release_and_build_only_select_distinct_crate_modes",
+        "ReleaseTests.test_frozen_registry_export_keeps_exact_versions_and_does_not_resolve_again",
+        "ReleaseTests.test_git_only_v25_binary_proof_and_build_only_need_no_registry_package"
+      ],
+      "executed": false
+    }
+  },
+  "rust_regressions_not_run": [
+    "Extended cleanup_lock_symlink_is_rejected_without_changing_its_target with startup classification",
+    "Preserved transient network watchdog regression",
+    "Extended control_attribution_websocket_negotiates_without_changing_legacy_frames with the real typed HTTP await route, two joined native thread frames, scoped history selections, and reverse completion"
+  ],
+  "new_integration_targets": [],
+  "metadata_regression_scope": {
+    "commit": "f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b",
+    "changed_files": 2,
+    "new_standalone_rust_test_definition": false,
+    "extends_existing_http_websocket_test": true,
+    "same_bearer_two_distinct_threads": true,
+    "reverse_completion_order": "B then A while B remains selected",
+    "actual_frame_fields_checked_in_definition": [
+      "authenticated account/owner identity",
+      "distinct thread/run/native call identities",
+      "OpenAI session and subject metadata"
+    ],
+    "history_bridge": "explicit production CallScope/sidecar bridge with captured history owners",
+    "uses_fixture_replies": true,
+    "full_connect_inner_or_real_exec_wait_job_covered": false,
+    "executed": false
+  },
+  "project": {
+    "package": "ssmcp",
+    "version": "0.10.25",
+    "manifest": {
+      "bytes": 10109,
+      "sha256": "c7e9fa819512800dfee8704f22b4c2d0db74713622a0e0d82be6dea96007e8d1"
+    },
+    "lock": {
+      "bytes": 66476,
+      "sha256": "5e9d5cecd724991e310e2ec34867545cf6efed7b1a2a24e2e15ca628e2efceb6"
+    }
+  },
+  "gitlinks": {
+    "crates/zharness": {
+      "before": "cb63a9a0aa163214c6062664cd62fefb357be5a8",
+      "after": "cb63a9a0aa163214c6062664cd62fefb357be5a8"
+    },
+    "crates/zplugin": {
+      "before": "cf02c1d9db575b92b36297dfe1fde72de9ee51e4",
+      "after": "cf02c1d9db575b92b36297dfe1fde72de9ee51e4"
+    },
+    "crates/ztuio": {
+      "before": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "after": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e"
+    },
+    "crates/zuse": {
+      "before": "830fcefd2277cbba46536c67d206f29058ba7fb3",
+      "after": "830fcefd2277cbba46536c67d206f29058ba7fb3"
+    }
+  },
+  "release_policy": {
+    "contract": "git-source-v1",
+    "version": "0.10.25",
+    "crate_publication": {
+      "status": "deferred",
+      "reason": "Independent registry dependencies and the external package require separate verification."
+    },
+    "production_relay_deployment": "separately deferred by unchanged policy",
+    "public_assets": {
+      "archives": 6,
+      "archive_sha256_sidecars": 6,
+      "installers": 2,
+      "checksums": 1,
+      "manifest": 1
+    },
+    "legacy": "Old tags through 0.10.24 may use their original validation only on explicit main workflow dispatch, after successful validation in the fixed tag checkout"
+  },
+  "known_followup": {
+    "startup_test_error_string_call": "A boxed-error string method mismatch remains scheduled for the next source increment; this source has not been compiled.",
+    "version_tree_and_unified_computer_on_off": "accepted next increment; no completed source/test result at this observation"
+  },
+  "limitations": [
+    "Source-only. No Cargo, compilation, unit tests, workflow dispatch, runtime, UI, P1, package, publish, release or deployment was executed.",
+    "Git-only binary release and isolated real Cargo registry export/repack are unexecuted. Ancillary private registry modes can still be blocked by missing or incompatible independent registry packages.",
+    "The derived registry exporter requires the repository's current inline declarations. It rejects ambiguous source conversion instead of reserializing unrelated TOML."
+  ],
+  "independent_observation": {
+    "github_commit_tree_parents_read": true,
+    "github_patch_read_for_f6": true,
+    "source_reader_exit_code": 0,
+    "source_reader_both_eof": true,
+    "helper_import_or_execution": false,
+    "cargo_or_product_execution": false,
+    "dispatch_publication_install_or_deployment": false
+  },
+  "acceptance_binding": {
+    "final_candidate_sha": null,
+    "final_gate": null,
+    "runtime": null,
+    "ui": null,
+    "p1": null,
+    "older_W_results_reassigned": false
+  },
+  "e9_preflight_reported": {
+    "observation_source": "source integration coordinator",
+    "observed_utc": "2026-11-21T07:49:51.583Z",
+    "status": "source-lock preflight stopped the first launch attempt before the author started",
+    "author_model_started": false,
+    "cargo_executed": false,
+    "product_failure": false,
+    "original_failed_preflight_retained": true,
+    "next_step": "Check actual held descriptor, fdinfo and global lock record identity; do not drop the lock proof.",
+    "original_receipt_independently_read_by_this_extractor": false
+  }
+}

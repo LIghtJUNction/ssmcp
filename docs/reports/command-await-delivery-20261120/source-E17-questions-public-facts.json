@@ -1,0 +1,492 @@
+{
+  "schema_version": 1,
+  "kind": "E17-Questions-navigation-merged",
+  "observed_utc": "2026-11-21T12:57:52Z",
+  "source": {
+    "author_start": {
+      "commit": "561ef5a94763877893b0575e04b6da480761499c",
+      "tree": "ac58ef7ea25b69033c1f84d69d3ff614f6385473",
+      "parents": [
+        "dae9d52c734b5d316bf90d2317a51e3992f68085"
+      ],
+      "subject": "fix: publish worker EOF cancellation without waiting for native input [skip ci]"
+    },
+    "fast_forward_base": {
+      "commit": "9362d2232e1ca57d976308b10df6ed6b4b167332",
+      "tree": "ac58ef7ea25b69033c1f84d69d3ff614f6385473",
+      "parents": [
+        "dae9d52c734b5d316bf90d2317a51e3992f68085",
+        "561ef5a94763877893b0575e04b6da480761499c"
+      ],
+      "subject": "Merge worker EOF cancellation fix (#171) [skip ci]"
+    },
+    "author_final": {
+      "commit": "183d7ada89d88e53b30c4d4bc8c4aef62c1e8d91",
+      "tree": "a9b283173ee46cff86ca4a119566f0ebc488292a",
+      "parents": [
+        "9362d2232e1ca57d976308b10df6ed6b4b167332"
+      ],
+      "subject": "fix: navigate adjacent panels from the Questions list [skip ci]"
+    },
+    "fast_forward_tree_unchanged": true,
+    "PR": 172,
+    "PR_state": "closed",
+    "merged_commit": "cf358f00f84b73e9892e62dd9b50b0dcc218201c",
+    "merged_tree": "a9b283173ee46cff86ca4a119566f0ebc488292a",
+    "PR_merged_at": "2026-11-21T12:56:33Z",
+    "merge_parents": [
+      "9362d2232e1ca57d976308b10df6ed6b4b167332",
+      "183d7ada89d88e53b30c4d4bc8c4aef62c1e8d91"
+    ],
+    "merge_commit_time": "2026-11-21T12:56:33Z",
+    "merge_tree_equals_author_tree": true,
+    "merge_patch_equals_author_patch": true
+  },
+  "phase": {
+    "started_utc": "2026-11-21T12:45:10.507521+00:00",
+    "finished_utc": "2026-11-21T12:51:09.343402+00:00",
+    "exit_code": 0,
+    "error": null,
+    "same_original_author_resumed": true,
+    "new_model_started_by_reporting_root": false,
+    "author_wrapper_unchanged": true,
+    "rustc_wrapper_unchanged": true,
+    "allowed_checks": [],
+    "final_acceptance_allowed": false
+  },
+  "change": {
+    "paths": [
+      "src/client/terminal/conversation/questions.rs",
+      "src/client/terminal/conversation/questions/history_tests.rs"
+    ],
+    "additions": 102,
+    "deletions": 1,
+    "per_file": [
+      {
+        "path": "src/client/terminal/conversation/questions.rs",
+        "additions": 3,
+        "deletions": 1
+      },
+      {
+        "path": "src/client/terminal/conversation/questions/history_tests.rs",
+        "additions": 99,
+        "deletions": 0
+      }
+    ],
+    "identities": {
+      "src/client/terminal/conversation/questions.rs": {
+        "before": {
+          "blob": "c2c62df7f197151f550b6ee721917f0bf5c019e9",
+          "bytes": 41596,
+          "sha256": "c11ebcacf4a2c7e4789efa1d9850067fad24ed59d416c44ffe13b83fc4d199a0"
+        },
+        "after": {
+          "blob": "a6d135e9684dd670003ea6955896d05039f39bee",
+          "bytes": 41765,
+          "sha256": "c82535139da86bc3d571bce93f90c4f16f8de5b9d8922f2608625d8c4a470c35"
+        }
+      },
+      "src/client/terminal/conversation/questions/history_tests.rs": {
+        "before": {
+          "blob": "d9d1c587b3488c226da5521318fef2913e831f42",
+          "bytes": 7761,
+          "sha256": "fee7ae38099db78993b6e7d9848cf9cc79624c8160bcf94f51a01de2266bb673"
+        },
+        "after": {
+          "blob": "ae96a0fda10939404a984e5eaf39fc1bf669e247",
+          "bytes": 12034,
+          "sha256": "51795f3759c4114e37bf39083ae3eb3856bbf7d0601cf2b69da1fb5315277125"
+        }
+      }
+    }
+  },
+  "basis": {
+    "reported_symptom": "Questions 5/8 with no requests, Right does not reach 6/8.",
+    "screenshot_binary_revision_known": false,
+    "screenshot_independently_read_by_reporting_root": false,
+    "static_path": "CSI and SS3 arrows decode to Back/Open. The generic horizontal navigation skips Questions. Its list was treated as content and Open attempted to open a question; an empty list stayed in place."
+  },
+  "behavior": {
+    "list": "Before the existing detail arms, Back/Open in !detail route to canvas_move(-1/+1) for empty and populated lists, independent of content_focus. The footer adds the panel navigation hint.",
+    "preserved": "Enter opens the selected request. Detail editor arrows, Finish choice and explicit Enter approval, Esc/Alt arrows, and the shared main draft remain on the existing paths."
+  },
+  "regressions": [
+    {
+      "name": "client::terminal::conversation::questions::history_tests::full_keyboard_empty_questions_list_arrows_move_between_panels",
+      "compiled": false,
+      "executed": false
+    },
+    {
+      "name": "client::terminal::conversation::questions::history_tests::full_keyboard_questions_list_arrows_preserve_selection_until_enter",
+      "compiled": false,
+      "executed": false
+    }
+  ],
+  "test_scope": "Full chat_keyboard press entry with isolated queue/history. Covers CSI and SS3 with both focus values, draft cursor and recipient, no send or queue changes, selection across list navigation, pending decision, and retained answer draft. Earlier test source is byte-identical.",
+  "validation": {
+    "first_format_checks": [
+      {
+        "command": "rustfmt --check on the two changed Rust files",
+        "exit_code": 1,
+        "reason": "Four assert_eq expressions needed multiline formatting."
+      },
+      {
+        "command": "git diff --check",
+        "exit_code": 0
+      }
+    ],
+    "format_adjustment_exit_code": 0,
+    "final_format_checks": [
+      {
+        "argv": [
+          "rustfmt",
+          "--check",
+          "--edition",
+          "2024",
+          "--config",
+          "skip_children=true",
+          "src/client/terminal/conversation/questions.rs",
+          "src/client/terminal/conversation/questions/history_tests.rs"
+        ],
+        "exit_code": 0,
+        "output": ""
+      },
+      {
+        "argv": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "output": ""
+      }
+    ],
+    "post_commit_git_checks": {
+      "count": 113,
+      "all_exit_zero": true
+    },
+    "git_receipt_records_are_not_tests": true,
+    "cargo_executed": false,
+    "author_check_helper_executed": false,
+    "compiled_or_tests_executed": false,
+    "gate_or_product_acceptance_executed": false,
+    "static_review": {
+      "status": "ready",
+      "reader": "reporting root and direct source reviewer",
+      "execution": false,
+      "new_acceptance_gate": false
+    }
+  },
+  "push": {
+    "count": 1,
+    "normal_push": true,
+    "exit_code": 0,
+    "remote_heads_recorded": {
+      "refs/heads/main": "9362d2232e1ca57d976308b10df6ed6b4b167332",
+      "refs/heads/work/local-startup-zuse-20261121": "183d7ada89d88e53b30c4d4bc8c4aef62c1e8d91"
+    },
+    "nonfatal_credential_store_DBus_warning": true
+  },
+  "clean": {
+    "index_and_worktree": true,
+    "porcelain": "",
+    "all_four_submodules": true,
+    "submodule_status": [
+      " fb2948f78467dd92b216aabda6f18a5645f0e7f6 crates/zharness (v0.6.0-3-gfb2948f)",
+      " 592a1be623b81a775026c470e6f0efe91fcf78f3 crates/zplugin (v0.3.1-3-g592a1be)",
+      " 9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e crates/ztuio (v0.1.0)",
+      " 8d37a7df6fd94df1d0939eb6800c238e71f5835d crates/zuse (v0.2.2-21-g8d37a7d)"
+    ]
+  },
+  "package_version": "0.10.25",
+  "unchanged_since_fixed_main": {
+    "Cargo.toml": {
+      "blob": "9e51d222b8049615691a6830e0447ec275e27058",
+      "bytes": 10109,
+      "sha256": "c7e9fa819512800dfee8704f22b4c2d0db74713622a0e0d82be6dea96007e8d1"
+    },
+    "Cargo.lock": {
+      "blob": "c64e987b31bb984d9e413164e6c057b027803c8c",
+      "bytes": 66476,
+      "sha256": "b8caf2e4f747094a0bcd12842b1fe7894d7d956efa1f8b756f17a16518b9d393"
+    },
+    ".github/workflows/ci.yml": {
+      "blob": "762eec62ae3e8d842f1188141ce13a422e931838",
+      "bytes": 15351,
+      "sha256": "d60f0b21ce4c16440d3dd39c1fb3d53fb21de3bb889a30c4ed4f8ae7822f9317"
+    },
+    ".github/workflows/release.yml": {
+      "blob": "41968605ad5d459d07ae599fccb1fb3d89a848d8",
+      "bytes": 24312,
+      "sha256": "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"
+    },
+    ".github/workflows/deploy-server.yml": {
+      "blob": "a550ffbfb4b915af8d6922bdf0f05ba5c58763ca",
+      "bytes": 4499,
+      "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+    },
+    "scripts/release.py": {
+      "blob": "1197f9b919f6fdfbbbb339a859fb50e63d17cfd9",
+      "bytes": 65061,
+      "sha256": "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"
+    },
+    "scripts/install.sh": {
+      "blob": "7620b1d29b87173492ea9d8b74d846f8d9c3c185",
+      "bytes": 6783,
+      "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+    },
+    "scripts/install.ps1": {
+      "blob": "eb13725db6cb24c06a137f1ff2129649d2c25515",
+      "bytes": 29653,
+      "sha256": "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"
+    },
+    "scripts/e2e_x11_text.py": {
+      "blob": "31531da68fa06f9f97ff73102fba1bc2a9096e08",
+      "bytes": 35493,
+      "sha256": "0408aa79331bccc611302b09840395eeedb0a03caa33fa9881c827585d6887fa"
+    },
+    "scripts/e2e_zuse_worker.py": {
+      "blob": "2cf496bcbe2f90683322bda1d4dd452dfa2d6bb5",
+      "bytes": 13634,
+      "sha256": "c27ea79cebedf476a726aa839c632d1adef1279a3cb54b1c6a8a4a1636b1a344"
+    },
+    "scripts/e2e.py": {
+      "blob": "58481fe227a3e19370cd864d6ab442ed9989ebef",
+      "bytes": 49927,
+      "sha256": "294c9fd997f30fba7f7046ef3b4f93e0876121655d952797bdb47222e9cd9c19"
+    },
+    "src/computer/zuse_backend.rs": {
+      "blob": "f18d7e8f723140b06214b294d95f33c237fc414f",
+      "bytes": 99165,
+      "sha256": "8d46d29815fc096e560efee0e9ffbf4336b48c1605c98c1723835ef02f0113e6"
+    },
+    "src/computer/host_control.rs": {
+      "blob": "d1fce5ebbd57028aa4b531c642a5b13eed808da2",
+      "bytes": 10870,
+      "sha256": "0e12445ab3f3d805712438c513b04b4b0ced2cd7a52f63b9ee4f069548a745a9"
+    },
+    "src/computer/host_control/storage.rs": {
+      "blob": "2468a8261694860fc2752bc8cdb53e5c91effbea",
+      "bytes": 27361,
+      "sha256": "bd9b61c8a5ea59d9016ced974847a22614d5ae95b39952d3738b0faf516921c6"
+    },
+    "src/client/terminal.rs": {
+      "blob": "c3e979e324880923d6d8a051ebcbf85c75a488af",
+      "bytes": 170232,
+      "sha256": "be037c6365f512ede0dcbb80f8b52b20c159e72c1962dd4ba9c85d0d23175b05"
+    },
+    "src/client/terminal/conversation.rs": {
+      "blob": "5b9bc37e7106227b4240140c5d0e992576baf2ca",
+      "bytes": 263811,
+      "sha256": "dc6c5d7e80fd22ae4996134a96a66b1a48ff546db0e2d3c84ae4d4c0bcfc29e8"
+    },
+    "src/client/terminal/conversation/canvas.rs": {
+      "blob": "8943e020faede5af6d1637d822544ca29405ca54",
+      "bytes": 46004,
+      "sha256": "92bfca8368b8024834e908229e2bc22e7bd902d17a551e15a8de86756757a188"
+    }
+  },
+  "gitlinks": {
+    "crates/zharness": {
+      "start": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "fixed_main": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "final": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "checkout": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "clean": true
+    },
+    "crates/zplugin": {
+      "start": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "fixed_main": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "final": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "checkout": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "clean": true
+    },
+    "crates/ztuio": {
+      "start": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "fixed_main": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "final": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "checkout": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "clean": true
+    },
+    "crates/zuse": {
+      "start": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "fixed_main": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "final": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "checkout": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "clean": true
+    }
+  },
+  "unchanged_internal_git_sources": {
+    "https://github.com/LIghtJUNction/z64.git": "7e9cff67beae2c484f8b9749b83ae24a1d0e1bbd",
+    "https://github.com/LIghtJUNction/zcall.git": "199678d08104bed588e5d10b2c0634a47d7c8417",
+    "https://github.com/LIghtJUNction/zclap.git": "4d87f3ae3743e81509d5ac5500909955667c860f",
+    "https://github.com/LIghtJUNction/zconv.git": "0af1f7eb0766ff0ce9db5cee7c6184eff511a8c1",
+    "https://github.com/LIghtJUNction/zguard.git": "6772b932a65e18f64e13591dee6edb2f6b099406",
+    "https://github.com/LIghtJUNction/zharness.git": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+    "https://github.com/LIghtJUNction/zmcpio.git": "04bb6cd05c5295ab41a892a76cbef10b8ac07402",
+    "https://github.com/LIghtJUNction/zplugin.git": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+    "https://github.com/LIghtJUNction/zsys.git": "808fcfdb73584ca7ca122e20b76f0209f56ab0f7",
+    "https://github.com/LIghtJUNction/ztuio.git": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+    "https://github.com/LIghtJUNction/zuse.git": "8d37a7df6fd94df1d0939eb6800c238e71f5835d"
+  },
+  "evidence": {
+    "launch": {
+      "file": "launch-receipt.json",
+      "bytes": 1937,
+      "sha256": "2bc2f79985c89f298071953a2ae0e8c97a4b95a3782209f63becf046981bc73e",
+      "read_scope": "Full original read."
+    },
+    "exit": {
+      "file": "author-exit.json",
+      "bytes": 2097,
+      "sha256": "61cbcbb457afba322749f791fbbfadcc081ee5dc640fe67fcf59fc0302647b3e",
+      "read_scope": "Full original read."
+    },
+    "source": {
+      "file": "source-changes-receipt.json",
+      "bytes": 56669,
+      "sha256": "f7019b48443b840a08ce5f160989b1a845684fb65da32bc8cf498c626b266c4a",
+      "read_scope": "Full original file hashed; selected identities, changes, clean state, scope, behavior and unchanged inputs read; full formatting, commit and push command records read; 113 Git result codes summarized, not each command output independently audited."
+    },
+    "diffs": {
+      "author-final.full.diff": {
+        "file": "author-final.full.diff",
+        "bytes": 6267,
+        "sha256": "23148a6905ec385c155315ffce2f70dd0fb906e403cd94b3ad73a891d5df18c4",
+        "read_scope": "Identity read from original source receipt; actual full author patch read separately from fixed GitHub commit."
+      },
+      "author-own-fixes.full.diff": {
+        "file": "author-own-fixes.full.diff",
+        "bytes": 6267,
+        "sha256": "23148a6905ec385c155315ffce2f70dd0fb906e403cd94b3ad73a891d5df18c4",
+        "read_scope": "Identity read from original source receipt; actual full author patch read separately from fixed GitHub commit."
+      }
+    }
+  },
+  "E16_preserved": {
+    "author": "561ef5a94763877893b0575e04b6da480761499c",
+    "merge": "9362d2232e1ca57d976308b10df6ed6b4b167332",
+    "path": "src/computer/zuse_backend.rs",
+    "identity": {
+      "blob": "f18d7e8f723140b06214b294d95f33c237fc414f",
+      "bytes": 99165,
+      "sha256": "8d46d29815fc096e560efee0e9ffbf4336b48c1605c98c1723835ef02f0113e6"
+    },
+    "compiled_or_tested_in_E17": false
+  },
+  "zuse_provenance": {
+    "repository": "https://github.com/LIghtJUNction/zuse.git",
+    "locked": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+    "package_name": "zuse-computer",
+    "package_version": "0.3.0",
+    "observation_kind": "historical_default_branch_merge_observation",
+    "default_ref": "refs/heads/main",
+    "effective_merge_event_utc": "2026-11-21T11:57:18Z",
+    "source_owner_actual_GET_started_utc": "2026-11-21T12:44:42+00:00",
+    "source_owner_actual_GET_finished_utc": "2026-11-21T12:44:47+00:00",
+    "current_head_separately_observed": "0016f96067d1e4672c62be9d8008d210edcdae2d",
+    "current_head_equals_pin": false,
+    "local_fetch_history": {
+      "old": "ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc",
+      "new": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "effective_utc": "2026-11-21T12:01:38+00:00",
+      "action": "pull: fast-forward",
+      "source_owner_read_utc": "2026-11-21T12:46:20.216987+00:00"
+    },
+    "primary_urls": [
+      "https://api.github.com/repos/LIghtJUNction/zuse/pulls/5",
+      "https://api.github.com/repos/LIghtJUNction/zuse/issues/events/36857051430"
+    ],
+    "report_root_independent_GitHub_PR_and_event_read": true,
+    "native_records": [
+      {
+        "file": "git-heads-v25-r19-zuse-provenance.json",
+        "bytes": 2952,
+        "sha256": "dab33ec58babca0501b955b8a6784ba34b862fd36091cde6d9b10dcc75664586",
+        "read_scope": "Full original read."
+      },
+      {
+        "file": "git-heads-v25-r19-zuse-current-ref.raw.json",
+        "bytes": 334,
+        "sha256": "bd7672237c4d656aa3c21514d168c765338c353cf8d0da8b9348cd9ad88e7cec",
+        "read_scope": "Full original read."
+      },
+      {
+        "file": "git-heads-v25-r19-zuse-pr5.raw.json",
+        "bytes": 22875,
+        "sha256": "1a333d6d1c09d5bf24290d1fa2cfc0932372f91d3dc53049235a1b6424deaaf8",
+        "read_scope": "Full file hashed; PR/event identity and time fields read."
+      },
+      {
+        "file": "git-heads-v25-r19-zuse-merge-event.raw.json",
+        "bytes": 9686,
+        "sha256": "0409e1de2e79cd49e910e3a2a2b71f7583bff490b743a1ea21c6655ea79f0cb3",
+        "read_scope": "Full file hashed; PR/event identity and time fields read."
+      },
+      {
+        "file": "git-heads-v25-r19-zuse-origin-main.reflog.raw",
+        "bytes": 845,
+        "sha256": "26425a9fcec8749ab5048ef638a279e997190cd002017fb151b47d39f86324ff",
+        "read_scope": "Full file hashed; all rows projected to SHAs, epoch, timezone and action; personal identity fields omitted."
+      }
+    ],
+    "current_ancestry_separate_observation": {
+      "head": "0016f96067d1e4672c62be9d8008d210edcdae2d",
+      "base": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "ahead_by": 5,
+      "behind_by": 0,
+      "merge_base": "8d37a7df6fd94df1d0939eb6800c238e71f5835d",
+      "limits": "Includes a merged side branch, not five consecutive first-parent changes. Current ancestry and commit dates do not replace historical branch evidence."
+    },
+    "dependency_updated_in_E17": false
+  },
+  "release": {
+    "direct_publish_request_recorded_by_source_owner": true,
+    "original_delivery_independently_read_by_reporting_root": false,
+    "checkpoint_request_record_read": true,
+    "prior_cross_project_relay_hold_cleared": true,
+    "dispatch_performed": false,
+    "H2_executed": false,
+    "production_install_reload_deploy_performed_in_this_flow": false
+  },
+  "new_source_validation": {
+    "Gate19": "source_owner_reported_preparation_only_not_bound_or_launched",
+    "original_stage_count": 35,
+    "new_regressions_planned_in_existing_library_private": true,
+    "downstream": "paused until original source handoff",
+    "old_results_do_not_transfer": true,
+    "source": "cf358f00f84b73e9892e62dd9b50b0dcc218201c",
+    "tree": "a9b283173ee46cff86ca4a119566f0ebc488292a",
+    "owner_reported_preparation": "Binder prepared; exact 8d37 objects and final source freeze still being prepared. No compilation, new stage or product execution claimed."
+  },
+  "old_results": {
+    "source": "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+    "Gate18": "35 passed",
+    "N18": "passed readonly parse;0product",
+    "runtime18": "18 passed",
+    "UI24": "3passed, fourth failed,20notrun;264 parent assertions;5child cases separate",
+    "old_results_transferred_to_new_source": false
+  },
+  "recovery_last_original_observation": {
+    "checkpoint": {
+      "file": "continuation.json",
+      "bytes": 18692,
+      "sha256": "fde3655b67726ad74dbf7d78613ed03f3f9676a2fddc3630de6ccfefb5739622",
+      "saved_utc": "2026-11-21T12:29:58.915519+00:00",
+      "saved_state": "E16 started; later actual author completion is independently recorded above",
+      "source_checkpoint": {
+        "file": "root-continuation-e16-started-20261121-v1.json",
+        "bytes": 11926,
+        "sha256": "ae65430cfa72fa2931a266a4d0e217965d9a0246cabf1b0528c04329a88de341"
+      },
+      "restore_script_unchanged": true,
+      "config_unchanged": true,
+      "natural_restore_triggered": false,
+      "completed_and_logs_absent_at_root_read": true
+    },
+    "meaning": "Last independently read recovery checkpoint is the E16-start snapshot. It is not treated as a current E17 phase status; no later checkpoint is claimed read.",
+    "natural_restore_triggered": false,
+    "report_root_rebooted_or_launched_recovery": false
+  },
+  "report_root_heavy_or_queued_work": 0
+}

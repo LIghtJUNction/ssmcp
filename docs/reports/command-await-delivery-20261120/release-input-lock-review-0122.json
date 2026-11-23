@@ -1,0 +1,310 @@
+{
+  "schema": "ssmcp.release-input-lock-review.v1",
+  "checkpoint_utc": "2026-11-21T01:33:27Z",
+  "scope": "Published version preparation and bounded deployment-policy test result; InputLease analysis is static and not an actual failure root-cause attribution.",
+  "previous_published_checkpoint": {
+    "commit": "6a1393434a6c9c237d21a43eef5674dd6e6c5b52",
+    "tree": "38da05766d6b8eb6a8f34d8a8a069e81a1a1a5e2",
+    "readme_bytes": 105126,
+    "readme_sha256": "f615ac6d88cd49c7544ea670158644d099a5cfca17b4d23f90b93f2990ec24e9",
+    "readme_url": "https://github.com/LIghtJUNction/ssmcp/blob/6a1393434a6c9c237d21a43eef5674dd6e6c5b52/docs/reports/command-await-delivery-20261120/README.md",
+    "frozen_source_record_url": "https://github.com/LIghtJUNction/ssmcp/blob/6a1393434a6c9c237d21a43eef5674dd6e6c5b52/docs/reports/command-await-delivery-20261120/frozen-source-0047.json",
+    "history_preserved_except_previous_current_heading": true
+  },
+  "public_observation_history": [
+    {
+      "utc": "2026-11-21T01:22:51Z",
+      "kind": "work branch readback",
+      "branch": "work/release21-recovery-20261121",
+      "head": "be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1",
+      "interpretation": "Historical readback still at B; no new public preparation head concluded at that time."
+    },
+    {
+      "utc": "2026-11-21T01:25:44Z",
+      "kind": "Complete six-file commit diff, PR and Cargo readback",
+      "head": "f4e6ff043eef6686a9013750ffcb8ab66926b9d4",
+      "verified_by_coordinating_reviewer": true
+    }
+  ],
+  "preparation_source": {
+    "commit": "f4e6ff043eef6686a9013750ffcb8ab66926b9d4",
+    "tree": "d6546dd46464ac1cbb1c3aabc0493638a44649f7",
+    "parents": [
+      "be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1"
+    ],
+    "commit_url": "https://github.com/LIghtJUNction/ssmcp/commit/f4e6ff043eef6686a9013750ffcb8ab66926b9d4",
+    "cargo_version": "0.10.25",
+    "commit_date_utc": "2026-11-21T01:15:58Z",
+    "commit_message": "release: prepare 0.10.25 source metadata [skip ci]",
+    "changed_files": [
+      "Cargo.toml",
+      "Cargo.lock",
+      ".github/workflows/release.yml",
+      "scripts/test_release.py",
+      "docs/releases.md",
+      "docs/release-notes-0.10.25.md"
+    ],
+    "files_changed_count": 6,
+    "additions": 23,
+    "deletions": 5,
+    "cargo_lock_change": "ssmcp self version 0.10.24 to 0.10.25 only",
+    "src_changed": false,
+    "gitlinks_changed": false,
+    "final_freeze": false,
+    "release_note_lines": 17,
+    "release_note_claim": "Preparation only; final integration, build/runtime, publication and installation remain to be confirmed.",
+    "no_runtime_result_transferred_from_b_or_fc": true
+  },
+  "pull_request": {
+    "number": 159,
+    "state": "open",
+    "draft": true,
+    "merged": false,
+    "head": "f4e6ff043eef6686a9013750ffcb8ab66926b9d4",
+    "base": "f33ed8f14fc14aff05a2e4098743eb07e8527c06",
+    "url": "https://github.com/LIghtJUNction/ssmcp/pull/159"
+  },
+  "source_final_readback": {
+    "observed_utc": "2026-11-21T01:27:48.842218Z",
+    "commit": "be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1",
+    "tree": "5e8ea273c8f8bd8b0e7b1f87ccc0d19fd594601b",
+    "git_only": true,
+    "command_exit_codes": [
+      0,
+      0
+    ],
+    "latest_independently_read_freeze_remains_b": true,
+    "p_is_not_final_frozen_source": true
+  },
+  "release_policy": {
+    "historical_source": "be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1",
+    "current_preparation_source": "f4e6ff043eef6686a9013750ffcb8ab66926b9d4",
+    "requested_default": true,
+    "deploy_server_input_read_only_for": "workflow_dispatch",
+    "deploy_condition": "publish == true AND requested AND no matching deferred version",
+    "b_deferred_versions": [
+      "0.10.15",
+      "0.10.16",
+      "0.10.17",
+      "0.10.18",
+      "0.10.19",
+      "0.10.20",
+      "0.10.21",
+      "0.10.22",
+      "0.10.23",
+      "0.10.24"
+    ],
+    "b_version_24_already_deferred": true,
+    "b_inference": "With publish=true, tag-push keeps requested=true; changing only the version to an unlisted version would enable deploy_server.",
+    "inference_is_not_an_actual_deployment": true,
+    "p_deferred_versions": [
+      "0.10.15",
+      "0.10.16",
+      "0.10.17",
+      "0.10.18",
+      "0.10.19",
+      "0.10.20",
+      "0.10.21",
+      "0.10.22",
+      "0.10.23",
+      "0.10.24",
+      "0.10.25"
+    ],
+    "p_added_deferred_version": "0.10.25",
+    "p_non_deferred_test_control": "0.10.26",
+    "retained_rc_control": "0.10.24-rc.1",
+    "other_test_assertions_unchanged": true,
+    "change_is_implemented_in_p": true
+  },
+  "deployment_policy_validation": {
+    "suite": "DeploymentPolicyTests",
+    "existing_tests_only": true,
+    "tests_passed": 11,
+    "whole_test_release_suite_executed": false,
+    "unittest_seconds": 2.587,
+    "outer_step_seconds": 2.778227721020812,
+    "exit_code": 0,
+    "started_utc": "2026-11-21T01:19:09.943543Z",
+    "finished_utc": "2026-11-21T01:19:12.721766Z",
+    "source": "f4e6ff043eef6686a9013750ffcb8ab66926b9d4",
+    "tree": "d6546dd46464ac1cbb1c3aabc0493638a44649f7",
+    "source_before_equals_after": true,
+    "source_clean_before_and_after": true,
+    "recorded_input_files_count": 4,
+    "input_bytes_and_sha256_unchanged": true,
+    "inputs_unchanged": true,
+    "cargo_or_product_binary_run": false,
+    "ci_or_publish_or_deploy": false,
+    "shared_target_lock_acquired": false,
+    "coordinating_reviewer_read_complete_receipt": true,
+    "coordinating_reviewer_read_complete_stderr": true
+  },
+  "normal_push": {
+    "exit_code": 0,
+    "force": false,
+    "normal": true,
+    "remote_before": "be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1",
+    "remote_after": "f4e6ff043eef6686a9013750ffcb8ab66926b9d4",
+    "remote_after_equals_preparation_source": true,
+    "source_final_unchanged": true,
+    "publication_or_deployment": false,
+    "coordinating_reviewer_read_complete_receipt": true,
+    "does_not_establish_author_process_exit": true,
+    "receipt_utc": "2026-11-21T01:23:37.381104Z"
+  },
+  "read_receipts_and_logs": [
+    {
+      "kind": "deployment policy receipt",
+      "bytes": 4079,
+      "sha256": "4283a9f76824f70d6a8e197c744845b94683019e8652be9def486d8be3611098",
+      "coordinating_reviewer_complete_read_and_hash_verified": true
+    },
+    {
+      "kind": "normal push receipt",
+      "bytes": 837,
+      "sha256": "f3aa4a1a7c48a67e242829cb8a074d03efb8b9c500c73752b274acc26b35c48d",
+      "coordinating_reviewer_complete_read_and_hash_verified": true
+    },
+    {
+      "kind": "static review receipt",
+      "bytes": 1052,
+      "sha256": "079778cbb8f4ef02f9ec5ce7d0c8270eaca94615660673c49adc2e9b47c96a38",
+      "coordinating_reviewer_complete_read_and_hash_verified": true,
+      "native_full_diff_referenced_by_receipt_independently_read": false,
+      "github_complete_six_file_patch_independently_read": true
+    },
+    {
+      "kind": "deployment policy stderr",
+      "bytes": 1835,
+      "sha256": "0857ddd4511c4b90e29c5b841e753c1aed6be3f36a86c2bfd55fd66e8203a075",
+      "coordinating_reviewer_complete_read_and_hash_verified": true
+    },
+    {
+      "kind": "deployment policy stdout",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "coordinating_reviewer_verified_bytes_and_sha256": true
+    }
+  ],
+  "input_lease_static_review": {
+    "fixed_source": "be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1",
+    "p_did_not_change_corresponding_src": true,
+    "type_fields": [
+      "File",
+      "Arc<Store>"
+    ],
+    "custom_clone_or_drop_or_explicit_unlock_in_reviewed_type": false,
+    "try_input_reads_enabled_ticket_or_state_json": false,
+    "try_input_action": "Open input.lock and attempt a nonblocking platform file lock.",
+    "none_result": "Recognized lock contention only; other errors remain errors.",
+    "reported_failure": {
+      "test": "off_drops_running_input_before_its_guard_is_released",
+      "location": "src/computer/host_control/tests.rs:220",
+      "assertion": "try_input().unwrap().is_some()",
+      "evidence_level": "Source owner report only; coordinating reviewer has not read that original failure log."
+    },
+    "conditional_interpretation": "If the reported failing assertion is accurate, the low-level call returned None for input lock busy; this does not identify an FD or process owner.",
+    "two_second_state_lock_timeout_is_not_this_path": true,
+    "test_sequence": [
+      "Retain lease while operation returns ENDED and its internal guard drops.",
+      "Assert try_input is None while the lease is retained.",
+      "Drop lease.",
+      "Assert try_input is Some."
+    ],
+    "final_some_assertion_should_be_retained": true,
+    "actual_failure_root_cause_proven": false,
+    "linux_mechanism": {
+      "flock_owned_by": "open file description",
+      "fork_or_dup_copies_share_lock": true,
+      "explicit_unlock_on_any_duplicate_releases_lock": true,
+      "close_only_release_requires_all_duplicates_closed": true,
+      "o_cloexec_acts_at_exec_not_fork": true,
+      "fork_to_exec_retention_is_possible": true,
+      "actual_fork_or_duplicate_in_failed_run_proven": false,
+      "actual_failed_fd_or_process_attribution": null
+    }
+  },
+  "windows_unlock_static_review": {
+    "fixed_source": "be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1",
+    "rust_version": "1.100.0",
+    "lock_file_ex": {
+      "offset_low": 4294967295,
+      "offset_high": 0,
+      "length_low": 1,
+      "length_high": 0
+    },
+    "rust_file_unlock": {
+      "offset_low": 0,
+      "offset_high": 0,
+      "length_low": 4294967295,
+      "length_high": 4294967295
+    },
+    "ranges_equal": false,
+    "microsoft_requires_exact_locked_range_match": true,
+    "containing_larger_range_is_not_sufficient": true,
+    "rust_first_unlock_failure_returns_before_second_call": true,
+    "second_call_error_not_locked_tolerance_does_not_repair_first_failure": true,
+    "implementation_constraint": "Any future explicit InputLease unlock must match the platform lock; File::unlock cannot be copied unconditionally for this Windows byte-range lock.",
+    "current_windows_lock_leak_proven": false,
+    "runtime_reproduction_executed_for_this_review": false
+  },
+  "sources": {
+    "b_release_policy": "https://github.com/LIghtJUNction/ssmcp/blob/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1/.github/workflows/release.yml#L75-L122",
+    "p_release_policy": "https://github.com/LIghtJUNction/ssmcp/blob/f4e6ff043eef6686a9013750ffcb8ab66926b9d4/.github/workflows/release.yml#L104-L118",
+    "p_deployment_policy_tests": "https://github.com/LIghtJUNction/ssmcp/blob/f4e6ff043eef6686a9013750ffcb8ab66926b9d4/scripts/test_release.py#L71-L193",
+    "p_release_notes": "https://github.com/LIghtJUNction/ssmcp/blob/f4e6ff043eef6686a9013750ffcb8ab66926b9d4/docs/release-notes-0.10.25.md",
+    "b_input_lease_type": "https://github.com/LIghtJUNction/ssmcp/blob/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1/src/computer/host_control/storage.rs#L48-L60",
+    "b_try_input": "https://github.com/LIghtJUNction/ssmcp/blob/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1/src/computer/host_control/storage.rs#L218-L228",
+    "b_input_lease_test": "https://github.com/LIghtJUNction/ssmcp/blob/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1/src/computer/host_control/tests.rs#L185-L220",
+    "b_windows_lock": "https://github.com/LIghtJUNction/ssmcp/blob/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1/src/platform_windows.rs#L267-L297",
+    "rust_windows_unlock": "https://github.com/rust-lang/rust/blob/1.100.0/library/std/src/sys/fs/windows.rs#L486-L499",
+    "flock": "https://man7.org/linux/man-pages/man2/flock.2.html",
+    "fork": "https://man7.org/linux/man-pages/man2/fork.2.html",
+    "open": "https://man7.org/linux/man-pages/man2/open.2.html",
+    "unlock_file": "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-unlockfile",
+    "unlock_file_ex": "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-unlockfileex",
+    "subsequent_public_fix": "https://github.com/LIghtJUNction/ssmcp/commit/d4c4b9c6fe09a4d7b246ca54a08f5c7b258289fb",
+    "subsequent_input_lease_source": "https://github.com/LIghtJUNction/ssmcp/blob/d4c4b9c6fe09a4d7b246ca54a08f5c7b258289fb/src/computer/host_control/storage.rs"
+  },
+  "remaining_validation": {
+    "p_final_freeze": false,
+    "product_build_pass": false,
+    "product_runtime_pass": false,
+    "final_p1_pass": false,
+    "formal_release_verified": false
+  },
+  "document_review_execution": {
+    "product_builds": 0,
+    "product_runtime_runs": 0,
+    "ci_triggers": 0,
+    "publication_helper_runs": 0,
+    "source_files_changed": 0,
+    "policy_test_result_is_existing_author_execution_not_a_document_review_rerun": true
+  },
+  "finish_approval": false,
+  "preparation_review_checkpoint_utc": "2026-11-21T01:30:21Z",
+  "subsequent_public_fix_source": {
+    "observed_utc": "2026-11-21T01:33:27Z",
+    "commit": "d4c4b9c6fe09a4d7b246ca54a08f5c7b258289fb",
+    "tree": "c64ea74cfb85474f05dd2c8bb3c834c73d10b08e",
+    "parent": "10fdc1c10888c59799bb98908911033bacc3f046",
+    "base": "f33ed8f14fc14aff05a2e4098743eb07e8527c06",
+    "commits_ahead": 10,
+    "complete_public_commit_chain_read": true,
+    "regression_commit": "224c2338b3170ebdfe4dde4d4835e5dedb813194",
+    "unix_fix_commit": "10fdc1c10888c59799bb98908911033bacc3f046",
+    "input_lease_change": {
+      "unix_only_drop": true,
+      "explicit_unlock_before_close": true,
+      "interrupted_retry": true,
+      "new_unix_duplicate_descriptor_regression": true,
+      "old_cancellation_test_and_final_some_preserved": true,
+      "windows_file_unlock_not_introduced": true,
+      "non_interrupted_unlock_error": "Stop retrying and continue field destruction; successful unlock is not asserted for that branch."
+    },
+    "scope": "Public source identity and narrow static code review only; independent line runtime scores are not copied or verified here.",
+    "existing_source_owner_merge_plan": "Normal integration into version25 preparation by the same existing author.",
+    "integrated_candidate_commit_verified": null,
+    "final_freeze_verified": false
+  }
+}

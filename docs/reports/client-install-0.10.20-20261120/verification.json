@@ -1,0 +1,382 @@
+{
+  "release": {
+    "source_commit": "4f4dd88275c205e0e61a7601b4e0d11f56038769",
+    "annotated_tag_object": "ae483355fd85e40ecb3e0f04ff64338b17a9ffc9",
+    "tag": "v0.10.20",
+    "id": 452506742,
+    "published_at": "2026-11-20T09:43:48Z",
+    "asset_count": 16,
+    "api": "https://api.github.com/repos/LIghtJUNction/ssmcp/releases/tags/v0.10.20",
+    "initial_latest": {
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/releases/latest",
+      "tag": "v0.10.20",
+      "release_id": 452506742
+    },
+    "latest_recheck": {
+      "http_status": 403,
+      "result": "unavailable"
+    },
+    "workflow": {
+      "run_id": 44710769033,
+      "head_sha": "4f4dd88275c205e0e61a7601b4e0d11f56038769",
+      "event": "workflow_dispatch",
+      "conclusion": "success",
+      "job_count": 19,
+      "job_conclusions": {
+        "publish_crates": "success",
+        "publish_release": "success",
+        "deploy_server": "skipped"
+      },
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44710769033"
+    },
+    "coordinator_latest_readback": {
+      "method": "authorized GitHub connector",
+      "release_id": 452506742,
+      "tag": "v0.10.20",
+      "published_at": "2026-11-20T09:43:48Z"
+    }
+  },
+  "assets": {
+    "ssmcp-x86_64-unknown-linux-gnu.tar.gz": {
+      "bytes": 10141793,
+      "sha256": "33ab32051b99fa36c11935dd8438d0987c073bcb64317bec11a227d29eacb2cc",
+      "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.20/ssmcp-x86_64-unknown-linux-gnu.tar.gz"
+    },
+    "release-manifest.json": {
+      "bytes": 2118,
+      "sha256": "52bf95a1cbd624b8532fddb6d5ee4895480c3b5bad901eab16cac1af8ee29f67",
+      "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.20/release-manifest.json"
+    },
+    "SHA256SUMS": {
+      "bytes": 762,
+      "sha256": "df65ef071e1574e621a33dd1ec77fd15ec9f002a85fd548528c78a1e59200712",
+      "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.20/SHA256SUMS"
+    }
+  },
+  "archived_client": {
+    "sha256": "434b6158bbb8e1ff12ffceb6bc0d703f20d368653c37b59ede2333a128bbfe2e",
+    "bytes": 13434720,
+    "version_output": "ssmcp 0.10.20",
+    "help_sha256": "d7d6c1b4eb6bfa9e40e1384aa969b149dec1e057cb73f9c61917576b317f17ae",
+    "target": "x86_64-unknown-linux-gnu",
+    "elf": "ELF64 little-endian x86-64 PIE",
+    "interpreter": "/lib64/ld-linux-x86-64.so.2",
+    "maximum_glibc_symbol_version": "2.34",
+    "host_glibc_version": "2.44",
+    "runtime_checks": [
+      "--version",
+      "--help"
+    ]
+  },
+  "registry": {
+    "payload_url": "https://static.crates.io/crates/ssmcp/ssmcp-0.10.20.crate",
+    "bytes": 8877099,
+    "payload_sha256": "192a5dd1a8623b82d7353cf7abfb28df6957b60934af43ceaef37a07a7696a78",
+    "matches_coordinator_supplied_checksum": true,
+    "cargo_vcs_info": {
+      "git": {
+        "sha1": "4f4dd88275c205e0e61a7601b4e0d11f56038769"
+      },
+      "path_in_vcs": ""
+    },
+    "metadata_url": "https://crates.io/api/v1/crates/ssmcp/0.10.20",
+    "metadata_http_status": 403,
+    "metadata_checksum_independently_read": false
+  },
+  "local": {
+    "baseline_sample_at": "2026-11-20T09:53:45.947916+00:00",
+    "checkpoint_sample_at": "2026-11-20T09:54:22.005079+00:00",
+    "path_selected": "$HOME/.local/bin/ssmcp",
+    "before": {
+      "$HOME/.local/bin/ssmcp": {
+        "version": "0.10.10",
+        "kind": "symlink",
+        "resolved": "$HOME/.local/share/oh-my-ztty/releases/0.2.5-linux-x86_64/bin/ssmcp",
+        "sha256": "409af30e7af8f4c43be24e1f9fc87ec46320a7531f89b590eab31265812055e7"
+      },
+      "$HOME/.cargo/bin/ssmcp": {
+        "version": "0.10.15",
+        "kind": "regular",
+        "resolved": "$HOME/.cargo/bin/ssmcp",
+        "sha256": "2c511ec9363d106e91173bbeda0213e7cb107d70484ccf025362094dc823f7c2"
+      },
+      "/usr/bin/ssmcp": {
+        "version": "0.9.1",
+        "kind": "regular",
+        "resolved": "/usr/bin/ssmcp",
+        "sha256": "59f29540db09e78dc21d49e17bedc279f7c0721bf5aba8939a7d1ef99d13bc13"
+      }
+    },
+    "checkpoint": {
+      "$HOME/.local/bin/ssmcp": {
+        "version": "0.10.10",
+        "kind": "symlink",
+        "resolved": "$HOME/.local/share/oh-my-ztty/releases/0.2.5-linux-x86_64/bin/ssmcp",
+        "sha256": "409af30e7af8f4c43be24e1f9fc87ec46320a7531f89b590eab31265812055e7"
+      },
+      "$HOME/.cargo/bin/ssmcp": {
+        "version": "0.10.15",
+        "kind": "regular",
+        "resolved": "$HOME/.cargo/bin/ssmcp",
+        "sha256": "2c511ec9363d106e91173bbeda0213e7cb107d70484ccf025362094dc823f7c2"
+      },
+      "/usr/bin/ssmcp": {
+        "version": "0.9.1",
+        "kind": "regular",
+        "resolved": "/usr/bin/ssmcp",
+        "sha256": "59f29540db09e78dc21d49e17bedc279f7c0721bf5aba8939a7d1ef99d13bc13"
+      }
+    },
+    "executable_replacement": false,
+    "rollback_backup_created": false,
+    "destination_blocker": "PATH-selected symlink into an oh-my-ztty-managed bundle",
+    "cargo": {
+      ".crates.toml": {
+        "sha256": "2028570d9e67929b0e9a5934222b945b8c9506c8d127ffd6d7d24567aa915a36",
+        "other_package_count": 37,
+        "ssmcp_version": "0.10.15",
+        "ssmcp_record_source_kind": "local_path"
+      },
+      ".crates2.json": {
+        "sha256": "ba7ea1dccccf14b993e8c74ce8c6b4f00ea1179da6a28375f7935ef4407d6c32",
+        "other_package_count": 37,
+        "ssmcp_version": "0.10.15",
+        "ssmcp_record_source_kind": "local_path"
+      }
+    },
+    "user_state_existing_files_hashed": 7,
+    "user_state_hashes_unchanged": true,
+    "cargo_records_byte_identical": true,
+    "path_unchanged": true,
+    "sample_scope": "initial native-path checkpoint before Cargo target authorization"
+  },
+  "continuity": {
+    "processes_sampled": 33,
+    "same_pid_start_ticks_and_executable": 31,
+    "sampled_pids_absent_at_checkpoint": 2,
+    "loaded_service_records_unchanged": true,
+    "active_units_sampled": 5,
+    "task_sent_process_signals": 0,
+    "task_service_mutations": 0,
+    "identity_read_limitations": 0,
+    "sample_scope": "initial native-path checkpoint before Cargo target authorization"
+  },
+  "acceptance": {
+    "zero_argument_probe": "completed_and_cleaned",
+    "legacy_self_fallback": "terminal_notice_observed",
+    "legacy_self_fallback_notice": "Older relay: reconnecting once with the same verified account and self-only access.",
+    "relay_listing_exact_workspace_match": true,
+    "terminal_connected_marker_observed": false,
+    "native_printf": {
+      "executable": "/usr/bin/printf",
+      "stdout": "ssmcp-0.10.20-native-probe-ok\n",
+      "stdout_bytes": 30,
+      "stderr_bytes": 0,
+      "exit_code": 0,
+      "state": "completed",
+      "cancelled": false,
+      "timed_out": false,
+      "verified_via": "coordinator live-client listing, native exec schema and completed job receipt"
+    },
+    "probe_cleanup": {
+      "status": "complete",
+      "exit_code": 0,
+      "graceful_signal": "SIGINT to verified probe pidfd",
+      "runner_exited_naturally": true,
+      "owned_scope_processes_gone": 4,
+      "scope_unloaded": true
+    }
+  },
+  "cargo_path_install": {
+    "destination": "$HOME/.cargo/bin/ssmcp",
+    "before": {
+      "version": "0.10.15",
+      "sha256": "2c511ec9363d106e91173bbeda0213e7cb107d70484ccf025362094dc823f7c2"
+    },
+    "after": {
+      "version": "0.10.20",
+      "sha256": "434b6158bbb8e1ff12ffceb6bc0d703f20d368653c37b59ede2333a128bbfe2e",
+      "source": "official GitHub release archive",
+      "mode": "0755"
+    },
+    "atomic_rename": true,
+    "destination_directory_synced": true,
+    "private_backup_verified": true,
+    "cargo_last_install": {
+      "recorded_version": "0.10.15",
+      "record_source": "local_path",
+      "other_package_records_per_file": 37,
+      "both_record_files_byte_identical": true
+    },
+    "path_resolution": {
+      "before": {
+        "login_interactive_zsh": {
+          "path": "$HOME/.cargo/bin/ssmcp",
+          "version": "0.10.15"
+        },
+        "native_execution": {
+          "path": "$HOME/.local/bin/ssmcp",
+          "version": "0.10.10"
+        },
+        "systemd_user_manager_path": {
+          "path": "$HOME/.local/share/mise/shims/ssmcp",
+          "version": "0.10.10"
+        }
+      },
+      "after": {
+        "login_interactive_zsh": {
+          "path": "$HOME/.cargo/bin/ssmcp",
+          "version": "0.10.20"
+        },
+        "native_execution": {
+          "path": "$HOME/.local/bin/ssmcp",
+          "version": "0.10.10"
+        },
+        "systemd_user_manager_path": {
+          "path": "$HOME/.local/share/mise/shims/ssmcp",
+          "version": "0.10.10"
+        }
+      }
+    },
+    "sample": {
+      "sample_before_at": "2026-11-20T09:58:17.969169+00:00",
+      "sample_after_at": "2026-11-20T10:00:17.042059+00:00",
+      "process_counts_by_class": {
+        "loaded_service_main": {
+          "retained": 5
+        },
+        "persistent_candidate": {
+          "retained": 26,
+          "same_retired_inode": 19
+        }
+      },
+      "service_properties_unchanged": true,
+      "native_path_unchanged": true,
+      "systemd_path_unchanged": true,
+      "sampled_user_state_hashes_unchanged": true,
+      "cargo_records_byte_identical": true,
+      "other_sampled_executables_unchanged": true,
+      "zsh_snapshot_files_unchanged": true,
+      "zsh_startup_path_identical": true,
+      "histfile_selection_identical": true,
+      "configured_history_file_exists": true,
+      "configured_history_mtime_predates_measurements": true,
+      "read_limitations_count": 0
+    },
+    "signals_sent_to_existing_processes": 0,
+    "existing_service_mutations": 0
+  },
+  "production_readonly": {
+    "outcome": "blocked_active_sessions",
+    "inspection_exit": 3,
+    "version": "0.10.13",
+    "same_process_during_inspection": true,
+    "matches_previously_recorded_pid": true,
+    "matches_previously_recorded_start_timestamp": true,
+    "matches_previously_recorded_version": true,
+    "matches_previously_recorded_executable_sha256": true,
+    "restarts": 0,
+    "historical_start_ticks_match": null,
+    "admission_fence_verified": false,
+    "switch_permitted": false,
+    "reason": "The current daemon has no verified atomic admission fence or drain lease.",
+    "receipt_reused_for_final_acceptance": true
+  },
+  "final_readback": {
+    "sample_at": "2026-11-20T10:03:28.782729+00:00",
+    "installed": {
+      "path": "$HOME/.cargo/bin/ssmcp",
+      "version": "0.10.20",
+      "sha256": "434b6158bbb8e1ff12ffceb6bc0d703f20d368653c37b59ede2333a128bbfe2e",
+      "matches_swapped_inode": true,
+      "private_rollback_copy_reverified": true
+    },
+    "path_resolution": {
+      "login_interactive_zsh": {
+        "path": "$HOME/.cargo/bin/ssmcp",
+        "version": "0.10.20"
+      },
+      "native_execution": {
+        "path": "$HOME/.local/bin/ssmcp",
+        "version": "0.10.10"
+      },
+      "systemd_user_manager_path": {
+        "path": "$HOME/.local/share/mise/shims/ssmcp",
+        "version": "0.10.10"
+      }
+    },
+    "native_path_unchanged": false,
+    "systemd_manager_path_unchanged": true,
+    "login_zsh_path_unchanged": false,
+    "zsh_startup_and_history_unchanged_during_final_sample": true,
+    "opaque_user_state_hashes_unchanged": true,
+    "cargo_records_byte_identical": true,
+    "other_package_records_per_file": {
+      ".crates.toml": 37,
+      ".crates2.json": 37
+    },
+    "native_bundle_sample_identical": true,
+    "native_symlink_payload_matches_recorded_path": true,
+    "service_observations_match_replacement_baseline": true,
+    "service_observations_match_pre_cleanup": true,
+    "process_counts_across_replacement_to_final": {
+      "loaded_service_main": {
+        "retained": 5
+      },
+      "persistent_candidate": {
+        "retained": 24,
+        "absent": 2
+      }
+    },
+    "process_counts_from_previous_probe_checkpoint_to_final_excluding_owned_scope": {
+      "loaded_service_main": {
+        "retained": 5
+      },
+      "persistent_candidate": {
+        "retained": 24,
+        "absent": 2
+      },
+      "short_lived_or_unclassified": {
+        "absent": 1
+      }
+    },
+    "read_limitations_count": 0,
+    "process_identity_basis": "PID, start ticks, executable device and inode",
+    "existing_process_signals": 0,
+    "existing_service_mutations": 0,
+    "path_comparison": {
+      "native_execution": {
+        "exact_match": false,
+        "equal_excluding_worker_arg0_paths": true,
+        "observed_redacted_diff": [
+          {
+            "op": "replace",
+            "old": [
+              "$HOME/.codex/tmp/arg0-linux/<worker-specific>"
+            ],
+            "new": [
+              "$HOME/.codex/tmp/arg0-linux/<worker-specific>"
+            ]
+          }
+        ]
+      },
+      "login_zsh": {
+        "exact_match": false,
+        "equal_excluding_worker_arg0_paths": true,
+        "observed_redacted_diff": [
+          {
+            "op": "replace",
+            "old": [
+              "$HOME/.codex/tmp/arg0-linux/<worker-specific>"
+            ],
+            "new": [
+              "$HOME/.codex/tmp/arg0-linux/<worker-specific>"
+            ]
+          }
+        ]
+      },
+      "startup_and_history_back_to_initial_sample_match": true,
+      "final_and_initial_native_survey_absent_pids_distinct": true
+    }
+  }
+}
