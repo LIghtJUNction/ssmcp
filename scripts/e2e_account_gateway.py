@@ -8,6 +8,7 @@ This module deliberately imports no scenario modules.
 
 import base64
 import hashlib
+from html import escape
 from html.parser import HTMLParser
 import http.client
 import json
@@ -28,10 +29,8 @@ IDENTITY = {"provider": "github", "subject": "123", "login": "fixture",
 
 
 def has_platform_consent(page, origin, identity):
-    # The test router's public origin is literal loopback HTTP. Its canonical
-    # account address retains that scheme, unlike an HTTPS relay address.
-    platform_address = f"{identity['username']}@{origin}"
-    return (isinstance(page, str) and f"<strong>{platform_address}</strong>" in page
+    address = escape(f"{identity['username']}@{origin}")
+    return (isinstance(page, str) and f"<strong>{address}</strong>" in page
             and "@github" not in page
             and "name=decision value=allow" in page
             and "name=decision value=deny" in page)

@@ -375,6 +375,57 @@ impl Runtime {
     pub fn enable_default_skill_sources(&self) -> Result<(), String> {
         self.files.enable_default_skill_sources()
     }
+    /// Schedule one cleanup scan for a live client session. The client retains
+    /// and joins this handle, so reconnect/reload cannot leave detached scans.
+    pub(crate) fn start_managed_file_cleanup(
+        &self,
+        trigger: &'static str,
+    ) -> tokio::task::JoinHandle<()> {
+        let root = self.tool_root.clone();
+        let audit = self.audit.clone();
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                crate::managed_files::cleanup(&root, false, trigger)
+            })
+            .await;
+            let warning = match result {
+                Ok(Ok(summary)) => {
+                    let recoveries = summary.recoveries.len() + summary.retention.recoveries.len();
+                    let warning = if !summary.errors.is_empty()
+                        || recoveries != 0
+                        || summary.scan_truncated
+                    {
+                        Some(format!(
+                            "Managed-file {trigger} cleanup kept unresolved files ({} errors, {recoveries} recoveries, scan_truncated={}); inspect ssmcp cleanup --list",
+                            summary.errors.len(),
+                            summary.scan_truncated,
+                        ))
+                    } else {
+                        None
+                    };
+                    audit.push(json!({
+                        "type": "ssmcp.files.cleanup",
+                        "trigger": trigger,
+                        "summary": summary,
+                    }));
+                    warning
+                }
+                Ok(Err(error)) => Some(format!("Managed-file {trigger} cleanup failed: {error}")),
+                Err(error) => Some(format!(
+                    "Managed-file {trigger} cleanup task failed: {error}"
+                )),
+            };
+            if let Some(warning) = warning {
+                audit.push(json!({
+                    "type": "ssmcp.files.cleanup_warning",
+                    "trigger": trigger,
+                    "message": warning,
+                }));
+                crate::client::render::status("cleanup", "Warning", &warning);
+            }
+        })
+    }
+
     /// Install an optional in-process call hook. The default is None.
     /// Each call keeps one snapshot; replacement affects subsequent calls.
     pub fn set_tool_call_hook(&self, hook: Option<Arc<dyn hooks::ToolCallHook>>) {
@@ -1004,6 +1055,14 @@ impl Runtime {
         ))
     }
     pub async fn shutdown(&self) {
+        self.shutdown_inner(false).await;
+    }
+
+    pub(crate) async fn shutdown_for_reload(&self) {
+        self.shutdown_inner(true).await;
+    }
+
+    async fn shutdown_inner(&self, reload: bool) {
         self.registry.close();
         {
             let pool = self
@@ -1047,6 +1106,19 @@ impl Runtime {
                 "cleanup_complete":false, "error":error
             }));
         }
+        if reload {
+            // Requests and the previous scheduled scan were joined by the client;
+            // workers, native backends and plugins above have now stopped.
+            if let Err(error) = self.start_managed_file_cleanup("reload").await {
+                let warning = format!("Managed-file reload cleanup task failed: {error}");
+                self.audit.push(json!({
+                    "type": "ssmcp.files.cleanup_warning",
+                    "trigger": "reload",
+                    "message": warning,
+                }));
+                crate::client::render::status("cleanup", "Warning", &warning);
+            }
+        }
         self.audit.close();
     }
 }
@@ -1055,6 +1127,121 @@ impl Runtime {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    struct ManagedCleanupRoot(PathBuf);
+
+    impl ManagedCleanupRoot {
+        fn new() -> Self {
+            let mut random = [0u8; 8];
+            crate::platform::random_bytes(&mut random).unwrap();
+            let suffix = u64::from_ne_bytes(random);
+            let root = std::env::temp_dir().join(format!(
+                "ssmcp-managed-lifecycle-{}-{suffix:016x}",
+                std::process::id()
+            ));
+            crate::platform::private_directory(&root).unwrap();
+            Self(std::fs::canonicalize(root).unwrap())
+        }
+
+        async fn runtime(&self) -> Arc<Runtime> {
+            let output = OutputStore::start_connection().unwrap();
+            #[cfg(unix)]
+            let shell = PathBuf::from("/bin/sh");
+            #[cfg(windows)]
+            let shell = crate::platform::default_shell();
+            let backend = Backend::with_output(&shell, self.0.clone(), output)
+                .await
+                .unwrap();
+            Runtime::new(backend, self.0.clone()).unwrap()
+        }
+    }
+
+    impl Drop for ManagedCleanupRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_file_startup_reports_empty_cleanup_without_creating_a_registry() {
+        let root = ManagedCleanupRoot::new();
+        let runtime = root.runtime().await;
+        runtime.start_managed_file_cleanup("startup").await.unwrap();
+        runtime.shutdown().await;
+
+        let page = runtime.audit.read(json!({})).await.unwrap();
+        let events = page["events"].as_array().unwrap();
+        assert_eq!(events.len(), 1);
+        let event = &events[0]["event"];
+        assert_eq!(event["type"], "ssmcp.files.cleanup");
+        assert_eq!(event["trigger"], "startup");
+        assert_eq!(event["summary"]["trigger"], "startup");
+        assert_eq!(event["summary"]["registry_present"], false);
+        assert_eq!(event["summary"]["enabled"], false);
+        assert_eq!(event["summary"]["dry_run"], false);
+        assert_eq!(event["summary"]["removed_files"], 0);
+        assert_eq!(event["summary"]["removed_bytes"], 0);
+        assert_eq!(event["summary"]["errors"], json!([]));
+        assert_eq!(event["summary"]["recoveries"], json!([]));
+        assert_eq!(page["closed"], true);
+        assert!(page["archive_error"].is_null());
+        assert!(!root.0.join(".ssmcp/managed-files").exists());
+    }
+
+    #[tokio::test]
+    async fn managed_file_reload_cleans_released_files_before_closing_its_audit() {
+        use crate::managed_files::{Category, CleanupConfig, FileIdentity, ManagedFiles};
+
+        let root = ManagedCleanupRoot::new();
+        let store = ManagedFiles::open(&root.0).unwrap();
+        store
+            .set_config(&CleanupConfig {
+                max_age_seconds: 0,
+                ..CleanupConfig::default()
+            })
+            .unwrap();
+        crate::platform::private_directory(&root.0.join(".ssmcp/tmp")).unwrap();
+        let relative = std::path::Path::new(".ssmcp/tmp/lifecycle.txt");
+        let path = root.0.join(relative);
+        let bytes = b"owned temporary data";
+        std::fs::write(&path, bytes).unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        let identity = FileIdentity::from_file(&file).unwrap();
+        crate::managed_files::record_created(
+            &root.0,
+            relative,
+            Category::Temporary,
+            "lifecycle-test",
+            &identity,
+        )
+        .unwrap();
+        drop(file);
+
+        let lease = store.lease(relative).unwrap();
+        let runtime = root.runtime().await;
+        runtime.start_managed_file_cleanup("startup").await.unwrap();
+        let retained = std::fs::read(&path);
+        drop(lease);
+        runtime.shutdown_for_reload().await;
+
+        assert_eq!(retained.unwrap(), bytes);
+        let page = runtime.audit.read(json!({})).await.unwrap();
+        let events = page["events"].as_array().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["event"]["trigger"], "startup");
+        assert_eq!(events[0]["event"]["summary"]["kept_active"], 1);
+        assert_eq!(events[0]["event"]["summary"]["removed_files"], 0);
+        assert_eq!(events[1]["event"]["type"], "ssmcp.files.cleanup");
+        assert_eq!(events[1]["event"]["trigger"], "reload");
+        assert_eq!(events[1]["event"]["summary"]["removed_files"], 1);
+        assert_eq!(
+            events[1]["event"]["summary"]["removed_bytes"],
+            bytes.len() as u64
+        );
+        assert!(!path.exists());
+        assert_eq!(page["closed"], true);
+        assert!(page["archive_error"].is_null());
+    }
 
     fn code_context(code: &str) -> crate::wire::CodeContext {
         crate::wire::CodeContext {

@@ -28,6 +28,8 @@ mod link_metrics;
 mod local;
 pub(crate) mod messaging;
 pub(crate) mod notification;
+#[cfg(all(test, unix))]
+mod output_expiry_fixture;
 mod panel;
 mod paths;
 pub(crate) mod presentation;
@@ -3130,6 +3132,27 @@ pub(crate) fn bounded_native_reply(
     }
 }
 
+async fn join_managed_file_cleanup(task: &mut JoinHandle<()>) {
+    if let Err(error) = task.await {
+        render::status(
+            "cleanup",
+            "Warning",
+            &format!("Managed-file cleanup task failed: {error}"),
+        );
+    }
+}
+
+async fn periodic_managed_file_cleanup(
+    task: &mut JoinHandle<()>,
+    start: impl FnOnce() -> JoinHandle<()>,
+) {
+    // A slow scan owns its slot until it has finished and been joined.
+    if task.is_finished() {
+        join_managed_file_cleanup(task).await;
+        *task = start();
+    }
+}
+
 async fn connect_inner(
     options: &Options,
     ui: &ui::Ui,
@@ -3141,11 +3164,23 @@ async fn connect_inner(
 ) -> crate::Result<ConnectionExit> {
     let management = session_control(options, service)?;
     let mut interrupt = interrupt_signal()?;
-    let mut terminate = terminate_signal()?;
+    let mut terminate = {
+        let signal = terminate_signal()?;
+        #[cfg(all(test, unix))]
+        {
+            output_expiry_fixture::StopSignal::new(signal)
+        }
+        #[cfg(not(all(test, unix)))]
+        {
+            signal
+        }
+    };
     let restart = reload::Restart::capture(options, service.is_some())?;
     let metadata = options.metadata()?;
     let wire_metadata = options.registration_metadata()?;
     let executable = std::env::current_exe()?;
+    #[cfg(all(test, unix))]
+    let executable = output_expiry_fixture::transport_executable(executable)?;
     transport.report_connecting();
     if options.account_compat {
         render::status(
@@ -3533,13 +3568,26 @@ async fn connect_inner(
     let mut intentionally_stopped = false;
     let mut service_updates = tokio::time::interval(Duration::from_secs(1));
     service_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Only registered, connected sessions scan the workspace.
+    let cleanup_period = Duration::from_secs(5 * 60);
+    let mut cleanup_updates =
+        tokio::time::interval_at(tokio::time::Instant::now() + cleanup_period, cleanup_period);
+    cleanup_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut managed_cleanup = backend.start_managed_file_cleanup("startup");
     backend.start_workers();
     let mut worker_start_error = if options.worker_window_child {
         worker_window::child_ready(&client_id).err()
     } else {
         None
     };
+    #[cfg(all(test, unix))]
+    let output_fixture_ready = output_expiry_fixture::runtime_ready(&backend, &client_id, attempt);
     let mut result: crate::Result<()> = 'connected: loop {
+        #[cfg(all(test, unix))]
+        if let Err(error) = &output_fixture_ready {
+            intentionally_stopped = true;
+            break Err(error.clone().into());
+        }
         if let Some(error) = worker_start_error.take() {
             intentionally_stopped = true;
             break Err(error.into());
@@ -3611,6 +3659,11 @@ async fn connect_inner(
                     }
                 },
                 None => {},
+            },
+            _ = cleanup_updates.tick() => {
+                periodic_managed_file_cleanup(&mut managed_cleanup, || {
+                    backend.start_managed_file_cleanup("periodic")
+                }).await;
             },
             _ = service_updates.tick(), if service.is_some() => {
                 if service.expect("guarded service runner").stop_requested() {
@@ -3847,6 +3900,7 @@ async fn connect_inner(
         reload_requested = false;
         result = Ok(());
     }
+    join_managed_file_cleanup(&mut managed_cleanup).await;
     git_status.shutdown().await;
     if matches!(&transport, Transport::Account { .. })
         && !intentionally_stopped
@@ -3860,7 +3914,11 @@ async fn connect_inner(
     incoming.stop().await;
     drop(writer);
     let _ = process.start_kill();
-    backend.shutdown().await;
+    if reload_requested {
+        backend.shutdown_for_reload().await;
+    } else {
+        backend.shutdown().await;
+    }
     let _ = process.wait().await;
     let exit_message = terminal::take_exit_message().or(pending_logout_message);
     drop(display_session);
@@ -3896,6 +3954,50 @@ pub fn report_run_error(error: &(dyn std::error::Error + 'static)) {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn managed_file_cleanup_does_not_overlap_and_shutdown_waits_for_the_scan() {
+        use std::future::Future;
+
+        let (release_first, first) = tokio::sync::oneshot::channel::<()>();
+        let mut task = tokio::spawn(async move {
+            first.await.unwrap();
+        });
+        periodic_managed_file_cleanup(&mut task, || {
+            panic!("an active cleanup scan must not be replaced")
+        })
+        .await;
+
+        release_first.send(()).unwrap();
+        timeout(Duration::from_secs(2), async {
+            while !task.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the released scan completes");
+
+        let (release_second, second) = tokio::sync::oneshot::channel::<()>();
+        let mut replacements = 0;
+        periodic_managed_file_cleanup(&mut task, || {
+            replacements += 1;
+            tokio::spawn(async move {
+                second.await.unwrap();
+            })
+        })
+        .await;
+        assert_eq!(replacements, 1);
+
+        let joining = join_managed_file_cleanup(&mut task);
+        tokio::pin!(joining);
+        let pending =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(joining.as_mut().poll(cx))).await;
+        assert!(pending.is_pending(), "shutdown must await the owned scan");
+        release_second.send(()).unwrap();
+        timeout(Duration::from_secs(2), joining)
+            .await
+            .expect("shutdown joins the released scan");
+    }
+
     #[test]
     fn worker_capacity_changes_accumulate_with_checked_bounds() {
         let total = worker_total_after_delta(0, 3).unwrap();

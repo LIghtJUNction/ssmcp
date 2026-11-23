@@ -82,6 +82,10 @@ struct State {
     used_bytes: u64,
     captures: usize,
     sequence: u64,
+    #[cfg(all(test, unix))]
+    expiry_probe: Option<expiry_fixture::Probe>,
+    #[cfg(all(test, unix))]
+    expiry_probe_used: bool,
 }
 
 impl State {
@@ -92,6 +96,14 @@ impl State {
     }
 
     fn expire(&mut self, current: u64) -> (usize, u64) {
+        self.expire_observed(current, |_, _| {})
+    }
+
+    fn expire_observed(
+        &mut self,
+        current: u64,
+        mut removed: impl FnMut(&str, &Entry),
+    ) -> (usize, u64) {
         let ids: Vec<_> = self
             .entries
             .iter()
@@ -102,6 +114,7 @@ impl State {
         for id in &ids {
             if let Some(entry) = self.remove(id) {
                 bytes += entry.data.len() as u64;
+                removed(id, &entry);
             }
         }
         (ids.len(), bytes)
@@ -178,6 +191,9 @@ impl OutputStore {
                     let Some(store) = weak.upgrade() else {
                         break;
                     };
+                    #[cfg(all(test, unix))]
+                    expiry_fixture::timer_sweep(&store);
+                    #[cfg(not(all(test, unix)))]
                     let _ = store.cleanup();
                 }
             });
@@ -801,6 +817,633 @@ fn error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+/// Private test observation; production builds have no aging or witness interface.
+#[cfg(all(test, unix))]
+pub(crate) mod expiry_fixture {
+    use super::*;
+    use tokio::sync::oneshot;
+
+    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+    #[serde(deny_unknown_fields)]
+    pub(crate) struct Artifact {
+        pub id: String,
+        pub bytes: u64,
+        pub sha256: String,
+    }
+
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[serde(deny_unknown_fields)]
+    pub(crate) struct Artifacts {
+        pub target: Artifact,
+        pub fresh: Artifact,
+        pub active: Artifact,
+    }
+
+    const AGING_POINT: &str = "timer_sweep_before_expiry";
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+    pub(crate) struct OriginalExpiries {
+        pub target: u64,
+        pub fresh: u64,
+        pub active: u64,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub(crate) struct Armed {
+        #[serde(flatten)]
+        pub artifacts: Artifacts,
+        pub deferred: bool,
+        pub aging_point: &'static str,
+        pub original_expires_at_unix: OriginalExpiries,
+        pub old_expires_at_unix: u64,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub(crate) struct Control {
+        pub id: String,
+        pub present: bool,
+        pub active: bool,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub(crate) struct Controls {
+        pub fresh: Control,
+        pub active: Control,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub(crate) struct Witness {
+        pub origin: &'static str,
+        pub aging_point: &'static str,
+        pub old_expires_at_unix: u64,
+        pub new_expires_at_unix: u64,
+        pub timer_now_unix: u64,
+        pub removed: Artifact,
+        pub controls: Controls,
+    }
+
+    pub(super) struct Probe {
+        artifacts: Artifacts,
+        original_expires_at_unix: OriginalExpiries,
+        sender: oneshot::Sender<Result<Witness, String>>,
+    }
+
+    fn check_entry<'a>(
+        state: &'a State,
+        expected: &Artifact,
+        active: bool,
+    ) -> Result<&'a Entry, String> {
+        validate_id(&expected.id)?;
+        if expected.bytes == 0
+            || expected.bytes > ARTIFACT_BYTES
+            || expected.sha256.len() != 64
+            || !expected
+                .sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err("invalid fixture artifact descriptor".into());
+        }
+        let entry = state.entries.get(&expected.id).ok_or_else(|| {
+            format!(
+                "exact fixture artifact {} is absent from this store",
+                expected.id
+            )
+        })?;
+        if entry.active != active
+            || entry.metadata.complete == active
+            || entry.metadata.error.is_some()
+            || entry.data.len() as u64 != expected.bytes
+            || entry.metadata.bytes != expected.bytes
+            || entry.metadata.sha256 != expected.sha256
+            || crate::hex::encode(Sha256::digest(&entry.data)) != expected.sha256
+        {
+            return Err(format!(
+                "exact fixture artifact {} changed or has the wrong completion state",
+                expected.id
+            ));
+        }
+        Ok(entry)
+    }
+
+    fn check_original_entry(
+        state: &State,
+        expected: &Artifact,
+        active: bool,
+        expires_at_unix: u64,
+    ) -> Result<(), String> {
+        if check_entry(state, expected, active)?
+            .metadata
+            .expires_at_unix
+            != expires_at_unix
+        {
+            return Err(format!(
+                "exact fixture artifact {} expiry changed after arming",
+                expected.id
+            ));
+        }
+        Ok(())
+    }
+
+    /// Freeze exact completed target and control identities without aging or expiry.
+    pub(crate) fn arm(
+        store: &OutputStore,
+        artifacts: Artifacts,
+    ) -> Result<(Armed, oneshot::Receiver<Result<Witness, String>>), String> {
+        let mut state = store
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if state.expiry_probe_used {
+            return Err("this store already accepted an expiry observation".into());
+        }
+        if artifacts.target.id == artifacts.fresh.id
+            || artifacts.target.id == artifacts.active.id
+            || artifacts.fresh.id == artifacts.active.id
+        {
+            return Err("expiry target and controls must be three distinct artifacts".into());
+        }
+        if store.policy.retention_secs != RETENTION_SECS {
+            return Err("public expiry fixture requires the unchanged retention policy".into());
+        }
+        let original_expires_at_unix = OriginalExpiries {
+            target: check_entry(&state, &artifacts.target, false)?
+                .metadata
+                .expires_at_unix,
+            fresh: check_entry(&state, &artifacts.fresh, false)?
+                .metadata
+                .expires_at_unix,
+            active: check_entry(&state, &artifacts.active, true)?
+                .metadata
+                .expires_at_unix,
+        };
+        let current = now();
+        if original_expires_at_unix.target <= current || original_expires_at_unix.fresh <= current {
+            return Err("completed fixture outputs must be fresh before arming".into());
+        }
+        let (sender, receiver) = oneshot::channel();
+        state.expiry_probe_used = true;
+        state.expiry_probe = Some(Probe {
+            artifacts: artifacts.clone(),
+            original_expires_at_unix,
+            sender,
+        });
+        Ok((
+            Armed {
+                artifacts,
+                deferred: true,
+                aging_point: AGING_POINT,
+                original_expires_at_unix,
+                old_expires_at_unix: original_expires_at_unix.target,
+            },
+            receiver,
+        ))
+    }
+
+    /// Called only by the existing real 60-second sleeper (and direct unit tests).
+    /// Revalidation, deferred aging and actual removal share one store lock and time.
+    pub(super) fn timer_sweep(store: &OutputStore) {
+        let mut state = store
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let current = now();
+        let new_expires_at_unix = current.saturating_sub(1);
+        let probe = state.expiry_probe.take();
+        let prepared = probe.as_ref().map(|probe| -> Result<(), String> {
+            for (artifact, active, expires_at_unix) in [
+                (
+                    &probe.artifacts.target,
+                    false,
+                    probe.original_expires_at_unix.target,
+                ),
+                (
+                    &probe.artifacts.fresh,
+                    false,
+                    probe.original_expires_at_unix.fresh,
+                ),
+                (
+                    &probe.artifacts.active,
+                    true,
+                    probe.original_expires_at_unix.active,
+                ),
+            ] {
+                check_original_entry(&state, artifact, active, expires_at_unix)?;
+            }
+            if probe.original_expires_at_unix.target <= current
+                || probe.original_expires_at_unix.fresh <= current
+            {
+                return Err("completed fixture outputs are no longer fresh at timer sweep".into());
+            }
+            // Late audit/capture writes before this lock see the original fresh
+            // target. Only this real timer tick performs the test-only mutation.
+            state
+                .entries
+                .get_mut(&probe.artifacts.target.id)
+                .expect("all three originals validated under this lock")
+                .metadata
+                .expires_at_unix = new_expires_at_unix;
+            Ok(())
+        });
+        let expected = probe.as_ref().map(|probe| &probe.artifacts.target);
+        let mut removed = None;
+        // Preserve ordinary cleanup even when observation preflight fails.
+        state.expire_observed(current, |id, entry| {
+            if expected.is_some_and(|expected| expected.id == id) {
+                removed = Some(
+                    if entry.active || !entry.metadata.complete || entry.metadata.error.is_some() {
+                        Err("aged target completion changed before timer removal".to_owned())
+                    } else {
+                        Ok(Artifact {
+                            id: id.to_owned(),
+                            bytes: entry.data.len() as u64,
+                            sha256: crate::hex::encode(Sha256::digest(&entry.data)),
+                        })
+                    },
+                );
+            }
+        });
+        let outcome = probe.zip(prepared).map(|(probe, prepared)| {
+            let result = (|| {
+                prepared?;
+                let removed = removed.ok_or("timer did not remove the exact aged artifact")??;
+                if removed != probe.artifacts.target {
+                    return Err("timer removed bytes differ from the armed artifact".into());
+                }
+                check_original_entry(
+                    &state,
+                    &probe.artifacts.fresh,
+                    false,
+                    probe.original_expires_at_unix.fresh,
+                )?;
+                check_original_entry(
+                    &state,
+                    &probe.artifacts.active,
+                    true,
+                    probe.original_expires_at_unix.active,
+                )?;
+                Ok(Witness {
+                    origin: "timer",
+                    aging_point: AGING_POINT,
+                    old_expires_at_unix: probe.original_expires_at_unix.target,
+                    new_expires_at_unix,
+                    timer_now_unix: current,
+                    removed,
+                    controls: Controls {
+                        fresh: Control {
+                            id: probe.artifacts.fresh.id,
+                            present: true,
+                            active: false,
+                        },
+                        active: Control {
+                            id: probe.artifacts.active.id,
+                            present: true,
+                            active: true,
+                        },
+                    },
+                })
+            })();
+            (probe.sender, result)
+        });
+        drop(state);
+        // Never publish or wait for the controller while holding the output lock.
+        if let Some((sender, result)) = outcome {
+            let _ = sender.send(result);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        struct Fixture {
+            store: Arc<OutputStore>,
+            artifacts: Artifacts,
+            active_capture: Capture,
+        }
+
+        impl Fixture {
+            fn new() -> Self {
+                // No Tokio runtime: these unit tests exercise observation causality,
+                // while the ignored client fixture exercises the actual sleeper.
+                let store = OutputStore::with_policy(Policy::default());
+                fn capture(
+                    store: &Arc<OutputStore>,
+                    scope: &str,
+                    complete: bool,
+                ) -> (Capture, Artifact) {
+                    let mut capture = store.capture(scope);
+                    capture.push(b"fixture retained bytes\n").unwrap();
+                    capture.spill().unwrap();
+                    if complete {
+                        capture.finish().unwrap();
+                    }
+                    let metadata = capture.metadata().unwrap();
+                    let artifact = Artifact {
+                        id: metadata.id,
+                        bytes: metadata.bytes,
+                        sha256: metadata.sha256,
+                    };
+                    (capture, artifact)
+                }
+                let (target_capture, target) = capture(&store, "target", true);
+                let (fresh_capture, fresh) = capture(&store, "fresh", true);
+                let (active_capture, active) = capture(&store, "active", false);
+                drop(target_capture);
+                drop(fresh_capture);
+                Self {
+                    store,
+                    artifacts: Artifacts {
+                        target,
+                        fresh,
+                        active,
+                    },
+                    active_capture,
+                }
+            }
+
+            fn expiries(&self) -> OriginalExpiries {
+                let state = self.store.state.lock().unwrap();
+                OriginalExpiries {
+                    target: state.entries[&self.artifacts.target.id]
+                        .metadata
+                        .expires_at_unix,
+                    fresh: state.entries[&self.artifacts.fresh.id]
+                        .metadata
+                        .expires_at_unix,
+                    active: state.entries[&self.artifacts.active.id]
+                        .metadata
+                        .expires_at_unix,
+                }
+            }
+        }
+
+        #[test]
+        fn timer_witness_binds_actual_removed_bytes_and_preserved_controls() {
+            let fixture = Fixture::new();
+            let originals = fixture.expiries();
+            let (armed, mut received) = arm(&fixture.store, fixture.artifacts.clone()).unwrap();
+            assert_eq!(fixture.expiries(), originals);
+            let encoded = serde_json::to_value(&armed).unwrap();
+            assert_eq!(encoded["deferred"], true);
+            assert_eq!(encoded["aging_point"], "timer_sweep_before_expiry");
+            assert_eq!(
+                encoded["original_expires_at_unix"],
+                json!({"target":originals.target,"fresh":originals.fresh,"active":originals.active})
+            );
+            assert_eq!(encoded["old_expires_at_unix"], originals.target);
+            assert!(encoded.get("new_expires_at_unix").is_none());
+            assert!(matches!(
+                received.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            timer_sweep(&fixture.store);
+            let witness = received.try_recv().unwrap().unwrap();
+            assert_eq!(witness.origin, "timer");
+            assert_eq!(witness.aging_point, "timer_sweep_before_expiry");
+            assert_eq!(witness.old_expires_at_unix, originals.target);
+            assert_eq!(
+                witness.new_expires_at_unix,
+                witness.timer_now_unix.saturating_sub(1)
+            );
+            assert!(witness.new_expires_at_unix < witness.old_expires_at_unix);
+            assert_eq!(witness.removed, fixture.artifacts.target);
+            assert_eq!(witness.controls.fresh.id, fixture.artifacts.fresh.id);
+            assert!(!witness.controls.fresh.active);
+            assert_eq!(witness.controls.active.id, fixture.artifacts.active.id);
+            assert!(witness.controls.active.active);
+            let state = fixture.store.state.lock().unwrap();
+            assert!(!state.entries.contains_key(&fixture.artifacts.target.id));
+            assert_eq!(
+                state.entries[&fixture.artifacts.fresh.id]
+                    .metadata
+                    .expires_at_unix,
+                originals.fresh
+            );
+            assert_eq!(
+                state.entries[&fixture.artifacts.active.id]
+                    .metadata
+                    .expires_at_unix,
+                originals.active
+            );
+            assert_eq!(
+                state.used_bytes,
+                fixture.artifacts.fresh.bytes + fixture.artifacts.active.bytes
+            );
+        }
+
+        #[test]
+        fn late_audit_push_keeps_the_armed_target_fresh_until_the_timer() {
+            let fixture = Fixture::new();
+            let audit =
+                crate::backend::events::EventLog::with_output("audit", fixture.store.clone());
+            let originals = fixture.expiries();
+            let (_, mut received) = arm(&fixture.store, fixture.artifacts.clone()).unwrap();
+            let before = fixture.store.state.lock().unwrap().used_bytes;
+            // These real EventLog writes append to a Capture in this same store,
+            // exercising room()/expiry for late completion and summary records.
+            audit.push_control(json!({
+                "type":"ssmcp.code_mode","phase":"finished",
+                "run_id":"expiry-fixture-run","success":true,"status":"completed","duration_ms":54
+            }));
+            audit.push_control(json!({
+                "type":"ssmcp.code_mode","phase":"call-finished","scope":"native-call",
+                "run_id":"expiry-fixture-run","request_id":1,"tool":"ssmcp.ui.tool_summary",
+                "success":true,"duration_ms":1
+            }));
+            assert!(fixture.store.state.lock().unwrap().used_bytes > before);
+            assert_eq!(fixture.expiries(), originals);
+            assert!(matches!(
+                received.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            timer_sweep(&fixture.store);
+            let witness = received.try_recv().unwrap().unwrap();
+            assert_eq!(witness.removed, fixture.artifacts.target);
+            assert_eq!(witness.old_expires_at_unix, originals.target);
+            assert_eq!(witness.aging_point, "timer_sweep_before_expiry");
+            assert!(
+                !fixture
+                    .store
+                    .state
+                    .lock()
+                    .unwrap()
+                    .entries
+                    .contains_key(&fixture.artifacts.target.id)
+            );
+        }
+
+        #[test]
+        fn read_and_manual_cleanup_cannot_be_reported_as_timer_removal() {
+            for read in [false, true] {
+                let fixture = Fixture::new();
+                let (_, mut received) = arm(&fixture.store, fixture.artifacts.clone()).unwrap();
+                // Arrange an independently expired entry, then let the real
+                // non-timer path delete it. The observer must never rebase it.
+                fixture
+                    .store
+                    .state
+                    .lock()
+                    .unwrap()
+                    .entries
+                    .get_mut(&fixture.artifacts.target.id)
+                    .unwrap()
+                    .metadata
+                    .expires_at_unix = now().saturating_sub(1);
+                if read {
+                    assert!(
+                        fixture
+                            .store
+                            .perform_sync(
+                                "ssmcp.output.stat",
+                                json!({"id":fixture.artifacts.target.id})
+                            )
+                            .is_err()
+                    );
+                } else {
+                    assert_eq!(fixture.store.cleanup().unwrap()["removed_artifacts"], 1);
+                }
+                assert!(
+                    !fixture
+                        .store
+                        .state
+                        .lock()
+                        .unwrap()
+                        .entries
+                        .contains_key(&fixture.artifacts.target.id)
+                );
+                assert!(matches!(
+                    received.try_recv(),
+                    Err(oneshot::error::TryRecvError::Empty)
+                ));
+                timer_sweep(&fixture.store);
+                assert!(
+                    received
+                        .try_recv()
+                        .unwrap()
+                        .unwrap_err()
+                        .contains("is absent from this store")
+                );
+            }
+        }
+
+        #[test]
+        fn wrong_store_changed_descriptor_and_active_target_are_rejected_before_aging() {
+            let fixture = Fixture::new();
+            let other = OutputStore::with_policy(Policy::default());
+            assert!(arm(&other, fixture.artifacts.clone()).is_err());
+            let mut changed = fixture.artifacts.clone();
+            changed.target.sha256 = "0".repeat(64);
+            assert!(arm(&fixture.store, changed).is_err());
+            let mut active_target = fixture.artifacts.clone();
+            std::mem::swap(&mut active_target.target, &mut active_target.active);
+            assert!(arm(&fixture.store, active_target).is_err());
+            let state = fixture.store.state.lock().unwrap();
+            assert!(!state.expiry_probe_used);
+            assert!(
+                state
+                    .entries
+                    .values()
+                    .all(|entry| entry.metadata.expires_at_unix > now())
+            );
+        }
+
+        #[test]
+        fn repeat_aging_and_changed_active_control_do_not_produce_success() {
+            let mut fixture = Fixture::new();
+            let originals = fixture.expiries();
+            let (_, mut received) = arm(&fixture.store, fixture.artifacts.clone()).unwrap();
+            assert!(arm(&fixture.store, fixture.artifacts.clone()).is_err());
+            fixture.active_capture.finish().unwrap();
+            timer_sweep(&fixture.store);
+            assert!(received.try_recv().unwrap().is_err());
+            assert_eq!(
+                fixture.store.state.lock().unwrap().entries[&fixture.artifacts.target.id]
+                    .metadata
+                    .expires_at_unix,
+                originals.target
+            );
+        }
+
+        #[test]
+        fn changing_any_original_expiry_rejects_the_probe_without_aging() {
+            for index in 0..3 {
+                let fixture = Fixture::new();
+                let (_, mut received) = arm(&fixture.store, fixture.artifacts.clone()).unwrap();
+                let ids = [
+                    &fixture.artifacts.target.id,
+                    &fixture.artifacts.fresh.id,
+                    &fixture.artifacts.active.id,
+                ];
+                fixture
+                    .store
+                    .state
+                    .lock()
+                    .unwrap()
+                    .entries
+                    .get_mut(ids[index])
+                    .unwrap()
+                    .metadata
+                    .expires_at_unix += 1;
+                let changed = fixture.expiries();
+                timer_sweep(&fixture.store);
+                assert!(
+                    received
+                        .try_recv()
+                        .unwrap()
+                        .unwrap_err()
+                        .contains("expiry changed after arming")
+                );
+                assert_eq!(fixture.expiries(), changed);
+            }
+        }
+
+        #[test]
+        fn rejected_probe_still_runs_ordinary_timer_expiry() {
+            let fixture = Fixture::new();
+            let mut other = fixture.store.capture("unrelated-expired-output");
+            other.push(b"unrelated retained bytes\n").unwrap();
+            other.spill().unwrap();
+            other.finish().unwrap();
+            let other_id = other.metadata().unwrap().id;
+            drop(other);
+            let originals = fixture.expiries();
+            let (_, mut received) = arm(&fixture.store, fixture.artifacts.clone()).unwrap();
+            {
+                let mut state = fixture.store.state.lock().unwrap();
+                state
+                    .entries
+                    .get_mut(&fixture.artifacts.active.id)
+                    .unwrap()
+                    .metadata
+                    .expires_at_unix += 1;
+                state
+                    .entries
+                    .get_mut(&other_id)
+                    .unwrap()
+                    .metadata
+                    .expires_at_unix = now().saturating_sub(1);
+            }
+            timer_sweep(&fixture.store);
+            assert!(received.try_recv().unwrap().is_err());
+            let state = fixture.store.state.lock().unwrap();
+            assert!(!state.entries.contains_key(&other_id));
+            assert_eq!(
+                state.entries[&fixture.artifacts.target.id]
+                    .metadata
+                    .expires_at_unix,
+                originals.target
+            );
+            assert_eq!(
+                state.used_bytes,
+                fixture.artifacts.target.bytes
+                    + fixture.artifacts.fresh.bytes
+                    + fixture.artifacts.active.bytes
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -825,6 +1468,138 @@ mod tests {
             max_captures: 8,
             ..Policy::default()
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires two live dropped-UID processes driven by test_multi_user_runtime.py"]
+    fn per_user_output_fixture() {
+        use std::io::{BufRead, Read, Write};
+        use std::os::unix::fs::MetadataExt;
+
+        fn command() -> Value {
+            let mut line = String::new();
+            let bytes = io::stdin().lock().take(1025).read_line(&mut line).unwrap();
+            assert!(bytes > 0 && bytes <= 1024 && line.ends_with('\n'));
+            serde_json::from_str(&line).unwrap()
+        }
+        fn report(frame: Value) {
+            println!("\nSSMCP_MULTI_USER_OUTPUT {frame}");
+            io::stdout().flush().unwrap();
+        }
+
+        assert_eq!(
+            std::env::var("SSMCP_TEST_OUTPUT_PROTOCOL").expect("run test_multi_user_runtime.py"),
+            "1"
+        );
+        let uid = unsafe { libc::geteuid() };
+        let pid = std::process::id();
+        assert_ne!(uid, 0, "fixture must drop privileges");
+        if let Some(path) = std::env::var_os("SSMCP_TEST_OUTPUT_FOREIGN_ROOT") {
+            let path = std::path::PathBuf::from(path);
+            assert_eq!(path, std::env::temp_dir().join(format!("ssmcp-{uid}")));
+            let metadata = std::fs::metadata(&path).unwrap();
+            assert!(metadata.is_dir());
+            assert_ne!(metadata.uid(), uid);
+            assert_eq!(metadata.mode() & 0o7777, 0o700);
+            assert_eq!(
+                std::fs::read_dir(&path).err().unwrap().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+
+        let store = OutputStore::new_connection().unwrap();
+        let original: Vec<u8> = (0..READ_BYTES * 2 + 137)
+            .map(|index| (index as u8).wrapping_add(uid as u8))
+            .collect();
+        let mut capture = store.capture(format!("multi-user-output:{uid}"));
+        capture.push(&original).unwrap();
+        capture.finish().unwrap();
+        let metadata = capture.metadata().unwrap();
+        let id = metadata.id.as_str();
+        assert_eq!(metadata.storage, "memory");
+        assert!(metadata.path.is_none() && metadata.error.is_none());
+        assert!(metadata.complete);
+        assert_eq!(metadata.bytes, original.len() as u64);
+        assert_eq!(metadata.observed_bytes, metadata.bytes);
+        let stat = store
+            .perform_sync("ssmcp.output.stat", json!({"id":id}))
+            .unwrap();
+        assert_eq!(stat, serde_json::to_value(&metadata).unwrap());
+        let mut restored = Vec::new();
+        let mut offset = 0;
+        while offset < metadata.bytes {
+            let page = store
+                .perform_sync(
+                    "ssmcp.output.read",
+                    json!({"id":id,"offset":offset,"max_bytes":READ_BYTES}),
+                )
+                .unwrap();
+            let bytes = STANDARD
+                .decode(page["data_base64"].as_str().unwrap())
+                .unwrap();
+            let next = page["next_offset"].as_u64().unwrap();
+            assert_eq!(page["id"], id);
+            assert_eq!(page["storage"], "memory");
+            assert!(page["path"].is_null());
+            assert_eq!(page["offset"], offset);
+            assert_eq!(page["bytes"], bytes.len());
+            assert_eq!(page["size"], metadata.bytes);
+            assert_eq!(page["observed_bytes"], metadata.bytes);
+            assert_eq!(page["complete"], true);
+            assert_eq!(page["truncated"], false);
+            assert!(!bytes.is_empty() && bytes.len() <= READ_BYTES);
+            assert_eq!(next, offset + bytes.len() as u64);
+            assert!(next <= metadata.bytes);
+            assert_eq!(page["eof"], next == metadata.bytes);
+            assert_eq!(page["sha256"], crate::hex::encode(Sha256::digest(&bytes)));
+            restored.extend_from_slice(&bytes);
+            offset = next;
+        }
+        assert_eq!(restored, original);
+        assert_eq!(
+            crate::hex::encode(Sha256::digest(&restored)),
+            metadata.sha256
+        );
+        let replacement = OutputStore::new_connection().unwrap();
+        for name in ["ssmcp.output.read", "ssmcp.output.stat"] {
+            assert!(
+                replacement
+                    .perform_sync(name, json!({"id":id}))
+                    .unwrap_err()
+                    .contains("output is unavailable in this connection")
+            );
+        }
+        report(json!({"phase":"ready","uid":uid,"pid":pid,"artifact":&metadata}));
+
+        let request = command();
+        let foreign = request["foreign_id"].as_str().unwrap();
+        assert_eq!(
+            request,
+            json!({"phase":"verify","id":id,"foreign_id":foreign})
+        );
+        validate_id(foreign).unwrap();
+        assert_ne!(foreign, id);
+        for name in ["ssmcp.output.read", "ssmcp.output.stat"] {
+            assert!(
+                store
+                    .perform_sync(name, json!({"id":foreign}))
+                    .unwrap_err()
+                    .contains("output is unavailable in this connection")
+            );
+        }
+        report(json!({"phase":"verified","uid":uid,"pid":pid,"id":id,"foreign_id":foreign}));
+
+        // Neither process releases its real store until both peers have verified.
+        assert_eq!(command(), json!({"phase":"release","id":id}));
+        assert_eq!(
+            store
+                .perform_sync("ssmcp.output.stat", json!({"id":id}))
+                .unwrap(),
+            stat
+        );
+        assert_eq!(capture.metadata().unwrap().id, id);
+        report(json!({"phase":"complete","uid":uid,"pid":pid,"id":id,"foreign_id":foreign}));
     }
 
     #[test]
@@ -1073,61 +1848,6 @@ mod tests {
                 )
                 .is_err()
         );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    #[ignore = "run by the two-UID CI harness with coordinated process input"]
-    fn per_user_output_fixture() {
-        use std::io::{BufRead, Write};
-
-        let location = std::env::var_os("SSMCP_TEST_OUTPUT_BASE").unwrap();
-        let store = OutputStore::at_for_test(location.into()).unwrap();
-        let contents = b"private fixture output";
-        let mut capture = store.capture("multi-user");
-        capture.spill().unwrap();
-        capture.push(contents).unwrap();
-        capture.finish().unwrap();
-        let artifact = capture.metadata().unwrap();
-        assert!(artifact.path.is_none());
-        let own = store
-            .perform_sync("ssmcp.output.read", json!({"id":artifact.id}))
-            .unwrap();
-        assert_eq!(own["storage"], "memory");
-        assert!(own["path"].is_null());
-        assert_eq!(own["complete"], true);
-        assert_eq!(
-            STANDARD
-                .decode(own["data_base64"].as_str().unwrap())
-                .unwrap(),
-            contents
-        );
-        println!("SSMCP_MULTI_USER_OUTPUT_ID={}", artifact.id);
-        std::io::stdout().flush().unwrap();
-
-        let mut lines = std::io::stdin().lock().lines();
-        let foreign = lines.next().unwrap().unwrap();
-        assert_ne!(foreign, artifact.id);
-        validate_id(&foreign).unwrap();
-        assert!(
-            store
-                .perform_sync("ssmcp.output.read", json!({"id":foreign}))
-                .is_err()
-        );
-        assert!(
-            store
-                .perform_sync("ssmcp.output.stat", json!({"id":foreign}))
-                .is_err()
-        );
-        assert!(
-            store
-                .perform_sync("ssmcp.output.read", json!({"id":artifact.id}))
-                .is_ok()
-        );
-        println!("SSMCP_MULTI_USER_FOREIGN_DENIED");
-        std::io::stdout().flush().unwrap();
-        // Wait for the cross-process barrier before dropping the memory store.
-        assert_eq!(lines.next().unwrap().unwrap(), "done");
     }
 
     #[test]
