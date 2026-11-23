@@ -827,6 +827,138 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires two live dropped-UID processes driven by test_multi_user_runtime.py"]
+    fn per_user_output_fixture() {
+        use std::io::{BufRead, Read, Write};
+        use std::os::unix::fs::MetadataExt;
+
+        fn command() -> Value {
+            let mut line = String::new();
+            let bytes = io::stdin().lock().take(1025).read_line(&mut line).unwrap();
+            assert!(bytes > 0 && bytes <= 1024 && line.ends_with('\n'));
+            serde_json::from_str(&line).unwrap()
+        }
+        fn report(frame: Value) {
+            println!("\nSSMCP_MULTI_USER_OUTPUT {frame}");
+            io::stdout().flush().unwrap();
+        }
+
+        assert_eq!(
+            std::env::var("SSMCP_TEST_OUTPUT_PROTOCOL").expect("run test_multi_user_runtime.py"),
+            "1"
+        );
+        let uid = unsafe { libc::geteuid() };
+        let pid = std::process::id();
+        assert_ne!(uid, 0, "fixture must drop privileges");
+        if let Some(path) = std::env::var_os("SSMCP_TEST_OUTPUT_FOREIGN_ROOT") {
+            let path = std::path::PathBuf::from(path);
+            assert_eq!(path, std::env::temp_dir().join(format!("ssmcp-{uid}")));
+            let metadata = std::fs::metadata(&path).unwrap();
+            assert!(metadata.is_dir());
+            assert_ne!(metadata.uid(), uid);
+            assert_eq!(metadata.mode() & 0o7777, 0o700);
+            assert_eq!(
+                std::fs::read_dir(&path).err().unwrap().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+
+        let store = OutputStore::new_connection().unwrap();
+        let original: Vec<u8> = (0..READ_BYTES * 2 + 137)
+            .map(|index| (index as u8).wrapping_add(uid as u8))
+            .collect();
+        let mut capture = store.capture(format!("multi-user-output:{uid}"));
+        capture.push(&original).unwrap();
+        capture.finish().unwrap();
+        let metadata = capture.metadata().unwrap();
+        let id = metadata.id.as_str();
+        assert_eq!(metadata.storage, "memory");
+        assert!(metadata.path.is_none() && metadata.error.is_none());
+        assert!(metadata.complete);
+        assert_eq!(metadata.bytes, original.len() as u64);
+        assert_eq!(metadata.observed_bytes, metadata.bytes);
+        let stat = store
+            .perform_sync("ssmcp.output.stat", json!({"id":id}))
+            .unwrap();
+        assert_eq!(stat, serde_json::to_value(&metadata).unwrap());
+        let mut restored = Vec::new();
+        let mut offset = 0;
+        while offset < metadata.bytes {
+            let page = store
+                .perform_sync(
+                    "ssmcp.output.read",
+                    json!({"id":id,"offset":offset,"max_bytes":READ_BYTES}),
+                )
+                .unwrap();
+            let bytes = STANDARD
+                .decode(page["data_base64"].as_str().unwrap())
+                .unwrap();
+            let next = page["next_offset"].as_u64().unwrap();
+            assert_eq!(page["id"], id);
+            assert_eq!(page["storage"], "memory");
+            assert!(page["path"].is_null());
+            assert_eq!(page["offset"], offset);
+            assert_eq!(page["bytes"], bytes.len());
+            assert_eq!(page["size"], metadata.bytes);
+            assert_eq!(page["observed_bytes"], metadata.bytes);
+            assert_eq!(page["complete"], true);
+            assert_eq!(page["truncated"], false);
+            assert!(!bytes.is_empty() && bytes.len() <= READ_BYTES);
+            assert_eq!(next, offset + bytes.len() as u64);
+            assert!(next <= metadata.bytes);
+            assert_eq!(page["eof"], next == metadata.bytes);
+            assert_eq!(page["sha256"], crate::hex::encode(Sha256::digest(&bytes)));
+            restored.extend_from_slice(&bytes);
+            offset = next;
+        }
+        assert_eq!(restored, original);
+        assert_eq!(
+            crate::hex::encode(Sha256::digest(&restored)),
+            metadata.sha256
+        );
+        let replacement = OutputStore::new_connection().unwrap();
+        for name in ["ssmcp.output.read", "ssmcp.output.stat"] {
+            assert!(
+                replacement
+                    .perform_sync(name, json!({"id":id}))
+                    .unwrap_err()
+                    .contains("output is unavailable in this connection")
+            );
+        }
+        report(json!({"phase":"ready","uid":uid,"pid":pid,"artifact":&metadata}));
+
+        let request = command();
+        let foreign = request["foreign_id"].as_str().unwrap();
+        assert_eq!(
+            request,
+            json!({"phase":"verify","id":id,"foreign_id":foreign})
+        );
+        validate_id(foreign).unwrap();
+        assert_ne!(foreign, id);
+        for name in ["ssmcp.output.read", "ssmcp.output.stat"] {
+            assert!(
+                store
+                    .perform_sync(name, json!({"id":foreign}))
+                    .unwrap_err()
+                    .contains("output is unavailable in this connection")
+            );
+        }
+        report(json!({"phase":"verified","uid":uid,"pid":pid,"id":id,"foreign_id":foreign}));
+
+        // Neither process releases its real store until both peers have verified.
+        assert_eq!(command(), json!({"phase":"release","id":id}));
+        assert_eq!(
+            store
+                .perform_sync("ssmcp.output.stat", json!({"id":id}))
+                .unwrap(),
+            stat
+        );
+        assert_eq!(capture.metadata().unwrap().id, id);
+        report(json!({"phase":"complete","uid":uid,"pid":pid,"id":id,"foreign_id":foreign}));
+    }
+
     #[test]
     fn short_binary_output_stays_inline_and_releases_its_memory() {
         let fixture = Fixture::new(tiny());
