@@ -158,7 +158,38 @@ class DurableWait(Harness):
         value = outer.get("result", {})
         if value.get("isError") or not isinstance(value.get("structuredContent"), dict):
             raise AssertionError(f"Native {name} failed: {value}")
-        return value["structuredContent"]
+        body = value["structuredContent"]
+        if body.get("spilled") is True:
+            artifact = body.get("artifact", {})
+            if (body.get("format") != "mcp_tool_result_json"
+                    or artifact.get("complete") is not True
+                    or not isinstance(artifact.get("bytes"), int)
+                    or not 0 < artifact["bytes"] <= 1_048_576
+                    or "ssmcp.output.read" not in self.native_tools):
+                raise AssertionError("original native result spill cannot be read completely")
+            data, offset = bytearray(), 0
+            while offset < artifact["bytes"]:
+                original = self.native_reply("ssmcp.output.read",
+                    {"id": artifact["id"], "offset": offset, "max_bytes": 4096}).get("result", {})
+                page = original.get("structuredContent", {})
+                if original.get("isError") or page.get("spilled") or not page.get("data_base64"):
+                    raise AssertionError("original native result artifact is unavailable; no tool replay")
+                chunk = base64.b64decode(page["data_base64"], validate=True)
+                if page.get("next_offset") != offset + len(chunk):
+                    raise AssertionError("original native result artifact cursor is inconsistent")
+                data.extend(chunk)
+                offset = page["next_offset"]
+                if page.get("eof"):
+                    break
+            if len(data) != artifact["bytes"] or hashlib.sha256(data).hexdigest() != artifact.get("sha256"):
+                raise AssertionError("original native result artifact bytes do not match its receipt")
+            restored = json.loads(data)
+            if restored.get("isError") or not isinstance(restored.get("structuredContent"), dict):
+                raise AssertionError("restored original native tool result is not a successful object")
+            body = restored["structuredContent"]
+            self.record("original_native_result_restored", tool=name,
+                        artifact_id=artifact["id"], bytes=len(data), sha256=artifact["sha256"])
+        return body
 
     def await_call(self, **arguments):
         return self.tool("await", {"client_id": self.client_id, "agent": self.agent, **arguments})
@@ -511,7 +542,7 @@ class DurableWait(Harness):
         rows = []
         for _ in range(32):
             arguments = {"action": "thread", "client_id": self.client_id,
-                         "agent_id": self.member["agent_id"], "limit": 64}
+                         "agent_id": self.member["agent_id"], "limit": 8}
             if cursor is not None:
                 arguments.update(cursor=cursor, generation=generation)
             page = self.native("ssmcp.ui.events", arguments)
