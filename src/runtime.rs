@@ -860,21 +860,6 @@ impl Runtime {
             crate::session::attach::thread_history::ToolCall::start(&source, &name);
         crate::client::terminal::tool_summary_call_started(&source, &name);
         let caller = source.call.clone();
-        let harness_call = tool
-            .provider
-            .is_harness()
-            .then(|| backend::rpc::HarnessCall::new(call_id));
-        let command_rpc_expected = tool.provider == Provider::Codex
-            && (tool.native_name == "codex.command_exec"
-                || (tool.native_name == "codex.rpc" && arguments["method"] == "command/exec"));
-        if tool.provider.is_harness() {
-            self.audit.push(
-                json!({"type":"ssmcp.harness.tool.started","call_id":call_id,
-                "provider":tool.provider.label(),"tool":name,"generation":tool.generation,
-                "rpc_correlation":true,"command_rpc_expected":command_rpc_expected,
-                "file_audit":"unknown","approval":"native"}),
-            );
-        }
         let control = matches!(tool.provider, Provider::Computer | Provider::Sessions);
         if control {
             self.audit
@@ -931,12 +916,10 @@ impl Runtime {
                 }
                 Provider::Plugins => self.plugins.perform(&tool, arguments).await,
                 provider if self.native.contains(provider) => {
-                    let dispatch = source.clone().scope(self.native.call(&tool, arguments));
-                    if let Some(call) = &harness_call {
-                        call.scope(dispatch).await
-                    } else {
-                        dispatch.await
-                    }
+                    source
+                        .clone()
+                        .scope(self.native.call(&tool, arguments))
+                        .await
                 }
                 _ => Err("provider is not mounted in the native plugin host".into()),
             }
@@ -958,18 +941,6 @@ impl Runtime {
             waiting.finish(&outcome, observation_stopped);
         }
         drop(observation);
-        if tool.provider.is_harness() {
-            self.audit.push(
-                json!({"type":"ssmcp.harness.tool.completed","call_id":call_id,
-                "provider":tool.provider.label(),"tool":name,"generation":tool.generation,
-                "duration_ms":started.elapsed().as_millis() as u64,
-                "success":outcome.as_ref().is_ok_and(|result|result["isError"]!=true),
-                "rpc_correlation":true,"command_rpc_expected":command_rpc_expected,
-                "command_rpc_started":harness_call.as_ref().is_some_and(|call|call.command_started()),
-                "command_rpc_completed":harness_call.as_ref().is_some_and(|call|call.command_completed()),
-                "file_audit":"unknown","approval":"native"}),
-            );
-        }
         if control {
             self.audit
                 .push(json!({"type":"ssmcp.control.completed","call_id":call_id,

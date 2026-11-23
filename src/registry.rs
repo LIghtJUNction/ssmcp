@@ -27,21 +27,11 @@ pub enum Provider {
     Sessions,
     Worker,
     Audit,
-    Codex,
-    Claude,
-    Pi,
-    OpenCode,
     #[serde(rename = "ssmcp")]
     Peer,
 }
 
-pub(crate) const OPTIONAL_PROVIDERS: [(Provider, &str); 5] = [
-    (Provider::Codex, "codex"),
-    (Provider::Claude, "claude"),
-    (Provider::Pi, "pi"),
-    (Provider::OpenCode, "opencode"),
-    (Provider::Peer, "ssmcp"),
-];
+pub(crate) const OPTIONAL_PROVIDERS: [(Provider, &str); 1] = [(Provider::Peer, "ssmcp")];
 impl Provider {
     pub fn label(self) -> &'static str {
         match self {
@@ -62,15 +52,8 @@ impl Provider {
             Self::Sessions => "sessions",
             Self::Worker => "worker",
             Self::Audit => "audit",
-            Self::Codex => "codex",
-            Self::Claude => "claude",
-            Self::Pi => "pi",
-            Self::OpenCode => "opencode",
             Self::Peer => "ssmcp",
         }
-    }
-    pub fn is_harness(self) -> bool {
-        matches!(self, Self::Codex | Self::Claude | Self::Pi | Self::OpenCode)
     }
 }
 #[derive(Clone, Debug, Serialize)]
@@ -116,7 +99,7 @@ impl StoredTool {
             description: descriptor["description"].as_str().map(str::to_owned),
             input_schema: descriptor["inputSchema"].clone(),
             output_schema: descriptor.get("outputSchema").cloned(),
-            approval: if self.provider.is_harness() || self.provider == Provider::Peer {
+            approval: if self.provider == Provider::Peer {
                 ApprovalPolicy::Native
             } else {
                 ApprovalPolicy::AuthorizedConnection
@@ -347,17 +330,7 @@ fn prepare(
         if native_name.is_empty() {
             return Err("native tool has no name".into());
         }
-        let id = if provider == Provider::Claude {
-            if let Some(name) = native_name.strip_prefix("cc.") {
-                format!("claude.{}", component(name))
-            } else if let Some(name) = native_name.strip_prefix("ssmcp.cc.") {
-                format!("ssmcp.claude.{name}")
-            } else {
-                return Err("Claude returned a tool outside its namespace".into());
-            }
-        } else {
-            native_name.clone()
-        };
+        let id = native_name.clone();
         let allowed = match provider {
             Provider::Client => {
                 id == "ssmcp.client.capabilities" || id.starts_with("ssmcp.resources.")
@@ -427,10 +400,6 @@ fn prepare(
                     | "ssmcp.worker.release"
             ),
             Provider::Audit => id == "ssmcp.audit.events",
-            Provider::Codex => id.starts_with("codex.") || id.starts_with("ssmcp.codex."),
-            Provider::Claude => true,
-            Provider::Pi => id.starts_with("pi.") || id.starts_with("ssmcp.pi."),
-            Provider::OpenCode => id.starts_with("opencode."),
             Provider::Peer => id.starts_with("peer."),
         };
         if !allowed
@@ -494,15 +463,13 @@ mod tests {
     #[test]
     fn native_schema_and_extensions_survive_exactly() {
         let registry = Registry::new();
-        let native = tool("cc.Read");
+        let native = tool("peer.Read");
         registry
-            .replace(Provider::Claude, vec![native.clone()])
+            .replace(Provider::Peer, vec![native.clone()])
             .unwrap();
-        let routed = registry.lookup("claude.Read").unwrap();
-        let mut expected = native;
-        expected["name"] = "claude.Read".into();
-        assert_eq!(routed.descriptor, expected);
-        assert_eq!(routed.native_name, "cc.Read");
+        let routed = registry.lookup("peer.Read").unwrap();
+        assert_eq!(routed.descriptor, native);
+        assert_eq!(routed.native_name, "peer.Read");
     }
     #[test]
     fn snapshots_isolate_failures_reject_collisions_and_stale_routes() {
@@ -511,19 +478,19 @@ mod tests {
             .replace(Provider::Exec, vec![tool("ssmcp.exec.start")])
             .unwrap();
         registry
-            .replace(Provider::Codex, vec![tool("codex.a")])
+            .replace(Provider::Peer, vec![tool("peer.a")])
             .unwrap();
-        let old = registry.lookup("codex.a").unwrap();
-        let mut changed = tool("codex.a");
+        let old = registry.lookup("peer.a").unwrap();
+        let mut changed = tool("peer.a");
         changed["inputSchema"]["additionalProperties"] = false.into();
-        registry.replace(Provider::Codex, vec![changed]).unwrap();
+        registry.replace(Provider::Peer, vec![changed]).unwrap();
         assert!(registry.validate(&old).is_err());
         assert!(
             registry
-                .replace(Provider::Codex, vec![tool("ssmcp.exec.start")])
+                .replace(Provider::Peer, vec![tool("ssmcp.exec.start")])
                 .is_err()
         );
-        assert!(registry.lookup("codex.a").is_err());
+        assert!(registry.lookup("peer.a").is_err());
         assert!(registry.lookup("ssmcp.exec.start").is_ok());
         registry.close();
         assert!(registry.lookup("ssmcp.exec.start").is_err());
@@ -537,19 +504,15 @@ mod tests {
         let other = registry.lookup("ssmcp.exec.start").unwrap();
         let before = registry
             .replace(
-                Provider::Codex,
-                vec![
-                    tool("codex.keep"),
-                    tool("codex.change"),
-                    tool("codex.remove"),
-                ],
+                Provider::Peer,
+                vec![tool("peer.keep"), tool("peer.change"), tool("peer.remove")],
             )
             .unwrap();
-        let old = registry.lookup("codex.keep").unwrap();
-        let removed = registry.lookup("codex.remove").unwrap();
+        let old = registry.lookup("peer.keep").unwrap();
+        let removed = registry.lookup("peer.remove").unwrap();
         let (key_pointer, native_pointer, descriptor) = {
             let state = registry.state.read().unwrap();
-            let (key, stored) = state.tools.get_key_value("codex.keep").unwrap();
+            let (key, stored) = state.tools.get_key_value("peer.keep").unwrap();
             (
                 key.as_ptr(),
                 stored.native_name.as_ptr(),
@@ -557,23 +520,23 @@ mod tests {
             )
         };
 
-        let mut changed = tool("codex.change");
+        let mut changed = tool("peer.change");
         changed["inputSchema"]["additionalProperties"] = false.into();
         let generation = registry
             .replace(
-                Provider::Codex,
+                Provider::Peer,
                 vec![
-                    tool("codex.keep"),
+                    tool("peer.keep"),
                     changed.clone(),
-                    tool("codex.new1"),
-                    tool("codex.new2"),
+                    tool("peer.new1"),
+                    tool("peer.new2"),
                 ],
             )
             .unwrap();
         assert!(generation > before);
         {
             let state = registry.state.read().unwrap();
-            let (key, stored) = state.tools.get_key_value("codex.keep").unwrap();
+            let (key, stored) = state.tools.get_key_value("peer.keep").unwrap();
             assert_eq!(key.as_ptr(), key_pointer);
             assert_eq!(stored.native_name.as_ptr(), native_pointer);
             assert!(stored.descriptor.shares_storage(&descriptor));
@@ -581,21 +544,21 @@ mod tests {
                 state
                     .tools
                     .values()
-                    .filter(|tool| tool.provider == Provider::Codex)
+                    .filter(|tool| tool.provider == Provider::Peer)
                     .all(|tool| tool.generation == generation)
             );
         }
         assert!(registry.validate(&old).is_err());
         assert!(registry.validate(&removed).is_err());
-        assert!(registry.lookup("codex.remove").is_err());
+        assert!(registry.lookup("peer.remove").is_err());
         assert!(
             registry
-                .validate(&registry.lookup("codex.keep").unwrap())
+                .validate(&registry.lookup("peer.keep").unwrap())
                 .is_ok()
         );
-        assert_eq!(registry.lookup("codex.change").unwrap().descriptor, changed);
-        assert!(registry.lookup("codex.new1").is_ok());
-        assert!(registry.lookup("codex.new2").is_ok());
+        assert_eq!(registry.lookup("peer.change").unwrap().descriptor, changed);
+        assert!(registry.lookup("peer.new1").is_ok());
+        assert!(registry.lookup("peer.new2").is_ok());
         assert!(registry.validate(&other).is_ok());
     }
 
@@ -625,7 +588,7 @@ mod tests {
         let registry = Registry::new();
         assert!(
             registry
-                .replace(Provider::Pi, vec![json!({"name":"pi.read"})])
+                .replace(Provider::Peer, vec![json!({"name":"peer.read"})])
                 .is_err()
         );
         assert!(registry.catalog().unwrap().is_empty());

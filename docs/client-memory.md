@@ -1,5 +1,9 @@
 # 客户端内存占用与优化验证
 
+> **历史验证记录（2026-11-18，ssmcp 0.7.4）。** 本页的测量、安装结论和提供方状态只对应文末保留的源码、二进制与报告，不代表当前版本或当前安装状态。
+
+当前源码中的客户端通过[原生运行时](../src/runtime.rs)和[注册表](../src/registry.rs)提供工具，已移除内置第三方 Harness 适配器。输出按当前进程的 RAM 预算管理；本页记录的旧磁盘归档策略属于历史版本，现行规则见[输出预算与完整性](session-control.md#自动清理与容量)。
+
 **严格的 10 MB 目标尚未全面达到。** 本机已安装提供方场景中，完成 40 条命令后再空闲 35 秒，客户端 RSS + Swap 末值从 **350.36 MB 降至 15.70 MB**，下降约 **95.5%**；发现完成后的采样峰值仍为 **76.21 MB**。最小场景峰值 **9.04 MB**，通过预算；合成目录场景峰值 **10.64 MB**，未通过。[基线报告](reports/client-memory-2026-11-18/baseline-installed.json) · [优化报告](reports/client-memory-2026-11-18/optimized-installed.json)
 
 ## 口径与实测结果
@@ -28,9 +32,9 @@
 
 优化版四轮扫描和最终复查均返回 **1,450 个工具、23 页**，摘要一致；基线目录在测试中由 1,397 增至 1,450，两个版本的内容摘要也不同。这是实际安装版本的比较，不是固定目录的严格消融实验。[目录及刷新记录](reports/client-memory-2026-11-18/optimized-installed.json)
 
-## 实现改动与行为边界
+## 当时的实现改动与行为边界
 
-- **目录共享与按需展开。** 描述符以紧凑字节保存，较大项压缩；提供方、注册表和分页快照共享内容。刷新复用相同描述符及路由名称的分配，变化项才替换，但仍更新提供方 generation，使旧句柄失效。生成的 Codex schema 留在私有目录，只常驻索引并按需读取。[目录](../src/catalog.rs) · [注册表](../src/registry.rs) · [Codex](../src/backend/codex.rs)
+- **目录共享与按需展开。** 描述符以紧凑字节保存，较大项压缩；提供方、注册表和分页快照共享内容。刷新复用相同描述符及路由名称的分配，变化项才替换，但仍更新提供方 generation，使旧句柄失效。当时生成的 Codex schema 留在私有目录，只常驻索引并按需读取；当前源码已移除此内置适配器，不再使用该 schema 存储路径。[目录](../src/catalog.rs) · [注册表](../src/registry.rs) · [当前原生注册](../src/runtime.rs)
 - **历史和完成输出设限。** 每个事件环使用紧凑 JSON，限制 256 KiB／1,024 条；后台回放保持 2 MiB／4,096 条。命令流运行时保留 64 KiB 尾部，成功结束后释放重复尾部；不超过 4 KiB 的输出可留一份内存捕获，较大输出从归档读取。失败保留尾部与错误，归档缺失或缩短报错。另清理关闭终端的观察器流计数。[事件](../src/backend/events.rs) · [回放](../src/session/attach.rs) · [命令](../src/backend/shell.rs) · [归档](../src/output.rs) · [观察器](../src/observer.rs)
 - **减少启动分配并归还空闲页。** 浏览器 HTTP 客户端延迟创建。Linux GNU 入口在 Tokio 和工作线程启动前设置 64 KiB `M_MMAP_THRESHOLD`；存在 `MALLOC_MMAP_THRESHOLD_`、`GLIBC_TUNABLES` 或 `LD_PRELOAD` 时跳过。显式阈值关闭动态调整，可能增加映射开销；刷新或回复结束后的 `malloc_trim` 仅归还空闲页。其他平台不执行这些 GNU 调整。[入口](../src/bin/ssmcp.rs) · [回收](../src/memory.rs) · [glibc 说明](https://sourceware.org/glibc/manual/latest/html_node/Malloc-Tunable-Parameters.html)
 - **缩小代码体积。** Release 使用 `opt-level="z"`、fat LTO、单代码生成单元与符号裁剪。没有逐项消融，不能把总收益单独归给某个改动。[配置](../Cargo.toml)
