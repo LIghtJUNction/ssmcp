@@ -1764,16 +1764,14 @@ async fn finish_passive_response(
 ) -> Value {
     tool_summaries::collect(report).await;
     let eligible = eligible_user_response(report).await.unwrap_or_default();
-    let mut response = super::events_tool::worker_subscriptions::append(
-        report,
-        tool_result(Ok(value.clone())),
-        &eligible,
-    )
-    .await;
+    let response =
+        super::prompt_hooks::append(report, tool_result(Ok(value.clone())), &eligible).await;
+    let mut response =
+        super::events_tool::worker_subscriptions::append(report, response, &eligible).await;
     if let Some(notices) = response.get("worker_events") {
         value["worker_events"] = notices.clone();
     }
-    // The bounded summary and worker probes can await; withhold observation data as well as
+    // The bounded summary, timer and worker probes can await; withhold observation data as well as
     // notices if its account, connection or binding changed during that await.
     if !response_events_authorized(report, client_id, &value).await
         || !response_authorized(report, client_id)
