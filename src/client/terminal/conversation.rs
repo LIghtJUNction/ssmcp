@@ -117,7 +117,7 @@ type SidebarAgentRow = (String, PanelTone, Option<SidebarAgentIdentity>);
 #[derive(Default)]
 pub(super) struct Conversation {
     pub(super) composer: Composer,
-    pub(super) idle_tips: hints::IdleTips,
+    idle_tips: hints::IdleTips,
     pub(super) worker_activity_rows: u16,
     #[cfg(test)]
     worker_activity_fixture: Option<Value>,
