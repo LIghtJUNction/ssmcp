@@ -1023,7 +1023,7 @@ impl Desktop {
                 canvas,
                 390 + page as u64,
                 Rect::new(
-                    row_x + row_width - 114.,
+                    bounds.x + bounds.w - 114.,
                     bounds.y + bounds.h - 41.,
                     106.,
                     32.,
@@ -1038,7 +1038,7 @@ impl Desktop {
         if history.omitted > 0 {
             canvas.text(
                 &format!("本窗口已省略 {} 条较早记录", history.omitted),
-                row_x + 6.,
+                bounds.x + 6.,
                 bounds.y + bounds.h - 13.,
                 10,
                 false,
