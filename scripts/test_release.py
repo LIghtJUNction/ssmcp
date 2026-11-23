@@ -441,6 +441,160 @@ class ReleaseTests(unittest.TestCase):
             temporary.parent.mkdir(parents=True)
             temporary.write_bytes(archive.read_bytes())
 
+    def gui_fixtures(self, *, package=True):
+        self.desktop_version_fixture()
+        for spec in release.GUI_CLIENTS.values():
+            directory = self.root / spec["directory"]
+            (directory / spec["entry"]).parent.mkdir(parents=True, exist_ok=True)
+            if not (directory / spec["entry"]).exists():
+                (directory / spec["entry"]).write_text("fixture application source\n")
+            (directory / "README.md").write_text("fixture client instructions\n")
+        (self.root / "LICENSE").write_text("fixture license\n")
+        self.git("add", "apps", "LICENSE")
+        self.git("commit", "--quiet", "-m", "GUI source fixtures")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        sha = self.git("rev-parse", "HEAD")
+        environment = mock.patch.dict(os.environ, {
+            "SOURCE_COMMIT": sha, "GITHUB_REPOSITORY": "fixture/ssmcp",
+            "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_WORKFLOW_SHA": sha,
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
+        fixtures = {}
+        for platform, spec in release.GUI_CLIENTS.items():
+            directory = self.root / "target/gui-fixtures" / platform
+            directory.mkdir(parents=True)
+            (directory / "build.log").write_text("fixture successful compilation\n")
+            (directory / "tests.log").write_text(
+                "INSTRUMENTATION_RESULT: stream=SSMCP protocol and controller checks passed: fixture\n"
+                if platform == "android" else "test result: ok. 1 passed; 0 failed;\n"
+                if platform == "windows" else "Executed 1 test, with 0 failures (0 unexpected)\n")
+            (directory / "result.json").write_text(json.dumps({
+                "source_commit": sha, "target": spec["target"], "profile": spec["profile"],
+                "build_exit": 0, "test_exit": 0,
+            }))
+            binary = None
+            # Structural fixture bytes only; these are not native acceptance tests.
+            if platform == "windows":
+                binary = directory / "ssmcp-desktop.exe"
+                binary.write_bytes(b"MZfixture executable")
+            elif platform == "android":
+                binary = directory / "app-debug.apk"
+                with zipfile.ZipFile(binary, "w") as archive:
+                    archive.writestr("AndroidManifest.xml", "fixture manifest")
+                    archive.writestr("classes.dex", "fixture bytecode")
+            fixtures[platform] = (directory, binary)
+            if package:
+                release.package_gui(platform, directory, binary, self.root)
+        return fixtures
+
+    def test_gui_assets_and_simulator_receipt_join_the_same_release_manifest(self):
+        output = self.fixtures()
+        self.gui_fixtures()
+        self.stub_verified_crate()
+        release.checksums(self.root)
+        release.checksums(self.root, recheck=True)
+        manifest = json.loads((output / "release-manifest.json").read_text())
+        self.assertEqual(len(manifest["artifacts"]), 13)
+        self.assertEqual({row["platform"] for row in manifest["gui_clients"]}, {"windows", "android", "ios"})
+        self.assertTrue(all(row["source"]["commit"] == manifest["commit"] for row in manifest["gui_clients"]))
+        self.assertIsNone(next(row for row in manifest["gui_clients"] if row["platform"] == "ios")["asset"])
+        with zipfile.ZipFile(output / release.GUI_CLIENTS["windows"]["asset"]) as archive:
+            self.assertEqual(set(archive.namelist()), {"ssmcp-desktop.exe", "README.md", "LICENSE", "build-source.json"})
+            self.assertEqual(archive.read("ssmcp-desktop.exe"), b"MZfixture executable")
+        result = release.validate_tag(None, self.root, build_only=True)
+        self.assertEqual(result["gui_clients"], "true")
+
+    def test_apps_present_cannot_finalize_without_every_gui_asset_and_test_receipt(self):
+        output = self.fixtures()
+        self.gui_fixtures()
+        self.stub_verified_crate()
+        for platform, spec in release.GUI_CLIENTS.items():
+            required = [release.gui_receipt_name(platform)]
+            if spec["asset"]:
+                required.extend([spec["asset"], spec["asset"] + ".sha256"])
+            for name in required:
+                with self.subTest(name=name):
+                    path, data = output / name, (output / name).read_bytes()
+                    path.unlink()
+                    with self.assertRaises((ValueError, FileNotFoundError)):
+                        release.checksums(self.root)
+                    path.write_bytes(data)
+        self.assertFalse((output / "release-manifest.json").exists())
+
+    def test_gui_receipts_reject_other_sources_failed_tests_and_changed_artifacts(self):
+        output = self.fixtures()
+        self.gui_fixtures()
+        self.stub_verified_crate()
+        path = output / release.gui_receipt_name("android")
+        original = path.read_bytes()
+        for mutate in (
+            lambda row: row["source"].update(commit="0" * 40),
+            lambda row: row["source"].update(application_tree="0" * 40),
+            lambda row: row.update(target="android-api-33-x86_64"),
+            lambda row: row["checks"].update(test_exit=1),
+            lambda row: row["checks"].update(test_exit=False),
+            lambda row: row["evidence"].pop("tests.log"),
+            lambda row: row["actions"].update(run_id=""),
+            lambda row: row["asset"].update(sha256="0" * 64),
+        ):
+            row = json.loads(original)
+            mutate(row)
+            path.write_text(json.dumps(row))
+            with self.assertRaises(ValueError):
+                release.checksums(self.root)
+            path.write_bytes(original)
+        artifact = output / release.GUI_CLIENTS["android"]["asset"]
+        artifact.write_bytes(artifact.read_bytes() + b"changed after tests")
+        (output / (artifact.name + ".sha256")).write_text(f"{release.digest(artifact)}  {artifact.name}\n")
+        with self.assertRaisesRegex(ValueError, "successful build"):
+            release.checksums(self.root)
+
+    def test_gui_packaging_requires_actual_success_and_requested_source(self):
+        fixtures = self.gui_fixtures(package=False)
+        evidence, binary = fixtures["windows"]
+        result = evidence / "result.json"
+        original = result.read_bytes()
+        for exit_code in (1, False, "0"):
+            receipt = json.loads(original)
+            receipt["build_exit"] = exit_code
+            result.write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(ValueError, "exit receipts"):
+                release.package_gui("windows", evidence, binary, self.root)
+        result.write_bytes(original)
+        with mock.patch.dict(os.environ, {"SOURCE_COMMIT": "0" * 40}):
+            with self.assertRaisesRegex(ValueError, "immutable commit"):
+                release.package_gui("windows", evidence, binary, self.root)
+        with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": ""}):
+            with self.assertRaisesRegex(ValueError, "Actions run"):
+                release.package_gui("windows", evidence, binary, self.root)
+        self.assertFalse((self.root / "dist").exists())
+
+    def test_android_custom_runner_requires_explicit_success_even_with_adb_exit_zero(self):
+        passed = "INSTRUMENTATION_RESULT: stream=SSMCP protocol and controller checks passed: fixture\n"
+        for text in (passed, passed + "INSTRUMENTATION_CODE: -1\n"):
+            release.validate_android_instrumentation(text)
+        for text in ("", "INSTRUMENTATION_CODE: -1\n", passed + "INSTRUMENTATION_CODE: 0\n",
+                     "SSMCP protocol checks passed: outdated runner\n", passed + passed,
+                     passed + "SSMCP check failed: AssertionError: fixture\n",
+                     passed + "INSTRUMENTATION_FAILED: fixture\n"):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, "Instrumentation"):
+                release.validate_android_instrumentation(text)
+
+    def test_gui_native_test_logs_cannot_claim_a_zero_test_run(self):
+        for platform, text in (
+            ("windows", ""), ("windows", "test result: ok. 0 passed; 0 failed;\n"),
+            ("ios", ""), ("ios", "Executed 0 tests, with 0 failures\n"),
+            ("ios", "Executed 3 tests, with 1 failures\n"),
+        ):
+            with self.subTest(platform=platform, text=text), self.assertRaises(ValueError):
+                release.validate_gui_test_log(platform, text)
+
+    def test_incomplete_gui_source_cannot_silently_skip_the_release_gate(self):
+        (self.root / "apps/ssmcp-android").mkdir(parents=True)
+        with self.assertRaisesRegex(ValueError, "incomplete android"):
+            release.validate_tag(None, self.root, build_only=True)
+
     def test_checksums_require_every_platform_and_match_manifest(self):
         output = self.fixtures()
         self.stub_verified_crate()
@@ -628,6 +782,81 @@ class ReleaseTests(unittest.TestCase):
                 updated = (self.root / "Cargo.lock").read_text()
                 self.assertIn('name = "ssmcp"\nversion = "' + expected + '"', updated)
                 self.assertIn('name = "fixture"\nversion = "0.5.9"', updated)
+
+    def desktop_version_fixture(self):
+        desktop = self.root / "apps/ssmcp-desktop"
+        desktop.mkdir(parents=True)
+        (desktop / "Cargo.toml").write_text(
+            '[package]\nname = "ssmcp-desktop"\nversion = "0.1.0"\n'
+            '[workspace]\n[dependencies]\nssmcp = { path = "../.." }\n'
+        )
+        (desktop / "Cargo.lock").write_text(
+            'version = 4\n\n[[package]]\nname = "ssmcp"\nversion = "0.5.0"\n'
+            '\n[[package]]\nname = "ssmcp-desktop"\nversion = "0.1.0"\ndependencies = ["ssmcp"]\n'
+            '\n[[package]]\nname = "fixture"\nversion = "0.5.0"\n'
+        )
+        return desktop
+
+    def test_bump_updates_desktop_path_lock_without_changing_app_or_other_packages(self):
+        desktop = self.desktop_version_fixture()
+        paths = [self.root / path for path in release.application_version_files(self.root)]
+        before = {path: path.read_bytes() for path in paths}
+        manifest = (desktop / "Cargo.toml").read_bytes()
+        preview = release.bump("minor", self.root, dry_run=True)
+        self.assertEqual(preview["version"], "0.6.0")
+        self.assertEqual(before, {path: path.read_bytes() for path in paths})
+        release.bump("minor", self.root)
+        self.assertEqual(release.version(self.root), "0.6.0")
+        self.assertEqual((desktop / "Cargo.toml").read_bytes(), manifest)
+        self.assertEqual(
+            {row["name"]: row["version"] for row in release.read_toml(desktop / "Cargo.lock")["package"]},
+            {"ssmcp": "0.6.0", "ssmcp-desktop": "0.1.0", "fixture": "0.5.0"},
+        )
+        self.assertEqual(release.validate_package("v0.6.0", self.root), "0.6.0")
+
+    def test_invalid_desktop_lock_prevents_every_version_write(self):
+        desktop = self.desktop_version_fixture()
+        path = desktop / "Cargo.lock"
+        valid = path.read_text()
+        variants = [
+            None,
+            valid.replace('name = "ssmcp"\nversion = "0.5.0"', 'name = "ssmcp"\nversion = "0.4.0"'),
+            valid + '\n[[package]]\nname = "ssmcp"\nversion = "0.5.0"\n',
+            valid.replace('name = "ssmcp"\nversion = "0.5.0"',
+                          'name = "ssmcp"\nversion = "0.5.0"\nsource = "registry+https://example.invalid"'),
+        ]
+        for content in variants:
+            with self.subTest(content=content):
+                if content is None:
+                    path.unlink()
+                else:
+                    path.write_text(content)
+                files = [self.root / "Cargo.toml", self.root / "Cargo.lock", desktop / "Cargo.toml", path]
+                before = {item: item.read_bytes() if item.exists() else None for item in files}
+                with self.assertRaises(ValueError):
+                    release.bump("minor", self.root)
+                self.assertEqual(before, {
+                    item: item.read_bytes() if item.exists() else None for item in files
+                })
+
+    def test_bump_workflow_commits_desktop_lock_and_reuses_the_same_commit(self):
+        desktop = self.desktop_version_fixture()
+        self.git("add", "apps/ssmcp-desktop")
+        self.git("commit", "--quiet", "-m", "independent desktop fixture")
+        baseline = self.git("rev-parse", "HEAD")
+        with self.bump_origin() as remote:
+            first = bump_release.prepare("minor", baseline, self.root)
+            self.assertEqual(
+                self.git("diff", "--name-only", baseline, first["sha"]).splitlines(),
+                ["Cargo.lock", "Cargo.toml", "apps/ssmcp-desktop/Cargo.lock"],
+            )
+            self.assertEqual(self.git("status", "--porcelain"), "")
+            self.assertIn('name = "ssmcp"\nversion = "0.6.0"', (desktop / "Cargo.lock").read_text())
+            self.git("checkout", "--quiet", "--detach", baseline)
+            repeated = bump_release.prepare("minor", baseline, self.root)
+            self.assertEqual(repeated["sha"], first["sha"])
+            self.assertEqual(repeated["status"], "reused")
+            self.assertEqual(self.remote_commit(remote, "refs/tags/v0.6.0^{commit}"), first["sha"])
 
     @contextmanager
     def bump_origin(self):

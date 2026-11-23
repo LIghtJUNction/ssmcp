@@ -117,6 +117,10 @@ impl ConversationFeed {
                 detail
                     .push("ALL: every condition must be satisfied in the same observation.".into());
             }
+            if !is_assignment(operation) {
+                detail.extend(target_references(operation));
+                detail.push(observation_note(operation).into());
+            }
             detail.push(format!("Pool generation {generation} · operation {id}"));
             output.push(ConversationEntry {
                 key: format!("worker-operation\0{generation}\0{id}"),
@@ -154,17 +158,18 @@ fn duration(milliseconds: u64) -> String {
 fn state(operation: &Value) -> &'static str {
     match operation["state"].as_str() {
         Some("waiting") => "Waiting",
-        Some("satisfied") => "Satisfied",
-        Some("timed_out") => "Timed out",
-        Some("indeterminate") => "Unknown target",
+        Some("satisfied") => "Triggered",
+        Some("timed_out") => "Window expired",
+        Some("indeterminate") => "Unknown",
         Some("unavailable") => "Unavailable",
-        Some("cancelled") => "Cancelled",
+        Some("cancelled") => "Observation stopped",
         Some("error") => "Error",
         Some("submitted") => "Submitted",
         Some("assigned") => "Assigned",
         Some("current") => "Current capacity",
         Some("changed") => "Capacity changed",
-        Some("unchanged") => "Unchanged",
+        Some("unchanged") if operation["wait_ms"] == 0 => "Current capacity unchanged",
+        Some("unchanged") => "Window expired · unchanged",
         Some("not_accepting") => "Not accepting tasks",
         _ => "State unavailable",
     }
@@ -192,21 +197,17 @@ fn mode(operation: &Value) -> &'static str {
 }
 
 fn target(target: &Value) -> String {
+    let summary = target["summary"].as_str().filter(|text| !text.is_empty());
     match target["kind"].as_str() {
-        Some("task_finished") => format!(
-            "Task {} finished",
-            target["task_id"].as_str().unwrap_or("unavailable")
-        ),
-        Some("task_result") => format!(
-            "Task {} result",
-            target["task_id"].as_str().unwrap_or("unavailable")
-        ),
-        Some("worker_idle") => match (target["slot"].as_u64(), target["epoch"].as_u64()) {
-            (Some(slot), Some(epoch)) => format!(
-                "Worker #{:02} idle (slot {slot}, epoch {epoch})",
-                slot.saturating_add(1)
-            ),
-            _ => "Worker idle target unavailable".into(),
+        Some("task_finished") => summary
+            .map(|text| format!("{text} · finishes"))
+            .unwrap_or_else(|| "Worker task finishes".into()),
+        Some("task_result") => summary
+            .map(|text| format!("{text} · result"))
+            .unwrap_or_else(|| "Worker task result".into()),
+        Some("worker_idle") => match target["slot"].as_u64() {
+            Some(slot) => format!("Worker #{:02} becomes idle", slot.saturating_add(1)),
+            None => "Worker idle target unavailable".into(),
         },
         Some("availability_change") => {
             if let Some(revision) = target["revision"].as_u64() {
@@ -216,6 +217,49 @@ fn target(target: &Value) -> String {
             }
         }
         _ => "Condition unavailable".into(),
+    }
+}
+
+fn target_references(operation: &Value) -> Vec<String> {
+    operation["targets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|target| {
+            if let Some(id) = target["task_id"].as_str() {
+                Some(format!("Task ID {id}"))
+            } else if let (Some(slot), Some(epoch)) =
+                (target["slot"].as_u64(), target["epoch"].as_u64())
+            {
+                Some(format!(
+                    "Worker #{:02} · slot {slot}, epoch {epoch}",
+                    slot.saturating_add(1)
+                ))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn observation_note(operation: &Value) -> &'static str {
+    match operation["state"].as_str() {
+        Some("timed_out" | "unchanged") => {
+            "Observation window expired or returned unchanged. This does not cancel execution or establish task completion."
+        }
+        Some("cancelled") => {
+            "Only this observation stopped. Stopping observation does not cancel execution."
+        }
+        Some("satisfied" | "changed") => {
+            "The requested condition triggered a return. This does not establish overall task completion."
+        }
+        Some("indeterminate" | "unavailable" | "error") => {
+            "Target outcome is unknown or unavailable. Do not infer success or replay work."
+        }
+        Some("waiting") => {
+            "Observation is pending. This window's budget is not the task's execution deadline."
+        }
+        _ => "This is a read-only observation of the requested condition.",
     }
 }
 
@@ -376,12 +420,14 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(rows.contains("Wait #7 · ALL · Waiting · 1.2s / 5.0s"));
-        assert!(rows.contains("Task exact-task-id finished"));
-        assert!(rows.contains("Worker #02 idle (slot 1, epoch 41)"));
+        assert!(rows.contains("Worker task finishes"));
+        assert!(rows.contains("Task ID exact-task-id"));
+        assert!(rows.contains("Worker #02 becomes idle"));
+        assert!(rows.contains("slot 1, epoch 41"));
         pool["manager_operations"][0]["state"] = json!("timed_out");
         pool["manager_operations"][0]["elapsed_ms"] = json!(5002);
         let rows = compact(&pool, 120, 2);
-        assert!(rows[0].0.contains("Timed out · 5.0s / 5.0s"));
+        assert!(rows[0].0.contains("Window expired · 5.0s / 5.0s"));
         assert!(!rows[0].0.contains("Waiting"));
         let operation = &mut pool["manager_operations"][0];
         operation["kind"] = json!("result");
@@ -399,7 +445,7 @@ mod tests {
         for (value, label) in [
             ("current", "Current capacity"),
             ("changed", "Capacity changed"),
-            ("unchanged", "Unchanged"),
+            ("unchanged", "Window expired"),
             ("not_accepting", "Not accepting tasks"),
         ] {
             pool["manager_operations"][0]["state"] = json!(value);

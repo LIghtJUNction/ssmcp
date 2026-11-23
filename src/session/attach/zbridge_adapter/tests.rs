@@ -382,3 +382,155 @@ async fn remote_frontend_uses_the_real_private_ipc_and_explicit_detach() {
     service.abort();
     let _ = service.await;
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn unified_pty_bridge_keeps_writer_lease_generation_and_native_hooks() {
+    use crate::runtime::hooks::{ToolCall, ToolCallHook};
+    use crate::wire::Operation as NativeOperation;
+    use std::time::Duration;
+    struct DenyInput;
+    impl ToolCallHook for DenyInput {
+        fn before_call(&self, call: &ToolCall) -> Result<(), String> {
+            if matches!(
+                call.native_name.as_str(),
+                "terminal.write" | "ssmcp.exec.write" | "ssmcp.exec.resize"
+            ) {
+                Err("fixture denies native PTY control".into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+    let backend = crate::backend::Backend::start(std::path::Path::new("/bin/sh"))
+        .await
+        .unwrap();
+    let runtime = Runtime::new(backend, std::env::current_dir().unwrap()).unwrap();
+    let jobs = runtime.terminals();
+    let started=jobs.call("ssmcp.exec.start",json!({"mode":"pty","command":["python3","-c",
+        "import os,tty; tty.setraw(0); os.write(1,b'READY'); data=os.read(0,1); os.write(1,b'HANDLED:'+data)"]})).await.unwrap();
+    let job_id = started["job_id"].as_str().unwrap();
+    let mut cursor = 0;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let page = jobs
+                .call(
+                    "ssmcp.exec.read",
+                    json!({"job_id":job_id,"stdout_cursor":cursor,"wait_ms":100}),
+                )
+                .await
+                .unwrap();
+            cursor = page["stdout_cursor"].as_u64().unwrap();
+            if page["stdout"].as_str().unwrap().contains("READY") {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    runtime.set_tool_call_hook(Some(Arc::new(DenyInput)));
+    for (name, arguments) in [
+        ("ssmcp.exec.write", json!({"job_id":job_id,"data":"x"})),
+        (
+            "ssmcp.exec.resize",
+            json!({"job_id":job_id,"rows":44,"cols":120}),
+        ),
+        ("terminal.write", json!({"terminal_id":job_id,"data":"x"})),
+    ] {
+        let rejected = runtime
+            .perform(NativeOperation::CallTool {
+                name: name.into(),
+                arguments,
+            })
+            .await
+            .unwrap_err();
+        assert!(rejected.contains("fixture denies native PTY control"));
+    }
+    runtime.set_tool_call_hook(None);
+    assert_eq!(
+        jobs.call("ssmcp.exec.status", json!({"job_id":job_id}))
+            .await
+            .unwrap()["stdin"]["bytes_written"],
+        0
+    );
+
+    let (_capture, handle) = host();
+    let binding = handle.bind_runtime(runtime.clone()).unwrap();
+    let reader = handle.frontend(true).unwrap();
+    let writer = handle.frontend(false).unwrap();
+    assert!(handle.frontend(false).is_err());
+    let generation = generation(&writer).await;
+    let state = reader
+        .request(req(Operation::State {
+            generation: generation.clone(),
+            resource: id("terminals"),
+            query: json!({}),
+        }))
+        .await;
+    let ResponseBody::State(state) = state.body else {
+        panic!("missing terminals")
+    };
+    let terminal = state.value["terminals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["job_id"] == job_id)
+        .expect("exec PTY appears in existing bridge resource");
+    assert_eq!(terminal["pid"], started["pid"]);
+    let write = req(Operation::Command {
+        generation: generation.clone(),
+        command: id("terminal.write"),
+        arguments: json!({"terminal_id":job_id,"data":"q"}),
+    });
+    assert_eq!(
+        error(reader.request(write.clone()).await).code,
+        ErrorCode::Denied
+    );
+    let resize = req(Operation::Command {
+        generation: generation.clone(),
+        command: id("terminal.resize"),
+        arguments: json!({"rows":39,"cols":117}),
+    });
+    assert_eq!(
+        error(reader.request(resize.clone()).await).code,
+        ErrorCode::Denied
+    );
+    let resized = writer.request(resize).await;
+    assert!(matches!(resized.body, ResponseBody::Command(_)));
+    assert_eq!(
+        jobs.call("ssmcp.exec.status", json!({"job_id":job_id}))
+            .await
+            .unwrap()["stdin"]["bytes_written"],
+        0
+    );
+    let accepted = writer.request(write.clone()).await;
+    let ResponseBody::Command(receipt) = accepted.body else {
+        panic!("missing write receipt")
+    };
+    assert_eq!(receipt.value["written"], 1);
+    let done = jobs
+        .call("ssmcp.exec.wait", json!({"job_id":job_id,"wait_ms":3000}))
+        .await
+        .unwrap();
+    assert_eq!(done["exit_code"], 0);
+    let page = jobs
+        .call(
+            "ssmcp.exec.read",
+            json!({"job_id":job_id,"stdout_cursor":cursor}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page["stdout"], "HANDLED:q");
+    drop(binding);
+    assert_eq!(
+        error(writer.request(write).await).code,
+        ErrorCode::StaleGeneration
+    );
+    assert_eq!(
+        jobs.call("ssmcp.exec.status", json!({"job_id":job_id}))
+            .await
+            .unwrap()["stdin"]["bytes_written"],
+        1
+    );
+    runtime.shutdown().await;
+}

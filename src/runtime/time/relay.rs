@@ -1,13 +1,86 @@
 //! Read-only projection of negotiated server waits. This module never captures
 //! a Source/HistoryOwner, calls a tool, restores a task or changes any queue.
-use super::{Entry, Status, clean_label, millis};
-use crate::wire::wait_display;
+use super::{Entry, WaitView, clean_label, millis};
+use crate::wire::wait_display::{self, Outcome};
 use std::time::{Duration, Instant};
 
 struct Observation {
     wire: wait_display::Observation,
     received: Instant,
     deadline: Instant,
+    ended: Option<Instant>,
+}
+
+impl Observation {
+    fn entry(&self, now: Instant) -> Entry {
+        let wire = &self.wire;
+        let actor = wire
+            .attribution
+            .agent
+            .as_ref()
+            .expect("validated participant");
+        let kind = wire.targets.first().expect("validated target").label();
+        let label = format!(
+            "Relay {kind} · {}@{}{}",
+            actor.name,
+            wire.attribution.account.login,
+            if wire.targets.len() == 1 {
+                String::new()
+            } else {
+                format!(" · +{} targets", wire.targets.len() - 1)
+            }
+        );
+        let label: String = label.chars().take(80).collect();
+        let label = clean_label(Some(label))
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "Relay wait".into());
+        let view = WaitView {
+            operation: wire.operation.clone(),
+            mode: wire.mode,
+            targets: wire.target_labels.clone(),
+            // Only bounded declared references and authenticated public
+            // metadata arrive here, never result/private-message bodies.
+            references: wire
+                .target_details
+                .iter()
+                .filter(|text| !text.is_empty())
+                .cloned()
+                .collect(),
+            outcome: wire.outcome,
+            window_ms: Some(wire.window_ms),
+        };
+        let active = self.ended.is_none();
+        Entry {
+            id: wire.wait_id.clone(),
+            kind: "relay_wait",
+            label,
+            status: view.status(),
+            elapsed_ms: if active {
+                wire.elapsed_ms
+                    .saturating_add(millis(now.saturating_duration_since(self.received)))
+            } else {
+                wire.elapsed_ms
+            },
+            remaining_ms: Some(if active {
+                super::remaining_millis(self.deadline, now)
+            } else {
+                wire.remaining_ms
+            }),
+            deadline_unix_ms: None,
+            finished_age_ms: self
+                .ended
+                .map(|ended| millis(now.saturating_duration_since(ended))),
+            cancellable: false,
+            episode: Some(wire.episode),
+            attribution: Some(wire.attribution.clone()),
+            wait: Some(view),
+        }
+    }
+
+    fn same(&self, wire: &wait_display::Observation) -> bool {
+        self.wire.wait_id == wire.wait_id && self.wire.episode == wire.episode
+    }
 }
 
 #[derive(Default)]
@@ -15,6 +88,7 @@ pub(super) struct State {
     enabled: bool,
     revision: u64,
     active: Vec<Observation>,
+    recent: Vec<Observation>,
 }
 
 impl State {
@@ -22,6 +96,23 @@ impl State {
         self.enabled = enabled;
         self.revision = 0;
         self.active.clear();
+        self.recent.clear();
+    }
+
+    fn retain(&mut self, mut observation: Observation, now: Instant) {
+        if let Some(index) = self
+            .recent
+            .iter()
+            .position(|prior| prior.same(&observation.wire))
+        {
+            observation.ended = self.recent[index].ended;
+            self.recent.remove(index);
+        }
+        observation.ended.get_or_insert(now);
+        self.recent.push(observation);
+        if self.recent.len() > wait_display::MAX_ACTIVE {
+            self.recent.remove(0);
+        }
     }
 
     pub(super) fn apply(
@@ -37,6 +128,16 @@ impl State {
             return Ok(false);
         }
         self.revision = snapshot.revision;
+        for mut old in std::mem::take(&mut self.active) {
+            if !snapshot.active.iter().any(|wire| old.same(wire))
+                && !snapshot.recent.iter().any(|wire| old.same(wire))
+            {
+                // Disappearance is not evidence of success or cancellation.
+                old.wire.outcome = Outcome::Unknown;
+                old.wire.elapsed_ms = old.entry(now).elapsed_ms;
+                self.retain(old, now);
+            }
+        }
         self.active = snapshot
             .active
             .into_iter()
@@ -44,58 +145,62 @@ impl State {
                 deadline: now + Duration::from_millis(wire.remaining_ms),
                 received: now,
                 wire,
+                ended: None,
             })
             .collect();
+        for wire in snapshot.recent {
+            let observation = Observation {
+                deadline: now,
+                received: now,
+                wire,
+                ended: Some(now),
+            };
+            self.retain(observation, now);
+        }
         Ok(true)
     }
 
+    fn expire(&mut self, now: Instant) {
+        let mut active = Vec::new();
+        for mut observation in std::mem::take(&mut self.active) {
+            if now < observation.deadline {
+                active.push(observation);
+            } else {
+                // A lost final frame cannot leave a zombie countdown.
+                // The local budget ending is not evidence of the server's
+                // actual return. Only its typed receipt can establish expiry.
+                observation.wire.elapsed_ms = observation.wire.elapsed_ms.saturating_add(millis(
+                    observation
+                        .deadline
+                        .saturating_duration_since(observation.received),
+                ));
+                observation.wire.remaining_ms = 0;
+                observation.wire.outcome = Outcome::Unknown;
+                observation.ended = Some(observation.deadline);
+                self.retain(observation, now);
+            }
+        }
+        self.active = active;
+        self.recent.retain(|observation| {
+            observation.ended.is_some_and(|ended| {
+                now.saturating_duration_since(ended) < Duration::from_secs(300)
+            })
+        });
+    }
+
     pub(super) fn entries(&mut self, now: Instant) -> Vec<Entry> {
-        // A delayed/dropped final snapshot cannot leave a zombie countdown.
-        self.active.retain(|observation| now < observation.deadline);
+        self.expire(now);
         self.active
             .iter()
-            .map(|observation| {
-                let wire = &observation.wire;
-                let actor = wire
-                    .attribution
-                    .agent
-                    .as_ref()
-                    .expect("validated participant");
-                let kind = wire.targets.first().expect("validated target").label();
-                let label = format!(
-                    "Relay {} · {}@{}{}",
-                    kind,
-                    actor.name,
-                    wire.attribution.account.login,
-                    if wire.targets.len() == 1 {
-                        String::new()
-                    } else {
-                        format!(" · +{} targets", wire.targets.len() - 1)
-                    }
-                );
-                // The display label is bounded independently from validated wire
-                // identity; account/agent provenance remains structured metadata.
-                let label: String = label.chars().take(80).collect();
-                let label = clean_label(Some(label))
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "Relay wait".into());
-                Entry {
-                    id: wire.wait_id.clone(),
-                    kind: "relay_wait",
-                    label,
-                    status: Status::Running,
-                    elapsed_ms: wire.elapsed_ms.saturating_add(millis(
-                        now.saturating_duration_since(observation.received),
-                    )),
-                    remaining_ms: Some(super::remaining_millis(observation.deadline, now)),
-                    deadline_unix_ms: None,
-                    finished_age_ms: None,
-                    cancellable: false,
-                    episode: Some(wire.episode),
-                    attribution: Some(wire.attribution.clone()),
-                }
-            })
+            .map(|observation| observation.entry(now))
+            .collect()
+    }
+
+    pub(super) fn recent_entries(&mut self, now: Instant) -> Vec<Entry> {
+        self.expire(now);
+        self.recent
+            .iter()
+            .map(|observation| observation.entry(now))
             .collect()
     }
 }
@@ -124,10 +229,17 @@ mod tests {
                         name: "Owned observer".into(),
                     }),
                 },
+                operation: "await".into(),
                 targets: vec![wait_display::Kind::AgentStatus],
+                target_labels: vec!["Member reaches the requested status".into()],
+                target_details: vec!["Requested member status must be ready".into()],
+                mode: wait_display::Mode::Any,
+                outcome: wait_display::Outcome::Pending,
+                window_ms: 2100,
                 elapsed_ms: 100,
                 remaining_ms: 2000,
             }],
+            recent: vec![],
         }
     }
 
@@ -151,7 +263,8 @@ mod tests {
                 .apply(
                     wait_display::Snapshot {
                         revision: 2,
-                        active: vec![]
+                        active: vec![],
+                        recent: vec![],
                     },
                     now
                 )
@@ -173,7 +286,9 @@ mod tests {
         let now = Instant::now();
         let mut snapshot = frame(1, 1);
         snapshot.active[0].targets = vec![wait_display::Kind::Event];
+        snapshot.active[0].target_labels = vec!["Events in the authorized subscription".into()];
         snapshot.active[0].remaining_ms = crate::wire::MAX_OBSERVATION_WAIT_MS;
+        snapshot.active[0].window_ms = crate::wire::MAX_OBSERVATION_WAIT_MS;
         assert!(state.apply(snapshot, now).unwrap());
         let entry = state.entries(now).remove(0);
         assert_eq!(
@@ -227,5 +342,56 @@ mod tests {
         })
         .await;
         std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn missing_receipt_trigger_and_disappearance_preserve_distinct_observation_outcomes() {
+        let mut state = State::default();
+        state.configure(true);
+        let now = Instant::now();
+        state.apply(frame(1, 1), now).unwrap();
+        assert!(state.entries(now + Duration::from_secs(2)).is_empty());
+        let expired = state.recent_entries(now + Duration::from_secs(2));
+        assert_eq!(expired[0].wait.as_ref().unwrap().outcome, Outcome::Unknown);
+        assert_eq!(expired[0].status, super::super::Status::Unknown);
+
+        let mut receipt = frame(2, 1).active.remove(0);
+        receipt.outcome = Outcome::Triggered;
+        receipt.elapsed_ms = 1900;
+        receipt.remaining_ms = 100;
+        state
+            .apply(
+                wait_display::Snapshot {
+                    revision: 2,
+                    active: vec![],
+                    recent: vec![receipt],
+                },
+                now + Duration::from_secs(2),
+            )
+            .unwrap();
+        let actual = state.recent_entries(now + Duration::from_secs(2));
+        assert_eq!(actual.len(), 1);
+        assert_eq!(actual[0].wait.as_ref().unwrap().outcome, Outcome::Triggered);
+        assert_eq!(actual[0].status, super::super::Status::Returned);
+
+        state
+            .apply(frame(3, 2), now + Duration::from_secs(3))
+            .unwrap();
+        state
+            .apply(
+                wait_display::Snapshot {
+                    revision: 4,
+                    active: vec![],
+                    recent: vec![],
+                },
+                now + Duration::from_secs(3),
+            )
+            .unwrap();
+        assert!(
+            state
+                .recent_entries(now + Duration::from_secs(3))
+                .iter()
+                .any(|entry| entry.episode == Some(2)
+                    && entry.wait.as_ref().unwrap().outcome == Outcome::Unknown)
+        );
     }
 }

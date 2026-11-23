@@ -120,6 +120,7 @@ pub(super) struct Conversation {
     idle_tips: hints::IdleTips,
     pub(super) worker_activity_rows: u16,
     worker_assignments: worker_operations::ConversationFeed,
+    wait_observations: timing::WaitFeed,
     #[cfg(test)]
     worker_activity_fixture: Option<Value>,
     #[cfg(test)]
@@ -3042,6 +3043,7 @@ impl State {
         self.events.set_scope(events::EventScope::Conversation);
         self.conversation.logs_open = self.conversation.view == View::Logs;
         self.chat_updates();
+        self.chat_wait_observations();
         if let Some(pool) = self.chat_worker_operations() {
             for entry in self.conversation.worker_assignments.update(&pool) {
                 self.events
@@ -3919,7 +3921,7 @@ mod tests {
         state.conversation.worker_activity_fixture.as_mut().unwrap()["manager_operations"][0]["state"] =
             json!("timed_out");
         let text = display(&mut state).screen().contents();
-        assert!(text.contains("Timed out"), "{text}");
+        assert!(text.contains("Window expired"), "{text}");
         assert!(text.contains("slot 1, epoch 41"), "{text}");
         assert_eq!(state.events.snapshot()["retained_events"], 1);
         assert_eq!(

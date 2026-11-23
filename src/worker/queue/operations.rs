@@ -45,6 +45,7 @@ impl WaitCondition {
                 slot: None,
                 epoch: None,
                 revision: None,
+                summary: None,
             },
             Self::WorkerIdle { slot, epoch } => ManagerTargetView {
                 kind: "worker_idle",
@@ -52,6 +53,7 @@ impl WaitCondition {
                 slot: Some(*slot),
                 epoch: Some(*epoch),
                 revision: None,
+                summary: None,
             },
         }
     }
@@ -174,6 +176,26 @@ fn elapsed(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u64::MAX as u128) as u64
 }
 
+fn labelled_targets<T>(
+    state: &State<T>,
+    actor: &Actor,
+    mut targets: Vec<ManagerTargetView>,
+) -> Vec<ManagerTargetView> {
+    for target in &mut targets {
+        target.summary = target
+            .task_id
+            .as_ref()
+            .and_then(|id| state.tasks.get(id))
+            .filter(|task| &task.actor == actor)
+            .map(|task| {
+                let clean = telemetry::display_text(&task.text, super::MAX_TASK_BYTES);
+                let redacted = crate::audit::event(serde_json::Value::String(clean));
+                telemetry::display_text(redacted.as_str().unwrap_or("[redacted]"), 160)
+            });
+    }
+    targets
+}
+
 fn encoded_bytes(view: &ManagerOperationView) -> Result<usize, String> {
     serde_json::to_vec(view)
         .map(|bytes| bytes.len() + 1)
@@ -186,7 +208,7 @@ impl Operations {
             .sequence
             .checked_add(1)
             .ok_or("worker operation sequence exhausted")?;
-        let view = ManagerOperationView {
+        let mut view = ManagerOperationView {
             operation_id,
             kind: spec.kind,
             state: "waiting",
@@ -200,10 +222,23 @@ impl Operations {
             elapsed_ms: 0,
             wait_ms: Some(spec.wait_ms),
         };
-        let mut largest = view.clone();
-        largest.elapsed_ms = u64::MAX;
-        largest.state = "indeterminate";
-        let reserved_bytes = encoded_bytes(&largest)?;
+        let reserve = |view: &ManagerOperationView| {
+            let mut largest = view.clone();
+            largest.elapsed_ms = u64::MAX;
+            largest.state = "indeterminate";
+            encoded_bytes(&largest)
+        };
+        let mut reserved_bytes = reserve(&view)?;
+        if reserved_bytes > MAX_HISTORY_BYTES
+            || self.active_bytes + reserved_bytes > MAX_ACTIVE_BYTES
+        {
+            // Labels are optional presentation. Adding them must not reduce
+            // the existing capacity or drop any exact wait condition.
+            for target in &mut view.targets {
+                target.summary = None;
+            }
+            reserved_bytes = reserve(&view)?;
+        }
         if self.active.len() >= MAX_ACTIVE
             || self.active_targets + view.targets.len() > MAX_ACTIVE_TARGETS
             || self.active_bytes + reserved_bytes > MAX_ACTIVE_BYTES
@@ -338,11 +373,12 @@ impl<T> Queue<T> {
         &self,
         actor: &Actor,
         client_id: &str,
-        spec: WaitSpec,
+        mut spec: WaitSpec,
         at_ms: u64,
     ) -> Result<WaitGuard<'_, T>, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         require_manager(&state, actor, client_id)?;
+        spec.targets = labelled_targets(&state, actor, spec.targets);
         let id = state.operations.begin(spec, at_ms)?;
         Ok(WaitGuard {
             queue: self,
@@ -365,15 +401,20 @@ impl<T> Queue<T> {
             return Err("worker wait_for belongs to another pool generation".into());
         }
         let _ = evaluate(&state, actor, &request.conditions, true)?;
+        let targets = labelled_targets(
+            &state,
+            actor,
+            request
+                .conditions
+                .iter()
+                .map(WaitCondition::target)
+                .collect(),
+        );
         let id = state.operations.begin(
             WaitSpec {
                 kind: "wait_for",
                 mode: request.mode.name(),
-                targets: request
-                    .conditions
-                    .iter()
-                    .map(WaitCondition::target)
-                    .collect(),
+                targets,
                 wait_ms: request.wait_ms,
             },
             at_ms,
@@ -701,7 +742,7 @@ mod tests {
                     owner.clone(),
                     CLIENT,
                     &format!("task-{index}"),
-                    "body",
+                    &"Long readable task summary ".repeat(12),
                     (),
                     index,
                 )
@@ -742,5 +783,44 @@ mod tests {
         );
         assert!(serde_json::to_vec(&views).unwrap().len() <= 16 * 1024);
         assert_eq!(queue.snapshot().queued, 128);
+    }
+    #[test]
+    fn wait_task_labels_require_the_exact_actor_and_exclude_result_bodies() {
+        let (queue, owner) = fixture(1);
+        let task = queue
+            .submit_managed(
+                owner.clone(),
+                CLIENT,
+                "labelled",
+                "Verify build token=fixture-secret",
+                (),
+                1,
+            )
+            .unwrap();
+        let req = request(
+            &queue,
+            "all",
+            json!([{"type":"task_finished","task_id":task.task_id}]),
+        );
+        let guard = queue.begin_conditions(&owner, CLIENT, &req, 2).unwrap();
+        let views = queue.snapshot().manager_operations;
+        let view = views.iter().find(|view| view.kind == "wait_for").unwrap();
+        let label = view.targets[0].summary.as_ref().unwrap();
+        assert!(label.contains("Verify build"));
+        assert!(!label.contains("fixture-secret"));
+        let foreign = Actor {
+            participant: Some("foreign".into()),
+            ..owner.clone()
+        };
+        assert!(queue.begin_conditions(&foreign, CLIENT, &req, 3).is_err());
+        let state = queue.state.lock().unwrap();
+        let hidden = labelled_targets(&state, &foreign, vec![req.conditions[0].target()]);
+        assert!(hidden[0].summary.is_none());
+        drop(state);
+        drop(guard);
+        assert_eq!(
+            queue.result(&owner, &task.task_id).unwrap().status,
+            TaskStatus::Queued
+        );
     }
 }

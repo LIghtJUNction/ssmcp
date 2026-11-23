@@ -216,6 +216,7 @@ async fn local_layers_are_inert_until_trusted_rc_registration_and_keep_explicit_
         assert_eq!(first.sources.len(), 1, "unregistered files never activate");
         assert_eq!(first.sources[0].name, "official");
         let config = Rc {
+            env: Default::default(),
             version: 1,
             tools: Tools {
                 overrides: vec![PathBuf::from("registered.js")],
@@ -279,6 +280,7 @@ fn project_registration_matches_only_the_exact_workspace_and_duplicates_are_erro
     save_test_rc(
         &paths,
         &Rc {
+            env: Default::default(),
             version: 1,
             tools: Tools {
                 projects: vec![other],
@@ -301,7 +303,14 @@ fn project_registration_matches_only_the_exact_workspace_and_duplicates_are_erro
             ..Tools::default()
         },
     ] {
-        save_test_rc(&paths, &Rc { version: 1, tools });
+        save_test_rc(
+            &paths,
+            &Rc {
+                env: Default::default(),
+                version: 1,
+                tools,
+            },
+        );
         assert!(paths.config().is_err());
     }
 }
@@ -313,6 +322,7 @@ async fn missing_or_invalid_enabled_layer_fails_instead_of_using_official_helper
     save_test_rc(
         &paths,
         &Rc {
+            env: Default::default(),
             version: 1,
             tools: Tools {
                 global: true,
@@ -440,6 +450,7 @@ async fn enabling_existing_sources_preserves_files_and_migrates_their_old_rc_reg
     save_test_rc(
         &paths,
         &Rc {
+            env: Default::default(),
             version: 1,
             tools: Tools {
                 overrides: vec![paths.project()],
@@ -532,6 +543,7 @@ async fn local_layer_symlinks_cannot_redirect_initialization_or_selection() {
         save_test_rc(
             &paths,
             &Rc {
+                env: Default::default(),
                 version: 1,
                 tools: Tools {
                     projects: vec![paths.workspace.clone()],
@@ -559,6 +571,7 @@ fn local_config_save_rejects_a_changed_snapshot_without_overwriting_it() {
     std::fs::create_dir_all(paths.rc.parent().unwrap()).unwrap();
     std::fs::write(&paths.rc, changed).unwrap();
     let desired = Rc {
+        env: Default::default(),
         version: 1,
         tools: Tools {
             global: true,
@@ -711,6 +724,7 @@ fn selected_source_limit_keeps_sixteen_legacy_overrides_and_both_local_layers() 
         })
         .collect::<Vec<_>>();
     let mut config = Rc {
+        env: Default::default(),
         version: 1,
         tools: Tools {
             overrides,

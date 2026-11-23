@@ -1,4 +1,16 @@
 fn main() -> std::process::ExitCode {
+    let environment = match ssmcp::client::startup_environment() {
+        Ok(environment) => environment,
+        Err(error) => {
+            ssmcp::client::report_run_error(error.as_ref());
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    for (name, value) in environment {
+        // SAFETY: main has not created Tokio or started any client, native
+        // worker, or other thread. The complete plan was validated first.
+        unsafe { std::env::set_var(name, value) };
+    }
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     if std::env::var_os("MALLOC_MMAP_THRESHOLD_").is_none()
         && std::env::var_os("GLIBC_TUNABLES").is_none()

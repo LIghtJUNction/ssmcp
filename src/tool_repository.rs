@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fs::{File, OpenOptions},
     io::{Read, Write},
@@ -178,6 +178,72 @@ struct Rc {
     version: u32,
     #[serde(default)]
     tools: Tools,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    env: BTreeMap<String, String>,
+}
+
+pub(crate) fn validate_environment(
+    defaults: &BTreeMap<String, String>,
+    windows: bool,
+) -> Result<(), String> {
+    let mut names = BTreeSet::new();
+    for (name, value) in defaults {
+        let mut bytes = name.bytes();
+        if !bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+            || !bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err("[env] names must use ASCII letters, digits, and underscores, starting with a letter or underscore".into());
+        }
+        let normalized = if windows {
+            name.to_ascii_uppercase()
+        } else {
+            name.clone()
+        };
+        if matches!(
+            normalized.as_str(),
+            "HOME" | "USERPROFILE" | "XDG_CONFIG_HOME"
+        ) {
+            return Err("[env] cannot set HOME, USERPROFILE, or XDG_CONFIG_HOME; set configuration locations before starting ssmcp".into());
+        }
+        if !names.insert(normalized) {
+            return Err("[env] names must be distinct without regard to case on Windows".into());
+        }
+        if value.contains('\0') {
+            return Err("[env] values must not contain NUL characters".into());
+        }
+    }
+    Ok(())
+}
+
+fn parse_rc(text: &str) -> Result<Rc, String> {
+    // TOML diagnostics can quote the source line. The shared RC now contains
+    // environment defaults, so never include those lines or values in errors.
+    let rc: Rc = toml::from_str(text).map_err(|_| {
+        "invalid ssmcprc.toml; use version = 1, supported [tools] fields, and literal string values in [env]".to_owned()
+    })?;
+    if rc.version != 1 || rc.tools.overrides.len() > MAX_OVERRIDES || rc.tools.projects.len() > 128
+    {
+        return Err(
+            "ssmcprc.toml requires version=1, at most 16 overrides and 128 trusted project roots"
+                .into(),
+        );
+    }
+    let mut projects = BTreeSet::new();
+    for project in &rc.tools.projects {
+        if !project.is_absolute()
+            || project
+                .components()
+                .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+            || !path_text(&project.display().to_string())
+            || !projects.insert(project)
+        {
+            return Err("tools.projects requires distinct absolute canonical project roots".into());
+        }
+    }
+    validate_environment(&rc.env, cfg!(windows))?;
+    Ok(rc)
 }
 
 #[derive(Deserialize)]
@@ -205,6 +271,16 @@ struct Paths {
 pub(crate) fn configured_paths(workspace: &Path) -> Result<(PathBuf, PathBuf), String> {
     let paths = Paths::current(workspace)?;
     Ok((paths.rc, paths.directory))
+}
+
+/// Read the same trusted RC used by tools; do not initialize any directory or
+/// repository. The executable directory shares the existing global home root.
+pub(crate) fn startup_environment(
+    workspace: &Path,
+) -> Result<(PathBuf, BTreeMap<String, String>), String> {
+    let paths = Paths::current(workspace)?;
+    let (_, config) = paths.read_config()?;
+    Ok((paths.global.with_file_name("bin"), config.env))
 }
 
 impl Paths {
@@ -242,6 +318,7 @@ impl Paths {
                     Rc {
                         version: 1,
                         tools: Tools::default(),
+                        env: BTreeMap::new(),
                     },
                 ));
             }
@@ -251,27 +328,7 @@ impl Paths {
         let bytes = read_file(&self.rc, MAX_RC)
             .map_err(|error| format!("{}: {error}", self.rc.display()))?;
         let text = std::str::from_utf8(&bytes).map_err(|_| "ssmcprc.toml must be UTF-8")?;
-        let rc: Rc = toml::from_str(text).map_err(|e| format!("invalid ssmcprc.toml: {e}"))?;
-        if rc.version != 1
-            || rc.tools.overrides.len() > MAX_OVERRIDES
-            || rc.tools.projects.len() > 128
-        {
-            return Err("ssmcprc.toml requires version=1, at most 16 overrides and 128 trusted project roots".into());
-        }
-        let mut projects = BTreeSet::new();
-        for project in &rc.tools.projects {
-            if !project.is_absolute()
-                || project
-                    .components()
-                    .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
-                || !path_text(&project.display().to_string())
-                || !projects.insert(project)
-            {
-                return Err(
-                    "tools.projects requires distinct absolute canonical project roots".into(),
-                );
-            }
-        }
+        let rc = parse_rc(text).map_err(|error| format!("{}: {error}", self.rc.display()))?;
         Ok((
             Some(RcIdentity {
                 path: self.rc.display().to_string(),
@@ -978,3 +1035,40 @@ async fn concurrent_warm_sources_do_not_take_the_repository_write_lease() {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod environment_config_tests {
+    use super::*;
+
+    #[test]
+    fn version_one_tools_configs_remain_valid_and_env_survives_tools_serialization() {
+        let old = parse_rc("version = 1\n[tools]\nglobal = true\n").unwrap();
+        assert!(old.env.is_empty());
+        assert!(old.tools.global);
+        let mut config =
+            parse_rc("version = 1\n[env]\nEXAMPLE = 'literal $HOME/$(command)'\nEMPTY = ''\n")
+                .unwrap();
+        let original = config.env.clone();
+        config.tools.global = true;
+        // local::save_config serializes this complete Rc with the same call.
+        let saved = toml::to_string_pretty(&config).unwrap();
+        let restored = parse_rc(&saved).unwrap();
+        assert_eq!(restored.env, original);
+        assert!(restored.tools.global);
+    }
+
+    #[test]
+    fn invalid_environment_config_never_echoes_its_values() {
+        let secret = "private-value-never-print";
+        for text in [
+            format!("version = 1\n[env]\nTOKEN = '{secret}' unexpected\n"),
+            format!("version = 1\n[env]\nTOKEN = {{ secret = '{secret}' }}\n"),
+            format!("version = 1\n[env]\nHOME = '{secret}'\n"),
+        ] {
+            let error = parse_rc(&text).unwrap_err();
+            assert!(!error.contains(secret));
+            assert!(!error.contains("TOKEN ="));
+        }
+        assert!(parse_rc("version = 1\n[unknown]\nkey = 'value'\n").is_err());
+    }
+}

@@ -121,6 +121,13 @@ async fn public_wait_display_works_with_every_native_slot_held_without_calls_or_
     );
     let display = &frame.active[0];
     assert_eq!(display.targets, vec![wire::wait_display::Kind::AgentStatus]);
+    assert_eq!(display.target_labels.len(), 1);
+    assert!(display.target_labels[0].contains("requested status"));
+    assert!(display.target_details[0].contains(&fixture.agent_id));
+    assert!(display.target_details[0].contains("display-fixture-ready"));
+    assert_eq!(display.mode, wire::wait_display::Mode::Any);
+    assert_eq!(display.outcome, wire::wait_display::Outcome::Pending);
+    assert_eq!(display.window_ms, 5000);
     assert_eq!(display.attribution.account.subject, "42");
     assert_eq!(
         display.attribution.agent.as_ref().unwrap().id,
@@ -138,10 +145,15 @@ async fn public_wait_display_works_with_every_native_slot_held_without_calls_or_
     assert_eq!(response["structuredContent"]["status"], "ready");
     assert_eq!(response["structuredContent"]["wait_id"], display.wait_id);
     passive(&response);
-    snapshot(&fixture, |ended| {
+    let ended = snapshot(&fixture, |ended| {
         ended.revision > frame.revision && ended.active.is_empty()
     })
     .await;
+    assert_eq!(ended.recent.len(), 1);
+    assert_eq!(
+        ended.recent[0].outcome,
+        wire::wait_display::Outcome::Triggered
+    );
     fixture.assert_summary_observation_did_not_consume_questions();
     assert_eq!(fixture.message_status(&message_id).await, "queued");
     {
@@ -297,4 +309,121 @@ async fn display_authority_revocation_and_disconnect_end_only_the_observation() 
         assert!(state.acknowledgements.is_empty());
         assert!(state.finish_operations.is_empty());
     }
+}
+
+fn event_arguments(fixture: &Fixture, mut arguments: Value) -> Value {
+    arguments["client_id"] = json!(fixture.session.client_id());
+    arguments["agent_id"] = json!(fixture.agent_id);
+    arguments["token"] = json!(fixture.agent_token);
+    arguments
+}
+
+async fn event_request(fixture: &Fixture, arguments: Value) -> Value {
+    crate::http::events_tool::dispatch(
+        fixture.broker.clone(),
+        "mcp".into(),
+        fixture.token.clone(),
+        event_arguments(fixture, arguments),
+    )
+    .await
+    .unwrap()
+}
+
+fn start_event_wait(fixture: &Fixture, arguments: Value) -> JoinHandle<Value> {
+    let arguments = event_arguments(fixture, arguments);
+    let broker = fixture.broker.clone();
+    let token = fixture.token.clone();
+    tokio::spawn(async move {
+        timeout(
+            Duration::from_secs(8),
+            crate::http::events_tool::dispatch(broker, "mcp".into(), token, arguments),
+        )
+        .await
+        .expect("owned event wait must remain bounded")
+        .unwrap()
+    })
+}
+
+#[tokio::test]
+async fn standalone_event_wait_displays_only_authorized_conditions_and_actual_outcomes() {
+    let fixture = Fixture::with_timing(true).await;
+    let subscription = event_request(
+        &fixture,
+        json!({"action":"subscribe","request_id":"display_events",
+            "filter":{"kinds":["custom.wait_display"]}}),
+    )
+    .await;
+    let subscription_id = subscription["subscription_id"].as_str().unwrap();
+    let calls = fixture.native.lock().unwrap().calls.clone();
+    let waiting = start_event_wait(
+        &fixture,
+        json!({"action":"wait","subscription_id":subscription_id,"wait_ms":500}),
+    );
+    let first = snapshot(&fixture, |frame| frame.active.len() == 1).await;
+    let entry = first.active[0].clone();
+    assert_eq!(entry.targets, vec![wire::wait_display::Kind::Event]);
+    assert_eq!(entry.mode, wire::wait_display::Mode::Single);
+    assert_eq!(entry.operation, "events.wait");
+    assert_eq!(entry.window_ms, 500);
+    assert!(entry.target_details[0].contains(subscription_id));
+    let pending = waiting.await.unwrap();
+    assert_eq!(pending["status"], "pending");
+    assert_eq!(pending["observation_id"], entry.wait_id);
+    snapshot(&fixture, |frame| {
+        frame.recent.iter().any(|ended| {
+            ended.wait_id == entry.wait_id
+                && ended.outcome == wire::wait_display::Outcome::WindowExpired
+        })
+    })
+    .await;
+    let waiting = start_event_wait(
+        &fixture,
+        json!({"action":"wait","subscription_id":subscription_id,"wait_ms":5000}),
+    );
+    let active = snapshot(&fixture, |frame| {
+        frame
+            .active
+            .iter()
+            .any(|active| active.wait_id != entry.wait_id)
+    })
+    .await;
+    let next_id = active.active[0].wait_id.clone();
+    event_request(
+        &fixture,
+        json!({"action":"publish","request_id":"display_event_trigger",
+            "name":"custom.wait_display","data":{"message":"private event body fixture"}}),
+    )
+    .await;
+    let ready = waiting.await.unwrap();
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["observation_id"], next_id);
+    assert!(!ready["events"].as_array().unwrap().is_empty());
+    let ended = snapshot(&fixture, |frame| {
+        frame.recent.iter().any(|ended| {
+            ended.wait_id == next_id && ended.outcome == wire::wait_display::Outcome::Triggered
+        })
+    })
+    .await;
+    let encoded = serde_json::to_string(&ended).unwrap();
+    for private in [
+        fixture.token.as_str(),
+        fixture.agent_token.as_str(),
+        "private event body fixture",
+    ] {
+        assert!(!encoded.contains(private));
+    }
+    assert_eq!(fixture.native.lock().unwrap().calls, calls);
+    let before = fixture.native.lock().unwrap().display_frames.len();
+    let denied = crate::http::events_tool::dispatch(
+        fixture.broker.clone(),
+        "mcp".into(),
+        fixture.token.clone(),
+        event_arguments(
+            &fixture,
+            json!({"action":"wait","subscription_id":"unowned_subscription","wait_ms":5000}),
+        ),
+    )
+    .await;
+    assert!(denied.is_err());
+    assert_eq!(fixture.native.lock().unwrap().display_frames.len(), before);
 }
