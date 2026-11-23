@@ -62,7 +62,7 @@ async fn sequential_calls_reuse_slots_and_parallel_calls_stay_separate() {
     assert!(pool.state.lock().unwrap().active.is_empty());
 }
 #[tokio::test]
-async fn closed_interactive_terminals_release_stream_counters_and_reuse_the_slot() {
+async fn closed_interactive_terminals_release_and_reuse_the_slot() {
     let pool = fixture(1);
     let cwd = std::env::current_dir().unwrap();
     for index in 0..64 {
@@ -73,7 +73,7 @@ async fn closed_interactive_terminals_release_stream_counters_and_reuse_the_slot
             pool.state
                 .lock()
                 .unwrap()
-                .streamed
+                .active
                 .contains_key(&format!("terminal:{id}"))
         );
         pool.terminal_closed(&id);
@@ -82,7 +82,6 @@ async fn closed_interactive_terminals_release_stream_counters_and_reuse_the_slot
     }
     let state = pool.state.lock().unwrap();
     assert!(state.active.is_empty());
-    assert!(state.streamed.is_empty());
     assert_eq!(state.slots.len(), 1);
 }
 
