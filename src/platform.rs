@@ -52,12 +52,13 @@ pub fn terminate_signal() -> io::Result<Signal> {
     }
 }
 
+/// Select the platform shell when the caller has not supplied an explicit path.
 pub fn default_shell() -> PathBuf {
     #[cfg(unix)]
     {
         std::env::var_os("SHELL")
             .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
+            .filter(|shell| shell.is_absolute() && is_executable(shell))
             .unwrap_or_else(|| PathBuf::from("/bin/sh"))
     }
     #[cfg(windows)]

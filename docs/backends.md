@@ -17,7 +17,7 @@ ssmcp --server https://relay.example --allow alice@relay.example --name dev --ti
 | `--name NAME` | 客户端显示名称；默认包含主机名和进程 ID |
 | `--title TITLE` | 供 agent 识别任务的会话标题；最多 512 个 UTF-8 字节 |
 | `--allow USER@SERVER` | 指定当前中继上已注册的控制账号；可重复或以逗号分隔，最多 32 个不同账号 |
-| `--shell /absolute/path` | 选择交互式 shell；Unix 默认使用绝对路径的 `SHELL` 或 `/bin/sh`，Windows 使用绝对路径的 `COMSPEC` 或系统 `cmd.exe` |
+| `--shell /absolute/path` | 选择交互式 shell。Unix 默认使用 `SHELL` 指向的可执行绝对路径，否则使用 `/bin/sh`。Windows 默认使用绝对路径的 `COMSPEC` 或系统 `cmd.exe` |
 | `--context-root PATH` | 增加只读 skills／AGENTS 文档根目录；最多 8 个，不扩展普通文件写入范围 |
 | `--list-tools` | 发现并打印本机工具目录后退出；不连接 SSH、不接受 SSH 目标或 `--allow` |
 | `-F FILE`、`-i FILE`、`-p PORT` | OpenSSH 配置、私钥文件和端口 |

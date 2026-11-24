@@ -83,6 +83,46 @@ impl Drop for Home {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
+
+#[test]
+fn unix_default_shell_falls_back_when_shell_is_unavailable() {
+    let home = Home::new();
+    let missing = home.0.join("missing/zsh");
+    let non_executable = home.0.join("zsh");
+    write_private(&non_executable, b"#!/bin/sh\nexit 0\n");
+    let mut client = Command::new(env!("CARGO_BIN_EXE_ssmcp"));
+    client
+        .arg("--list-tools")
+        .current_dir(&home.0)
+        .env_clear()
+        .env("HOME", &home.0)
+        .env("SSMCP_CLIENT_CONFIG", home.0.join("config.toml"))
+        .env("PATH", "");
+
+    for shell in [&missing, &non_executable] {
+        let output = client.env("SHELL", shell).output().unwrap();
+        assert!(
+            output.status.success(),
+            "unavailable SHELL {shell:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let catalog: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            catalog["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == "terminal.write")
+        );
+    }
+
+    let output = client.arg("--shell").arg(&missing).output().unwrap();
+    assert!(
+        !output.status.success(),
+        "an explicit missing shell must fail"
+    );
+}
+
 fn write_private(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
