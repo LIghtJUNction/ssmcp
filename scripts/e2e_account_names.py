@@ -9,6 +9,7 @@ An already-built fixture is required; this script never invokes Cargo.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import http.client
 import json
@@ -174,16 +175,23 @@ class AccountNames(Harness):
                        for account in initial.values()), "the new platform name is unused in the private fixture")
         self.login_portal()
         form = self.home(old_name)
+        month_before = datetime.now(timezone.utc).strftime("%Y-%m")
         status, _, headers = self.portal("/account/username", "POST",
                                          {"csrf": form.fields["csrf"], "username": new_name})
+        month_after = datetime.now(timezone.utc).strftime("%Y-%m")
         self.check(status == 303 and headers.get("location") == "/#account",
                    "the authenticated browser renames its own canonical account")
         form = self.home(new_name)
         renamed = self.accounts()
+        usage = renamed[self.identity["subject"]].get("username_renames")
+        self.check(usage in ({"period": month_before, "count": 1},
+                             {"period": month_after, "count": 1}),
+                   "the first successful rename persists one use in the current UTC month")
         expected_owner = {**owner, "handle": new_name,
+                          "username_renames": usage,
                           "handle_aliases": sorted(set(owner["handle_aliases"]) | {old_name})}
         self.check(renamed[self.identity["subject"]] == expected_owner and renamed["124"] == other,
-                   "rename changes only the owner's handle and retains its prior names")
+                   "rename updates the owner's handle and quota while retaining prior names")
         current = self.whoami(self.account_token)
         self.verify_identity(current, renamed[self.identity["subject"]])
         status, _, _ = self.portal("/account/username", "POST",
