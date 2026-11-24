@@ -29,9 +29,11 @@ pub enum Provider {
     Audit,
     #[serde(rename = "ssmcp")]
     Peer,
+    Zrun,
 }
 
-pub(crate) const OPTIONAL_PROVIDERS: [(Provider, &str); 1] = [(Provider::Peer, "ssmcp")];
+pub(crate) const OPTIONAL_PROVIDERS: [(Provider, &str); 2] =
+    [(Provider::Peer, "ssmcp"), (Provider::Zrun, "zrun")];
 impl Provider {
     pub fn label(self) -> &'static str {
         match self {
@@ -53,6 +55,7 @@ impl Provider {
             Self::Worker => "worker",
             Self::Audit => "audit",
             Self::Peer => "ssmcp",
+            Self::Zrun => "zrun",
         }
     }
 }
@@ -99,7 +102,7 @@ impl StoredTool {
             description: descriptor["description"].as_str().map(str::to_owned),
             input_schema: descriptor["inputSchema"].clone(),
             output_schema: descriptor.get("outputSchema").cloned(),
-            approval: if self.provider == Provider::Peer {
+            approval: if matches!(self.provider, Provider::Peer | Provider::Zrun) {
                 ApprovalPolicy::Native
             } else {
                 ApprovalPolicy::AuthorizedConnection
@@ -401,6 +404,7 @@ fn prepare(
             ),
             Provider::Audit => id == "ssmcp.audit.events",
             Provider::Peer => id.starts_with("peer."),
+            Provider::Zrun => id.starts_with("zrun."),
         };
         if !allowed
             || id.len() > 128

@@ -36,10 +36,10 @@ def full_call(harness, name, arguments=None, *, expect_error=False):
 
 def native_defaults(harness, label, context):
     rows = harness.call("ssmcp.harnesses.list")["harnesses"]
-    names = {"ssmcp"}
+    names = {"ssmcp", "zrun"}
     providers = {row["provider"]: row for row in rows}
     harness.check(len(rows) == len(providers) == len(names) and set(providers) == names,
-                  f"{context}: only the explicit SSMCP peer has lazy state")
+                  f"{context}: SSMCP peer and zrun each have lazy state")
     harness.check(all(row["status"] == "not_loaded" and row["tools"] == 0
                       and "executable" in row and row["executable"] is None
                       and "version" in row and row["version"] is None for row in rows),
@@ -48,6 +48,7 @@ def native_defaults(harness, label, context):
                   f"{context}: startup and observation execute zero external argv, including --version")
     full_call(harness, "unknown.fixture", expect_error=True)
     full_call(harness, "codex.definitely_missing", expect_error=True)
+    full_call(harness, "zrun.shell_run", expect_error=True)
     harness.check(harness.external_invocations(label) == [],
                   f"{context}: unknown and unloaded prefixed tools cannot trigger discovery")
     for removed in ("codex", "claude", "pi", "opencode"):

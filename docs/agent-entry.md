@@ -35,6 +35,23 @@ socket 和父目录必须由当前用户拥有且保持私有；路径禁止符�
 
 peer 连接不启动另一个 ssmcp 进程，也不拥有远端进程。客户端会拒绝本次连接自己公布的完整 MCP URL；同一主机的不同账号路径仍可明确选择。此检查针对直接自连接，不替代远端账号权限，也不为任意跨网关调用链做自动选路。关闭本机连接会停止其拥有的请求，peer 网关继续运行。
 
+## 连接 zrun 命令服务
+
+在 Linux 上，用同一系统账号启动 zrun，再将私有 socket 的绝对路径交给 SSMCP。
+
+```sh
+install -d -m 0700 "$XDG_RUNTIME_DIR/zrun"
+zrun mcp --unix "$XDG_RUNTIME_DIR/zrun/mcp.sock"
+```
+
+在另一个终端启动 SSMCP。
+
+```sh
+ssmcp local --load-harness zrun -- --socket "$XDG_RUNTIME_DIR/zrun/mcp.sock"
+```
+
+SSMCP 根据 zrun 实际返回的目录注册 `zrun.shell_run` 和 `zrun.shell_batch`，保留输入 schema 和命令回执。命令由 zrun 服务按其账号、工作目录和准入规则执行。只有显式选择了 socket 的会话才能加载这些工具。服务及 socket 的生命周期由启动 zrun 的终端管理。 [zrun 命令服务](https://github.com/LIghtJUNction/zrun/blob/main/docs/agent-shell.md)
+
 ## 错误与验证范围
 
 provider 缺失、原生握手失败、认证拒绝或目录无效时，启动返回具体错误；前台连接继续遵循已有 watchdog 策略。可使用 `--list-tools` 单独检查所选协议，也可添加 `--no-watchdog` 让连接失败后退出。

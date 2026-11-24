@@ -202,6 +202,7 @@ Usage: ssmcp username@server [options]
 
 Native tools run in SSMCP. Connect other clients through MCP, or use explicit local commands.
 --load-harness ssmcp requires -- --endpoint URL --token-env NAME [--socket PATH].
+--load-harness zrun requires -- --socket /absolute/private/path (Linux).
 The peer URL identifies an authenticated MCP gateway, not a device/session.
 Tools keep their native schemas and permission/approval behavior.
 

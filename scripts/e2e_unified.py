@@ -323,7 +323,7 @@ class Unified(SessionFeatures):
             status, result, _ = self.rpc("tools/list", modern=modern)
             self.check(status == 200 and [t["name"] for t in result["result"]["tools"]] == ["link", "list", "code_mode", "collab", "await", "events", "messages"],
                        f"public MCP exposes exactly link/list/code_mode/collab/await/events/messages (modern={modern})")
-        provider_names = {"ssmcp"}
+        provider_names = {"ssmcp", "zrun"}
         discovery = self.call("ssmcp.harnesses.list")
         rows = discovery["harnesses"]
         providers = {row["provider"]: row for row in rows}
@@ -346,7 +346,7 @@ class Unified(SessionFeatures):
         self.check(index(listed) == index(invoked) and len(index(listed)) == len(listed)
                    and len(index(invoked)) == len(invoked),
                    "list and code_mode tools return one identical collision-free full-schema catalog")
-        self.check(not any(t["name"].startswith(("codex.", "claude.", "pi.", "opencode.", "playwright.", "peer.")) for t in listed),
+        self.check(not any(t["name"].startswith(("codex.", "claude.", "pi.", "opencode.", "playwright.", "peer.", "zrun.")) for t in listed),
                    "unloaded optional providers contribute no invented native tools")
         self.initial_catalog = index(listed)
         self.save("catalog.json", {"client": selected, "tools": listed, "discovery": discovery})

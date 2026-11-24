@@ -13,6 +13,7 @@ ssmcp [connection options] --load-harness NAME [-- native protocol arguments]
 ssmcp --list-harnesses [--json]
 
 ssmcp                     Explicit authenticated MCP peer; no child ssmcp is started
+zrun                      Private zrun command service (Linux)
 
 Third-party harness import has been removed. Run that tool externally, or use
 SSMCP terminal or exec for explicit commands. Existing saved files are retained.
@@ -20,13 +21,14 @@ Peer arguments after --: --endpoint URL --token-env NAME [--socket /absolute/pat
 Use the peer's exact displayed MCP URL, including /USER; this names a gateway,
 not an individual device/session. The environment variable contains its OAuth bearer.
 Unix socket transport keeps that URL's Host, Origin and OAuth checks.
+zrun arguments after --: --socket /absolute/private/path
 ";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Selection {
     pub provider: Provider,
     pub arguments: Vec<OsString>,
-    pub peer: Option<peer::Settings>,
+    pub peer: peer::Settings,
 }
 
 impl Selection {
@@ -52,7 +54,11 @@ impl Selection {
                 return Err("agent arguments cannot contain NUL".into());
             }
         }
-        let peer = Some(peer::Settings::parse(&arguments)?);
+        let peer = if provider == Provider::Zrun {
+            peer::Settings::parse_zrun(&arguments)?
+        } else {
+            peer::Settings::parse(&arguments)?
+        };
         Ok(Self {
             provider,
             arguments,
@@ -61,8 +67,8 @@ impl Selection {
     }
 
     pub fn check_target(&self, own_endpoint: Option<&str>) -> Result<(), String> {
-        if let (Some(peer), Some(own)) = (&self.peer, own_endpoint) {
-            peer.reject_self(own)?;
+        if let Some(own) = own_endpoint {
+            self.peer.reject_self(own)?;
         }
         Ok(())
     }
@@ -146,7 +152,6 @@ mod tests {
                     .contains("third-party harness import was removed")
             );
         }
-        assert_eq!(OPTIONAL_PROVIDERS, [(Provider::Peer, "ssmcp")]);
         assert!(options(&["--list-tools"]).harness.is_none());
     }
 
@@ -201,6 +206,25 @@ mod tests {
                 Options::parse(args.iter().map(OsString::from)).is_err(),
                 "{args:?}"
             );
+        }
+    }
+
+    #[test]
+    fn zrun_selection_requires_one_absolute_socket_and_no_gateway_credentials() {
+        for args in [
+            vec![],
+            vec!["--socket", "relative"],
+            vec!["--endpoint", "http://127.0.0.1/mcp"],
+            vec!["--socket", "/tmp/zrun.sock", "--token-env", "TOKEN"],
+            vec!["--socket", "/tmp/zrun.sock", "--socket=/tmp/other.sock"],
+        ] {
+            assert!(Selection::new("zrun", args.iter().map(OsString::from).collect()).is_err());
+        }
+        let selection = Selection::new("zrun", vec!["--socket=/tmp/zrun.sock".into()]);
+        if cfg!(target_os = "linux") {
+            assert_eq!(selection.unwrap().provider, Provider::Zrun);
+        } else {
+            assert!(selection.unwrap_err().contains("Linux only"));
         }
     }
 

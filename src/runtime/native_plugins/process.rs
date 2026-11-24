@@ -183,7 +183,7 @@ impl Process {
     }
 
     async fn refresh(&self, provider: Provider, name: &str) -> Result<Value, String> {
-        let outcome = self.refresh_peer().await;
+        let outcome = self.refresh_peer(provider).await;
         let diagnostic = match outcome {
             Ok(value) => value,
             Err(error) => {
@@ -235,13 +235,24 @@ impl Process {
         }
     }
 
-    async fn refresh_peer(&self) -> Result<Value, String> {
-        let settings = self.harness.as_ref().and_then(|agent| agent.peer.as_ref())
-            .ok_or("ssmcp peer requires explicit startup configuration: --load-harness ssmcp -- --endpoint URL --token-env NAME")?;
-        let existing = self.drivers.lock().unwrap().get(&Provider::Peer).cloned();
+    async fn refresh_peer(&self, provider: Provider) -> Result<Value, String> {
+        let name = provider.label();
+        let selected = self
+            .harness
+            .as_ref()
+            .filter(|agent| agent.provider == provider)
+            .ok_or_else(|| {
+                let arguments = if provider == Provider::Zrun {
+                    "--socket /absolute/private/path"
+                } else {
+                    "--endpoint URL --token-env NAME"
+                };
+                format!("{name} requires explicit startup configuration: --load-harness {name} -- {arguments}")
+            })?;
+        let existing = self.drivers.lock().unwrap().get(&provider).cloned();
         let driver = match existing {
             Some(driver) => driver,
-            None => peer::Peer::start(settings.clone()).await?,
+            None => peer::Peer::start(selected.peer.clone()).await?,
         };
         let catalog = match driver.compact_tools().await {
             Ok(catalog) => catalog,
@@ -254,10 +265,10 @@ impl Process {
         let details = driver.details();
         let published = {
             let mut drivers = self.drivers.lock().unwrap();
-            drivers.insert(Provider::Peer, driver.clone());
-            let result = self.registry.replace_catalog(Provider::Peer, catalog);
+            drivers.insert(provider, driver.clone());
+            let result = self.registry.replace_catalog(provider, catalog);
             if result.is_err() {
-                drivers.remove(&Provider::Peer);
+                drivers.remove(&provider);
             }
             result
         };
@@ -266,7 +277,7 @@ impl Process {
             return Err(error);
         }
         Ok(
-            json!({"provider":"ssmcp","status":"ready","executable":null,"version":null,
+            json!({"provider":name,"status":"ready","executable":null,"version":null,
             "tools":count,"details":details}),
         )
     }
@@ -372,7 +383,7 @@ impl Process {
                 }
                 _ => Err("unknown optional harness primitive".into()),
             },
-            provider @ Provider::Peer => {
+            Provider::Peer | Provider::Zrun => {
                 let driver = self
                     .drivers
                     .lock()
@@ -494,6 +505,7 @@ impl NativePlugin for Process {
             Provider::Ui,
             Provider::Harnesses,
             Provider::Peer,
+            Provider::Zrun,
         ]
     }
 

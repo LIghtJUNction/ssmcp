@@ -1,4 +1,4 @@
-//! Explicit JSON-response MCP over HTTP/Unix, without spawning another ssmcp.
+//! Explicit JSON-response MCP over HTTP/Unix for SSMCP gateways and zrun.
 //! Reuses this application's HTTP trust configuration and catalog descriptors.
 use crate::catalog::ToolDescriptor;
 use reqwest::{
@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -27,10 +27,15 @@ const MAX_TOOLS: usize = 4096;
 const CALL_TIMEOUT: Duration = Duration::from_secs(900);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Settings {
-    pub endpoint: Url,
-    pub token_env: String,
-    pub socket: Option<PathBuf>,
+pub(crate) enum Settings {
+    Gateway {
+        endpoint: Url,
+        token_env: String,
+        socket: Option<PathBuf>,
+    },
+    Zrun {
+        socket: PathBuf,
+    },
 }
 
 impl Settings {
@@ -84,24 +89,60 @@ impl Settings {
             #[cfg(not(unix))]
             return Err("peer Unix socket transport is unavailable on this platform".into());
         }
-        Ok(Self {
+        Ok(Self::Gateway {
             endpoint,
             token_env,
             socket,
         })
     }
 
+    pub fn parse_zrun(arguments: &[OsString]) -> Result<Self, String> {
+        if !cfg!(target_os = "linux") {
+            return Err("zrun Unix socket transport is available on Linux only".into());
+        }
+        let socket = match arguments {
+            [flag, path] if flag == "--socket" => path.to_str(),
+            [argument] => argument
+                .to_str()
+                .and_then(|arg| arg.strip_prefix("--socket=")),
+            _ => None,
+        }
+        .filter(|path| !path.is_empty())
+        .ok_or("--load-harness zrun requires -- --socket /absolute/path")?;
+        let socket = PathBuf::from(socket);
+        if !socket.is_absolute() || socket.as_os_str().len() > 4096 {
+            return Err("zrun --socket requires a bounded absolute path".into());
+        }
+        Ok(Self::Zrun { socket })
+    }
+
+    fn endpoint(&self) -> &str {
+        match self {
+            Self::Gateway { endpoint, .. } => endpoint.as_str(),
+            Self::Zrun { .. } => "http://zrun/mcp",
+        }
+    }
+
+    fn socket(&self) -> Option<&Path> {
+        match self {
+            Self::Gateway { socket, .. } => socket.as_deref(),
+            Self::Zrun { socket } => Some(socket),
+        }
+    }
+
     /// A gateway URL does not identify a device. Reject only the exact endpoint
     /// this connection itself advertises, never every user on the same host.
     pub fn reject_self(&self, own_endpoint: &str) -> Result<(), String> {
-        if Url::parse(own_endpoint).is_ok_and(|own| own == self.endpoint) {
+        if let Self::Gateway { endpoint, .. } = self
+            && Url::parse(own_endpoint).is_ok_and(|own| &own == endpoint)
+        {
             return Err("ssmcp peer is this connection's own MCP endpoint; select a different explicit peer endpoint".into());
         }
         Ok(())
     }
 
     fn validate_socket(&self) -> Result<(), String> {
-        let Some(path) = &self.socket else {
+        let Some(path) = self.socket() else {
             return Ok(());
         };
         #[cfg(unix)]
@@ -167,7 +208,7 @@ fn endpoint_url(raw: &str) -> Result<Url, String> {
 pub(crate) struct Peer {
     settings: Settings,
     client: Client,
-    authorization: HeaderValue,
+    authorization: Option<HeaderValue>,
     session: Mutex<Option<HeaderValue>>,
     version: Mutex<String>,
     routes: Mutex<BTreeMap<String, String>>,
@@ -177,29 +218,41 @@ pub(crate) struct Peer {
 
 impl Peer {
     pub async fn start(settings: Settings) -> Result<Arc<Self>, String> {
-        let token = std::env::var(&settings.token_env)
-            .map_err(|_| "peer OAuth bearer environment variable is missing or not UTF-8")?;
-        Self::connect(settings, &token).await
+        let token =
+            match &settings {
+                Settings::Gateway { token_env, .. } => Some(std::env::var(token_env).map_err(
+                    |_| "peer OAuth bearer environment variable is missing or not UTF-8",
+                )?),
+                Settings::Zrun { .. } => None,
+            };
+        Self::connect(settings, token.as_deref()).await
     }
 
-    async fn connect(settings: Settings, token: &str) -> Result<Arc<Self>, String> {
+    async fn connect(settings: Settings, token: Option<&str>) -> Result<Arc<Self>, String> {
         settings.validate_socket()?;
-        if token.is_empty()
-            || token.len() > 8192
-            || !token.bytes().all(|byte| byte.is_ascii_graphic())
-        {
-            return Err("peer OAuth bearer must be nonempty, bounded and contain no whitespace/control characters".into());
-        }
-        let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
-            .map_err(|_| "peer OAuth bearer is not a valid header")?;
-        authorization.set_sensitive(true);
+        let authorization = match &settings {
+            Settings::Gateway { .. } => {
+                let token = token
+                    .filter(|token| {
+                        !token.is_empty()
+                            && token.len() <= 8192
+                            && token.bytes().all(|byte| byte.is_ascii_graphic())
+                    })
+                    .ok_or("peer OAuth bearer must be nonempty, bounded and contain no whitespace/control characters")?;
+                let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
+                    .map_err(|_| "peer OAuth bearer is not a valid header")?;
+                authorization.set_sensitive(true);
+                Some(authorization)
+            }
+            Settings::Zrun { .. } => None,
+        };
         let builder = crate::http_client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(5));
         #[cfg(unix)]
-        let builder = if let Some(path) = &settings.socket {
-            builder.unix_socket(path.as_path())
+        let builder = if let Some(path) = settings.socket() {
+            builder.unix_socket(path)
         } else {
             builder
         };
@@ -236,6 +289,11 @@ impl Peer {
                 "peer did not initialize a compatible JSON-response MCP tools server".into(),
             );
         }
+        if matches!(peer.settings, Settings::Zrun { .. })
+            && initialized["serverInfo"]["name"] != "zrun"
+        {
+            return Err("the selected socket did not identify its MCP server as zrun".into());
+        }
         *peer.version.lock().unwrap() = initialized["protocolVersion"].as_str().unwrap().to_owned();
         peer.exchange(
             json!({"jsonrpc":"2.0","method":"notifications/initialized","params":{}}),
@@ -247,16 +305,20 @@ impl Peer {
     }
 
     pub fn details(&self) -> Value {
-        json!({"scope":"explicit MCP gateway, not a device/session binding",
-            "endpoint":self.settings.endpoint.as_str(),"transport":if self.settings.socket.is_some(){"unix_http"}else{"http"},
+        let scope = match self.settings {
+            Settings::Gateway { .. } => "explicit MCP gateway, not a device/session binding",
+            Settings::Zrun { .. } => "explicit private zrun command service",
+        };
+        json!({"scope":scope,
+            "endpoint":self.settings.endpoint(),"transport":if self.settings.socket().is_some(){"unix_http"}else{"http"},
             "automatic_model_turn":false,"owns_peer_process":false})
     }
 
     fn error_text(&self, text: &str) -> String {
         let secret = self
             .authorization
-            .to_str()
-            .ok()
+            .as_ref()
+            .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "));
         let text = secret.map_or_else(
             || text.to_owned(),
@@ -307,16 +369,17 @@ impl Peer {
         }
         let mut request = self
             .client
-            .post(self.settings.endpoint.clone())
-            .header(header::AUTHORIZATION, self.authorization.clone())
-            .header(
-                header::ORIGIN,
-                self.settings.endpoint.origin().ascii_serialization(),
-            )
+            .post(self.settings.endpoint())
             .header("MCP-Protocol-Version", self.version.lock().unwrap().clone())
             .header(header::ACCEPT, "application/json, text/event-stream")
             .header(header::CONTENT_TYPE, "application/json")
             .body(body);
+        if let Settings::Gateway { endpoint, .. } = &self.settings {
+            request = request.header(header::ORIGIN, endpoint.origin().ascii_serialization());
+        }
+        if let Some(authorization) = &self.authorization {
+            request = request.header(header::AUTHORIZATION, authorization.clone());
+        }
         if let Some(session) = self.session.lock().unwrap().clone() {
             request = request.header("MCP-Session-Id", session);
         }
@@ -326,8 +389,12 @@ impl Peer {
             .map_err(|_| "MCP peer HTTP transport failed")?;
         let status = response.status();
         if !status.is_success() {
+            let check = match self.settings {
+                Settings::Gateway { .. } => "check the explicit endpoint and its OAuth bearer",
+                Settings::Zrun { .. } => "check the configured zrun Unix socket and service",
+            };
             return Err(format!(
-                "MCP peer rejected the request (HTTP {}); check the explicit endpoint and its OAuth bearer",
+                "MCP peer rejected the request (HTTP {}); {check}",
                 status.as_u16()
             ));
         }
@@ -436,7 +503,17 @@ impl Peer {
                 if !entry["inputSchema"].is_object() {
                     return Err("MCP peer returned a tool without an input schema".into());
                 }
-                let route = format!("peer.{}", crate::registry::component(&native));
+                let route = match self.settings {
+                    Settings::Gateway { .. } => {
+                        format!("peer.{}", crate::registry::component(&native))
+                    }
+                    Settings::Zrun { .. }
+                        if matches!(native.as_str(), "shell_run" | "shell_batch") =>
+                    {
+                        format!("zrun.{native}")
+                    }
+                    Settings::Zrun { .. } => continue,
+                };
                 if routes.insert(route.clone(), native).is_some() {
                     return Err("MCP peer repeated a tool name or route".into());
                 }
@@ -452,6 +529,9 @@ impl Peer {
                 None | Some(Value::Null) => {
                     if *self.closed.borrow() {
                         return Err("MCP peer connection is closed".into());
+                    }
+                    if matches!(self.settings, Settings::Zrun { .. }) && tools.is_empty() {
+                        return Err("zrun did not advertise a command tool".into());
                     }
                     *self.routes.lock().unwrap() = routes;
                     return Ok(tools);
@@ -566,7 +646,7 @@ mod tests {
             .unwrap()
         }
         async fn peer(&self) -> Arc<Peer> {
-            Peer::connect(self.settings(), TOKEN).await.unwrap()
+            Peer::connect(self.settings(), Some(TOKEN)).await.unwrap()
         }
     }
 
@@ -575,14 +655,20 @@ mod tests {
         headers: HeaderMap,
         Json(body): Json<Value>,
     ) -> Response {
-        if headers
+        if state.mode == "zrun" {
+            if headers.contains_key(header::AUTHORIZATION)
+                || headers.contains_key(header::ORIGIN)
+                || headers.get(header::HOST).and_then(|v| v.to_str().ok()) != Some("zrun")
+            {
+                return StatusCode::FORBIDDEN.into_response();
+            }
+        } else if headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             != Some(&format!("Bearer {TOKEN}"))
         {
             return StatusCode::UNAUTHORIZED.into_response();
-        }
-        if headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) != Some(&state.origin)
+        } else if headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) != Some(&state.origin)
             || headers.get(header::HOST).and_then(|v| v.to_str().ok())
                 != state.origin.strip_prefix("http://")
         {
@@ -601,10 +687,18 @@ mod tests {
         }
         let method = body["method"].as_str().unwrap();
         let id = body["id"].clone();
+        let server = if state.mode == "zrun" {
+            "zrun"
+        } else {
+            "ssmcp-peer-fixture"
+        };
         let result = match method {
             "initialize" => json!({"protocolVersion":VERSION,"capabilities":{"tools":{}},
-                "serverInfo":{"name":"ssmcp-peer-fixture","version":"1"}}),
+                "serverInfo":{"name":server,"version":"1"}}),
             "notifications/initialized" => return StatusCode::ACCEPTED.into_response(),
+            "tools/list" if state.mode == "zrun" => {
+                json!({"tools":[{"name":"shell_run","inputSchema":{"type":"object"}}]})
+            }
             "tools/list" => {
                 if body["params"].get("cursor").is_none() {
                     json!({"tools":[{"name":"Echo","description":"actual fixture echo", "inputSchema":{"type":"object"},
@@ -620,8 +714,10 @@ mod tests {
                 }
             }
             "tools/call" => match body["params"]["name"].as_str().unwrap() {
-                "Echo" => json!({"content":[{"type":"text","text":"actual peer reply"}],
-                        "structuredContent":{"received":body["params"]["arguments"]},"isError":false}),
+                "Echo" | "shell_run" => {
+                    json!({"content":[{"type":"text","text":"actual peer reply"}],
+                        "structuredContent":{"received":body["params"]["arguments"]},"isError":false})
+                }
                 "Fail" => {
                     json!({"content":[{"type":"text","text":"actual peer tool failure"}],"isError":true})
                 }
@@ -728,7 +824,9 @@ mod tests {
         assert!(settings.reject_self("https://relay.example/alice").is_err());
         assert!(settings.reject_self("https://relay.example/bob").is_ok());
         assert!(settings.reject_self("https://other.example/alice").is_ok());
-        assert_eq!(settings.token_env, "PEER_TOKEN");
+        assert!(
+            matches!(settings, Settings::Gateway { token_env, .. } if token_env == "PEER_TOKEN")
+        );
     }
 
     #[test]
@@ -750,7 +848,7 @@ mod tests {
                 &["--endpoint", &endpoint, "--token-env", "PEER_TOKEN"].map(OsString::from),
             )
             .unwrap_or_else(|error| panic!("{account:?}: {error}"));
-            assert_eq!(settings.endpoint.path(), format!("/{account}"));
+            assert_eq!(settings.endpoint(), endpoint);
         }
     }
 
@@ -827,7 +925,7 @@ mod tests {
     async fn peer_auth_paging_redirect_and_jsonrpc_failures_do_not_publish_partial_tools() {
         let server = Server::start("repeated_cursor").await;
         assert!(
-            Peer::connect(server.settings(), "wrong-token")
+            Peer::connect(server.settings(), Some("wrong-token"))
                 .await
                 .is_err()
         );
@@ -842,7 +940,7 @@ mod tests {
                 .contains("JSON-RPC")
         );
         let redirect = Server::start("redirect").await;
-        let error = match Peer::connect(redirect.settings(), TOKEN).await {
+        let error = match Peer::connect(redirect.settings(), Some(TOKEN)).await {
             Ok(_) => panic!("followed a redirect"),
             Err(error) => error,
         };
@@ -905,8 +1003,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[tokio::test]
-    async fn peer_unix_http_keeps_url_host_origin_and_oauth_without_tcp_fallback() {
+    fn private_unix_fixture(mode: &'static str, route: &str) -> (Server, PathBuf) {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
         let mut random = [0u8; 8];
         crate::platform::random_bytes(&mut random).unwrap();
@@ -923,20 +1020,30 @@ mod tests {
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
         let state = Arc::new(Fixture {
             origin: "http://127.0.0.1:9".into(),
-            mode: "healthy",
+            mode,
             requests: Mutex::new(Vec::new()),
             entered: Notify::new(),
         });
         let router = Router::new()
-            .route("/alice", post(handle))
+            .route(route, post(handle))
             .with_state(state.clone());
         let task = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
         });
-        let server = Server { state, task };
+        (Server { state, task }, socket)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn peer_unix_http_keeps_url_host_origin_and_oauth_without_tcp_fallback() {
+        use std::os::unix::fs::PermissionsExt;
+        let (server, socket) = private_unix_fixture("healthy", "/alice");
         let mut settings = server.settings();
-        settings.socket = Some(socket.clone());
-        let peer = Peer::connect(settings.clone(), TOKEN).await.unwrap();
+        let Settings::Gateway { socket: path, .. } = &mut settings else {
+            panic!("expected a gateway fixture");
+        };
+        *path = Some(socket.clone());
+        let peer = Peer::connect(settings.clone(), Some(TOKEN)).await.unwrap();
         assert_eq!(peer.compact_tools().await.unwrap().len(), 3);
         assert_eq!(
             peer.call("peer.Echo", json!({"via":"unix"})).await.unwrap()["structuredContent"]["received"]
@@ -945,9 +1052,40 @@ mod tests {
         );
         peer.shutdown().await;
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666)).unwrap();
-        assert!(Peer::connect(settings, TOKEN).await.is_err());
+        assert!(Peer::connect(settings, Some(TOKEN)).await.is_err());
         drop(server);
-        std::fs::remove_file(socket).unwrap();
-        std::fs::remove_dir(directory).unwrap();
+        std::fs::remove_file(&socket).unwrap();
+        std::fs::remove_dir(socket.parent().unwrap()).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn zrun_unix_http_omits_gateway_headers_and_preserves_native_results() {
+        use std::os::unix::fs::PermissionsExt;
+        let (server, socket) = private_unix_fixture("zrun", "/mcp");
+        let settings = Settings::parse_zrun(&["--socket".into(), socket.clone().into()]).unwrap();
+        let peer = Peer::start(settings.clone()).await.unwrap();
+        let catalog = peer.compact_tools().await.unwrap();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].value().unwrap()["name"], "zrun.shell_run");
+        let arguments = json!({"script":"printf smoke"});
+        assert_eq!(
+            peer.call("zrun.shell_run", arguments.clone())
+                .await
+                .unwrap()["structuredContent"]["received"],
+            arguments
+        );
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(
+            peer.call("zrun.shell_run", arguments)
+                .await
+                .unwrap_err()
+                .contains("private")
+        );
+        assert!(Peer::start(settings).await.is_err());
+        assert_eq!(server.state.requests.lock().unwrap().len(), 4);
+        drop(server);
+        std::fs::remove_file(&socket).unwrap();
+        std::fs::remove_dir(socket.parent().unwrap()).unwrap();
     }
 }
