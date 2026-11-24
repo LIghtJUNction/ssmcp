@@ -1,31 +1,28 @@
 # 选择中转服务器与固定服务器公钥
 
-客户端把服务器地址和信任配置保存在本机。本文说明原有服务器回退和 HTTPS 公钥固定；命名 context 的优先级及本地／远程切换见[选择连接目标](connection-contexts.md)。登录、远程会话列表和新建 HTTPS / WSS 连接先解析显式目标或 context，再使用这里的服务器回退。每个服务器的账号凭据仍单独保存。[地址选择实现](../src/client/account.rs) · [配置命令](../src/client/config.rs)
+客户端把服务器地址和信任配置保存在本机。本文说明原有服务器回退和 HTTPS 公钥固定；命名 context 的优先级及本地／远程切换见[选择连接目标](connection-contexts.md)。账号查询、远程会话列表和新建 HTTPS / WSS 连接先解析显式目标或 context，再使用这里的服务器回退。每个服务器的账号凭据仍单独保存。[地址选择实现](../src/client/account.rs) · [配置命令](../src/client/config.rs)
 
 ## 设置回退服务器
 
-用命令保存默认地址，再在该服务器登录：
+保存回退地址，再指定该服务器上的账号。
 
 ~~~sh
 ssmcp config set server https://relay.example.com
 ssmcp config get server
-ssmcp login --server https://relay.example.com
-ssmcp whoami --server https://relay.example.com
+ssmcp whoami alice@relay.example.com
+ssmcp alice@relay.example.com
 ~~~
 
-`config set` 只修改 `[client].server`，保留已有 `[ui]` 设置与注释。`config get server` 输出原有服务器回退的结果；命名 context 生效时，用 `context show` 查看新连接的实际选择。`config path` 输出实际配置文件路径。移除显式设置使用 `ssmcp config unset server`，随后回退到最后登录的服务器；想明确恢复内置地址，可执行 `ssmcp config set server https://ssmcp.lmm.best`。
+`config set` 只修改 `[client].server`，保留已有 `[ui]` 设置与注释。`config get server` 输出原有服务器回退的结果；命名 context 生效时，用 `context show` 查看新连接的实际选择。`config path` 输出实际配置文件路径。移除显式设置使用 `ssmcp config unset server`，随后回退到现有控制端凭据的默认服务器；想明确恢复内置地址，可执行 `ssmcp config set server https://ssmcp.lmm.best`。
 
-单次命令可以指定另一个服务器：
+在命令中指定另一个服务器。
 
 ~~~sh
-ssmcp login --server https://other.example.com
-ssmcp whoami --server https://other.example.com
-
-# --server 也可以放在账号子命令前。
-ssmcp --server https://other.example.com whoami
+ssmcp whoami alice@other.example.com
+ssmcp alice@other.example.com
 ~~~
 
-`--server` 对本次命令生效，不改写 `[client].server`。`login` 成功后会更新登录记录中的默认服务器；配置文件里的显式设置仍优先。账号 API 与新建连接都使用实际选中的中继。切换到另一台服务器时，先在该服务器登录，客户端不会借用其他服务器的令牌。
+命名目标和 `--server` 对本次命令生效，保留原有 `[client].server`。设备连接成功后保存目标，供裸 `ssmcp` 复用。控制端凭据仍按服务器隔离。
 
 ### 直接编辑配置文件
 
@@ -41,13 +38,13 @@ theme = "minimal"
 
 已有 `[client]` 或 `[ui]` 表时，在原表中修改，保留自己的 UI 选项。地址须为完整 HTTPS origin，也就是协议、主机名和可选端口；例如 `https://relay.example.com:8443`。不填写 `/mcp`、其他路径、用户名、密码、查询参数或片段。HTTP 仅用于 `127.0.0.1`、`[::1]` 等字面量回环地址的本地测试。
 
-没有命名 context 或其他显式连接目标时，服务器回退按以下顺序选择：
+当前命令、context 和上次设备连接目标均未提供服务器时，旧配置和控制端命令的服务器回退遵循下表。
 
 | 优先级 | 来源 | 使用方式 |
 | --- | --- | --- |
 | 1 | 当前命令的 `--server` | `ssmcp whoami --server https://relay.example.com` |
 | 2 | 配置文件的 `[client].server` | 编辑 TOML，或运行 `ssmcp config set server URL` |
-| 3 | 最后登录的服务器 | 由成功的 `ssmcp login` 更新账号存储中的 `default` |
+| 3 | 旧控制端凭据的默认服务器 | 读取账号存储中现有的 `default` |
 | 4 | 内置地址 | `https://ssmcp.lmm.best` |
 
 配置文件位置按以下顺序选择：
@@ -79,7 +76,7 @@ ssmcp trust list
 ~~~sh
 ssmcp trust add --server https://relay.example.com --public-key ./server-public.pem
 ssmcp trust list
-ssmcp login --server https://relay.example.com
+ssmcp whoami alice@relay.example.com
 ~~~
 
 `server-public.pem` 使用 `-----BEGIN PUBLIC KEY-----` 格式，只包含公开信息。管理员可在 HTTPS 入口所在机器，从实际使用的证书文件提取：
@@ -131,11 +128,11 @@ pins = ["sha256//BuP9j9opu2CrWVV95h7bCuzbIxE0vjDnW0Vfjht5L6k="]
 
 未登记公钥的服务器使用正常的 HTTPS 证书校验。公钥固定增加了一条身份条件：即使冒充者获得了该域名的另一张有效证书，仍需持有已登记公钥对应的私钥才能通过握手。它适用于 ssmcp CLI 的 HTTPS / WSS 连接；浏览器和其他 MCP 客户端各自管理连接校验。受信任服务器本身仍负责转发工具调用，应由可信操作者维护。
 
-CLI 的临时 `invite` / `join` 已移除。被控设备使用显式 `--allow 用户名@中继服务器`；完整流程见[账号与被控设备](client-accounts.md)。
+CLI 的临时 `invite` / `join` 已移除。被控设备启动时指定 `ssmcp 用户名@中继服务器`；完整流程见[账号与被控设备](client-accounts.md)。
 
 ## 续签、换钥与撤销
 
-证书续签继续使用同一把公钥时，无须修改信任文件。准备更换公钥时，先通过可信渠道分发并添加新公钥，保留旧公钥；服务器切换后验证 `ssmcp whoami` 和会话连接，再从 `trusted-servers.toml` 中删除旧值。使用多个 HTTPS 入口或同时提供不同算法证书时，应登记这些入口实际使用的可信公钥。
+证书续签继续使用同一把公钥时，无须修改信任文件。准备更换公钥时，先通过可信渠道分发并添加新公钥，保留旧公钥；服务器切换后验证 `ssmcp whoami 用户名@服务器` 和会话连接，再从 `trusted-servers.toml` 中删除旧值。使用多个 HTTPS 入口或同时提供不同算法证书时，应登记这些入口实际使用的可信公钥。
 
 要移除某台服务器的全部额外公钥约束：
 

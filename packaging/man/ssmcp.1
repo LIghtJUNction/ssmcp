@@ -5,7 +5,16 @@ ssmcp \- connect devices and control authorized terminals through an MCP gateway
 .B ssmcp
 .I username@server
 .RB [ options ]
+.PP
+.B ssmcp
+.I username@server
+.B \-\-register
 .RB [ \-\-no-browser ]
+.RB [ \-\-json ]
+.PP
+.B ssmcp local
+.RB [ \-\-listen " IP:PORT" ]
+.RB [ \-\-socket " PATH" ]
 .PP
 .B ssmcp
 .IR "whoami | logout"
@@ -23,113 +32,26 @@ ssmcp \- connect devices and control authorized terminals through an MCP gateway
 .RB [ \-\-client " id" ]
 .RB [ \-\-terminal " id" ]
 .PP
-.B ssmcp invite
-.RB [ \-\-server " https://origin" ]
-.RB [ \-\-ttl " seconds" ]
-.RB [ \-\-session-ttl " seconds" ]
-.RB [ \-\-shell " sh|powershell" ]
-.RB [ \-\-no-bootstrap ]
-.RB [ \-\-json ]
-.PP
-.B ssmcp join
-.BI \-\-server " https://origin"
-.BI \-\-token " invitation"
-.RB [ \-\-name " name" ]
-.RB [ \-\-no-watchdog ]
-.PP
 .B ssmcp
 .RB [ \-\-server " https://origin" ]
 .RB [ \-\-name " name" ]
 .RB [ \-\-title " title" ]
 .RB [ \-\-no-watchdog ]
 .RB [ \-\-reconnect-delay " seconds" ]
-.PP
-.B ssmcp \-\-ssh
-.RB [ \-\-name " name" ]
-.RB [ \-\-title " title" ]
-.RB [ \-\-allow " username@github[,username@github...]" ]
-.RB [ \-F " ssh_config" ]
-.RB [ \-\-identity " file" ]
-.RB [ \-p " port" ]
-.RB [ \-\-shell " path" ]
-.RB [ \-\-daemon ]
-.RB [ \-\-session-control ]
-.RB [ \-\-no-watchdog ]
-.RB [ \-\-reconnect-delay " seconds" ]
-.RB [ \-\-portal " https://origin" ]
-.RB [ \-\-no-setup ]
-.I [user@]host
-.PP
-.B ssmcp setup
-.RB [ options ]
-.IR [[user@]host]
-.PP
-.B ssmcp
-.B \-\-list-tools
-.PP
-.B ssmcp computer
-.IR "version | download [VERSION] | install DOWNLOAD_ID | uninstall INSTALLATION_ID"
-.RB [ \-\-json ]
-.PP
-.B ssmcp computer
-.IR "on | off | toggle | status"
-.RB [ \-\-json ]
-.PP
-.B ssmcp sessions
-.IR "list | status NAME | start NAME | close NAME | stop NAME | restart NAME | logs NAME | remove NAME | auth NAME"
-.RB [ \-\-json ]
-.PP
-.B ssmcp sessions create
-.I NAME
-.RB [ \-\-cwd " dir" ]
-.RB [ \-\-json ]
-.RI [ "connection options" ]
-.RI [ "username@server" ]
-.PP
-.B ssmcp attach
-.RI [ list ]
-.RB [ \-\-json ]
-.PP
-.B ssmcp attach
-.I NAME
-.RB [ \-\-read-only ]
-.PP
-.B ssmcp service install
-.RB [ \-\-system ]
-.RB [ \-\-user " account" ]
-.RB [ \-\-state-dir " path" ]
-.RB [ \-\-password-stdin ]
-.RB [ \-\-dry-run ]
-.RB [ \-\-json ]
-.PP
-.B ssmcp service
-.IR "start | stop | restart | status | uninstall"
-.RB [ \-\-system ]
-.RB [ \-\-json ]
-.PP
-.B ssmcp service run
 .PP
 .B ssmcp ui
 .IR "show | check | init | preview"
 .RB [ \-\-ui-config " file" ]
 .SH DESCRIPTION
 ssmcp provides a local shell, managed command jobs and file tools.
-Run ssmcp username@server to connect over HTTPS and WSS. The first connection
-opens GitHub authorization, binds the chosen server-local username after browser
-confirmation, and continues connecting. Later connections reuse the credential
-for that server. Bare ssmcp reuses the last authorized account.
-No separate login command, SSH key or repeated \-\-allow is required.
+Run ssmcp username@server to connect over HTTPS and WSS. The device selects
+a registered relay account without logging in. The controlling MCP client
+authorizes independently. Bare ssmcp reuses the last successful foreground
+connection target. Each live connection has a new client ID.
 .PP
-The \-\-ssh switch or explicit SSH options select legacy OpenSSH public-key authentication. An existing
-client login can supply the user's verified GitHub identity for the SSH allow
-policy; explicit \-\-allow remains available for sharing with other users.
-Without a client login or \-\-allow, SSH connections return the account's
-/username URL and a one-time login code. GitHub-authorized connections return
-/mcp. Each connection has a random client ID.
-.PP
-ssmcp discovers installed Codex, Claude Code, Pi and OpenCode executables on PATH;
-optional harness failures leave other capabilities available. Multiple clients
-may connect under the same account.
+On Linux, ssmcp local serves MCP on loopback. Open /logs in the SSMCP window
+for its URL and one-time authorization code. Add the URL to your MCP client,
+complete authorization, then use list to discover the session.
 .PP
 For foreground clients, interactive standard output shows a connection summary. Redirected output or
 JSONL mode emits one JSON object containing url, client_id, name, type, hostname
@@ -151,27 +73,16 @@ stops its owned background jobs and closes native provider connections.
 Operator-managed external Pi and OpenCode services are not terminated. Login-code grants issued by that
 connection are revoked. GitHub identity grants remain subject to their own
 lifetimes and each currently connected client's allow policy.
-.SH CLIENT ACCOUNTS AND TEMPORARY ACCESS
+.SH CLIENT ACCOUNTS
 .TP
-.B ssmcp username@server
-Validate the username, automatically obtain GitHub authorization when needed,
-and connect this device. Use \-\-no-browser to print the authorization link and
-confirmation code for another device. The authorized server becomes the default.
-Names are case-insensitive and stored in lowercase. Use 3 through 32 ASCII
-letters, digits, underscores or hyphens; start with a letter and end with a
-letter or digit. Reserved names and the gh- prefix cannot be registered.
-One GitHub account binds one name per server. An occupied name can be used
-only by its registered owner.
-.PP
-Credentials are isolated by HTTPS origin. Expired or revoked credentials restart
-authorization in named foreground sessions. Bans, network failures and server
-errors preserve the credential and do not restart login. Background sessions
-report that authorization is required; authorize in a terminal, then restart
-the saved session. The legacy login subcommand remains available for older scripts.
+.B ssmcp username@server \-\-register
+Register a new username by confirming the request in the browser. The CLI
+receives a registration receipt. The relay account page manages names and
+personal announcements. Administrators manage the server announcement there.
 .TP
-.B ssmcp whoami
-Verify and display the current GitHub identity and server. \-\-json includes
-credential expiry but never the bearer token.
+.B ssmcp whoami username@server
+Read public information for the named relay account. Use \-\-json for its
+account name and announcements.
 .TP
 .B ssmcp logout
 Revoke the selected client login on the server and remove its local credential.
@@ -183,38 +94,12 @@ ssmcp \-i to select a session and enter its terminal. \-\-client ID selects
 a known session; \-\-terminal ID selects an existing terminal (default main).
 Ctrl-C is delivered to that terminal; Ctrl-] detaches and leaves it running.
 These account commands are separate from saved local sessions list and attach.
-.TP
-.B ssmcp invite
-Print a single-use command to copy from the logged-in device A to device B.
-The invitation can be redeemed for 600 seconds by default (\-\-ttl accepts
-30 through 3600). The resulting controlled session lasts at most 3600 seconds
-by default (\-\-session-ttl accepts 60 through 86400).
 .PP
-The default command downloads a temporary client from the same server, runs
-join, and removes the temporary files when it exits. B needs an outbound HTTPS
-connection, plus sh and curl or wget on Linux/macOS, or PowerShell on Windows.
-No SSH access or prior ssmcp installation is required. The server must publish
-the matching binary using client_download_dir. Use \-\-shell sh or
-\-\-shell powershell for B's terminal; the default matches A's platform.
-Use \-\-no-bootstrap when B already has a compatible ssmcp installation.
-Treat the generated command as a temporary credential.
-.TP
-.B ssmcp join
-Redeem \-\-token against \-\-server and run this device as a controlled
-foreground session owned by the inviting account. Temporary device credentials
-remain in memory; they cannot list or control other sessions or create invites.
-Keep B's terminal open. Default watchdog reconnects with the redeemed device
-credential; it does not redeem the invitation again. Authorization expiry or
-revocation stops retries. Ctrl-C on B stops its session and owned jobs.
-Temporary join sessions cannot be saved with \-\-daemon or grant
-\-\-session-control.
-.PP
-Account commands accept \-\-server to select an HTTPS origin. Login defaults
-to https://ssmcp.lmm.best when no server has been selected. See
+The control commands use an existing controller credential. New controllers
+can authorize through the relay MCP URL.
 .UR https://github.com/LIghtJUNction/ssmcp/blob/main/docs/client-accounts.md
-client account and temporary access documentation
+Account and device connection documentation
 .UE
-for credentials, server routing and bootstrap requirements.
 .SH PERSISTENT CLIENT SERVICE
 The client service is ssmcp.service; it is separate from the remote ssmcpd gateway.
 Install a system unit with an explicit non-root owner, then enable and start it:
@@ -315,44 +200,6 @@ name and origin, never the bearer token.
 .B \-\-no-browser
 Print the GitHub authorization URL and confirmation code without launching a
 browser. Open the link on another device and approve the matching request.
-.TP
-.B \-\-ssh
-Explicitly select the legacy SSH transport for a Host alias or user@host.
-The \-F, \-\-identity, valued \-i and \-p options also select SSH.
-.TP
-.BI \-F " file"
-Use a separate OpenSSH client configuration file.
-.TP
-.BI \-\-allow " username@github[,username@github...]"
-Allow verified GitHub users to access this connection. Repeat this option or
-separate entries with commas. At most 32 distinct users are accepted; case is
-normalized and duplicates are removed. The identity syntax is username@provider;
-github is the currently supported provider. Usernames contain 1 to 39 ASCII
-letters or digits with optional single hyphens between them.
-.PP
-Sharing with additional users requires an SSH destination. An HTTPS account
-connection is owned by its signed-in account. This option cannot accompany
-\-\-list-tools. The flag selects access policy. Existing SSH keys and
-configuration remain usable; interactive first-connection setup may open the portal in a browser.
-The server must support and configure GitHub OAuth. An unsupported
-server causes startup to fail before exposing the local backend.
-.TP
-.BI \-\-portal " https://origin"
-Use this HTTPS portal origin for setup when it differs from the SSH hostname.
-Paths, query strings, fragments and embedded credentials are rejected.
-.TP
-.B \-\-no-setup
-Disable automatic first-connection setup. Noninteractive commands and saved
-background services do not start interactive setup even without this flag.
-Cannot accompany the setup subcommand.
-.TP
-.BI \-\-identity " file"
-Use the specified SSH private key. The historical \-i FILE HOST form remains
-supported; ssh-agent is also supported. A standalone \-i without a file,
-or \-\-interactive, selects remote account terminal control instead.
-.TP
-.BI \-p " port"
-Connect to the specified SSH port.
 .TP
 .BI \-\-shell " path"
 Run the specified absolute shell path in a local pseudo-terminal. The default
@@ -554,44 +401,12 @@ has a persistent artifact: use outputs.read for its captured prefix and inspect
 capture completeness. Exiting or reloading the client stops its managed work.
 
 .SH AUTHENTICATION
-Account connections use a server-issued credential over HTTPS/WebSocket.
-SSH connections require public-key authentication, with standard OpenSSH
-host-key verification. For GitHub-authorized connections, add the returned
-/mcp URL to an OAuth-capable MCP client. Sign in with GitHub in the browser, then review the
-verified identity, MCP client name, registered callback origin and resource URL
-on ssmcp's separate consent page. Explicitly allow or cancel that MCP client's
-request. GitHub sign-in alone does not grant the MCP client access.
+Add the relay MCP URL from /logs in an OAuth-capable MCP client. Sign in as
+the account selected by username@server and review the MCP consent screen.
+The relay checks the verified stable account ID for discovery and calls.
 .PP
-The server resolves allowed GitHub usernames to stable user IDs when each
-connection attaches. Discovery and calls check that connection's IDs. A rename
-does not change an existing connection's identity match; reconnecting resolves
-the startup usernames again. Update \-\-allow after a username change. No
-cross-connection username pin is persisted. An authorized MCP client may see
-an empty list until a matching connection comes online.
-.PP
-For SSH without a client login or \-\-allow, add the returned /username URL
-and enter login_code on the OAuth page. This grant covers only clients without an allow list under that SSH
-account and depends on its issuing connection. It cannot access any client
-started with \-\-allow, even under the same SSH account.
-.PP
-Both MCP authorization modes complete Authorization Code with S256 PKCE and
-use ssmcp-issued access tokens as Bearer credentials. GitHub tokens are used to read the verified
-identity and are not retained. Repository and email scopes are not requested.
-.PP
-With \-\-ssh or explicit SSH options, the destination may be a Host alias
-from ~/.ssh/config. OpenSSH resolves HostName, User, Port, IdentityFile,
-IdentityAgent and ProxyJump. An explicit SSH user@host overrides the configured
-User; without SSH options, username@server selects HTTPS. Use \-F for a
-separate SSH configuration. Local ssh-agent authentication works without agent forwarding;
-ssmcp disables forwarding, connection multiplexing and remote TTY allocation.
-.PP
-Public keys are managed by the server's OpenSSH authorized_keys policy. A key
-already accepted for that account can be reused. On a ForceCommand-restricted
-ssmcp account, update authorized_keys through a separate administrator account
-or server console; ssh-copy-id and SFTP cannot execute their normal operations
-through the fixed bridge command. Append the new public key, test a second
-connection, then remove only the old key. Removing a key affects new SSH
-authentication; close an existing connection to revoke its OAuth grants.
+For a local MCP session, add its displayed loopback URL and authorize with
+the one-time code from /logs. The authorization applies to that local session.
 .PP
 The login code expires 1800 seconds after issue and is consumed by one successful
 authorization. login_expires_in subtracts backend startup time. MCP access
@@ -612,9 +427,9 @@ It saves the new token pair and retries with the new access token. Serialize
 refreshes for one grant; reusing a consumed refresh token revokes the grant.
 .PP
 GitHub grants are bound to the verified identity, resource and OAuth client,
-without an issuing SSH connection. They may access current and future clients
+independently of the device connection. They may access current and future clients
 whose allow lists match that identity. Login-code grants are additionally bound
-to their issuing SSH connection and exclude all allow-listed clients. Closing
+to their issuing local connection. Closing
 that source revokes its access and refresh tokens. Reconnect to obtain a new
 login code when a fresh login-code authorization is needed.
 .PP
@@ -821,20 +636,13 @@ output thresholds.
 .SH EXAMPLES
 .nf
 ssmcp alice@ssmcp.example.com --name laptop
-ssmcp alice@ssmcp.example.com --no-browser
-ssmcp whoami
+ssmcp alice@ssmcp.example.com --register --no-browser
+ssmcp whoami alice@ssmcp.example.com --json
+ssmcp local
 ssmcp --name laptop
 ssmcp list
 ssmcp -i --client CLIENT_ID
-ssmcp invite --shell sh
-ssmcp invite --shell powershell
 ssmcp --no-watchdog --name one-attempt
-ssmcp --ssh --name build-shell user@host
-ssmcp --ssh --name build-shell my-server
-ssmcp --ssh --name build-shell --title "Fix the client build" my-server
-ssmcp --ssh --allow octocat@github --name build-shell my-server
-ssmcp --ssh --allow alice@github,bob@github --allow carol@github my-server
-ssmcp --ssh --name review --title "Review project" user@host
 ssmcp --list-tools
 .fi
 .PP
