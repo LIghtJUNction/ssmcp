@@ -157,6 +157,7 @@ pub(super) struct Conversation {
     native_pending: Option<messaging::Pending>,
     native_retry: Option<messaging::Pending>,
     native_last: Option<Value>,
+    native_receipt_background: Option<std::collections::BTreeSet<String>>,
     native_refreshed: bool,
     native_picker: bool,
     native_lookup: Option<messaging::PendingPicker>,
@@ -3212,7 +3213,7 @@ impl State {
                 let scroll_hint = self.chat_scroll_hint();
                 let wait_hint = self.chat_user_wait_hint();
                 let paste_hint = self.chat_paste_recovery_hint();
-                let native_receipt_hint = self.chat_native_receipt_hint();
+                let native_receipt_hint = self.chat_native_priority_hint();
                 let native_hint = self.chat_native_hint();
                 let update_hint = self.chat_update_notice();
                 let priority_hint = self.notice.is_some()
