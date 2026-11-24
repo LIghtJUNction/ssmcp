@@ -8,6 +8,7 @@ import unittest
 from types import SimpleNamespace
 
 from e2e_account_gateway import AccountGateway, IDENTITY, validate_account_identity
+from e2e_relay_composer import check_restored_draft
 
 
 class AccountIdentityTests(unittest.TestCase):
@@ -63,6 +64,41 @@ class AccountIdentityTests(unittest.TestCase):
                 self.ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
                 with self.assertRaises(AssertionError):
                     validate_account_identity(self.harness, self.directory, self.identity)
+
+
+class RestoredDraftTests(unittest.TestCase):
+    def setUp(self):
+        self.harness = SimpleNamespace(check=AccountIdentityTests.check)
+        self.before = {"draft": {"text": "unsent 界", "cursor": 6},
+                       "draft_context": {"target": None, "native_recipient": None, "parked": None}}
+
+    def test_implicit_next_caller_is_restored_without_becoming_explicit(self):
+        self.assertNotEqual(self.before["draft_context"]["target"], "next")
+        check_restored_draft(self.harness, self.before, copy.deepcopy(self.before))
+
+    def test_explicit_and_native_recipients_are_restored_exactly(self):
+        for recipient in ({"target": "next"}, {"target": "worker-thread"},
+                          {"native_recipient": "thread:123", "native_account": ["server", "123"]},
+                          {"send_group": [{"target": "worker-thread"}]}):
+            with self.subTest(recipient=recipient):
+                before = copy.deepcopy(self.before)
+                before["draft_context"].update(recipient)
+                check_restored_draft(self.harness, before, copy.deepcopy(before))
+
+    def test_changed_text_cursor_or_recipient_and_uncleared_parking_fail_independently(self):
+        mutations = [("draft", "text", "wrong", "exact draft text"),
+                     ("draft", "cursor", 0, "exact UTF-8 cursor"),
+                     ("draft_context", "target", "next", "exact recipient"),
+                     ("draft_context", "native_recipient", "other-thread", "exact recipient"),
+                     ("draft_context", "native_account", ["server", "124"], "exact recipient"),
+                     ("draft_context", "send_group", [], "exact recipient"),
+                     ("draft_context", "parked", {"text": "leftover"}, "parked draft")]
+        for section, key, value, message in mutations:
+            with self.subTest(key=key):
+                restored = copy.deepcopy(self.before)
+                restored[section][key] = value
+                with self.assertRaisesRegex(AssertionError, message):
+                    check_restored_draft(self.harness, self.before, restored)
 
 
 if __name__ == "__main__":
