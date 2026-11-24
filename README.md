@@ -1,8 +1,12 @@
 # ssmcp
 
-### 面向 Astra Pro 的 harness
+### 让AI管理你的多台设备，无需公网IP。
 > 客户端可以随便改！自由创造
 **支持 Astra Pro 集群，在你自己的开发环境中协同完成开发任务。**
+
+> 还能远程控制你朋友的电脑
+
+> 最值钱的用法是榨干Astra Pro
 
 [![Donate](https://donate.lmm.best/badge.svg?project=ssmcp&lang=zh-CN&layout=compact&theme=dark&width=480&animation=steam)](https://donate.lmm.best/?project=ssmcp)
 
