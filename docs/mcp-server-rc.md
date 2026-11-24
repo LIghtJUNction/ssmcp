@@ -12,6 +12,7 @@ version = 1
 
 [mcp]
 files = ["mcp/servers.toml"]
+startup = ["docs"]
 
 [mcp.servers.docs]
 transport = "streamable-http"
@@ -28,6 +29,8 @@ transport = "streamable-http"
 url = "https://catalog.example/mcp"
 token_env = "CATALOG_MCP_TOKEN"
 ~~~
+
+`startup` 是可选的服务器名列表。SSMCP 完成工具源码加载后，按列表调用相同的加载入口。没有列入的服务器在 agent 显式调用 `mcp.load` 后连接。启动加载的结果进入客户端日志，每个名称都有独立回执。
 
 凭据配置保存引用。持有连接的 SSMCP 客户端解析环境变量，Code Mode 收到连接状态和工具目录。导入文件和仓库只保存可版本化的配置和代码。
 
@@ -56,6 +59,7 @@ token_env = "CATALOG_MCP_TOKEN"
 ## 验收用例
 
 - 同一个测试网关分别使用内嵌配置和导入文件完成连接，并返回一致的工具 schema。
+- 在 `startup` 中加入一个名称。启动会话后检查加载回执，确认只连接声明的网关。
 - 同时连接两个网关。装载或卸载其中一个时，另一个仍可读取自己的工具。
 - 更新一条配置后重新加载。重新发现目录，并在工具回执中看到替换版本。
 - 将 URL 改成不可用地址并重新加载。调用返回错误，旧目录仍可用。
