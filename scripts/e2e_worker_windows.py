@@ -1410,9 +1410,11 @@ class WorkerWindows(Harness):
                    "the original claimant observes cancellation through the same claim")
         self.retire_cancelled_pool(frontend, parent, worker, manager, executor, pending["claim"], cancelled)
         parent_agent = self.coordinators[parent["id"]]
-        self.bound(parent["id"], parent_agent, "ssmcp.ui.message", {
+        receipt = self.bound(parent["id"], parent_agent, "ssmcp.ui.message", {
             "text": "WINDOW_TASK_OK", "kind": "progress",
         })
+        self.check(receipt["accepted"] and receipt["recorded"], "the parent records the real worker result")
+        frontend.send(b"\x1b[1;5F")
         frontend.until(lambda shot: "WINDOW_TASK_OK" in "\n".join(shot["rows"]),
                        "worker result displayed in the parent conversation")
         self.check(True, "the parent conversation receives the independently completed worker result")
