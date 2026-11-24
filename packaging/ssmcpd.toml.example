@@ -1,6 +1,8 @@
 # Copy to /etc/ssmcpd/ssmcpd.toml, owned by ssmcpd with mode 0600.
 # Precedence: command line > environment > TOML > built-in defaults.
 # Existing ssmcpd.env values override the corresponding TOML values.
+# For a relay without the built-in portal, OAuth or commerce, use a separate
+# config with [relay] and [relay.principals]. See docs/relay-integration.md.
 
 [server]
 listen = "127.0.0.1:8080"

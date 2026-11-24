@@ -86,6 +86,7 @@ struct Config {
     portal: PortalConfig,
     commerce: ssmcp::commerce::CommerceConfig,
     portal_only: bool,
+    relay: Option<ssmcp::broker::RelayAccess>,
 }
 
 // Plain TOML configuration. Never derive Debug or include source text in errors:
@@ -98,9 +99,10 @@ struct FileConfig {
     auth: AuthConfig,
     portal: PortalConfig,
     commerce: ssmcp::commerce::CommerceConfig,
+    relay: Option<ssmcp::broker::RelayAccess>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 struct PortalConfig {
     state_dir: Option<PathBuf>,
@@ -203,7 +205,7 @@ fn load_file_config(path: &Path, config: &mut Config) -> ssmcp::Result<()> {
         return Err("configuration exceeds 64 KiB".into());
     }
     let file = parse_file_config(&source)?;
-    if file.auth.github.is_some() && metadata.mode() & 0o077 != 0 {
+    if (file.auth.github.is_some() || file.relay.is_some()) && metadata.mode() & 0o077 != 0 {
         return Err("configuration containing provider secrets must have mode 0600 and be owned by the service user".into());
     }
     if let Some(value) = file.server.listen {
@@ -246,6 +248,7 @@ fn load_file_config(path: &Path, config: &mut Config) -> ssmcp::Result<()> {
     config.portal = file.portal;
     config.commerce = file.commerce;
     config.github = file.auth.github;
+    config.relay = file.relay;
     Ok(())
 }
 
@@ -309,6 +312,7 @@ fn run() -> ssmcp::Result<()> {
         portal: PortalConfig::default(),
         commerce: ssmcp::commerce::CommerceConfig::default(),
         portal_only,
+        relay: None,
     };
     if mode == "serve" {
         let path = options
@@ -328,7 +332,7 @@ fn run() -> ssmcp::Result<()> {
         {
             config.client_registry = Some(value.into());
         }
-        if config.client_registry.is_none() {
+        if config.client_registry.is_none() && config.relay.is_none() {
             config.client_registry = std::env::var_os("STATE_DIRECTORY")
                 .map(|path| PathBuf::from(path).join("oauth-clients.toml"));
         }
@@ -454,6 +458,16 @@ fn absolute_path(path: &Path, label: &str) -> ssmcp::Result<()> {
 
 fn validate_portal_config(config: &Config) -> ssmcp::Result<()> {
     let portal = &config.portal;
+    if config.relay.is_some()
+        && (config.portal_only
+            || config.github.is_some()
+            || config.client_registry.is_some()
+            || config.client_download_dir.is_some()
+            || *portal != PortalConfig::default()
+            || config.commerce.enabled)
+    {
+        return Err("relay mode cannot be combined with account, OAuth storage, download or commerce services".into());
+    }
     if let Some(socket) = &portal.frontend_socket {
         absolute_path(socket, "portal.frontend_socket")?;
     }
@@ -601,7 +615,11 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
         &config.public_url,
         config.client_download_dir.as_deref(),
     )?;
-    let mut broker = Broker::with_identity_config(config.public_url, config.oauth, config.github)?;
+    let headless = config.relay.is_some();
+    let mut broker = match config.relay {
+        Some(access) => Broker::headless(config.public_url, access)?,
+        None => Broker::with_identity_config(config.public_url, config.oauth, config.github)?,
+    };
     broker.client_downloads = publication;
     if let Some(path) = config.client_registry {
         broker.oauth.enable_client_registry(&path)?;
@@ -610,7 +628,7 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
             "persistence",
             &[("event", "durable_oauth_state_enabled".into())],
         );
-    } else {
+    } else if !headless {
         ssmcp::observability::log(
             "warn",
             "persistence",
@@ -725,7 +743,9 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
             ("listen", config.listen.to_string()),
             (
                 "mode",
-                if config.portal_only {
+                if headless {
+                    "relay"
+                } else if config.portal_only {
                     "portal_only"
                 } else {
                     "gateway"
@@ -817,6 +837,7 @@ mod tests {
             portal: PortalConfig::default(),
             commerce: ssmcp::commerce::CommerceConfig::default(),
             portal_only: false,
+            relay: None,
         }
     }
 
@@ -972,6 +993,7 @@ client_secret = "example-test-secret"
             portal: PortalConfig::default(),
             commerce: ssmcp::commerce::CommerceConfig::default(),
             portal_only: false,
+            relay: None,
         };
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(

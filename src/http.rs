@@ -44,6 +44,9 @@ mod user_wait;
 mod worker_reminders;
 
 pub fn router(broker: Arc<Broker>) -> Router {
+    if broker.relay_access.is_some() {
+        return relay_router(broker);
+    }
     Router::new()
         .merge(crate::oauth::routes())
         .merge(
@@ -59,6 +62,30 @@ pub fn router(broker: Arc<Broker>) -> Router {
         .with_state(broker)
         .layer(middleware::map_response(no_store))
         .layer(middleware::from_fn(crate::observability::http))
+}
+
+/// Mount only the relay protocol. A headless broker requires provisioned access.
+pub fn relay_router(broker: Arc<Broker>) -> Router {
+    assert!(
+        broker.relay_access.is_some(),
+        "relay_router requires a headless broker"
+    );
+    Router::new()
+        .merge(crate::device::relay_routes())
+        .route("/healthz", get(|| async { "ok\n" }))
+        .route("/mcp", any(relay_endpoint))
+        .with_state(broker)
+        .layer(middleware::map_response(no_store))
+        .layer(middleware::from_fn(crate::observability::http))
+}
+
+async fn relay_endpoint(state: State<Arc<Broker>>, request: Request) -> Response {
+    endpoint(
+        state,
+        Path(crate::broker::IDENTITY_RESOURCE.to_owned()),
+        request,
+    )
+    .await
 }
 
 /// The local host exposes only OAuth and authenticated MCP. No account, device
@@ -116,11 +143,27 @@ async fn endpoint(
     if !valid_origin(headers, &broker.public_url) {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let challenge = |invalid| {
+        if broker.relay_access.is_some() {
+            let value = if invalid {
+                "Bearer error=\"invalid_token\""
+            } else {
+                "Bearer"
+            };
+            (
+                StatusCode::UNAUTHORIZED,
+                [(header::WWW_AUTHENTICATE, value)],
+            )
+                .into_response()
+        } else {
+            unauthorized(&broker.public_url, &user, invalid)
+        }
+    };
     let Some(secret) = bearer(headers) else {
-        return unauthorized(&broker.public_url, &user, has_bearer_authorization(headers));
+        return challenge(has_bearer_authorization(headers));
     };
     if broker.authenticate(&user, secret).await.is_none() {
-        return unauthorized(&broker.public_url, &user, true);
+        return challenge(true);
     }
     let access_token = secret.to_owned();
     if request.method() != Method::POST {

@@ -621,6 +621,9 @@ pub fn routes() -> Router<Arc<Broker>> {
         .route("/api/client/call", post(call_tool))
         .route("/api/client/io", post(session_io::request))
 }
+pub(crate) fn relay_routes() -> Router<Arc<Broker>> {
+    Router::new().route("/api/client/connect", get(connect))
+}
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct VerifyIdentity {
@@ -784,7 +787,11 @@ async fn connect(
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     origin(&headers, &broker)?;
-    if !broker.portal.enabled(&broker) {
+    if let Some(access) = &broker.relay_access {
+        if !access.permit_ingress(&headers) || headers.contains_key(header::AUTHORIZATION) {
+            return Err(problem(Problem::Unauthorized));
+        }
+    } else if !broker.portal.enabled(&broker) {
         return Err(fail(
             StatusCode::SERVICE_UNAVAILABLE,
             "client_login_unavailable",

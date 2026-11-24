@@ -12,6 +12,8 @@ mod event_tests;
 mod execution_group;
 mod management;
 mod messaging;
+mod relay_access;
+pub use relay_access::RelayAccess;
 pub(crate) mod session_io;
 mod traffic;
 pub(crate) mod wait_display;
@@ -845,6 +847,7 @@ pub struct Broker {
     pub oauth: crate::oauth::OAuth,
     pub identities: IdentityProviders,
     pub portal: crate::portal::Portal,
+    pub(crate) relay_access: Option<RelayAccess>,
     pub client_downloads: Option<crate::client_downloads::Publisher>,
     /// The foreground local host owns a private runner from the same binary.
     /// Remote servers keep their installed runner and existing runtime checks.
@@ -913,6 +916,7 @@ impl Broker {
             native_messages: crate::messaging::Hub::default(),
             session_io: session_io::Hub::default(),
             portal: crate::portal::Portal::default(),
+            relay_access: None,
             client_downloads: None,
             code_mode_runner: None,
             management: None,
@@ -931,13 +935,25 @@ impl Broker {
         self.authenticate_now(user, access_token)
     }
 
+    /// Provision a headless relay. Serve it with `http::relay_router`.
+    pub fn headless(public_url: String, access: RelayAccess) -> crate::Result<Self> {
+        access.validate()?;
+        let mut broker = Self::with_oauth_config(public_url, crate::oauth::OAuthConfig::default())?;
+        broker.relay_access = Some(access);
+        Ok(broker)
+    }
+
     /// Synchronous decision point for responses that must not await between
     /// checking current OAuth/account state and committing a queue revision.
     pub(crate) fn authenticate_now(&self, user: &str, access_token: &str) -> Option<Authorization> {
         if !valid_username(user) {
             return None;
         }
-        let authorization = self.oauth.authenticate(user, access_token)?;
+        let authorization = if let Some(access) = &self.relay_access {
+            access.authenticate(user, access_token)?
+        } else {
+            self.oauth.authenticate(user, access_token)?
+        };
         self.authorized_account(&authorization)
             .then_some(authorization)
     }

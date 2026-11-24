@@ -643,6 +643,7 @@ def package(target, root=None):
         if "linux" in target:
             shutil.copy2(root / "src/code_mode.js", stage / "code-mode.js")
             shutil.copy2(root / "docs/deployment.md", stage / "docs/deployment.md")
+            shutil.copy2(root / "docs/relay-integration.md", stage / "docs/relay-integration.md")
             shutil.copytree(root / "packaging", stage / "packaging")
             shutil.copy2(root / "scripts/setup_server.py", stage / "setup-server")
         write_archive(stage, archive, epoch)
@@ -1100,6 +1101,24 @@ def registry_export_manifest(root):
             return line
 
         text = inline_dependency(text, "dependencies", name, replace_source)
+    unix = "cfg(unix)"
+    zrun = expected.get("target", {}).get(unix, {}).get("dependencies", {}).get("zrun")
+    if isinstance(zrun, dict) and "git" in zrun:
+        require_project_z_zrun(zrun)
+        choices = [
+            row for row in read_toml(root / "Cargo.lock")["package"]
+            if row["name"] == "zrun"
+        ]
+        if (len(choices) != 1
+                or not re.fullmatch(re.escape("git+" + ZRUN_GIT + "#") + SHA.pattern,
+                                    choices[0].get("source", ""))):
+            raise ValueError("registry export requires one locked Git revision for zrun")
+        pinned = "=" + choices[0]["version"]
+        version_key(choices[0]["version"])
+        del zrun["git"]
+        zrun["version"] = pinned
+        text = inline_dependency(text, "target.'cfg(unix)'.dependencies", "zrun", lambda line:
+                                 re.sub(r'git\s*=\s*"[^"]+"', 'version = ' + json.dumps(pinned), line, count=1))
     # Registry consumers cannot use the development-only internal Git overrides.
     overrides = expected.get("patch", {}).get("crates-io", {})
     for name in sorted(overrides.keys() & PROJECT_Z_PATCHES):
@@ -1108,6 +1127,11 @@ def registry_export_manifest(root):
     if tomllib.loads(text) != expected:
         raise ValueError("registry export changed fields beyond the internal Git source selectors")
     return text.encode()
+
+
+def require_project_z_zrun(spec):
+    if spec.get("git") != ZRUN_GIT or set(spec) - {"git", "features", "default-features"}:
+        raise ValueError("zrun registry export requires the canonical Git dependency")
 
 
 def registry_lock(data, release_version, direct):

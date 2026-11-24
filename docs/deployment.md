@@ -1,5 +1,7 @@
 # Linux 服务端部署
 
+第三方网站自行管理登录、账户和计费时，可单独运行中继模式。它提供 HTTPS 设备连接和带凭据的 MCP API。配置、反代与调用示例见[中继集成指南](relay-integration.md)。
+
 服务器部署 `ssmcpd` 和 HTTPS 反向代理；本机部署 `ssmcp`，需要调用某个 Harness 时再安装和配置它。服务器管理和旧部署迁移可继续使用 OpenSSH，当前设备连接使用 HTTPS/WSS。服务器不运行 Codex、Claude Code、Pi 或 OpenCode，模型身份和项目配置都留在本机。以下以 systemd Linux、`/usr/local` 前缀和服务端账户 `alice` 为例。
 
 当前客户端通过 HTTPS/WSS 接入核心；受控端可以使用 `--allow 用户名@服务器` 明确授权，控制端仍须完成账户 OAuth 与访问控制检查。已登录的受控端省略 `--allow` 时只允许自己。接入步骤见[配置与登录](configuration.md)。

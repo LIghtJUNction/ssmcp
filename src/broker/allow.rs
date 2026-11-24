@@ -48,6 +48,16 @@ impl Broker {
                     .map_err(|error| error.to_string())?,
             );
         }
+        if let Some(access) = &self.relay_access {
+            return handles
+                .iter()
+                .map(|handle| {
+                    access
+                        .identity(handle)
+                        .ok_or_else(|| "unknown provisioned relay principal".into())
+                })
+                .collect();
+        }
         if !self.identities.enabled("github") {
             return Err("account OAuth provider is not configured".into());
         }
@@ -95,22 +105,32 @@ impl Broker {
         owner: Option<&Identity>,
         message: Option<String>,
     ) -> Result<AccessSnapshot, String> {
-        let identities = allow.to_vec();
-        let records = self
-            .portal
-            .storage(move |store| {
-                identities
-                    .iter()
-                    .map(|identity| store.account_record(&identity.subject))
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .await
-            .map_err(|_| "could not read server account names")?;
-        let mut entries = Vec::with_capacity(records.len());
-        for (identity, record) in allow.iter().zip(records) {
-            let handle = record
-                .handle
-                .ok_or("account has no registered relay username")?;
+        let handles = if self.relay_access.is_some() {
+            allow
+                .iter()
+                .map(|identity| identity.login.clone())
+                .collect()
+        } else {
+            let identities = allow.to_vec();
+            self.portal
+                .storage(move |store| {
+                    identities
+                        .iter()
+                        .map(|identity| {
+                            store
+                                .account_record(&identity.subject)
+                                .map(|record| record.handle)
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .await
+                .map_err(|_| "could not read server account names")?
+                .into_iter()
+                .map(|handle| handle.ok_or("account has no registered relay username"))
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let mut entries = Vec::with_capacity(handles.len());
+        for (identity, handle) in allow.iter().zip(handles) {
             let principal = crate::server_endpoint::allow_principal(&handle, &self.public_url)
                 .map_err(|error| error.to_string())?;
             entries.push(AccessEntry {
@@ -134,6 +154,11 @@ impl Broker {
     pub(super) async fn revoke_target(&self, principal: &str) -> Result<Identity, String> {
         let handle = crate::server_endpoint::allow_handle_for_server(principal, &self.public_url)
             .map_err(|error| error.to_string())?;
+        if let Some(access) = &self.relay_access {
+            return access
+                .identity(&handle)
+                .ok_or_else(|| "unknown provisioned relay principal".into());
+        }
         // Revocation must also work for a banned controller.
         let account = self
             .portal
@@ -206,6 +231,101 @@ mod tests {
         Operation::CallTool {
             name: "fixture.echo".into(),
             arguments: json!({"value":"safe"}),
+        }
+    }
+    #[tokio::test]
+    async fn headless_relay_checks_ingress_and_filters_mcp_by_provisioned_principal() {
+        use sha2::{Digest, Sha256};
+        let ingress = "a".repeat(64);
+        let alice = "b".repeat(64);
+        let bob = "c".repeat(64);
+        let digest = |token: &str| crate::hex::encode(Sha256::digest(token));
+        let access = serde_json::from_value(json!({
+            "device_ingress_sha256": digest(&ingress),
+            "principals": {"alice":digest(&alice), "bob":digest(&bob)}
+        }))
+        .unwrap();
+        let broker = Arc::new(Broker::headless("https://ssmcp.test".into(), access).unwrap());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let router = crate::http::router(broker.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let fixture = Fixture {
+            broker,
+            base,
+            server,
+            _directory: Temporary(
+                std::env::temp_dir().join(crate::broker::generate_secret().unwrap()),
+            ),
+        };
+        let rejected = tokio_tungstenite::connect_async(fixture.request(None, true))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(rejected, tokio_tungstenite::tungstenite::Error::Http(response)
+            if response.status().as_u16() == 401)
+        );
+        let mut request = fixture.request(None, true);
+        request
+            .headers_mut()
+            .insert("x-ssmcp-device-ingress", ingress.parse().unwrap());
+        let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        send(
+            &mut socket,
+            Frame::Hello {
+                version: wire::VERSION,
+                mode: Mode::Shell,
+                metadata: ClientMetadata {
+                    name: "headless fixture".into(),
+                    title: None,
+                    cwd: "/fixture".into(),
+                    hostname: "localhost".into(),
+                    allow: names(&["alice"]),
+                },
+            },
+        )
+        .await;
+        let Frame::Ready { client_id, .. } = receive(&mut socket).await else {
+            panic!("ready required")
+        };
+        let http = crate::http_client::builder().no_proxy().build().unwrap();
+        for path in [
+            "/",
+            "/setup",
+            "/api/client/whoami",
+            "/.well-known/oauth-authorization-server",
+        ] {
+            assert_eq!(
+                http.get(format!("{}{path}", fixture.base))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                404
+            );
+        }
+        let payload = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list","arguments":{}}});
+        for token in [&alice, &bob, &ingress] {
+            let reply = http
+                .post(format!("{}/mcp", fixture.base))
+                .bearer_auth(token)
+                .json(&payload)
+                .send()
+                .await
+                .unwrap();
+            if token == &ingress {
+                assert_eq!(reply.status(), 401);
+            } else {
+                assert_eq!(reply.status(), 200);
+                let value: Value = reply.json().await.unwrap();
+                let clients = value["result"]["structuredContent"]["clients"]
+                    .as_array()
+                    .unwrap();
+                assert_eq!(clients.len(), usize::from(token == &alice));
+                if token == &alice {
+                    assert_eq!(clients[0]["id"], client_id);
+                }
+            }
         }
     }
     impl Fixture {
