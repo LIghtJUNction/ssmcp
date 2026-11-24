@@ -618,6 +618,7 @@ class MaintenanceProbeContracts(unittest.TestCase):
 
     def test_prepare_persists_private_binding_and_scopes_baseline_only(self):
         release, manifest = DeploymentContracts.release(self)
+        manifest["dependency_graph"] = {"fixture": "x" * 1_200_000}
         raw = json.dumps(manifest).encode()
         manifest_url = "https://github.com/" + deploy.REPOSITORY + "/releases/download/" + TAG + "/release-manifest.json"
         release["assets"].append({"name": "release-manifest.json", "browser_download_url": manifest_url})
@@ -631,6 +632,7 @@ class MaintenanceProbeContracts(unittest.TestCase):
                 destination.write_bytes(b"fixture archive")
                 return destination.stat().st_size
             if url == manifest_url:
+                self.assertGreaterEqual(maximum, len(raw))
                 return raw
             if url.startswith("https://api.github.com/"):
                 return json.dumps(release).encode()

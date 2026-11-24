@@ -29,6 +29,7 @@ SERVICE = "ssmcpd.service"
 BASE = Path("/var/lib/ssmcp-deployments")
 MANAGED_DROPIN = Path("/etc/systemd/system/ssmcpd.service.d/zzz-release.conf")
 REPOSITORY = "LIghtJUNction/ssmcp"
+MAX_RELEASE_MANIFEST_BYTES = 8 * 1024 * 1024
 
 # Reviewed exceptions for generated-artifact history removal only. This table
 # travels with the standalone helper; release metadata, CLI and environment
@@ -882,7 +883,7 @@ def prepare(intent, folder):
     manifest_assets = [asset for asset in release.get("assets", []) if asset.get("name") == "release-manifest.json"]
     require(len(manifest_assets) == 1 and manifest_assets[0].get("browser_download_url") == manifest_url,
             "published_manifest_required")
-    manifest_bytes = fetch(manifest_url, 1_048_576)
+    manifest_bytes = fetch(manifest_url, MAX_RELEASE_MANIFEST_BYTES)
     if manifest_assets[0].get("digest"):
         require(manifest_assets[0]["digest"] == "sha256:" + hashlib.sha256(manifest_bytes).hexdigest(), "manifest_digest")
     record = select_release(tag, commit, release, json.loads(manifest_bytes), platform.machine(),
