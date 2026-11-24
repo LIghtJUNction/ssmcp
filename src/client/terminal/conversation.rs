@@ -360,7 +360,7 @@ impl State {
             json!({"connected":false,"supported":true,"preview":true,
                 "agents":[
                     {"agent_id":"example-builder","name":"Builder","role":"implementation","status":"working"},
-                    {"agent_id":"example-reviewer","name":"Reviewer","role":"review","status":"available"}],
+                    {"agent_id":"example-reviewer","name":"Reviewer","role":"review","status":"idle"}],
                 "queue":[{"id":"example-request","text":"Keep the interface simple; verify command output and source audit.","status":"queued","target":"next","revision":1}]})
         } else {
             steering::snapshot()
@@ -3281,6 +3281,7 @@ impl State {
                 let connection = super::footer::Connection::from_snapshot(self.preview, &data);
                 let scroll_hint = self.chat_scroll_hint();
                 let wait_hint = self.chat_user_wait_hint();
+                let timing_hint = self.chat_timing_footer_hint();
                 let paste_hint = self.chat_paste_recovery_hint();
                 let native_hint = self.chat_native_hint();
                 let update_hint = self.chat_update_notice();
@@ -3289,7 +3290,8 @@ impl State {
                     || wait_hint.is_some()
                     || paste_hint.is_some()
                     || native_hint.is_some()
-                    || update_hint.is_some();
+                    || update_hint.is_some()
+                    || timing_hint.is_some();
                 let idle_hint = self.chat_idle_tip(
                     now,
                     connection == super::footer::Connection::Connected,
@@ -3313,6 +3315,7 @@ impl State {
                         self.rendered_update_notice = Some(hint);
                         return message;
                     }
+                    if let Some(hint) = timing_hint { return hint; }
                     if let Some(hint) = idle_hint { return hint.into(); }
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }

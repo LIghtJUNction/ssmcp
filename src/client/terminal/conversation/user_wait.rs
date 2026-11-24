@@ -209,21 +209,29 @@ impl State {
         self.dirty = true;
     }
 
+    fn chat_wait_hint_visible(&self) -> bool {
+        !self.help
+            && !self.selection
+            && !self.conversation.logs_open
+            && self.conversation.view == View::Activity
+            && !self.conversation.detail
+            && !self.conversation.content_focus
+            && !self.chat_menu_visible()
+            && !self.conversation.composer.completion_loading()
+    }
+
     pub(super) fn chat_user_wait_hint(&self) -> Option<(String, PanelTone)> {
-        if self.help
-            || self.selection
-            || self.conversation.logs_open
-            || self.conversation.view != View::Activity
-            || self.conversation.detail
-            || self.conversation.content_focus
-            || self.chat_menu_visible()
-            || self.conversation.composer.completion_loading()
-        {
+        if !self.chat_wait_hint_visible() {
             return None;
         }
-        hint(&self.chat_user_wait_snapshot())
-            .map(|text| (text, PanelTone::Error))
-            .or_else(|| self.chat_timing_hint().map(|text| (text, PanelTone::Muted)))
+        hint(&self.chat_user_wait_snapshot()).map(|text| (text, PanelTone::Error))
+    }
+
+    pub(super) fn chat_timing_footer_hint(&self) -> Option<String> {
+        if !self.chat_wait_hint_visible() {
+            return None;
+        }
+        self.chat_timing_hint()
     }
 
     pub(super) fn chat_user_wait_snapshot(&self) -> Snapshot {
@@ -484,6 +492,83 @@ mod tests {
                 vt100::Color::Rgb(242, 139, 130)
             );
             assert_eq!(state.conversation.composer.text(), original);
+            assert!(state.actions.is_empty());
+        }
+    }
+
+    #[test]
+    fn background_time_keeps_native_receipts_visible_but_human_wait_has_priority() {
+        for width in [120, 48] {
+            let mut state = super::super::super::preview_state(28, width, &Ui::default());
+            state.events.clear();
+            state.notice = None;
+            state.conversation.wait_fixture = Some(Snapshot::default());
+            state.conversation.timing_fixture = Some(crate::runtime::time::Snapshot::default());
+            state.panel.tasks = vec![crate::client::panel::TaskView {
+                id: "#background".into(),
+                description: "Ordinary background work".into(),
+                cwd: None,
+                started: Instant::now() - Duration::from_secs(5),
+                deadline: None,
+            }];
+            let recipient =
+                "client:1111111111111111111111111111111111111111111111111111111111111111";
+            state.conversation.native_recipient = Some(recipient.into());
+            state.conversation.composer.set_text("Unsent draft 界");
+            state.conversation.composer.left();
+            let draft = state.conversation.snapshot()["draft"].clone();
+            for (status, label) in [
+                ("queued", "Queued by service"),
+                ("included", "Included in recipient tool response"),
+                ("acknowledged", "Acknowledged by recipient"),
+            ] {
+                let receipt = json!({
+                    "recipient_id": recipient,
+                    "message_id": "native-exact-receipt",
+                    "request_id": "ui-exact-request",
+                    "text": "Previously submitted text",
+                    "status": status
+                });
+                state.conversation.native_last = Some(receipt.clone());
+                state.conversation.native_fixture = Some(json!({
+                    "available": true, "connected": true,
+                    "recipients": [], "outgoing": [receipt]
+                }));
+                let rendered = screen(&mut state);
+                assert!(
+                    rendered.lines().last().unwrap().contains(label),
+                    "{rendered}"
+                );
+                assert!(rendered.contains("运行 00:"), "{rendered}");
+                assert_eq!(state.conversation.snapshot()["draft"], draft);
+                assert_eq!(
+                    state.conversation.native_recipient.as_deref(),
+                    Some(recipient)
+                );
+
+                state.conversation.wait_fixture.as_mut().unwrap().active =
+                    vec![entry("human-wait", "human-episode", Intent::Finish)];
+                let rendered = screen(&mut state);
+                assert!(
+                    rendered.lines().last().unwrap().contains("等待你的输入"),
+                    "{rendered}"
+                );
+                assert!(rendered.contains("运行 00:"), "{rendered}");
+                assert_eq!(state.conversation.snapshot()["draft"], draft);
+                state
+                    .conversation
+                    .wait_fixture
+                    .as_mut()
+                    .unwrap()
+                    .active
+                    .clear();
+            }
+            state.conversation.native_recipient = None;
+            let rendered = screen(&mut state);
+            assert!(
+                rendered.lines().last().unwrap().contains("任务 · 运行"),
+                "{rendered}"
+            );
             assert!(state.actions.is_empty());
         }
     }
