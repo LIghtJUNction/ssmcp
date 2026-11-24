@@ -1436,13 +1436,22 @@ class WorkerWindows(Harness):
         return [{key: value for key, value in target.items() if key != "summary"}
                 for target in targets]
 
+    def parent_display(self, parent, path, **page):
+        return self.bound(parent["id"], self.coordinators[parent["id"]], "ssmcp.ui.get",
+                          {"path": f"/display/{path}", **page})
+
+    def parent_events(self, parent):
+        offset = 0
+        while offset is not None:
+            page = self.parent_display(parent, "events/events", offset=offset, limit=12)
+            yield from page["value"]
+            offset = page.get("next_offset")
+
     def conversation_operation(self, frontend, parent, heading, labels, *, deadline=None):
         remaining = lambda: 5 if deadline is None else max(0, deadline - time.monotonic())
-        coordinator = self.coordinators[parent["id"]]
 
         def display(path):
-            return self.bound(parent["id"], coordinator, "ssmcp.ui.get",
-                              {"path": f"/display/{path}"})["value"]
+            return self.parent_display(parent, path)["value"]
 
         context_keys = ("draft", "target", "native_recipient", "editing")
         state = display("conversation")
@@ -1453,36 +1462,43 @@ class WorkerWindows(Harness):
         frontend.send(b"\x1b[1;5F")
         frontend.until(lambda shot: heading in "\n".join(shot["rows"]),
                        f"the actual parent conversation contains {heading}", timeout=remaining())
-        candidates = [event for event in display("events")["events"] if heading in event["summary"]]
+        events = list(self.parent_events(parent))
+        candidates = [event for event in events if heading in event["summary"]]
         self.check(len(candidates) == 1, "the operation has one retained parent conversation card")
         event_id = candidates[0]["id"]
         self.check(not candidates[0]["expanded"], "the newly observed operation card starts collapsed")
         frontend.send(b"\t")
         wait_for(lambda: display("conversation")["focus"] == "content",
                  timeout=remaining(), description="Tab focuses the actual parent conversation")
-        selection = display("events")
-        for _ in range(selection["visible_cards"]):
-            selected = selection["selected"]
+        ids = [event["id"] for event in events]
+        selected = display("events/selected")
+        for _ in ids:
             if selected == event_id:
                 break
-            ids = [event["id"] for event in selection["events"]]
-            if selected not in ids or event_id not in ids:
+            if selected not in ids:
                 raise AssertionError("the parent operation card is outside the retained selection")
             frontend.send(b"\x1b[A" if ids.index(event_id) < ids.index(selected) else b"\x1b[B")
 
             def moved():
-                current = display("events")
-                return current if current["selected"] != selected else None
+                current = display("events/selected")
+                return current if current != selected else None
 
-            selection = wait_for(moved, timeout=remaining(), description="move the parent card selection")
-        self.check(selection["selected"] == event_id, "keyboard navigation selects the exact operation card")
+            selected = wait_for(moved, timeout=remaining(), description="move the parent card selection")
+        self.check(selected == event_id, "keyboard navigation selects the exact operation card")
         frontend.send(b"\r")
         expanded = frontend.until(
-            lambda frame: all(label in "\n".join(frame["rows"]) for label in labels),
-            "expanded physical operation details retain every exact reference", timeout=remaining())
-        retained = [event for event in display("events")["events"] if event["id"] == event_id]
+            lambda frame: any(f"▾ {heading}" in row for row in frame["rows"]),
+            "the original operation card opens in the physical terminal", timeout=remaining())
+        if not all(label in "\n".join(expanded["rows"]) for label in labels):
+            # An expanded card near the bottom can open below the viewport.
+            frontend.send(b"\x1b[6~")
+            expanded = frontend.until(
+                lambda frame: all(label in "\n".join(frame["rows"]) for label in labels),
+                "expanded physical operation details retain every exact reference", timeout=remaining())
+        retained = self.parent_display(parent, "events/events", offset=ids.index(event_id), limit=1)["value"]
         self.check(len(retained) == 1 and retained[0]["selected"] and retained[0]["expanded"],
                    "the original operation card is selected and expanded")
+        self.check(retained[0]["id"] == event_id, "the expanded card retains its original event ID")
         frontend.send(b"\x1b")
         restored = frontend.until(lambda frame: not frame["hide_cursor"],
                                   "Esc returns focus to the original editable draft", timeout=remaining())
@@ -1605,9 +1621,10 @@ class WorkerWindows(Harness):
                        == [("task_finished", task_id, "satisfied"),
                            ("task_finished", paired["task_id"], "satisfied")],
                        "All returns only when both exact tasks are finished")
-        parent_frame = frontend.frame()
-        self.check(draft in input_text(parent_frame) and not parent_frame["hide_cursor"],
-                   "coordinator waits preserve the parent's editable draft through completion")
+        parent_frame = frontend.until(
+            lambda shot: draft in input_text(shot) and not shot["hide_cursor"],
+            "the parent's editable draft after both coordinator waits finish", timeout=5)
+        self.check(True, "coordinator waits preserve the parent's editable draft through completion")
         case["parent_frame_after_completion"] = parent_frame
         # The original retirement scenario must use a new wait identity;
         # replaying the paired assignment would correctly return its receipt.
@@ -1676,6 +1693,16 @@ class WorkerWindows(Harness):
                     evidence = {"waiting": operation}
                     case["outer_timeout" if outer_timeout else "native_timeout"] = evidence
                     if not outer_timeout:
+                        pattern = re.compile(rf"Wait #{operation_id} · ALL · Waiting · (\d+\.\d)s / 5\.0s")
+
+                        def elapsed_frame():
+                            shot = view.frame()
+                            match = pattern.search("\n".join(shot["rows"]))
+                            return (shot, float(match[1])) if match else None
+
+                        first, elapsed = wait_for(
+                            elapsed_frame, timeout=max(0, observation_deadline - time.monotonic()),
+                            description="the first physical worker frame for this wait")
                         target_labels = [
                             f"Task ID {task_id}",
                             f"Worker #{claim['slot'] + 1:02} · slot {claim['slot']}, epoch {claim['epoch']}",
@@ -1686,52 +1713,30 @@ class WorkerWindows(Harness):
                             frontend, parent, f"Wait #{operation_id} · ALL", target_labels,
                             deadline=observation_deadline)
                         evidence["conversation"] = conversation
-                        pattern = re.compile(rf"Wait #{operation_id} · ALL · Waiting · (\d+\.\d)s / 5\.0s")
-                        samples = {}
 
-                        def visible_progress():
-                            # Both displays share the same observation deadline;
-                            # no serial VT timeout can outlive the native wait.
-                            shot = view.frame()
-                            parent_shot = frontend.frame()
-                            text = "\n".join(shot["rows"])
-                            match = pattern.search(text)
-                            if match:
-                                elapsed = float(match[1])
-                                samples.setdefault("first", (shot, elapsed))
-                                if elapsed > samples["first"][1]:
-                                    samples["later"] = (shot, elapsed)
-                            parent_text = "\n".join(parent_shot["rows"])
-                            if all(label in parent_text for label in target_labels):
-                                samples["targets_frame"] = parent_shot
-                            if (f"Wait #{operation_id}" in parent_text
-                                    and draft in input_text(parent_shot) and not parent_shot["hide_cursor"]):
-                                samples["parent_frame"] = parent_shot
-                            return samples if all(key in samples for key in (
-                                "first", "later", "targets_frame", "parent_frame")) else None
+                        def elapsed_advanced():
+                            frame = elapsed_frame()
+                            return frame if frame is not None and frame[1] > elapsed else None
 
-                        visible = wait_for(visible_progress,
-                                           timeout=max(0, observation_deadline - time.monotonic()),
-                                           description="same-operation elapsed, targets and both visible panels in one window")
-                        first, elapsed = visible["first"]
-                        second, later = visible["later"]
+                        second, later = wait_for(
+                            elapsed_advanced, timeout=max(0, observation_deadline - time.monotonic()),
+                            description="the same physical worker wait advances within its original window")
                         self.check(later > elapsed, "one real native wait has an increasing visible elapsed time")
-                        self.check(all(label in "\n".join(visible["targets_frame"]["rows"])
+                        targets_frame = conversation["frame"]
+                        parent_frame = conversation["editable_frame"]
+                        self.check(all(label in "\n".join(targets_frame["rows"])
                                            for label in target_labels),
                                    "the expanded parent wait visibly identifies its exact task, worker and operation")
-                        displayed_events = self.bound(
-                            parent["id"], self.coordinators[parent["id"]], "ssmcp.ui.get",
-                            {"path": "/display/events"})["value"]["events"]
-                        same_card = [event for event in displayed_events
+                        same_card = [event for event in self.parent_events(parent)
                                      if event["id"] == conversation["event"]["id"]]
                         self.check(len(same_card) == 1 and same_card[0]["expanded"],
                                    "elapsed updates preserve the original expanded wait card")
                         evidence["event_after_elapsed"] = same_card[0]
-                        self.check(draft in input_text(visible["parent_frame"])
-                                   and not visible["parent_frame"]["hide_cursor"],
+                        self.check(f"Wait #{operation_id}" in "\n".join(parent_frame["rows"])
+                                   and draft in input_text(parent_frame) and not parent_frame["hide_cursor"],
                                    "visible coordinator waits preserve the parent's editable draft")
                         evidence.update(first_frame=first, later_frame=second,
-                                        parent_frame=visible["parent_frame"], targets_frame=visible["targets_frame"],
+                                        parent_frame=parent_frame, targets_frame=targets_frame,
                                         observation_seconds=round(time.monotonic() - issued_at, 3))
                     result = future.result(timeout=7)
                     if outer_timeout:
