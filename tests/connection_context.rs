@@ -332,7 +332,7 @@ fn context_local_options_keep_loopback_foreground_and_context_root_rules() {
     home.failure(
         &["--context", "work", "--title", "--context"],
         None,
-        "no saved sign-in",
+        "choose an account with ssmcp username@server",
     );
 }
 
