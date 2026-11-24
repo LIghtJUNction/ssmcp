@@ -1,5 +1,5 @@
 //! Server-rendered account pages. All stored display data is escaped.
-use super::store::Account;
+use super::store::{Account, UsernameRenameQuota};
 use crate::user_policy::TrafficQuota;
 
 pub(super) const CSS: &str = include_str!("portal.css");
@@ -133,6 +133,7 @@ fn account_panel(
     management_enabled: bool,
     traffic: Option<&TrafficQuota>,
     public_url: &str,
+    rename_quota: Option<UsernameRenameQuota>,
 ) -> String {
     let (status_class, status) = if account.is_some() {
         ("status signed-in", "已登录")
@@ -146,8 +147,23 @@ fn account_panel(
 <div class="panel-bar"><span class="eyebrow">你的账户</span><span class="{status_class}">{status}</span></div><div class="account-body">"#
     );
     if let Some(a) = account {
+        let (quota_note, disabled) = match rename_quota {
+            Some(quota) if quota.limit == 0 => ("服务器已关闭改名功能。".into(), " disabled"),
+            Some(quota) => (
+                format!(
+                    "按 UTC 自然月计算，本月还可改名 {} 次，月上限 {} 次。",
+                    quota.remaining, quota.limit
+                ),
+                if quota.remaining == 0 {
+                    " disabled"
+                } else {
+                    ""
+                },
+            ),
+            None => (String::new(), ""),
+        };
         let username_form = format!(
-            r#"<details class="traffic-details"><summary>修改用户名</summary><form class="key-form" method="post" action="/account/username"><input type="hidden" name="csrf" value="{csrf}"><label for="account-username">平台用户名<input id="account-username" name="username" value="{}" required minlength="3" maxlength="32" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="username-help"></label><small id="username-help">登录后自动分配用户名，可在这里修改。3–32 个英文字母、数字、下划线或连字符，以字母开头，以字母或数字结尾。修改后，已有登录和授权继续有效。</small><button type="submit">保存用户名</button></form></details>"#,
+            r#"<details class="traffic-details"><summary>修改用户名</summary><form class="key-form" method="post" action="/account/username"><input type="hidden" name="csrf" value="{csrf}"><label for="account-username">平台用户名<input id="account-username" name="username" value="{}" required minlength="3" maxlength="32" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="username-help"></label><small id="username-help">登录后自动分配用户名，可在这里修改。3–32 个英文字母、数字、下划线或连字符，以字母开头，以字母或数字结尾。修改后，已有登录和授权继续有效。{quota_note}</small><button type="submit"{disabled}>保存用户名</button></form></details>"#,
             escape(a.handle.as_deref().unwrap_or_default()),
         );
         let primary_action = if management_enabled {
@@ -241,6 +257,7 @@ pub(super) fn home(
     management_enabled: bool,
     public_url: &str,
     traffic: Option<&TrafficQuota>,
+    rename_quota: Option<UsernameRenameQuota>,
 ) -> String {
     let csrf = escape(csrf.unwrap_or(""));
     let mut body = if let Some(account) = account {
@@ -271,6 +288,7 @@ pub(super) fn home(
         management_enabled,
         traffic,
         public_url,
+        rename_quota,
     ));
     if account.is_some() {
         body.push_str("</div></section>");
@@ -308,6 +326,7 @@ mod tests {
             handle: Some("developer".into()),
             generated_handle: false,
             handle_aliases: Default::default(),
+            username_renames: None,
             banned: false,
             rate_limit_bps: None,
             has_recharged: false,
@@ -338,6 +357,7 @@ mod tests {
             true,
             "https://example.test",
             Some(traffic),
+            None,
         )
     }
 
@@ -350,6 +370,10 @@ mod tests {
             true,
             "https://EXAMPLE.test:443",
             None,
+            Some(UsernameRenameQuota {
+                limit: 1,
+                remaining: 1,
+            }),
         );
         assert!(html.contains("developer@example.test"));
         assert!(html.contains("修改用户名"));
@@ -401,6 +425,7 @@ mod tests {
                 management_enabled,
                 None,
                 "https://example.test",
+                None,
             );
             assert_eq!(without_quota.matches(orders_link).count(), 1);
             let with_quota = account_panel(
@@ -410,11 +435,12 @@ mod tests {
                 management_enabled,
                 Some(&quota),
                 "https://example.test",
+                None,
             );
             assert!(!with_quota.contains(orders_link));
         }
         assert!(
-            !account_panel(None, "csrf", true, true, None, "https://example.test")
+            !account_panel(None, "csrf", true, true, None, "https://example.test", None)
                 .contains(orders_link)
         );
     }
@@ -467,6 +493,7 @@ mod tests {
                 true,
                 "https://example.test",
                 Some(&monthly_quota(123_456_789)),
+                None,
             );
             assert!(!html.contains(r#"aria-label="账户流量""#));
             assert!(!html.contains("123456789 字节"));

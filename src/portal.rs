@@ -46,6 +46,8 @@ const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
 const MAX_SESSIONS: usize = 4096;
 type DigestKey = [u8; 32];
 
+pub const DEFAULT_MONTHLY_USERNAME_RENAME_LIMIT: u32 = 1;
+
 #[derive(Default)]
 pub struct Portal {
     frontend: Option<frontend::Endpoint>,
@@ -153,6 +155,7 @@ pub(crate) enum Problem {
     UsernameInvalid,
     UsernameTaken,
     UsernameBound,
+    UsernameRenameLimit,
     Banned,
     TrafficQuotaExceeded,
     TrafficPeriodMismatch,
@@ -163,7 +166,7 @@ impl Problem {
         match self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Csrf | Self::Forbidden | Self::Banned => StatusCode::FORBIDDEN,
-            Self::Busy => StatusCode::TOO_MANY_REQUESTS,
+            Self::Busy | Self::UsernameRenameLimit => StatusCode::TOO_MANY_REQUESTS,
             Self::TrafficQuotaExceeded => StatusCode::PAYMENT_REQUIRED,
             Self::TrafficPeriodMismatch | Self::TrafficGrantConflict => StatusCode::CONFLICT,
             Self::Storage
@@ -212,6 +215,7 @@ impl Problem {
             Self::UsernameBound => {
                 "此账户已有用户名，请使用现有名称连接；如需改名，请在账户页修改。"
             }
+            Self::UsernameRenameLimit => "已达到服务器设置的改名次数上限，请在账户页查看额度。",
             Self::Banned => "此账户已被服务器管理员封禁。",
             Self::TrafficQuotaExceeded => {
                 "本月流量额度不足。服务器流量有限，经常使用请购买流量包。"
@@ -316,6 +320,16 @@ impl Portal {
             .lock()
             .map_err(|_| "portal storage lock poisoned")?
             .configure_monthly_allowances(allowances);
+        Ok(())
+    }
+
+    pub fn configure_monthly_username_rename_limit(&self, limit: u32) -> crate::Result<()> {
+        self.store
+            .as_ref()
+            .ok_or("monthly username rename limits require portal storage")?
+            .lock()
+            .map_err(|_| "portal storage lock poisoned")?
+            .configure_monthly_username_rename_limit(limit);
         Ok(())
     }
 
@@ -583,6 +597,7 @@ async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<R
             false,
             &broker.public_url,
             None,
+            None,
         ))
         .into_response());
     }
@@ -608,9 +623,19 @@ async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<R
         }
         Err(error) => return Err(error),
     };
-    let account = match subject {
-        Some(subject) => Some(broker.portal.storage(move |s| s.account(&subject)).await?),
-        None => None,
+    let (account, rename_quota) = match subject {
+        Some(subject) => {
+            let (account, quota) = broker
+                .portal
+                .storage(move |store| {
+                    let account = store.account(&subject)?;
+                    let quota = store.username_rename_quota(&account, crate::management::now());
+                    Ok((account, quota))
+                })
+                .await?;
+            (Some(account), Some(quota))
+        }
+        None => (None, None),
     };
     let traffic = if let Some(account) = &account {
         if let Some(management) = &broker.portal.management {
@@ -637,6 +662,7 @@ async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<R
         broker.portal.management.is_some(),
         &broker.public_url,
         traffic.as_ref(),
+        rename_quota,
     ))
     .into_response();
     if let Some(raw) = new_cookie {

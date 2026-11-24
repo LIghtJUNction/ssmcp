@@ -310,6 +310,11 @@ impl From<Problem> for ApiError {
                 "username_bound",
                 "This account already has a username. Connect using its current name, or rename it on the account page.",
             ),
+            Problem::UsernameRenameLimit => Self::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "username_rename_limit",
+                "This account has reached the server's monthly username change limit.",
+            ),
             Problem::Banned => Self::new(
                 StatusCode::FORBIDDEN,
                 "account_banned",

@@ -41,12 +41,36 @@ pub(crate) struct Account {
     /// Previous names stay bound to the same subject; they can never be reclaimed.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub handle_aliases: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) username_renames: Option<UsernameRenames>,
     #[serde(default)]
     pub banned: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit_bps: Option<u64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub has_recharged: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct UsernameRenames {
+    period: String,
+    count: u32,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct UsernameRenameQuota {
+    pub limit: u32,
+    pub remaining: u32,
+}
+
+impl Account {
+    fn renames_in(&self, period: &str) -> Option<&UsernameRenames> {
+        // A backwards clock adjustment must not grant a second allowance.
+        self.username_renames
+            .as_ref()
+            .filter(|usage| usage.period.as_str() >= period)
+    }
 }
 
 /// Account directory data deliberately excludes public keys and their fingerprints.
@@ -76,6 +100,7 @@ pub(crate) struct Store {
     failed: bool,
     traffic: super::traffic::TrafficLedger,
     monthly_allowances: crate::user_policy::MonthlyTrafficAllowances,
+    monthly_username_rename_limit: u32,
 }
 
 impl Drop for Store {
@@ -184,6 +209,7 @@ impl Store {
             failed: false,
             traffic,
             monthly_allowances: Default::default(),
+            monthly_username_rename_limit: super::DEFAULT_MONTHLY_USERNAME_RENAME_LIMIT,
         };
         let mut next = store.database.clone();
         if initialize_handles(&mut next).map_err(|_| "could not initialize platform usernames")? {
@@ -271,6 +297,7 @@ impl Store {
                 handle: None,
                 generated_handle: false,
                 handle_aliases: BTreeSet::new(),
+                username_renames: None,
                 banned: false,
                 rate_limit_bps: None,
                 has_recharged: false,
@@ -311,47 +338,83 @@ impl Store {
     pub fn claim_handle(&mut self, subject: &str, handle: &str) -> Result<Account, Problem> {
         let handle = normalize_handle(handle)?;
         let account = self.account(subject)?;
-        if account.handle.as_deref() == Some(handle.as_str()) {
-            return if account.generated_handle {
-                self.rename_handle(subject, &handle)
-            } else {
-                Ok(account)
-            };
-        }
         if account.handle_aliases.contains(&handle) {
             return Ok(account);
         }
-        if account.handle.is_some() && !account.generated_handle {
+        if account.handle.is_some()
+            && !account.generated_handle
+            && account.handle.as_deref() != Some(handle.as_str())
+        {
             return Err(Problem::UsernameBound);
         }
-        self.rename_handle(subject, &handle)
+        self.bind_handle(account, handle, None)
     }
 
-    /// The authenticated browser profile is the only explicit rename flow.
-    /// Validation, namespace reservation and persistence share the Store writer lease.
+    pub(super) fn configure_monthly_username_rename_limit(&mut self, limit: u32) {
+        self.monthly_username_rename_limit = limit;
+    }
+
+    pub(super) fn username_rename_quota(&self, account: &Account, now: u64) -> UsernameRenameQuota {
+        let period = crate::user_policy::traffic_period_at(now, 0);
+        let used = account.renames_in(&period).map_or(0, |usage| usage.count);
+        let limit = self.monthly_username_rename_limit;
+        UsernameRenameQuota {
+            limit,
+            remaining: limit.saturating_sub(used),
+        }
+    }
+
+    /// The authenticated browser profile is the explicit rename flow.
     pub fn rename_handle(&mut self, subject: &str, handle: &str) -> Result<Account, Problem> {
+        self.rename_handle_at(subject, handle, crate::management::now())
+    }
+
+    fn rename_handle_at(
+        &mut self,
+        subject: &str,
+        handle: &str,
+        now: u64,
+    ) -> Result<Account, Problem> {
         let handle = normalize_handle(handle)?;
         let account = self.account(subject)?;
-        if account.handle.as_deref() == Some(handle.as_str()) && !account.generated_handle {
+        let period = crate::user_policy::traffic_period_at(now, 0);
+        self.bind_handle(account, handle, Some(period))
+    }
+
+    /// Name ownership and monthly usage are persisted in one writer transaction.
+    fn bind_handle(
+        &mut self,
+        mut account: Account,
+        handle: String,
+        rename_period: Option<String>,
+    ) -> Result<Account, Problem> {
+        let changing = account.handle.as_deref() != Some(handle.as_str());
+        if !changing && !account.generated_handle {
             return Ok(account);
         }
         if self
             .account_by_handle(&handle)?
-            .is_some_and(|owner| owner.subject != subject)
+            .is_some_and(|owner| owner.subject != account.subject)
         {
             return Err(Problem::UsernameTaken);
         }
-        if account.handle.as_deref() != Some(handle.as_str())
+        if changing
             && account.handle_aliases.len() >= MAX_HANDLE_ALIASES
             && !account.handle_aliases.contains(&handle)
         {
             return Err(Problem::Limit);
         }
-        let mut next = self.database.clone();
-        let account = next
-            .accounts
-            .get_mut(subject)
-            .ok_or(Problem::Unauthorized)?;
+        if changing && let Some(period) = rename_period {
+            let mut usage = account
+                .renames_in(&period)
+                .cloned()
+                .unwrap_or(UsernameRenames { period, count: 0 });
+            if usage.count >= self.monthly_username_rename_limit {
+                return Err(Problem::UsernameRenameLimit);
+            }
+            usage.count += 1;
+            account.username_renames = Some(usage);
+        }
         account.handle_aliases.remove(&handle);
         if let Some(previous) = account.handle.replace(handle.clone())
             && previous != handle
@@ -359,7 +422,9 @@ impl Store {
             account.handle_aliases.insert(previous);
         }
         account.generated_handle = false;
-        let account = account.clone();
+        let mut next = self.database.clone();
+        next.accounts
+            .insert(account.subject.clone(), account.clone());
         self.save(next)?;
         Ok(account)
     }
@@ -669,6 +734,13 @@ fn validate(database: &Database) -> crate::Result<()> {
         {
             return Err("invalid account username aliases".into());
         }
+        if account.username_renames.as_ref().is_some_and(|usage| {
+            account.handle.is_none()
+                || !crate::user_policy::valid_traffic_period(&usage.period)
+                || usage.count == 0
+        }) {
+            return Err("invalid account username rename usage".into());
+        }
         for handle in account.handle.iter().chain(account.handle_aliases.iter()) {
             if normalize_handle(handle).ok().as_ref() != Some(handle) || !handles.insert(handle) {
                 return Err(
@@ -810,6 +882,7 @@ mod tests {
     fn browser_rename_retains_names_ownership_policy_and_durable_aliases() {
         let directory = AccountDirectory::new();
         let mut store = Store::open(&directory.0).unwrap();
+        store.configure_monthly_username_rename_limit(2);
         let initial = store
             .login(&identity("123", "alice"))
             .unwrap()
@@ -866,6 +939,77 @@ mod tests {
             Err(Problem::Banned)
         ));
         assert!(!reopened.handle_available("alice-work").unwrap());
+    }
+
+    #[test]
+    fn username_rename_quota_survives_restart_and_resets_at_utc_month_boundary() {
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        let boundary = crate::user_policy::traffic_reset_at("2026-11", 0).unwrap();
+        store.login(&identity("123", "alice")).unwrap();
+        let claimed = store.claim_handle("123", "alice-home").unwrap();
+        assert!(claimed.username_renames.is_none());
+        assert_eq!(
+            store
+                .username_rename_quota(&claimed, boundary - 1)
+                .remaining,
+            1
+        );
+
+        let renamed = store
+            .rename_handle_at("123", "alice-work", boundary - 1)
+            .unwrap();
+        assert_eq!(renamed.handle.as_deref(), Some("alice-work"));
+        assert_eq!(
+            store
+                .username_rename_quota(&renamed, boundary - 1)
+                .remaining,
+            0
+        );
+        store
+            .rename_handle_at("123", "ALICE-WORK", boundary - 1)
+            .unwrap();
+        assert!(matches!(
+            store.rename_handle_at("123", "alice-next", boundary - 1),
+            Err(Problem::UsernameRenameLimit)
+        ));
+        drop(store);
+
+        let mut reopened = Store::open(&directory.0).unwrap();
+        assert!(matches!(
+            reopened.rename_handle_at("123", "alice-next", boundary - 1),
+            Err(Problem::UsernameRenameLimit)
+        ));
+        let next_month = reopened
+            .rename_handle_at("123", "alice-next", boundary)
+            .unwrap();
+        assert_eq!(next_month.handle.as_deref(), Some("alice-next"));
+        assert!(next_month.handle_aliases.contains("alice-work"));
+
+        reopened.configure_monthly_username_rename_limit(2);
+        assert_eq!(
+            reopened
+                .username_rename_quota(&next_month, boundary)
+                .remaining,
+            1
+        );
+        reopened
+            .rename_handle_at("123", "alice-dec", boundary + 1)
+            .unwrap();
+        assert!(matches!(
+            reopened.rename_handle_at("123", "alice-last", boundary - 1),
+            Err(Problem::UsernameRenameLimit)
+        ));
+        reopened.configure_monthly_username_rename_limit(0);
+        let year_end = crate::user_policy::traffic_reset_at("2026-12", 0).unwrap();
+        assert!(matches!(
+            reopened.rename_handle_at("123", "alice-last", year_end),
+            Err(Problem::UsernameRenameLimit)
+        ));
+        assert_eq!(
+            reopened.account("123").unwrap().handle.as_deref(),
+            Some("alice-dec")
+        );
     }
 
     #[test]
@@ -1004,6 +1148,7 @@ mod tests {
                     handle: Some("shared-name".into()),
                     generated_handle: false,
                     handle_aliases: BTreeSet::new(),
+                    username_renames: None,
                     banned: false,
                     rate_limit_bps: None,
                     has_recharged: false,

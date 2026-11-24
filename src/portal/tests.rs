@@ -219,6 +219,7 @@ fn view_escapes_untrusted_text_and_includes_complete_tutorial() {
         handle: None,
         generated_handle: false,
         handle_aliases: Default::default(),
+        username_renames: None,
         banned: false,
         rate_limit_bps: None,
         has_recharged: false,
@@ -229,6 +230,7 @@ fn view_escapes_untrusted_text_and_includes_complete_tutorial() {
         true,
         false,
         "https://ssmcp.lmm.best",
+        None,
         None,
     );
     assert!(!html.contains("<script>"));
@@ -399,6 +401,7 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
     assert!(default_username.starts_with("member-"));
     assert!(html.contains(&format!("{default_username}@ssmcp.test")));
     assert!(html.contains("修改用户名"));
+    assert!(html.contains("本月还可改名 1 次，月上限 1 次"));
     assert!(!html.contains("<dt>GitHub 账户</dt>"));
     assert!(html.contains("action=\"/account/username\""));
     assert!(html.contains("复制命令"));
@@ -442,6 +445,18 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
     assert!(registered_home.contains("ssmcp alice-dev@ssmcp.test"));
     assert!(registered_home.contains("修改用户名"));
     assert!(registered_home.contains(r#"name="username" value="alice-dev""#));
+    assert!(registered_home.contains("本月还可改名 0 次，月上限 1 次"));
+    assert!(registered_home.contains(r#"<button type="submit" disabled>保存用户名"#));
+    let limited = client
+        .post(&register)
+        .header("cookie", &new_cookie)
+        .header("origin", "https://ssmcp.test")
+        .form(&[("csrf", csrf), ("username", "alice-work")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(limited.status(), 429);
+    assert!(limited.text().await.unwrap().contains("改名次数上限"));
     assert!(!registered_home.contains("旧版 SSH 公钥管理"));
     let bob_username = broker
         .portal
@@ -483,6 +498,10 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
             Some("alice-dev")
         );
     }
+    broker
+        .portal
+        .configure_monthly_username_rename_limit(3)
+        .unwrap();
     for name in ["alice-work", "alice-dev"] {
         let renamed = client
             .post(&register)

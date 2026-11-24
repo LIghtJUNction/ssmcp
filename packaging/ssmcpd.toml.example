@@ -57,6 +57,9 @@ client_registration_ttl = 31536000
 # admin_usernames = ["maintainer"]
 # Per-account bytes/second in EACH direction, shared across connections.
 # default_rate_limit_bps = 8388608
+# Successful username changes per account, reset at the start of each UTC month.
+# Zero disables profile renames.
+# monthly_username_rename_limit = 1
 # Monthly gifts in bytes. Both omitted default to 1,000,000,000 each.
 # A paid user has a server-verified successful production recharge record.
 # Zero means no gift, not unlimited; purchased packages are added separately.

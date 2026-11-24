@@ -110,6 +110,7 @@ struct PortalConfig {
     admin_github_users: Vec<String>,
     admin_usernames: Vec<String>,
     default_rate_limit_bps: u64,
+    monthly_username_rename_limit: u32,
     free_user_monthly_traffic_bytes: u64,
     paid_user_monthly_traffic_bytes: u64,
     owner_mappings: HashMap<String, String>,
@@ -129,6 +130,7 @@ impl Default for PortalConfig {
             admin_github_users: Vec::new(),
             admin_usernames: Vec::new(),
             default_rate_limit_bps: ssmcp::user_policy::DEFAULT_RATE_LIMIT_BPS,
+            monthly_username_rename_limit: ssmcp::portal::DEFAULT_MONTHLY_USERNAME_RENAME_LIMIT,
             free_user_monthly_traffic_bytes: ssmcp::user_policy::FREE_MONTHLY_TRAFFIC_BYTES,
             paid_user_monthly_traffic_bytes: ssmcp::user_policy::FREE_MONTHLY_TRAFFIC_BYTES,
             owner_mappings: HashMap::new(),
@@ -620,6 +622,9 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
             return Err("portal.state_dir requires the existing auth.github configuration".into());
         }
         broker.portal = ssmcp::portal::Portal::open(path)?;
+        broker
+            .portal
+            .configure_monthly_username_rename_limit(config.portal.monthly_username_rename_limit)?;
         broker.portal.configure_monthly_allowances(ssmcp::user_policy::MonthlyTrafficAllowances {
             free_user_bytes: config.portal.free_user_monthly_traffic_bytes,
             paid_user_bytes: config.portal.paid_user_monthly_traffic_bytes,
@@ -1048,6 +1053,19 @@ client_secret = "example-test-secret"
         ] {
             assert!(normalize_origin(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn monthly_username_rename_limit_defaults_to_one_and_accepts_zero() {
+        assert_eq!(
+            parse_file_config("[portal]\n").unwrap().portal.monthly_username_rename_limit,
+            1
+        );
+        for limit in [0_u32, 3] {
+            let config = parse_file_config(&format!("[portal]\nmonthly_username_rename_limit = {limit}\n")).unwrap();
+            assert_eq!(config.portal.monthly_username_rename_limit, limit);
+        }
+        assert!(parse_file_config("[portal]\nmonthly_username_rename_limit = -1\n").is_err());
     }
 
     #[test]
