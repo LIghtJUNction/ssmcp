@@ -14,6 +14,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import errno
 import fcntl
@@ -540,6 +541,9 @@ class WorkerWindows(Harness):
     def environment(self, label, directory, *, terminal=True):
         self.windows.append(directory)
         environment = self.client_environment(label)
+        # The held-stdin command below uses sh. Keep it inside the fixture's
+        # explicit utility directory without exposing the rest of the host PATH.
+        (Path(environment["PATH"]) / "sh").symlink_to("/bin/sh")
         allowed = {"SSMCP_AUTH_HOME", "SSMCP_SESSION_HOME", "SSMCP_CLIENT_CONFIG", "SSMCP_UI_CONFIG"}
         environment = {key: value for key, value in environment.items()
                        if not key.startswith("SSMCP_") or key in allowed}
@@ -630,25 +634,85 @@ class WorkerWindows(Harness):
         self.sensitive.append(joined["token"])
         return joined
 
-    def bound(self, client_id, participant, name, arguments=None, *, allow_error=False):
-        code = "return await call(%s, %s, %s);" % (
-            json.dumps(client_id), json.dumps(name), json.dumps(arguments or {}),
-        )
-        if allow_error:
-            # Code Mode can reject the native call before it returns a result.
-            code = (
-                "try { " + code + " } catch (error) { "
-                "return {isError: true, content: [{type: 'text', text: String(error.message ?? error)}]}; }"
-            )
+    def bound(self, client_id, participant, name, arguments=None, *, allow_error=False,
+              expected_error=None):
+        if allow_error and not expected_error:
+            raise AssertionError("a negative native call requires its exact expected error")
+        # Native validation may reject call() before returning an MCP envelope.
+        # Catch only inside the native call and validate its real message below;
+        # HTTP, sandbox startup and unrelated native errors still fail this test.
+        code = (
+            "try { const response = await call(%s, %s, %s); return {native: response}; } "
+            "catch (error) { if (!%s) throw error; "
+            "return {exception: String(error.message ?? error)}; }"
+        ) % (json.dumps(client_id), json.dumps(name), json.dumps(arguments or {}),
+             json.dumps(allow_error))
         result = self.public_call("code_mode", {
             "agent": {"client_id": client_id, "id": participant["agent_id"], "token": participant["token"]},
             "code": code,
-        })
-        native = result["result"]
+        })["result"]
+        if "exception" in result:
+            native = {"isError": True, "caught_exception": True,
+                      "content": [{"type": "text", "text": result["exception"]}]}
+        else:
+            native = result["native"]
         if allow_error:
+            if native.get("isError"):
+                error = "\n".join(item.get("text", "") for item in native.get("content", []))
+                if expected_error not in error:
+                    raise AssertionError(f"{name} returned an unrelated error: {error}")
+                self.cases.setdefault("expected_native_errors", []).append({
+                    "tool": name, "error": error,
+                    "caught_exception": native.get("caught_exception", False),
+                })
             return native
         if native.get("isError"):
             raise AssertionError(f"{name} returned a native error: {native}")
+        return self.native_value(client_id, participant, native["structuredContent"], operation=name)
+
+    def native_value(self, client_id, participant, value, *, operation):
+        if value.get("spilled") is not True:
+            return value
+        if operation == "ssmcp.output.read":
+            raise AssertionError("native artifact reads must not recursively spill")
+        meta = value.get("artifact", {})
+        size = meta.get("bytes")
+        evidence = {"operation": operation, "summary": value, "state": "unverified"}
+        self.cases.setdefault("native_artifacts", []).append(evidence)
+        if (value.get("format") != "mcp_tool_result_json" or value.get("output_error")
+                or meta.get("storage") != "memory" or meta.get("path") is not None
+                or meta.get("scope") != "native_tool_result_json"
+                or meta.get("complete") is not True or meta.get("error")
+                or not isinstance(size, int) or not 0 < size <= 1024 * 1024
+                or meta.get("observed_bytes") != size
+                or not re.fullmatch(r"[0-9a-f]{32}", str(meta.get("id", "")))
+                or not re.fullmatch(r"[0-9a-f]{64}", str(meta.get("sha256", "")))):
+            raise AssertionError("native result is not a complete bounded original memory artifact")
+        payload = bytearray()
+        while len(payload) < size:
+            offset = len(payload)
+            part = self.bound(client_id, participant, "ssmcp.output.read", {
+                "id": meta["id"], "offset": offset, "max_bytes": min(16384, size - offset),
+            })
+            chunk = base64.b64decode(part["data_base64"], validate=True)
+            end = offset + len(chunk)
+            if (not chunk or end > size or part.get("id") != meta["id"]
+                    or part.get("offset") != offset or part.get("next_offset") != end
+                    or part.get("bytes") != len(chunk) or part.get("size") != size
+                    or part.get("complete") is not True or part.get("truncated") is not False
+                    or part.get("observed_bytes") != size or part.get("eof") is not (end == size)
+                    or part.get("sha256_scope") != "returned_chunk"
+                    or part.get("sha256") != hashlib.sha256(chunk).hexdigest()):
+                raise AssertionError("native artifact returned an incomplete or mismatched chunk")
+            payload.extend(chunk)
+        if hashlib.sha256(payload).hexdigest() != meta["sha256"]:
+            raise AssertionError("native artifact digest differs from the original retained bytes")
+        native = json.loads(payload)
+        if native.get("isError") or not isinstance(native.get("structuredContent"), dict):
+            raise AssertionError("native artifact did not contain a successful original MCP result")
+        evidence.update(state="verified", bytes=len(payload), sha256=meta["sha256"],
+                        original_keys=sorted(native["structuredContent"]))
+        self.check(True, f"{operation}: original spilled MCP result is read completely with exact cursors and hashes")
         return native["structuredContent"]
 
     def native_file_safety(self, workspace, parent, worker, manager):
@@ -656,7 +720,10 @@ class WorkerWindows(Harness):
                     (worker, manager, "worker"))
         for client, participant, label in sessions:
             def native(name, arguments, *, allow_error=False):
-                return self.bound(client["id"], participant, name, arguments, allow_error=allow_error)
+                return self.bound(
+                    client["id"], participant, name, arguments, allow_error=allow_error,
+                    expected_error=SAFETY_REFUSAL if allow_error else None,
+                )
 
             target = workspace / f"safety-{label}.txt"
             native("ssmcp.fs.write_text", {"path": target.name, "text": label})
@@ -669,9 +736,10 @@ class WorkerWindows(Harness):
                            and any(item.get("text") == SAFETY_REFUSAL
                                    for item in refusal.get("content", [])),
                            f"{label}: native safety rejects before mutation")
-            policy_target = workspace / ".ssmcp" / "safety" / "attempt.toml"
+            policy_path = f".ssmcp/safety/attempt-{label}.toml"
+            policy_target = workspace / policy_path
             native("ssmcp.fs.write_text", {
-                "path": ".ssmcp/safety/attempt.toml", "text": "ordinary setup", "create_parents": True,
+                "path": policy_path, "text": "ordinary setup", "create_parents": True,
             })
             self.check(policy_target.read_text() == "ordinary setup",
                        f"{label}: policy directory has no implicit approval barrier")
@@ -808,7 +876,19 @@ class WorkerWindows(Harness):
         self.check(len([entry for entry in events(directory) if entry["kind"] == "clipboard"]) == before,
                    "a full pool explains the limit without generating another invitation")
         frontend.send(b"\x1b")
-        frontend.until(empty_composer_ready, "main composer after full-pool notice")
+        retained = frontend.until(
+            lambda shot: "/invite worker" in input_text(shot) and not shot["hide_cursor"],
+            "the rejected full-pool invitation remains editable",
+        )
+        draft = self.bound(parent["id"], self.coordinators[parent["id"]],
+                           "ssmcp.ui.get", {"path": "/display/conversation/draft"})["value"]
+        self.cases["full_pool_invitation_draft"] = {
+            "draft": draft, "physical_composer": input_text(retained),
+        }
+        self.check(draft["text"] == "/invite worker" and draft["cursor"] == len("/invite worker"),
+                   "a rejected invitation preserves the exact editable command and cursor")
+        frontend.send(b"\x01\x0b")
+        frontend.until(empty_composer_ready, "main composer after explicitly clearing the rejected invitation")
         before_resize = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]["slots"]
         waiting_slots = {(slot["slot"], slot["epoch"]) for slot in before_resize if slot["state"] == "idle"}
         self.check(len(waiting_slots) == 3, "three exact waiting station identities precede resizing")
@@ -880,11 +960,13 @@ class WorkerWindows(Harness):
             receipt = retirement["retirement"]
             denied = self.bound(worker["id"], manager, "ssmcp.worker.release", {
                 "retirement": receipt,
-            }, allow_error=True)
+            }, allow_error=True,
+                expected_error="worker release does not match this exact authenticated retirement receipt")
             self.check(denied.get("isError") is True, "the manager cannot acknowledge another worker's retirement")
             foreign = self.bound(worker["id"], executor, "ssmcp.worker.release", {
                 "retirement": receipt,
-            }, allow_error=True)
+            }, allow_error=True,
+                expected_error="worker release does not match this exact authenticated retirement receipt")
             self.check(foreign.get("isError") is True,
                        "another registered worker cannot acknowledge the idle worker's retirement")
             released = self.bound(worker["id"], idle_worker, "ssmcp.worker.release", {"retirement": receipt})
@@ -955,7 +1037,8 @@ class WorkerWindows(Harness):
             "generation": claim["generation"], "mode": "all",
             "conditions": [{"type": "worker_idle", "slot": claim["slot"], "epoch": claim["epoch"]}],
             "wait_ms": 0,
-        }, allow_error=True)
+        }, allow_error=True,
+            expected_error="worker wait_for slot and epoch do not identify a current worker")
         unavailable = obsolete.get("structuredContent", {})
         obsolete_error = "\n".join(item.get("text", "") for item in obsolete.get("content", []))
         self.check((obsolete.get("isError") is True and "slot and epoch" in obsolete_error)
@@ -1127,11 +1210,15 @@ class WorkerWindows(Harness):
                            f"{label}: closing task detail restores its original paused log anchor")
 
             view.resize(32, 132)
+            view.keys(b"\x1bOQ")
+            view.panel(lambda panel: panel["slot"] == claim["slot"] and panel["view"] == "details"
+                       and not panel["logs"]["task_view"], "F2 opens this station's diagnostic logs")
             view.keys(b"\x1b[H")
             view.panel(lambda panel: panel["logs"]["first_line"] == 0)
-            short = view.find_text("Command started: sh -c")
+            short = view.find_text("sh -c [inline script]")
             short_text = region_text(short, view.panel()["logs"])
-            started_lines = [line for line in short_text.splitlines() if "Command started: sh -c" in line]
+            started_lines = [line for line in short_text.splitlines()
+                             if "RUN" in line and "sh -c [inline script]" in line]
             self.check(started_lines and all("exit 0" not in line for line in started_lines)
                        and "COMMAND_END" not in short_text and "[inline script]" in short_text,
                        "default log shows a short started-command summary without inventing its script's exit")
@@ -1162,6 +1249,10 @@ class WorkerWindows(Harness):
     def protocol(self, frontend, directory, parent, worker, manager):
         tools = [tool for tool in self.native_catalog(worker["id"])
                  if tool["name"].startswith("ssmcp.worker.")]
+        self.cases["worker_catalog"] = {
+            "expected": sorted(WORKER_TOOLS), "observed": [tool["name"] for tool in tools],
+            "schemas": {tool["name"]: isinstance(tool.get("inputSchema"), dict) for tool in tools},
+        }
         self.check({tool["name"] for tool in tools} == WORKER_TOOLS
                    and len(tools) == len(WORKER_TOOLS)
                    and all(isinstance(tool.get("inputSchema"), dict) for tool in tools),
@@ -1173,7 +1264,8 @@ class WorkerWindows(Harness):
         self.check(any(member["agent_id"] == executor["agent_id"] and member["role"] == "worker"
                        for member in members["agents"]),
                    "the external executor explicitly registers as a worker before waiting")
-        denied = self.bound(worker["id"], executor, "ssmcp.worker.attach", allow_error=True)
+        denied = self.bound(worker["id"], executor, "ssmcp.worker.attach", allow_error=True,
+                            expected_error="worker pool belongs to a different authenticated manager")
         self.check(denied.get("isError") is True, "an executor cannot take over the pool manager")
         client_id = worker["id"]
         assignment_window = self.public_call("await", {
@@ -1193,7 +1285,7 @@ class WorkerWindows(Harness):
         self.check(task["status"] == "queued" and task["slot"] is None
                    and submitted["worker"]["queued"] == 1 and submitted["worker"]["working"] == 0,
                    "submit is a real queued task and does not pretend an executor has claimed it")
-        self.assert_dispatch_display(directory, worker, manager, task_id)
+        self.assert_dispatch_display(frontend, parent, directory, worker, manager, task_id)
         def resume_assignment(after):
             return self.public_call("await", {
                 "client_id": client_id,
@@ -1202,7 +1294,12 @@ class WorkerWindows(Harness):
             })
 
         observed = resume_assignment(0)
-        assignment = observed["results"][0]["data"]
+        self.cases["assignment-observation"] = {"first_window": assignment_window,
+                                                "original_ready_response": observed}
+        assignment = self.native_value(worker["id"], executor, observed["results"][0]["data"],
+                                       operation="await:worker_assignment")
+        self.check(isinstance(assignment.get("claim"), dict),
+                   "the original assignment response contains its actionable native claim")
         self.check(observed["status"] == "ready" and observed["cursor"] == 1
                    and assignment["status"] == "assigned" and assignment["claim"]["task_id"] == task_id,
                    "one authenticated executor receives the task submitted between observation windows")
@@ -1214,7 +1311,7 @@ class WorkerWindows(Harness):
             "request_id": executor["wait_request_id"],
         })
         self.check(duplicate["claim"] == assignment["claim"], "claim retry retains the exact assigned lease")
-        self.assert_dispatch_display(directory, worker, manager, task_id, claim=assignment["claim"])
+        self.assert_dispatch_display(frontend, parent, directory, worker, manager, task_id, claim=assignment["claim"])
         self.execute_fixture_command(worker["id"], executor)
         command_state = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
         command_slot = next(slot for slot in command_state["slots"]
@@ -1233,7 +1330,8 @@ class WorkerWindows(Harness):
         self.check(repeated["duplicate"] is True, "an identical progress retry does not create a second event")
         rejected = self.bound(worker["id"], manager, "ssmcp.worker.report", {
             **report_arguments, "request_id": "worker-window-foreign-progress", "progress": "UNAUTHORIZED_PROGRESS",
-        }, allow_error=True)
+        }, allow_error=True,
+            expected_error="worker activity requires this exact authenticated current claim")
         self.check(rejected.get("isError") is True, "the manager cannot report activity as another claim's executor")
         active = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
         active_slot = next(slot for slot in active["slots"] if slot["slot"] == assignment["claim"]["slot"])
@@ -1296,7 +1394,7 @@ class WorkerWindows(Harness):
         next_slot = next(slot for slot in next_task["slots"] if slot["slot"] == pending["claim"]["slot"])
         self.check(next_slot.get("last_command") is None and next_slot.get("progress") is None,
                    "a new task clears the previous task's command and progress fields")
-        self.timed_condition_waits(frontend, directory, worker, manager, pending["claim"])
+        self.timed_condition_waits(frontend, parent, directory, worker, manager, pending["claim"])
         cancellation = self.bound(worker["id"], manager, "ssmcp.worker.cancel", {"task_id": cancelled})
         self.check(cancellation["task"]["status"] == "cancelling"
                    and cancellation["worker"]["working"] == 1,
@@ -1331,7 +1429,58 @@ class WorkerWindows(Harness):
             "generation": generation, "mode": mode, "conditions": conditions, "wait_ms": wait_ms,
         })
 
-    def assert_dispatch_display(self, directory, worker, manager, task_id, *, claim=None):
+    @staticmethod
+    def semantic_targets(targets):
+        # Only the documented display summary is non-semantic. Preserve order,
+        # cardinality and every other key, including any unexpected identity.
+        return [{key: value for key, value in target.items() if key != "summary"}
+                for target in targets]
+
+    def conversation_operation(self, frontend, parent, heading, labels, *, deadline=None):
+        remaining = lambda: 5 if deadline is None else max(0, deadline - time.monotonic())
+        coordinator = self.coordinators[parent["id"]]
+
+        def display(path):
+            return self.bound(parent["id"], coordinator, "ssmcp.ui.get",
+                              {"path": f"/display/{path}"})["value"]
+
+        context_keys = ("draft", "target", "native_recipient", "editing")
+        state = display("conversation")
+        before = {key: state[key] for key in context_keys}
+        self.check(state["view"] == "activity" and state["focus"] == "input",
+                   "operation inspection starts in the actual editable parent conversation")
+        # Ctrl-End follows the existing conversation without editing its draft.
+        frontend.send(b"\x1b[1;5F")
+        frontend.until(lambda shot: heading in "\n".join(shot["rows"]),
+                       f"the actual parent conversation contains {heading}", timeout=remaining())
+        candidates = [event for event in display("events")["events"] if heading in event["summary"]]
+        self.check(len(candidates) == 1, "the operation has one retained parent conversation card")
+        event_id = candidates[0]["id"]
+        self.check(not candidates[0]["expanded"], "the newly observed operation card starts collapsed")
+        shot = frontend.until(lambda shot: heading in "\n".join(shot["rows"]),
+                              "the current physical card row before clicking", timeout=remaining())
+        row = next(index for index, text in enumerate(shot["rows"]) if heading in text)
+        col = shot["rows"][row].index(heading)
+        # Right-click opens the global log view. Left-click expands this
+        # verified collapsed card through its actual current physical hit row.
+        frontend.send(f"\x1b[<0;{col + 1};{row + 1}M\x1b[<0;{col + 1};{row + 1}m".encode())
+        expanded = frontend.until(
+            lambda frame: all(label in "\n".join(frame["rows"]) for label in labels),
+            "expanded physical operation details retain every exact reference", timeout=remaining())
+        retained = [event for event in display("events")["events"] if event["id"] == event_id]
+        self.check(len(retained) == 1 and retained[0]["selected"] and retained[0]["expanded"],
+                   "the clicked original operation card is selected and expanded")
+        frontend.send(b"\x1b")
+        restored = frontend.until(lambda frame: not frame["hide_cursor"],
+                                  "Esc returns focus to the original editable draft", timeout=remaining())
+        state = display("conversation")
+        after = {key: state[key] for key in context_keys}
+        self.check(after == before and state["focus"] == "input",
+                   "reading operation details preserves the exact draft, cursor and recipient")
+        return {"frame": expanded, "editable_frame": restored, "event": retained[0],
+                "context_before": before, "context_after": after}
+
+    def assert_dispatch_display(self, frontend, parent, directory, worker, manager, task_id, *, claim=None):
         status = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
         kind, state = ("claim", "assigned") if claim else ("submit", "submitted")
         matching = [operation for operation in status["manager_operations"]
@@ -1341,21 +1490,27 @@ class WorkerWindows(Harness):
         operation = matching[0]
         evidence = {"operation": operation}
         self.cases.setdefault("manager-dispatch", {})[kind] = evidence
+        labels = [f"Task ID {task_id}",
+                  f"Pool generation {status['generation']} · operation {operation['operation_id']}"]
         if claim:
             self.check(operation["slot"] == claim["slot"] and operation["epoch"] == claim["epoch"],
                        "assignment display identifies the actual zero-based slot and epoch")
-            label = (f"Assigned · Task {task_id} · Worker #{claim['slot'] + 1:02}"
-                     f" (slot {claim['slot']}, epoch {claim['epoch']})")
+            heading = f"Task assigned · Worker #{claim['slot'] + 1:02}"
+            labels.append(f"Worker #{claim['slot'] + 1:02} · slot {claim['slot']} · epoch {claim['epoch']}")
         else:
             self.check(operation["slot"] is None and operation["epoch"] is None
                        and not any(item["kind"] == "claim" and item["task_id"] == task_id
                                    for item in status["manager_operations"]),
                        "submission does not fabricate an assigned worker or claim")
-            label = f"Submitted · Task {task_id} · queued"
+            heading = "Task submitted · Queued"
+        evidence["conversation"] = self.conversation_operation(
+            frontend, parent, heading, [heading, *labels])
         view = ChildView(self, directory, worker, manager)
         try:
-            shot = wait_for(lambda: self.visible_monitor_frame(view.frame, [label]),
-                            timeout=5, description=f"visible {kind} operation in the worker monitor")
+            labels = [f"Queued {status['queued']}", f"Working {status['working']}",
+                      f"Idle {status['idle']}"]
+            shot = wait_for(lambda: self.visible_monitor_frame(view.frame, labels),
+                            timeout=5, description=f"actual child capacity after {kind}")
         finally:
             view.close()
         evidence["frame"] = shot
@@ -1369,7 +1524,8 @@ class WorkerWindows(Harness):
                    "another idle worker cannot satisfy the exact busy slot and epoch")
         denied = self.bound(worker["id"], executor, "ssmcp.worker.wait_for", {
             "generation": generation, "mode": "all", "conditions": [idle_condition], "wait_ms": 0,
-        }, allow_error=True)
+        }, allow_error=True,
+            expected_error="this worker management action requires the pool's authenticated manager")
         self.check(denied.get("isError") is True, "only the authenticated pool manager can wait for conditions")
 
         paired = self.bound(worker["id"], manager, "ssmcp.worker.submit", {
@@ -1400,7 +1556,7 @@ class WorkerWindows(Harness):
                 current = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
                 pending = {item["mode"]: item for item in current["manager_operations"]
                            if item["kind"] == "wait_for" and item["state"] == "waiting"
-                           and item["targets"] == targets}
+                           and self.semantic_targets(item["targets"]) == targets}
                 return pending if set(pending) == {"any", "all"} else None
 
             operations = wait_for(both_waiting, timeout=2, description="both actual Any and All waits")
@@ -1460,7 +1616,7 @@ class WorkerWindows(Harness):
         frontend.send(b"\x01\x0b")
         frontend.until(empty_composer_ready, "parent composer after the paired condition waits")
 
-    def timed_condition_waits(self, frontend, directory, worker, manager, claim):
+    def timed_condition_waits(self, frontend, parent, directory, worker, manager, claim):
         generation, task_id = claim["generation"], claim["task_id"]
         conditions = [{"type": "task_finished", "task_id": task_id},
                       {"type": "worker_idle", "slot": claim["slot"], "epoch": claim["epoch"]}]
@@ -1499,7 +1655,7 @@ class WorkerWindows(Harness):
                         current = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
                         return next((item for item in current["manager_operations"]
                                      if item["operation_id"] not in known and item["kind"] == "wait_for"
-                                     and item["state"] == "waiting" and item["targets"] == targets), None)
+                                     and item["state"] == "waiting" and self.semantic_targets(item["targets"]) == targets), None)
 
                     operation = wait_for(pending_operation, timeout=max(0, observation_deadline - time.monotonic()),
                                          description="registering the actual native wait within its observation window")
@@ -1507,6 +1663,16 @@ class WorkerWindows(Harness):
                     evidence = {"waiting": operation}
                     case["outer_timeout" if outer_timeout else "native_timeout"] = evidence
                     if not outer_timeout:
+                        target_labels = [
+                            f"Task ID {task_id}",
+                            f"Worker #{claim['slot'] + 1:02} · slot {claim['slot']}, epoch {claim['epoch']}",
+                            f"Pool generation {generation} · operation {operation_id}",
+                            "ALL: every condition must be satisfied in the same observation.",
+                        ]
+                        conversation = self.conversation_operation(
+                            frontend, parent, f"Wait #{operation_id} · ALL", target_labels,
+                            deadline=observation_deadline)
+                        evidence["conversation"] = conversation
                         pattern = re.compile(rf"Wait #{operation_id} · ALL · Waiting · (\d+\.\d)s / 5\.0s")
                         samples = {}
 
@@ -1522,10 +1688,10 @@ class WorkerWindows(Harness):
                                 samples.setdefault("first", (shot, elapsed))
                                 if elapsed > samples["first"][1]:
                                     samples["later"] = (shot, elapsed)
-                                if (f"Task {task_id} finished" in text
-                                        and f"Worker #{claim['slot'] + 1:02} idle" in text):
-                                    samples["targets_frame"] = shot
-                            if (f"Wait #{operation_id}" in "\n".join(parent_shot["rows"])
+                            parent_text = "\n".join(parent_shot["rows"])
+                            if all(label in parent_text for label in target_labels):
+                                samples["targets_frame"] = parent_shot
+                            if (f"Wait #{operation_id}" in parent_text
                                     and draft in input_text(parent_shot) and not parent_shot["hide_cursor"]):
                                 samples["parent_frame"] = parent_shot
                             return samples if all(key in samples for key in (
@@ -1537,9 +1703,17 @@ class WorkerWindows(Harness):
                         first, elapsed = visible["first"]
                         second, later = visible["later"]
                         self.check(later > elapsed, "one real native wait has an increasing visible elapsed time")
-                        self.check(f"Task {task_id} finished" in "\n".join(visible["targets_frame"]["rows"])
-                                   and f"Worker #{claim['slot'] + 1:02} idle" in "\n".join(visible["targets_frame"]["rows"]),
-                                   "the pending wait visibly identifies its task and specific worker")
+                        self.check(all(label in "\n".join(visible["targets_frame"]["rows"])
+                                           for label in target_labels),
+                                   "the expanded parent wait visibly identifies its exact task, worker and operation")
+                        displayed_events = self.bound(
+                            parent["id"], self.coordinators[parent["id"]], "ssmcp.ui.get",
+                            {"path": "/display/events"})["value"]["events"]
+                        same_card = [event for event in displayed_events
+                                     if event["id"] == conversation["event"]["id"]]
+                        self.check(len(same_card) == 1 and same_card[0]["expanded"],
+                                   "elapsed updates preserve the original expanded wait card")
+                        evidence["event_after_elapsed"] = same_card[0]
                         self.check(draft in input_text(visible["parent_frame"])
                                    and not visible["parent_frame"]["hide_cursor"],
                                    "visible coordinator waits preserve the parent's editable draft")
@@ -1578,7 +1752,7 @@ class WorkerWindows(Harness):
                                and any(slot["task_id"] == task_id and slot["state"] == "working"
                                        for slot in current["slots"]),
                                "ended observation leaves no active wait and does not release the task's occupied slot")
-                    terminal = "Timed out" if ended["state"] == "timed_out" else "Cancelled"
+                    terminal = "Window expired" if ended["state"] == "timed_out" else "Observation stopped"
                     final_frame = wait_for(
                         lambda: self.visible_monitor_frame(view.frame, [f"Wait #{operation_id} · ALL · {terminal}"]),
                         timeout=3, description="terminal wait state replaces the waiting title")
@@ -1594,6 +1768,17 @@ class WorkerWindows(Harness):
         frontend.until(lambda shot: marker in input_text(shot), label)
         self.check(True, label)
         frontend.send(b"\x01\x0b")
+
+    def preserve_parent_transcripts(self):
+        """Retain the full real parent PTY, including a failed physical check."""
+        preserved = []
+        self.evidence_directory.mkdir(parents=True, exist_ok=True)
+        for index, frontend in enumerate(self.frontends):
+            path = self.evidence_directory / f"parent-{index}-{frontend.label}.pty"
+            path.write_bytes(frontend.transcript)
+            preserved.append({"path": str(path), "bytes": path.stat().st_size,
+                              "sha256": digest(path), "rows": ROWS, "cols": COLS})
+        return preserved
 
     def preserve_child_transcripts(self):
         """Keep real child output even when an assertion prevents screenshots."""
@@ -1937,6 +2122,7 @@ def main():
                     harness.cleanup()
                 finally:
                     report["child_transcripts"] = harness.preserve_child_transcripts()
+                    report["parent_transcripts"] = harness.preserve_parent_transcripts()
                 harness.assert_no_persisted_conversation_state("after all processes exited")
                 harness.assert_clipboard_counts()
                 report["cleanup"] = {"errors": harness.cleanup_errors,

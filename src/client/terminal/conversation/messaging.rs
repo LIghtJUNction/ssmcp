@@ -1416,8 +1416,9 @@ mod tests {
                 episode: None,
                 attribution: None,
                 wait: None,
+                durable: None,
             }],
-            recent: vec![],
+            ..Default::default()
         });
         assert!(state.chat_native_priority_hint().is_none());
         let frame = state.chat_frame(Instant::now());

@@ -73,6 +73,7 @@ BUILTIN_TOOLS = frozenset({
 
 WORKER_TOOLS = frozenset({
     "ssmcp.worker.status", "ssmcp.worker.attach", "ssmcp.worker.tasks",
+    "ssmcp.worker.events",
     "ssmcp.worker.stop", "ssmcp.worker.resize", "ssmcp.worker.submit", "ssmcp.worker.result",
     "ssmcp.worker.cancel", "ssmcp.worker.wait", "ssmcp.worker.wait_available", "ssmcp.worker.wait_for", "ssmcp.worker.claim", "ssmcp.worker.complete",
     "ssmcp.worker.report", "ssmcp.worker.release",
