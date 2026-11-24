@@ -439,7 +439,11 @@ class RelayComposer(Composer):
         front.until(empty_composer_ready,
                     "the named-account chat composer over a real WebSocket relay")
         whoami = self.account("/api/client/whoami")["identity"]
-        self.check(whoami == self.identity, "the client relay belongs to the isolated named account")
+        # The private ready record pins the account's five identity fields;
+        # whoami also exposes independently tested username metadata.
+        self.metrics["relay_identity"] = {"expected": self.identity, "observed": whoami}
+        self.check({key: whoami.get(key) for key in self.identity} == self.identity,
+                   "the client relay belongs to the isolated named account")
         self.check(any(item["id"] == self.client_id for item in self.account("/api/client/sessions")["clients"]),
                    "the real account session API sees the outbound WebSocket client")
         self.authenticate_mcp()
