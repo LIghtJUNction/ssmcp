@@ -737,7 +737,7 @@ impl State {
         }
     }
 
-    pub(super) fn chat_native_hint(&self) -> Option<String> {
+    pub(super) fn chat_native_receipt_hint(&self) -> Option<String> {
         if !matches!(self.conversation.view, View::Activity | View::Agents) {
             return None;
         }
@@ -745,18 +745,31 @@ impl State {
             return Some("Submitting native message · draft retained".into());
         }
         if self.conversation.send_to_group {
+            return None;
+        }
+        let selected = self.conversation.native_recipient.as_deref()?;
+        let receipt = self.conversation.native_last.as_ref()?;
+        (field(receipt, "recipient_id") == selected).then(|| receipt_hint(receipt))
+    }
+
+    pub(super) fn chat_native_hint(&self) -> Option<String> {
+        if !matches!(self.conversation.view, View::Activity | View::Agents) {
+            return None;
+        }
+        if self.conversation.native_pending.is_some() {
+            return self.chat_native_receipt_hint();
+        }
+        if self.conversation.send_to_group {
             return Some(
                 "Group destination · /send <text> · /group list reviews recipients".into(),
             );
         }
-        let selected = self.conversation.native_recipient.as_deref()?;
-        if let Some(receipt) = &self.conversation.native_last
-            && field(receipt, "recipient_id") == selected
-        {
-            return Some(receipt_hint(receipt));
-        }
-        Some("Native message · text only · Enter sends · /message chooses recipient".into())
+        self.conversation.native_recipient.as_ref()?;
+        self.chat_native_receipt_hint().or_else(|| {
+            Some("Native message · text only · Enter sends · /message chooses recipient".into())
+        })
     }
+
 }
 
 #[cfg(test)]
@@ -1247,6 +1260,78 @@ mod tests {
         );
         assert_eq!(state.conversation.composer.text(), saved.text);
         assert_eq!(state.conversation.native_recipient, saved.native_recipient);
+    }
+
+    #[test]
+    fn matching_native_receipts_render_over_background_wait_without_another_key() {
+        use crate::client::interface::user_wait::{Entry, Intent, Snapshot};
+
+        let mut state = state(120);
+        state.notice = None;
+        state.conversation.content_focus = false;
+        state.conversation.wait_fixture = Some(Snapshot {
+            connected: true,
+            active: vec![Entry {
+                wait_id: "background-wait".into(),
+                episode_id: "background-episode".into(),
+                intent: Intent::NeedUser,
+                recipient: "next".into(),
+                reason: None,
+                remaining_ms: 12_500,
+                finish_request_id: None,
+                notification_requested: false,
+                notification: None,
+            }],
+            ..Snapshot::default()
+        });
+        assert!(state.chat_user_wait_hint().is_some());
+        let recipient = "client:1111111111111111111111111111111111111111111111111111111111111111";
+        let body = "!touch .native-must-not-execute\n@./missing-native-file\n  消息原文";
+        state.conversation.native_recipient = Some(recipient.into());
+        state.conversation.composer.set_text(body);
+        // Selecting a recipient alone must not hide the background wait.
+        assert!(state.chat_native_receipt_hint().is_none());
+        state.conversation.native_pending = Some(pending(&state, body));
+        let frame = state.chat_frame(Instant::now());
+        assert!(frame.rows.last().unwrap().contains("Submitting native message"));
+        let receipt = json!({
+            "request_id":"ui-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "message_id":"native_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "recipient_id":recipient,"text":body,"status":"queued"
+        });
+        // Even a queued receipt must match all three binding fields before
+        // clearing this draft. No input events drive these transitions.
+        for (field, wrong) in [
+            ("request_id", "ui-wrong"),
+            ("recipient_id", "client:wrong"),
+            ("text", "wrong payload"),
+        ] {
+            let mut unrelated = receipt.clone();
+            unrelated[field] = json!(wrong);
+            state.conversation.native_fixture.as_mut().unwrap()["outgoing"] = json!([unrelated]);
+            state.chat_poll_native();
+            assert!(state.conversation.native_pending.is_some());
+            assert_eq!(state.conversation.composer.text(), body);
+        }
+        for (status, label) in [
+            ("queued", "Queued by service"),
+            ("included", "Included in recipient tool response"),
+            ("acknowledged", "Acknowledged by recipient"),
+        ] {
+            let mut current = receipt.clone();
+            current["status"] = json!(status);
+            state.conversation.native_fixture.as_mut().unwrap()["outgoing"] = json!([current]);
+            state.chat_poll_native();
+            assert!(state.conversation.native_pending.is_none());
+            assert_eq!(state.conversation.composer.text(), "");
+            assert_eq!(
+                state.conversation.native_recipient.as_deref(),
+                Some(recipient)
+            );
+            assert!(state.chat_user_wait_hint().is_some());
+            let frame = state.chat_frame(Instant::now());
+            assert!(frame.rows.last().unwrap().contains(label), "{status}");
+        }
     }
 
     #[test]
