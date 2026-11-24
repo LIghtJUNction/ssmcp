@@ -34,7 +34,7 @@ import termios
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from e2e_account_gateway import has_platform_consent
+from e2e_account_gateway import has_platform_consent, validate_account_identity
 from e2e_account_relay import IDENTITY, wait_for
 from e2e_composer import (
     Composer, ENTER, LEFT, UP, editing_queue, input_text, journal_value, visible_record,
@@ -439,7 +439,9 @@ class RelayComposer(Composer):
         front.until(empty_composer_ready,
                     "the named-account chat composer over a real WebSocket relay")
         whoami = self.account("/api/client/whoami")["identity"]
-        self.check(whoami == self.identity, "the client relay belongs to the isolated named account")
+        validate_account_identity(
+            self, self.fixture_directory, whoami,
+            "the client relay belongs to the isolated named account")
         self.check(any(item["id"] == self.client_id for item in self.account("/api/client/sessions")["clients"]),
                    "the real account session API sees the outbound WebSocket client")
         self.authenticate_mcp()
