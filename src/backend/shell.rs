@@ -3264,6 +3264,56 @@ mod tests {
     async fn py(shell: &Shell, code: &str) -> String {
         start(shell, &[python(), "-u", "-c", code], 0).await
     }
+    async fn observe_fixture_completion(shell: &Shell, id: &str) -> Value {
+        timeout(Duration::from_secs(10), async {
+            loop {
+                // A bounded wait window can expire while the same job remains
+                // live. Observe its terminal state; never restart the command
+                // or retry a failed terminal result until an assertion passes.
+                let state = shell
+                    .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":250}))
+                    .await
+                    .unwrap();
+                if state["running"] == false {
+                    return state;
+                }
+            }
+        })
+        .await
+        .expect("fixture job must reach a terminal state within ten seconds")
+    }
+
+    #[tokio::test]
+    async fn fixture_completion_observes_the_same_job_and_preserves_terminal_failure() {
+        let shell = Shell::new();
+        let id = start_fixture_with_input(&shell, "stdin", 15000, "pipe").await;
+        let pending = shell
+            .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":0}))
+            .await
+            .unwrap();
+        assert_eq!(pending["running"], true);
+        assert_eq!(pending["wait_timed_out"], true);
+        assert!(pending["exit_code"].is_null());
+        shell
+            .call("ssmcp.exec.write", json!({"job_id":id,"close_stdin":true}))
+            .await
+            .unwrap();
+        let done = observe_fixture_completion(&shell, &id).await;
+        assert_eq!(done["job_id"], id);
+        assert_eq!(done["running"], false);
+        assert_eq!(done["exit_code"], 0, "{done}");
+        let failed = py(&shell, "raise SystemExit(7)").await;
+        let done = observe_fixture_completion(&shell, &failed).await;
+        assert_eq!(done["job_id"], failed);
+        assert_eq!(
+            done["exit_code"], 7,
+            "terminal failure must never be retried"
+        );
+        let jobs = shell.call("ssmcp.exec.list", json!({})).await.unwrap();
+        assert_eq!(jobs["jobs"].as_array().unwrap().len(), 2);
+        shell.shutdown().await;
+    }
+
     #[tokio::test]
     async fn native_completion_wait_is_targeted_and_droppable() {
         let shell = Shell::new();
@@ -3625,9 +3675,11 @@ mod tests {
                 }
             };
             let states=async { for _ in 0..100 { shell.call("ssmcp.exec.status",json!({"job_id":id})).await.unwrap(); tokio::task::yield_now().await; } };
-            let waiter=shell.call("ssmcp.exec.wait",json!({"job_id":id,"wait_ms":5000}));
+            let waiter=observe_fixture_completion(&shell,&id);
             let (_,_,done)=tokio::join!(reader,states,waiter);
-            assert_eq!(done.unwrap()["exit_code"],0);
+            assert_eq!(done["running"],false,"{done}");
+            assert_eq!(done["wait_timed_out"],false,"{done}");
+            assert_eq!(done["exit_code"],0,"{done}");
         }).await.expect("read/status/wait must make progress concurrently");
         let all = shell
             .call("ssmcp.exec.read", json!({"job_id":id}))
@@ -3810,14 +3862,15 @@ with socket.create_connection(("127.0.0.1", {port}), timeout=5) as gate:
             job["cwd"],
             json!(root.join("nested").canonicalize().unwrap())
         );
-        shell
-            .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":5000}))
-            .await
-            .unwrap();
+        let done = observe_fixture_completion(&shell, id).await;
+        assert_eq!(done["wait_timed_out"], false, "{done}");
+        assert_eq!(done["exit_code"], 0, "{done}");
         let result = shell
             .call("ssmcp.exec.read", json!({"job_id":id}))
             .await
             .unwrap();
+        assert_eq!(result["stdout_eof"], true, "{result}");
+        assert_eq!(result["stderr"], "", "{result}");
         assert_eq!(
             std::path::Path::new(result["stdout"].as_str().unwrap().trim())
                 .canonicalize()
