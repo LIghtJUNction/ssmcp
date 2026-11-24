@@ -10,6 +10,15 @@ const EN: &[Message<'static>] = &[
         "server update required for queue",
     ),
     Message::text("connection.online", "connected"),
+    Message::text("shell.preview", "Preview has no live shell to change."),
+    Message::text("shell.pending", "Checking shell preference"),
+    Message::text("shell.current", "Current shell"),
+    Message::text(
+        "shell.usage",
+        "Use /chsh auto, /chsh system or /chsh NAME|PATH.",
+    ),
+    Message::text("shell.changed", "Shell preference saved. Using"),
+    Message::text("shell.next", "Applies to new terminals and ! commands."),
     Message::text("tip.help", "/help · show commands"),
     Message::text("tip.invite", "/invite · copy coordinator instructions"),
     Message::text("tip.worker_list", "/worker ls · show worker pool status"),
@@ -23,6 +32,15 @@ const ZH: &[Message<'static>] = &[
     Message::text("connection.offline", "未连接"),
     Message::text("connection.queue_update", "队列需要更新服务端"),
     Message::text("connection.online", "已连接"),
+    Message::text("shell.preview", "预览没有可切换的 shell。"),
+    Message::text("shell.pending", "正在检查 shell 偏好"),
+    Message::text("shell.current", "当前 shell"),
+    Message::text(
+        "shell.usage",
+        "使用 /chsh auto、/chsh system 或 /chsh 名称或绝对路径。",
+    ),
+    Message::text("shell.changed", "已保存 shell 偏好，当前使用"),
+    Message::text("shell.next", "适用于新终端及 ! 命令。"),
     Message::text("tip.help", "/help · 查看操作帮助"),
     Message::text("tip.invite", "/invite · 复制主 Agent 协作说明"),
     Message::text("tip.worker_list", "/worker ls · 查看 worker 池状态"),
@@ -32,7 +50,7 @@ const ZH: &[Message<'static>] = &[
     ),
 ];
 
-pub(super) fn text(key: &'static str) -> &'static str {
+pub(in crate::client) fn text(key: &'static str) -> &'static str {
     static REQUESTED: OnceLock<String> = OnceLock::new();
     let requested = REQUESTED.get_or_init(|| {
         ["LC_ALL", "LC_MESSAGES", "LANG"]

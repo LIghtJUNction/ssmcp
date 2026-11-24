@@ -4,6 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod shell;
+pub(crate) use shell::{ShellPreference, launcher_environment};
+
 #[cfg(unix)]
 pub struct Signal(tokio::signal::unix::Signal);
 #[cfg(windows)]
@@ -52,27 +55,11 @@ pub fn terminate_signal() -> io::Result<Signal> {
     }
 }
 
-/// Select the platform shell when the caller has not supplied an explicit path.
+/// Select the native shell, independently of the client's preferred launcher.
 pub fn default_shell() -> PathBuf {
-    #[cfg(unix)]
-    {
-        std::env::var_os("SHELL")
-            .map(PathBuf::from)
-            .filter(|shell| shell.is_absolute() && is_executable(shell))
-            .unwrap_or_else(|| PathBuf::from("/bin/sh"))
-    }
-    #[cfg(windows)]
-    {
-        std::env::var_os("COMSPEC")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .unwrap_or_else(|| {
-                PathBuf::from(
-                    std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into()),
-                )
-                .join("System32/cmd.exe")
-            })
-    }
+    shell::system_shell()
+        .filter(|path| path.is_absolute() && is_executable(path))
+        .unwrap_or_else(shell::fallback_shell)
 }
 
 pub fn hostname() -> io::Result<String> {

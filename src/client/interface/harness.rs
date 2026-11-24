@@ -184,7 +184,7 @@ pub(crate) fn submit_tasks(raw: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn shell_arguments(raw: &str) -> Result<Value, String> {
+fn shell_script(raw: &str) -> Result<&str, String> {
     let command = raw.trim();
     if command.is_empty() {
         return Err("Use ! followed by a shell command, for example !pwd".into());
@@ -198,22 +198,40 @@ fn shell_arguments(raw: &str) -> Result<Value, String> {
             "Shell commands accept up to 16384 UTF-8 bytes without control characters".into(),
         );
     }
-    let shell = crate::platform::default_shell();
-    let shell = shell
+    Ok(command)
+}
+
+fn shell_arguments(shell: &std::path::Path, command: &str) -> Result<Value, String> {
+    let environment = crate::platform::launcher_environment(shell);
+    let executable = shell
         .to_str()
         .ok_or("The configured shell path is not valid UTF-8")?;
     #[cfg(unix)]
-    let arguments = json!({"command":[shell,"-c",command],"stdin":"null"});
+    let argv = vec![executable, "-c", command];
     #[cfg(windows)]
-    let arguments = json!({"command":[shell,"/D","/S","/C",command],"stdin":"null"});
-    Ok(arguments)
+    let argv = {
+        let name = shell
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        match name.to_ascii_lowercase().as_str() {
+            "bash" | "zsh" | "sh" | "fish" => vec![executable, "-c", command],
+            "powershell" | "pwsh" => vec![executable, "-NoLogo", "-NoProfile", "-Command", command],
+            _ => vec![executable, "/D", "/S", "/C", command],
+        }
+    };
+    Ok(json!({"command":argv,"stdin":"null","env":environment}))
 }
 
 fn native_data(value: &Value) -> &Value {
     value.get("structuredContent").unwrap_or(value)
 }
 
-async fn execute_shell(runtime: Arc<Runtime>, raw: String, arguments: Value) -> Result<(), String> {
+async fn execute_shell(runtime: Arc<Runtime>, raw: String, track: bool) -> Result<(), String> {
+    let mut arguments = shell_arguments(&runtime.local_shell().shell_path()?, &raw)?;
+    if track {
+        arguments["track_artifacts"] = json!(true);
+    }
     let started = runtime
         .perform(Operation::CallTool {
             name: "ssmcp.exec.start".into(),
@@ -282,10 +300,7 @@ pub(crate) fn submit_shell(raw: &str) -> Result<(), String> {
 }
 
 pub(crate) fn submit_shell_with_tracking(raw: &str, track: bool) -> Result<(), String> {
-    let mut arguments = shell_arguments(raw)?;
-    if track {
-        arguments["track_artifacts"] = json!(true);
-    }
+    let raw = shell_script(raw)?.to_owned();
     let binding = binding()?;
     let runtime = binding
         .runtime
@@ -296,7 +311,6 @@ pub(crate) fn submit_shell_with_tracking(raw: &str, track: bool) -> Result<(), S
         .handle
         .ok_or("The live client async runtime is not available")?;
     let slot = Slot::acquire()?;
-    let raw = raw.trim().to_owned();
     let source = crate::runtime::call_scope::Source::capture();
     let source = if track {
         source.with_local_artifact_tracking()
@@ -305,13 +319,61 @@ pub(crate) fn submit_shell_with_tracking(raw: &str, track: bool) -> Result<(), S
     };
     handle.spawn(source.scope(async move {
         let _slot = slot;
-        if let Err(error) = execute_shell(runtime, raw, arguments).await {
+        if let Err(error) = execute_shell(runtime, raw, track).await {
+            super::super::render::status("shell", "Error", &error);
             super::super::render::message(&format!(
                 "## ! command failed\n\n{}",
                 bounded(&error, 4096)
             ));
         }
     }));
+    Ok(())
+}
+
+/// Only the local terminal command can persist or change the shell preference.
+pub(crate) fn submit_chsh(raw: &str) -> Result<(), String> {
+    use crate::client::terminal::locale::text;
+    use crate::platform::ShellPreference;
+    use std::path::Path;
+
+    let (runtime, handle) = local_runtime()?;
+    runtime.local_registry().ensure_open()?;
+    let choice = if raw.is_empty() {
+        None
+    } else {
+        let path = Path::new(raw);
+        ShellPreference::validate(path)?;
+        Some((raw.to_owned(), ShellPreference::new(Some(path), false)))
+    };
+    handle.spawn_blocking(move || {
+        let shell = runtime.local_shell();
+        let status = match choice {
+            Some((raw, preference)) => shell
+                .change_shell(preference, || super::super::config::set_shell(&raw))
+                .map(|path| {
+                    format!(
+                        "{} {:?}. {}",
+                        text("shell.changed"),
+                        path,
+                        text("shell.next")
+                    )
+                }),
+            None => shell.shell_path().map_err(Into::into).map(|path| {
+                format!(
+                    "{} {:?}. {}",
+                    text("shell.current"),
+                    path,
+                    text("shell.usage")
+                )
+            }),
+        };
+        let (level, message) = match status {
+            Ok(message) => ("Info", message),
+            Err(error) => ("Error", error.to_string()),
+        };
+        super::super::terminal::notice(&message);
+        super::super::render::status("shell", level, &message);
+    });
     Ok(())
 }
 
@@ -344,12 +406,16 @@ mod tests {
     #[test]
     fn shell_prefix_keeps_command_as_one_explicit_shell_argument() {
         let command = "printf '%s\\n' 'a b' | sort";
-        let value = shell_arguments(command).unwrap();
+        let value = shell_arguments(
+            &crate::platform::default_shell(),
+            shell_script(command).unwrap(),
+        )
+        .unwrap();
         let args = value["command"].as_array().unwrap();
         assert_eq!(args.last().unwrap(), command);
         assert_eq!(value["stdin"], "null");
-        assert!(shell_arguments(" \n ").is_err());
-        assert!(shell_arguments("echo \u{1b}[2J").is_err());
-        assert!(shell_arguments(&"x".repeat(MAX_INPUT + 1)).is_err());
+        assert!(shell_script(" \n ").is_err());
+        assert!(shell_script("echo \u{1b}[2J").is_err());
+        assert!(shell_script(&"x".repeat(MAX_INPUT + 1)).is_err());
     }
 }

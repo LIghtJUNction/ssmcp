@@ -12,6 +12,7 @@ usage() {
 Usage: sh install.sh [--version vMAJOR.MINOR.PATCH] [--dir DIRECTORY]
 
 Installs the latest stable ssmcp client to ~/.local/bin by default.
+When the release includes zrun, installs it alongside ssmcp.
 Linux x86_64/ARM64 requires glibc 2.35 or newer; macOS supports Intel/Apple Silicon.
 SSMCP_VERSION and SSMCP_INSTALL_DIR provide the same defaults as the options.
 Downloads are verified against the release's SHA256SUMS before installation.
@@ -174,6 +175,45 @@ chmod 755 "$pending"
 mv -f "$pending" "$install_dir/ssmcp"
 pending=
 printf 'Installed %s → %s/ssmcp\n' "$reported" "$install_dir"
+
+# The zrun executable is covered by the same archive checksum. Older release
+# archives can still be installed when they omit the companion.
+install_zrun() {
+    destination=$install_dir/zrun
+    if [ -e "$destination" ] || [ -L "$destination" ]; then
+        if [ -f "$destination" ] && [ -x "$destination" ]; then
+            printf 'Using existing zrun at %s\n' "$destination"
+            return 0
+        fi
+        printf 'ssmcp install: warning: zrun already occupies %s and is not executable\n' "$destination" >&2
+        return 1
+    fi
+    if ! tar -xzf "$work_dir/$archive" -C "$work_dir" zrun 2>/dev/null; then
+        printf 'ssmcp install: warning: this release archive has no zrun executable\n' >&2
+        return 1
+    fi
+    companion=$work_dir/zrun
+    if [ ! -f "$companion" ] || [ -L "$companion" ] || ! chmod 755 "$companion" ||
+        ! zrun_reported=$("$companion" --version) ||
+        ! printf '%s\n' "$zrun_reported" | grep -Eq '^zrun [0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$'; then
+        printf 'ssmcp install: warning: bundled zrun could not run on this system\n' >&2
+        return 1
+    fi
+    if ! pending=$(mktemp "$install_dir/.zrun.XXXXXXXX") ||
+        ! cat "$companion" > "$pending" ||
+        ! chmod 755 "$pending" ||
+        ! mv -n "$pending" "$destination" ||
+        [ -e "$pending" ]; then
+        printf 'ssmcp install: warning: could not install bundled zrun at %s\n' "$destination" >&2
+        return 1
+    fi
+    pending=
+    printf 'Installed %s → %s\n' "$zrun_reported" "$destination"
+}
+
+if ! install_zrun; then
+    printf 'SSMCP will use an available zrun or fall back to the system shell.\n' >&2
+fi
 case ":$PATH:" in
     *":$install_dir:"*) ;;
     *) printf 'Add this directory to PATH: %s\n' "$install_dir" ;;

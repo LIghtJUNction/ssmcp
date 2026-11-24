@@ -402,6 +402,12 @@ impl Registry {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct InteractiveShell {
+    preference: crate::platform::ShellPreference,
+    current: PathBuf,
+}
+
 pub struct Shell {
     root: PathBuf,
     output: Arc<OutputStore>,
@@ -410,7 +416,7 @@ pub struct Shell {
     slots: Arc<Semaphore>,
     events: Arc<EventLog>,
     observer: Option<Arc<crate::observer::Pool>>,
-    interactive_shell: Option<PathBuf>,
+    interactive_shell: Mutex<Option<InteractiveShell>>,
 }
 impl Shell {
     pub fn new() -> Arc<Self> {
@@ -435,7 +441,7 @@ impl Shell {
         Ok(Arc::new(Self {
             root,
             observer: output.observer(),
-            interactive_shell: None,
+            interactive_shell: Mutex::new(None),
             output,
             namespace,
             registry: Mutex::new(Registry::default()),
@@ -451,24 +457,80 @@ impl Shell {
         if !shell.is_absolute() {
             return Err("shell must be an absolute path".into());
         }
-        let mut manager = Self::with_workspace(root, output)?;
-        Arc::get_mut(&mut manager).unwrap().interactive_shell = Some(shell.to_path_buf());
-        let job = manager.spawn_pty(
-            PtyStart {
-                id: "main".into(),
-                command: interactive_command(shell),
-                title: Some("main".into()),
-                cwd: manager.root.clone(),
-                env: HashMap::new(),
-                timeout_ms: 0,
-                size: None,
-                live: true,
-                compatibility_limit: false,
-            },
-            crate::runtime::call_scope::Source::capture(),
-        )?;
+        Self::with_shell_preference(crate::platform::ShellPreference::exact(shell), root, output)
+    }
+
+    pub(crate) fn with_shell_preference(
+        preference: crate::platform::ShellPreference,
+        root: PathBuf,
+        output: Arc<OutputStore>,
+    ) -> crate::Result<Arc<Self>> {
+        let manager = Self::with_workspace(root, output)?;
+        let (current, job) = preference.select(|shell| {
+            manager.spawn_pty(
+                PtyStart {
+                    id: "main".into(),
+                    command: interactive_command(shell),
+                    title: Some("main".into()),
+                    cwd: manager.root.clone(),
+                    env: crate::platform::launcher_environment(shell),
+                    timeout_ms: 0,
+                    size: None,
+                    live: true,
+                    compatibility_limit: false,
+                },
+                crate::runtime::call_scope::Source::capture(),
+            )
+        })?;
+        *manager.interactive_shell.lock().unwrap() = Some(InteractiveShell {
+            preference,
+            current,
+        });
         manager.registry().selected = job.id.clone();
         Ok(manager)
+    }
+
+    fn shell_selection(&self) -> Result<InteractiveShell, String> {
+        self.interactive_shell
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| "connection has no interactive shell".into())
+    }
+
+    pub(crate) fn shell_path(&self) -> Result<PathBuf, String> {
+        let selection = self.shell_selection()?;
+        if crate::platform::is_executable(&selection.current) {
+            return Ok(selection.current);
+        }
+        let (current, ()) = selection.preference.select(|_| Ok(()))?;
+        self.record_current_shell(&selection, &current);
+        Ok(current)
+    }
+
+    pub(crate) fn change_shell(
+        &self,
+        preference: crate::platform::ShellPreference,
+        persist: impl FnOnce() -> crate::Result<()>,
+    ) -> crate::Result<PathBuf> {
+        let (current, ()) = preference.select(|_| Ok(()))?;
+        let mut selection = self.interactive_shell.lock().unwrap();
+        if selection.is_none() {
+            return Err("connection has no interactive shell".into());
+        }
+        persist()?;
+        *selection = Some(InteractiveShell {
+            preference,
+            current: current.clone(),
+        });
+        Ok(current)
+    }
+
+    fn record_current_shell(&self, selection: &InteractiveShell, current: &Path) {
+        let mut active = self.interactive_shell.lock().unwrap();
+        if let Some(active) = active.as_mut().filter(|active| *active == selection) {
+            active.current = current.to_owned();
+        }
     }
 
     fn next_job_id(&self) -> String {
@@ -793,10 +855,7 @@ impl Shell {
                             .into(),
                     );
                 }
-                let shell = self
-                    .interactive_shell
-                    .as_ref()
-                    .ok_or("connection has no interactive shell")?;
+                let selection = self.shell_selection()?;
                 let requested = args.cwd.unwrap_or_else(|| self.root.clone());
                 let cwd = if requested.is_absolute() {
                     requested
@@ -821,20 +880,23 @@ impl Shell {
                         crate::terminals::MAX_TERMINALS
                     ));
                 }
-                let job = self.spawn_pty(
-                    PtyStart {
-                        id: self.next_job_id(),
-                        command: interactive_command(shell),
-                        title: args.name,
-                        cwd,
-                        env: HashMap::new(),
-                        timeout_ms: 0,
-                        size: None,
-                        live: true,
-                        compatibility_limit: true,
-                    },
-                    creator,
-                )?;
+                let (current, job) = selection.preference.select(|shell| {
+                    self.spawn_pty(
+                        PtyStart {
+                            id: self.next_job_id(),
+                            command: interactive_command(shell),
+                            title: args.name.clone(),
+                            cwd: cwd.clone(),
+                            env: crate::platform::launcher_environment(shell),
+                            timeout_ms: 0,
+                            size: None,
+                            live: true,
+                            compatibility_limit: true,
+                        },
+                        creator.clone(),
+                    )
+                })?;
+                self.record_current_shell(&selection, &current);
                 if args.select {
                     let mut registry = self.registry();
                     if registry.closed || !registry.jobs.contains_key(&job.id) {

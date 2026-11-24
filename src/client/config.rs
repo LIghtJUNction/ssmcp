@@ -26,6 +26,7 @@ SSMCP_CLIENT_CONFIG selects another configuration file.";
 #[serde(default, deny_unknown_fields)]
 pub(super) struct ClientSettings {
     pub server: Option<String>,
+    pub shell: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -56,6 +57,9 @@ impl ClientSettings {
     pub(super) fn validate(&self) -> Result<()> {
         if let Some(server) = &self.server {
             super::account::normalize_server(server)?;
+        }
+        if let Some(shell) = &self.shell {
+            crate::platform::ShellPreference::validate(shell)?;
         }
         Ok(())
     }
@@ -172,24 +176,41 @@ pub(super) fn server() -> Result<Option<String>> {
 
 fn set_server_at(path: &Path, server: Option<&str>) -> Result<()> {
     let server = server.map(super::account::normalize_server).transpose()?;
+    set_client_value(path, "server", server.as_deref())
+}
+
+pub(super) fn shell() -> Result<Option<PathBuf>> {
+    let text = read_config(
+        &config_path()?,
+        std::env::var_os("SSMCP_CLIENT_CONFIG").is_some(),
+    )?;
+    Ok(parse(&text)?.shell)
+}
+
+pub(super) fn set_shell(shell: &str) -> Result<()> {
+    crate::platform::ShellPreference::validate(Path::new(shell))?;
+    set_client_value(&config_path()?, "shell", (shell != "auto").then_some(shell))
+}
+
+fn set_client_value(path: &Path, field: &str, setting: Option<&str>) -> Result<()> {
     let text = read_config(path, false)?;
     let mut document: DocumentMut = text
         .parse()
         .map_err(|_| "invalid ssmcp client TOML configuration")?;
     // Editing the TOML tree preserves UI settings, comments and other formatting.
-    if let Some(server) = server {
+    if let Some(setting) = setting {
         if !document.contains_key("client") {
             document["client"] = Item::Table(Table::new());
         }
         let client = document["client"]
             .as_table_like_mut()
             .ok_or("client configuration must be a TOML table")?;
-        client.insert("server", value(server));
+        client.insert(field, value(setting));
     } else if let Some(client) = document.get_mut("client") {
         client
             .as_table_like_mut()
             .ok_or("client configuration must be a TOML table")?
-            .remove("server");
+            .remove(field);
     }
     save_document(path, &text, document)
 }

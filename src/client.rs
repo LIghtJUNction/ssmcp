@@ -190,7 +190,7 @@ Usage: ssmcp username@server [options]
   --reconnect-delay N  Initial retry delay, 1..=3600 seconds (default 5; bounded exponential backoff)
   --title TITLE        Session title in the header and agent list (max 512 UTF-8 bytes)
   --tty TERMINAL       Observe commands in reusable terminal windows (kitty, ztty, ...)
-  --shell /path        Shell executable (default: platform shell)
+  --shell NAME|PATH    Preferred shell (Unix default: zrun, then the native shell)
   --context-root PATH  Add a read-only skill/instruction root (repeat up to 8 times)
   --log-format FORMAT  pretty (default), pretty-verbose, or jsonl
   --no-color           Disable ANSI colors (also honors NO_COLOR)
@@ -518,7 +518,7 @@ struct Options {
     identity: Option<OsString>,
     port: Option<u16>,
     config: Option<OsString>,
-    shell: PathBuf,
+    shell: Option<PathBuf>,
     tty: Option<String>,
     harness: Option<agent::Selection>,
 }
@@ -662,7 +662,7 @@ impl Options {
         let mut max_inline_output = None;
         let mut no_color = false;
         let (mut identity, mut port, mut config) = (None, None, None);
-        let mut shell = crate::platform::default_shell();
+        let mut shell = None;
         let mut tty = None;
         let mut harness_name = None;
         let mut harness_arguments = Vec::new();
@@ -994,7 +994,12 @@ impl Options {
                     chat.set(flag, value)?;
                 }
                 Some("--shell") => {
-                    shell = PathBuf::from(args.next().ok_or("--shell requires an absolute path")?);
+                    let path = PathBuf::from(
+                        args.next()
+                            .ok_or("--shell requires a name or absolute path")?,
+                    );
+                    crate::platform::ShellPreference::validate(&path)?;
+                    shell = Some(path);
                 }
                 Some(value) if !value.starts_with('-') && destination.is_none() => {
                     destination = Some(value.to_owned())
@@ -1233,9 +1238,6 @@ impl Options {
         {
             return Err("--account-compat requires exactly one --allow USER@SERVER and no username, SSH destination, local mode or --list-tools".into());
         }
-        if !shell.is_absolute() {
-            return Err("--shell requires an absolute path".into());
-        }
         validate_title(title.as_deref())?;
         if let Some(name) = &name
             && (name.trim().is_empty() || name.len() > 128 || name.chars().any(char::is_control))
@@ -1289,6 +1291,14 @@ impl Options {
         {
             false
         }
+    }
+
+    fn shell_preference(&self) -> crate::Result<crate::platform::ShellPreference> {
+        let choice = match &self.shell {
+            Some(shell) => crate::platform::ShellPreference::new(Some(shell), true),
+            None => crate::platform::ShellPreference::new(config::shell()?.as_deref(), false),
+        };
+        Ok(choice)
     }
 
     fn metadata(&self) -> crate::Result<ClientMetadata> {
@@ -1411,10 +1421,9 @@ impl Options {
         if let Some(tty) = &self.tty {
             args.extend([OsString::from("--tty"), OsString::from(tty)]);
         }
-        args.extend([
-            OsString::from("--shell"),
-            self.shell.clone().into_os_string(),
-        ]);
+        if let Some(shell) = &self.shell {
+            args.extend([OsString::from("--shell"), shell.clone().into_os_string()]);
+        }
         args.extend(
             self.resource_limits
                 .arguments()
@@ -2482,7 +2491,7 @@ pub async fn run() -> crate::Result<()> {
     if options.list_tools {
         let management = session_control(&options, service.as_ref())?;
         let backend = tokio::select! {
-            result = timeout(Duration::from_secs(120), Backend::start_with_harness(&options.shell, options.tty.as_deref(), options.harness.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
+            result = timeout(Duration::from_secs(120), Backend::start_with_harness(options.shell_preference()?, options.tty.as_deref(), options.harness.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
             _ = interrupt.recv() => return Ok(()),
             _ = terminate.recv() => return Ok(()),
         };
@@ -3494,7 +3503,7 @@ async fn connect_inner(
         },
         _ = interrupt.recv() => { let _ = process.kill().await; return Ok(ConnectionExit::Stopped); },
         _ = terminate.recv() => { let _ = process.kill().await; return Ok(ConnectionExit::Stopped); },
-        result = timeout(Duration::from_secs(120), Backend::start_with_harness(&options.shell, options.tty.as_deref(), options.harness.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
+        result = timeout(Duration::from_secs(120), Backend::start_with_harness(options.shell_preference()?, options.tty.as_deref(), options.harness.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
     };
     let backend = match Runtime::with_session_control(
         backend.clone(),

@@ -50,11 +50,19 @@ impl Process {
         .await
     }
     pub async fn start_with_tty(shell_path: &Path, tty: Option<&str>) -> crate::Result<Arc<Self>> {
-        Self::start_with_harness(shell_path, tty, None).await
+        if !shell_path.is_absolute() {
+            return Err("shell must be an absolute path".into());
+        }
+        Self::start_with_harness(
+            crate::platform::ShellPreference::exact(shell_path),
+            tty,
+            None,
+        )
+        .await
     }
 
     pub(crate) async fn start_with_harness(
-        shell_path: &Path,
+        shell: crate::platform::ShellPreference,
         tty: Option<&str>,
         harness: Option<&crate::client::agent::Selection>,
     ) -> crate::Result<Arc<Self>> {
@@ -63,7 +71,7 @@ impl Process {
             None => None,
         };
         Self::with_observer(
-            shell_path,
+            shell,
             std::env::current_dir()?,
             OutputStore::start_connection()?,
             observer,
@@ -77,10 +85,20 @@ impl Process {
         root: PathBuf,
         output: Arc<OutputStore>,
     ) -> crate::Result<Arc<Self>> {
-        Self::with_observer(shell_path, root, output, None, None).await
+        if !shell_path.is_absolute() {
+            return Err("shell must be an absolute path".into());
+        }
+        Self::with_observer(
+            crate::platform::ShellPreference::exact(shell_path),
+            root,
+            output,
+            None,
+            None,
+        )
+        .await
     }
     async fn with_observer(
-        shell_path: &Path,
+        preference: crate::platform::ShellPreference,
         root: PathBuf,
         output: Arc<OutputStore>,
         observer: Option<Arc<crate::observer::Pool>>,
@@ -89,7 +107,7 @@ impl Process {
         if let Some(observer) = &observer {
             output.set_observer(observer);
         }
-        let shell = shell::Shell::with_terminal(shell_path, root, output.clone())?;
+        let shell = shell::Shell::with_shell_preference(preference, root, output.clone())?;
         let registry = Registry::new();
         registry.replace(
             Provider::Terminal,

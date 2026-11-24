@@ -140,11 +140,21 @@ else:
         actual = subprocess.check_output([str(installed), "--version"], text=True).strip()
         if actual != expected_version:
             raise AssertionError(actual)
+        companion = install_dir / "zrun"
+        if not windows:
+            actual = subprocess.check_output([str(companion), "--version"], text=True).strip()
+            if actual != "zrun " + release.ZRUN_RELEASE:
+                raise AssertionError(actual)
+            companion.write_bytes(b"existing user zrun")
         installed.write_bytes(b"previous installed version")
         run_install(True)
         actual = subprocess.check_output([str(installed), "--version"], text=True).strip()
         if actual != expected_version:
             raise AssertionError(actual)
+        if not windows and companion.read_bytes() != b"existing user zrun":
+            raise AssertionError("the update replaced an existing zrun")
+        if windows and (install_dir / "zrun.exe").exists():
+            raise AssertionError("Windows installer installed zrun")
         before = release.digest(installed)
 
         for mode, expected_host in (

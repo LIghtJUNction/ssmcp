@@ -100,6 +100,7 @@ fn local_command(text: &str) -> bool {
                 | "/paste-retry"
                 | "/group"
                 | "/goal"
+                | "/chsh"
                 | "/openai"
                 | "/openai-session"
                 | "/openai-subject"

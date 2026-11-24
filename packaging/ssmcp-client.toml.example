@@ -5,6 +5,7 @@
 # --server overrides this setting; omitting it preserves the last-login default.
 [client]
 # server = "https://relay.example.com"
+# shell = "auto" # zrun, then the system shell on Unix. Also accepts system, a name or an absolute path.
 
 # HTTPS public keys belong in trusted-servers.toml next to this file.
 # Import a verified key with: ssmcp trust add --server URL --public-key FILE

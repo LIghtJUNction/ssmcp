@@ -288,6 +288,10 @@ impl Runtime {
         self.backend.local_command_stats()
     }
 
+    pub(crate) fn local_shell(&self) -> Arc<crate::backend::shell::Shell> {
+        self.backend.terminals()
+    }
+
     pub(crate) async fn safety_events(&self, cursor: u64, limit: usize) -> Result<Value, String> {
         self.files.safety_events(cursor, limit).await
     }

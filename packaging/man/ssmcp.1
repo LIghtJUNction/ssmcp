@@ -201,9 +201,11 @@ name and origin, never the bearer token.
 Print the GitHub authorization URL and confirmation code without launching a
 browser. Open the link on another device and approve the matching request.
 .TP
-.BI \-\-shell " path"
-Run the specified absolute shell path in a local pseudo-terminal. The default
-is SHELL or /bin/sh on Unix and COMSPEC or cmd.exe on Windows.
+.BI \-\-shell " name|path"
+Choose the shell for local pseudo-terminals and ! commands. Unix uses zrun
+when available, then SHELL, then /bin/sh. Windows uses COMSPEC or cmd.exe.
+The /chsh command in the local conversation shows or saves a preference.
+Use /chsh auto to restore automatic selection or /chsh system to use the native shell.
 .TP
 .B \-\-list-tools
 Start the local shell and discover installed harnesses, print the combined

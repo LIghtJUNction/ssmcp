@@ -29,6 +29,9 @@ TARGETS = {
     "x86_64-pc-windows-msvc": ["ssmcp"],
     "aarch64-pc-windows-msvc": ["ssmcp"],
 }
+ZRUN_GIT = "https://github.com/LIghtJUNction/zrun.git"
+ZRUN_RELEASE = "0.1.0-p0.2"
+ZRUN_REVISION = "d5af0458b23e5f581fbd06616aa050f50fc62865"
 TAG = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?")
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_Z_DIRECT = {"zplugin": "zplugin", "zharness": "zharness", "ztuio": "ztuio",
@@ -593,6 +596,26 @@ def write_archive(stage, output, epoch):
                         archive.addfile(info, stream)
 
 
+def bundle_zrun(target, root, stage):
+    source = stage.parent / "zrun-source"
+    source.mkdir()
+    subprocess.run(["git", "init", "--quiet"], cwd=source, check=True)
+    subprocess.run(["git", "fetch", "--quiet", "--depth=1", ZRUN_GIT, ZRUN_REVISION], cwd=source, check=True)
+    subprocess.run(["git", "checkout", "--quiet", "--detach", "FETCH_HEAD"], cwd=source, check=True)
+    if command("git", "rev-parse", "HEAD", cwd=source) != ZRUN_REVISION:
+        raise ValueError("bundled zrun source differs from the pinned revision")
+    target_dir = Path(os.environ.get("CARGO_TARGET_DIR", root / "target" / "zrun-companion")).resolve()
+    subprocess.run([
+        "cargo", "build", "--locked", "--release", "--package", "zrun-cli",
+        "--target", target, "--target-dir", str(target_dir),
+    ], cwd=source, check=True)
+    binary = target_dir / target / "release" / "zrun"
+    if command(str(binary), "--version", cwd=source) != f"zrun {ZRUN_RELEASE}":
+        raise ValueError("bundled zrun executable differs from the pinned version")
+    shutil.copy2(binary, stage / "zrun")
+    shutil.copy2(source / "LICENSE", stage / "LICENSE-zrun")
+
+
 def package(target, root=None):
     root = root or ROOT
     release_version = version(root)
@@ -613,6 +636,8 @@ def package(target, root=None):
             shutil.copy2(source, stage / filename)
         for filename in ("README.md", "LICENSE"):
             shutil.copy2(root / filename, stage / filename)
+        if "windows" not in target:
+            bundle_zrun(target, root, stage)
         (stage / "docs").mkdir()
         shutil.copy2(root / "docs/releases.md", stage / "docs/releases.md")
         if "linux" in target:

@@ -55,7 +55,7 @@ ssmcp --version
 
 ## 使用安装脚本安装或更新
 
-包含安装脚本的 Release 可以自动选择系统和 CPU 架构。脚本下载归档与 `SHA256SUMS`，核验摘要并运行新程序的 `--version` 后，再替换当前用户目录中的客户端。下载失败、摘要不符、指定版本不匹配或二进制不能运行时，检查会在替换旧程序前停止。[Unix 安装器](../scripts/install.sh) · [Windows 安装器](../scripts/install.ps1)
+包含安装脚本的 Release 可以自动选择系统和 CPU 架构。脚本下载归档与 `SHA256SUMS`，核验摘要并运行新程序的 `--version` 后，再替换当前用户目录中的客户端。下载失败、摘要不符、指定版本不匹配或客户端不能运行时，检查会在替换旧程序前停止。新的 Linux 和 macOS 安装包包含固定版本的 zrun，安装器将它放在 ssmcp 旁边并保留该目录已有的 zrun。旧归档或 zrun 安装失败时，客户端可以使用系统 shell。[Unix 安装器](../scripts/install.sh) · [Windows 安装器](../scripts/install.ps1)
 
 Linux 与 macOS：
 

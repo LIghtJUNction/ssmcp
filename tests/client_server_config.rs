@@ -123,6 +123,42 @@ fn unix_default_shell_falls_back_when_shell_is_unavailable() {
     );
 }
 
+#[test]
+fn zrun_launch_failure_logs_both_fallbacks_and_the_explicit_error() {
+    let home = Home::new();
+    let zrun = home.0.join("zrun");
+    let system = home.0.join("system-shell");
+    for path in [&zrun, &system] {
+        fs::write(path, b"#!/no-such-ssmcp-shell-interpreter\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let mut client = Command::new(env!("CARGO_BIN_EXE_ssmcp"));
+    client
+        .args(["--list-tools", "--log-format", "jsonl", "--shell", "zrun"])
+        .current_dir(&home.0)
+        .env_clear()
+        .env("HOME", &home.0)
+        .env("SSMCP_CLIENT_CONFIG", home.0.join("config.toml"))
+        .env("SHELL", &system)
+        .env("PATH", &home.0);
+    let output = client.output().unwrap();
+    let logs = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{logs}");
+    assert!(
+        logs.contains(r#""level":"Warning""#) && logs.contains("Trying"),
+        "{logs}"
+    );
+    assert!(
+        logs.contains("system-shell") && logs.contains("/bin/sh"),
+        "{logs}"
+    );
+
+    let output = client.arg("--shell").arg(&system).output().unwrap();
+    let logs = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{logs}");
+    assert!(logs.contains("No usable SSMCP shell"), "{logs}");
+}
+
 fn write_private(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();

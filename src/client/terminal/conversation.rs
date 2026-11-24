@@ -724,6 +724,13 @@ impl State {
                 self.notice = Some("Closing this client · restoring the terminal".into());
             }
             "/goal" => self.chat_goal(rest)?,
+            "/chsh" => {
+                if self.preview {
+                    return Err(super::locale::text("shell.preview").into());
+                }
+                crate::client::interface::harness::submit_chsh(rest)?;
+                self.notice = Some(super::locale::text("shell.pending").into());
+            }
             "/openai" | "/openai-session" | "/openai-subject" | "/chatgpt" | "/plugin-docs" => {
                 self.chat_openai_command(command, rest)?;
                 self.conversation.about = false;

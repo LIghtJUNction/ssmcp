@@ -17,10 +17,14 @@ ssmcp --server https://relay.example --allow alice@relay.example --name dev --ti
 | `--name NAME` | 客户端显示名称；默认包含主机名和进程 ID |
 | `--title TITLE` | 供 agent 识别任务的会话标题；最多 512 个 UTF-8 字节 |
 | `--allow USER@SERVER` | 指定当前中继上已注册的控制账号；可重复或以逗号分隔，最多 32 个不同账号 |
-| `--shell /absolute/path` | 选择交互式 shell。Unix 默认使用 `SHELL` 指向的可执行绝对路径，否则使用 `/bin/sh`。Windows 默认使用绝对路径的 `COMSPEC` 或系统 `cmd.exe` |
+| `--shell NAME\|PATH` | 选择新终端和 `!命令` 的 shell。Unix 默认优先用 zrun，其次是 `SHELL`，最后用 `/bin/sh`。Windows 默认用 `COMSPEC`，最后用系统 `cmd.exe` |
 | `--context-root PATH` | 增加只读 skills／AGENTS 文档根目录；最多 8 个，不扩展普通文件写入范围 |
 | `--list-tools` | 发现并打印本机工具目录后退出；不连接 SSH、不接受 SSH 目标或 `--allow` |
 | `-F FILE`、`-i FILE`、`-p PORT` | OpenSSH 配置、私钥文件和端口 |
+
+在对话里输入 `/chsh` 查看当前 shell，输入 `/chsh zsh` 或 `/chsh /绝对路径` 保存首选项。使用 `/chsh system` 选择系统默认，或用 `/chsh auto` 恢复自动选择。切换完成后，新终端和 `!命令` 使用所选 shell，已打开的终端继续运行原进程。
+
+首选项保存在 `[client].shell`。启动时 `--shell` 优先于此配置。可直接用 `--shell zrun` 选择自动回退，或用其他名称、绝对路径指定必须能启动的程序。回退会写入警告日志，全部启动失败会记录错误。`ssmcp.exec.start` 继续直接执行调用方提供的 argv。 [客户端配置示例](../packaging/ssmcp-client.toml.example)
 
 `--name` 和 `--title` 是显示信息，允许重名。服务端为每条连接分配独立 `id`，所有调用用这个 ID 分派；重连后需重新读取 `list`。`--name` 最多 128 个 UTF-8 字节，不能全为空白或含控制字符；同名连接需按 ID 区分。`cwd` 记录启动目录，不随交互式 shell 的 `cd` 改变。[客户端参数](../src/client.rs) · [元数据约束](../src/wire.rs)
 

@@ -26,7 +26,7 @@ mod events;
 mod footer;
 mod guide;
 mod images;
-mod locale;
+pub(super) mod locale;
 pub(crate) mod markdown;
 mod retired_keys;
 mod sleep;

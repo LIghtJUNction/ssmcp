@@ -90,6 +90,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "View complete command and script: /command [JOB_ID]",
     },
     SlashCommand {
+        name: "/chsh",
+        description: "Show or choose the shell for new terminals and ! commands",
+    },
+    SlashCommand {
         name: "/tasks",
         description: "Open Tasks beside Logs; browse jobs or cancel an exact ID",
     },
