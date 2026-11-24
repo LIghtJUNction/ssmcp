@@ -57,6 +57,7 @@ test-client-ui:
 
 .PHONY: test-client-ui-ready
 test-client-ui-ready:
+	python3 scripts/test_e2e_worker_windows.py
 	python3 scripts/test_e2e_relay_composer_identity.py
 	python3 scripts/test_composer_journal.py
 	$(MAKE) test-native-inputs-ready
