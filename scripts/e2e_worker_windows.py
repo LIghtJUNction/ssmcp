@@ -241,6 +241,7 @@ from e2e_dashboard import Decoder
 
 CHAT_DISABLED = "chat_disabled: human chat is disabled for this client"
 REPLY_UNSUPPORTED = "Native ssmcp.ui.reply is not advertised; send verifies the catalog and otherwise requires a client update."
+SAFETY_REFUSAL = "native file mutation blocked by safety policy"
 
 
 def directory_chat_enabled(client):
@@ -630,9 +631,15 @@ class WorkerWindows(Harness):
         return joined
 
     def bound(self, client_id, participant, name, arguments=None, *, allow_error=False):
-        code = "const response = await call(%s, %s, %s); return response;" % (
+        code = "return await call(%s, %s, %s);" % (
             json.dumps(client_id), json.dumps(name), json.dumps(arguments or {}),
         )
+        if allow_error:
+            # Code Mode can reject the native call before it returns a result.
+            code = (
+                "try { " + code + " } catch (error) { "
+                "return {isError: true, content: [{type: 'text', text: String(error.message ?? error)}]}; }"
+            )
         result = self.public_call("code_mode", {
             "agent": {"client_id": client_id, "id": participant["agent_id"], "token": participant["token"]},
             "code": code,
@@ -658,7 +665,9 @@ class WorkerWindows(Harness):
                 refusal = native("ssmcp.fs.write_text", {
                     "path": path, "text": "synthetic-private-safety-value", "create_parents": True,
                 }, allow_error=True)
-                self.check(refusal.get("isError") is True,
+                self.check(refusal.get("isError") is True
+                           and any(item.get("text") == SAFETY_REFUSAL
+                                   for item in refusal.get("content", [])),
                            f"{label}: native safety rejects before mutation")
             policy_target = workspace / ".ssmcp" / "safety" / "attempt.toml"
             native("ssmcp.fs.write_text", {
@@ -669,7 +678,10 @@ class WorkerWindows(Harness):
             denied_dir = workspace / f"policy-blocked-{label}"
             blocked = native("ssmcp.fs.mkdir", {"path": denied_dir.name, "parents": True},
                              allow_error=True)
-            self.check(blocked.get("isError") is True and not denied_dir.exists(),
+            self.check(blocked.get("isError") is True
+                       and any(item.get("text") == SAFETY_REFUSAL
+                               for item in blocked.get("content", []))
+                       and not denied_dir.exists(),
                        f"{label}: project allow cannot override user approval requirement")
             self.check(not (workspace.parent / "outside-safety-fixture").exists(),
                        f"{label}: rejected traversal has no filesystem effect")
