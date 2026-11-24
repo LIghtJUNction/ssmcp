@@ -525,6 +525,8 @@ class WorkerWindows(Harness):
         self.decoder_binary = decoder
         self.fixture_binary = fixture_binary
         self.fixture_timeout_seconds = 300
+        # The HTTP transport must outlive the ten-second native observation.
+        self.http_timeout = 15
         self.frontends = []
         self.windows = []
         self.owned = []
