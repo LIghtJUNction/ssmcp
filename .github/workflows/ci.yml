@@ -125,7 +125,7 @@ jobs:
           test "$ssmcp_node_real" = "$(readlink -f /usr/bin/node)"
           printf 'Runtime executable: %s\n' "$ssmcp_node_real"
           node --version
-          python3 -c 'from PIL import ImageFont; ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 18)'
+          python3 -c 'from PIL import Image, ImageDraw, ImageFont; ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 18); print("Pillow PNG renderer dependencies available")'
       - name: Record the Linux validation source identity
         if: matrix.runner == 'ubuntu-24.04'
         run: python3 scripts/collect_native_validation_kit.py capture --identity "$RUNNER_TEMP/native-validation-source.json"
