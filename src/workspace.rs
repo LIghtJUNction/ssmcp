@@ -1372,6 +1372,29 @@ struct NetWriteArgs {
     data_base64: String,
 }
 
+// Isolated fixtures still share the portable process-wide writer lock. Retry
+// only its pre-mutation busy result; keep every operation/assertion and error.
+#[cfg(test)]
+async fn perform_after_write_contention(
+    workspace: &Workspace,
+    name: &str,
+    arguments: Value,
+) -> Result<Value, String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match workspace.perform(name, arguments.clone()).await {
+            Err(error)
+                if cfg!(not(target_os = "linux"))
+                    && error == "workspace is busy; retry the file operation"
+                    && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            result => return result,
+        }
+    }
+}
+
 #[cfg(test)]
 mod managed_file_integration_tests {
     use super::*;
@@ -1435,7 +1458,9 @@ mod managed_file_integration_tests {
                 json!({"path":"./new.rs","text":"fn main() {}"}),
             ),
         ] {
-            let result = workspace.perform(name, args).await.unwrap();
+            let result = perform_after_write_contention(&workspace, name, args)
+                .await
+                .unwrap();
             assert!(result.get("tracking_warning").is_none(), "{result}");
         }
         let records = managed_files::list(&scratch.0).unwrap();
@@ -1573,13 +1598,13 @@ mod managed_file_integration_tests {
         let scratch = Scratch::new();
         let workspace = scratch.workspace();
         std::fs::write(scratch.0.join("existing.txt"), b"before").unwrap();
-        workspace
-            .perform(
-                "ssmcp.fs.write_text",
-                json!({"path":"existing.txt","text":"after","overwrite":true}),
-            )
-            .await
-            .unwrap();
+        perform_after_write_contention(
+            &workspace,
+            "ssmcp.fs.write_text",
+            json!({"path":"existing.txt","text":"after","overwrite":true}),
+        )
+        .await
+        .unwrap();
         assert!(managed_files::list(&scratch.0).unwrap().is_empty());
         assert_eq!(
             std::fs::read(scratch.0.join("existing.txt")).unwrap(),
@@ -1591,13 +1616,13 @@ mod managed_file_integration_tests {
             b"not a registry directory",
         )
         .unwrap();
-        let result = workspace
-            .perform(
-                "ssmcp.fs.write_text",
-                json!({"path":"created.txt","text":"success survives tracking failure"}),
-            )
-            .await
-            .unwrap();
+        let result = perform_after_write_contention(
+            &workspace,
+            "ssmcp.fs.write_text",
+            json!({"path":"created.txt","text":"success survives tracking failure"}),
+        )
+        .await
+        .unwrap();
         assert_eq!(result["written"], "success survives tracking failure".len());
         assert!(
             result["tracking_warning"]
