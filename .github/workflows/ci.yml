@@ -105,7 +105,9 @@ jobs:
       - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends nodejs bubblewrap util-linux rsync apparmor-profiles shellcheck
+          sudo apt-get install --yes --no-install-recommends nodejs bubblewrap util-linux rsync apparmor-profiles shellcheck python3-pil
+          # The PTY evidence renderer imports Pillow through this test interpreter.
+          python3 -c 'from PIL import Image, ImageDraw, ImageFont; print("Pillow PNG renderer dependencies available")'
           if test -e /sys/module/apparmor/parameters/enabled && grep -q Y /sys/module/apparmor/parameters/enabled; then
             if test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict; then
               sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
