@@ -60,7 +60,7 @@ class Session:
                          "os.execv(sys.argv[1],sys.argv[1:])")
         self.process = subprocess.Popen(
             [sys.executable, "-c", tty_bootstrap, str(binary),
-             "--server", self.state.origin, "--allow", self.state.allow_principal,
+             self.state.allow_principal,
              "--name", label, "--no-watchdog", "--no-setup", "--no-browser", "--shell", "/bin/sh",
              "--ui-config", str(config)],
             cwd=workspace, env=env, stdin=slave, stdout=slave, stderr=slave)

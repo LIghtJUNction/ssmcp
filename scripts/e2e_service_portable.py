@@ -23,7 +23,6 @@ import os
 from pathlib import Path
 import plistlib
 import re
-import secrets
 import shutil
 import signal
 import socket
@@ -44,9 +43,6 @@ def wait_for(predicate, description, timeout=15):
         time.sleep(0.1)
     raise AssertionError(f"timed out waiting for {description}")
 
-
-IDENTITY = {"provider": "github", "subject": "123", "login": "fixture",
-            "principal": "fixture@github", "username": "portablefixture"}
 
 
 class GatewayHandler(BaseHTTPRequestHandler):
@@ -70,65 +66,21 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         fixture = self.server.fixture
-        if self.headers.get("Authorization") != "Bearer " + fixture.token:
-            fixture.record("unexpected_requests")
-            return self.reply(403, {"error": "invalid_fixture_credential"})
-        if self.path == "/api/client/whoami":
-            fixture.record("whoami")
-            return self.reply(200, {"identity": IDENTITY})
-        if self.path == "/api/client/connect":
+        if self.path == "/api/client/connect" and self.headers.get("Authorization") is None:
             fixture.record("connect")
             return self.reply(503, {"error": "portable_fixture_unavailable"})
         fixture.record("unexpected_requests")
         self.reply(404, {"error": "fixture_route_not_found"})
 
     def do_POST(self):
-        fixture = self.server.fixture
-        try:
-            size = int(self.headers.get("Content-Length", "0"))
-            if not 0 <= size <= 4096:
-                raise ValueError("invalid fixture request size")
-            body = json.loads(self.rfile.read(size) or b"{}")
-            if not isinstance(body, dict):
-                raise ValueError("invalid fixture request object")
-        except ValueError:
-            fixture.record("unexpected_requests")
-            return self.reply(400, {"error": "invalid_fixture_request"})
-        if self.path == "/api/client/login/start":
-            fixture.record("login_start")
-            return self.reply(200, {
-                "device_code": fixture.device_code, "user_code": "PORT-ABLE",
-                "verification_uri": fixture.origin + "/device",
-                "verification_uri_complete": fixture.origin + "/device?user_code=PORT-ABLE",
-                "expires_in": 600, "interval": 1,
-            })
-        if self.path == "/api/client/login/poll" and body.get("device_code") == fixture.device_code:
-            fixture.record("login_poll")
-            return self.reply(200, {"status": "authorized", "access_token": fixture.token,
-                                    "identity": IDENTITY, "expires_in": 3600})
-        if self.path == "/api/client/device/challenge":
-            # This fixture models the explicit legacy-device-proof fallback,
-            # not an arbitrary ignored endpoint. Malformed or unauthenticated
-            # requests must still fail the final unexpected-request assertion.
-            if self.headers.get("Authorization") != "Bearer " + fixture.token:
-                fixture.record("unexpected_requests")
-                return self.reply(403, {"error": "invalid_fixture_credential"})
-            if body:
-                fixture.record("unexpected_requests")
-                return self.reply(400, {"error": "invalid_fixture_request"})
-            fixture.record("device_challenge")
-            return self.reply(404, {"error": "fixture_device_proof_unavailable"})
-        fixture.record("unexpected_requests")
+        self.server.fixture.record("unexpected_requests")
         self.reply(404, {"error": "fixture_route_not_found"})
 
 
 class UnavailableGateway:
     def __init__(self):
-        self.token = secrets.token_hex(32)
-        self.device_code = secrets.token_hex(32)
         self.lock = threading.Lock()
-        self.counts = {key: 0 for key in
-                       ("login_start", "login_poll", "whoami", "connect", "device_challenge", "unexpected_requests")}
+        self.counts = {"connect": 0, "unexpected_requests": 0}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), GatewayHandler)
         self.server.daemon_threads = True
         self.server.fixture = self
@@ -181,15 +133,6 @@ class Portable:
 
     def prepare_gateway(self):
         self.gateway = UnavailableGateway()
-        self.secrets.extend((self.gateway.token, self.gateway.device_code))
-        # Let the real account writer apply private Unix permissions or Windows
-        # ACLs. Both device-flow endpoints belong to this synthetic local server.
-        login = self.cli(["login", "--server", self.gateway.origin, "--no-browser", "--json"])
-        value = json.loads(login.stdout)
-        self.check(value.get("server") == self.gateway.origin and value.get("identity") == IDENTITY,
-                   "explicit local fixture login stores the synthetic account using the real credential writer")
-        self.check(all(secret not in login.stdout + login.stderr for secret in self.secrets),
-                   "fixture login output excludes account and polling credentials")
 
     def check(self, condition, description):
         if not condition:
@@ -313,7 +256,7 @@ class Portable:
 
     def create_args(self, name):
         return [
-            "sessions", "create", name, "--json", "--server", self.gateway.origin, "--watchdog",
+            "sessions", "create", name, "--json", f"portable-fixture@{self.gateway.origin}", "--watchdog",
             "--reconnect-delay", "1", "--no-setup", "--title",
             "portable lifecycle fixture; unavailable account gateway",
             "--cwd", str(self.workspace),
@@ -519,11 +462,8 @@ class Portable:
         self.stop()
         observed = self.gateway.snapshot()
         self.samples["gateway_requests"] = observed
-        self.check(observed["login_start"] == observed["login_poll"] == 1
-                   and observed["whoami"] > 0 and observed["connect"] > 1
-                   and observed["device_challenge"] >= observed["connect"]
-                   and observed["unexpected_requests"] == 0,
-                   "session retries and supervisor restoration reuse the local login without new authorization")
+        self.check(observed["connect"] > 1 and observed["unexpected_requests"] == 0,
+                   "session retries and supervisor restoration reuse the target without login")
 
     def diagnostics(self):
         for index, log in enumerate(self.manager_logs):

@@ -624,7 +624,7 @@ def main():
             drain.start()
         with (root / "client.log").open("wb") as logfile:
             command = [str(binary), "--no-watchdog", "--no-setup", "--no-browser",
-                "--server", state.origin, "--allow", state.allow_principal,
+                state.allow_principal,
                 "--shell", "/bin/sh", "--ui-config", str(root / "config.toml")]
             if not args.no_tty:
                 bootstrap = ("import fcntl,os,sys,termios; os.setsid(); "

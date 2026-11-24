@@ -81,15 +81,15 @@ class FetchHarness(Harness):
         return len(self.fetch_log.read_text().splitlines()) if self.fetch_log.exists() else 0
 
     def connect_headless(self, log_format):
-        token = self.state.account_token
-        previous = len(self.state.connections.get(token, []))
+        name = "periodic-fetch-fixture"
+        previous = len(self.state.connections.get(name, []))
         process = self.spawn(
-            "A", "--name", "periodic-fetch-fixture", "--no-setup",
+            "A", self.state.allow_principal, "--name", name, "--no-setup",
             "--shell", "/bin/sh", "--no-watchdog", "--log-format", log_format,
         )
-        wait_for(lambda: len(self.state.connections.get(token, [])) > previous,
+        wait_for(lambda: len(self.state.connections.get(name, [])) > previous,
                  "headless account connection")
-        connection = self.state.connections[token][-1]
+        connection = self.state.connections[name][-1]
         connection.call("terminal.status", {})
         self.check(process.poll() is None, f"{log_format} session is connected without a TTY")
         return process
@@ -107,7 +107,6 @@ class FetchHarness(Harness):
         self.git_command(workspace, "remote", "add", "origin", str(bare))
         self.git_command(workspace, "fetch", "-q", "origin")
         self.git_command(workspace, "checkout", "-q", "-B", "main", "--track", "origin/main")
-        self.cli("A", "login", "--server", self.state.origin, "--no-browser", "--json")
         default = self.cli("A", "config", "get", "git-fetch-interval")
         self.check(default.stdout.strip() == "300", "new configurations default to 300 seconds")
         configured = self.cli("A", "config", "set", "git-fetch-interval", "60")

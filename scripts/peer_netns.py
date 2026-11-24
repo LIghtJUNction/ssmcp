@@ -166,7 +166,7 @@ async def inside(args):
     for signum in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(signum, stop.set)
     process = await asyncio.create_subprocess_exec(
-        "/ssmcp", "--server", args.origin, "--allow", f"alice@{args.origin}",
+        "/ssmcp", f"alice@{args.origin}",
         "--name", args.role, "--no-setup", "--input", "none", "--shell", "/bin/sh",
         cwd=home / "work", env=env, stdin=subprocess.DEVNULL,
     )
