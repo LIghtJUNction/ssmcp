@@ -17,16 +17,7 @@ impl Managed {
     pub fn spawn(command: &mut Command) -> io::Result<Self> {
         command.kill_on_drop(true);
         #[cfg(unix)]
-        // SAFETY: setsid is async-signal-safe and this runs in the forked child.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setsid() < 0 {
-                    Err(io::Error::last_os_error())
-                } else {
-                    Ok(())
-                }
-            });
-        }
+        prepare_session(command.as_std_mut());
         #[cfg(windows)]
         command.creation_flags(
             windows_sys::Win32::System::Threading::CREATE_SUSPENDED
@@ -117,6 +108,71 @@ impl Managed {
 }
 
 impl Drop for Managed {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
+#[cfg(unix)]
+fn prepare_session(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: setsid is async-signal-safe and this runs in the forked child.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+}
+
+#[cfg(unix)]
+pub(crate) struct ExecManaged {
+    pub child: zrun::process::Child,
+    pid: libc::pid_t,
+    stopped: bool,
+}
+
+#[cfg(unix)]
+impl ExecManaged {
+    pub(crate) fn spawn(command: &mut std::process::Command) -> io::Result<Self> {
+        let driver = crate::command_runtime::Driver::get()?;
+        prepare_session(command);
+        let child = zrun::process::spawn(command, &driver.io)?;
+        Ok(Self {
+            pid: child.id() as libc::pid_t,
+            child,
+            stopped: false,
+        })
+    }
+
+    pub(crate) async fn wait(&mut self) -> io::Result<ExitStatus> {
+        let timer = &crate::command_runtime::Driver::get()?.timer;
+        if !self.stopped {
+            self.child.wait_for_exit(timer).await?;
+            self.terminate();
+        }
+        self.child.wait(timer).await
+    }
+
+    fn terminate(&mut self) {
+        if !self.stopped {
+            self.stopped = true;
+            crate::platform::stop_unix_descendants(self.pid);
+            let _ = self.child.start_kill();
+        }
+    }
+
+    pub(crate) async fn shutdown(&mut self) {
+        self.terminate();
+        let _ = self.wait().await;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ExecManaged {
     fn drop(&mut self) {
         self.terminate();
     }
@@ -221,24 +277,22 @@ mod windows_tests {
 #[cfg(all(test, target_os = "macos"))]
 mod macos_tests {
     use super::*;
+    use crate::test_process::read_line;
     use std::{process::Stdio, time::Duration};
-    use tokio::{
-        io::{AsyncBufReadExt, AsyncReadExt, BufReader},
-        time::timeout,
-    };
+    use tokio::time::timeout;
 
     #[tokio::test]
     async fn natural_exit_closes_background_descendant_pipes() {
-        let mut command = Command::new("/bin/sh");
+        let mut command = std::process::Command::new("/bin/sh");
         command
             .args(["-c", "sleep 60 & printf '%s\\n' \"$!\""])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        let mut process = Managed::spawn(&mut command).unwrap();
-        let mut stdout = BufReader::new(process.child.stdout.take().unwrap());
+        let mut process = ExecManaged::spawn(&mut command).unwrap();
+        let mut stdout = process.child.take_stdout().unwrap().unwrap();
         let mut line = String::new();
-        timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+        timeout(Duration::from_secs(5), read_line(&mut stdout, &mut line))
             .await
             .unwrap()
             .unwrap();
@@ -249,15 +303,17 @@ mod macos_tests {
             .unwrap()
             .unwrap();
         assert!(status.success());
-        let mut tail = Vec::new();
-        let pipe = timeout(Duration::from_secs(5), stdout.read_to_end(&mut tail)).await;
+        let mut tail = [0];
+        let pipe = timeout(Duration::from_secs(5), stdout.read(&mut tail)).await;
         if pipe.is_err() {
             // Keep a failed regression from leaving its 60-second fixture alive.
             unsafe { libc::kill(pid, libc::SIGKILL) };
         }
-        pipe.expect("background descendant must release stdout after its leader exits")
-            .unwrap();
-        assert!(tail.is_empty());
+        assert_eq!(
+            pipe.expect("background descendant must release stdout after its leader exits")
+                .unwrap(),
+            0
+        );
         process.shutdown().await;
     }
 }

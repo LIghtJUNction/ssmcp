@@ -610,128 +610,46 @@ fn viewer_size() -> (u16, u16) {
 #[cfg(unix)]
 pub(crate) mod pty {
     use super::{Lease, Slot};
-    use std::{
-        io,
-        os::fd::{AsRawFd, FromRawFd, OwnedFd},
-        pin::Pin,
-        process::Stdio,
-        sync::Arc,
-        task::{Context, Poll},
-        time::Duration,
-    };
-    use tokio::{
-        io::{AsyncRead, ReadBuf, unix::AsyncFd},
-        task::JoinHandle,
-    };
+    use crate::command_runtime::{Driver, JoinHandle, open_pty, resize_pty};
+    use std::{fs::File, io, process::Stdio, sync::Arc, time::Duration};
+    use zrun::io::{AsyncFd, Nonblocking};
 
     pub(crate) struct Output {
-        master: Arc<AsyncFd<OwnedFd>>,
+        master: AsyncFd<File>,
         resize: JoinHandle<()>,
     }
+
     impl Output {
         pub(crate) fn open(lease: &Lease) -> io::Result<(Self, Stdio, Stdio)> {
             let (rows, cols) = lease.dimensions();
-            let mut size = libc::winsize {
-                ws_row: rows,
-                ws_col: cols,
-                ws_xpixel: 0,
-                ws_ypixel: 0,
-            };
-            let (mut master, mut slave) = (-1, -1);
-            // SAFETY: openpty writes two fresh descriptors into initialized locals.
-            if unsafe {
-                libc::openpty(
-                    &mut master,
-                    &mut slave,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    &raw mut size,
-                )
-            } < 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            // SAFETY: successful openpty returned exclusively owned descriptors.
-            let (master, slave) =
-                unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
-            for fd in [master.as_raw_fd(), slave.as_raw_fd()] {
-                // SAFETY: both descriptors are live and newly created.
-                if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-            }
-            // SAFETY: master remains owned until after all reactor registrations.
-            if unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            let master = Arc::new(unsafe { AsyncFd::register(master) }?);
-            let resize_fd = master.clone();
+            let (master, slave) = open_pty(rows, cols)?;
+            let stdout = Stdio::from(slave.try_clone()?);
+            let resize_fd = master.try_clone()?;
+            let driver = Driver::get()?;
+            let master = AsyncFd::new(&driver.io, master, Nonblocking::Set)?;
             let slot = Arc::downgrade(&lease.slot);
-            let resize = tokio::spawn(async move {
+            let resize = driver.spawn(async move {
                 let mut previous = (rows, cols);
-                loop {
-                    tokio::time::sleep(Duration::from_millis(250)).await;
+                while driver.timer.sleep(Duration::from_millis(250)).await.is_ok() {
                     let Some(slot) = slot.upgrade() else { break };
                     let dimensions = Slot::dimensions(&slot);
                     if dimensions != previous {
-                        let size = libc::winsize {
-                            ws_row: dimensions.0,
-                            ws_col: dimensions.1,
-                            ws_xpixel: 0,
-                            ws_ypixel: 0,
-                        };
-                        // SAFETY: resize_fd owns master throughout this ioctl.
-                        unsafe {
-                            libc::ioctl(resize_fd.get_ref().as_raw_fd(), libc::TIOCSWINSZ, &size)
-                        };
+                        let _ = resize_pty(&resize_fd, dimensions.0, dimensions.1);
                         previous = dimensions;
                     }
                 }
-            });
-            let stdout = Stdio::from(slave.try_clone()?);
+            })?;
             Ok((Self { master, resize }, stdout, Stdio::from(slave)))
         }
-    }
-    impl AsyncRead for Output {
-        fn poll_read(
-            self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &mut ReadBuf<'_>,
-        ) -> Poll<io::Result<()>> {
-            loop {
-                let mut ready = std::task::ready!(self.master.poll_read_ready(cx))?;
-                let result = ready.try_io(|fd| {
-                    let target = buf.initialize_unfilled();
-                    // SAFETY: target is writable, bounded storage and fd is borrowed.
-                    let count = unsafe {
-                        libc::read(
-                            fd.get_ref().as_raw_fd(),
-                            target.as_mut_ptr().cast(),
-                            target.len(),
-                        )
-                    };
-                    if count >= 0 {
-                        Ok(count as usize)
-                    } else {
-                        let error = io::Error::last_os_error();
-                        if error.raw_os_error() == Some(libc::EIO) {
-                            Ok(0)
-                        } else {
-                            Err(error)
-                        }
-                    }
-                });
-                match result {
-                    Ok(Ok(count)) => {
-                        buf.advance(count);
-                        return Poll::Ready(Ok(()));
-                    }
-                    Ok(Err(error)) => return Poll::Ready(Err(error)),
-                    Err(_) => continue,
-                }
+
+        pub(crate) async fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.master.read(buf).await {
+                Err(error) if error.raw_os_error() == Some(libc::EIO) => Ok(0),
+                result => result,
             }
         }
     }
+
     impl Drop for Output {
         fn drop(&mut self) {
             self.resize.abort()

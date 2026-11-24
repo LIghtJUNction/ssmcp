@@ -235,6 +235,9 @@ tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-
 [dev-dependencies]
 tokio = { version = "1.54", features = ["test-util"] }
 
+[target.'cfg(unix)'.dependencies]
+zrun = { git = "https://github.com/LIghtJUNction/zrun.git", rev = "16c7581994e7971e5d9beafbb23f59f5fea1de6e", features = ["process"] }
+
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 portable-pty = "0.9"
 cap-std = "4.0.3"

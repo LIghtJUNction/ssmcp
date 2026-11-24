@@ -1,5 +1,8 @@
 //! A single Linux pseudo-terminal with bounded, cursor-addressed output.
 use crate::{
+    command_runtime::{
+        DeadlineError, Driver, JoinHandle, open_pty, resize_pty, timeout, timeout_at,
+    },
     output::{Capture, INLINE_BYTES, INLINE_LINES, OutputStore},
     wire::Operation,
 };
@@ -7,22 +10,24 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, VecDeque},
+    fs::File,
     io,
-    os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+    os::{
+        fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+        unix::process::{CommandExt, ExitStatusExt},
+    },
     path::Path,
-    process::Stdio,
+    process::{Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
-use tokio::{
-    io::unix::AsyncFd,
-    process::{Child, Command},
-    sync::{Mutex as AsyncMutex, Notify},
-    task::JoinHandle,
-    time::{Instant, timeout, timeout_at},
+use tokio::sync::{Mutex as AsyncMutex, Notify};
+use zrun::{
+    io::{AsyncFd, FdInterest, Nonblocking},
+    process::Child,
 };
 
 const OUTPUT_CAPACITY: usize = 1024 * 1024;
@@ -65,15 +70,15 @@ pub(crate) struct JobConfig<'a> {
 }
 
 pub struct Terminal {
-    master: Mutex<Option<Arc<AsyncFd<OwnedFd>>>>,
-    child: AsyncMutex<Option<Child>>,
+    master: Mutex<Option<Arc<File>>>,
+    child: Mutex<Option<Child>>,
     leader: OwnedFd,
     pid: libc::pid_t,
     output: Mutex<Output>,
     changed: Arc<Notify>,
     input_bytes: AtomicU64,
     output_event: Option<OutputEvent>,
-    writer: AsyncMutex<()>,
+    writer: AsyncMutex<Option<AsyncFd<File>>>,
     reader: Mutex<Option<JoinHandle<()>>>,
     closed: AtomicBool,
     live: bool,
@@ -159,8 +164,6 @@ impl Terminal {
         if argv.is_empty() || argv[0].is_empty() {
             return Err("PTY command must not be empty".into());
         }
-        let mut master = -1;
-        let mut slave = -1;
         let (rows, cols) = size.unwrap_or_else(|| {
             if live {
                 crate::client::terminal::pane_size(24, 80)
@@ -168,40 +171,15 @@ impl Terminal {
                 (24, 80)
             }
         });
-        let size = libc::winsize {
-            ws_row: rows,
-            ws_col: cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        // SAFETY: all pointers refer to initialized, live storage; openpty fills both fds.
-        if unsafe {
-            libc::openpty(
-                &mut master,
-                &mut slave,
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                &size,
-            )
-        } < 0
-        {
-            return Err(io::Error::last_os_error().into());
-        }
-        // SAFETY: successful openpty returned two newly owned descriptors.
-        let (master, slave) =
-            unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
-        for fd in [master.as_raw_fd(), slave.as_raw_fd()] {
-            // SAFETY: fd is owned and valid; FD_CLOEXEC prevents unintended inheritance.
-            if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-                return Err(io::Error::last_os_error().into());
-            }
-        }
-        // SAFETY: master is a valid descriptor and no other flags need preserving on a new PTY.
-        if unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } < 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-        // SAFETY: OwnedFd keeps this descriptor valid and stable for AsyncFd's whole lifetime.
-        let master = Arc::new(unsafe { AsyncFd::register(master) }?);
+        let driver = Driver::get()?;
+        let (master, slave) = open_pty(rows, cols)?;
+        let mut reader = AsyncFd::new(&driver.io, master.try_clone()?, Nonblocking::Set)?;
+        let writer = AsyncFd::with_interest(
+            &driver.io,
+            master.try_clone()?,
+            Nonblocking::Set,
+            FdInterest::Writable,
+        )?;
         let mut command = Command::new(&argv[0]);
         command
             .args(&argv[1..])
@@ -209,8 +187,7 @@ impl Terminal {
             .envs(env)
             .stdin(Stdio::from(slave.try_clone()?))
             .stdout(Stdio::from(slave.try_clone()?))
-            .stderr(Stdio::from(slave))
-            .kill_on_drop(true);
+            .stderr(Stdio::from(slave));
         command.current_dir(cwd);
         // SAFETY: this closure runs after fork and only calls async-signal-safe syscalls.
         unsafe {
@@ -224,14 +201,22 @@ impl Terminal {
                 Ok(())
             });
         }
-        let child = command.spawn()?;
-        let pid = child.id().ok_or("shell has no process id")? as libc::pid_t;
-        let leader = open_pidfd(pid).map_err(|error| {
-            format!("terminal cleanup requires Linux 5.3+ with pidfd support: {error}")
-        })?;
+        let mut child = zrun::process::spawn(&mut command, &driver.io)?;
+        let pid = child.id() as libc::pid_t;
+        let leader = match open_pidfd(pid) {
+            Ok(leader) => leader,
+            Err(error) => {
+                // The still-owned child can be killed safely before reaping.
+                let _ = child.start_kill();
+                return Err(format!(
+                    "terminal cleanup requires Linux 5.3+ with pidfd support: {error}"
+                )
+                .into());
+            }
+        };
         let terminal = Arc::new(Self {
-            master: Mutex::new(Some(master.clone())),
-            child: AsyncMutex::new(Some(child)),
+            master: Mutex::new(Some(Arc::new(master))),
+            child: Mutex::new(Some(child)),
             leader,
             pid,
             output: Mutex::new(Output {
@@ -241,7 +226,7 @@ impl Terminal {
             changed: Arc::new(Notify::new()),
             input_bytes: AtomicU64::new(0),
             output_event,
-            writer: AsyncMutex::new(()),
+            writer: AsyncMutex::new(Some(writer)),
             reader: Mutex::new(None),
             closed: AtomicBool::new(false),
             live,
@@ -250,19 +235,10 @@ impl Terminal {
             observer_cwd: cwd.to_path_buf(),
         });
         let weak = Arc::downgrade(&terminal);
-        let reader = tokio::spawn(async move {
+        let reader = driver.spawn(async move {
             let mut data = [0_u8; 8192];
             loop {
-                let result = async {
-                    loop {
-                        let mut ready = master.readable().await?;
-                        match ready.try_io(|fd| read_fd(fd.get_ref().as_raw_fd(), &mut data)) {
-                            Ok(result) => return result,
-                            Err(_) => continue,
-                        }
-                    }
-                }
-                .await;
+                let result = reader.read(&mut data).await;
                 let Some(terminal) = weak.upgrade() else {
                     break;
                 };
@@ -316,8 +292,9 @@ impl Terminal {
                     }
                 }
                 terminal.changed.notify_waiters();
+                zrun::yield_now().await;
             }
-        });
+        })?;
         *terminal.reader.lock().unwrap() = Some(reader);
         Ok(terminal)
     }
@@ -331,7 +308,7 @@ impl Terminal {
                 wait_ms,
             } => self.read(cursor, max_bytes, wait_ms).await,
             Operation::Write { data } => {
-                if !self.running().await {
+                if !self.running() {
                     return Err("terminal has exited".into());
                 }
                 let (written, timed_out, error) = self.write_counted(data.as_bytes(), 5000).await;
@@ -339,28 +316,18 @@ impl Terminal {
                     "remaining_bytes":data.len()-written,"timed_out":timed_out,"error":error}))
             }
             Operation::Resize { rows, cols } => {
-                if !self.running().await {
+                if !self.running() {
                     return Err("terminal has exited".into());
                 }
                 let master = self.master()?;
-                let size = libc::winsize {
-                    ws_row: rows,
-                    ws_col: cols,
-                    ws_xpixel: 0,
-                    ws_ypixel: 0,
-                };
-                // SAFETY: master and winsize point to live objects for the ioctl duration.
-                if unsafe { libc::ioctl(master.get_ref().as_raw_fd(), libc::TIOCSWINSZ, &size) } < 0
-                {
-                    return Err(io::Error::last_os_error().to_string());
-                }
+                resize_pty(&master, rows, cols).map_err(|error| error.to_string())?;
                 Ok(json!({"rows":rows,"cols":cols}))
             }
             Operation::PeerPort { .. }
             | Operation::ListTools { .. }
             | Operation::CallTool { .. } => Err("not a terminal operation".into()),
             Operation::Status {} => {
-                let running = self.running().await;
+                let running = self.running();
                 let output = self.output.lock().unwrap();
                 let mut result = json!({"running":running,"pid":self.pid,"start_cursor":output.start,"next_cursor":output.end,"output_eof":output.eof});
                 if let Some(capture) = &output.capture {
@@ -376,7 +343,7 @@ impl Terminal {
         }
     }
 
-    fn master(&self) -> Result<Arc<AsyncFd<OwnedFd>>, String> {
+    fn master(&self) -> Result<Arc<File>, String> {
         self.master
             .lock()
             .unwrap()
@@ -384,24 +351,14 @@ impl Terminal {
             .ok_or_else(|| "terminal is closed".into())
     }
 
-    async fn running(&self) -> bool {
-        let child = self.child.lock().await;
-        if self.closed.load(Ordering::Acquire) || child.is_none() {
-            return false;
-        }
-        // Keep the session leader unreaped until shutdown, preventing its PID/session ID reuse.
-        // SAFETY: info is writable, zeroed storage; WNOHANG makes waitid nonblocking.
-        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-        let result = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                self.pid as libc::id_t,
-                &mut info,
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        };
-        // SAFETY: waitid initialized the siginfo union on success.
-        result == 0 && unsafe { info.si_pid() } == 0
+    fn running(&self) -> bool {
+        !self.closed.load(Ordering::Acquire)
+            && self
+                .child
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|child| matches!(child.try_exit(), Ok(None)))
     }
 
     async fn read(&self, cursor: u64, max_bytes: usize, wait_ms: u64) -> Result<Value, String> {
@@ -492,7 +449,7 @@ impl Terminal {
                 }
             };
             if let Some(mut snapshot) = snapshot {
-                snapshot["running"] = json!(self.running().await);
+                snapshot["running"] = json!(self.running());
                 return Ok(snapshot);
             }
             let _ = timeout_at(deadline, changed).await;
@@ -522,38 +479,23 @@ impl Terminal {
     /// Observe the leader without reaping it: its PID/session identity must remain
     /// pinned until shutdown has signalled all owned members.
     pub(crate) async fn wait_exit(&self) -> io::Result<(Option<i32>, Option<i32>)> {
-        // SAFETY: the cloned OwnedFd pins this descriptor for the entire
-        // registration lifetime; no other owner can replace or close it.
-        let leader = unsafe { AsyncFd::register(self.leader.try_clone()?) }?;
-        loop {
-            let mut ready = leader.readable().await?;
-            // SAFETY: waitid writes initialized siginfo storage for this owned,
-            // unreaped child, and WNOHANG prevents blocking the async executor.
-            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            let result = unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    self.pid as libc::id_t,
-                    &mut info,
-                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-                )
-            };
-            if result < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            // Readiness may be spurious; never turn it into cancellation of a
-            // still-running command.
-            if unsafe { info.si_pid() } == 0 {
-                ready.clear_ready();
-                continue;
-            }
-            let status = unsafe { info.si_status() };
-            return match info.si_code {
-                libc::CLD_EXITED => Ok((Some(status), None)),
-                libc::CLD_KILLED | libc::CLD_DUMPED => Ok((None, Some(status))),
-                _ => Err(io::Error::other("PTY leader exit status unavailable")),
-            };
-        }
+        let driver = Driver::get()?;
+        let mut leader = AsyncFd::new(
+            &driver.io,
+            self.leader.try_clone()?,
+            Nonblocking::ReadinessOnly,
+        )?;
+        let status = leader
+            .readable(|_| {
+                let child = self.child.lock().unwrap();
+                child
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("terminal is closed"))?
+                    .try_exit()?
+                    .ok_or_else(|| io::ErrorKind::WouldBlock.into())
+            })
+            .await?;
+        Ok((status.code(), status.signal()))
     }
 
     /// Every successful nonblocking syscall is counted before another await.
@@ -564,7 +506,7 @@ impl Terminal {
         wait_ms: u64,
     ) -> (usize, bool, Option<String>) {
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
-        if !self.running().await {
+        if !self.running() {
             return (0, false, Some("terminal has exited".into()));
         }
         if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
@@ -576,16 +518,17 @@ impl Terminal {
             {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => return (0, false, Some(error)),
-                Err(_) => return (0, true, None),
+                Err(DeadlineError::Elapsed) => return (0, true, None),
+                Err(DeadlineError::Reactor(error)) => return (0, false, Some(error.to_string())),
             }
         }
-        let _guard = match timeout_at(deadline, self.writer.lock()).await {
+        let mut writer = match timeout_at(deadline, self.writer.lock()).await {
             Ok(guard) => guard,
-            Err(_) => return (0, true, None),
+            Err(DeadlineError::Elapsed) => return (0, true, None),
+            Err(DeadlineError::Reactor(error)) => return (0, false, Some(error.to_string())),
         };
-        let master = match self.master() {
-            Ok(master) => master,
-            Err(error) => return (0, false, Some(error)),
+        let Some(master) = writer.as_mut() else {
+            return (0, false, Some("terminal is closed".into()));
         };
         let mut written = 0;
         while written < data.len() {
@@ -598,24 +541,21 @@ impl Terminal {
             if Instant::now() >= deadline {
                 return (written, true, None);
             }
-            let ready = tokio::select! {
+            let result = tokio::select! {
                 biased;
                 _ = &mut changed => continue,
-                ready = timeout_at(deadline, master.writable()) => ready,
+                result = timeout_at(deadline, master.write(&data[written..])) => result,
             };
-            let mut ready = match ready {
-                Ok(Ok(ready)) => ready,
-                Ok(Err(error)) => return (written, false, Some(error.to_string())),
-                Err(_) => return (written, true, None),
-            };
-            match ready.try_io(|fd| write_fd(fd.get_ref().as_raw_fd(), &data[written..])) {
+            match result {
                 Ok(Ok(0)) => return (written, false, Some("terminal accepted zero bytes".into())),
                 Ok(Ok(count)) => {
                     written += count;
                     self.input_bytes.fetch_add(count as u64, Ordering::AcqRel);
                 }
-                Ok(Err(error)) => return (written, false, Some(error.to_string())),
-                Err(_) => continue,
+                Ok(Err(error)) | Err(DeadlineError::Reactor(error)) => {
+                    return (written, false, Some(error.to_string()));
+                }
+                Err(DeadlineError::Elapsed) => return (written, true, None),
             }
         }
         (written, false, None)
@@ -629,14 +569,15 @@ impl Terminal {
             return;
         }
         self.changed.notify_waiters();
-        let mut child = self.child.lock().await;
-        if child.is_some() {
+        let child = self.child.lock().unwrap().take();
+        if let Some(mut child) = child {
             self.stop_session();
-            if let Some(mut child) = child.take() {
-                let _ = child.start_kill();
-                let _ = child.wait().await;
+            let _ = child.start_kill();
+            if let Ok(driver) = Driver::get() {
+                let _ = child.wait(&driver.timer).await;
             }
         }
+        self.writer.lock().await.take();
         let reader = self.reader.lock().unwrap().take();
         if let Some(mut reader) = reader
             && timeout(Duration::from_secs(2), &mut reader).await.is_err()
@@ -805,33 +746,13 @@ fn signal_pidfd(fd: &OwnedFd, signal: libc::c_int) -> io::Result<()> {
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        if self.child.get_mut().is_some() {
+        if let Some(mut child) = self.child.get_mut().unwrap().take() {
             self.stop_session();
+            let _ = child.start_kill();
         }
         if let Some(reader) = self.reader.get_mut().unwrap().take() {
             reader.abort();
         }
-        // Child's kill_on_drop also handles early error paths; normal shutdown explicitly reaps it.
-    }
-}
-
-fn read_fd(fd: RawFd, data: &mut [u8]) -> io::Result<usize> {
-    // SAFETY: fd is valid and the mutable slice owns its writable buffer.
-    let n = unsafe { libc::read(fd, data.as_mut_ptr().cast(), data.len()) };
-    if n < 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(n as usize)
-    }
-}
-
-fn write_fd(fd: RawFd, data: &[u8]) -> io::Result<usize> {
-    // SAFETY: fd is valid and data remains readable for the syscall duration.
-    let n = unsafe { libc::write(fd, data.as_ptr().cast(), data.len()) };
-    if n < 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(n as usize)
     }
 }
 
@@ -910,7 +831,7 @@ mod tests {
         collect_until(&terminal, &mut cursor, "AFTER_INT").await;
         let pid = terminal.pid;
         terminal.shutdown().await;
-        assert!(!terminal.running().await);
+        assert!(!terminal.running());
         assert!(!Path::new(&format!("/proc/{pid}")).exists());
         assert!(
             terminal
@@ -959,7 +880,7 @@ mod tests {
         let foreground = timeout(Duration::from_secs(2), async {
             loop {
                 // SAFETY: master is a live PTY.
-                let foreground = unsafe { libc::tcgetpgrp(master.get_ref().as_raw_fd()) };
+                let foreground = unsafe { libc::tcgetpgrp(master.as_raw_fd()) };
                 if foreground > 0 && foreground != terminal.pid {
                     break foreground;
                 }
@@ -1053,7 +974,7 @@ mod tests {
             }
         }
 
-        let mut decoy_command = Command::new("python3");
+        let mut decoy_command = tokio::process::Command::new("python3");
         decoy_command
             .args([
                 "-u",
@@ -1094,7 +1015,7 @@ child.wait(timeout=2)
         let _child_cleanup = KillFixture(open_pidfd(decoy_child).unwrap());
         assert!(owned_process(decoy_child, decoy_pid));
 
-        let mut leader = Command::new("python3")
+        let mut leader = tokio::process::Command::new("python3")
             .args(["-c", "import time; time.sleep(15)"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())

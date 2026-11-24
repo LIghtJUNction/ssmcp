@@ -35,6 +35,10 @@ socket 和父目录必须由当前用户拥有且保持私有；路径禁止符�
 
 peer 连接不启动另一个 ssmcp 进程，也不拥有远端进程。客户端会拒绝本次连接自己公布的完整 MCP URL；同一主机的不同账号路径仍可明确选择。此检查针对直接自连接，不替代远端账号权限，也不为任意跨网关调用链做自动选路。关闭本机连接会停止其拥有的请求，peer 网关继续运行。
 
+## zrun 原生命令执行
+
+Linux 和 macOS 上，`ssmcp.exec.start` 默认通过进程内的 zrun 库执行，作用于本地、daemon 和 worker 客户端。Linux 的 `mode:"pty"` 也走同一执行路径。Windows 使用原生进程和 ConPTY。以下显式命令服务用于另外加载 `zrun.shell_run` 和 `zrun.shell_batch`。
+
 ## 连接 zrun 命令服务
 
 在 Linux 上，用同一系统账号启动 zrun，再将私有 socket 的绝对路径交给 SSMCP。

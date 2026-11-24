@@ -1,19 +1,35 @@
 //! Owned commands. Linux uses a per-command subreaper; other platforms keep native ownership.
 #[cfg(target_os = "linux")]
+use crate::command_runtime::Driver;
+#[cfg(target_os = "linux")]
 use std::{
     io,
-    os::fd::{AsRawFd, FromRawFd, OwnedFd},
-    process::ExitStatus,
+    os::{
+        fd::{AsRawFd, FromRawFd, OwnedFd},
+        unix::process::CommandExt,
+    },
+    process::{Command, ExitStatus},
     time::{Duration, Instant},
 };
 #[cfg(target_os = "linux")]
-use tokio::process::{Child, Command};
+use zrun::process::Child as ZrunChild;
 
 #[cfg(not(target_os = "linux"))]
 #[path = "process_portable.rs"]
 mod portable;
+#[cfg(all(unix, not(target_os = "linux")))]
+pub(crate) use portable::ExecManaged;
 #[cfg(not(target_os = "linux"))]
 pub use portable::Managed;
+#[cfg(windows)]
+pub(crate) use portable::Managed as ExecManaged;
+
+#[cfg(target_os = "linux")]
+use tokio::process::{Child as TokioChild, Command as TokioCommand};
+#[cfg(target_os = "linux")]
+pub type Managed = ManagedProcess<TokioChild>;
+#[cfg(target_os = "linux")]
+pub(crate) type ExecManaged = ManagedProcess<ZrunChild>;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ResourceUsage {
@@ -40,8 +56,8 @@ fn accounting_channel() -> io::Result<(OwnedFd, OwnedFd)> {
 }
 
 #[cfg(target_os = "linux")]
-pub struct Managed {
-    pub child: Child,
+pub struct ManagedProcess<C> {
+    pub child: C,
     pid: libc::pid_t,
     leader: OwnedFd,
     stopped: bool,
@@ -49,57 +65,15 @@ pub struct Managed {
 }
 
 #[cfg(target_os = "linux")]
-impl Managed {
-    pub fn spawn(command: &mut Command) -> io::Result<Self> {
-        Self::spawn_inner(command, false)
-    }
-
-    pub(crate) fn spawn_accounted(command: &mut Command) -> io::Result<Self> {
-        Self::spawn_inner(command, true)
-    }
-
-    fn spawn_inner(command: &mut Command, account: bool) -> io::Result<Self> {
-        // Only the guardian is a direct child. Killing it first would orphan
-        // detached grandchildren, so all exits go through its bounded cleanup.
+impl ManagedProcess<TokioChild> {
+    pub fn spawn(command: &mut TokioCommand) -> io::Result<Self> {
         command.kill_on_drop(false);
-        let parent = std::process::id() as libc::pid_t;
-        let max_fd = guardian::descriptor_limit()?;
-        // Accounting is optional. Keep the parent write end alive through spawn.
-        let accounting = account
-            .then(accounting_channel)
-            .transpose()
-            .ok()
-            .flatten()
-            .filter(|(_, write)| write.as_raw_fd() >= 3);
-        let report_fd = accounting
-            .as_ref()
-            .map_or(-1, |(_, write)| write.as_raw_fd());
-        // SAFETY: guardian::prepare contains only stack data and libc operations.
-        unsafe {
-            command.pre_exec(move || guardian::prepare(parent, max_fd, report_fd));
-        }
+        prepare_command(command.as_std_mut(), false)?;
         let child = command.spawn()?;
         let pid = child
             .id()
             .ok_or_else(|| io::Error::other("child has no PID"))? as libc::pid_t;
-        let leader = match crate::pty::open_pidfd(pid) {
-            Ok(fd) => fd,
-            Err(error) => {
-                // The unreaped direct child still owns this PID. Ask it to
-                // clean up rather than killing its subreaper before descendants.
-                unsafe {
-                    libc::kill(pid, libc::SIGTERM);
-                }
-                return Err(error);
-            }
-        };
-        Ok(Self {
-            child,
-            pid,
-            leader,
-            stopped: false,
-            accounting: accounting.map(|(read, _)| read),
-        })
+        Self::from_child(child, pid, None)
     }
 
     /// The guardian exits only after reaping its complete owned process tree.
@@ -114,8 +88,87 @@ impl Managed {
         self.child.wait().await
     }
 
+    pub async fn shutdown(&mut self) {
+        self.terminate();
+        let _ = self.child.wait().await;
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl ManagedProcess<ZrunChild> {
+    pub fn spawn(command: &mut Command) -> io::Result<Self> {
+        Self::spawn_inner(command, false)
+    }
+
+    pub(crate) fn spawn_accounted(command: &mut Command) -> io::Result<Self> {
+        Self::spawn_inner(command, true)
+    }
+
+    fn spawn_inner(command: &mut Command, account: bool) -> io::Result<Self> {
+        let driver = Driver::get()?;
+        let accounting = prepare_command(command, account)?;
+        let child = zrun::process::spawn(command, &driver.io)?;
+        let pid = child.id() as libc::pid_t;
+        Self::from_child(child, pid, accounting.map(|(read, _)| read))
+    }
+
+    /// The guardian exits only after reaping its complete owned process tree.
+    pub async fn wait(&mut self) -> io::Result<ExitStatus> {
+        let status = self.child.wait(&Driver::get()?.timer).await?;
+        self.stopped = true;
+        Ok(status)
+    }
+
+    pub async fn shutdown(&mut self) {
+        self.terminate();
+        let _ = self.wait().await;
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_command(command: &mut Command, account: bool) -> io::Result<Option<(OwnedFd, OwnedFd)>> {
+    // Only the guardian is a direct child. Keep it alive to reap its tree.
+    let parent = std::process::id() as libc::pid_t;
+    let max_fd = guardian::descriptor_limit()?;
+    let accounting = account
+        .then(accounting_channel)
+        .transpose()
+        .ok()
+        .flatten()
+        .filter(|(_, write)| write.as_raw_fd() >= 3);
+    let report_fd = accounting
+        .as_ref()
+        .map_or(-1, |(_, write)| write.as_raw_fd());
+    // SAFETY: guardian::prepare contains only stack data and libc operations.
+    unsafe {
+        command.pre_exec(move || guardian::prepare(parent, max_fd, report_fd));
+    }
+    Ok(accounting)
+}
+
+#[cfg(target_os = "linux")]
+impl<C> ManagedProcess<C> {
+    fn from_child(child: C, pid: libc::pid_t, accounting: Option<OwnedFd>) -> io::Result<Self> {
+        let leader = match crate::pty::open_pidfd(pid) {
+            Ok(fd) => fd,
+            Err(error) => {
+                // The unreaped direct child pins this PID. Let the guardian
+                // reap any descendants before the child handle is dropped.
+                unsafe { libc::kill(pid, libc::SIGTERM) };
+                return Err(error);
+            }
+        };
+        Ok(Self {
+            child,
+            pid,
+            leader,
+            stopped: false,
+            accounting,
+        })
+    }
+
     /// Request cleanup while the subreaper remains alive to adopt and reap
-    /// detached descendants. The watchdog also works after a Tokio runtime stops.
+    /// detached descendants. The watchdog also works after the command reactor stops.
     pub fn terminate(&mut self) {
         if self.stopped {
             return;
@@ -166,16 +219,9 @@ impl Managed {
             peak_rss_bytes: record[1],
         })
     }
-
-    pub async fn shutdown(&mut self) {
-        self.terminate();
-        // Always wait, including after synchronous termination or a cancelled wait.
-        let _ = self.child.wait().await;
-    }
 }
-
 #[cfg(target_os = "linux")]
-impl Drop for Managed {
+impl<C> Drop for ManagedProcess<C> {
     fn drop(&mut self) {
         self.terminate();
     }
@@ -684,11 +730,10 @@ mod guardian {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use crate::test_process::read_line;
     use std::{process::Stdio, time::Duration};
-    use tokio::{
-        io::{AsyncBufReadExt, BufReader},
-        time::timeout,
-    };
+    use tokio::time::timeout;
+    use zrun::io::AsyncFd;
 
     #[tokio::test]
     async fn shutdown_stops_owned_children_in_a_separate_session() {
@@ -699,10 +744,10 @@ child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],
 print(child.pid, flush=True)
 time.sleep(300)
 "#]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::inherit());
-        let mut managed = Managed::spawn(&mut command).unwrap();
-        let mut stdout = BufReader::new(managed.child.stdout.take().unwrap());
+        let mut managed = ExecManaged::spawn(&mut command).unwrap();
+        let mut stdout = managed.child.take_stdout().unwrap().unwrap();
         let mut line = String::new();
-        timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+        timeout(Duration::from_secs(5), read_line(&mut stdout, &mut line))
             .await
             .unwrap()
             .unwrap();
@@ -739,10 +784,10 @@ time.sleep(300)
         let mut command = Command::new("python3");
         command.args(["-u", "-c", "import subprocess,sys; child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); print(child.pid,flush=True)"])
             .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::inherit());
-        let mut process = Managed::spawn(&mut command).unwrap();
-        let mut stdout = BufReader::new(process.child.stdout.take().unwrap());
+        let mut process = ExecManaged::spawn(&mut command).unwrap();
+        let mut stdout = process.child.take_stdout().unwrap().unwrap();
         let mut line = String::new();
-        timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+        timeout(Duration::from_secs(5), read_line(&mut stdout, &mut line))
             .await
             .unwrap()
             .unwrap();
@@ -794,7 +839,7 @@ time.sleep(60)
 
     async fn detached_command(
         completes: bool,
-    ) -> (Managed, i32, i32, BufReader<tokio::process::ChildStdout>) {
+    ) -> (ExecManaged, i32, i32, AsyncFd<std::process::ChildStdout>) {
         let mut command = Command::new("python3");
         command
             .args(["-u", "-c", DOUBLE_FORK])
@@ -802,10 +847,10 @@ time.sleep(60)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
-        let mut managed = Managed::spawn(&mut command).unwrap();
-        let mut stdout = BufReader::new(managed.child.stdout.take().unwrap());
+        let mut managed = ExecManaged::spawn(&mut command).unwrap();
+        let mut stdout = managed.child.take_stdout().unwrap().unwrap();
         let mut line = String::new();
-        timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+        timeout(Duration::from_secs(5), read_line(&mut stdout, &mut line))
             .await
             .unwrap()
             .unwrap();
@@ -829,7 +874,6 @@ time.sleep(60)
 
     #[tokio::test]
     async fn double_forked_descendant_is_reaped_after_native_exit() {
-        use tokio::io::AsyncReadExt;
         let (mut managed, command, daemon, mut stdout) = detached_command(true).await;
         let status = timeout(Duration::from_secs(5), managed.wait())
             .await
@@ -838,13 +882,13 @@ time.sleep(60)
         assert_eq!(status.code(), Some(17), "preserve the native exit code");
         gone(command).await;
         gone(daemon).await;
-        let mut tail = Vec::new();
-        timeout(Duration::from_secs(1), stdout.read_to_end(&mut tail))
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(
-            tail.is_empty(),
+        let mut tail = [0];
+        assert_eq!(
+            timeout(Duration::from_secs(1), stdout.read(&mut tail))
+                .await
+                .unwrap()
+                .unwrap(),
+            0,
             "all inherited stdout writers must be closed"
         );
     }
@@ -880,14 +924,14 @@ time.sleep(60)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        let mut managed = Managed::spawn(&mut command).unwrap();
+        let mut managed = ExecManaged::spawn(&mut command).unwrap();
         let status = timeout(Duration::from_secs(5), managed.wait())
             .await
             .unwrap()
             .unwrap();
         assert_eq!(status.signal(), Some(libc::SIGTERM));
         let mut missing = Command::new("/ssmcp/nonexistent-command-for-exec-error-test");
-        let error = Managed::spawn(&mut missing)
+        let error = ExecManaged::spawn(&mut missing)
             .err()
             .expect("exec failure must fail spawn");
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
@@ -961,7 +1005,7 @@ time.sleep(60)
     async fn cloned_fixture(
         mode: &str,
         unrelated: Option<u32>,
-    ) -> (Managed, i32, BufReader<tokio::process::ChildStdout>) {
+    ) -> (ExecManaged, i32, AsyncFd<std::process::ChildStdout>) {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command
             .args([
@@ -978,13 +1022,13 @@ time.sleep(60)
         if let Some(pid) = unrelated {
             command.env("SSMCP_UNRELATED_FIXTURE_PID", pid.to_string());
         }
-        let mut managed = Managed::spawn(&mut command).unwrap();
-        let mut stdout = BufReader::new(managed.child.stdout.take().unwrap());
+        let mut managed = ExecManaged::spawn(&mut command).unwrap();
+        let mut stdout = managed.child.take_stdout().unwrap().unwrap();
         let pid = timeout(Duration::from_secs(5), async {
             loop {
                 let mut line = String::new();
                 assert_ne!(
-                    stdout.read_line(&mut line).await.unwrap(),
+                    read_line(&mut stdout, &mut line).await.unwrap(),
                     0,
                     "fixture exited before reporting its child"
                 );
@@ -1000,7 +1044,6 @@ time.sleep(60)
 
     #[tokio::test]
     async fn clone_without_sigchld_is_reaped_on_native_exit_and_closes_stdout() {
-        use tokio::io::AsyncReadExt;
         let (mut managed, child, mut stdout) = cloned_fixture("adopt", None).await;
         let status = timeout(Duration::from_secs(5), managed.wait())
             .await
@@ -1008,20 +1051,20 @@ time.sleep(60)
             .unwrap();
         assert_eq!(status.code(), Some(17));
         gone(child).await;
-        let mut tail = Vec::new();
-        timeout(Duration::from_secs(1), stdout.read_to_end(&mut tail))
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(
-            tail.is_empty(),
+        let mut tail = [0];
+        assert_eq!(
+            timeout(Duration::from_secs(1), stdout.read(&mut tail))
+                .await
+                .unwrap()
+                .unwrap(),
+            0,
             "the adopted clone must release inherited output pipes"
         );
     }
 
     #[tokio::test]
     async fn child_identity_check_accepts_clone_children_and_rejects_unrelated_pids() {
-        let mut unrelated = Command::new("python3")
+        let mut unrelated = tokio::process::Command::new("python3")
             .args(["-c", "import time; time.sleep(15)"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1054,10 +1097,7 @@ time.sleep(60)
             return;
         }
         let (managed, command, daemon, _stdout) = detached_command(false).await;
-        println!(
-            "SSMCP_OWNED_PIDS {} {command} {daemon}",
-            managed.child.id().unwrap()
-        );
+        println!("SSMCP_OWNED_PIDS {} {command} {daemon}", managed.child.id());
         std::io::Write::flush(&mut std::io::stdout()).unwrap();
         // Deliberately skip both Managed::drop and runtime shutdown.
         unsafe {
@@ -1067,7 +1107,7 @@ time.sleep(60)
 
     #[tokio::test]
     async fn abrupt_owner_exit_cleans_and_reaps_detached_commands() {
-        let mut fixture = Command::new(std::env::current_exe().unwrap());
+        let mut fixture = tokio::process::Command::new(std::env::current_exe().unwrap());
         fixture
             .args([
                 "--exact",

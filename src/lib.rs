@@ -8,6 +8,8 @@ pub mod client;
 pub mod code_mode;
 #[cfg(target_os = "linux")]
 mod collab;
+#[cfg(unix)]
+mod command_runtime;
 pub mod computer;
 pub mod context;
 #[cfg(target_os = "linux")]

@@ -30,6 +30,22 @@ pub(crate) async fn isolated(case: &str) -> bool {
     true
 }
 
+pub(crate) async fn read_line(
+    pipe: &mut zrun::io::AsyncFd<std::process::ChildStdout>,
+    line: &mut String,
+) -> std::io::Result<usize> {
+    let mut bytes = Vec::new();
+    let mut next = [0];
+    while pipe.read(&mut next).await? != 0 {
+        bytes.push(next[0]);
+        if next[0] == b'\n' {
+            break;
+        }
+    }
+    line.push_str(std::str::from_utf8(&bytes).map_err(std::io::Error::other)?);
+    Ok(bytes.len())
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn forked_cloexec_descriptor_holds_lock_until_exec() {

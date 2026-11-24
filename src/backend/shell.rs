@@ -6,13 +6,17 @@ mod artifacts;
 #[cfg(all(test, target_os = "linux"))]
 mod pty_tests;
 
-use super::{events::EventLog, process::Managed};
+use super::{events::EventLog, process::ExecManaged};
+#[cfg(unix)]
+use crate::command_runtime::{DeadlineError, Driver, JoinHandle, timeout_at as command_timeout};
 use crate::output::{Capture, OutputStore};
 use crate::runtime::time::ExecutionTiming;
 use crate::{pty::Terminal, wire::Operation};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
+#[cfg(unix)]
+use std::process::Command;
 use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
@@ -23,13 +27,62 @@ use std::{
     },
     time::Duration,
 };
+#[cfg(windows)]
+use tokio::sync::oneshot as command_ready;
+#[cfg(windows)]
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     process::{ChildStdin, Command},
-    sync::{Mutex as AsyncMutex, Notify, Semaphore, watch},
     task::JoinHandle,
+};
+use tokio::{
+    sync::{Mutex as AsyncMutex, Notify, Semaphore, watch},
     time::{Instant, timeout, timeout_at},
 };
+#[cfg(unix)]
+use zrun::{io::AsyncFd, sync as command_ready};
+
+#[cfg(unix)]
+type ChildStdin = AsyncFd<std::process::ChildStdin>;
+
+#[cfg(unix)]
+enum CommandOutput {
+    Stdout(AsyncFd<std::process::ChildStdout>),
+    Stderr(AsyncFd<std::process::ChildStderr>),
+    Pty(crate::observer::pty::Output),
+    Empty,
+}
+
+#[cfg(unix)]
+impl CommandOutput {
+    async fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Stdout(pipe) => pipe.read(buffer).await,
+            Self::Stderr(pipe) => pipe.read(buffer).await,
+            Self::Pty(pty) => pty.read(buffer).await,
+            Self::Empty => Ok(0),
+        }
+    }
+}
+
+#[cfg(windows)]
+type CommandOutput = Box<dyn AsyncRead + Unpin + Send>;
+
+#[cfg(windows)]
+#[derive(Debug)]
+enum DeadlineError {
+    Elapsed,
+}
+
+#[cfg(windows)]
+async fn command_timeout<F: std::future::Future>(
+    deadline: std::time::Instant,
+    future: F,
+) -> Result<F::Output, DeadlineError> {
+    timeout_at(deadline.into(), future)
+        .await
+        .map_err(|_| DeadlineError::Elapsed)
+}
 
 const DEFAULT_ARTIFACT_BUDGET_BYTES: u64 = 20_000_000_000;
 const MAX_JOBS: usize = 32;
@@ -507,11 +560,6 @@ impl Shell {
                 return Err(format!("could not start PTY command: {error}"));
             }
         };
-        // The connection's implicit main terminal is infrastructure, not a
-        // submitted command. Compatibility terminal.open shares this spawn.
-        if creator.call.is_none() && args.id != "main" {
-            registry.local_spawned = registry.local_spawned.saturating_add(1);
-        }
         let (cancel, mut cancel_rx) = watch::channel(false);
         let (input_stopped, _) = watch::channel(false);
         let mut stderr = Output::new(&self.output, format!("job:{}:stderr", args.id));
@@ -556,31 +604,26 @@ impl Shell {
             #[cfg(target_os = "linux")]
             disk_delta: std::sync::OnceLock::new(),
         });
-        if let Some(id) = evicted {
-            registry.forget(&id);
-        }
-        registry.jobs.insert(job.id.clone(), job.clone());
-        drop(registry);
-        let worker_command =
-            crate::worker::native_command_started(&job.creator, &job.id, &job.command);
-        let mut started = job.snapshot();
-        started["type"] = json!("exec.started");
-        self.events
-            .push_execution(started, job.creator.clone(), timing);
+        let (ready, start) = command_ready::channel::<Option<crate::worker::NativeCommandLog>>();
         let events = self.events.clone();
         let worker = job.clone();
-        tokio::spawn(async move {
+        let supervise = async move {
+            let Ok(worker_command) = start.await else {
+                return;
+            };
             let outcome = tokio::select! {
                 biased;
                 _ = cancel_rx.changed() => (None, true, false, None, None),
                 result = async {
                     if let Some(deadline) = timing.deadline {
-                        timeout_at(deadline.into(), terminal.wait_exit()).await
+                        command_timeout(deadline, terminal.wait_exit()).await
                     } else { Ok(terminal.wait_exit().await) }
                 } => match result {
                     Ok(Ok((code, signal))) => (code, false, false, None, signal),
                     Ok(Err(error)) => (None, false, false, Some(error.to_string()), None),
-                    Err(_) => (None, false, true, None, None),
+                    Err(DeadlineError::Elapsed) => (None, false, true, None, None),
+                    #[cfg(unix)]
+                    Err(DeadlineError::Reactor(error)) => (None, false, false, Some(error.to_string()), None),
                 }
             };
             worker.stop_input();
@@ -616,7 +659,31 @@ impl Shell {
             snapshot["type"] = json!("exec.exited");
             events.push_scoped(snapshot, worker.creator.clone());
             worker.changed.notify_waiters();
-        });
+        };
+        #[cfg(target_os = "linux")]
+        if let Err(error) = command_task(supervise) {
+            crate::client::terminal::close_session(&job.id);
+            return Err(format!("could not supervise PTY command: {error}"));
+        }
+        #[cfg(not(target_os = "linux"))]
+        tokio::spawn(supervise);
+        // The connection's implicit main terminal is infrastructure, not a
+        // submitted command. Compatibility terminal.open shares this spawn.
+        if job.creator.call.is_none() && job.id != "main" {
+            registry.local_spawned = registry.local_spawned.saturating_add(1);
+        }
+        if let Some(id) = &evicted {
+            registry.forget(id);
+        }
+        registry.jobs.insert(job.id.clone(), job.clone());
+        drop(registry);
+        let worker_command =
+            crate::worker::native_command_started(&job.creator, &job.id, &job.command);
+        let mut started = job.snapshot();
+        started["type"] = json!("exec.started");
+        self.events
+            .push_execution(started, job.creator.clone(), timing);
+        let _ = ready.send(worker_command);
         Ok(job)
     }
 
@@ -1340,13 +1407,15 @@ impl Shell {
                 Err("job stdin is closed".into())
             };
         }
-        let deadline = Instant::now() + Duration::from_millis(args.wait_ms);
+        let deadline = std::time::Instant::now() + Duration::from_millis(args.wait_ms);
         let mut input = tokio::select! {
             biased;
             _ = stopped.changed() => return Ok(job.write_result(0,data.len(),false,Some("job stdin closed before the write".into()))),
-            result = timeout_at(deadline, job.stdin.lock()) => match result {
+            result = command_timeout(deadline, job.stdin.lock()) => match result {
                 Ok(input) => input,
-                Err(_) => return Ok(job.write_result(0,data.len(),true,None)),
+                Err(DeadlineError::Elapsed) => return Ok(job.write_result(0,data.len(),true,None)),
+                #[cfg(unix)]
+                Err(DeadlineError::Reactor(error)) => return Err(error.to_string()),
             }
         };
         let mut written = 0;
@@ -1369,7 +1438,7 @@ impl Shell {
                     error = Some("job stdin closed during the write".into());
                     break;
                 },
-                result = timeout_at(deadline, pipe.write(&data[written..])) => result,
+                result = command_timeout(deadline, pipe.write(&data[written..])) => result,
             };
             match result {
                 Ok(Ok(0)) => {
@@ -1384,7 +1453,12 @@ impl Shell {
                     error = Some(format!("stdin write failed: {cause}"));
                     break;
                 }
-                Err(_) => {
+                #[cfg(unix)]
+                Err(DeadlineError::Reactor(cause)) => {
+                    error = Some(cause.to_string());
+                    break;
+                }
+                Err(DeadlineError::Elapsed) => {
                     timed_out = true;
                     break;
                 }
@@ -1575,29 +1649,24 @@ impl Shell {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let pty_reader: Option<Box<dyn AsyncRead + Unpin + Send>> = {
-            #[cfg(unix)]
-            {
-                if args.mode.is_none()
-                    && let Some(lease) = &observation
-                {
-                    let (reader, stdout, stderr) = crate::observer::pty::Output::open(lease)
-                        .map_err(|error| format!("could not open command PTY: {error}"))?;
-                    command
-                        .stdout(stdout)
-                        .stderr(stderr)
-                        .env("TERM", "xterm-256color");
-                    Some(Box::new(reader))
-                } else {
-                    None
-                }
-            }
-            #[cfg(not(unix))]
-            {
-                None
-            }
+        #[cfg(unix)]
+        let pty_reader = if args.mode.is_none()
+            && let Some(lease) = &observation
+        {
+            let (reader, stdout, stderr) = crate::observer::pty::Output::open(lease)
+                .map_err(|error| format!("could not open command PTY: {error}"))?;
+            command
+                .stdout(stdout)
+                .stderr(stderr)
+                .env("TERM", "xterm-256color");
+            Some(reader)
+        } else {
+            None
         };
+        #[cfg(unix)]
         let output_mode = if pty_reader.is_some() { "pty" } else { "pipes" };
+        #[cfg(windows)]
+        let output_mode = "pipes";
         if let Some(env) = args.env {
             command.envs(env);
         }
@@ -1623,42 +1692,53 @@ impl Shell {
         }
         #[cfg(target_os = "linux")]
         let spawn = if creator.call.is_none() {
-            Managed::spawn_accounted
+            ExecManaged::spawn_accounted
         } else {
-            Managed::spawn
+            ExecManaged::spawn
         };
         #[cfg(not(target_os = "linux"))]
-        let spawn = Managed::spawn;
+        let spawn = ExecManaged::spawn;
         let mut process =
             spawn(&mut command).map_err(|e| format!("could not start command: {e}"))?;
-        if creator.call.is_none() {
-            registry.local_spawned = registry.local_spawned.saturating_add(1);
-        }
         #[cfg(target_os = "linux")]
         if let Some(artifacts) = &mut artifacts {
             artifacts.mark_started();
         }
-        let pid = process.child.id().ok_or("command has no process ID")?;
-        let stdout: Box<dyn AsyncRead + Unpin + Send> = match pty_reader {
-            Some(reader) => reader,
-            None => Box::new(
-                process
-                    .child
-                    .stdout
-                    .take()
-                    .ok_or("command stdout unavailable")?,
-            ),
+        #[cfg(unix)]
+        let (pid, stdin_pipe, stdout, stderr) = {
+            let child = &mut process.child;
+            let (stdout, stderr) = if let Some(reader) = pty_reader {
+                (CommandOutput::Pty(reader), CommandOutput::Empty)
+            } else {
+                (
+                    CommandOutput::Stdout(
+                        child
+                            .take_stdout()
+                            .map_err(|error| format!("could not register stdout: {error}"))?
+                            .ok_or("command stdout unavailable")?,
+                    ),
+                    CommandOutput::Stderr(
+                        child
+                            .take_stderr()
+                            .map_err(|error| format!("could not register stderr: {error}"))?
+                            .ok_or("command stderr unavailable")?,
+                    ),
+                )
+            };
+            let stdin_pipe = child
+                .take_stdin()
+                .map_err(|error| format!("could not register stdin: {error}"))?;
+            (child.id(), stdin_pipe, stdout, stderr)
         };
-        let stderr: Box<dyn AsyncRead + Unpin + Send> = if output_mode == "pty" {
-            Box::new(tokio::io::empty())
-        } else {
-            Box::new(
-                process
-                    .child
-                    .stderr
-                    .take()
-                    .ok_or("command stderr unavailable")?,
-            )
+        #[cfg(windows)]
+        let (pid, stdin_pipe, stdout, stderr) = {
+            let child = &mut process.child;
+            let pid = child.id().ok_or("command has no process ID")?;
+            let stdout: CommandOutput =
+                Box::new(child.stdout.take().ok_or("command stdout unavailable")?);
+            let stderr: CommandOutput =
+                Box::new(child.stderr.take().ok_or("command stderr unavailable")?);
+            (pid, child.stdin.take(), stdout, stderr)
         };
         let (cancel, cancel_rx) = watch::channel(false);
         let (input_stopped, _) = watch::channel(stdin != InputMode::Pipe);
@@ -1689,7 +1769,7 @@ impl Shell {
             changed: Arc::new(Notify::new()),
             cancel,
             input_mode: stdin,
-            stdin: AsyncMutex::new(process.child.stdin.take()),
+            stdin: AsyncMutex::new(stdin_pipe),
             input_stopped,
             observation: Mutex::new(observation),
             output_mode,
@@ -1702,35 +1782,27 @@ impl Shell {
             #[cfg(target_os = "linux")]
             disk_delta: std::sync::OnceLock::new(),
         });
-        // A failed spawn must leave the retained history untouched.
-        if let Some(id) = &evicted {
-            registry.forget(id);
-        }
-        registry.jobs.insert(id.clone(), job.clone());
-        drop(registry);
-        let worker_command =
-            crate::worker::native_command_started(&job.creator, &job.id, &job.command);
-        let mut started = job.snapshot();
-        started["type"] = json!("exec.started");
-        self.events
-            .push_execution(started, job.creator.clone(), job.timing);
+        let (ready, start) = command_ready::channel::<Option<crate::worker::NativeCommandLog>>();
         let events = self.events.clone();
         let worker = job.clone();
-        tokio::spawn(async move {
-            let mut out = tokio::spawn(capture(worker.clone(), stdout, "stdout", events.clone()));
-            let mut err = tokio::spawn(capture(worker.clone(), stderr, "stderr", events.clone()));
+        command_task(async move {
+            let Ok(worker_command) = start.await else { return };
+            let out = command_task(capture(worker.clone(), stdout, "stdout", events.clone()));
+            let err = command_task(capture(worker.clone(), stderr, "stderr", events.clone()));
             let mut cancel_rx = cancel_rx;
             let outcome = tokio::select! {
                 biased;
                 _=cancel_rx.changed() => (None,true,false,None,None),
                 result=async {
                     if let Some(deadline) = worker.timing.deadline {
-                        timeout_at(deadline.into(), process.wait()).await
+                        command_timeout(deadline, process.wait()).await
                     } else { Ok(process.wait().await) }
                 } => match result {
                     Ok(Ok(status)) => (status.code(),false,false,None,exit_signal(&status)),
                     Ok(Err(error)) => (None,false,false,Some(error.to_string()),None),
-                    Err(_) => (None,false,true,None,None),
+                    Err(DeadlineError::Elapsed) => (None,false,true,None,None),
+                    #[cfg(unix)]
+                    Err(DeadlineError::Reactor(error)) => (None,false,false,Some(error.to_string()),None),
                 }
             };
             // Wake blocked/queued writers before waiting for their pipe lock.
@@ -1741,10 +1813,7 @@ impl Shell {
             process.shutdown().await;
             #[cfg(target_os = "linux")]
             let usage = process.take_usage();
-            tokio::join!(
-                drain(&mut out, &worker, "stdout"),
-                drain(&mut err, &worker, "stderr")
-            );
+            tokio::join!(drain(out, &worker, "stdout"), drain(err, &worker, "stderr"));
             {
                 let mut state = worker.state();
                 // Status reads can observe completion without a notification.
@@ -1773,17 +1842,22 @@ impl Shell {
                 static SAMPLES: Semaphore = Semaphore::const_new(MAX_JOBS);
                 if let Ok(permit) = SAMPLES.try_acquire() {
                     let job = worker.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let _permit = permit;
-                        let mut artifacts = job
-                            .artifacts
-                            .as_ref()
-                            .unwrap()
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner());
-                        let delta = artifacts.completion_delta();
-                        let _ = job.disk_delta.set(delta);
-                    });
+                    let sample = std::thread::Builder::new()
+                        .name("ssmcp-disk-sample".into())
+                        .spawn(move || {
+                            let _permit = permit;
+                            let mut artifacts = job
+                                .artifacts
+                                .as_ref()
+                                .unwrap()
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner());
+                            let delta = artifacts.completion_delta();
+                            let _ = job.disk_delta.set(delta);
+                        });
+                    if sample.is_err() {
+                        let _ = worker.disk_delta.set((None, true));
+                    }
                 } else {
                     let _ = worker.disk_delta.set((None, true));
                 }
@@ -1816,7 +1890,24 @@ impl Shell {
             let changed = worker.changed.clone();
             drop(worker);
             changed.notify_waiters();
-        });
+        })
+        .map_err(|error| format!("could not supervise command: {error}"))?;
+        if job.creator.call.is_none() {
+            registry.local_spawned = registry.local_spawned.saturating_add(1);
+        }
+        // A failed spawn must leave the retained history untouched.
+        if let Some(id) = &evicted {
+            registry.forget(id);
+        }
+        registry.jobs.insert(id.clone(), job.clone());
+        drop(registry);
+        let worker_command =
+            crate::worker::native_command_started(&job.creator, &job.id, &job.command);
+        let mut started = job.snapshot();
+        started["type"] = json!("exec.started");
+        self.events
+            .push_execution(started, job.creator.clone(), job.timing);
+        let _ = ready.send(worker_command);
         let mut result = job.snapshot();
         #[cfg(target_os = "linux")]
         if let Some(artifacts) = &job.artifacts {
@@ -2019,9 +2110,20 @@ async fn wait_output(job: &Job, out: u64, err: u64, wait_ms: u64) -> Result<(), 
         }
     }
 }
-async fn capture<R: AsyncRead + Unpin>(
+fn command_task<F>(future: F) -> std::io::Result<JoinHandle<F::Output>>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    #[cfg(unix)]
+    return Driver::get()?.spawn(future);
+    #[cfg(windows)]
+    Ok(tokio::spawn(future))
+}
+
+async fn capture(
     job: Arc<Job>,
-    mut reader: R,
+    mut reader: CommandOutput,
     stream: &'static str,
     events: Arc<EventLog>,
 ) {
@@ -2070,6 +2172,8 @@ async fn capture<R: AsyncRead + Unpin>(
                     events.push_scoped(json!({"type":"ssmcp.output_archived","job_id":job.id,"stream":stream,"artifact":artifact}), job.creator.clone());
                 }
                 job.changed.notify_waiters();
+                #[cfg(unix)]
+                zrun::yield_now().await;
             }
         }
     }
@@ -2085,25 +2189,41 @@ fn finish_output(job: &Job, stream: &str, error: Option<String>) {
     drop(state);
     job.changed.notify_waiters();
 }
-async fn drain(handle: &mut JoinHandle<()>, job: &Job, stream: &str) {
-    match timeout(Duration::from_secs(2), &mut *handle).await {
+async fn drain(handle: std::io::Result<JoinHandle<()>>, job: &Job, stream: &str) {
+    let mut handle = match handle {
+        Ok(handle) => handle,
+        Err(error) => {
+            finish_output(
+                job,
+                stream,
+                Some(format!("could not start {stream} capture: {error}")),
+            );
+            return;
+        }
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    match command_timeout(deadline, &mut handle).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => finish_output(
             job,
             stream,
             Some(format!("{stream} capture task failed: {error}")),
         ),
-        Err(_) => {
+        Err(error) => {
             handle.abort();
             let _ = handle.await;
-            finish_output(
-                job,
-                stream,
-                Some("output pipe remained open after command exit; capture stopped".into()),
-            );
+            let message = match error {
+                DeadlineError::Elapsed => {
+                    "output pipe remained open after command exit; capture stopped".into()
+                }
+                #[cfg(unix)]
+                DeadlineError::Reactor(error) => format!("command reactor stopped: {error}"),
+            };
+            finish_output(job, stream, Some(message));
         }
     }
 }
+
 fn tool(
     name: &str,
     description: &str,
@@ -2822,9 +2942,9 @@ mod tests {
                 .stdout
                 .append(&vec![b'x'; crate::output::INLINE_BYTES + 1]);
         }
-        let mut collector = tokio::spawn(std::future::pending::<()>());
+        let collector = command_task(std::future::pending::<()>()).unwrap();
         collector.abort();
-        drain(&mut collector, &job, "stdout").await;
+        drain(Ok(collector), &job, "stdout").await;
         let snapshot = job.snapshot();
         assert_eq!(snapshot["stdout"]["eof"], true);
         assert_eq!(snapshot["stdout"]["artifact"]["complete"], false);
