@@ -102,6 +102,12 @@ jobs:
         with:
           toolchain: 1.100.0
           components: rustfmt, clippy
+      - name: Restore Cargo dependencies for Linux acceptance
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-acceptance-${{ matrix.runner }}
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install test dependencies
         run: |
           sudo apt-get update
@@ -356,6 +362,12 @@ jobs:
         with:
           toolchain: 1.100.0
           components: clippy
+      - name: Restore Cargo dependencies for native client checks
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: native-client-${{ matrix.runner }}
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings
       - run: cargo test --locked --lib --bin ssmcp --test release_client
       - name: Build the explicit native plugin fixture

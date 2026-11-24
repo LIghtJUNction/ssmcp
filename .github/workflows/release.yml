@@ -255,6 +255,12 @@ jobs:
         with:
           toolchain: 1.100.0
           targets: ${{ matrix.target }}
+      - name: Restore Cargo dependencies for the release target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: release-${{ matrix.runner }}-${{ matrix.target }}
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
