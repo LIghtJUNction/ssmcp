@@ -584,21 +584,7 @@ mod tests {
     }
 
     async fn write_after_contention(workspace: &Workspace, args: Value) -> Result<Value, String> {
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            match workspace.perform("ssmcp.fs.write_text", args.clone()).await {
-                // The portable writer returns this only before reading the preimage,
-                // publishing bytes, or emitting audit events. Parallel tests on other
-                // workspaces share that bounded lock; all other failures stay fatal.
-                Err(error)
-                    if error == "workspace is busy; retry the file operation"
-                        && tokio::time::Instant::now() < deadline =>
-                {
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                }
-                result => return result,
-            }
-        }
+        super::super::perform_after_write_contention(workspace, "ssmcp.fs.write_text", args).await
     }
 
     #[test]
@@ -769,11 +755,7 @@ mod tests {
         let text = (0..650)
             .map(|i| format!("row-{i:04} {}\n", "x".repeat(64)))
             .collect::<String>();
-        workspace
-            .perform(
-                "ssmcp.fs.write_text",
-                json!({"path":"large.txt","text":text}),
-            )
+        write_after_contention(&workspace, json!({"path":"large.txt","text":text}))
             .await
             .unwrap();
         let page = workspace
