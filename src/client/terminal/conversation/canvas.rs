@@ -577,7 +577,7 @@ mod tests {
         state.chat_key(Key::Mouse {
             button: 2,
             x: 3,
-            y: body_top(state.geometry.rows) + 1,
+            y: state.geometry.chat_body_top() + 1,
             release: false,
         });
         assert!(state.conversation.logs_open && state.raw_logs);

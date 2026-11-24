@@ -254,19 +254,16 @@ class Local(Harness):
 
     def authorization_entry(self):
         front = self.front
-        snapshot = front.until(lambda value: "本地会话" in text(value) and "/logs" in text(value)
-                               and re.search(r"\bconnected\s+·", text(value)) is not None
+        snapshot = front.until(lambda value: re.search(r"(?:connected|已连接)\s+·\s+http://127\.0\.0\.1:", text(value)) is not None
                                and termios.tcgetattr(front.slave)[3] & (termios.ICANON | termios.ECHO) == 0,
                                "connected local terminal and raw input readiness", timeout=15)
         footer_origin = re.search(r"http://127\.0\.0\.1:[0-9]+", text(snapshot))
         self.check(footer_origin is not None and "本月剩余" not in text(snapshot)
                    and "未登录" not in text(snapshot),
                    "actual PTY shows local origin and authorization without a cloud-account quota")
-        front.send("/login\t\r")
-        front.until(lambda value: "无需 GitHub" in text(value), "local login command explanation")
         auth = Path(self.environments["local-fixture"]["SSMCP_AUTH_HOME"])
-        self.check(not list(auth.iterdir()), "local /login does not create a remote account credential")
-        front.send(b"\x15")
+        self.check(not any(path.name != "last-connection.json" for path in auth.iterdir()),
+                   "local startup saves no remote account credentials")
         front.send("/logs\t\r")
         # The entry is read only in this owned PTY. Never persist its secret or a
         # screenshot of the real code in the machine-readable report.

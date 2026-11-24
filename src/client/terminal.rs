@@ -333,6 +333,25 @@ pub(super) fn update_link_metrics(generation: u64, status: super::link_metrics::
     }
 }
 
+pub(super) fn set_announcements(lines: &[&str]) {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let announcements = lines
+            .iter()
+            .map(|line| panel::safe_text(line))
+            .collect::<Vec<_>>();
+        if state.announcements != announcements {
+            state.announcements = announcements;
+            let (rows, cols) = (state.geometry.rows, state.geometry.cols);
+            state.resize(rows, cols);
+            state.dirty = true;
+        }
+    }
+}
+
 pub(super) fn set_connection_versions(versions: super::update::ConnectionVersions) {
     if let Some(shared) = shared() {
         let mut state = shared
@@ -881,12 +900,12 @@ pub(crate) fn snapshot() -> serde_json::Value {
     let conversation = state.conversation.snapshot();
     serde_json::json!({
         "active": shared.alive.load(Ordering::Acquire), "rows":g.rows, "cols":g.cols,
-        "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":g.log_rows,"cols":g.left,"visible":!chat || state.conversation.logs_open},
+        "panes":{"logs":{"row":if chat {g.chat_body_top()} else {0},"col":0,"rows":g.log_rows,"cols":g.left,"visible":!chat || state.conversation.logs_open},
             "activity":{"row":state.chat_activity_top(),"col":0,"rows":g.log_rows.saturating_sub(state.conversation.worker_activity_rows),"cols":g.left,"visible":chat && !state.help && state.conversation.view == conversation::View::Activity},
-            "worker_activity":{"row":conversation::body_top(g.rows),"col":0,"rows":state.conversation.worker_activity_rows.min(g.log_rows),"cols":g.left,"visible":chat && !state.help && state.conversation.view == conversation::View::Activity && state.conversation.worker_activity_rows>0},
-            "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":if chat {g.log_rows} else {g.pty_rows},"cols":g.left,"visible":if chat {!state.conversation.logs_open && state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
-            "tasks":{"row":conversation::body_top(g.rows),"col":0,"rows":g.log_rows,"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
-            "waits":{"row":conversation::body_top(g.rows),"col":0,"rows":g.log_rows,"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Waits},
+            "worker_activity":{"row":g.chat_body_top(),"col":0,"rows":state.conversation.worker_activity_rows.min(g.log_rows),"cols":g.left,"visible":chat && !state.help && state.conversation.view == conversation::View::Activity && state.conversation.worker_activity_rows>0},
+            "audit":{"row":if chat {g.chat_body_top()} else {g.pty_top},"col":0,"rows":if chat {g.log_rows} else {g.pty_rows},"cols":g.left,"visible":if chat {!state.conversation.logs_open && state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
+            "tasks":{"row":g.chat_body_top(),"col":0,"rows":g.log_rows,"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
+            "waits":{"row":g.chat_body_top(),"col":0,"rows":g.log_rows,"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Waits},
             "input":{"row":conversation::prompt_top(g)+1,"col":0,"rows":g.input_rows,"cols":g.left,"visible":chat && g.input_rows>0}},
         "focus":if chat && state.conversation.logs_open && state.conversation.content_focus {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "sleeping":state.sleep.visible,
@@ -1068,12 +1087,17 @@ struct Geometry {
     cols: u16,
     left: u16,
     log_rows: u16,
+    banner_rows: u16,
     input_rows: u16,
     pty_top: u16,
     pty_rows: u16,
 }
 
 impl Geometry {
+    fn chat_body_top(self) -> u16 {
+        conversation::body_top(self.rows) + self.banner_rows
+    }
+
     fn new(rows: u16, cols: u16, ui: &Ui, preferred_input_rows: Option<u16>) -> Self {
         let rows = rows.clamp(1, 1000);
         let cols = cols.clamp(1, 1000);
@@ -1113,6 +1137,7 @@ impl Geometry {
             cols,
             left: layout.log_cols.max(1),
             log_rows,
+            banner_rows: 0,
             input_rows,
             pty_top,
             pty_rows,
@@ -1584,6 +1609,7 @@ impl vt100::Callbacks for Replies {
 struct State {
     worker: Option<worker::Monitor>,
     context_label: String,
+    announcements: Vec<String>,
     server_origin: Option<footer::Origin>,
     connection_versions: Option<super::update::ConnectionVersions>,
     logout_target: Option<conversation::logout::Target>,
@@ -1635,6 +1661,7 @@ impl State {
             events: events::EventView::new(),
             attached_history: None,
             context_label: String::new(),
+            announcements: Vec::new(),
             server_origin: None,
             connection_versions: None,
             logout_target: None,
@@ -1858,7 +1885,14 @@ impl State {
         self.dirty = true;
     }
     fn resize(&mut self, rows: u16, cols: u16) {
-        let geometry = Geometry::new(rows, cols, &self.ui, self.conversation.preferred_input_rows);
+        let mut geometry =
+            Geometry::new(rows, cols, &self.ui, self.conversation.preferred_input_rows);
+        if self.ui.layout == Layout::Chat && rows >= 6 {
+            geometry.banner_rows =
+                (self.announcements.len().min(2) as u16).min(geometry.log_rows.saturating_sub(1));
+            geometry.log_rows -= geometry.banner_rows;
+            geometry.pty_rows = geometry.log_rows;
+        }
         if self.geometry != geometry {
             self.logs
                 .set_size(nonzero(geometry.log_rows), nonzero(geometry.left));

@@ -672,7 +672,7 @@ impl State {
             if view.kind == QuestionKind::Finish && editable(&view) {
                 for choice in [FinishChoice::No, FinishChoice::Yes] {
                     let selected = self.question_choice(&question.id) == choice;
-                    let row = body_top(self.geometry.rows) + rows.len() as u16;
+                    let row = self.geometry.chat_body_top() + rows.len() as u16;
                     if rows.len() < usize::from(height) {
                         self.conversation.finish_button_rows.push((
                             row,

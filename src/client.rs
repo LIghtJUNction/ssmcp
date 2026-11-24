@@ -80,10 +80,11 @@ const HELP: &str = r#"ssmcp — connect a device; control its tools remotely
 Usage: ssmcp [username@server] [options]
 
 Start
-  ssmcp                         Reuse your last authorized account
+  ssmcp                         Reuse your last successful connection
   ssmcp --worker N              Open chat and a worker window with N slots
-  ssmcp local                   Run a local MCP session on Linux
-  ssmcp alice@relay.example     Connect and sign in when needed
+  ssmcp local                   Start a same-machine MCP session on Linux
+  ssmcp alice@relay.example --register   Register a new account name in your browser
+  ssmcp alice@relay.example     Expose this device to that account (no device login)
   ssmcp list                    List online processes and registered threads
   ssmcp -i                      Open an authorized remote terminal
   ssmcp attach [process|thread] ID|N   Attach to remote chat
@@ -91,7 +92,7 @@ Start
   ssmcp wait [REQUEST_ID ...]   Print actual replies; accepts piped receipts
 
 Manage
-  config · whoami · logout      Account and server settings
+  whoami · config               Read existing account info and manage client settings
   context                     Saved local and HTTPS connection targets
   update [--check]              Update the installed client
   cleanup                      Inspect and clean registered workspace files
@@ -101,15 +102,25 @@ Manage
   overview                     Local sessions, agents, workers and commands
   computer                     Zuse CLI version and installation
   safety [status]              Show native filesystem safety coverage
-  setup · ui · 007             Setup, appearance and recovery
+  ui · 007                     Appearance and recovery
 
 Options
   --name NAME   --title TEXT   --context NAME   --server URL   --context-root PATH
   --worker N    Open chat and a separate worker monitor
   --version [--all]    Show the version or the locked dependency tree
-  --no-browser  --no-watchdog  --theme NAME   --no-color
-  --allow USER@SERVER    Allow a registered account on this relay; repeat or comma-separate
-  --account-compat       Use an existing verified self account on an older relay
+  --no-watchdog  --theme NAME   --no-color
+  --no-browser  Print the registration link without opening it
+
+Same machine (Linux)
+  1. Run ssmcp local in the directory you want to control.
+  2. Open /logs in that session. Add its MCP URL to your local MCP client
+     (Codex: codex mcp add ssmcp-local --url URL), then authorize with the
+     one-time code from /logs if prompted.
+  3. Call list to select the live session, then discover tools with code_mode.
+     Keep the MCP entry to reconnect to the running session.
+  Tip: use ssmcp local --listen 127.0.0.1:8765 for a stable URL across restarts.
+  For a relay session, connect your MCP client to the URL in /logs and sign in
+  on the controller as the account named by username@server.
 
 Use ssmcp COMMAND --help for command options; --help-full lists advanced connection and executor flags.
 Foreground --worker keeps chat here and opens a separate worker window.
@@ -135,7 +146,7 @@ Usage: ssmcp username@server [options]
        ssmcp --version [--all]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
        ssmcp [options] [--server URL]
-       ssmcp setup [--server URL] [--no-browser]
+       ssmcp USERNAME@SERVER --register [--no-browser]
        ssmcp overview [--json] [--watch]
        ssmcp overview <show|state|jobs|exec|cancel|command> TARGET [arguments]
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
@@ -152,7 +163,7 @@ Usage: ssmcp username@server [options]
        ssmcp ui <show|check|init|preview> [--ui-config FILE]
        ssmcp 007 <install|upgrade|run|start|stop|status|uninstall|sessions> [options]
 
-  --server URL         Relay for this command; overrides config and last login
+  --server URL         Relay for this command; overrides config and last connection
   --context NAME       Named local or HTTPS target; overrides SSMCP_CONTEXT and context use
   --input MODE         terminal (default), none, pipe, web, mcp-stdio, mcp-http or sock
   --input-host HOST    Loopback host for web or MCP HTTP (required)
@@ -167,7 +178,7 @@ Usage: ssmcp username@server [options]
   --agent-exec PATH    Absolute executable for exec; optional --agent-argv-file PATH
   --agent-peer ID      Exact native message recipient for ssmcp; also set --agent-account PROVIDER:SUBJECT
   --username NAME      Named account on the selected server
-  --no-browser         Print the GitHub authorization link without opening it
+  --no-browser         Print the account registration link without opening it
   -i, --interactive    Select an authorized account session and open its terminal
   --name NAME          Display name (default: hostname-pid)
   --daemon             Start a quiet, user-owned native background service
@@ -178,12 +189,6 @@ Usage: ssmcp username@server [options]
   --watchdog           Enable automatic reconnects explicitly (compatibility flag)
   --reconnect-delay N  Initial retry delay, 1..=3600 seconds (default 5; bounded exponential backoff)
   --title TITLE        Session title in the header and agent list (max 512 UTF-8 bytes)
-  --allow USER@SERVER  Allow only these registered relay accounts to control this device
-                       Repeat or comma-separate; at most 32 accounts
-                       No device login required; controllers must sign in
-  --account-compat     Explicit older-relay mode; requires one --allow for your saved account
-                       Verifies its registered handle; never signs in or registers a name
-                       This account owns the connection and pays its account quota
   --tty TERMINAL       Observe commands in reusable terminal windows (kitty, ztty, ...)
   --shell /path        Shell executable (default: platform shell)
   --context-root PATH  Add a read-only skill/instruction root (repeat up to 8 times)
@@ -215,38 +220,23 @@ Examples:
   ssmcp list
   ssmcp -i
   ssmcp --no-watchdog --name one-shot
-  ssmcp --allow alice@ssmcp.lmm.best
-  ssmcp --account-compat --allow alice@ssmcp.lmm.best
-  ssmcp --server https://relay.example --allow alice@relay.example,bob@relay.example
   ssmcp sessions status workstation
   ssmcp sessions stop workstation
   ssmcp service install --system --user alice
   sudo systemctl enable --now ssmcp
   ssmcp sessions create workstation --watchdog alice@my-server.example
-  ssmcp sessions create shared --allow alice@ssmcp.lmm.best
   ssmcp attach --local workstation
   ssmcp attach thread THREAD_ID
   ssmcp send process PROCESS_ID 'Review the patch' | ssmcp wait --count 2
   ssmcp sessions close workstation
 
-On the controlled device, use --allow username@relay-server. No login or invitation
-is needed there. The account must already exist on that relay; a different server,
-an unknown or banned account, bare names and the former @github syntax are rejected.
-Only the listed accounts receive access. Controllers must sign in through OAuth.
-Names resolve to stable account IDs; billing follows the account making each call.
-
---account-compat is an explicit authenticated mode for an older relay, not anonymous
---allow. It requires a valid saved login for exactly the allowed account, verifies
-its stable identity and registered handle with that relay, and never starts OAuth
-or claims a username. The verified account owns this connection (including account
-management and audit visibility) and its quota applies. Access-list editing is
-unavailable. Missing, expired, revoked or mismatched credentials fail closed.
-
-Without --allow, a saved valid login selects only your own registered username.
-username@server signs in and registers that username when needed. whoami displays
-your account, and logout removes the selected server's saved login. Other servers
-and independent logins are preserved. --no-browser prints the authorization URL.
-An update or a controlled-device restart does not grant a new controller identity.
+Start a controlled device with ssmcp username@server. The account must already
+exist on the relay. The device connects without an account token. Control apps
+authorize independently through MCP OAuth, using that account. A successful
+foreground connection saves its target for the next bare ssmcp invocation.
+Use ssmcp username@server --register to register a new username in the browser.
+Registration returns account information and creates no client login.
+whoami USERNAME@SERVER reads public account information.
 
 ssmcp list shows authorized processes and their registered threads. Numbers bind
 the last displayed directory for 5 minutes. Full IDs work directly; exact unique
@@ -269,7 +259,7 @@ Chat I/O requires an upgraded relay and recipient client. Requests and outputs
 have bounded live-server-memory retention of at most 1 hour; a server restart
 loses pending requests and retained replies.
 Redirected stdout (or jsonl mode) emits one connection JSON object. Add its URL to
-an MCP client and sign in as an allowed account. --allow cannot use --list-tools.
+an MCP client and authorize as the selected account.
 Live input, output and native tool events appear on stderr as readable blocks.
 Independent commands run concurrently and support status, output, wait and cancel.
 Color is automatic on terminals; NO_COLOR or redirected stderr disables ANSI.
@@ -502,7 +492,6 @@ struct Options {
     destination: Option<String>,
     server: Option<String>,
     username: Option<String>,
-    no_browser: bool,
     account_compat: bool,
     relay: Option<account::Credential>,
     temporary: bool,
@@ -649,7 +638,6 @@ impl Options {
         let mut server = None;
         let mut context = None;
         let mut username = None;
-        let mut no_browser = false;
         let mut account_compat = false;
         let mut ssh = false;
         let mut name = None;
@@ -808,7 +796,12 @@ impl Options {
                             .map_err(|_| "--public-url must be UTF-8")?,
                     );
                 }
-                Some("--no-browser") => no_browser = true,
+                Some("--no-browser") => {} // Accepted for previously saved startup commands.
+                Some("--account-compat") if new_connection => {
+                    return Err(
+                        "--account-compat was removed; connect with ssmcp username@server".into(),
+                    );
+                }
                 Some("--account-compat") => account_compat = true,
                 Some("--username") => {
                     let value = args.next().ok_or("--username requires a name")?;
@@ -857,6 +850,9 @@ impl Options {
                 }
                 Some(value) if value.starts_with("--title=") => {
                     title = Some(value["--title=".len()..].to_owned());
+                }
+                Some("--allow") if new_connection => {
+                    return Err("--allow was removed; connect with ssmcp username@server".into());
                 }
                 Some("--allow") => {
                     let value = args.next().ok_or("--allow requires USER@SERVER")?;
@@ -1061,13 +1057,48 @@ impl Options {
                 || identity.is_some()
                 || port.is_some()
                 || config.is_some();
-            if let Some(selection) =
-                connection_context::resolve(context.as_deref(), explicit_target)
-                    .map_err(|e| e.to_string())?
+            let last = if !explicit_target
+                && username.is_none()
+                && context.is_none()
+                && std::env::var_os("SSMCP_CONTEXT").is_none()
             {
-                match selection.endpoint {
-                    connection_context::Endpoint::Local => local_mode = true,
-                    connection_context::Endpoint::Https(origin) => server = Some(origin),
+                account::last_connection().map_err(|error| error.to_string())?
+            } else {
+                None
+            };
+            match last {
+                Some(account::LastConnection::Local {
+                    listen: previous_listen,
+                    public_url: previous_url,
+                    socket: previous_socket,
+                }) => {
+                    local_mode = true;
+                    #[cfg(target_os = "linux")]
+                    {
+                        listen = listen.or(previous_listen);
+                        public_url = public_url.or(previous_url);
+                        socket = socket.or(previous_socket.map(Some));
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    let _ = (previous_listen, previous_url, previous_socket);
+                }
+                Some(account::LastConnection::Relay {
+                    username: name,
+                    server: origin,
+                }) => {
+                    username = Some(name);
+                    server = Some(origin);
+                }
+                None => {
+                    if let Some(selection) =
+                        connection_context::resolve(context.as_deref(), explicit_target)
+                            .map_err(|error| error.to_string())?
+                    {
+                        match selection.endpoint {
+                            connection_context::Endpoint::Local => local_mode = true,
+                            connection_context::Endpoint::Https(origin) => server = Some(origin),
+                        }
+                    }
                 }
             }
         }
@@ -1217,7 +1248,6 @@ impl Options {
             destination,
             server,
             username,
-            no_browser,
             account_compat,
             relay: None,
             temporary: false,
@@ -1364,7 +1394,7 @@ impl Options {
             args.extend([OsString::from("--title"), OsString::from(title)]);
         }
         // A signed-in account re-derives its self-allow from the saved credential.
-        if self.relay.is_none() || self.account_compat {
+        if self.username.is_none() && (self.relay.is_none() || self.account_compat) {
             for principal in &self.allow {
                 args.extend([OsString::from("--allow"), OsString::from(principal)]);
             }
@@ -1662,7 +1692,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER\nRequires a running ssmcp service.\n\n  --cpu-limit PERCENT  Linux CPU quota; 100% is one CPU\n  --memory-limit SIZE  Linux memory cap; e.g. 512MiB\n  --allow USER@SERVER  Allow a registered account on the selected relay\n  No login is needed on this controlled device; controllers must sign in.\n  Repeat --allow or comma-separate targets. Without it, a saved login selects yourself."
+            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER\nRequires a running ssmcp service.\n\n  --cpu-limit PERCENT  Linux CPU quota; 100% is one CPU\n  --memory-limit SIZE  Linux memory cap; e.g. 512MiB\n  USERNAME@SERVER selects the registered account. The controlled device connects without logging in."
         );
         return Ok(());
     }
@@ -1697,11 +1727,11 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         return Ok(());
     };
     if options.destination.is_some() {
-        return Err("Use ssmcp sessions create NAME username@server for an OAuth session".into());
+        return Err("Use ssmcp sessions create NAME username@server for a relay session".into());
     }
     options.chat.validate_saved_input()?;
     options.resource_limits.require_background(true)?;
-    apply_account(&mut options, true).await?;
+    apply_account(&mut options).await?;
     let mut spec = options.session_spec()?;
     spec.cwd = cwd;
     validate_session_spec(&spec)?;
@@ -2065,7 +2095,7 @@ fn validate_destination(destination: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn apply_account(options: &mut Options, allow_login: bool) -> crate::Result<()> {
+async fn apply_account(options: &mut Options) -> crate::Result<()> {
     if options.is_local() {
         return Ok(());
     }
@@ -2082,30 +2112,16 @@ async fn apply_account(options: &mut Options, allow_login: bool) -> crate::Resul
         return Ok(());
     }
     if options.allow.is_empty() {
-        let saved = account::credentials(Some(&server)).await?;
-        if saved.is_none() && options.username.is_none() {
-            return Err("no saved sign-in; use --allow username@relay-server for an unsigned controlled device, or sign in to allow yourself".into());
-        }
-        let credential = account::connect_credential(
-            Some(&server),
-            options.username.as_deref(),
-            options.no_browser,
-            allow_login && options.username.is_some(),
-        )
-        .await?;
-        let handle = credential
-            .username
-            .as_deref()
-            .ok_or("register a server username before connecting without --allow")?;
+        let username = match options.username.take() {
+            Some(name) => name,
+            None => account::connection_username(&server)?,
+        };
         options
             .allow
-            .push(crate::server_endpoint::allow_principal(handle, &server)?);
-        options.username = credential.username.clone();
-        options.relay = Some(credential);
-    } else {
-        // An explicit local policy needs no account token on the controlled device.
-        options.relay = None;
+            .push(crate::server_endpoint::allow_principal(&username, &server)?);
+        options.username = Some(username);
     }
+    options.relay = None;
     options.server = Some(server);
     Ok(())
 }
@@ -2258,6 +2274,12 @@ pub async fn run() -> crate::Result<()> {
     }
     connection_context::normalize_args(&mut args)?;
     config::normalize_args(&mut args)?;
+    if args.first().is_some_and(|arg| arg == "login")
+        || (args.first().is_some_and(|arg| arg == "setup")
+            && !args.get(1).is_some_and(|arg| arg == "browser"))
+    {
+        return Err("client login was removed; use ssmcp username@server to connect or add --register to register a new username".into());
+    }
     if computer_control::dispatch(&args).await? {
         return Ok(());
     }
@@ -2272,8 +2294,8 @@ pub async fn run() -> crate::Result<()> {
     if connection_context::dispatch(&args)? || config::dispatch(&args)? || trust::dispatch(&args)? {
         return Ok(());
     }
-    if args.first().is_some_and(|arg| arg == "setup") {
-        args[0] = OsString::from("login");
+    if account::dispatch_registration(&args).await? {
+        return Ok(());
     }
     if account::dispatch(&args).await? {
         return Ok(());
@@ -2282,7 +2304,7 @@ pub async fn run() -> crate::Result<()> {
         .first()
         .is_some_and(|arg| arg == "invite" || arg == "join")
     {
-        return Err("invite and join were removed; start the controlled device with ssmcp --allow username@relay-server".into());
+        return Err("invite and join were removed; start the controlled device with ssmcp username@relay-server".into());
     }
     if args.first().is_some_and(|arg| arg == "service") {
         return crate::session::install::manage(args.into_iter().skip(1).collect()).await;
@@ -2342,15 +2364,14 @@ pub async fn run() -> crate::Result<()> {
         options.chat.validate_saved_input()?;
     }
     if options.destination.is_some() {
-        return Err("SSH device connections have been removed. Use ssmcp username@server or ssmcp login --server https://server".into());
+        return Err("SSH device connections have been removed. Use ssmcp username@server".into());
     }
     if options.is_local() {
         if service.is_some() {
             return Err("local mode requires a foreground session".into());
         }
     } else {
-        let interactive_login = service.is_none() && !options.chat.input.uses_stdio();
-        apply_account(&mut options, interactive_login).await?;
+        apply_account(&mut options).await?;
     }
     if let Some(runner) = &service
         && (options.daemon
@@ -2500,7 +2521,6 @@ pub async fn run() -> crate::Result<()> {
     }
     let mut attempt = 0u64;
     let mut reconnect_failures = 0u32;
-    let mut reauthenticated = false;
     loop {
         if options.worker_window_child && worker_window::child_stop_requested() {
             return Ok(());
@@ -2518,7 +2538,7 @@ pub async fn run() -> crate::Result<()> {
                 .relay
                 .clone()
                 .ok_or("--account-compat lost its verified account; start a new connection")?;
-            apply_account(&mut options, false).await?;
+            apply_account(&mut options).await?;
             let current = options
                 .relay
                 .as_ref()
@@ -2539,28 +2559,16 @@ pub async fn run() -> crate::Result<()> {
                 .as_secs()
                 >= credential.expires_at
         }) {
-            if service.is_none()
-                && !options.account_compat
-                && !options.temporary
-                && !options.chat.input.uses_stdio()
-                && options.username.is_some()
-                && !reauthenticated
-            {
-                reauthenticated = true;
-                options.allow.clear();
-                apply_account(&mut options, true).await?;
-            } else {
-                if let Some(runner) = &service {
-                    runner.record(
-                        "disconnected",
-                        attempt,
-                        None,
-                        None,
-                        Some(relay::AUTH_EXPIRED),
-                    )?;
-                }
-                return Err(relay::failure(relay::AUTH_EXPIRED.into()));
+            if let Some(runner) = &service {
+                runner.record(
+                    "disconnected",
+                    attempt,
+                    None,
+                    None,
+                    Some(relay::AUTH_EXPIRED),
+                )?;
             }
+            return Err(relay::failure(relay::AUTH_EXPIRED.into()));
         }
         attempt = attempt.saturating_add(1);
         if let Some(runner) = &service {
@@ -2636,24 +2644,6 @@ pub async fn run() -> crate::Result<()> {
         if let Some(message) = error.as_deref()
             && retry_legacy_self_account(&mut options, message, registered).await?
         {
-            continue;
-        }
-        let permanent = result
-            .as_ref()
-            .err()
-            .is_some_and(|error| error.downcast_ref::<relay::PermanentFailure>().is_some());
-        if permanent
-            && error.as_deref() == Some(relay::AUTH_EXPIRED)
-            && service.is_none()
-            && !options.account_compat
-            && !options.temporary
-            && !options.chat.input.uses_stdio()
-            && options.username.is_some()
-            && !reauthenticated
-        {
-            reauthenticated = true;
-            options.allow.clear();
-            apply_account(&mut options, true).await?;
             continue;
         }
         if !watchdog_retries(options.watchdog, result.as_ref().err().map(Box::as_ref)) {
@@ -2994,7 +2984,7 @@ async fn register_transport(
     }
     if !github_auth && (ready.1.is_empty() || ready.2 == 0) {
         stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
-        return Err("server returned no account access policy for this connection; use --allow username@relay-server".into());
+        return Err("server returned no account access policy for this connection; use ssmcp username@relay-server".into());
     }
     Ok(Some(RegisteredTransport {
         process,
@@ -3304,7 +3294,16 @@ async fn connect_inner(
     let executable = std::env::current_exe()?;
     #[cfg(all(test, unix))]
     let executable = output_expiry_fixture::transport_executable(executable)?;
-    transport.report_connecting();
+    if let (Some(username), Some(server)) = (&options.username, &options.server) {
+        let principal = crate::server_endpoint::allow_principal(username, server)?;
+        render::status(
+            "account",
+            "Progress",
+            &format!("Connecting to account {principal}"),
+        );
+    } else {
+        transport.report_connecting();
+    }
     if options.account_compat {
         render::status(
             "account",
@@ -3614,6 +3613,36 @@ async fn connect_inner(
         let _ = process.wait().await;
         return Err(error);
     }
+    if service.is_none() && !options.worker_window_child {
+        let target =
+            options
+                .username
+                .as_ref()
+                .zip(options.server.as_ref())
+                .map(|(username, server)| account::LastConnection::Relay {
+                    username: username.clone(),
+                    server: server.clone(),
+                });
+        #[cfg(target_os = "linux")]
+        let target = options
+            .local
+            .as_ref()
+            .map(|settings| account::LastConnection::Local {
+                listen: Some(settings.listen.to_string()),
+                public_url: settings.public_url.clone(),
+                socket: settings.socket_path().map(PathBuf::from),
+            })
+            .or(target);
+        if let Some(target) = target
+            && let Err(error) = account::remember_connection(&target)
+        {
+            render::status(
+                "account",
+                "Notice",
+                &format!("Could not remember connection: {error}"),
+            );
+        }
+    }
     render::status(
         "shell",
         "Connected",
@@ -3723,6 +3752,14 @@ async fn connect_inner(
     };
     #[cfg(all(test, unix))]
     let output_fixture_ready = output_expiry_fixture::runtime_ready(&backend, &client_id, attempt);
+    let announcements = async {
+        if let Some((username, server)) = options.username.as_deref().zip(options.server.as_deref())
+        {
+            account::monitor_announcements(server, username).await;
+        }
+        std::future::pending::<()>().await;
+    };
+    tokio::pin!(announcements);
     let mut result: crate::Result<()> = 'connected: loop {
         #[cfg(all(test, unix))]
         if let Err(error) = &output_fixture_ready {
@@ -3734,6 +3771,7 @@ async fn connect_inner(
             break Err(error.into());
         }
         tokio::select! {
+            _ = &mut announcements, if display_session.is_some() => {},
             ended = chat_io::input_ended(&mut chat) => match ended {
                 Ok(()) if options.chat.input == chat_io::Input::Pipe => {
                     render::status("chat input", "Ready", "Pipe reached EOF; the connected session stays available");
@@ -5673,7 +5711,6 @@ mod named_entry_tests {
         assert!(options.destination.is_none());
         assert_eq!(options.server.as_deref(), Some("https://example.com:8443"));
         assert_eq!(options.username.as_deref(), Some("alice"));
-        assert!(options.no_browser);
         assert!(options.identity.is_none());
 
         let server = options.server.as_deref().unwrap();

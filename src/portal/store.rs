@@ -49,6 +49,8 @@ pub(crate) struct Account {
     pub rate_limit_bps: Option<u64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub has_recharged: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub announcement: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -90,6 +92,8 @@ pub(crate) struct AccountSummary {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Database {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    announcement: String,
     accounts: BTreeMap<String, Account>,
 }
 
@@ -301,6 +305,7 @@ impl Store {
                 banned: false,
                 rate_limit_bps: None,
                 has_recharged: false,
+                announcement: String::new(),
             });
         account.github_login.clone_from(&identity.login);
         initialize_handles(&mut next)?;
@@ -311,6 +316,29 @@ impl Store {
             .clone();
         self.save(next)?;
         Ok(account)
+    }
+
+    pub fn server_announcement(&self) -> &str {
+        &self.database.announcement
+    }
+
+    pub fn update_announcement(
+        &mut self,
+        subject: &str,
+        global: bool,
+        text: String,
+    ) -> Result<(), Problem> {
+        self.account(subject)?;
+        let mut next = self.database.clone();
+        if global {
+            next.announcement = text;
+        } else {
+            next.accounts
+                .get_mut(subject)
+                .ok_or(Problem::Unauthorized)?
+                .announcement = text;
+        }
+        self.save(next)
     }
 
     pub fn handle_available(&self, handle: &str) -> Result<bool, Problem> {
@@ -331,6 +359,13 @@ impl Store {
                     || account.handle_aliases.contains(&handle)
             })
             .cloned())
+    }
+
+    pub fn register_handle(&mut self, subject: &str, handle: &str) -> Result<Account, Problem> {
+        if !self.handle_available(handle)? {
+            return Err(Problem::UsernameTaken);
+        }
+        self.claim_handle(subject, handle)
     }
 
     /// A CLI login can choose the first explicit name, but never rename one.
@@ -1152,6 +1187,7 @@ mod tests {
                     banned: false,
                     rate_limit_bps: None,
                     has_recharged: false,
+                    announcement: String::new(),
                 },
             );
         }

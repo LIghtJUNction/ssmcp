@@ -173,11 +173,6 @@ pub(super) fn subcommands(command: &str) -> &'static [SlashCommand] {
             "/allow add" => "USER · grant this session's access",
             "/allow remove" => "USER · revoke this session's access",
         },
-        "/login" => commands! {
-            "/login open" => "Open the pending GitHub sign-in link",
-            "/login copy" => "Copy the pending GitHub sign-in link",
-            "/login link" => "Show the pending GitHub sign-in link",
-        },
         "/new" => commands! {
             "/new chat" => "Add a conversation panel",
             "/new statistics" => "Add a statistics panel",

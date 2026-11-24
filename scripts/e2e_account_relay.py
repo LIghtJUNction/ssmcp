@@ -272,6 +272,10 @@ class Handler(BaseHTTPRequestHandler):
             self.connection.settimeout(20)
             WebSocket(self, token, self.state).serve()
             return
+        if self.path == f"/api/client/account/{IDENTITY['username']}":
+            assert self.headers.get("Authorization") is None
+            return self.respond(200, {"username": IDENTITY["username"],
+                                      "announcement": "Fixture greeting", "server_announcement": "Fixture notice"})
         if not self.state.identity(token):
             return self.respond(401, {"error": "invalid_token"})
         if self.path == "/api/client/whoami":
@@ -396,8 +400,7 @@ class Harness:
         return process
 
     def unsigned(self, name, *arguments):
-        return self.spawn("B", "--server", self.state.origin,
-                          "--allow", self.state.allow_principal, "--name", name,
+        return self.spawn("B", self.state.allow_principal, "--name", name,
                           "--no-setup", "--shell", "/bin/sh", "--reconnect-delay", "1",
                           *arguments)
 
@@ -446,66 +449,33 @@ class Harness:
             self.check("invite and join were removed" in old.stderr,
                        f"retired {command} cannot enter a nonexistent invitation flow")
         self.check(not self.state.requests, "retired commands never contact the relay")
-        login = self.cli("A", "login", "--server", self.state.origin, "--no-browser", "--json")
-        self.check(json.loads(login.stdout)["identity"] == IDENTITY,
-                   "device login stores the verified identity and registered server username")
-        self.check(self.state.account_token not in login.stdout + login.stderr
-                   and self.state.device_code not in login.stdout + login.stderr,
-                   "login output excludes account and polling credentials")
-        credential_file = self.root / "A/auth" / (hashlib.sha256(self.state.origin.encode()).hexdigest() + ".json")
-        self.check(stat.S_IMODE(credential_file.stat().st_mode) == 0o600,
-                   "account credentials have owner-only file permissions")
-        whoami = self.cli("A", "whoami", "--json")
-        self.check(json.loads(whoami.stdout)["identity"] == IDENTITY
-                   and self.state.account_token not in whoami.stdout + whoami.stderr,
-                   "whoami verifies identity without exposing the login token")
+        for command in (("login",), ("--allow", self.state.allow_principal)):
+            self.cli("B", *command, success=False)
+        self.check(not self.state.requests, "retired login and device allow flags never contact the relay")
+        whoami = self.cli("B", "whoami", self.state.allow_principal, "--json")
+        self.check(json.loads(whoami.stdout)["account"]["username"] == IDENTITY["username"],
+                   "the named public account can be read without logging in")
+        auth_a = self.root / "A/auth"
+        credential_file = auth_a / (hashlib.sha256(self.state.origin.encode()).hexdigest() + ".json")
+        credential_file.write_text(json.dumps({
+            "server": self.state.origin, "token": self.state.account_token,
+            "subject": IDENTITY["subject"], "principal": IDENTITY["principal"],
+            "username": IDENTITY["username"], "expires_at": int(time.time()) + 3600,
+        }))
+        credential_file.chmod(0o600)
+        server_file = auth_a / "default"
+        server_file.write_text(self.state.origin)
+        server_file.chmod(0o600)
         original_credential = credential_file.read_bytes()
-        before = len(self.state.requests)
-        wrong_origin = self.cli("B", "--server", self.state.origin,
-                                "--allow", self.foreign.allow_principal,
-                                "--no-watchdog", "--no-setup", success=False)
-        self.check("this connection uses" in wrong_origin.stderr and len(self.state.requests) == before
-                   and not self.foreign.requests,
-                   "an allow target from another relay is rejected before network access")
-        old_allow = self.cli("B", "--server", self.state.origin, "--allow", "fixture@github",
-                             "--no-watchdog", "--no-setup", success=False)
-        self.check("no longer an allow target" in old_allow.stderr
-                   and len(self.state.requests) == before,
-                   "provider-style allow labels cannot replace a same-origin account target")
         self.cli("A", "whoami", "--server", self.foreign.origin, "--json", success=False)
         self.check(not self.foreign.requests and credential_file.read_bytes() == original_credential,
-                   "selecting another origin never borrows the saved account credential")
-        self.state.redirect_whoami = self.foreign.origin + "/api/client/whoami"
-        redirected = self.cli("A", "whoami", "--json", success=False)
-        self.state.redirect_whoami = None
-        self.check("redirected" in redirected.stderr and not self.foreign.requests,
-                   "account API redirects never forward credentials to another origin")
-        self.state.whoami_identity = {**IDENTITY, "subject": "456"}
-        changed = self.cli("A", "--no-watchdog", "--no-setup", "--shell", "/bin/sh", success=False)
-        self.state.whoami_identity = None
-        self.check("different GitHub account" in changed.stderr
-                   and not self.state.connect_attempts
-                   and credential_file.read_bytes() == original_credential,
-                   "a changed stable identity cannot connect or replace the saved credential")
-        mismatched = self.cli("A", f"other@{self.state.origin}", "--no-browser",
-                              "--no-watchdog", "--no-setup", success=False)
-        self.check("different username" in mismatched.stderr and not self.state.connect_attempts,
-                   "a requested username must match the account registered on this relay")
-        a = self.spawn("A", "--name", "A fixture", "--no-setup", "--shell", "/bin/sh",
-                       "--reconnect-delay", "1")
-        account_session = self.connection("A fixture")
-        self.check(account_session.token == self.state.account_token
-                   and account_session.hello["metadata"]["allow"] == [self.state.allow_principal],
-                   "signed-in A binds its own username and origin with its saved account token")
-        self.stop(a)
+                   "selecting another origin never borrows the saved controller credential")
 
         b = self.unsigned("B fixture")
         connection = self.connection("B fixture")
         self.check(not connection.token
                    and connection.hello["version"] in SUPPORTED_WIRE_VERSIONS,
-                   "unsigned B uses explicit same-origin allow and a supported WebSocket protocol")
-        self.check(not list((self.root / "B/auth").iterdir()),
-                   "unsigned B never saves or receives A's account credential")
+                   "unsigned B uses its named relay target and a supported WebSocket protocol")
         listing = json.loads(self.cli("A", "list", "--json").stdout)
         self.check(any(item["id"] == connection.id for item in listing["clients"]),
                    "A lists its currently controllable unsigned B session")
@@ -552,34 +522,29 @@ class Harness:
         stopped = self.unsigned("B interrupt")
         self.connection("B interrupt")
         self.stop(stopped)
-        self.check(not list((self.root / "B/auth").iterdir()),
-                   "Ctrl-C cleans up an unsigned session without leaving credentials on B")
-        self.check(not any(path in ("/api/client/invites", "/api/client/enroll")
+        auth_b = self.root / "B/auth"
+        saved = auth_b / "last-connection.json"
+        self.check(list(auth_b.iterdir()) == [saved] and stat.S_IMODE(saved.stat().st_mode) == 0o600
+                   and json.loads(saved.read_text()) == {
+                        "mode": "relay", "server": self.state.origin, "username": IDENTITY["username"]},
+                   "the device only saves a private connection target")
+        bare = self.spawn("B", "--name", "B resumed", "--no-watchdog", "--no-setup", "--shell", "/bin/sh")
+        resumed = self.connection("B resumed")
+        self.check(not resumed.token and resumed.hello["metadata"]["allow"] == [self.state.allow_principal],
+                   "a new client invocation without a target reconnects without a token")
+        resumed.call("terminal.status", {})
+        self.stop(bare)
+        self.check(not any(path in ("/api/client/invites", "/api/client/enroll",
+                                    "/api/client/login/start", "/api/client/login/poll")
                            for _, path in self.state.requests),
-                   "the current lifecycle never depends on invitation or enrollment endpoints")
-
-        live = self.spawn("A", "--name", "A logout", "--no-setup", "--shell", "/bin/sh",
-                          "--reconnect-delay", "1")
-        self.connection("A logout")
-        owned = descendants(live.pid)
-        before = self.state.connect_attempts[self.state.account_token]
-        authorizations = self.state.requests.count(("POST", "/api/client/login/start"))
+                   "device startup never requests login, invitation or enrollment")
         self.cli("A", "logout", "--json")
-        live.wait(timeout=8)
-        wait_for(lambda: all(not process_running(pid) for pid in owned), "logout process cleanup")
-        after = self.state.connect_attempts[self.state.account_token]
-        self.check(live.returncode != 0
-                   and after == before,
-                   "logout revokes its live session and declined authorization cannot reconnect it"
-                   f" (exit={live.returncode}, connect_attempts_before={before}, connect_attempts_after={after})")
-        self.check(self.state.requests.count(("POST", "/api/client/login/start")) == authorizations + 1,
-                   "a foreground account session offers at most one fresh authorization after revocation")
         self.check(not credential_file.exists() and self.state.logged_out,
-                   "logout revokes and removes the selected origin's account credential")
+                   "the existing controller credential can still be revoked and removed")
         self.check(not self.state.errors and not self.foreign.errors,
                    "gateways observed no malformed client protocol frames")
         return {"status": "passed", "checks": len(self.checks), "passed_checks": self.checks, "transport": "loopback WebSocket",
-                "oauth": "synthetic GitHub provider", "device": "unsigned explicit same-origin allow",
+                "oauth": "fixture controller credential", "device": "unsigned named target",
                 "ssh": False, "models_started": False,
                 "binary_sha256": hashlib.file_digest(Path(self.binary).open("rb"), "sha256").hexdigest(),
                 "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}

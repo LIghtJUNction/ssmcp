@@ -69,7 +69,7 @@ SSMCP 按下列规则解析新连接和需要中继的账号命令：
 
 被选中的名字不存在、环境变量为空或名字格式无效时，命令会明确失败。一个过期的保存选择可以通过有效的 `--context NAME` 临时覆盖，或用 `context use --default` 清除。配置文件本身损坏或包含无效端点时，需要先修正配置。
 
-`login`、`whoami`、远程设备列表等中继命令在选择 `local` context 时会报错；本地模式的 MCP 地址和授权方式见[本地运行](local-mode.md)。`config`、`ui`、`update` 等本地管理命令不接受前置 `--context`。
+`whoami`、远程设备列表等中继命令在选择 `local` context 时会报错；本地模式的 MCP 地址和授权方式见[本地运行](local-mode.md)。`config`、`ui`、`update` 等本地管理命令不接受前置 `--context`。
 
 这些是 SSMCP 自己的选择规则。命名连接目标的组织方式参考了 [Docker contexts](https://docs.docker.com/engine/manage-resources/contexts/)，并不依赖 Docker 的环境变量或配置文件。
 

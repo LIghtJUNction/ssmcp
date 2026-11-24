@@ -19,7 +19,6 @@ mod attach;
 mod chat;
 pub(crate) mod device_identity;
 mod directory;
-pub(super) mod login;
 mod send;
 pub(super) mod status;
 mod wait;
@@ -83,7 +82,9 @@ fn valid_credential(value: &Credential) -> Result<()> {
             .is_some_and(|name| crate::username::normalize(name).as_deref() != Ok(name.as_str()))
         || value.expires_at == 0
     {
-        return Err("invalid saved account credential; run ssmcp login again".into());
+        return Err(
+            "invalid saved account credential; authorize your controller through MCP OAuth".into(),
+        );
     }
     Ok(())
 }
@@ -228,6 +229,59 @@ fn write_private_limit(path: &Path, bytes: &[u8], limit: usize) -> Result<()> {
     result
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub(super) enum LastConnection {
+    Local {
+        #[serde(default)]
+        listen: Option<String>,
+        #[serde(default)]
+        public_url: Option<String>,
+        #[serde(default)]
+        socket: Option<PathBuf>,
+    },
+    Relay {
+        username: String,
+        server: String,
+    },
+}
+
+pub(super) fn last_connection() -> Result<Option<LastConnection>> {
+    let root = state_root()?;
+    if !root.try_exists()? {
+        return Ok(None);
+    }
+    verify_directory(&root)?;
+    read_private(&root.join("last-connection.json"))?
+        .map(|bytes| serde_json::from_slice(&bytes).map_err(Into::into))
+        .transpose()
+}
+
+pub(super) fn remember_connection(target: &LastConnection) -> Result<()> {
+    let root = state_root()?;
+    create_tree(&root)?;
+    verify_directory(&root)?;
+    write_private(
+        &root.join("last-connection.json"),
+        &serde_json::to_vec(target)?,
+    )
+}
+
+pub(super) fn connection_username(server: &str) -> Result<String> {
+    if let Some(LastConnection::Relay {
+        username,
+        server: previous,
+    }) = last_connection()?
+        && previous == server
+    {
+        return Ok(username);
+    }
+    // Migrate old defaults using the public username only, even if the old token expired.
+    load_at(&state_root()?, Some(server), true)?
+        .and_then(|credential| credential.username)
+        .ok_or_else(|| "choose an account with ssmcp username@server, or run ssmcp local".into())
+}
+
 fn credential_path(root: &Path, server: &str) -> PathBuf {
     root.join(format!(
         "{}.json",
@@ -267,11 +321,14 @@ fn load_at(root: &Path, server: Option<&str>, include_expired: bool) -> Result<O
         return Err("saved credential belongs to another server".into());
     }
     if !include_expired && value.expires_at <= now() {
-        return Err("account login has expired; run ssmcp login again".into());
+        return Err(
+            "account login has expired; authorize your controller through MCP OAuth".into(),
+        );
     }
     Ok(Some(value))
 }
 
+#[cfg(test)]
 fn save_at(root: &Path, credential: &Credential) -> Result<()> {
     valid_credential(credential)?;
     create_tree(root)?;
@@ -432,6 +489,9 @@ impl Api {
                 Some("io_invalid_request") => {
                     Some("invalid chat input, target, output cursor or reply state")
                 }
+                Some("account_not_found") => {
+                    Some("this username is unavailable on the selected server")
+                }
                 Some("account_banned") => {
                     Some("this account is banned on this server; contact its administrator")
                 }
@@ -553,7 +613,7 @@ impl Arguments {
                 Some("--name") => result.name = Some(value()?),
                 Some("--client") => result.client = Some(value()?),
                 Some("--terminal") => result.terminal = Some(value()?),
-                _ => return Err("unknown account option; see ssmcp login --help".into()),
+                _ => return Err("unknown account option; see ssmcp whoami --help".into()),
             }
         }
         if result.json && result.interactive {
@@ -632,6 +692,7 @@ fn public_identity(value: &Value) -> Result<Value> {
 
 // Only use metadata validated by public_identity from this relay's authenticated
 // response. Aliases never enter the credential cache or replace subject checks.
+#[cfg(test)]
 fn identity_matches_username(identity: &Value, requested: &str) -> bool {
     identity["username"].as_str() == Some(requested)
         || identity["username_aliases"]
@@ -682,6 +743,7 @@ pub(super) async fn open_browser(url: &Url) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 struct Authorization {
     api: Api,
     server: String,
@@ -693,6 +755,7 @@ struct Authorization {
     deadline: tokio::time::Instant,
 }
 
+#[cfg(test)]
 async fn begin_authorization(
     root: &Path,
     args: &Arguments,
@@ -750,6 +813,7 @@ async fn begin_authorization(
     })
 }
 
+#[cfg(test)]
 async fn finish_authorization(root: &Path, authorization: Authorization) -> Result<Credential> {
     let Authorization {
         api,
@@ -828,6 +892,7 @@ async fn finish_authorization(root: &Path, authorization: Authorization) -> Resu
     Ok(credential)
 }
 
+#[cfg(test)]
 async fn authorize_at(root: &Path, args: &Arguments, username: Option<&str>) -> Result<Credential> {
     let authorization = begin_authorization(root, args, username).await?;
     eprintln!(
@@ -843,29 +908,82 @@ async fn authorize_at(root: &Path, args: &Arguments, username: Option<&str>) -> 
     finish_authorization(root, authorization).await
 }
 
-async fn login(args: &Arguments) -> Result<()> {
-    let credential = authorize_at(&state_root()?, args, None).await?;
-    let mut identity = json!({
-        "provider":"github",
-        "subject":credential.subject,
-        "login":credential.principal.trim_end_matches("@github"),
-        "principal":credential.principal,
-    });
-    if let Some(username) = &credential.username {
-        identity["username"] = json!(username);
+pub(super) async fn dispatch_registration(args: &[OsString]) -> Result<bool> {
+    let Some(target) = args.first().and_then(|value| value.to_str()) else {
+        return Ok(false);
+    };
+    if !target.contains('@') || args.get(1).is_none_or(|arg| arg != "--register") {
+        return Ok(false);
     }
-    if args.json {
-        println!(
-            "{}",
-            json!({"server":credential.server,"identity":identity,"expires_at":credential.expires_at})
-        );
-    } else {
-        println!(
-            "Signed in as {} · {}",
-            credential.principal, credential.server
-        );
+    let (username, server) = parse_target(target)?;
+    let options = Arguments::parse(&args[2..])?;
+    if options.help {
+        println!("Usage: ssmcp USERNAME@SERVER --register [--no-browser] [--json]");
+        return Ok(true);
     }
-    Ok(())
+    if args[2..]
+        .iter()
+        .any(|arg| arg != "--no-browser" && arg != "--json")
+    {
+        return Err("registration accepts --no-browser and --json".into());
+    }
+    let api = Api::new(&server)?;
+    let started = api.post(
+        "/api/client/registration/start",
+        None,
+        json!({"username": username, "name": platform::hostname().unwrap_or_else(|_| "ssmcp client".into())}),
+    ).await?;
+    let code = started["device_code"]
+        .as_str()
+        .filter(|value| valid_secret(value))
+        .ok_or("server did not return a registration code")?;
+    let raw_url = started["verification_uri_complete"]
+        .as_str()
+        .ok_or("server did not return a registration URL")?;
+    let url = verification_url(&server, raw_url, code)?;
+    eprintln!("Open this link to register {username}: {url}");
+    if let Some(confirmation) = started["user_code"]
+        .as_str()
+        .map(safe)
+        .filter(|value| !value.contains(code))
+    {
+        eprintln!("Confirmation code: {confirmation}");
+    }
+    if !options.no_browser {
+        let _ = open_browser(&url).await;
+    }
+    let lifetime = started["expires_in"]
+        .as_u64()
+        .filter(|value| (1..=1800).contains(value))
+        .ok_or("server returned an invalid registration lifetime")?;
+    let interval = Duration::from_secs(started["interval"].as_u64().unwrap_or(2).clamp(1, 60));
+    let mut interrupt = platform::interrupt_signal()?;
+    tokio::select! {
+        result = tokio::time::timeout(Duration::from_secs(lifetime), async {
+            loop {
+                let reply = api.request(Method::POST, "/api/client/login/poll", None,
+                    Some(json!({"device_code":code}))).await?;
+                if reply.value["status"] == "registered" && reply.status.is_success() {
+                    let identity = public_identity(&reply.value)?;
+                    if identity["username"].as_str() != Some(&username) {
+                        return Err("server returned a different registered username".into());
+                    }
+                    if options.json {
+                        println!("{}", json!({"server": server, "identity": identity}));
+                    } else {
+                        println!("Registered {target}. Connect with ssmcp {target}.");
+                    }
+                    return Ok(true);
+                }
+                if reply.status != StatusCode::TOO_MANY_REQUESTS && reply.value["status"] != "pending" {
+                    Api::checked(reply)?;
+                    return Err("registration was declined or expired".into());
+                }
+                tokio::time::sleep(interval.max(Duration::from_secs(reply.retry_after))).await;
+            }
+        }) => result.map_err(|_| "registration expired")?,
+        _ = interrupt.recv() => Err("registration cancelled".into()),
+    }
 }
 
 /// Explicit old-relay compatibility is limited to an existing, verified self account.
@@ -899,24 +1017,6 @@ async fn compat_at(root: &Path, server: &str, allow: &[String]) -> Result<Creden
     Ok(credential)
 }
 
-/// Obtain and validate the selected server's account without a separate login command.
-pub(super) async fn connect_credential(
-    server: Option<&str>,
-    username: Option<&str>,
-    no_browser: bool,
-    allow_login: bool,
-) -> Result<Credential> {
-    let server = resolve_server(server)?;
-    connect_at(
-        &state_root()?,
-        Some(&server),
-        username,
-        no_browser,
-        allow_login,
-    )
-    .await
-}
-
 fn same_subject(credential: &Credential, identity: &Value) -> Result<()> {
     if credential
         .subject
@@ -928,6 +1028,7 @@ fn same_subject(credential: &Credential, identity: &Value) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 async fn connect_at(
     root: &Path,
     server: Option<&str>,
@@ -1014,9 +1115,66 @@ async fn connect_at(
 }
 
 async fn require_credential(server: Option<&str>) -> Result<Credential> {
-    credentials(server)
-        .await?
-        .ok_or_else(|| "not signed in; run ssmcp login [--server URL]".into())
+    credentials(server).await?.ok_or_else(|| {
+        "no saved controller credential; authorize a controller through MCP OAuth".into()
+    })
+}
+
+async fn account_info(api: &Api, username: &str) -> Result<Value> {
+    let username = crate::username::normalize(username)?;
+    Api::checked(
+        api.request(
+            Method::GET,
+            &format!("/api/client/account/{username}"),
+            None,
+            None,
+        )
+        .await?,
+    )
+}
+
+pub(super) async fn monitor_announcements(server: &str, username: &str) {
+    let Ok(api) = Api::new(server) else { return };
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        if let Ok(Ok(info)) =
+            tokio::time::timeout(Duration::from_secs(3), account_info(&api, username)).await
+        {
+            let lines = ["server_announcement", "announcement"]
+                .into_iter()
+                .filter_map(|key| info[key].as_str())
+                .filter(|text| !text.is_empty() && text.len() <= 1024)
+                .collect::<Vec<_>>();
+            super::terminal::set_announcements(&lines);
+        }
+    }
+}
+
+async fn public_whoami(args: &Arguments, target: Option<&str>) -> Result<()> {
+    let (username, server) = match target {
+        Some(target) => parse_target(target)?,
+        None => {
+            let server = resolve_server(args.server.as_deref())?;
+            (connection_username(&server)?, server)
+        }
+    };
+    let info = account_info(&Api::new(&server)?, &username).await?;
+    if args.json {
+        println!("{}", json!({"server": server, "account": info}));
+    } else {
+        println!(
+            "{}",
+            crate::server_endpoint::allow_principal(
+                info["username"]
+                    .as_str()
+                    .ok_or("server did not return an account name")?,
+                &server
+            )?
+        );
+    }
+    Ok(())
 }
 
 async fn whoami(args: &Arguments) -> Result<()> {
@@ -1026,7 +1184,7 @@ async fn whoami(args: &Arguments) -> Result<()> {
         .await?;
     let identity = public_identity(&reply)?;
     if identity["principal"] != credential.principal {
-        return Err("server identity differs from the saved login; run ssmcp login again".into());
+        return Err("server identity differs from the saved login; authorize your controller through MCP OAuth".into());
     }
     if args.json {
         println!(
@@ -1474,30 +1632,58 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
     }
     let remote_sessions = remote_session_args(args);
     let (operation, rest, interactive) = match first {
-        "login" | "logout" | "whoami" | "list" | "ls" => (first, &args[1..], false),
+        "logout" | "whoami" | "list" | "ls" => (first, &args[1..], false),
         "sessions" if remote_sessions.is_some() => ("list", remote_sessions.unwrap(), false),
         _ if standalone_interactive(args) => ("list", args, true),
         _ => return Ok(false),
     };
+    let (target, rest) = match rest.split_first() {
+        Some((target, remaining))
+            if operation == "whoami"
+                && target.to_str().is_some_and(|value| value.contains('@')) =>
+        {
+            (target.to_str(), remaining)
+        }
+        _ => (None, rest),
+    };
     let mut options = Arguments::parse(rest)?;
     if options.help {
         println!(
-            "ssmcp login [--context NAME | --server URL] [--no-browser] [--name NAME]\nssmcp whoami [--context NAME | --server URL] [--json]\nssmcp logout [--context NAME | --server URL] [--json]\nssmcp list [--context NAME | --server URL] [--json | -i] [--client ID] [--terminal ID]\nssmcp -i [--context NAME | --server URL] [--client ID] [--terminal ID]\n\nlogout clears the selected server\'s saved login, including when offline.\nIts result reports whether remote revocation was confirmed; other independent logins are preserved."
+            "ssmcp whoami [USERNAME@SERVER | --context NAME | --server URL] [--json]\nssmcp logout [--context NAME | --server URL] [--json]\nssmcp list [--context NAME | --server URL] [--json | -i] [--client ID] [--terminal ID]\nssmcp -i [--context NAME | --server URL] [--client ID] [--terminal ID]\n\nlogout clears the selected server\'s saved login, including when offline.\nIts result reports whether remote revocation was confirmed; other independent logins are preserved."
         );
         return Ok(true);
     }
-    options.server = super::connection_context::remote_server(
-        options.context.as_deref(),
-        options.server.as_deref(),
-    )?;
+    if target.is_some() {
+        if options.server.is_some() || options.context.is_some() {
+            return Err(
+                "an explicit account cannot be combined with a server or context selector".into(),
+            );
+        }
+    } else {
+        options.server = super::connection_context::remote_server(
+            options.context.as_deref(),
+            options.server.as_deref(),
+        )?;
+    }
     options.interactive |= interactive;
     if options.json && options.interactive {
         return Err("--json cannot be combined with interactive mode".into());
     }
     match operation {
-        "login" => login(&options).await?,
         "logout" => logout_command(&options).await?,
-        "whoami" => whoami(&options).await?,
+        "whoami" if target.is_some() => public_whoami(&options, target).await?,
+        "whoami" => {
+            if let Some(LastConnection::Relay { username, server }) = last_connection()?
+                && options.server.is_none()
+            {
+                let target = crate::server_endpoint::allow_principal(&username, &server)?;
+                public_whoami(&options, Some(&target)).await?;
+            } else if credentials(options.server.as_deref()).await?.is_some() {
+                whoami(&options).await?;
+            } else {
+                public_whoami(&options, None).await?;
+            }
+        }
         "list" | "ls" => list(&options).await?,
         _ => unreachable!(),
     }

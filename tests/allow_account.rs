@@ -80,7 +80,6 @@ impl Drop for Home {
 #[derive(Clone)]
 struct Peer {
     legacy: bool,
-    authenticated: bool,
     hellos: Arc<Mutex<Vec<ClientMetadata>>>,
     whoamis: Arc<AtomicUsize>,
 }
@@ -96,11 +95,7 @@ async fn connect(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    if peer.authenticated {
-        assert_eq!(headers["authorization"], format!("Bearer {TOKEN}"));
-    } else {
-        assert!(!headers.contains_key("authorization"));
-    }
+    assert!(!headers.contains_key("authorization"));
     let offer = headers[wire::CAPABILITIES_HEADER].to_str().unwrap();
     assert!(
         offer
@@ -179,7 +174,7 @@ async fn allow_help_uses_only_server_qualified_accounts() {
         );
         assert!(output.stderr.is_empty());
         let text = String::from_utf8(output.stdout).unwrap();
-        assert!(text.contains("--allow USER@SERVER"), "{args:?}: {text}");
+        assert!(!text.contains("--allow"), "{args:?}: {text}");
         assert!(!text.contains("ssmcp invite"));
         assert!(!text.contains("ssmcp join"));
         assert!(!text.contains("--allow USER@github"));
@@ -187,7 +182,7 @@ async fn allow_help_uses_only_server_qualified_accounts() {
 }
 
 #[tokio::test]
-async fn allow_cli_registers_anonymously_or_uses_only_the_saved_login_default() {
+async fn device_cli_connects_without_a_token_with_explicit_or_migrated_username() {
     for (legacy, explicit, saved) in [
         (false, true, false),
         (true, true, true),
@@ -198,7 +193,6 @@ async fn allow_cli_registers_anonymously_or_uses_only_the_saved_login_default() 
         let whoamis = Arc::new(AtomicUsize::new(0));
         let peer = Peer {
             legacy,
-            authenticated: !explicit,
             hellos: hellos.clone(),
             whoamis: whoamis.clone(),
         };
@@ -221,12 +215,7 @@ async fn allow_cli_registers_anonymously_or_uses_only_the_saved_login_default() 
             "allow-cli-fixture".into(),
         ];
         if explicit {
-            args.extend([
-                "--allow".into(),
-                format!("Alice@{base}, ALICE_DEV@{base}"),
-                "--allow".into(),
-                format!("alice@{base}"),
-            ]);
+            args.push(format!("Alice@{base}"));
         }
         let output = home
             .run(&args.iter().map(String::as_str).collect::<Vec<_>>())
@@ -248,11 +237,11 @@ async fn allow_cli_registers_anonymously_or_uses_only_the_saved_login_default() 
             "{stderr}"
         );
         assert!(!stderr.contains("Starting native tools"), "{stderr}");
-        assert_eq!(whoamis.load(Ordering::SeqCst), usize::from(!explicit));
+        assert_eq!(whoamis.load(Ordering::SeqCst), 0);
         let captured = hellos.lock().unwrap();
         assert_eq!(captured.len(), 1);
         let expected = if explicit {
-            vec![format!("alice@{base}"), format!("alice_dev@{base}")]
+            vec![format!("alice@{base}")]
         } else {
             vec![format!("owner-home@{base}")]
         };
@@ -273,16 +262,17 @@ async fn allow_cli_rejects_wrong_servers_and_retired_syntax_before_network() {
         assert!(output.stdout.is_empty());
         assert!(String::from_utf8_lossy(&output.stderr).contains("allow"));
     }
-    for command in ["invite", "join"] {
+    for command in ["invite", "join", "login"] {
         let output = home.run(&[command, "--help"]).await;
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("removed"));
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("removed") || error.contains("unrecognized command"));
     }
     let output = home.run(&["--server", &base, "--no-watchdog"]).await;
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("no saved sign-in"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("choose an account"));
     assert!(
         tokio::time::timeout(Duration::from_millis(30), listener.accept())
             .await

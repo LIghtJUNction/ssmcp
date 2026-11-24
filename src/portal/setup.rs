@@ -45,6 +45,7 @@ struct Entry {
 struct Grant {
     client_name: String,
     requested_username: Option<String>,
+    registration_only: bool,
     expires: Instant,
     decision: Decision,
     last_poll: Option<Instant>,
@@ -152,6 +153,7 @@ impl SetupState {
                 grant: Arc::new(AsyncMutex::new(Grant {
                     client_name,
                     requested_username: None,
+                    registration_only: false,
                     expires,
                     decision: Decision::Pending,
                     last_poll: None,
@@ -434,6 +436,7 @@ struct Device {
 }
 pub(super) fn routes() -> Router<Arc<Broker>> {
     Router::new()
+        .route("/api/client/registration/start", post(registration_start))
         .route(
             "/api/client/login/start",
             post(client_start).fallback(method_not_allowed),
@@ -537,20 +540,21 @@ async fn page_inner(
         state.charge("page", 600)?;
         state.by_code(&values["code"])?
     };
-    let (name, decision, requested_username) = {
+    let (name, decision, requested_username, registration_only) = {
         let grant = grant.lock().await;
         grant.alive()?;
         (
             grant.client_name.clone(),
             grant.decision.clone(),
             grant.requested_username.clone(),
+            grant.registration_only,
         )
     };
     if let Decision::Failed(problem) = &decision {
         return Err((*problem).into());
     }
     if matches!(decision, Decision::Denied) {
-        return Ok(Html(client_completed_page(false)).into_response());
+        return Ok(Html(client_completed_page(false, registration_only)).into_response());
     }
     let (browser, csrf, subject, new_cookie) = browser_session(&broker.portal, headers)?;
     if let Decision::Authorized(owner) = decision {
@@ -561,7 +565,7 @@ async fn page_inner(
                 "This setup request has already been approved by its account owner.",
             ));
         }
-        return Ok(Html(client_completed_page(true)).into_response());
+        return Ok(Html(client_completed_page(true, registration_only)).into_response());
     }
     if subject.is_none() {
         let mut response = start_login(broker, browser, Some(return_to))?;
@@ -584,6 +588,14 @@ async fn page_inner(
             return Err(problem.into());
         }
     };
+    if registration_only {
+        return Ok(Html(registration_page(
+            &values["code"],
+            &csrf,
+            requested_username.as_deref().unwrap_or_default(),
+        ))
+        .into_response());
+    }
     Ok(Html(client_consent_page(
         &name,
         &values["code"],
@@ -619,9 +631,11 @@ async fn authorize_inner(broker: &Broker, request: Request) -> Result<Response, 
     let previous = grant.decision.clone();
     grant.decide(&subject, allow)?;
     let username = grant.requested_username.clone().filter(|_| allow);
+    let registration_only = grant.registration_only;
     let result = broker
         .portal
         .storage(move |store| match username {
+            Some(username) if registration_only => store.register_handle(&subject, &username),
             Some(username) => store.claim_handle(&subject, &username),
             None => store.account(&subject),
         })
@@ -656,6 +670,21 @@ async fn client_start(
     State(broker): State<Arc<Broker>>,
     request: Request,
 ) -> Result<Json<Value>, ApiError> {
+    start_client_request(broker, request, false).await
+}
+
+async fn registration_start(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    start_client_request(broker, request, true).await
+}
+
+async fn start_client_request(
+    broker: Arc<Broker>,
+    request: Request,
+    registration_only: bool,
+) -> Result<Json<Value>, ApiError> {
     enabled(&broker)?;
     let input: ClientStart = body(request, &broker.public_url).await?;
     let name = input.name.trim();
@@ -680,6 +709,13 @@ async fn client_start(
         ),
         None => None,
     };
+    if registration_only {
+        match username_available {
+            Some(true) => {}
+            Some(false) => return Err(Problem::UsernameTaken.into()),
+            None => return Err(ApiError::invalid("registration requires a username")),
+        }
+    }
     let (device_code, user_code, grant) = {
         let mut state = lock(&broker.portal)?;
         state.charge("start", 60)?;
@@ -692,6 +728,7 @@ async fn client_start(
     {
         let mut grant = grant.lock().await;
         grant.requested_username = username.clone();
+        grant.registration_only = registration_only;
     }
     let base = broker.public_url.trim_end_matches('/');
     Ok(Json(
@@ -763,6 +800,12 @@ async fn client_poll(
         login: account.github_login.clone(),
     };
     let public_identity = crate::device::account_identity_json(&identity, &account)?;
+    if grant.registration_only {
+        grant.login_issued = true;
+        return Ok(Json(
+            json!({"status":"registered","identity":public_identity}),
+        ));
+    }
     broker
         .portal
         .record_audit(
@@ -811,7 +854,30 @@ fn client_consent_page(
         ),
     )
 }
-fn client_completed_page(allowed: bool) -> String {
+fn registration_page(code: &str, csrf: &str, username: &str) -> String {
+    view::page(
+        "注册用户名",
+        &format!(
+            r#"<section class="card"><h1>注册用户名</h1><p>注册 <strong>{}</strong>。请核对本次请求的验证码：<code>{}</code>。</p><form method="post" action="/setup/authorize"><input type="hidden" name="csrf" value="{}"><input type="hidden" name="code" value="{}"><button type="submit" name="decision" value="allow">确认注册</button><button type="submit" name="decision" value="deny">拒绝</button></form></section>"#,
+            escape(username),
+            escape(code),
+            escape(csrf),
+            escape(code)
+        ),
+    )
+}
+
+fn client_completed_page(allowed: bool, registration_only: bool) -> String {
+    if registration_only {
+        return view::page(
+            "用户名注册",
+            if allowed {
+                "<section class=card><h1>注册完成</h1><a href=/>查看账户</a></section>"
+            } else {
+                "<section class=card><h1>已拒绝注册</h1><a href=/>查看账户</a></section>"
+            },
+        );
+    }
     if !allowed {
         return view::page(
             "已拒绝客户端登录",

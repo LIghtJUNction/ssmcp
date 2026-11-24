@@ -223,13 +223,12 @@ fn server_configuration_is_editable_and_precedence_is_consistent() {
     // No credential exists for edited.example: never reuse the last-login token.
     let denied = home.command(&["whoami"]);
     assert!(!denied.status.success());
-    assert!(String::from_utf8_lossy(&denied.stderr).contains("not signed in"));
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("choose an account"));
     let connection = home.command(&["--no-watchdog", "--name", "config-check"]);
     assert!(!connection.status.success());
     assert!(connection.stdout.is_empty());
     let error = String::from_utf8_lossy(&connection.stderr);
-    assert!(error.contains("no saved sign-in"), "{error}");
-    assert!(error.contains("--allow username@relay-server"), "{error}");
+    assert!(error.contains("ssmcp username@server"), "{error}");
     assert!(!error.contains(&"a".repeat(64)));
     home.success(&["config", "unset", "server"]);
     assert_eq!(
@@ -239,7 +238,7 @@ fn server_configuration_is_editable_and_precedence_is_consistent() {
 }
 
 #[test]
-fn explicit_server_overrides_configuration_for_account_and_allow_requests() {
+fn explicit_server_overrides_configuration_for_account_and_device_requests() {
     let home = Home::new();
     home.success(&["config", "set", "server", "https://configured.example"]);
     let server = Server::once(
@@ -266,7 +265,7 @@ fn explicit_server_overrides_configuration_for_account_and_allow_requests() {
             .contains(&format!("authorization: bearer {token}"))
     );
 
-    // Explicit --allow reaches the selected relay anonymously, even when that
+    // An explicit device target reaches the selected relay anonymously, even when that
     // origin has a saved login. A protocol rejection stops before tools start.
     let relay = Server::once(
         "404 Not Found",
@@ -277,7 +276,6 @@ fn explicit_server_overrides_configuration_for_account_and_allow_requests() {
     let output = home.command(&[
         "--server",
         &relay.origin,
-        "--allow",
         &allow,
         "--no-watchdog",
         "--no-browser",
@@ -307,7 +305,7 @@ fn explicit_server_overrides_configuration_for_account_and_allow_requests() {
 }
 
 #[test]
-fn configured_default_is_used_by_account_login_named_connection_and_allow() {
+fn configured_default_is_used_by_legacy_account_reads_and_named_connections() {
     let home = Home::new();
     let server = Server::once(
         "200 OK",
@@ -335,26 +333,25 @@ fn configured_default_is_used_by_account_login_named_connection_and_allow() {
     );
     assert!(!request.contains(&previous_token));
 
-    let login = Server::once("400 Bad Request", json!({"error": "stop_test"}));
-    home.success(&["config", "set", "server", &login.origin]);
-    let output = home.command(&["login", "--no-browser"]);
+    let registration = Server::once("400 Bad Request", json!({"error": "stop_test"}));
+    let target = format!("Alice@{}", registration.origin);
+    let output = home.command(&[&target, "--register", "--no-browser"]);
     assert!(!output.status.success());
-    let request = login.request();
-    assert!(request.starts_with("POST /api/client/login/start "));
+    let request = registration.request();
+    assert!(request.starts_with("POST /api/client/registration/start "));
+    assert!(request.contains(r#""username":"alice""#));
     assert!(!request.to_ascii_lowercase().contains("authorization:"));
-    assert!(!request.contains(&previous_token));
 
     let named = Server::once("400 Bad Request", json!({"error": "stop_test"}));
     home.success(&["config", "set", "server", &named.origin]);
     let output = home.command(&["--username", "Alice", "--no-browser", "--no-watchdog"]);
     assert!(!output.status.success());
     let request = named.request();
-    assert!(request.starts_with("POST /api/client/login/start "));
-    assert!(request.contains("\"username\":\"alice\""));
+    assert!(request.starts_with("GET /api/client/connect "));
     assert!(!request.to_ascii_lowercase().contains("authorization:"));
     assert!(!request.contains(&previous_token));
 
-    // The configured origin also controls unsigned --allow connections. A
+    // The configured origin also controls unsigned named connections. A
     // different last-login origin must neither override it nor supply a token.
     let relay = Server::once(
         "404 Not Found",
@@ -363,8 +360,7 @@ fn configured_default_is_used_by_account_login_named_connection_and_allow() {
     home.account(&relay.origin, &selected_token);
     home.account("https://last-login.example", &previous_token);
     home.success(&["config", "set", "server", &relay.origin]);
-    let allow = format!("alice@{}", relay.origin);
-    let output = home.command(&["--allow", &allow, "--no-watchdog", "--no-browser"]);
+    let output = home.command(&["--username", "alice", "--no-watchdog"]);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let error = String::from_utf8_lossy(&output.stderr);
@@ -424,10 +420,8 @@ fn invalid_configuration_never_silently_selects_the_builtin_server() {
     .unwrap();
     for args in [
         vec!["config", "get", "server"],
-        vec!["login", "--no-browser"],
         vec!["whoami"],
         vec!["--no-watchdog"],
-        vec!["--allow", "alice@remote.example", "--no-watchdog"],
     ] {
         let result = home.command(&args);
         assert!(!result.status.success());

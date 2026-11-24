@@ -295,7 +295,7 @@ impl State {
         if self.conversation.list_count == 0 || self.conversation.detail {
             return None;
         }
-        let relative = row.checked_sub(body_top(self.geometry.rows))?;
+        let relative = row.checked_sub(self.geometry.chat_body_top())?;
         if relative >= self.geometry.log_rows {
             return None;
         }
@@ -343,7 +343,7 @@ mod tests {
             state.conversation.selected = selected;
             let body = state.queue_rows_at(data, state.geometry.log_rows, NOW);
             for index in 0..usize::from(state.geometry.log_rows) {
-                frame.rows[usize::from(body_top(state.geometry.rows)) + index] = body
+                frame.rows[usize::from(state.geometry.chat_body_top()) + index] = body
                     .get(index)
                     .cloned()
                     .unwrap_or_else(|| state.chat_line("", PanelTone::Normal, state.geometry.left));
@@ -379,7 +379,7 @@ mod tests {
                     .any(|row| row.contains("› Keep the request list"))
             );
             assert!(rows.iter().any(|row| row.trim().is_empty()));
-            let row = body_top(state.geometry.rows) + meta as u16;
+            let row = state.geometry.chat_body_top() + meta as u16;
             assert_eq!(state.chat_queue_hit(&data, row), Some(1));
             let mut moved = data.clone();
             moved["queue"].as_array_mut().unwrap().swap(0, 1);
@@ -392,7 +392,7 @@ mod tests {
             assert_eq!(state.chat_queue_hit(&moved, row), None);
             let blank = rows.iter().position(|row| row.trim().is_empty()).unwrap();
             assert_eq!(
-                state.chat_queue_hit(&data, body_top(state.geometry.rows) + blank as u16),
+                state.chat_queue_hit(&data, state.geometry.chat_body_top() + blank as u16),
                 None
             );
 

@@ -14,7 +14,7 @@ pub(super) fn escape(s: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-/// Use the configured server origin and the same address rules as --allow.
+/// Use the configured server origin and the same address rules as device startup.
 pub(super) fn account_address(handle: Option<&str>, public_url: &str) -> String {
     handle
         .and_then(|handle| crate::server_endpoint::allow_principal(handle, public_url).ok())
@@ -126,6 +126,28 @@ pub(super) fn traffic_panel(traffic: &TrafficQuota) -> String {
     )
 }
 
+fn announcement_form(csrf: &str, text: &str, global: bool) -> String {
+    let (scope, title, help) = if global {
+        ("server", "全站公告", "留空可清除全站公告。")
+    } else {
+        (
+            "account",
+            "个人公告",
+            "可用 {username} 和 {time}（UTC）。留空会恢复默认问候。公告会显示在连接到此账号的客户端。",
+        )
+    };
+    format!(
+        r#"<details class="traffic-details"><summary>{title}</summary><form class="key-form" method="post" action="/account/announcement"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="scope" value="{scope}"><label>{title}<input name="announcement" value="{}" maxlength="512"></label><small>{help}</small><button type="submit">保存公告</button></form></details>"#,
+        escape(text)
+    )
+}
+
+#[derive(Default)]
+pub(super) struct AccountSettings<'a> {
+    pub rename_quota: Option<UsernameRenameQuota>,
+    pub global_announcement: Option<&'a str>,
+}
+
 fn account_panel(
     account: Option<&Account>,
     csrf: &str,
@@ -133,7 +155,7 @@ fn account_panel(
     management_enabled: bool,
     traffic: Option<&TrafficQuota>,
     public_url: &str,
-    rename_quota: Option<UsernameRenameQuota>,
+    settings: AccountSettings<'_>,
 ) -> String {
     let (status_class, status) = if account.is_some() {
         ("status signed-in", "已登录")
@@ -147,7 +169,7 @@ fn account_panel(
 <div class="panel-bar"><span class="eyebrow">你的账户</span><span class="{status_class}">{status}</span></div><div class="account-body">"#
     );
     if let Some(a) = account {
-        let (quota_note, disabled) = match rename_quota {
+        let (quota_note, disabled) = match settings.rename_quota {
             Some(quota) if quota.limit == 0 => ("服务器已关闭改名功能。".into(), " disabled"),
             Some(quota) => (
                 format!(
@@ -182,6 +204,10 @@ fn account_panel(
 {username_form}<div class="account-actions">{primary_action}{traffic_action}</div>"#,
             escape(&account_address(a.handle.as_deref(), public_url)),
         ));
+        html.push_str(&announcement_form(csrf, &a.announcement, false));
+        if let Some(text) = settings.global_announcement {
+            html.push_str(&announcement_form(csrf, text, true));
+        }
         if management_enabled {
             html.push_str(r#"<div class="account-shortcuts"><a class="text-link" href="/account/history">历史记录 <span aria-hidden="true">↗</span></a>"#);
             if traffic.is_some_and(|quota| quota.limit_bytes.is_none()) {
@@ -196,7 +222,7 @@ fn account_panel(
         html.push_str(&format!(
             r#"<h2 id="account-title">已有账户？在这里继续。</h2><p class="account-description">使用 GitHub 登录，查看用户名、在线连接与本月流量。</p>
 <form class="login-form" method="post" action="/account/login"><input type="hidden" name="csrf" value="{csrf}"><button class="login-button" type="submit">{GITHUB_ICON}使用 GitHub 登录<span class="arrow" aria-hidden="true">↗</span></button></form>
-<small class="account-note">第一次使用可从下面的安装步骤开始，连接时再完成登录。</small>"#
+<small class="account-note">第一次使用可从下面的安装步骤开始，登录网页获取用户名。</small>"#
         ));
     } else {
         html.push_str(
@@ -210,10 +236,7 @@ fn account_panel(
 fn connect_panel(account: Option<&Account>, public_url: &str) -> String {
     let copy_script_url = super::assets::url("copy-command.js");
     let origin = public_url.trim_end_matches('/');
-    let host = origin
-        .strip_prefix("https://")
-        .or_else(|| origin.strip_prefix("http://"))
-        .unwrap_or(origin);
+    let host = origin.strip_prefix("https://").unwrap_or(origin);
     let username = account
         .and_then(|account| account.handle.as_deref())
         .unwrap_or("myname");
@@ -228,7 +251,7 @@ fn connect_panel(account: Option<&Account>, public_url: &str) -> String {
 <div class="section-content"><div class="terminal" aria-label="本机连接命令"><div class="terminal-bar"><span>terminal</span><span class="terminal-label">~/your-project</span></div><div class="terminal-content"><p class="terminal-comment"># 在本机执行</p><pre class="command"><code id="client-command">{}</code></pre></div></div>
 <div class="connect-actions"><p class="command-hint">{hint}</p><button id="copy-client-command" class="secondary" type="button" hidden>复制命令</button><span id="copy-command-status" role="status"></span></div>
 <script src="{copy_script_url}" defer></script>
-<p class="section-description">首次连接会引导你使用 GitHub 登录。核对用户名和设备后允许连接；后续会复用本机凭据。保持这个终端运行，客户端连接成功后继续第三步。</p>
+<p class="section-description">设备无需登录。请在此网页登录获取用户名。也可以在命令后添加 <code>--register</code> 注册新用户名。保持这个终端运行，连接成功后继续第三步。</p>
 <a class="text-link" href="/guide/zh#help">连接遇到问题？ <span class="arrow" aria-hidden="true">↗</span></a>
 <details><summary>用户名和工具发现</summary><p>用户名为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾。名称不区分大小写，已占名称只允许原绑定 GitHub 账户登录。</p><p>连接后，应用可以调用当前客户端已注册的工具。终端命令和文件操作在你的电脑上执行；额外工具的安装、登录与授权仍由你管理。</p></details></div></section>"#,
         escape(&command)
@@ -257,7 +280,7 @@ pub(super) fn home(
     management_enabled: bool,
     public_url: &str,
     traffic: Option<&TrafficQuota>,
-    rename_quota: Option<UsernameRenameQuota>,
+    settings: AccountSettings<'_>,
 ) -> String {
     let csrf = escape(csrf.unwrap_or(""));
     let mut body = if let Some(account) = account {
@@ -288,7 +311,7 @@ pub(super) fn home(
         management_enabled,
         traffic,
         public_url,
-        rename_quota,
+        settings,
     ));
     if account.is_some() {
         body.push_str("</div></section>");
@@ -330,6 +353,7 @@ mod tests {
             banned: false,
             rate_limit_bps: None,
             has_recharged: false,
+            announcement: String::new(),
         }
     }
 
@@ -357,7 +381,7 @@ mod tests {
             true,
             "https://example.test",
             Some(traffic),
-            None,
+            AccountSettings::default(),
         )
     }
 
@@ -370,10 +394,13 @@ mod tests {
             true,
             "https://EXAMPLE.test:443",
             None,
-            Some(UsernameRenameQuota {
-                limit: 1,
-                remaining: 1,
-            }),
+            AccountSettings {
+                rename_quota: Some(UsernameRenameQuota {
+                    limit: 1,
+                    remaining: 1,
+                }),
+                ..AccountSettings::default()
+            },
         );
         assert!(html.contains("developer@example.test"));
         assert!(html.contains("修改用户名"));
@@ -425,7 +452,7 @@ mod tests {
                 management_enabled,
                 None,
                 "https://example.test",
-                None,
+                AccountSettings::default(),
             );
             assert_eq!(without_quota.matches(orders_link).count(), 1);
             let with_quota = account_panel(
@@ -435,13 +462,21 @@ mod tests {
                 management_enabled,
                 Some(&quota),
                 "https://example.test",
-                None,
+                AccountSettings::default(),
             );
             assert!(!with_quota.contains(orders_link));
         }
         assert!(
-            !account_panel(None, "csrf", true, true, None, "https://example.test", None)
-                .contains(orders_link)
+            !account_panel(
+                None,
+                "csrf",
+                true,
+                true,
+                None,
+                "https://example.test",
+                AccountSettings::default()
+            )
+            .contains(orders_link)
         );
     }
 
@@ -493,7 +528,7 @@ mod tests {
                 true,
                 "https://example.test",
                 Some(&monthly_quota(123_456_789)),
-                None,
+                AccountSettings::default(),
             );
             assert!(!html.contains(r#"aria-label="账户流量""#));
             assert!(!html.contains("123456789 字节"));

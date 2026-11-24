@@ -43,7 +43,7 @@ terminal open. The displayed MCP URL uses one-time connection-code OAuth.
   --no-watchdog          Exit after a lost connection
 
 Normal foreground display, shell and context flags also apply. Background
-sessions, --server, --username and --allow are unavailable in local mode.
+sessions and account connection options are unavailable in local mode.
 Socket clients use the displayed HTTP origin and the same OAuth/token checks:
   curl --unix-socket PATH http://127.0.0.1:PORT/healthz
 Replace PORT with the displayed port. The loopback listener remains available.

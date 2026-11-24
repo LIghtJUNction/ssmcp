@@ -16,7 +16,7 @@ pub(crate) const TOOL: &str = "ssmcp.client.reload";
 pub(crate) fn tool() -> Value {
     json!({
         "name": TOOL,
-        "description": "Acknowledge and restart this foreground client from its installed executable, preserving its resolved connection target, other startup arguments, cwd and environment. Reject while other requests are in flight. Stops local background commands, harnesses and forwards. Live logs, drafts and pending requests are discarded at restart. The client reconnects with a new ID; use list again. Server-qualified --allow accounts are checked again after reconnect; control apps retain their independent sign-in.",
+        "description": "Acknowledge and restart this foreground client from its installed executable, preserving its resolved connection target, other startup arguments, cwd and environment. Reject while other requests are in flight. Stops local background commands, harnesses and forwards. Live logs, drafts and pending requests are discarded at restart. The client reconnects with a new ID; use list again. The relay verifies the selected account again after reconnect; control apps retain their independent sign-in.",
         "inputSchema": {"type":"object","properties":{},"additionalProperties":false},
         "annotations": {"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false}
     })
@@ -178,6 +178,9 @@ pub(super) fn connection_arguments(
             ),
         ]
     };
+    if let Some(username) = &options.username {
+        pinned.extend([OsString::from("--username"), OsString::from(username)]);
+    }
     let mut arguments = arguments.into_iter().peekable();
     if arguments.peek().is_some_and(|argument| argument == "local") {
         arguments.next();
@@ -189,12 +192,14 @@ pub(super) fn connection_arguments(
                 pinned.extend(arguments);
                 break;
             }
-            Some("--context" | "--server") => {
+            Some("--context" | "--server" | "--username") => {
                 arguments
                     .next()
                     .ok_or("reload connection selector is missing its value")?;
             }
             Some(value) if value.starts_with("--context=") => {}
+            Some(value)
+                if options.username.is_some() && super::account::parse_target(value).is_ok() => {}
             Some(value) if super::connection_option_takes_value(value) => {
                 pinned.push(argument);
                 pinned.push(

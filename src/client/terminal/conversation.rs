@@ -13,7 +13,6 @@ mod groups;
 mod hints;
 mod history;
 mod listener;
-mod login;
 pub(super) mod logout;
 mod messaging;
 mod openai;
@@ -188,7 +187,6 @@ pub(super) struct Conversation {
     input_task: Option<attachments::Task>,
     paste_recovery: Option<String>,
     retrying_paste: bool,
-    login_task: Option<crate::client::account::login::Task>,
     access_request: Option<u64>,
     pub(super) logout_task: Option<logout::Task>,
     pub(super) exit_message: Option<String>,
@@ -249,7 +247,7 @@ pub(super) fn body_top(rows: u16) -> u16 {
     u16::from(rows >= 6)
 }
 pub(super) fn prompt_top(geometry: Geometry) -> u16 {
-    body_top(geometry.rows) + geometry.log_rows
+    geometry.chat_body_top() + geometry.log_rows
 }
 
 fn field<'a>(value: &'a Value, key: &str) -> &'a str {
@@ -518,7 +516,6 @@ impl State {
             return;
         }
         self.chat_poll_input();
-        self.chat_poll_login();
         self.chat_poll_access();
         self.chat_poll_logout();
         self.chat_poll_goal();
@@ -846,7 +843,7 @@ impl State {
                     }
                 }
             }
-            "/login" => self.chat_login(rest)?,
+            "/login" => return Err("Use ssmcp username@server --register for a new account. Authorize the controller using the MCP URL in /logs.".into()),
             "/allow" => self.chat_allow(rest)?,
             "/logout" => self.chat_logout(rest)?,
             "/handoff" => {
@@ -1981,7 +1978,7 @@ impl State {
             } if !release && x < self.geometry.left => {
                 if button & 64 != 0 {
                     let delta = if button & 1 == 0 { -3 } else { 3 };
-                    if y >= body_top(self.geometry.rows) && y < prompt_top(self.geometry) {
+                    if y >= self.geometry.chat_body_top() && y < prompt_top(self.geometry) {
                         let event_row = y.checked_sub(self.chat_activity_top());
                         // Keep the right half available for the conversation even
                         // when a command window occupies the entire visible body.
@@ -1998,7 +1995,7 @@ impl State {
                 } else {
                     self.conversation.content_focus = true;
                     if self.conversation.view == View::Tasks {
-                        if let Some(row) = y.checked_sub(body_top(self.geometry.rows))
+                        if let Some(row) = y.checked_sub(self.geometry.chat_body_top())
                             && self.conversation.tasks.mouse_select(row)
                             && button == 0
                         {
@@ -3017,7 +3014,7 @@ impl State {
         if self.conversation.view == View::Queue {
             return self.chat_queue_hit(&self.chat_data(), row);
         }
-        let relative = row.checked_sub(body_top(self.geometry.rows) + 1)?;
+        let relative = row.checked_sub(self.geometry.chat_body_top() + 1)?;
         if relative >= self.geometry.log_rows.saturating_sub(1) {
             return None;
         }
@@ -3102,7 +3099,7 @@ impl State {
     }
 
     pub(super) fn chat_activity_top(&self) -> u16 {
-        body_top(self.geometry.rows).saturating_add(
+        self.geometry.chat_body_top().saturating_add(
             self.conversation
                 .worker_activity_rows
                 .min(self.geometry.log_rows),
@@ -3139,7 +3136,7 @@ impl State {
             .iter()
             .filter(|item| Receipt::from_entry(item).pending())
             .count();
-        let top = body_top(g.rows);
+        let top = g.chat_body_top();
         let height = g.log_rows;
         let mut body = match self.conversation.view {
             View::Activity => {
@@ -3430,6 +3427,12 @@ impl State {
                         self.tone(PanelTone::Muted, &format!("{}{label}  ", " ".repeat(gap))),
                     )
                 }
+            } else if (1..top).contains(&index) {
+                self.chat_line(
+                    &format!("  {}", self.announcements[usize::from(index - 1)]),
+                    PanelTone::Muted,
+                    g.left,
+                )
             } else if index >= top && index < top + height {
                 body[usize::from(index - top)].clone()
             } else if index == prompt_top(g) && g.input_rows > 0 {
@@ -4054,7 +4057,7 @@ mod tests {
             state.chat_key(Key::Mouse {
                 button: 0,
                 x: 8,
-                y: body_top(state.geometry.rows),
+                y: state.geometry.chat_body_top(),
                 release: false,
             });
             assert_eq!(
@@ -4085,7 +4088,7 @@ mod tests {
             state.conversation.worker_activity_fixture = None;
             display(&mut state);
             assert_eq!(state.conversation.worker_activity_rows, 0);
-            assert_eq!(state.chat_activity_top(), body_top(state.geometry.rows));
+            assert_eq!(state.chat_activity_top(), state.geometry.chat_body_top());
             assert_eq!(state.conversation.composer.text(), "Keep this draft");
         }
     }
@@ -4537,6 +4540,24 @@ mod tests {
     }
 
     #[test]
+    fn announcements_reserve_rows_under_the_header_without_moving_the_composer() {
+        let mut state = preview(24, 100);
+        let prompt = prompt_top(state.geometry);
+        state.announcements = vec!["Deployment Friday".into(), "你好，alice".into()];
+        state.resize(24, 100);
+        let screen = display(&mut state).screen().contents();
+        let lines = screen.lines().collect::<Vec<_>>();
+        assert!(lines[0].contains("SSMCP main"));
+        assert!(lines[1].contains("Deployment Friday"));
+        assert!(lines[2].contains("你好，alice"));
+        assert_eq!(state.geometry.chat_body_top(), 3);
+        assert_eq!(prompt_top(state.geometry), prompt);
+        state.announcements.clear();
+        state.resize(24, 100);
+        assert_eq!(state.geometry.chat_body_top(), 1);
+    }
+
+    #[test]
     fn header_is_one_safe_row_with_narrow_and_unicode_content() {
         let ui = Ui {
             sidebar: false,
@@ -4757,7 +4778,7 @@ mod tests {
         state.chat_key(Key::Mouse {
             button: 0,
             x: 2,
-            y: body_top(state.geometry.rows) + 1 + index as u16 * 2,
+            y: state.geometry.chat_body_top() + 1 + index as u16 * 2,
             release: false,
         });
         state.chat_character('\r');
@@ -4918,7 +4939,7 @@ mod tests {
         state.chat_key(Key::Mouse {
             button: 0,
             x: state.chat_agent_list_width() + 5,
-            y: body_top(state.geometry.rows) + 5,
+            y: state.geometry.chat_body_top() + 5,
             release: false,
         });
         assert_eq!(state.conversation.view, View::Agents);
@@ -4954,7 +4975,7 @@ mod tests {
         assert!(start > 0);
         assert_eq!(state.conversation.list_count, 5);
         assert!(!rows[1].contains("Agent 0  ·"));
-        let first = body_top(state.geometry.rows) + 1;
+        let first = state.geometry.chat_body_top() + 1;
         state.chat_key(Key::Mouse {
             button: 0,
             x: 1,
@@ -4976,7 +4997,7 @@ mod tests {
         state.chat_key(Key::Mouse {
             button: 0,
             x: 1,
-            y: body_top(state.geometry.rows),
+            y: state.geometry.chat_body_top(),
             release: false,
         });
         assert_eq!(
@@ -4988,7 +5009,7 @@ mod tests {
         state.chat_key(Key::Mouse {
             button: 2,
             x: 1,
-            y: body_top(state.geometry.rows),
+            y: state.geometry.chat_body_top(),
             release: false,
         });
         assert_eq!(state.conversation.view, View::Logs);
@@ -5024,7 +5045,7 @@ mod tests {
         assert!(start > 0);
         assert_eq!(state.conversation.list_count, 4);
         assert!(rows[1].contains(&format!("Request {start}")));
-        let top = body_top(state.geometry.rows);
+        let top = state.geometry.chat_body_top();
         for offset in 0..state.conversation.list_count {
             let first = 1 + offset * 3;
             let expected = start + offset;
@@ -5972,7 +5993,7 @@ mod tests {
             let mut theme = vt100::Parser::new(nonzero(1), nonzero(1), 0);
             theme.process(format!("\x1b[{}m ", ui.background()).as_bytes());
             let background = theme.screen().cell(0, 0).unwrap().bgcolor();
-            for row in body_top(g.rows)..body_top(g.rows) + g.log_rows {
+            for row in g.chat_body_top()..g.chat_body_top() + g.log_rows {
                 assert_eq!(
                     screen.cell(row, g.left - 1).unwrap().bgcolor(),
                     background,
@@ -5986,7 +6007,7 @@ mod tests {
                     );
                 }
             }
-            let top = body_top(g.rows);
+            let top = g.chat_body_top();
             assert_eq!(
                 screen.cell(top, 4).unwrap().fgcolor(),
                 vt100::Color::Rgb(20, 40, 60)

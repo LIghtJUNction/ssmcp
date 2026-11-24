@@ -485,7 +485,7 @@ async fn connect_once(
     tokio::select! {
         biased;
         _ = wait_for_stop(&mut stop) => return Ok(ConnectionExit::Stopped),
-        result = apply_account(&mut options, false) => result?,
+        result = apply_account(&mut options) => result?,
     }
     if *stop.borrow() {
         return Ok(ConnectionExit::Stopped);

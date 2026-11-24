@@ -187,6 +187,7 @@ fn comparison_code_alone_cannot_authorize_and_decisions_are_owner_bound() {
     let mut grant = Grant {
         client_name: "test".into(),
         requested_username: None,
+        registration_only: false,
         expires: Instant::now() + TTL,
         decision: Decision::Pending,
         last_poll: None,
@@ -691,4 +692,150 @@ async fn banned_github_callback_terminates_client_poll_without_waiting_for_expir
             .await
             .unwrap()
     );
+}
+
+#[tokio::test]
+async fn registration_claims_only_new_names_and_returns_no_login_token() {
+    let fixture = Fixture::new().await;
+    let start = |name| {
+        fixture
+            .client
+            .post(format!("{}/api/client/registration/start", fixture.base))
+            .json(&json!({"name": "fixture", "username": name}))
+            .send()
+    };
+    let grant: Value = start("fixture-account")
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let code = grant["user_code"].as_str().unwrap();
+    let secret = grant["device_code"].as_str().unwrap();
+    let (cookie, csrf) = fixture.session("123");
+    assert_eq!(
+        fixture
+            .consent(&cookie, &csrf, code, "allow")
+            .await
+            .status(),
+        303
+    );
+    let receipt: Value = fixture
+        .client
+        .post(format!("{}/api/client/login/poll", fixture.base))
+        .json(&json!({"device_code":secret}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(receipt["status"], "registered");
+    assert_eq!(receipt["identity"]["username"], "fixture-account");
+    assert!(receipt.get("access_token").is_none());
+    assert_eq!(start("fixture-account").await.unwrap().status(), 409);
+    let another: Value = start("another-name")
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .consent(
+                &cookie,
+                &csrf,
+                another["user_code"].as_str().unwrap(),
+                "allow"
+            )
+            .await
+            .status(),
+        409
+    );
+}
+
+#[tokio::test]
+async fn public_account_shows_default_and_updates_own_announcement() {
+    let fixture = Fixture::new().await;
+    fixture
+        .broker
+        .portal
+        .storage(|store| {
+            store.claim_handle("123", "alice-notices")?;
+            store.update_announcement("123", true, "System message".into())
+        })
+        .await
+        .unwrap();
+    let read = || {
+        fixture
+            .client
+            .get(format!("{}/api/client/account/alice-notices", fixture.base))
+            .send()
+    };
+    let default: Value = read()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        default["announcement"]
+            .as_str()
+            .unwrap()
+            .starts_with("alice-notices · ")
+    );
+    assert!(
+        default["announcement"]
+            .as_str()
+            .unwrap()
+            .ends_with("Z · 你好")
+    );
+    assert_eq!(default["server_announcement"], "System message");
+    assert!(default.get("subject").is_none());
+    let (cookie, csrf) = fixture.session("123");
+    let edit = |scope, message| {
+        fixture
+            .client
+            .post(format!("{}/account/announcement", fixture.base))
+            .header("cookie", &cookie)
+            .header("origin", "https://ssmcp.test")
+            .form(&[
+                ("csrf", csrf.as_str()),
+                ("scope", scope),
+                ("announcement", message),
+            ])
+            .send()
+    };
+    assert_eq!(
+        edit("server", "Unauthorized replacement")
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert_eq!(
+        edit("account", "Welcome {username}")
+            .await
+            .unwrap()
+            .status(),
+        303
+    );
+    let updated: Value = read()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated["announcement"], "Welcome alice-notices");
+    assert_eq!(updated["server_announcement"], "System message");
 }

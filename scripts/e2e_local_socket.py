@@ -121,6 +121,15 @@ class SocketLocal(Local):
         status, listed, _ = self.rpc("tools/list")
         self.check(status == 200 and bool(listed.get("result", {}).get("tools")),
                    "authenticated MCP lists tools over the same Unix socket")
+        clients = self.public_call("list", {})["clients"]
+        self.check(len(clients) == 1 and clients[0]["name"] == "local-fixture",
+                   "MCP discovers the same-machine fixture session")
+        self.client_id = clients[0]["id"]
+        (self.workspace / "mcp-check.txt").write_text("local MCP verified")
+        for attempt in (1, 2):
+            read = self.call("ssmcp.fs.read_text", {"path": "mcp-check.txt"})
+            self.check(read["text"] == "local MCP verified",
+                       f"new MCP HTTP connection {attempt} reaches the same live native session")
         if self.custom:
             self.check(True, "the custom path recovered an owned stale socket and completed MCP")
         self.front.disconnect()

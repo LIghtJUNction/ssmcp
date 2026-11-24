@@ -29,6 +29,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
@@ -538,6 +539,8 @@ pub fn routes() -> Router<Arc<Broker>> {
         .route("/account/login", post(login))
         .route("/account/logout", post(logout))
         .route("/account/username", post(update_username))
+        .route("/account/announcement", post(update_announcement))
+        .route("/api/client/account/{username}", get(client_account))
         .merge(guide::routes())
         .merge(setup::routes())
         .merge(dashboard::routes())
@@ -597,7 +600,7 @@ async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<R
             false,
             &broker.public_url,
             None,
-            None,
+            view::AccountSettings::default(),
         ))
         .into_response());
     }
@@ -637,6 +640,7 @@ async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<R
         }
         None => (None, None),
     };
+    let mut is_admin = false;
     let traffic = if let Some(account) = &account {
         if let Some(management) = &broker.portal.management {
             let identity = Identity {
@@ -644,14 +648,25 @@ async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<R
                 subject: account.subject.clone(),
                 login: account.github_login.clone(),
             };
-            management
+            let snapshot = management
                 .snapshot(&identity, crate::management::Scope::Own)
                 .await
-                .map_err(|_| Problem::ManagementUnavailable)?
-                .traffic
+                .map_err(|_| Problem::ManagementUnavailable)?;
+            is_admin = snapshot.is_admin;
+            snapshot.traffic
         } else {
             Some(broker.traffic_quota(&account.subject).await?)
         }
+    } else {
+        None
+    };
+    let global_announcement = if is_admin {
+        Some(
+            broker
+                .portal
+                .storage(|store| Ok(store.server_announcement().to_owned()))
+                .await?,
+        )
     } else {
         None
     };
@@ -662,7 +677,10 @@ async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<R
         broker.portal.management.is_some(),
         &broker.public_url,
         traffic.as_ref(),
-        rename_quota,
+        view::AccountSettings {
+            rename_quota,
+            global_announcement: global_announcement.as_deref(),
+        },
     ))
     .into_response();
     if let Some(raw) = new_cookie {
@@ -1035,6 +1053,96 @@ async fn update_username(
         .storage(move |store| store.rename_handle(&subject, &username))
         .await?;
     Ok(Redirect::to("/#account").into_response())
+}
+
+async fn update_announcement(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+) -> Result<Response, Problem> {
+    let (headers, values) = form(request).await?;
+    only(&values, &["csrf", "scope", "announcement"])?;
+    let (_, subject) = broker
+        .portal
+        .verify(&headers, &values, &broker.public_url)?;
+    let subject = subject.ok_or(Problem::Unauthorized)?;
+    let global = match values["scope"].as_str() {
+        "account" => false,
+        "server" => {
+            broker.portal.charge_management(&subject)?;
+            let identity = broker.portal.identity_for_subject(subject.clone()).await?;
+            let management = broker
+                .portal
+                .management
+                .as_ref()
+                .ok_or(Problem::Unauthorized)?;
+            let snapshot = management
+                .snapshot(&identity, crate::management::Scope::Own)
+                .await
+                .map_err(|_| Problem::ManagementUnavailable)?;
+            if !snapshot.is_admin {
+                return Err(Problem::Unauthorized);
+            }
+            true
+        }
+        _ => return Err(Problem::Invalid),
+    };
+    let text = values["announcement"].trim();
+    if text.len() > 512 || text.chars().any(char::is_control) {
+        return Err(Problem::Invalid);
+    }
+    let text = text.to_owned();
+    broker
+        .portal
+        .storage(move |store| store.update_announcement(&subject, global, text))
+        .await?;
+    Ok(Redirect::to("/#account").into_response())
+}
+
+async fn client_account(
+    State(broker): State<Arc<Broker>>,
+    axum::extract::Path(username): axum::extract::Path<String>,
+) -> Result<Response, Problem> {
+    let info = broker
+        .portal
+        .storage(move |store| {
+            let account = store
+                .account_by_handle(&username)?
+                .filter(|account| !account.banned);
+            let Some((account, name)) = account
+                .as_ref()
+                .and_then(|account| account.handle.as_deref().map(|name| (account, name)))
+            else {
+                return Ok(None);
+            };
+            let mut time =
+                crate::runtime::time::utc_at(crate::management::now().saturating_mul(1000) as i64)
+                    .map_err(|_| Problem::Storage)?;
+            if let Some(index) = time.find('.') {
+                time.truncate(index);
+                time.push('Z');
+            }
+            let greeting = if account.announcement.is_empty() {
+                "{username} · {time} · 你好"
+            } else {
+                &account.announcement
+            };
+            Ok(Some(json!({
+                "username": name,
+                "announcement": greeting.replace("{username}", name).replace("{time}", &time),
+                "server_announcement": store.server_announcement(),
+            })))
+        })
+        .await?;
+    let (status, body) = match info {
+        Some(info) => (StatusCode::OK, info),
+        None => (StatusCode::NOT_FOUND, json!({"error": "account_not_found"})),
+    };
+    Ok((
+        status,
+        [(header::CACHE_CONTROL, "no-store")],
+        axum::Json(body),
+    )
+        .into_response())
 }
 
 /// Validate a single public-key line through the installed OpenSSH implementation.

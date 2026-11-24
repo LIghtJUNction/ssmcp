@@ -261,7 +261,6 @@ fn context_local_account_commands_never_fall_back_to_remote() {
     let home = Home::new();
     home.contexts();
     for args in [
-        vec!["login"],
         vec!["whoami", "--json"],
         vec!["logout", "--json"],
         vec!["list", "--json"],
@@ -308,7 +307,7 @@ fn context_local_options_keep_loopback_foreground_and_context_root_rules() {
     home.failure(
         &["--context", "here", "--allow", "alice@work.example"],
         None,
-        "foreground OS-user",
+        "--allow was removed",
     );
     home.failure(
         &[
@@ -431,11 +430,10 @@ fn context_saved_creation_does_not_treat_a_title_as_a_remote_selector() {
                 "build",
                 "--title",
                 title,
-                "--allow",
                 "alice@other.example",
             ],
             None,
-            "allow target belongs to",
+            "--context cannot be combined",
         );
     }
 }

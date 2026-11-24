@@ -223,6 +223,7 @@ fn view_escapes_untrusted_text_and_includes_complete_tutorial() {
         banned: false,
         rate_limit_bps: None,
         has_recharged: false,
+        announcement: String::new(),
     };
     let html = view::home(
         Some(&a),
@@ -231,7 +232,7 @@ fn view_escapes_untrusted_text_and_includes_complete_tutorial() {
         false,
         "https://ssmcp.lmm.best",
         None,
-        None,
+        view::AccountSettings::default(),
     );
     assert!(!html.contains("<script>"));
     assert!(html.contains("&lt;script&gt;"));
@@ -722,6 +723,25 @@ async fn dashboard_http_uses_sessions_enforces_admin_and_bounds_failure_audits()
         .build()
         .unwrap();
 
+    for (cookie, status) in [(&cookies[0], 401), (&cookies[1], 303)] {
+        let response = client
+            .post(format!("{base}/account/announcement"))
+            .header("cookie", cookie)
+            .header("origin", "https://ssmcp.test")
+            .form(&[
+                ("csrf", csrf.as_str()),
+                ("scope", "server"),
+                ("announcement", "Maintenance"),
+            ])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+    }
+    assert_eq!(
+        portal_broker_announcement(&client, &base, accounts[0].handle.as_deref().unwrap()).await,
+        "Maintenance"
+    );
     assert_eq!(
         client
             .get(format!("{base}/account/admin?subject=456&admin=true"))
@@ -889,6 +909,24 @@ async fn dashboard_http_uses_sessions_enforces_admin_and_bounds_failure_audits()
     let _ = server.await;
     management_task.abort();
     let _ = management_task.await;
+}
+
+async fn portal_broker_announcement(
+    client: &reqwest::Client,
+    base: &str,
+    username: &str,
+) -> String {
+    let body: serde_json::Value = client
+        .get(format!("{base}/api/client/account/{username}"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    body["server_announcement"].as_str().unwrap().to_owned()
 }
 
 async fn persisted_test_login(portal: &Portal) -> (String, String) {

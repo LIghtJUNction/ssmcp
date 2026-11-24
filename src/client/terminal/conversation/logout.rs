@@ -18,16 +18,9 @@ pub(in crate::client::terminal) struct Task {
 }
 
 impl Task {
-    fn start(
-        runtime: tokio::runtime::Handle,
-        target: Option<Target>,
-        login: Option<account::login::Task>,
-    ) -> Self {
+    fn start(runtime: tokio::runtime::Handle, target: Option<Target>) -> Self {
         let (sender, receiver) = oneshot::channel();
         let handle = runtime.spawn(async move {
-            if let Some(login) = login {
-                login.cancel_and_wait().await;
-            }
             let result = match target {
                 Some(target) => account::logout_connection(&target.server, &target.token)
                     .await
@@ -88,7 +81,7 @@ impl State {
         if self.conversation.logout_task.is_some() || self.conversation.exit_requested {
             return Err("This session is already signing out or closing".into());
         }
-        if self.logout_target.is_none() && self.conversation.login_task.is_none() {
+        if self.logout_target.is_none() {
             self.chat_finish_logout(Ok(None));
             return Ok(());
         }
@@ -100,9 +93,7 @@ impl State {
                     .map(|(_, handle)| handle)
             })
             .ok_or("Logout requires an active client runtime")?;
-        let login = self.conversation.login_task.take();
-        self.conversation.logout_task =
-            Some(Task::start(runtime, self.logout_target.clone(), login));
+        self.conversation.logout_task = Some(Task::start(runtime, self.logout_target.clone()));
         self.notice = Some("Signing out of this connection…".into());
         self.dirty = true;
         Ok(())
@@ -236,18 +227,6 @@ mod tests {
                 .exit_message
                 .unwrap()
                 .contains("were revoked")
-        );
-    }
-
-    #[tokio::test]
-    async fn logout_cancels_an_older_login_before_completing() {
-        let (login, _actions, events) = account::login::Task::pending_for_test();
-        let task = Task::start(tokio::runtime::Handle::current(), None, Some(login));
-        assert!(task.finish().await.unwrap().is_none());
-        assert!(
-            events
-                .send(account::login::Event::Notice("late login".into()))
-                .is_err()
         );
     }
 }
