@@ -1895,9 +1895,11 @@ class WorkerWindows(Harness):
                    and state["offline"] == 4 and state["registered_workers"] == 0,
                    "the replacement preserves requested capacity without inheriting the old manager or workers")
         expected = list(original["argv"])
+        endpoint_index = expected.index("--server")
+        expected[endpoint_index + 2:endpoint_index + 2] = ["--username", self.identity["username"]]
         expected[expected.index("--worker") + 1] = "4"
         self.check(current["cwd"] == str(workspace) and current["argv"] == expected,
-                   "worker-only reload preserves literal arguments and cwd with the updated capacity")
+                   "worker-only reload pins the account and preserves literal arguments and cwd")
         self.pool_projection(frontend, parent,
                              lambda pool: pool["client_id"] == replacement["id"]
                              and pool["process_id"] == current["identity"][0],

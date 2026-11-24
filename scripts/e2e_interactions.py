@@ -700,8 +700,16 @@ class Interactions(InputHistory):
         self.command_details(front)
         draft = self.ordinary_question(front, requester)
         self.retired_hooks(front, requester, draft)
-        recipient_id = self.native_message(front)
-        self.private_pastes(front, recipient_id)
+        self.replace_short(front, "/message")
+        front.send(ENTER)
+        front.until(lambda shot: "Native messaging is unavailable on this connection" in text(shot),
+                    "the login-free device keeps account messaging unavailable")
+        state = self.wait_state(front, lambda item: item["draft"]["text"] == "/message",
+                                "the rejected picker preserves the draft",
+                                fields=("draft", "native_recipient"))
+        self.check(state["native_recipient"] is None,
+                   "the login-free connection cannot select an account message recipient")
+        self.private_pastes(front, None)
         return {
             "status": "passed", "checks": len(self.checks), "passed_checks": self.checks,
             "frames": self.frames, "quiet_checks": self.quiet_checks,
