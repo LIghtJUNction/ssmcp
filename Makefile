@@ -57,6 +57,7 @@ test-client-ui:
 
 .PHONY: test-client-ui-ready
 test-client-ui-ready:
+	python3 scripts/test_e2e_relay_composer_identity.py
 	python3 scripts/e2e_client_ui.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/client-ui
 	python3 scripts/e2e_canvas_logs.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/canvas-logs --report $(CARGO_TARGET_DIR)/acceptance/canvas-logs/report.json
 	python3 scripts/e2e_composer.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/composer.json

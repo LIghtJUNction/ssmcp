@@ -68,6 +68,34 @@ class Form(HTMLParser):
             self.links.append(attrs["href"])
 
 
+def validate_account_identity(h, directory, identity, description=(
+        "the authenticated account API returns the exact identity and claims stored in the private ledger")):
+    """Compare every API identity field with the independently seeded private ledger."""
+    ledger = json.loads((directory / "accounts" / "accounts.json").read_text(encoding="utf-8"))
+    h.check(isinstance(ledger, dict) and isinstance(ledger.get("accounts"), dict),
+            "the isolated account fixture has a valid private ledger")
+    account = ledger["accounts"].get(h.identity["subject"])
+    h.check(isinstance(account, dict)
+            and account.get("subject") == h.identity["subject"]
+            and account.get("github_login") == h.identity["login"]
+            and account.get("username") == "gh-" + h.identity["subject"]
+            and account.get("handle") == h.identity["username"],
+            "the seeded account preserves its verified subject, login, internal ID and current handle")
+    aliases = account.get("handle_aliases")
+    # Serde omits generated_handle when false; the HTTP claim is always present.
+    generated = account.get("generated_handle", False)
+    h.check(isinstance(aliases, list) and len(aliases) == 1
+            and isinstance(aliases[0], str)
+            and re.fullmatch(r"member-[0-9a-f]{16}", aliases[0]) is not None
+            and type(generated) is bool and generated is False,
+            "the fresh fixture retains its generated name as one alias after the explicit claim")
+    expected = {**h.identity, "username_aliases": aliases, "username_generated": generated}
+    h.check(isinstance(identity, dict) and type(identity.get("username_generated")) is bool
+            and identity == expected,
+            description)
+    return identity
+
+
 class AccountGateway:
     def __init__(self, harness):
         self.harness = harness
@@ -145,31 +173,7 @@ class AccountGateway:
         self.pending_auth_homes.clear()
 
     def validate_account_identity(self, identity):
-        """Validate this freshly seeded fixture's one alias and explicit handle."""
-        h = self.harness
-        ledger = json.loads((self.directory / "accounts" / "accounts.json").read_text(encoding="utf-8"))
-        h.check(isinstance(ledger, dict) and isinstance(ledger.get("accounts"), dict),
-                "the isolated account fixture has a valid private ledger")
-        account = ledger["accounts"].get(h.identity["subject"])
-        h.check(isinstance(account, dict)
-                and account.get("subject") == h.identity["subject"]
-                and account.get("github_login") == h.identity["login"]
-                and account.get("username") == "gh-" + h.identity["subject"]
-                and account.get("handle") == h.identity["username"],
-                "the seeded account preserves its verified subject, login, internal ID and current handle")
-        aliases = account.get("handle_aliases")
-        # Serde omits generated_handle when false; the HTTP claim is always present.
-        generated = account.get("generated_handle", False)
-        h.check(isinstance(aliases, list) and len(aliases) == 1
-                and isinstance(aliases[0], str)
-                and re.fullmatch(r"member-[0-9a-f]{16}", aliases[0]) is not None
-                and type(generated) is bool and generated is False,
-                "the fresh fixture retains its generated name as one alias after the explicit claim")
-        expected = {**h.identity, "username_aliases": aliases, "username_generated": generated}
-        h.check(isinstance(identity, dict) and type(identity.get("username_generated")) is bool
-                and identity == expected,
-                "the authenticated account API returns the exact identity and claims stored in the private ledger")
-        return identity
+        return validate_account_identity(self.harness, self.directory, identity)
 
     def seed_login(self, environment):
         """Write only this fixture's real account credential into this child home."""
