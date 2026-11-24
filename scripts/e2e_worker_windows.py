@@ -1457,19 +1457,32 @@ class WorkerWindows(Harness):
         self.check(len(candidates) == 1, "the operation has one retained parent conversation card")
         event_id = candidates[0]["id"]
         self.check(not candidates[0]["expanded"], "the newly observed operation card starts collapsed")
-        shot = frontend.until(lambda shot: heading in "\n".join(shot["rows"]),
-                              "the current physical card row before clicking", timeout=remaining())
-        row = next(index for index, text in enumerate(shot["rows"]) if heading in text)
-        col = shot["rows"][row].index(heading)
-        # Right-click opens the global log view. Left-click expands this
-        # verified collapsed card through its actual current physical hit row.
-        frontend.send(f"\x1b[<0;{col + 1};{row + 1}M\x1b[<0;{col + 1};{row + 1}m".encode())
+        frontend.send(b"\t")
+        wait_for(lambda: display("conversation")["focus"] == "content",
+                 timeout=remaining(), description="Tab focuses the actual parent conversation")
+        selection = display("events")
+        for _ in range(selection["visible_cards"]):
+            selected = selection["selected"]
+            if selected == event_id:
+                break
+            ids = [event["id"] for event in selection["events"]]
+            if selected not in ids or event_id not in ids:
+                raise AssertionError("the parent operation card is outside the retained selection")
+            frontend.send(b"\x1b[A" if ids.index(event_id) < ids.index(selected) else b"\x1b[B")
+
+            def moved():
+                current = display("events")
+                return current if current["selected"] != selected else None
+
+            selection = wait_for(moved, timeout=remaining(), description="move the parent card selection")
+        self.check(selection["selected"] == event_id, "keyboard navigation selects the exact operation card")
+        frontend.send(b"\r")
         expanded = frontend.until(
             lambda frame: all(label in "\n".join(frame["rows"]) for label in labels),
             "expanded physical operation details retain every exact reference", timeout=remaining())
         retained = [event for event in display("events")["events"] if event["id"] == event_id]
         self.check(len(retained) == 1 and retained[0]["selected"] and retained[0]["expanded"],
-                   "the clicked original operation card is selected and expanded")
+                   "the original operation card is selected and expanded")
         frontend.send(b"\x1b")
         restored = frontend.until(lambda frame: not frame["hide_cursor"],
                                   "Esc returns focus to the original editable draft", timeout=remaining())

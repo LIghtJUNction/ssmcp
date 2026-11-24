@@ -191,8 +191,9 @@ async fn input_tick(
     mode: InputMode,
 ) -> Result<(), String> {
     if mode == InputMode::Monitor {
-        // Do not drain composer actions, fallback keys, or hidden PTY replies.
-        super::terminal::monitor_keyboard_bytes(&[], true)
+        super::terminal::monitor_keyboard_bytes(&[], true)?;
+        // Dispatch monitor controls without forwarding keys or replies to a PTY.
+        super::interface::apply_pending().map(|_| ())
     } else {
         forward_display(terminals, keys).await
     }
