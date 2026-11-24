@@ -832,9 +832,19 @@ jobs:
           set -euo pipefail
           sdkmanager="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           "$sdkmanager" --licenses < <(printf 'y\n%.0s' {1..100}) > "$ANDROID_EVIDENCE_DIR/licenses.log"
-          "$sdkmanager" --install 'platform-tools' 'cmdline-tools;16.0' 'platforms;android-35' \
-            'build-tools;35.0.0' 'system-images;android-35;google_apis;x86_64' \
-            2>&1 | tee "$ANDROID_EVIDENCE_DIR/sdk-install.log"
+          for attempt in 1 2 3; do
+            attempt_log="$ANDROID_EVIDENCE_DIR/sdk-install-$attempt.log"
+            if "$sdkmanager" --install 'platform-tools' 'cmdline-tools;16.0' 'platforms;android-35' \
+              'build-tools;35.0.0' 'system-images;android-35;google_apis;x86_64' \
+              2>&1 | tee "$attempt_log"; then
+              cp "$attempt_log" "$ANDROID_EVIDENCE_DIR/sdk-install.log"
+              break
+            fi
+            if [[ "$attempt" == 3 ]] || ! grep -Fq 'Error on ZipFile' "$attempt_log"; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
           # SDK Manager verifies its archive metadata. Retain the resolved package
           # revisions; a rebuilt debug APK is not promised to be byte-identical.
           python3 - <<'PY'
