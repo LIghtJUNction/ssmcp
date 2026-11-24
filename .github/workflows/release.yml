@@ -368,7 +368,8 @@ jobs:
           python-version: '3.13'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: ssmcp-*
+          # CI evidence has its own artifact, outside the public asset directory.
+          pattern: 'ssmcp-{x86_64,aarch64,gui}-*'
           merge-multiple: true
           path: dist
       - name: Recheck the source, submodules and existing release tag
@@ -496,7 +497,7 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: needs.validate.outputs.release_contract == 'legacy-tag-v1'
         with:
-          pattern: ssmcp-*
+          pattern: 'ssmcp-{x86_64,aarch64,gui}-*'
           merge-multiple: true
           path: dist
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
