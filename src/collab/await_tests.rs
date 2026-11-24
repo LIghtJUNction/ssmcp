@@ -13,14 +13,14 @@ async fn status_update_wakes_an_existing_observer_without_polling() {
     let hub = Hub::default();
     let (watcher, watch_token) = member(&hub, "observer");
     let (worker, work_token) = member(&hub, "worker");
-    let statuses = vec!["done".into()];
+    let statuses = vec!["working".into()];
     let waiting = hub.wait_status("owner", &watcher, &watch_token, &worker, &statuses, 2000);
     let update = async {
         tokio::task::yield_now().await;
         hub.dispatch(
             "owner",
             "update",
-            json!({"agent_id":worker,"token":work_token,"status":"done"}),
+            json!({"agent_id":worker,"token":work_token,"status":"working","expected_revision":1}),
         )
         .await
         .unwrap();
@@ -32,7 +32,7 @@ async fn status_update_wakes_an_existing_observer_without_polling() {
     .expect("update must notify an already waiting observer");
     let observed = observed.unwrap();
     assert_eq!(observed["matched"], true);
-    assert_eq!(observed["agent"]["status"], "done");
+    assert_eq!(observed["agent"]["status"], "working");
     assert!(observed.get("approved").is_none());
 }
 
@@ -41,7 +41,7 @@ async fn removing_a_target_wakes_with_unknown_target_instead_of_done() {
     let hub = Hub::default();
     let (watcher, watch_token) = member(&hub, "observer");
     let (worker, work_token) = member(&hub, "worker");
-    let statuses = vec!["done".into()];
+    let statuses = vec!["working".into()];
     let waiting = hub.wait_status("owner", &watcher, &watch_token, &worker, &statuses, 2000);
     let remove = async {
         tokio::task::yield_now().await;
@@ -66,7 +66,7 @@ async fn dropping_status_and_inbox_observers_preserves_members_and_messages() {
     let hub = Hub::default();
     let (watcher, watch_token) = member(&hub, "observer");
     let (worker, work_token) = member(&hub, "worker");
-    let statuses = vec!["done".into()];
+    let statuses = vec!["working".into()];
     assert!(
         tokio::time::timeout(
             Duration::from_millis(5),
@@ -85,7 +85,7 @@ async fn dropping_status_and_inbox_observers_preserves_members_and_messages() {
     );
     assert_eq!(
         hub.bind("owner", &worker, &work_token).unwrap().status,
-        "available"
+        "idle"
     );
     hub.dispatch(
         "owner",

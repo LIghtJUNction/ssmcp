@@ -1,5 +1,6 @@
 //! Live timing is a display projection; rendering never advances a user queue.
 use super::*;
+mod dashboard;
 use crate::runtime::time::{Entry, ExecutionTiming, Snapshot, Status};
 
 fn duration(ms: u64, remaining: bool) -> String {
@@ -104,57 +105,13 @@ fn hint(snapshot: &Snapshot) -> Option<String> {
 }
 
 fn detail(snapshot: &Snapshot) -> Option<String> {
-    let mut lines = vec!["时间 · 计时与等待".into()];
-    if let Ok(utc) = crate::runtime::time::utc_now() {
-        lines.push(format!("当前时间 · {utc}"));
-    }
-    if snapshot.active.is_empty() && snapshot.recent.is_empty() {
-        lines.push("暂无运行中的计时或等待".into());
-    }
-    for entry in &snapshot.active {
-        lines.push(format!(
-            "#{} · {}",
-            entry.id,
-            panel::safe_text(&entry.label)
-        ));
-        lines.push(format!(
-            "{} · 已用 {}{}",
-            clock_label(entry),
-            duration(entry.elapsed_ms, false),
-            if entry.cancellable {
-                " · /wait cancel <exact ID>"
-            } else {
-                " · 仅显示"
-            }
-        ));
-        if entry.remaining_ms == Some(0) {
-            lines.push("截止时间已到，仍等待实际操作返回。".into());
-        }
-    }
-    for entry in &snapshot.recent {
-        let status = if let Some(wait) = &entry.wait {
-            wait_outcome(wait.outcome)
-        } else {
-            match entry.status {
-                Status::Running => "运行",
-                Status::Elapsed | Status::Expired => "已到期",
-                Status::Cancelled => "已取消",
-                Status::Disconnected => "已断开",
-                Status::Returned => "条件触发返回",
-                Status::Unknown => "结果未知",
-            }
-        };
-        lines.push(format!(
-            "#{} · {} · {status} · 已用 {}",
-            entry.id,
-            panel::safe_text(&entry.label),
-            duration(entry.elapsed_ms, false)
-        ));
-    }
-    lines.push("经过与剩余时间由单调时钟计算，不受系统日期调整影响。".into());
-    lines.push("观察剩余是本轮等待预算。".into());
-    lines.push("计时到期不代表任务完成；取消计时不会停止任务。".into());
-    Some(lines.join("\n"))
+    Some(
+        dashboard::lines(snapshot)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 impl State {
@@ -199,6 +156,7 @@ impl State {
                 episode: None,
                 attribution: None,
                 wait: None,
+                durable: None,
             }
         }));
         snapshot
@@ -206,6 +164,44 @@ impl State {
 
     pub(super) fn chat_timing_hint(&self) -> Option<String> {
         hint(&self.chat_timing_snapshot())
+    }
+
+    pub(super) fn chat_wait_rows(&mut self, height: u16) -> Vec<String> {
+        use unicode_width::UnicodeWidthChar;
+        let width = usize::from(self.geometry.left.saturating_sub(2).max(1));
+        let mut source = dashboard::lines(&self.chat_timing_snapshot());
+        source.push((String::new(), PanelTone::Normal));
+        source.push(("等待你的输入".into(), PanelTone::Heading));
+        source.extend(
+            user_wait::detail(&self.chat_user_wait_snapshot())
+                .lines()
+                .map(|line| (line.to_owned(), PanelTone::Muted)),
+        );
+        let mut rows = Vec::new();
+        for (line, tone) in source {
+            let safe = panel::safe_text(&line);
+            let mut row = String::new();
+            let mut used = 0;
+            for character in safe.chars() {
+                let cells = character.width().unwrap_or(0);
+                if used + cells > width && !row.is_empty() {
+                    rows.push((std::mem::take(&mut row), tone));
+                    used = 0;
+                }
+                row.push(character);
+                used += cells;
+            }
+            rows.push((row, tone));
+        }
+        self.conversation.detail_scroll = self
+            .conversation
+            .detail_scroll
+            .min(rows.len().saturating_sub(usize::from(height)));
+        rows.into_iter()
+            .skip(self.conversation.detail_scroll)
+            .take(usize::from(height))
+            .map(|(text, tone)| self.chat_line(&text, tone, self.geometry.left))
+            .collect()
     }
 
     pub(super) fn chat_timing_detail(&self) -> Option<String> {
@@ -280,6 +276,9 @@ struct WaitCard {
 }
 
 fn wait_card(entry: &Entry) -> Option<WaitCard> {
+    if entry.durable.is_some() {
+        return dashboard::card(entry);
+    }
     use crate::wire::wait_display::{Mode, Outcome};
     let wait = entry.wait.as_ref()?;
     let target = wait

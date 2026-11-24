@@ -5,7 +5,7 @@ import {
 import { projectEvent, projectHistory, validateHistory } from './presentation.mjs';
 import { Timeline, CommandLedger } from './store.mjs';
 
-const supported = ['runtime', 'terminals', 'workers', 'threads', 'chat.queue'];
+const supported = ['runtime', 'terminals', 'workers', 'threads', 'chat.queue', 'time'];
 const paged = new Set(['workers', 'threads', 'chat.queue']);
 const pauseCodes = new Set(['denied', 'closed', 'authentication_required', 'unsupported_version']);
 const readTimeout = () => Object.assign(new Error('读取状态的 55 秒窗口已结束，尚未完成同步。'), { code: 'read_window_timeout' });
@@ -153,7 +153,8 @@ export class BridgeClient {
         for (const item of body.value.items.slice(0, 32)) {
           if (typeof item.id !== 'string' || typeof item.text !== 'string') continue;
           this.timeline.put({ id: `queue:${context.generation}:${item.id}`, generation: context.generation,
-            kind: 'input', title: '输入队列', text: item.text.slice(0, 16384), status: item.uncertain ? 'unknown' : item.status,
+            kind: 'input', title: '用户', messageId: item.id, inputSide: true, inputOrigin: 'human',
+            text: item.text.slice(0, 16384), status: item.uncertain ? 'unknown' : item.status,
             source: { kind: 'local_queue' }, metadata: item });
         }
         this.emit('timeline');

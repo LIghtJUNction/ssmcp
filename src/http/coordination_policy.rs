@@ -1,5 +1,6 @@
-//! Per-participant preferences for advisory coordinator waiting hints.
-//! These settings never change authorization, worker ownership, or delivery.
+//! Per-participant coordinator preferences. The events boundary applies enabled
+//! and kinds to a verified managed worker subscription; other fields are advisory.
+//! Preferences never grant authorization, worker ownership, or acknowledgements.
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -42,14 +43,10 @@ impl Default for Policy {
         Self {
             enabled: true,
             window_ms: crate::wire::MAX_OBSERVATION_WAIT_MS,
-            kinds: [
-                "user.input_available",
-                "worker.completed",
-                "worker.idle",
-                "worker.progress",
-            ]
-            .map(str::to_owned)
-            .to_vec(),
+            kinds: super::events_tool::worker_subscriptions::DEFAULT_KINDS
+                .iter()
+                .map(|kind| (*kind).to_owned())
+                .collect(),
             strategy: None,
             dreaming: None,
         }
@@ -261,9 +258,26 @@ pub(crate) fn policy(
         "strategy": policy.strategy,
         "dreaming": policy.dreaming,
         "advisory": true,
+        "agent_lifecycle_control":"collab.update with current expected_revision",
+        "dreaming_execution":"Only the live agent lifecycle round can request maintenance; this policy is advisory.",
         "retention_ms": RETAIN_FOR.as_millis(),
         "max_policies": MAX_POLICIES,
     }))
+}
+
+#[cfg(test)]
+pub(in crate::http) fn test_expire_entry(owner: &str, client_id: &str, agent_id: &str) {
+    let scope = Scope {
+        owner: owner.into(),
+        client_id: client_id.into(),
+        agent_id: agent_id.into(),
+    };
+    let mut registry = registry().lock().unwrap();
+    let (_, touched) = registry
+        .entries
+        .get_mut(&scope)
+        .expect("configured test policy");
+    *touched = Instant::now() - RETAIN_FOR;
 }
 
 #[cfg(test)]

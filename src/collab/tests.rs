@@ -129,7 +129,7 @@ async fn online_summary_alias_uses_registered_identity_and_authenticated_updates
     assert_eq!(
         public_wire,
         json!({"agent_id":id,"name":"Researcher",
-        "role":"Preparing a review","status":"available"})
+        "role":"Preparing a review","status":"idle"})
     );
     let mut unsupported = public_wire.clone();
     unsupported["summary"] = public_wire["role"].clone();
@@ -191,7 +191,7 @@ async fn discovery_is_public_but_mailbox_credentials_bind_owner_and_agent() {
     for agent in agents {
         assert!(agent.get("token").is_none());
         assert!(agent.get("owner").is_none());
-        assert_eq!(agent["status"], "available");
+        assert_eq!(agent["status"], "idle");
     }
     assert!(
         action(&hub, "another-owner", "receive", &a, json!({}))
@@ -221,7 +221,7 @@ async fn discovery_is_public_but_mailbox_credentials_bind_owner_and_agent() {
         "owner",
         "update",
         &a,
-        json!({"name":"planner","role":"review","status":"busy","capabilities":["rust"]}),
+        json!({"name":"planner","role":"review","status":"working","expected_revision":1,"capabilities":["rust"]}),
     )
     .await
     .unwrap();
@@ -248,17 +248,17 @@ async fn local_presence_and_run_binding_expose_no_participant_credentials() {
         "owner",
         "update",
         &member,
-        json!({"status":"reviewing"}),
+        json!({"status":"working","expected_revision":1}),
     )
     .await
     .unwrap();
     let bound = hub.bind("owner", id, token).unwrap();
     assert_eq!(bound.agent_id, id);
     assert_eq!(bound.name, "reviewer");
-    assert_eq!(bound.status, "reviewing");
+    assert_eq!(bound.status, "working");
     let presence = serde_json::to_value(hub.presence().unwrap()).unwrap();
     assert_eq!(presence[0]["agent_id"], id);
-    assert_eq!(presence[0]["status"], "reviewing");
+    assert_eq!(presence[0]["status"], "working");
     assert!(!presence.to_string().contains(token));
     assert!(presence[0].get("owner").is_none());
     assert!(presence[0].get("inbox").is_none());

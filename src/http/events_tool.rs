@@ -6,6 +6,7 @@ use crate::{
     events::{Actor, Filter, Hub},
 };
 use serde::Deserialize;
+pub(crate) mod worker_subscriptions;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -447,6 +448,7 @@ struct RunDelivery {
 
 #[derive(Default)]
 pub(crate) struct Registry {
+    workers: worker_subscriptions::Registry,
     records: Mutex<HashMap<String, Arc<Subscription>>>,
     deliveries: Mutex<HashMap<String, RunDelivery>>,
 }
@@ -785,6 +787,12 @@ fn native_sources(
     let mut snapshot = broker.worker_events.snapshot(&record.owner, sources);
     if let Some(sources) = snapshot.as_array_mut() {
         for source in &record.sources {
+            if source.client_id == record.client_id
+                && worker_subscriptions::managed_record(broker, record)
+            {
+                sources.push(json!({"client_id":source.client_id,"status":"server_hub"}));
+                continue;
+            }
             if source.binding.is_none() {
                 sources.push(json!({"client_id":source.client_id,"status":"needs_binding",
                     "message":"Join and bind this source participant separately, or supply source_agents when subscribing."}));
@@ -1132,7 +1140,7 @@ pub(crate) async fn dispatch(
     )
     .await?;
     let mut mutation = false;
-    let result = match args.request {
+    let mut result = match args.request {
         Request::Subscribe {
             request_id,
             mut filter,
@@ -1345,22 +1353,39 @@ pub(crate) async fn dispatch(
                 &subscription_id,
                 true,
             )?;
-            authorize_record(&broker, &access_token, &context, &record, false).await?;
+            let managed = worker_subscriptions::managed_record(&broker, &record);
+            if managed {
+                // Revoking one's own observer exposes no source data. The
+                // original main proof suffices even after its pool disconnects.
+                let authorization = context.final_authorization(&broker, &access_token)?;
+                record.principal.live(&record.owner, &authorization)?;
+            } else {
+                authorize_record(&broker, &access_token, &context, &record, false).await?;
+            }
             let result = broker
                 .events
                 .unsubscribe(&context.actor, &subscription_id)?;
             broker.event_subscriptions.remove(&subscription_id, &record);
-            authorize_record(&broker, &access_token, &context, &record, false)
-                .await
-                .map_err(|error| {
-                    format!("events_response_withheld: unsubscribe may have completed; {error}")
-                })?;
-            broker.event_subscriptions.note_delivery(record)?;
+            worker_subscriptions::unsubscribed(&broker, &context, &subscription_id);
+            if managed {
+                let authorization = context.final_authorization(&broker, &access_token)?;
+                record.principal.live(&record.owner, &authorization)?;
+            } else {
+                authorize_record(&broker, &access_token, &context, &record, false)
+                    .await
+                    .map_err(|error| {
+                        format!("events_response_withheld: unsubscribe may have completed; {error}")
+                    })?;
+                broker.event_subscriptions.note_delivery(record)?;
+            }
             mutation = true;
             result
         }
         Request::Subscriptions {} => {
-            let result = broker.events.subscriptions(&context.actor)?;
+            if let Ok(run) = code_mode::AUDIT_RUN.try_with(Clone::clone) {
+                worker_subscriptions::after_bind(&broker, &user, &access_token, &run).await;
+            }
+            let mut result = broker.events.subscriptions(&context.actor)?;
             let listed = result["subscriptions"]
                 .as_array()
                 .ok_or("events subscription listing is unavailable")?;
@@ -1386,6 +1411,12 @@ pub(crate) async fn dispatch(
                 }
                 broker.event_subscriptions.note_delivery(record)?;
             }
+            if let Some(subscriptions) = result["subscriptions"].as_array_mut() {
+                for subscription in subscriptions {
+                    worker_subscriptions::annotate(&broker, &context, subscription);
+                }
+            }
+            result["worker_subscription"] = worker_subscriptions::status(&broker, &context);
             result
         }
         Request::Publish {
@@ -1400,17 +1431,35 @@ pub(crate) async fn dispatch(
         }
         Request::Policy { patch } => {
             mutation = patch.is_some();
-            super::coordination_policy::policy(
+            let mut result = super::coordination_policy::policy(
                 &context.actor.owner,
                 &context.actor.client_id,
                 &context.actor.agent_id,
                 patch.as_ref(),
-            )?
+            )?;
+            worker_subscriptions::configure(&broker, &context, patch.as_ref())?;
+            if let Ok(run) = code_mode::AUDIT_RUN.try_with(Clone::clone) {
+                worker_subscriptions::after_bind(&broker, &user, &access_token, &run).await;
+            }
+            let managed = worker_subscriptions::status(&broker, &context);
+            let applicable = managed["status"] != "not_applicable";
+            if applicable {
+                // Live managed choices outlast the advisory policy cache.
+                // Partial patches preserve unmentioned fields in that live entry.
+                result["enabled"] = managed["enabled"].clone();
+                result["kinds"] = managed["kinds"].clone();
+                result["managed_retention"] = json!("original_session");
+            }
+            result["advisory"] = json!(!applicable);
+            result["advisory_fields"] = json!(["window_ms", "strategy", "dreaming"]);
+            result["worker_subscription"] = managed;
+            result
         }
     };
     context.final_authorization(&broker, &access_token).map_err(|error| {
         if mutation { format!("events_response_withheld: operation may have completed; inspect its original receipt; {error}") } else { error }
     })?;
+    worker_subscriptions::annotate(&broker, &context, &mut result);
     broker.event_subscriptions.note_context(&context)?;
     Ok(result)
 }
@@ -1442,7 +1491,7 @@ pub(crate) fn tool() -> Value {
     let count = json!({"type":"integer","minimum":1,"maximum":64,"default":32});
     json!({
         "name":"events",
-        "description":"Publish custom events, subscribe to authenticated source clients, read or await matching events, and explicitly acknowledge processed cursors. Direct waits use no JavaScript slot and last at most 55000 ms. Keep subscription_id across observation windows; read/wait never acknowledge. Each source connection and bound participant is reauthorized before delivery. source_agents authorizes source operations, not another participant's private event inbox. Lifecycle events are system-owned. policy reads or changes this participant's advisory idle-wait strategy.",
+        "description":"Publish custom events, subscribe to authenticated source clients, read or await matching events, and explicitly acknowledge processed cursors. Direct waits use no JavaScript slot and last at most 55000 ms. Keep subscription_id across observation windows; read/wait never acknowledge. Each source connection and bound participant is reauthorized before delivery. source_agents authorizes source operations, not another participant's private event inbox. Lifecycle events are system-owned. For a verified main with a separately bound linked pool, a real worker subscription is created automatically. policy enabled/kinds updates that subscription without ACK; subscriptions reports automatic/configured/manual origin and current cursors. window_ms, strategy and dreaming remain advisory preferences.",
         "inputSchema":{"type":"object","oneOf":[
             variant("subscribe",json!({"request_id":id,"after":{"type":"integer","minimum":0,"maximum":MAX_CURSOR},
                 "filter":{"type":"object","additionalProperties":false,"properties":{

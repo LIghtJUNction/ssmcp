@@ -24,7 +24,7 @@ from e2e_interactions import Interactions, digest
 
 ROWS = 32
 DRAFT = "OWNED_TIMER_DRAFT"
-CLOCK = re.compile(r"\b(Timer|Wait) (\+?)(\d+(?::\d{2}){1,2})")
+CLOCK = re.compile(r"(观察剩余|观察已用|剩余|计时|运行|等待) (\d+(?::\d{2}){1,2})")
 
 
 def clock(shot):
@@ -45,10 +45,21 @@ def clock(shot):
     if (not found or not header[:found.start()].endswith("─")
             or header[found.end():].strip()):
         return None
-    parts = [int(part) for part in found[3].split(":")]
+    label = found[1]
+    kind = {"观察剩余": "Wait", "观察已用": "Wait", "等待": "Wait",
+            "计时": "Timer", "运行": "Task"}.get(label)
+    if label == "剩余":
+        # Both task and timer deadlines use this short header. The actual
+        # footer supplies their type; it cannot establish a clock by itself.
+        footer = shot["rows"][-1].lstrip()
+        kind = "Timer" if footer.startswith("计时 · ") else (
+            "Task" if footer.startswith("任务 · ") else None)
+    if kind is None:
+        return None
+    parts = [int(part) for part in found[2].split(":")]
     seconds = parts[-1] + parts[-2] * 60 + (parts[0] * 3600 if len(parts) == 3 else 0)
-    return {"kind": found[1], "elapsed": found[2] == "+", "seconds": seconds,
-            "text": found[0], "row": row, "row_index": row_index,
+    return {"kind": kind, "elapsed": label in {"计时", "运行", "观察已用"},
+            "seconds": seconds, "text": found[0], "row": row, "row_index": row_index,
             "surface": "composer_header"}
 
 
@@ -123,6 +134,29 @@ class TimeWait(Interactions):
         self.await_receipts.append(value)
         return value
 
+    def member_snapshot(self, member):
+        # Ordinary collab.list is a response-delivery boundary. Observe the
+        # current revision passively while an exact human input must stay queued.
+        value = self.public_call("await", {
+            "client_id": self.client_id,
+            "agent": {"id": member["agent_id"], "token": member["token"]},
+            "targets": [{"type": "agent_status", "agent_id": member["agent_id"],
+                         "statuses": ["working", "idle", "offline", "dreaming", "retiring"]}],
+            "timeout_ms": 1000})
+        data = value["results"][0]["data"]
+        self.check(value["status"] == "ready" and data["matched"] is True
+                   and data["agent"]["agent_id"] == member["agent_id"],
+                   "a passive status snapshot returns the exact member and current lifecycle revision")
+        for key in ("user_messages", "native_messages", "question_answers", "tool_summary_reminders"):
+            self.check(not value.get(key), "the passive lifecycle snapshot does not consume " + key)
+        return data["agent"]
+
+    def lifecycle_update_arguments(self, member, status):
+        current = self.member_snapshot(member)
+        return {"action": "update", "client_id": self.client_id,
+                "agent_id": member["agent_id"], "token": member["token"],
+                "expected_revision": current["lifecycle"]["revision"], "status": status}
+
     def wait_timing(self, front, predicate):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
@@ -134,14 +168,22 @@ class TimeWait(Interactions):
         raise AssertionError("the exact owned timing entry did not reach the live UI")
 
     def local(self, front, command):
+        if not command.startswith("/wait cancel "):
+            raise AssertionError("this physical helper only cancels an exact owned wait")
+        queued = {item["id"] for item in self.queue()["queue"]}
         self.replace_short(front, command)
+        draft = self.ui("/display/conversation/draft")
         front.send(ENTER)
-        self.wait_state(front, lambda item: item["draft"]["text"] == "",
-                        "the local wait command completes without publishing a user request")
+        marker = "已取消等待 #" + command.removeprefix("/wait cancel ")
+        front.until(lambda shot: marker in text(shot),
+                    "the exact owned wait cancellation reaches the physical terminal")
+        self.check(self.ui("/display/conversation/draft") == draft,
+                   "local wait cancellation preserves the exact draft and cursor")
+        self.check({item["id"] for item in self.queue()["queue"]} == queued,
+                   "the local wait command publishes no new user requirement")
 
     def verify_clock_layout(self):
-        display = self.ui("/display")
-        pane = display["panes"]["input"]
+        pane = self.ui("/display/panes/input")
         self.check(pane["row"] == ROWS - 4 and pane["rows"] == 3 and pane["visible"] is True,
                    "the actual composer geometry pins clock header 27 and excludes body, draft and footer")
 
@@ -169,7 +211,7 @@ class TimeWait(Interactions):
             self.frames.append(png.name)
             self.frame_manifest.append({"path": png.name, "sha256": digest(png), "cells": snapshot.name,
                                         "cells_sha256": digest(snapshot), "size": shot["size"], "clock": clock(shot)})
-            self.check(self.ui("/display/conversation")["draft"] == self.saved_draft,
+            self.check(self.ui("/display/conversation/draft") == self.saved_draft,
                        name + ": exact draft bytes and cursor survive " + str(width) + "-column rendering")
         front.resize(ROWS, 120)
         front.pump(0.1)
@@ -185,7 +227,7 @@ class TimeWait(Interactions):
         front.send(LEFT)
         state = self.wait_state(front, lambda item: item["draft"]["text"] == value
                                 and item["draft"]["cursor"] == len(value.encode()) - 1,
-                                "the owned timing draft has its exact nonterminal cursor")
+                                "the owned timing draft has its exact nonterminal cursor", fields=("draft",))
         self.saved_draft = state["draft"]
 
     def run(self):
@@ -199,8 +241,9 @@ class TimeWait(Interactions):
         discovered = self.response("return await tools.search(%s,{name_prefix:'ssmcp.time.',include_schemas:true});" % json.dumps(self.client_id))
         advertised = discovered["structuredContent"]["result"]
         self.check(advertised.get("complete") is True
-                   and {tool["name"] for tool in advertised["tools"]} == {"ssmcp.time.now", "ssmcp.time.wait"},
-                   "the real native catalog advertises exactly both time primitives")
+                   and {tool["name"] for tool in advertised["tools"]} == {
+                       "ssmcp.time.now", "ssmcp.time.wait", "ssmcp.time.prompt"},
+                   "the real native catalog advertises all three time primitives")
         queued = self.submit_source(front, "TIME_REQUIREMENT_MUST_STAY_QUEUED")
         self.save_draft(front)
         self.verify_clock_layout()
@@ -254,13 +297,15 @@ return {rejected:native.isError === true,reason:native.content?.find(item=>item.
 
         elapsed = self.timer({"label":"Owned elapsed timer"})
         self.check(elapsed["remaining_ms"] is None, "an unknown end has no fabricated remaining deadline")
-        shot = self.quiet_until(front, lambda shot: (value := clock(shot)) is not None and value["elapsed"],
-                                "the unknown-end timer displays elapsed time")
+        shot = self.quiet_until(front, lambda shot: (value := clock(shot)) is not None
+                                and value["elapsed"] and value["kind"] in {"Task", "Timer"},
+                                "open-ended work displays elapsed time without an invented deadline")
+        elapsed_kind = clock(shot)["kind"]
         initial = clock(shot)["seconds"]
         self.quiet_until(front, lambda shot: (value := clock(shot)) is not None
                          and value["elapsed"] and value["seconds"] > initial,
                          "elapsed time advances without tool polling or keyboard activity", timeout=4)
-        self.capture_clock(front, "elapsed", "Timer", True)
+        self.capture_clock(front, "elapsed", elapsed_kind, True)
         self.timer({"op":"cancel", "timer_id":elapsed["timer_id"]})
         self.preserve_queued(queued)
 
@@ -296,7 +341,7 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
 
         # The existing user-wait UI gets a live countdown without acquiring an
         # input reservation or producing any task-completion permission here.
-        wait_id = "timer_fixture_user_wait"
+        wait_id = "fixture_user_wait"
         future = self.background("ssmcp.ui.wait", {"op":"wait", "wait_id":wait_id,
             "episode_id":"a" * 64, "intent":"need_user", "recipient":"next",
             "reason":"Owned countdown display fixture", "timeout_ms":20_000, "notify":False})
@@ -311,14 +356,18 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
 
         # This public Rust await executes no native operation. Its display
         # arrives through the negotiated, independent relay snapshot channel.
-        # The known participant starts at `available`; readiness is changed
-        # explicitly only after the real countdown has been observed.
+        # Queued human input wakes the member after this explicit idle baseline.
+        self.public_call("collab", self.lifecycle_update_arguments(member, "idle"))
         self.verify_clock_layout()
+        self.replace_short(front, "")
         public_queued = self.submit_source(front, "PUBLIC_WAIT_REQUIREMENT_STAYS_QUEUED")
         self.save_draft(front)
         self.verify_clock_layout()
+        current = self.member_snapshot(member)
+        self.check(current["status"] == "working",
+                   "queued human input wakes the exact participant before passive observation")
         target = {"type":"agent_status", "agent_id":member["agent_id"],
-                  "statuses":["timer-fixture-ready"]}
+                  "statuses":["idle"]}
         future = self.public_wait({"targets":[target], "timeout_ms":4000}, member)
         first = self.wait_timing(front, lambda entry: entry["kind"] == "relay_wait")
         self.check(first["attribution"]["agent"]["id"] == member["agent_id"]
@@ -342,9 +391,8 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
                                    and entry["id"] == first["id"] and entry["episode"] > first["episode"])
         self.capture_clock(front, "public-await", "Wait", False)
         self.preserve_queued(public_queued)
-        status, updated_rpc, _ = self.rpc("tools/call", {"name":"collab", "arguments":{
-            "action":"update", "client_id":self.client_id, "agent_id":member["agent_id"],
-            "token":member["token"], "status":"timer-fixture-ready"}}, modern=True)
+        status, updated_rpc, _ = self.rpc("tools/call", {"name":"collab",
+            "arguments": self.lifecycle_update_arguments(member, "idle")}, modern=True)
         if status != 200 or not isinstance(updated_rpc, dict) or "error" in updated_rpc:
             raise AssertionError("explicit collaboration update failed at the HTTP boundary")
         updated = updated_rpc["result"]
@@ -359,8 +407,8 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
                    and ready["results"][0]["data"]["matched"] is True,
                    "the same timed-out wait becomes ready only after its real target status changes")
 
-        self.public_call("collab", {"action":"update", "client_id":self.client_id,
-            "agent_id":member["agent_id"], "token":member["token"], "status":"available"})
+        self.public_call("collab", self.lifecycle_update_arguments(member, "idle"))
+        self.replace_short(front, "")
         cancel_queued = self.submit_source(front, "PUBLIC_WAIT_CANCEL_STAYS_PASSIVE")
         self.save_draft(front)
         self.verify_clock_layout()
@@ -376,8 +424,8 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
         self.check(cancelled["status"] == "cancelled" and cancelled["wait_id"] == cancelled_entry["id"],
                    "the active public waiter receives the same cancellation without replay")
         self.preserve_queued(cancel_queued)
-        self.quiet_until(front, lambda shot: clock(shot) is None,
-                         "the stopped public observation clears its live header clock")
+        self.quiet_until(front, lambda shot: (shown := clock(shot)) is None or shown["kind"] != "Wait",
+                         "the stopped observation clears its countdown while independent work may remain")
 
         pending = self.timer({"duration_ms":60_000, "label":"Disconnect clears this timer"})
         old_id = self.client_id
@@ -386,9 +434,9 @@ return await call(%s,'ssmcp.exec.start',%s);""" % (
         self.client_id = credentials["client_id"]
         front.client_id = self.client_id
         front.credentials = credentials
-        self.check(self.client_id != old_id and self.ui("/time") == {"active":[],"recent":[]},
+        self.check(self.client_id != old_id and self.ui("/time") == {"active":[],"recent":[],"prompts":[]},
                    "a fresh connection restores no active timers, observations or completion ledger")
-        self.check(self.ui("/display/conversation")["draft"] == self.saved_draft,
+        self.check(self.ui("/display/conversation/draft") == self.saved_draft,
                    "disconnect/reconnect preserves the exact unsubmitted draft and cursor")
         _, fresh = self.native("ssmcp.time.now", {})
         self.check(fresh["monotonic_scope"] != now["monotonic_scope"],

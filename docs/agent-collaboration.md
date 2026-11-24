@@ -11,8 +11,8 @@
 | action | 额外参数 | 作用 |
 | --- | --- | --- |
 | `join` | `name`；可选 `role`、`capabilities` | 加入会话，返回私密凭证、成员快照和限额 |
-| `list` | 无 | 查看当前有效成员的公开资料 |
-| `update` | 成员凭证；可选 `name`、`role`、`status`、`capabilities` | 更新自己的资料并续租；不传资料字段时仅续租 |
+| `list` | 无 | 查看有效成员的公开资料，以及单列的 `offline_agents` 历史摘要 |
+| `update` | 成员凭证；可选资料字段 `name`、`role`、`capabilities`，生命周期字段 `status`、`idle_after_ms`、`maintenance_budget_ms`、`maintenance` 及 `expected_revision` | 更新自己的资料、生命周期或维护结果并续租；不传字段时仅续租 |
 | `send` | 成员凭证、`to`、`payload`；可选 `topic`、`reply_to`、`idempotency_key` | 发送 JSON 私信或向当前成员广播 |
 | `receive` | 成员凭证；可选 `after`、`limit`、`wait_ms` | 非破坏读取自己的邮箱，可等待新消息 |
 | `ack` | 成员凭证、`through` | 确认已处理的消息，释放邮箱容量 |
@@ -72,7 +72,7 @@ return { client_id: clientId, ...joined };
 return await collab.list("CLIENT_ID_FROM_LIST");
 ~~~
 
-公开资料包含 `agent_id`、`name`、`role`、`status`、`capabilities`、加入时间、最近活动时间和租约到期时间。`status` 初始为 `available`；角色、能力与状态都是成员自行填写的工作信息。名称允许重复，消息目标始终使用 `agent_id`。
+公开资料包含 `agent_id`、`name`、`role`、`status`、`capabilities`、加入时间、最近活动时间和租约到期时间。新成员的状态为 `idle`，生命周期版本为 1；状态只接受 `working`、`idle`、`offline`、`dreaming` 和 `retiring`，并随实际工作、输入、维护期限与退休过程转换。角色和能力仍是协调资料。名称允许重复，消息目标始终使用 `agent_id`。[生命周期与版本条件更新](workers.md#member-lifecycle-and-bounded-maintenance)
 
 ## 绑定本次编排并接收用户要求
 
@@ -210,17 +210,46 @@ return await collab.receive("CLIENT_ID_FROM_LIST", {
 每个成员的租约为 15 分钟，成功的成员操作会续租；开始收件等待也会续租。单纯查询 `list` 不续租。需要长时间思考或等待其他系统时，调用方应在租约到期前 `update`，同时可以向同伴说明自己的状态：
 
 ~~~javascript
+const roster = await collab.list("CLIENT_ID_FROM_LIST");
+const current = roster.agents.find(agent => agent.agent_id === "AGENT_ID_FROM_JOIN");
+if (!current) throw new Error("The original member is no longer active");
 return await collab.update("CLIENT_ID_FROM_LIST", {
   agent_id: "AGENT_ID_FROM_JOIN",
   token: "PRIVATE_TOKEN_FROM_JOIN",
-  status: "reviewing",
+  expected_revision: current.lifecycle.revision,
+  status: "working",
   role: "reviewer"
 });
 ~~~
 
-`name`、`status` 最多 128 个 UTF-8 字节；`role` 最多 128 字节，`update` 传 `role: ""` 可清空角色。`capabilities` 最多 16 项，每项为 1–64 字节。主题、回复 ID 和发送去重 key 若提供，须为 1–128 字节；这些文字字段均拒绝控制字符。
+`status` 只能是 `working`、`idle`、`offline`、`dreaming`、`retiring`。修改状态、维护配置或维护轮次均须携带当前 `expected_revision`；成功响应的 `agent.lifecycle.revision` 是新的版本。版本冲突先重新读取并核对，结果未知时不能直接重发。状态与维护结果须分开更新。[状态与版本规则](../src/collab/lifecycle.rs)
 
-租约到期后，成员不再出现在有效名单中，其邮箱和凭证被清理。主动 `leave` 也会删除成员与邮箱，并结束该成员的收件等待；重复使用已经离开的凭证返回成员失效。退出前先处理需要保留的消息。
+公开成员快照包含 `status` 和 `lifecycle`；后者记录版本、空闲与维护配置、当前工作计数以及维护轮次。仅修改名称、角色或能力时可以不传版本；一旦提供 `expected_revision`，它也必须匹配当前版本。
+
+维护配置是 `update` 的顶层参数：
+
+| 参数 | 范围（毫秒） | 默认值 |
+| --- | --- | --- |
+| `idle_after_ms` | 1,000–86,400,000 | 300,000 |
+| `maintenance_budget_ms` | 1,000–55,000 | 30,000 |
+
+~~~javascript
+const listing = await collab.list(clientId);
+const member = listing.agents.find(item => item.agent_id === credentials.agent_id);
+if (!member) throw new Error("Original membership is not active");
+return await collab.update(clientId, {
+  ...credentials,
+  expected_revision: member.lifecycle.revision,
+  idle_after_ms: 300000,
+  maintenance_budget_ms: 30000
+});
+~~~
+
+维护操作使用 `maintenance: {round_id, action}`，携带服务端返回的原轮次 ID 和本次读取的版本。先报告 `start`，再分别报告实际 `complete`、`fail`、`cancel` 或 `unknown` 结果。预算到期时，尚未开始的请求被取消；已运行的维护变成 `unknown`，不能据此声称工作成功、已停止或可以重新执行。
+
+`name` 最多 128 个 UTF-8 字节；`role` 最多 128 字节，`update` 传 `role: ""` 可清空角色。`capabilities` 最多 16 项，每项为 1–64 字节。主题、回复 ID 和发送去重 key 若提供，须为 1–128 字节；这些文字字段均拒绝控制字符。
+
+租约到期后，成员不再出现在有效名单中，其邮箱和凭证被清理。主动 `leave` 也会删除成员与邮箱，并结束该成员的收件等待；重复使用已经离开的凭证返回成员失效。退出前先处理需要保留的消息。已移除成员最多保留 64 条离线摘要，每条保留 300,000 毫秒，通过 `list.offline_agents` 返回；其 `membership_active: false` 仅供观察，不能作为有效成员凭证使用。
 
 | 事件 | 后续处理 |
 | --- | --- |
@@ -256,7 +285,7 @@ return await collab.update("CLIENT_ID_FROM_LIST", {
 
 协作消息作为 JSON 数据交给收件者，收件者决定如何处理。`send` 不会执行消息中的命令、启动模型或唤起一个已经停止运行的 agent；调用方需要安排收件循环，或在任务阶段之间主动检查邮箱。
 
-这组原语负责成员、消息和确认。任务分配、领导者选择、代码所有权以及并行修改策略由调用方约定，可以直接放进 `role`、`status` 和 `payload`，无需为每一种协作方式添加新的服务端工作流。
+这组原语负责成员、消息和确认。任务分配、领导者选择、代码所有权以及并行修改策略由调用方约定，可以放进 `role`、`capabilities` 和 `payload`；`status` 专用于有版本条件的生命周期更新，不能承载任意任务描述。
 
 实现与验证入口：
 

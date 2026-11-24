@@ -879,3 +879,81 @@ fn closing_a_client_preserves_old_subscription_proofs_and_allows_fresh_requests(
         vec!["client"]
     );
 }
+
+#[test]
+fn managed_selection_preserves_ack_and_invalidates_old_attempted_delivery() {
+    let hub = Hub::default();
+    let main = actor("owner", "main", "main_agent");
+    let id = subscriber(&hub, &main, "managed", None);
+    publish(&hub, &main.owner, &main.client_id, 1);
+    let first = hub.read(&main, &id, 64).unwrap();
+    hub.ack(&main, &id, sequence(&first)).unwrap();
+    let progress = publish(&hub, &main.owner, &main.client_id, 2);
+    let attempted = hub.read(&main, &id, 64).unwrap();
+    assert_eq!(
+        hub.contains_pending_event(&main, &id, progress["event_id"].as_str().unwrap()),
+        Ok(true)
+    );
+    let changed = hub
+        .update_kinds(&main, &id, vec!["worker.completed".into()])
+        .unwrap();
+    assert_eq!(changed["cursor"], first["next_cursor"]);
+    assert_eq!(
+        hub.subscription_clients(&main, &id).unwrap(),
+        vec!["main".to_owned()]
+    );
+    assert!(hub.ack(&main, &id, sequence(&attempted)).is_err());
+    assert_eq!(
+        hub.contains_pending_event(&main, &id, progress["event_id"].as_str().unwrap()),
+        Ok(false)
+    );
+    let completed = hub
+        .publish_system(
+            &main.owner,
+            &main.client_id,
+            Some("worker"),
+            "worker.completed",
+            json!({"task_status":"completed"}),
+            (None, None),
+        )
+        .unwrap();
+    assert_eq!(
+        hub.contains_pending_event(&main, &id, completed["event_id"].as_str().unwrap()),
+        Ok(true)
+    );
+    let page = hub.read(&main, &id, 64).unwrap();
+    assert_eq!(page["events"].as_array().unwrap().len(), 1);
+    assert_eq!(page["events"][0]["id"], completed["event_id"]);
+    assert_eq!(hub.read(&main, &id, 64).unwrap()["events"], page["events"]);
+    hub.ack(&main, &id, sequence(&page)).unwrap();
+    assert_eq!(
+        hub.contains_pending_event(&main, &id, completed["event_id"].as_str().unwrap()),
+        Ok(false)
+    );
+    let peer = actor("owner", "main", "other_agent");
+    assert!(
+        hub.update_kinds(&peer, &id, vec!["worker.progress".into()])
+            .is_err()
+    );
+}
+
+#[test]
+fn managed_wake_check_reports_evicted_history_without_claiming_delivery() {
+    let hub = Hub::default();
+    let main = actor("owner", "main", "main_agent");
+    let id = subscriber(&hub, &main, "managed_gap", Some(0));
+    let first = publish(&hub, &main.owner, &main.client_id, 0);
+    for index in 1..=1100 {
+        publish(&hub, &main.owner, &main.client_id, index);
+    }
+    assert!(
+        hub.contains_pending_event(&main, &id, first["event_id"].as_str().unwrap(),)
+            .unwrap_err()
+            .starts_with("events_gap:")
+    );
+    assert!(
+        hub.read(&main, &id, 1)
+            .unwrap_err()
+            .starts_with("events_gap:")
+    );
+}

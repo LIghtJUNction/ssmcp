@@ -206,7 +206,7 @@ impl State {
                     self.conversation.detail = false;
                     self.conversation.detail_scroll = 0;
                 }
-                View::Statistics => {}
+                View::Statistics | View::Waits => {}
                 View::Agents => self.chat_select_target(),
                 View::Logs => {
                     self.logs.screen_mut().set_scrollback(0);

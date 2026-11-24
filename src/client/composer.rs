@@ -131,7 +131,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/wait",
-        description: "查看计时和用户等待；/wait cancel <编号> 只取消对应等待，会话继续",
+        description: "查看计时和用户等待面板；/wait status 读取快照；/wait cancel <编号> 只取消对应等待，会话继续",
     },
     SlashCommand {
         name: "/audit",

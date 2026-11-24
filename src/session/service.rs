@@ -1322,6 +1322,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn stale_close_is_rejected_before_mutation_and_close_waits_for_owned_tree() {
+        if crate::test_process::isolated("session::service::tests::stale_close_is_rejected_before_mutation_and_close_waits_for_owned_tree").await { return; }
         let root = Directory::new();
         let mut supervisor = Supervisor::new(root.0.clone(), "a".repeat(32));
         let (directory, generation) = root.worker(&mut supervisor, "owned");
@@ -1340,14 +1341,16 @@ mod tests {
             assert!(Instant::now() < deadline, "worker did not start");
             tokio::time::sleep(Duration::from_millis(10)).await;
         };
+        let stale = supervisor
+            .dispatch(Request::Close {
+                name: "owned".into(),
+                expected_generation: Some("stale".into()),
+            })
+            .await
+            .unwrap_err();
         assert!(
-            supervisor
-                .dispatch(Request::Close {
-                    name: "owned".into(),
-                    expected_generation: Some("stale".into())
-                })
-                .await
-                .is_err()
+            stale.to_string().contains("stale session generation"),
+            "{stale}"
         );
         assert!(desired_running(&directory).unwrap());
         assert!(!supervisor.workers["owned"].stopping);

@@ -59,6 +59,8 @@ test-client-ui:
 test-client-ui-ready:
 	python3 scripts/test_e2e_worker_windows.py
 	python3 scripts/test_e2e_relay_composer_identity.py
+	python3 scripts/test_composer_journal.py
+	$(MAKE) test-native-inputs-ready
 	python3 scripts/e2e_client_ui.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/client-ui
 	python3 scripts/e2e_canvas_logs.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/canvas-logs --report $(CARGO_TARGET_DIR)/acceptance/canvas-logs/report.json
 	python3 scripts/e2e_composer.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/composer.json
@@ -81,6 +83,23 @@ test-client-ui-ready:
 	  --source-revision "$(SSMCP_SOURCE_REVISION)" \
 	  --report "$$ssmcp_worker_windows_out/report.json" \
 	  --evidence-dir "$$ssmcp_worker_windows_out/evidence"
+
+# Fast native Input/quote and detached-observation regression. The durable
+# report labels 15 seconds as diagnostic; the separate full acceptance is 600s.
+.PHONY: test-native-inputs-ready
+test-native-inputs-ready:
+	@set -eu; test -n "$$SSMCP_E2E_FIXTURE_BINARY"; \
+	mkdir -p "$(CARGO_TARGET_DIR)/acceptance"; \
+	ssmcp_inputs_out="$$(mktemp -d "$(CARGO_TARGET_DIR)/acceptance/native-inputs-XXXXXX")"; \
+	python3 scripts/e2e_input_replies.py --bin-dir "$(CARGO_TARGET_DIR)/debug" \
+	  --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" \
+	  --build-source-commit "$(SSMCP_SOURCE_REVISION)" --report "$$ssmcp_inputs_out/tui/report.json"; \
+	ssmcp_client_sha="$$(sha256sum "$(CARGO_TARGET_DIR)/debug/ssmcp" | cut -d' ' -f1)"; \
+	ssmcp_fixture_sha="$$(sha256sum "$$SSMCP_E2E_FIXTURE_BINARY" | cut -d' ' -f1)"; \
+	python3 scripts/e2e_durable_wait.py --client-binary "$(CARGO_TARGET_DIR)/debug/ssmcp" \
+	  --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" --client-sha256 "$$ssmcp_client_sha" \
+	  --fixture-sha256 "$$ssmcp_fixture_sha" --build-source-commit "$(SSMCP_SOURCE_REVISION)" \
+	  --duration-seconds 15 --require-timed-prompts --report "$$ssmcp_inputs_out/durable.json"
 
 install:
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/share/man/man1 $(DESTDIR)$(PREFIX)/share/man/man8

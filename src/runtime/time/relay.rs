@@ -1,7 +1,7 @@
 //! Read-only projection of negotiated server waits. This module never captures
 //! a Source/HistoryOwner, calls a tool, restores a task or changes any queue.
 use super::{Entry, WaitView, clean_label, millis};
-use crate::wire::wait_display::{self, Outcome};
+use crate::wire::wait_display::{self, Outcome, Version};
 use std::time::{Duration, Instant};
 
 struct Observation {
@@ -75,6 +75,7 @@ impl Observation {
             episode: Some(wire.episode),
             attribution: Some(wire.attribution.clone()),
             wait: Some(view),
+            durable: wire.durable.clone(),
         }
     }
 
@@ -85,7 +86,7 @@ impl Observation {
 
 #[derive(Default)]
 pub(super) struct State {
-    enabled: bool,
+    version: Option<Version>,
     revision: u64,
     active: Vec<Observation>,
     recent: Vec<Observation>,
@@ -93,7 +94,11 @@ pub(super) struct State {
 
 impl State {
     pub(super) fn configure(&mut self, enabled: bool) {
-        self.enabled = enabled;
+        self.configure_version(enabled.then_some(Version::V3));
+    }
+
+    pub(super) fn configure_version(&mut self, version: Option<Version>) {
+        self.version = version;
         self.revision = 0;
         self.active.clear();
         self.recent.clear();
@@ -120,10 +125,10 @@ impl State {
         snapshot: wait_display::Snapshot,
         now: Instant,
     ) -> Result<bool, String> {
-        if !self.enabled {
+        let Some(version) = self.version else {
             return Err("wait display capability was not negotiated".into());
-        }
-        snapshot.validate()?;
+        };
+        snapshot.validate_for(version)?;
         if snapshot.revision <= self.revision {
             return Ok(false);
         }
@@ -183,7 +188,14 @@ impl State {
         self.active = active;
         self.recent.retain(|observation| {
             observation.ended.is_some_and(|ended| {
-                now.saturating_duration_since(ended) < Duration::from_secs(300)
+                // This is a bounded local display window, not a claim about
+                // the server cache deadline or synchronized wall clocks.
+                let seconds = if observation.wire.durable.is_some() {
+                    1800
+                } else {
+                    300
+                };
+                now.saturating_duration_since(ended) < Duration::from_secs(seconds)
             })
         });
     }
@@ -238,6 +250,7 @@ mod tests {
                 window_ms: 2100,
                 elapsed_ms: 100,
                 remaining_ms: 2000,
+                durable: None,
             }],
             recent: vec![],
         }
@@ -392,6 +405,127 @@ mod tests {
                 .iter()
                 .any(|entry| entry.episode == Some(2)
                     && entry.wait.as_ref().unwrap().outcome == Outcome::Unknown)
+        );
+    }
+
+    fn durable_frame(revision: u64) -> wait_display::Snapshot {
+        use wait_display::{DurableObservation, DurableState};
+        let mut snapshot = frame(revision, 1);
+        let wire = &mut snapshot.active[0];
+        wire.window_ms = 3_600_000;
+        wire.remaining_ms = 3_599_900;
+        wire.durable = Some(DurableObservation {
+            state: DurableState::Waiting,
+            result_status: None,
+            started_at_ms: 1_795_000_000_000,
+            completed_at_ms: None,
+            first_read_at_ms: None,
+            last_read_at_ms: None,
+            acknowledged_at_ms: None,
+            delivery_lag_ms: None,
+            retained_until_ms: None,
+            elapsed_total_ms: 100,
+            lifetime_ms: 3_600_000,
+            read_window_ms: 55_000,
+            read_windows: 1,
+            replay_count: 0,
+            cursor: 0,
+        });
+        snapshot
+    }
+
+    #[test]
+    fn durable_display_requires_v4_and_outlives_the_read_window_without_faking_a_result() {
+        let mut state = State::default();
+        let now = Instant::now();
+        state.configure(true);
+        assert!(state.apply(durable_frame(1), now).is_err());
+        state.configure_version(Some(Version::V4));
+        assert!(state.apply(durable_frame(1), now).unwrap());
+        let entry = state.entries(now + Duration::from_secs(60)).remove(0);
+        assert_eq!(entry.elapsed_ms, 60_100);
+        assert_eq!(entry.remaining_ms, Some(3_539_900));
+        assert_eq!(entry.durable.as_ref().unwrap().read_window_ms, 55_000);
+        assert_eq!(
+            entry.durable.as_ref().unwrap().elapsed_total_ms,
+            100,
+            "do not rewrite authoritative server measurements during local display projection"
+        );
+        state
+            .apply(
+                wait_display::Snapshot {
+                    revision: 2,
+                    active: vec![],
+                    recent: vec![],
+                },
+                now + Duration::from_secs(61),
+            )
+            .unwrap();
+        let missing = state
+            .recent_entries(now + Duration::from_secs(61))
+            .remove(0);
+        assert_eq!(missing.status, super::super::Status::Unknown);
+        assert_eq!(
+            missing.durable.unwrap().state,
+            wait_display::DurableState::Waiting
+        );
+    }
+
+    #[test]
+    fn terminal_durable_metadata_and_ack_update_keep_actual_duration_and_bounded_retention() {
+        use wait_display::{DurableState, DurableStatus};
+        let mut state = State::default();
+        state.configure_version(Some(Version::V4));
+        let now = Instant::now();
+        let mut wire = durable_frame(1).active.remove(0);
+        wire.outcome = Outcome::Triggered;
+        wire.elapsed_ms = 91_000;
+        wire.remaining_ms = 3_509_000;
+        let metadata = wire.durable.as_mut().unwrap();
+        metadata.state = DurableState::Cached;
+        metadata.result_status = Some(DurableStatus::Ready);
+        metadata.elapsed_total_ms = 91_000;
+        metadata.completed_at_ms = Some(1_795_000_091_000);
+        metadata.retained_until_ms = Some(1_795_001_891_000);
+        metadata.cursor = 1;
+        state
+            .apply(
+                wait_display::Snapshot {
+                    revision: 1,
+                    active: vec![],
+                    recent: vec![wire.clone()],
+                },
+                now,
+            )
+            .unwrap();
+        assert_eq!(
+            state.recent_entries(now + Duration::from_secs(301))[0].elapsed_ms,
+            91_000
+        );
+        let metadata = wire.durable.as_mut().unwrap();
+        metadata.state = DurableState::Acknowledged;
+        metadata.first_read_at_ms = Some(1_795_000_092_000);
+        metadata.last_read_at_ms = metadata.first_read_at_ms;
+        metadata.acknowledged_at_ms = Some(1_795_000_093_000);
+        metadata.delivery_lag_ms = Some(1000);
+        state
+            .apply(
+                wait_display::Snapshot {
+                    revision: 2,
+                    active: vec![],
+                    recent: vec![wire.clone()],
+                },
+                now + Duration::from_secs(302),
+            )
+            .unwrap();
+        assert_eq!(
+            state.recent_entries(now + Duration::from_secs(303))[0].durable,
+            wire.durable
+        );
+        assert!(
+            state
+                .recent_entries(now + Duration::from_secs(1800))
+                .is_empty()
         );
     }
 }

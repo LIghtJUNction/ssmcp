@@ -532,7 +532,14 @@ class RelayComposer(Composer):
         front.send(b"\x1b")
         front.until(lambda shot: parked in input_text(shot), "Escape restores the draft within the same process")
         escaped = self.queue()
+        self.metrics["draft_navigation"] = {
+            name: {"draft": state["draft"], "draft_context": state["draft_context"]}
+            for name, state in (("before", before), ("copied", copied), ("escaped", escaped))
+        }
         check_restored_draft(self, before, escaped)
+        self.check(escaped["draft"] == before["draft"]
+                   and escaped["draft_context"] == before["draft_context"],
+                   "same-process navigation restores the complete saved draft and routing context")
         self.select_request(front, first["id"])
         front.send(b"r")
         front.until(lambda shot: first["text"] in input_text(shot), "a fresh parked copy before real reload")

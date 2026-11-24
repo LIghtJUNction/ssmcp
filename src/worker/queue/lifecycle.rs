@@ -136,6 +136,11 @@ impl<T: Clone> Queue<T> {
                 task.view.status = TaskStatus::Cancelling;
                 task.view.updated_ms = now_ms;
             }
+            if let Some(id) = task_id {
+                self.record_task_event(&mut state, "worker.cancelling", &id, None, now_ms);
+            } else {
+                self.record_slot_event(&mut state, "worker.retiring", index, now_ms);
+            }
         }
         state.desired_total = total;
         self.changed(&mut state);
@@ -194,6 +199,8 @@ impl<T: Clone> Queue<T> {
             None,
         );
         worker.state = SlotState::Offline("external worker released its station".into());
+        self.record_slot_event(&mut state, "worker.offline", retirement.slot, now_ms);
+        let worker = &mut state.slots[retirement.slot];
         worker.registered = None;
         worker.retirement = None;
         worker.enabled = false;

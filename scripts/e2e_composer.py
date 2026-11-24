@@ -514,13 +514,11 @@ class Composer(Dashboard):
         members = []
         expected_statuses = {}
         subtitles = []
-        for role, status in (("review", "reviewing"), ("build", "testing")):
+        for role, status in (("review", "idle"), ("build", "working")):
             member = self.public_call("collab", {"action": "join", "client_id": self.client_id,
                                                   "name": "Shared name", "role": role})
             self.sensitive.append(member["token"])
-            self.public_call("collab", {"action": "update", "client_id": self.client_id,
-                                         "agent_id": member["agent_id"], "token": member["token"],
-                                         "status": status})
+            self.public_call("collab", self.lifecycle_update_arguments(member, status))
             members.append(member)
             expected_statuses[member["agent_id"]] = status
             subtitles.append(f"…{member['agent_id'][-8:]} · {role}")

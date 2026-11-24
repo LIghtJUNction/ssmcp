@@ -209,6 +209,13 @@ fn parse(text: &str) -> Result<Vec<Reference>, String> {
     let mut at = 0;
     let mut code_ticks = 0;
     while at < text.len() {
+        // Quoted messages remain text, including @file and $skill references.
+        if (at == 0 || text.as_bytes()[at - 1] == b'\n')
+            && text[at..].trim_start_matches([' ', '\t']).starts_with('>')
+        {
+            at = text[at..].find('\n').map_or(text.len(), |end| at + end + 1);
+            continue;
+        }
         let ch = text[at..].chars().next().unwrap();
         if ch == '\\' {
             at += ch.len_utf8();
@@ -901,5 +908,32 @@ mod tests {
         assert!(preview.chars().all(|ch| ch == '界'));
         assert!(utf8_preview(b"hello\x1b[31m", true).is_none());
         assert!(utf8_preview(b"invalid\xff", true).is_none());
+    }
+}
+
+#[cfg(test)]
+mod quoted_reference_tests {
+    use super::*;
+    #[test]
+    fn quoted_files_skills_and_backticks_do_not_expand_or_hide_real_references() {
+        let quote = crate::client::replies::quote_reply(
+            "message_original",
+            "@secret.txt\n$private-skill\n\x60unclosed",
+            "@real.txt $real-skill",
+            16384,
+        )
+        .unwrap();
+        assert_eq!(
+            parse(&quote).unwrap(),
+            vec![
+                Reference::File("real.txt".into()),
+                Reference::Skill("real-skill".into())
+            ]
+        );
+        assert!(
+            parse("> @\"unterminated file\n> $hidden")
+                .unwrap()
+                .is_empty()
+        );
     }
 }

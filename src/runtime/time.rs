@@ -2,6 +2,7 @@
 //! Deadlines use Instant; civil inputs are converted once when a timer starts.
 mod civil;
 mod execution;
+mod prompts;
 mod relay;
 mod wait_view;
 use super::{
@@ -14,14 +15,15 @@ use crate::{
     wire::ControlAttribution,
 };
 pub(crate) use execution::ExecutionTiming;
+pub(crate) use prompts::{PromptStatus, PromptSummary};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
-    sync::{Arc, Mutex, OnceLock, Weak},
+    sync::{Arc, Mutex, OnceLock, Weak, atomic::AtomicBool},
     time::{Duration, Instant},
 };
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 const MAX_TIMERS: usize = 32;
 const MAX_RECORDS: usize = 128;
@@ -51,12 +53,41 @@ fn display_clock() -> &'static Mutex<Weak<Clock>> {
     DISPLAY.get_or_init(Mutex::default)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq)]
 struct Owner {
     connection: Option<u64>,
     attribution: Option<ControlAttribution>,
     thread: Option<ThreadScope>,
     history: Option<HistoryOwner>,
+}
+
+impl PartialEq for Owner {
+    fn eq(&self, other: &Self) -> bool {
+        let same_attribution = match (&self.attribution, &other.attribution) {
+            (None, None) => true,
+            (Some(left), Some(right)) => {
+                left.account.provider == right.account.provider
+                    && left.account.subject == right.account.subject
+                    && left
+                        .owner
+                        .as_ref()
+                        .map(|owner| (&owner.provider, &owner.subject))
+                        == right
+                            .owner
+                            .as_ref()
+                            .map(|owner| (&owner.provider, &owner.subject))
+                    && left.agent.as_ref().map(|agent| &agent.id)
+                        == right.agent.as_ref().map(|agent| &agent.id)
+            }
+            _ => false,
+        };
+        // Login and participant names are presentation metadata. Renaming them
+        // must not replace an authenticated account, member or conversation.
+        same_attribution
+            && self.connection == other.connection
+            && self.thread == other.thread
+            && self.history == other.history
+    }
 }
 
 impl Owner {
@@ -132,12 +163,15 @@ pub(crate) struct Entry {
     pub attribution: Option<ControlAttribution>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait: Option<WaitView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub durable: Option<crate::wire::wait_display::DurableObservation>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub(crate) struct Snapshot {
     pub active: Vec<Entry>,
     pub recent: Vec<Entry>,
+    pub prompts: Vec<PromptSummary>,
 }
 
 struct Timer {
@@ -196,6 +230,7 @@ impl Timer {
             episode: None,
             attribution: None,
             wait: None,
+            durable: None,
         }
     }
 }
@@ -232,6 +267,7 @@ impl Observation {
             episode: None,
             attribution: None,
             wait: Some(self.view.clone()),
+            durable: None,
         }
     }
 }
@@ -245,6 +281,7 @@ struct State {
     timers: BTreeMap<String, Timer>,
     observations: BTreeMap<String, Observation>,
     finished_observations: VecDeque<Observation>,
+    prompts: prompts::State,
 }
 
 impl State {
@@ -276,14 +313,27 @@ pub(crate) struct Clock {
     id: String,
     started: Instant,
     state: Mutex<State>,
+    prompt_changed: Arc<Notify>,
+    prompt_scheduler_started: AtomicBool,
 }
 
 impl Clock {
     pub(super) fn configure(&self, time_tools: bool, wait_display: bool) {
+        self.configure_version(
+            time_tools,
+            wait_display.then_some(crate::wire::wait_display::Version::V3),
+        );
+    }
+
+    pub(super) fn configure_version(
+        &self,
+        time_tools: bool,
+        version: Option<crate::wire::wait_display::Version>,
+    ) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.time_tools = time_tools && !state.closed;
-        let display_enabled = wait_display && !state.closed;
-        state.relay.configure(display_enabled);
+        let version = if state.closed { None } else { version };
+        state.relay.configure_version(version);
     }
 
     pub(super) fn time_tools_enabled(&self) -> bool {
@@ -324,6 +374,8 @@ impl Clock {
             id: crate::hex::encode(bytes),
             started: Instant::now(),
             state: Mutex::new(State::default()),
+            prompt_changed: Arc::new(Notify::new()),
+            prompt_scheduler_started: AtomicBool::new(false),
         }))
     }
 
@@ -642,7 +694,10 @@ impl Clock {
         if state.closed {
             return Snapshot::default();
         }
-        let mut snapshot = Snapshot::default();
+        let mut snapshot = Snapshot {
+            prompts: state.prompts.summaries(owner),
+            ..Snapshot::default()
+        };
         for timer in state
             .timers
             .values()
@@ -728,8 +783,19 @@ impl Clock {
         state.timers.clear();
         state.observations.clear();
         state.finished_observations.clear();
+        state.prompts.disconnect();
         drop(state);
+        self.prompt_changed.notify_one();
         changed();
+    }
+}
+
+impl super::Runtime {
+    /// Read-only presentation for this Runtime, never the globally selected Clock.
+    pub fn time_snapshot(&self) -> Value {
+        let owner = Source::capture().owner().cloned();
+        serde_json::to_value(self.time.snapshot(&owner, Instant::now()))
+            .unwrap_or_else(|_| json!({"active":[],"recent":[],"prompts":[]}))
     }
 }
 
@@ -876,8 +942,8 @@ pub(crate) fn snapshot_at(now: Instant) -> Snapshot {
     })
 }
 
-pub(crate) fn utc_now() -> Result<String, String> {
-    civil::format(civil::now_ms()?)
+pub(crate) fn utc_at(unix_ms: i64) -> Result<String, String> {
+    civil::format(unix_ms)
 }
 
 pub(crate) fn cancel_local(id: &str) -> Result<(), String> {
@@ -910,6 +976,7 @@ pub(super) fn tools() -> Vec<Value> {
                     {"required":["op","timer_id"],"properties":{"op":{"const":"cancel"}},"not":{"anyOf":[{"required":["duration_ms"]},{"required":["deadline_unix_ms"]},{"required":["label"]},{"required":["wait_ms"]}]}},
                     {"required":["op"],"properties":{"op":{"const":"list"}},"not":{"anyOf":[{"required":["timer_id"]},{"required":["duration_ms"]},{"required":["deadline_unix_ms"]},{"required":["label"]},{"required":["wait_ms"]}]}}]},
             "annotations":{"readOnlyHint":false,"destructiveHint":false}}),
+        prompts::tool(),
     ]
 }
 
@@ -929,6 +996,14 @@ impl NativePlugin for Clock {
             let value = match call.native_name.as_str() {
                 "ssmcp.time.now" => self.now(call.arguments),
                 "ssmcp.time.wait" => self.wait(call.arguments).await,
+                "ssmcp.time.prompt" => {
+                    let source = Source::capture();
+                    tokio::task::spawn_blocking(move || {
+                        source.blocking(|| self.prompt(call.arguments))
+                    })
+                    .await
+                    .map_err(|_| "prompt worker stopped; outcome unknown".to_owned())?
+                }
                 _ => Err("unknown time primitive".into()),
             }?;
             Ok(crate::backend::result(value))

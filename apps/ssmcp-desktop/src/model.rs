@@ -1,7 +1,9 @@
 //! Bounded display projections. Transport credentials never enter this module.
+mod waits;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+pub use waits::WaitSnapshot;
 use zgpui::bridge::{CommandOutcome, CommandRecord, protocol::*};
 
 pub const HISTORY_ROWS: usize = 320;
@@ -113,11 +115,20 @@ pub struct Row {
     pub source: String,
     pub status: String,
     pub lossy: bool,
+    pub message_id: Option<String>,
+    pub input_side: bool,
+    pub input_origin: Option<String>,
 }
 
 impl Row {
     fn bytes(&self) -> usize {
-        self.kind.len() + self.text.len() + self.source.len() + self.status.len() + 96
+        self.kind.len()
+            + self.text.len()
+            + self.source.len()
+            + self.status.len()
+            + self.message_id.as_ref().map_or(0, String::len)
+            + self.input_origin.as_ref().map_or(0, String::len)
+            + 112
     }
 }
 
@@ -348,6 +359,7 @@ pub struct View {
     pub queue_next: Option<usize>,
     pub terminals: Vec<Terminal>,
     pub workers: Option<Workers>,
+    pub time: Option<WaitSnapshot>,
     pub receipts: VecDeque<Receipt>,
 }
 
@@ -415,6 +427,7 @@ impl View {
         self.queue.clear();
         self.terminals.clear();
         self.workers = None;
+        self.time = None;
         self.can_send = false;
         self.reloading = false;
         self.queue_more = false;
@@ -470,6 +483,39 @@ pub fn error_label(code: ErrorCode) -> &'static str {
     }
 }
 
+fn message_fields(value: &Value, projected: &Value) -> (Option<String>, bool, Option<String>) {
+    if !matches!(
+        value["type"].as_str(),
+        Some("ssmcp.message" | "ssmcp.user_input")
+    ) {
+        return (None, false, None);
+    }
+    let id = projected["message_id"]
+        .as_str()
+        .or_else(|| value["message_id"].as_str())
+        .filter(|id| ssmcp::client::replies::valid_message_id(id))
+        .map(str::to_owned);
+    let human = value["type"] == "ssmcp.user_input"
+        || value["role"] == "user"
+        || projected["input_origin"] == "human";
+    let input = human || value["kind"] == "input" || projected["input_side"] == true;
+    let origin = if human {
+        Some("human".into())
+    } else if input {
+        Some(
+            projected["input_origin"]
+                .as_str()
+                .or_else(|| value["input_origin"].as_str())
+                .filter(|value| value.len() <= 32)
+                .unwrap_or("system_hook")
+                .into(),
+        )
+    } else {
+        None
+    };
+    (id, input, origin)
+}
+
 pub fn event_row(event: &Event) -> Option<Row> {
     let frame = &event.value;
     if frame["kind"] == "terminal" {
@@ -489,6 +535,18 @@ pub fn event_row(event: &Event) -> Option<Row> {
     .collect::<Vec<_>>()
     .join("\n");
     let source = frame.get("source").unwrap_or(&Value::Null);
+    let (message_id, input_side, input_origin) = message_fields(value, &Value::Null);
+    let kind = if input_side {
+        "input"
+    } else if kind == "ssmcp.message" {
+        if value["kind"] == "answer" {
+            "answer"
+        } else {
+            "progress"
+        }
+    } else {
+        kind
+    };
     Some(Row {
         sequence: event.sequence,
         kind: bounded(kind, 128),
@@ -496,6 +554,9 @@ pub fn event_row(event: &Event) -> Option<Row> {
         source: source_label(source),
         status: text(value, "status", 64),
         lossy: frame["truncated"] == true,
+        message_id,
+        input_side,
+        input_origin,
     })
 }
 
@@ -545,6 +606,18 @@ pub fn conversation_page(
             return Err(BridgeError::invalid("invalid history sequence"));
         }
         last = Some(sequence);
+        // Keep operational envelopes in the Events page. Validate their
+        // sequence first so filtering cannot hide a corrupt journal page.
+        if !matches!(
+            value["value"]["type"].as_str(),
+            Some("ssmcp.message" | "ssmcp.user_input")
+        ) && !matches!(
+            value["kind"].as_str(),
+            Some("input" | "answer" | "progress" | "message")
+        ) {
+            continue;
+        }
+        let (message_id, input_side, input_origin) = message_fields(&value["value"], value);
         rows.push(Row {
             sequence,
             kind: text(value, "kind", 128),
@@ -552,6 +625,9 @@ pub fn conversation_page(
             source: source_label(&value["source"]),
             status: text(value, "status", 64),
             lossy: value["text_lossy"] == true || value["truncated"] == true,
+            message_id,
+            input_side,
+            input_origin,
         });
     }
     if more && (next >= end || previous == Some(next)) {
@@ -734,7 +810,7 @@ mod tests {
     #[test]
     fn history_page_handles_filtered_noncontiguous_sequences() {
         let page = json!({"start_cursor":"1","end_cursor":"12","next_cursor":"10","gap":false,"has_more":true,
-            "events":[{"sequence":"4","text":"first"},{"sequence":"9","text":"second"}]});
+            "events":[{"sequence":"4","kind":"progress","text":"first"},{"sequence":"9","kind":"answer","text":"second"}]});
         let (rows, cursor, more, gap) = conversation_page(&page, Some(Counter(3))).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(cursor, Counter(10));
@@ -742,10 +818,44 @@ mod tests {
     }
 
     #[test]
+    fn operational_tail_advances_cursor_without_displacing_conversation_messages() {
+        let mut page = json!({
+            "start_cursor":"1","end_cursor":"9","next_cursor":"9","gap":false,"has_more":false,
+            "events":[
+                {"sequence":"2","kind":"input","text":"human",
+                 "value":{"type":"ssmcp.user_input","message_id":"human-original"}},
+                {"sequence":"3","kind":"ssmcp.controller.finished","text":"finished",
+                 "value":{"type":"ssmcp.controller.finished"}},
+                {"sequence":"4","kind":"input","text":"timer",
+                 "value":{"type":"ssmcp.message","kind":"input","input_origin":"agent_timer",
+                          "message_id":"timer-original"}},
+                {"sequence":"5","kind":"answer","text":"answer",
+                 "value":{"type":"ssmcp.message","kind":"answer","message_id":"answer-original"}},
+                {"sequence":"8","kind":"ssmcp.controller.started","text":"started",
+                 "value":{"type":"ssmcp.controller.started"}}
+            ]
+        });
+        let (rows, cursor, more, gap) = conversation_page(&page, Some(Counter(1))).unwrap();
+        assert_eq!(cursor, Counter(9));
+        assert!(!more && !gap);
+        assert_eq!(
+            rows.iter().map(|row| row.text.as_str()).collect::<Vec<_>>(),
+            ["human", "timer", "answer"]
+        );
+        assert!(rows[0].input_side && rows[1].input_side && !rows[2].input_side);
+        assert_eq!(rows[1].message_id.as_deref(), Some("timer-original"));
+        page["events"][4]["sequence"] = json!("3");
+        assert!(conversation_page(&page, Some(Counter(1))).is_err());
+    }
+
+    #[test]
     fn retained_rows_are_bounded_and_duplicate_delivery_does_not_duplicate_text() {
         let mut history = History::default();
         for sequence in 0..1000 {
             history.push(Row {
+                message_id: None,
+                input_side: false,
+                input_origin: None,
                 sequence: Counter(sequence),
                 kind: "event".into(),
                 text: "中".repeat(2048),

@@ -466,9 +466,11 @@ impl<T: Clone> Queue<T> {
             task.view.updated_ms = now_ms;
             task_events.push((task.view.task_id.clone(), "worker.cancelling"));
         }
-        for slot in &mut state.slots {
+        let mut offline = Vec::new();
+        for (index, slot) in state.slots.iter_mut().enumerate() {
             if matches!(slot.state, SlotState::Idle) {
                 slot.state = SlotState::Offline("stopped by manager; no new tasks accepted".into());
+                offline.push(index);
             }
             log(
                 slot,
@@ -480,6 +482,9 @@ impl<T: Clone> Queue<T> {
         }
         for (id, kind) in task_events {
             self.record_task_event(&mut state, kind, &id, None, now_ms);
+        }
+        for slot in offline {
+            self.record_slot_event(&mut state, "worker.offline", slot, now_ms);
         }
         trim(&mut state);
         self.changed(&mut state);
@@ -539,6 +544,7 @@ impl<T: Clone> Queue<T> {
         if matches!(worker.state, SlotState::Working(_) | SlotState::Retiring) {
             return Err("active or retiring worker requires its exact completion or release acknowledgement".into());
         }
+        let already_offline = matches!(worker.state, SlotState::Offline(_));
         worker.state = SlotState::Offline(bounded(reason, 1024));
         log(
             worker,
@@ -547,6 +553,9 @@ impl<T: Clone> Queue<T> {
             "Slot went offline",
             None,
         );
+        if !already_offline {
+            self.record_slot_event(&mut state, "worker.offline", slot, super::now_ms());
+        }
         self.changed(&mut state);
         Ok(())
     }
@@ -1036,8 +1045,14 @@ impl<T: Clone> Queue<T> {
             "worker.completed"
         };
         self.record_task_event(state, kind, &lease.task_id, None, now_ms);
-        if matches!(state.slots[lease.slot].state, SlotState::Idle) {
-            self.record_slot_event(state, "worker.idle", lease.slot, now_ms);
+        let slot_kind = match state.slots[lease.slot].state {
+            SlotState::Idle => Some("worker.idle"),
+            SlotState::Retiring => Some("worker.retiring"),
+            SlotState::Offline(_) => Some("worker.offline"),
+            SlotState::Working(_) => None,
+        };
+        if let Some(kind) = slot_kind {
+            self.record_slot_event(state, kind, lease.slot, now_ms);
         }
         trim(state);
         self.changed(state);
@@ -1065,8 +1080,12 @@ impl<T: Clone> Queue<T> {
             task.view.updated_ms = now_ms;
             task_events.push((task.view.task_id.clone(), "worker.cancelling"));
         }
-        for slot in &mut state.slots {
+        let mut offline = Vec::new();
+        for (index, slot) in state.slots.iter_mut().enumerate() {
             if !matches!(slot.state, SlotState::Working(_)) {
+                if !matches!(slot.state, SlotState::Offline(_)) {
+                    offline.push(index);
+                }
                 slot.state = SlotState::Offline("connection closed".into());
                 slot.registered = None;
                 slot.retirement = None;
@@ -1075,6 +1094,9 @@ impl<T: Clone> Queue<T> {
         }
         for (id, kind) in task_events {
             self.record_task_event(&mut state, kind, &id, None, now_ms);
+        }
+        for slot in offline {
+            self.record_slot_event(&mut state, "worker.offline", slot, now_ms);
         }
         trim(&mut state);
         self.changed(&mut state);

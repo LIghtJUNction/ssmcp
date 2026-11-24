@@ -27,6 +27,8 @@ struct NativeAnswers {
     calls: Vec<String>,
     acknowledgements: Vec<Value>,
     summary_calls: u64,
+    prompt_reply: Option<Value>,
+    prompt_reads: u64,
     summary_reminded: bool,
     exec_running: bool,
     summary_probe_pause: Option<(Arc<Notify>, Arc<Notify>)>,
@@ -230,6 +232,8 @@ impl Fixture {
             calls: vec![],
             acknowledgements: vec![],
             summary_calls: 0,
+            prompt_reply: None,
+            prompt_reads: 0,
             summary_reminded: false,
             exec_running: false,
             summary_probe_pause: None,
@@ -380,6 +384,14 @@ impl Fixture {
                             );
                         }
                         let mut output = match name.as_str() {
+                            "ssmcp.time.prompt" => {
+                                assert_eq!(arguments, json!({"action":"read","limit":4}));
+                                state.prompt_reads += 1;
+                                state
+                                    .prompt_reply
+                                    .clone()
+                                    .expect("an advertised prompt fixture")
+                            }
                             "fixture.hold" => {
                                 assert!(
                                     arguments["slot"]
@@ -582,6 +594,8 @@ impl Fixture {
             name: name.into(),
             arguments: if name == "ssmcp.ui.questions" {
                 json!({"id":"retained_question"})
+            } else if name == "ssmcp.time.prompt" {
+                json!({"action":"read","limit":4})
             } else if name == "ssmcp.fs.stat" {
                 json!({"path":"summary-fixture"})
             } else {
@@ -1281,6 +1295,7 @@ async fn tool_summary_passive_timeout_resume_and_cancel_do_not_redeliver_or_cons
 mod await_capacity;
 mod retired_hooks;
 mod time_primitives;
+mod timed_prompts;
 mod wait_display;
 
 #[tokio::test]

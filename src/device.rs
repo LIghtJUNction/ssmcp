@@ -384,7 +384,7 @@ pub(crate) struct DevicePeer {
     pub control_attribution: bool,
     pub native_messages: bool,
     pub version_notice: bool,
-    pub wait_display: bool,
+    pub wait_display: Option<wire::wait_display::Version>,
     pub time_observation: bool,
     pub chat_disabled: bool,
     pub openai_context: bool,
@@ -399,7 +399,7 @@ impl From<Registration> for DevicePeer {
             control_attribution: account.control_attribution,
             native_messages: false,
             version_notice: false,
-            wait_display: false,
+            wait_display: None,
             time_observation: false,
             chat_disabled: false,
             openai_context: false,
@@ -827,7 +827,13 @@ async fn connect(
         control_attribution,
         native_messages,
         version_notice: capability_requested(&headers, wire::versions::CAPABILITY),
-        wait_display: capability_requested(&headers, wire::wait_display::CAPABILITY),
+        wait_display: if capability_requested(&headers, wire::wait_display::DURABLE_CAPABILITY) {
+            Some(wire::wait_display::Version::V4)
+        } else if capability_requested(&headers, wire::wait_display::CAPABILITY) {
+            Some(wire::wait_display::Version::V3)
+        } else {
+            None
+        },
         time_observation: capability_requested(&headers, wire::wait_display::TIME_CAPABILITY),
         chat_disabled: capability_requested(&headers, wire::CHAT_DISABLED_CAPABILITY),
         peer_ports: capability_requested(&headers, wire::peer_port::CAPABILITY),

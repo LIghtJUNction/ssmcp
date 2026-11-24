@@ -193,6 +193,7 @@ pub struct Session {
     chat_disabled: bool,
     tool_summary_advertised: AtomicBool,
     io_reply_advertised: AtomicBool,
+    prompt_hooks_advertised: AtomicBool,
     thread_events_advertised: AtomicBool,
     login: Mutex<Option<LoginCode>>,
     // Membership may change, but grants always identify immutable provider subjects.
@@ -261,6 +262,10 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) fn prompt_hooks_advertised(&self) -> bool {
+        self.prompt_hooks_advertised.load(Ordering::Acquire)
+    }
+
     pub(crate) fn io_reply_advertised(&self) -> bool {
         self.chat_enabled() && self.io_reply_advertised.load(Ordering::Acquire)
     }
@@ -283,6 +288,14 @@ impl Session {
         self.reports
             .try_send(completion)
             .map_err(|_| "code audit completion queue unavailable".into())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn steering_command_for_test(
+        &self,
+        command: wire::SteeringCommand,
+    ) -> Result<wire::SteeringSnapshot, String> {
+        self.steering_command(command)
     }
 
     fn steering_command(
@@ -318,6 +331,12 @@ impl Session {
             let mut recipients = std::collections::BTreeMap::<String, Vec<String>>::new();
             if let Some((owner, agent_id, _)) = seed {
                 if message.target == "next" || message.target == agent_id {
+                    self.collaboration.user_input_queued(
+                        owner,
+                        agent_id,
+                        &message.id,
+                        message.revision,
+                    );
                     recipients
                         .entry(owner.into())
                         .or_default()
@@ -326,6 +345,12 @@ impl Session {
             } else {
                 for (owner, member) in &members {
                     if message.target == "next" || message.target == member.agent_id {
+                        self.collaboration.user_input_queued(
+                            owner,
+                            &member.agent_id,
+                            &message.id,
+                            message.revision,
+                        );
                         recipients.entry(owner.clone()).or_default().push(format!(
                             "{}:{}",
                             self.client_id(),
@@ -576,6 +601,9 @@ impl Session {
             .map_err(|_| "client busy; retry later")?;
         let duration = request_timeout(&operation);
         let catalog_query = matches!(&operation, Operation::ListTools { .. });
+        let generated_input = matches!(&operation,
+            Operation::CallTool { name, arguments }
+            if name == "ssmcp.ui.message" && arguments["kind"] == "input");
         let audit_tool = match &operation {
             Operation::CallTool { name, .. } => Some(name.clone()),
             _ => None,
@@ -596,6 +624,17 @@ impl Session {
             return Err("audit intent could not be saved; tool was not dispatched".into());
         }
         let call_traffic = TrafficFailureState::default();
+        let mut lifecycle_activity = binding
+            .as_ref()
+            .map(|binding| {
+                self.collaboration.prepare_native_activity(
+                    &binding.owner,
+                    &binding.agent_id,
+                    &binding.token,
+                    &operation,
+                )
+            })
+            .transpose()?;
         let (reply, response) = oneshot::channel();
         if self
             .sender
@@ -629,7 +668,16 @@ impl Session {
             ));
         }
         if carries_source && let Some(run) = audit_run.as_ref() {
-            run.native_dispatched(self.client_id(), audit_tool.as_deref());
+            if generated_input {
+                // Retain original dispatch attribution without arming human input
+                // or question delivery for an agent-generated visible prompt.
+                run.dispatched(self.client_id());
+            } else {
+                run.native_dispatched(self.client_id(), audit_tool.as_deref());
+            }
+        }
+        if let Some(activity) = lifecycle_activity.as_mut() {
+            activity.dispatched();
         }
         let started = std::time::Instant::now();
         let result = match timeout(duration, response).await {
@@ -649,6 +697,11 @@ impl Session {
         } else {
             result
         };
+        // Capture only the actual authorized native receipt. Cancellation before
+        // this boundary drops the guard and retains uncertain worker outcomes.
+        if let Some(activity) = lifecycle_activity.take() {
+            activity.finish(&result);
+        }
         if audit_tool.is_some() {
             let outcome = if result
                 .as_ref()
@@ -714,6 +767,9 @@ impl Session {
             {
                 self.io_reply_advertised.store(true, Ordering::Release);
             }
+            if tools.iter().any(crate::http::prompt_hooks::advertises) {
+                self.prompt_hooks_advertised.store(true, Ordering::Release);
+            }
             if tools.iter().any(advertises_thread_events) {
                 self.thread_events_advertised.store(true, Ordering::Release);
             }
@@ -733,6 +789,13 @@ impl Session {
                     && crate::code_mode::tool_summaries::valid_native_receipt(value)))
         {
             self.tool_summary_advertised.store(true, Ordering::Release);
+        }
+        if audit_tool.as_deref() == Some(crate::http::prompt_hooks::TOOL)
+            && result
+                .as_ref()
+                .is_ok_and(crate::http::prompt_hooks::valid_native_receipt)
+        {
+            self.prompt_hooks_advertised.store(true, Ordering::Release);
         }
         if let Some(run) = audit_run.as_ref() {
             run.native_tool_summary_reply(
@@ -979,6 +1042,7 @@ impl Broker {
             chat_disabled: false,
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
+            prompt_hooks_advertised: AtomicBool::new(false),
             thread_events_advertised: AtomicBool::new(false),
             login: Mutex::new(Some(LoginCode {
                 value: login_code.into(),
@@ -1344,9 +1408,11 @@ impl Broker {
         let native_messages =
             registration.is_some() && peer.as_ref().is_some_and(|peer| peer.native_messages);
         let version_notice_supported = peer.as_ref().is_some_and(|peer| peer.version_notice);
-        let wait_display_supported = access_supported
-            && control_attribution
-            && peer.as_ref().is_some_and(|peer| peer.wait_display);
+        let wait_display_version = peer
+            .as_ref()
+            .and_then(|peer| peer.wait_display)
+            .filter(|_| access_supported && control_attribution);
+        let wait_display_supported = wait_display_version.is_some();
         let time_observation_supported = access_supported
             && control_attribution
             && peer.as_ref().is_some_and(|peer| peer.time_observation);
@@ -1391,8 +1457,14 @@ impl Broker {
         if version_notice_supported {
             capabilities.push(wire::versions::CAPABILITY.into());
         }
-        if wait_display_supported {
-            capabilities.push(wire::wait_display::CAPABILITY.into());
+        if let Some(version) = wait_display_version {
+            capabilities.push(
+                match version {
+                    wire::wait_display::Version::V3 => wire::wait_display::CAPABILITY,
+                    wire::wait_display::Version::V4 => wire::wait_display::DURABLE_CAPABILITY,
+                }
+                .into(),
+            );
         }
         if time_observation_supported {
             capabilities.push(wire::wait_display::TIME_CAPABILITY.into());
@@ -1422,6 +1494,7 @@ impl Broker {
                 chat_disabled,
                 tool_summary_advertised: AtomicBool::new(false),
                 io_reply_advertised: AtomicBool::new(false),
+                prompt_hooks_advertised: AtomicBool::new(false),
                 thread_events_advertised: AtomicBool::new(false),
                 login: Mutex::new((!restricted).then(|| LoginCode {
                     value: login_code.clone(),
@@ -1444,7 +1517,7 @@ impl Broker {
                 },
                 sender,
                 reports,
-                wait_display: wait_display::Hub::new(wait_display_supported),
+                wait_display: wait_display::Hub::new_version(wait_display_version),
                 slots: Semaphore::new(wire::MAX_INFLIGHT),
                 alive: AtomicBool::new(true),
                 ssh_user: user.clone(),
@@ -2326,6 +2399,7 @@ mod tests {
             chat_disabled: false,
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
+            prompt_hooks_advertised: AtomicBool::new(false),
             thread_events_advertised: AtomicBool::new(false),
             login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),

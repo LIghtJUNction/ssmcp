@@ -534,7 +534,7 @@ mod tests {
             agent_id: "agent_a".into(),
             name: "same name".into(),
             role: None,
-            status: "available".into(),
+            status: "idle".into(),
         }];
         let first = publish("one", "a", 0, "private", "agent_a");
         queue
@@ -626,7 +626,7 @@ mod tests {
                 agent_id: id.into(),
                 name: id.into(),
                 role: None,
-                status: "available".into(),
+                status: "idle".into(),
             })
             .collect()
     }

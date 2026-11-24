@@ -126,7 +126,7 @@ impl Kind {
         }
         // Only native message metadata routes prose to the conversation. Tool
         // bodies are not inspected recursively and cannot promote themselves.
-        if kind == "ssmcp.message"
+        if matches!(kind, "ssmcp.message" | "ssmcp.user_input")
             || matches!(event["role"].as_str(), Some("assistant" | "user"))
             || matches!(kind, "assistant" | "user")
             || (matches!(kind, "message_start" | "message_update" | "message_end")
@@ -147,6 +147,8 @@ pub(super) struct Meta {
     pub(super) scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
     pub(super) kind: Kind,
     pub(super) user: bool,
+    /// Input-side presentation does not grant human recall or approval rights.
+    pub(super) input: bool,
     pub(super) history: crate::runtime::call_scope::DisplayHistory,
     pub(super) history_message: bool,
     pub(super) message_id: Option<String>,
@@ -181,9 +183,10 @@ impl Meta {
         if meta.kind == Kind::Conversation {
             meta.plain_message = event["format"] == "plain";
             meta.user = event["role"] == "user"
-                || kind == "user"
+                || matches!(kind, "user" | "ssmcp.user_input")
                 || event["message"]["role"] == "user"
                 || rpc["method"] == "item/userMessage/delta";
+            meta.input = meta.user || (kind == "ssmcp.message" && event["kind"] == "input");
             meta.author = event["author"]
                 .as_str()
                 .unwrap_or("")
