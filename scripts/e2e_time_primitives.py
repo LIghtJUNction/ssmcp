@@ -20,12 +20,12 @@ import traceback
 import uuid
 
 import e2e_account_relay as relay
-from e2e_computer_controls import Session, save, until
+from e2e_pty_session import Session, save, until
 from e2e_dashboard import sha256
 
 DRAFT = "TIME_FIXTURE_DRAFT_保持不变"
-TIME_CAPABILITY = "time_observation_v1"
-SOURCES = ("e2e_time_primitives.py", "e2e_account_relay.py", "e2e_computer_controls.py", "e2e_dashboard.py")
+TIME_CAPABILITY = "time_observation_v2"
+SOURCES = ("e2e_time_primitives.py", "e2e_account_relay.py", "e2e_pty_session.py", "e2e_dashboard.py")
 
 
 def fingerprints():
@@ -53,7 +53,9 @@ def raw_input(session):
 
 
 def display(connection):
-    value = connection.call("ssmcp.ui.get", {"path": "/display"})["value"]
+    value = {"active": connection.call("ssmcp.ui.get", {"path": "/display/active"})["value"],
+             "panes": {"input": connection.call("ssmcp.ui.get", {"path": "/display/panes/input"})["value"]},
+             "timing": connection.call("ssmcp.ui.get", {"path": "/display/timing"})["value"]}
     assert value["active"] is True
     return value
 
@@ -85,8 +87,8 @@ def until_clock(sessions, session, row, label, predicate, description, timeout):
 
 
 def assert_draft(connection):
-    value = connection.call("ssmcp.ui.get", {"path": "/display/conversation"})["value"]
-    assert value["draft"]["text"] == DRAFT, value["draft"]
+    value = connection.call("ssmcp.ui.get", {"path": "/display/conversation/draft"})["value"]
+    assert value["text"] == DRAFT, value
 
 
 def failure(connection, name, arguments, expected):
@@ -144,7 +146,7 @@ def inside(args):
                        "tty_device": int(stat[4]), "foreground_pgrp": int(stat[5])}
                 assert tty["tty_device"] and all(tty[key] == session.process.pid for key in ("pgrp", "session", "foreground_pgrp"))
                 session.write(DRAFT.encode())
-                until(sessions, lambda: connection.call("ssmcp.ui.get", {"path": "/display/conversation"})["value"]["draft"]["text"] == DRAFT, "actual unsent draft")
+                until(sessions, lambda: connection.call("ssmcp.ui.get", {"path": "/display/conversation/draft"})["value"]["text"] == DRAFT, "actual unsent draft")
                 view = display(connection)
                 row = view["panes"]["input"]["row"] - 1
                 offered = session.state.capability_offers[-1]
@@ -159,7 +161,8 @@ def inside(args):
                     assert time_names == [], time_names
                     for name, arguments in (("ssmcp.time.now", {}),
                                             ("ssmcp.time.now", {"op": "interval", "start": {"unix_ms": 0}}),
-                                            ("ssmcp.time.wait", {"op": "list"})):
+                                            ("ssmcp.time.wait", {"op": "list"}),
+                                            ("ssmcp.time.prompt", {"op": "list"})):
                         failure(connection, name, arguments, "time_observation_not_negotiated:")
                     check("no_echo_hides_catalog_and_rejects_hardcoded_time_calls", names=time_names)
                     assert_draft(connection)
@@ -167,7 +170,7 @@ def inside(args):
                     sessions.remove(session)
                     continue
 
-                assert time_names == ["ssmcp.time.now", "ssmcp.time.wait"], time_names
+                assert time_names == ["ssmcp.time.now", "ssmcp.time.prompt", "ssmcp.time.wait"], time_names
                 assert tools["ssmcp.time.now"]["annotations"]["readOnlyHint"] is True
                 assert "interval" in tools["ssmcp.time.now"]["inputSchema"]["properties"]["op"]["enum"]
                 now = connection.call("ssmcp.time.now", {})
@@ -189,7 +192,13 @@ def inside(args):
                 until(sessions, lambda: "运行 00:" in divider(session, row), "running elapsed clock")
                 elapsed_frame = until_clock(sessions, session, row, "运行", lambda seconds: seconds >= 1,
                                             "running elapsed clock reaches one second", timeout=2.5)
-                state = connection.call("ssmcp.exec.status", {"job_id": job["job_id"]})
+                # The display and supervisor expose independent observations.
+                # Wait for the job's own elapsed receipt before comparing clocks.
+                def elapsed_receipt():
+                    value = connection.call("ssmcp.exec.status", {"job_id": job["job_id"]})
+                    return value if value["running"] and value["duration_ms"] >= 1000 else None
+
+                state = until(sessions, elapsed_receipt, "owned job reaches one elapsed second", timeout=2.5)
                 assert state["running"] and state["duration_ms"] >= 1000 and state["remaining_ms"] is None, state
                 assert clock_seconds(elapsed_frame, "运行") >= 1, elapsed_frame
                 native_time = [entry for entry in display(connection)["timing"]["active"] if entry["kind"] == "task"]

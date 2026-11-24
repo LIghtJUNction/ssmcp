@@ -22,6 +22,7 @@ fn sample(ms: u64, up: u64, down: u64) -> Sample {
 
 #[tokio::test]
 async fn link_metrics_real_datagrams_report_rates_then_disconnect() {
+    if crate::test_process::isolated("client::link_metrics::transport::tests::link_metrics_real_datagrams_report_rates_then_disconnect").await { return; }
     let (prepared, reporter) = pair();
     let (closed, receiver) = watch::channel(None);
     let (events, mut received) = mpsc::channel(8);

@@ -1,16 +1,29 @@
 import { byteLength, compareCounters } from './protocol.mjs';
 import { redact } from './presentation.mjs';
 
+const messageOwner = row => row.source?.recipient_agent_id ?? row.source?.agent_id
+  ?? (typeof row.metadata?.target === 'string' ? row.metadata.target : row.metadata?.target?.agent_id) ?? 'main';
+
 export class Timeline {
   constructor({ limit = 300, maxBytes = 768 * 1024 } = {}) {
     this.limit = limit; this.maxBytes = maxBytes; this.rows = []; this.bytes = 0; this.dropped = 0;
   }
   clear() { this.rows = []; this.bytes = 0; this.dropped = 0; }
   put(row) {
-    const safe = { ...row, metadata: redact(row.metadata) };
+    let safe = { ...row, metadata: redact(row.metadata) };
+    const existing = this.rows.findIndex(item => item.id === safe.id
+      || safe.messageId && item.messageId === safe.messageId && item.generation === safe.generation
+        && messageOwner(item) === messageOwner(safe));
+    if (existing >= 0) {
+      const previous = this.rows[existing];
+      if (previous.sequence && !safe.sequence) {
+        safe = { ...previous, queueStatus: safe.status };
+      } else if (previous.sequence) {
+        safe = { ...safe, id: previous.id, sequence: previous.sequence };
+      }
+    }
     const size = byteLength(safe);
     if (size > this.maxBytes) { this.dropped += 1; return false; }
-    const existing = this.rows.findIndex(item => item.id === safe.id);
     if (existing >= 0) { this.bytes -= this.rows[existing]._bytes; this.rows.splice(existing, 1); }
     safe._bytes = size;
     if (safe.sequence) {

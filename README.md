@@ -35,6 +35,10 @@ ssmcp 把多个已授权的 Astra Pro 会话连接到你的开发机，围绕同
 
 它的基本过程很直接：Agent 选中一个在线客户端，提交带参数的工具调用，客户端在本机执行，再返回结果、图片或可分页读取的输出 ID。工具的名称和参数来自实时目录；安装了一个产品，不代表它的全部内部功能都可以直接调用。
 
+长任务可保留同一个后台等待记录，HTTP 调用中断后继续读取结果；[定时提示词](docs/time-prompts.md)和 [Worker 事件订阅](docs/events.md#automatic-worker-subscriptions)把原操作的新情况带回会话。人类发言与自动提示统一显示在右侧，并可引用原消息继续回答。[等待与恢复](docs/await.md) · [输入与引用回复](docs/client-input.md#统一的输入与引用回复)
+
+Agent 使用 `working`、`idle`、`offline`、`dreaming`、`retiring` 五种生命周期状态。空闲维护只使用已有授权与现有 Agent；真实用户输入可以抢占维护，结果未知的工作保留原记录，不能自动重放。[生命周期与维护](docs/workers.md#member-lifecycle-and-bounded-maintenance)
+
 ## 快速开始
 
 ### 1. 选择客户端并安装
@@ -307,7 +311,7 @@ return await events.policy(controlId, {
 });
 ~~~
 
-`enabled`、`window_ms`、`kinds` 和 `strategy` 可调整；`strategy` 是建议文本。长等待使用公开 `await` 或 `events` 工具，默认且最长为 55 秒；JavaScript 内的 `events.wait` 默认且最多等待 1 秒。跨窗口保留 `wait_id`，处理事件后分别确认事件与等待结果游标；输入事件只负责唤醒，正文仍通过原输入通道领取。[订阅、绑定与等待示例](docs/events.md) · [JavaScript 短等待](docs/code-mode.md#events)
+`enabled`、`window_ms`、`kinds` 和 `strategy` 可调整；`strategy` 是建议文本。长等待使用公开 `await` 或 `events` 工具：`await` 的单次读取窗口默认 20 秒、最长 55 秒，公开 `events.wait` 默认且最长 55 秒；JavaScript 内的 `events.wait` 默认且最多等待 1 秒。后台观察期限与这些读取窗口分别计算。跨窗口保留 `wait_id`，处理事件后分别确认事件与等待结果游标；输入事件只负责唤醒，正文仍通过原输入通道领取。[订阅、绑定与等待示例](docs/events.md) · [JavaScript 短等待](docs/code-mode.md#events)
 
 ### 从命令行连接对话与传递结果
 

@@ -107,7 +107,7 @@ impl Fixture {
             control_attribution: true,
             native_messages: false,
             version_notice: false,
-            wait_display: false,
+            wait_display: None,
             time_observation: false,
             chat_disabled: false,
             openai_context: false,

@@ -351,6 +351,8 @@ fn safe_event<'a>(event: &'a Value, generation: &str) -> Result<(&'a str, Value)
             | "worker.cancelling"
             | "worker.completed"
             | "worker.idle"
+            | "worker.offline"
+            | "worker.retiring"
             | "worker.unknown"
     ) {
         return Err("worker_events_invalid_kind");
@@ -405,11 +407,16 @@ fn safe_event<'a>(event: &'a Value, generation: &str) -> Result<(&'a str, Value)
         "worker.cancelling" => status == Some("cancelling"),
         "worker.completed" => matches!(status, Some("completed" | "failed" | "cancelled")),
         "worker.unknown" => status == Some("unknown"),
-        "worker.idle" => status.is_none() && event["task_id"].is_null(),
+        "worker.idle" | "worker.offline" | "worker.retiring" => {
+            status.is_none() && event["task_id"].is_null()
+        }
         "worker.progress" => status.is_some() && activity.is_some(),
         _ => false,
     };
-    if !consistent || (kind != "worker.idle" && !event["task_id"].is_string()) {
+    if !consistent
+        || (!matches!(kind, "worker.idle" | "worker.offline" | "worker.retiring")
+            && !event["task_id"].is_string())
+    {
         return Err("worker_events_conflicting_status");
     }
     data.insert(
@@ -713,22 +720,30 @@ async fn pump(
         }
         for event in &page.events {
             let key = source_key(session.client_id(), &page.next.generation, event.seq);
-            if broker
-                .events
-                .publish_system(
-                    &binding.owner,
-                    session.client_id(),
-                    event.actor.as_deref(),
-                    &event.kind,
-                    event.data.clone(),
-                    (None, Some(&key)),
-                )
-                .is_err()
-            {
+            let published = broker.events.publish_system(
+                &binding.owner,
+                session.client_id(),
+                event.actor.as_deref(),
+                &event.kind,
+                event.data.clone(),
+                (None, Some(&key)),
+            );
+            let Ok(receipt) = published else {
                 // A published prefix is recoverable by the stable event keys.
                 // Do not advance past the page or replay any underlying work.
                 state(&source, "overflow", Some("events_source_journal_full"));
                 return;
+            };
+            if let Some(event_id) = receipt["event_id"].as_str() {
+                crate::http::events_tool::worker_subscriptions::published(
+                    &broker,
+                    &user,
+                    &token,
+                    &session,
+                    &binding,
+                    &event.kind,
+                    event_id,
+                );
             }
         }
         cursor = Some(page.next.clone());
@@ -772,6 +787,23 @@ mod tests {
             "next_cursor":{"generation":"pool_one","seq":next},
             "oldest_seq":1,"latest_seq":latest,"gap":false,
             "has_more":next<latest,"closed":false,"stopping":false,"status":status})
+    }
+
+    #[test]
+    fn offline_and_retiring_metadata_do_not_invent_task_outcomes() {
+        for kind in ["worker.offline", "worker.retiring"] {
+            let input = json!({
+                "type":kind,"seq":1,"generation":"pool_one","at_ms":100,
+                "slot":0,"epoch":1,"participant_id":"agent_1",
+                "task_id":null,"task_status":null,"attempt":null,"activity":null
+            });
+            assert_eq!(safe_event(&input, "pool_one").unwrap().0, kind);
+            let mut forged = input;
+            forged["task_id"] = json!("task_1");
+            forged["task_status"] = json!("completed");
+            forged["attempt"] = json!(1);
+            assert!(safe_event(&forged, "pool_one").is_err());
+        }
     }
 
     #[test]

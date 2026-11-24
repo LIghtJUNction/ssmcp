@@ -511,6 +511,76 @@ impl Hub {
         Ok(response)
     }
 
+    /// Change only the selection of an existing managed subscription. Its
+    /// original actor, source clients and acknowledged cursor cannot change.
+    /// Previously attempted deliveries no longer authorize an ACK of the new
+    /// selection until the caller reads it again.
+    pub(crate) fn update_kinds(
+        &self,
+        actor: &Actor,
+        subscription_id: &str,
+        kinds: Vec<String>,
+    ) -> Result<Value, String> {
+        actor.validate()?;
+        let mut state = self.locked();
+        let now = Instant::now();
+        let journal = Self::existing(&mut state, &actor.owner)?;
+        journal.prune(now);
+        let subscription = journal.subscription(actor, subscription_id)?;
+        if subscription.closed {
+            return Err("events_client_closed: managed subscription source is closed".into());
+        }
+        let mut filter = subscription.filter.clone();
+        filter.kinds = kinds;
+        let filter = filter.normalized(actor)?;
+        let subscription = journal
+            .subscriptions
+            .get_mut(subscription_id)
+            .expect("validated subscription");
+        if subscription.filter != filter {
+            subscription.filter = filter;
+            subscription.delivered = subscription.cursor;
+        }
+        journal.touch(subscription_id, now);
+        let result = journal.descriptor(
+            subscription_id,
+            journal
+                .subscriptions
+                .get(subscription_id)
+                .expect("validated subscription"),
+        );
+        drop(state);
+        self.changed.notify_waiters();
+        Ok(result)
+    }
+
+    /// A native publication may wake a managed member only if the actual
+    /// retained event is visible, selected and still beyond that actor's ACK.
+    pub(crate) fn contains_pending_event(
+        &self,
+        actor: &Actor,
+        subscription_id: &str,
+        event_id: &str,
+    ) -> Result<bool, String> {
+        actor.validate()?;
+        let mut state = self.locked();
+        let journal = Self::existing(&mut state, &actor.owner)?;
+        journal.prune(Instant::now());
+        let subscription = journal.subscription(actor, subscription_id)?;
+        if subscription.closed {
+            return Ok(false);
+        }
+        journal.check_cursor(subscription.cursor)?;
+        let recipient = format!("{}:{}", actor.client_id, actor.agent_id);
+        Ok(journal.events.iter().any(|event| {
+            event.value["id"].as_str() == Some(event_id)
+                && event.seq > subscription.cursor
+                && event.visible_to(&recipient)
+                && subscription.filter.matches(event)
+                && !event.excluded_wait(actor, false, None)
+        }))
+    }
+
     pub(crate) fn read(
         &self,
         actor: &Actor,

@@ -22,17 +22,31 @@ fn successful() -> Value {
         "structuredContent":{"result":{"ready":true}}})
 }
 
-fn configure_dreaming(target: &EligibleUserResponse) {
+async fn configure_dreaming(target: &EligibleUserResponse) -> String {
     let binding = target.binding.as_ref().unwrap();
-    coordination_policy::effective(
-        &binding.owner,
-        target.session.client_id(),
-        &binding.agent_id,
-        Some(&json!({"dreaming":{
-            "round_id":"fixture-round-1","repository":"project","budget_ms":1000
-        }})),
-    )
-    .unwrap();
+    let current = target
+        .session
+        .collaboration
+        .lifecycle_snapshot(&binding.owner, &binding.agent_id, &binding.token)
+        .unwrap();
+    let updated = target
+        .session
+        .collaboration
+        .dispatch(
+            &binding.owner,
+            "update",
+            json!({
+                "agent_id":binding.agent_id,"token":binding.token,
+                "expected_revision":current["lifecycle"]["revision"],
+                "status":"dreaming","maintenance_budget_ms":5000,
+            }),
+        )
+        .await
+        .unwrap();
+    updated["agent"]["lifecycle"]["maintenance"]["round_id"]
+        .as_str()
+        .unwrap()
+        .into()
 }
 
 async fn quiet_pool_reply(fixture: &TestFixture) -> Value {
@@ -163,18 +177,13 @@ async fn prepared(role: &str) -> (TestFixture, CodeRunReport, Vec<EligibleUserRe
 fn publish_pending(target: &EligibleUserResponse) {
     target
         .session
-        .steering
-        .command(
-            target.session.client_id(),
-            target.session.collaboration.presence().unwrap(),
-            wire::SteeringCommand::Publish {
-                command_id: "publish-worker-hint-fixture".into(),
-                message_id: "worker-hint-fixture".into(),
-                expected_revision: 0,
-                text: "Keep this genuine input queued during the passive worker probe.".into(),
-                target: target.binding.as_ref().unwrap().agent_id.clone(),
-            },
-        )
+        .steering_command_for_test(wire::SteeringCommand::Publish {
+            command_id: "publish-worker-hint-fixture".into(),
+            message_id: "worker-hint-fixture".into(),
+            expected_revision: 0,
+            text: "Keep this genuine input queued during the passive worker probe.".into(),
+            target: target.binding.as_ref().unwrap().agent_id.clone(),
+        })
         .unwrap();
 }
 
@@ -196,9 +205,48 @@ fn assert_pending(target: &EligibleUserResponse) {
     assert_eq!(message.state, wire::SteeringState::Queued);
 }
 
+/// Drive the real Session request channel, including each actual input write.
+/// A guessed number of UI calls cannot make a missing publication look accepted.
+async fn append_with_native(
+    fixture: &TestFixture,
+    report: &CodeRunReport,
+    before: Value,
+    eligible: &[EligibleUserResponse],
+    reply: Value,
+    after_probe: impl FnOnce(),
+) -> (Value, Value) {
+    let action = append(report, before, eligible);
+    tokio::pin!(action);
+    let mut probe_reply = Some(reply);
+    let mut after_probe = Some(after_probe);
+    let mut probe = None;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            tokio::select! {
+                result = &mut action => return (result, probe.expect("actual pool probe")),
+                operation = fixture.native_reply_with(|operation| {
+                    if operation["name"] == "ssmcp.ui.get" {
+                        assert_probe(operation.clone());
+                        after_probe.take().expect("one pool probe")();
+                        probe_reply.take().expect("one pool response")
+                    } else {
+                        TestFixture::input_receipt(operation)
+                    }
+                }) => {
+                    if operation["name"] == "ssmcp.ui.get" {
+                        probe = Some(operation);
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .unwrap()
+}
+
 #[tokio::test]
 async fn real_session_probe_preserves_errors_and_does_not_consume_user_input() {
-    let (mut fixture, report, eligible) = prepared("main").await;
+    let (fixture, report, eligible) = prepared("main").await;
     assert!(is_coordinator(&report, &eligible[0]));
     publish_pending(&eligible[0]);
 
@@ -224,15 +272,22 @@ async fn real_session_probe_preserves_errors_and_does_not_consume_user_input() {
         .unwrap();
     assert!(!is_coordinator(&mismatch, &eligible[0]));
 
+    let pool = fixture
+        .broker
+        .test_register_identity(crate::broker::IDENTITY_RESOURCE, fixture.actor.clone())
+        .await;
+    let mut availability = pool_reply();
+    availability["structuredContent"]["value"]["client_id"] = json!(pool.client_id());
     let before = original();
-    let (appended, operation) = tokio::time::timeout(Duration::from_secs(2), async {
-        tokio::join!(
-            append(&report, before.clone(), &eligible),
-            fixture.native_reply(pool_reply())
-        )
-    })
-    .await
-    .unwrap();
+    let (appended, operation) = append_with_native(
+        &fixture,
+        &report,
+        before.clone(),
+        &eligible,
+        availability,
+        || {},
+    )
+    .await;
     assert_probe(operation);
     assert_eq!(appended["isError"], before["isError"]);
     assert_eq!(appended["content"][0], before["content"][0]);
@@ -247,7 +302,7 @@ async fn real_session_probe_preserves_errors_and_does_not_consume_user_input() {
     let notice = &appended["structuredContent"]["worker_reminders"][0];
     assert_eq!(notice["client_id"], fixture.session.client_id());
     assert_eq!(notice["agent_id"], binding.agent_id);
-    assert_eq!(notice["worker_client_id"], "b".repeat(64));
+    assert_eq!(notice["worker_client_id"], pool.client_id());
     assert_eq!(notice["standby"], 2);
     assert!(
         appended["structuredContent"]
@@ -260,31 +315,30 @@ async fn real_session_probe_preserves_errors_and_does_not_consume_user_input() {
 
 #[tokio::test]
 async fn real_probe_error_and_revocation_leave_the_original_response_intact() {
-    let (mut fixture, report, eligible) = prepared("coordinator").await;
+    let (fixture, report, eligible) = prepared("coordinator").await;
     let before = without_input();
-    let (failed, operation) =
-        tokio::time::timeout(Duration::from_secs(2), async {
-            tokio::join!(append(&report, before.clone(), &eligible), fixture.native_reply(json!({
-            "isError":true,"content":[{"type":"text","text":"unknown UI path: /worker_pool"}]
-        })))
-        })
-        .await
-        .unwrap();
+    let (failed, operation) = append_with_native(
+        &fixture,
+        &report,
+        before.clone(),
+        &eligible,
+        json!({"isError":true,"content":[{"type":"text","text":"unknown UI path: /worker_pool"}]}),
+        || {},
+    )
+    .await;
     assert_probe(operation);
     assert_policy_only(&failed, &before);
-    let (mut fixture, report, eligible) = prepared("lead").await;
+    let (fixture, report, eligible) = prepared("lead").await;
     publish_pending(&eligible[0]);
-    let reply = async {
-        let operation = fixture.native_reply(pool_reply()).await;
-        // Same poll as sending the native response, before append can resume.
-        fixture.revoke_access();
-        operation
-    };
-    let (revoked, operation) = tokio::time::timeout(Duration::from_secs(2), async {
-        tokio::join!(append(&report, before.clone(), &eligible), reply)
-    })
-    .await
-    .unwrap();
+    let (revoked, operation) = append_with_native(
+        &fixture,
+        &report,
+        before.clone(),
+        &eligible,
+        pool_reply(),
+        || fixture.revoke_access(),
+    )
+    .await;
     assert_probe(operation);
     assert_eq!(revoked, before);
     assert_pending(&eligible[0]);
@@ -330,20 +384,19 @@ async fn actual_role_and_total_probe_deadline_gate_session_requests() {
 
 #[tokio::test]
 async fn input_arriving_during_probe_preempts_dreaming_without_consuming_it() {
-    let (mut fixture, report, eligible) = prepared("main").await;
-    configure_dreaming(&eligible[0]);
+    let (fixture, report, eligible) = prepared("main").await;
+    let round_id = configure_dreaming(&eligible[0]).await;
     let quiet = quiet_pool_reply(&fixture).await;
     let before = successful();
-    let reply = async {
-        let operation = fixture.native_reply(quiet.clone()).await;
-        publish_pending(&eligible[0]);
-        operation
-    };
-    let (blocked, operation) = tokio::time::timeout(Duration::from_secs(2), async {
-        tokio::join!(append(&report, before.clone(), &eligible), reply)
-    })
-    .await
-    .unwrap();
+    let (blocked, operation) = append_with_native(
+        &fixture,
+        &report,
+        before.clone(),
+        &eligible,
+        quiet.clone(),
+        || publish_pending(&eligible[0]),
+    )
+    .await;
     assert_probe(operation);
     assert!(
         blocked["structuredContent"]
@@ -353,8 +406,8 @@ async fn input_arriving_during_probe_preempts_dreaming_without_consuming_it() {
     assert_pending(&eligible[0]);
     assert!(!blocked.to_string().contains("Keep this genuine input"));
 
-    // Simulate handling that exact input before the next ordinary call. The
-    // suppressed hint must not have spent the round's delivery opportunity.
+    // Handling input does not resurrect a cancelled maintenance request.
+    // A subsequent explicit authorized request receives a different round ID.
     let target = &eligible[0];
     let delivered = target.session.steering.claim(
         target.session.client_id(),
@@ -364,36 +417,43 @@ async fn input_arriving_during_probe_preempts_dreaming_without_consuming_it() {
         65536,
     );
     assert_eq!(delivered.len(), 1);
-    let (ready, operation) = tokio::time::timeout(Duration::from_secs(2), async {
-        tokio::join!(
-            append(&report, before.clone(), &eligible),
-            fixture.native_reply(quiet.clone())
-        )
-    })
-    .await
-    .unwrap();
+    let binding = target.binding.as_ref().unwrap();
+    let preempted = target
+        .session
+        .collaboration
+        .lifecycle_snapshot(&binding.owner, &binding.agent_id, &binding.token)
+        .unwrap();
+    assert_eq!(preempted["status"], "working");
+    assert_eq!(preempted["lifecycle"]["maintenance"]["status"], "cancelled");
+    let fresh_round_id = configure_dreaming(target).await;
+    assert_ne!(fresh_round_id, round_id);
+    let (ready, operation) = append_with_native(
+        &fixture,
+        &report,
+        before.clone(),
+        &eligible,
+        quiet.clone(),
+        || {},
+    )
+    .await;
     assert_probe(operation);
     let hint = &ready["structuredContent"]["coordination_hints"][0];
-    assert_eq!(hint["dreaming_round"]["round_id"], "fixture-round-1");
-    assert_eq!(hint["dreaming_round"]["budget_ms"], 1000);
+    assert_eq!(hint["dreaming_round"]["round_id"], fresh_round_id);
+    assert_eq!(hint["dreaming_round"]["budget_ms"], 5000);
+    assert_eq!(hint["provenance"], "agent_lifecycle");
+    assert_eq!(hint["completion_permission"], false);
     assert!(ready.to_string().len() - before.to_string().len() <= MAX_APPEND_BYTES);
 
-    let (repeated, operation) = tokio::time::timeout(Duration::from_secs(2), async {
-        tokio::join!(
-            append(&report, before.clone(), &eligible),
-            fixture.native_reply(quiet)
-        )
-    })
-    .await
-    .unwrap();
+    let (repeated, operation) =
+        append_with_native(&fixture, &report, before.clone(), &eligible, quiet, || {}).await;
     assert_probe(operation);
     assert_eq!(repeated, before);
 }
 
 #[tokio::test]
-async fn busy_pool_preserves_the_round_until_a_real_standby_worker_is_available() {
-    let (mut fixture, report, eligible) = prepared("main").await;
-    configure_dreaming(&eligible[0]);
+async fn lifecycle_request_can_be_observed_without_standby_workers() {
+    let (fixture, report, eligible) = prepared("main").await;
+    let round_id = configure_dreaming(&eligible[0]).await;
     let mut available = quiet_pool_reply(&fixture).await;
     available["structuredContent"]["value"]["idle"] = json!(2);
     available["structuredContent"]["value"]["working"] = json!(1);
@@ -401,45 +461,53 @@ async fn busy_pool_preserves_the_round_until_a_real_standby_worker_is_available(
     busy["structuredContent"]["value"]["idle"] = json!(0);
     busy["structuredContent"]["value"]["working"] = json!(3);
     let before = successful();
-    let (blocked, operation) = tokio::time::timeout(Duration::from_secs(2), async {
-        tokio::join!(
-            append(&report, before.clone(), &eligible),
-            fixture.native_reply(busy)
-        )
-    })
-    .await
-    .unwrap();
-    assert_probe(operation);
-    assert!(blocked["structuredContent"]["coordination_hints"][0]["dreaming_round"].is_null());
-
-    // The ordinary wait hint above was cached, but real standby capacity offers
-    // the unspent explicit round without waiting for the thirty-second throttle.
-    let (ready, operation) = tokio::time::timeout(Duration::from_secs(2), async {
-        tokio::join!(
-            append(&report, before.clone(), &eligible),
-            fixture.native_reply(available)
-        )
-    })
-    .await
-    .unwrap();
+    let (blocked, operation) =
+        append_with_native(&fixture, &report, before.clone(), &eligible, busy, || {}).await;
     assert_probe(operation);
     assert_eq!(
-        ready["structuredContent"]["coordination_hints"][0]["dreaming_round"]["round_id"],
-        "fixture-round-1"
+        blocked["structuredContent"]["coordination_hints"][0]["dreaming_round"]["round_id"],
+        round_id
+    );
+    assert!(
+        blocked["structuredContent"]
+            .get("worker_reminders")
+            .is_none()
+    );
+
+    // A later capacity notice does not reissue the already delivered request.
+    let (ready, operation) = append_with_native(
+        &fixture,
+        &report,
+        before.clone(),
+        &eligible,
+        available,
+        || {},
+    )
+    .await;
+    assert_probe(operation);
+    assert!(
+        ready["structuredContent"]
+            .get("coordination_hints")
+            .is_none()
+    );
+    assert!(
+        ready["structuredContent"]["worker_reminders"]
+            .as_array()
+            .is_some_and(|items| items.len() == 1)
     );
     assert!(ready.to_string().len() - before.to_string().len() <= MAX_APPEND_BYTES);
 }
 
 #[tokio::test]
-async fn unknown_pool_authority_and_existing_errors_do_not_offer_dreaming() {
+async fn maintenance_uses_only_main_authority_and_yields_to_errors_or_input() {
     for failure in [
         "unavailable",
         "unauthorized",
         "native_error",
         "delivered_input",
     ] {
-        let (mut fixture, report, eligible) = prepared("main").await;
-        configure_dreaming(&eligible[0]);
+        let (fixture, report, eligible) = prepared("main").await;
+        let round_id = configure_dreaming(&eligible[0]).await;
         let mut reply = quiet_pool_reply(&fixture).await;
         let mut before = successful();
         match failure {
@@ -454,20 +522,21 @@ async fn unknown_pool_authority_and_existing_errors_do_not_offer_dreaming() {
             }
             _ => unreachable!(),
         }
-        let (after, operation) = tokio::time::timeout(Duration::from_secs(2), async {
-            tokio::join!(
-                append(&report, before.clone(), &eligible),
-                fixture.native_reply(reply)
-            )
-        })
-        .await
-        .unwrap();
+        let (after, operation) =
+            append_with_native(&fixture, &report, before.clone(), &eligible, reply, || {}).await;
         assert_probe(operation);
-        assert!(
-            after["structuredContent"]["coordination_hints"][0]["dreaming_round"].is_null(),
-            "{failure}"
-        );
-        assert!(!after.to_string().contains("Dreaming round fixture-round-1"));
+        let hint = &after["structuredContent"]["coordination_hints"][0];
+        if matches!(failure, "unavailable" | "unauthorized") {
+            assert!(hint.is_object(), "{failure}: {after}");
+            assert_eq!(hint["dreaming_round"]["round_id"], round_id);
+            assert_eq!(
+                hint["subscription_filter"]["client_ids"],
+                json!([eligible[0].session.client_id()])
+            );
+            assert!(after["structuredContent"].get("worker_reminders").is_none());
+        } else {
+            assert!(hint["dreaming_round"].is_null(), "{failure}");
+        }
         assert_eq!(after["isError"], before["isError"]);
         assert_eq!(
             after["structuredContent"]["user_messages"],
@@ -493,18 +562,13 @@ async fn pending_input_observation_is_recipient_scoped_and_never_claims() {
         .unwrap();
     let mut snapshot = target
         .session
-        .steering
-        .command(
-            target.session.client_id(),
-            target.session.collaboration.presence().unwrap(),
-            wire::SteeringCommand::Publish {
-                command_id: "other-input-publish".into(),
-                message_id: "other-input".into(),
-                expected_revision: 0,
-                text: "private other participant input".into(),
-                target: other["agent_id"].as_str().unwrap().into(),
-            },
-        )
+        .steering_command_for_test(wire::SteeringCommand::Publish {
+            command_id: "other-input-publish".into(),
+            message_id: "other-input".into(),
+            expected_revision: 0,
+            text: "private other participant input".into(),
+            target: other["agent_id"].as_str().unwrap().into(),
+        })
         .unwrap();
     assert!(!input_pending(target, &successful()));
     assert_eq!(snapshot.messages[0].state, wire::SteeringState::Queued);
@@ -563,4 +627,203 @@ fn assert_policy_only(after: &Value, before: &Value) {
     content.truncate(original_content.len());
     assert_eq!(&preserved, before);
     assert!(after.to_string().len() - before.to_string().len() <= MAX_APPEND_BYTES);
+}
+
+#[tokio::test]
+async fn visible_input_keeps_the_original_write_after_observation_and_never_replays_unknown() {
+    let (fixture, report, eligible) = prepared("main").await;
+    let target = &eligible[0];
+    let publication = Publication::new(
+        target,
+        "delayed-original",
+        "Inspect the original operation".into(),
+        "system_hook",
+    )
+    .unwrap();
+    publication.start(&report, target);
+    assert!(!publication.recorded_by(tokio::time::Instant::now()).await);
+    let operation = fixture.native_reply_with(TestFixture::input_receipt).await;
+    assert_eq!(
+        operation["arguments"]["text"],
+        "Inspect the original operation"
+    );
+    assert!(
+        publication
+            .recorded_by(tokio::time::Instant::now() + Duration::from_secs(1))
+            .await
+    );
+    publication.start(&report, target);
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(25),
+            fixture.native_reply_with(TestFixture::input_receipt)
+        )
+        .await
+        .is_err()
+    );
+
+    let unknown = Publication::new(
+        target,
+        "uncertain-original",
+        "Keep the unknown effect".into(),
+        "system_hook",
+    )
+    .unwrap();
+    unknown.start(&report, target);
+    fixture
+        .native_reply_with(|operation| {
+            assert_eq!(operation["name"], "ssmcp.ui.message");
+            json!({"isError":true,"content":[{"type":"text",
+            "text":"message delivery worker stopped"}]})
+        })
+        .await;
+    assert!(
+        !unknown
+            .recorded_by(tokio::time::Instant::now() + Duration::from_secs(1))
+            .await
+    );
+    assert!(!unknown.replaceable());
+    for _ in 0..3 {
+        unknown.start(&report, target);
+    }
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(25),
+            fixture.native_reply_with(TestFixture::input_receipt)
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn a_reserved_round_cannot_be_replaced_before_dispatch_or_after_unknown() {
+    let (fixture, report, eligible) = prepared("main").await;
+    let target = &eligible[0];
+    let binding = target.binding.as_ref().unwrap();
+    let round_id = configure_dreaming(target).await;
+    let policy = coordination_policy::effective(
+        &binding.owner,
+        target.session.client_id(),
+        &binding.agent_id,
+        None,
+    )
+    .unwrap();
+    let scope = Scope {
+        connection: Arc::as_ptr(&target.session) as usize,
+        client_id: target.session.client_id().into(),
+        owner: binding.owner.clone(),
+        agent_id: binding.agent_id.clone(),
+        pool_id: "".into(),
+    };
+    let mut cache = GuidanceCache::default();
+    // Collector A has reserved its original handle but has not started it.
+    let first = cache
+        .reserve(
+            &scope,
+            &policy,
+            Some(round_id.clone()),
+            json!({"message":"Original requested maintenance"}),
+            target,
+        )
+        .unwrap();
+    // Collector B's error response chooses ordinary guidance in the same scope.
+    assert!(
+        cache
+            .reserve(
+                &scope,
+                &policy,
+                None,
+                json!({"message":"Ordinary guidance"}),
+                target
+            )
+            .is_none()
+    );
+    assert!(cache.pending[&scope].publication.same(&first.publication));
+    first.publication.start(&report, target);
+    fixture.native_reply_with(|operation| {
+        assert_eq!(operation["arguments"]["input_origin"], "maintenance");
+        assert_eq!(operation["arguments"]["text"], "Original requested maintenance");
+        json!({"isError":true,"content":[{"type":"text","text":"message delivery worker stopped"}]})
+    }).await;
+    assert!(
+        !first
+            .publication
+            .recorded_by(tokio::time::Instant::now() + Duration::from_secs(1))
+            .await
+    );
+    assert!(
+        cache
+            .reserve(
+                &scope,
+                &policy,
+                None,
+                json!({"message":"Ordinary guidance"}),
+                target
+            )
+            .is_none()
+    );
+    let original = cache
+        .reserve(
+            &scope,
+            &policy,
+            Some(round_id),
+            json!({"message":"Original requested maintenance"}),
+            target,
+        )
+        .unwrap();
+    assert!(original.publication.same(&first.publication));
+    original.publication.start(&report, target);
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(25),
+            fixture.native_reply_with(TestFixture::input_receipt)
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn linked_pool_revocation_during_visible_guidance_withholds_the_hint() {
+    let (fixture, report, eligible) = prepared("main").await;
+    configure_dreaming(&eligible[0]).await;
+    let pool = fixture
+        .broker
+        .test_register_identity(crate::broker::IDENTITY_RESOURCE, fixture.actor.clone())
+        .await;
+    let mut probe = pool_reply();
+    probe["structuredContent"]["value"]["client_id"] = json!(pool.client_id());
+    probe["structuredContent"]["value"]["idle"] = json!(0);
+    probe["structuredContent"]["value"]["working"] = json!(3);
+    let before = successful();
+    let action = append(&report, before.clone(), &eligible);
+    tokio::pin!(action);
+    let mut probe = Some(probe);
+    let mut publications = 0usize;
+    let after = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            tokio::select! {
+                result = &mut action => break result,
+                _operation = fixture.native_reply_with(|operation| {
+                    if operation["name"] == "ssmcp.ui.get" {
+                        probe.take().unwrap()
+                    } else {
+                        assert_eq!(operation["arguments"]["input_origin"], "maintenance");
+                        publications += 1;
+                        TestFixture::revoke_session_access(&pool);
+                        TestFixture::input_receipt(operation)
+                    }
+                }) => {}
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        publications, 1,
+        "revocation occurs after the actual native write"
+    );
+    assert_eq!(after, before);
+    assert!(response_authorization(&report, &eligible[0]).is_some());
 }

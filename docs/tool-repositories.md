@@ -162,7 +162,7 @@ selection cause explicit errors.
 
 Dreaming uses the existing authenticated execution, task, filesystem and Git
 operations to maintain an authorized local tool repository. An optional
-[coordinator policy](events.md#one-optional-dreaming-round) names one round, its
+[coordinator policy](events.md#a-bounded-lifecycle-maintenance-round) names one round, its
 project or global layer, and a budget of at most 55 seconds. The response hook
 offers that round only when its observed input and pool conditions permit it.
 Neither setting the policy nor initializing a repository launches a model or

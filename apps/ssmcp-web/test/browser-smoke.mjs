@@ -3,6 +3,8 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { capabilities, response, eventPage, observation, GENERATION } from './fixtures.mjs';
@@ -26,10 +28,25 @@ try {
   const caps = capabilities({ resources: ['runtime', 'threads', 'conversation', 'chat.queue', 'terminals', 'workers'], commands: ['chat.send', 'terminal.write', 'terminal.resize', 'workers.resize'] });
   const source = { kind: 'main', client_id: 'real.fixture.client', connection: '9007199254740993', request_id: '12' };
   const worker = { slot: 0, epoch: '4', state: 'working', task_id: 'fixture.actual.task', task_summary: '核对原生工作状态', progress: '正在读取 fixture', registered: true, total_work_ms: '42000', current_task_elapsed_ms: '3000', logs_omitted: true };
+  const inputCases = [
+    { origin: 'human', text: '用户要求：检查多行输入\n@fixture-missing.txt $fixture_skill /reload' },
+    { origin: 'system_hook', text: '系统提示：继续当前任务' },
+    { origin: 'agent_timer', text: '定时提示：原任务仍在执行' },
+    { origin: 'worker_event', text: 'Worker 事件：检查已经完成' },
+    { origin: 'maintenance', text: '维护提示：处理有界待办' },
+  ].map((value, index) => ({ ...value, id: 'native_' + String(index + 1).padStart(32, '0') }));
+  const inputHistory = inputCases.map((item, index) => ({
+    sequence: (9007199254740987n + BigInt(index)).toString(), kind: 'input', text: item.text,
+    source: { ...source, kind: item.origin === 'human' ? 'local_human' : 'thread',
+      agent_id: item.origin === 'human' ? null : 'actual.agent' },
+    value: { type: item.origin === 'human' ? 'ssmcp.user_input' : 'ssmcp.message',
+      kind: 'input', role: item.origin === 'human' ? 'user' : 'tool', text: item.text,
+      message_id: item.id, input_origin: item.origin, completion_permission: false },
+  }));
   const states = resource => ({
     runtime: { backend_active: true, backend_generation: '2', live_cursor: cursor, retention: 'live_process_memory' },
     threads: { client_id: 'fixture.client', connected: true, chat_enabled: true, can_send: true, reloading: false, agents: [{ agent_id: 'actual.agent', name: '主协调者', role: 'main', status: 'working' }], next_offset: 1, has_more: false },
-    conversation: { schema_version: 1, scope: { kind: 'process' }, events: [{ sequence: '9007199254740992', kind: 'answer', text: '来自原生历史的 fixture 文本', source, value: { type: 'ssmcp.message' } }], next_cursor: '9007199254740993', start_cursor: '9007199254740992', end_cursor: '9007199254740993', has_more: false, gap: false, retention: 'live_process_memory' },
+    conversation: { schema_version: 1, scope: { kind: 'process' }, events: [...inputHistory, { sequence: '9007199254740992', kind: 'answer', text: '来自原生历史的 fixture 文本', source, value: { type: 'ssmcp.message', kind: 'answer', message_id: 'native_00000000000000000000000000000006' } }], next_cursor: '9007199254740993', start_cursor: '9007199254740987', end_cursor: '9007199254740993', has_more: false, gap: false, retention: 'live_process_memory' },
     'chat.queue': { client_id: 'fixture.client', items: queue, next_offset: queue.length, has_more: false },
     terminals: { terminals: [{ terminal_id: 'actual.terminal', name: '主终端', cwd: '/fixture/project', selected: true }], selected: 'actual.terminal', default_terminal_id: 'actual.terminal', max_terminals: 4 },
     workers: { pool_generation: 'actual.pool', total: 1, desired_total: 1, registered_workers: 1, working: 1, idle: 0, offline: 0, retiring: 0, queued: 0, slots: [worker], slot_count: 1, offset: 0, next_offset: null },
@@ -88,6 +105,75 @@ try {
   assert.equal(await page.locator('#pairing-token').inputValue(), '');
   assert.deepEqual(await page.evaluate(() => [localStorage.length, sessionStorage.length]), [0, 0]);
 
+  async function viewport(width, height) {
+    await page.setViewportSize({ width, height });
+    await page.waitForFunction(() => {
+      const box = document.getElementById('sidebar').getBoundingClientRect();
+      return innerWidth <= 700 ? box.right <= 1 : Math.abs(box.left) <= 1;
+    });
+  }
+  const layoutEvidence = [];
+  assert.equal(await page.locator('.timeline-row.is-input').count(), inputCases.length);
+  for (const width of [1365, 390]) {
+    await viewport(width, 1600);
+    const bounds = await page.locator('#timeline').boundingBox();
+    for (const item of inputCases) {
+      const row = page.locator('.timeline-row').filter({ has: page.getByText(item.text, { exact: true }) });
+      const box = await row.boundingBox();
+      assert.equal(await row.evaluate(node => node.classList.contains('is-input')), true);
+      assert.ok(box.x > bounds.x && Math.abs(box.x + box.width - bounds.x - bounds.width) <= 2,
+        item.origin + ' must align to the right edge at ' + width);
+      assert.equal(await row.evaluate(node => node._row.messageId), item.id);
+      layoutEvidence.push({ width, origin: item.origin, message_id: item.id, bounds: box });
+    }
+  }
+  await viewport(1365, 1600);
+  const originalDraft = '保留原草稿🦀\n第二行回答';
+  const human = inputCases[0];
+  const humanRow = page.locator('.timeline-row').filter({ has: page.getByText(human.text, { exact: true }) });
+  await page.locator('#chat-text').fill(originalDraft);
+  await humanRow.locator('.reply-button').click();
+  const quotedHuman = '> 回复消息 ' + human.id + '\n> ' + human.text.replaceAll('\n', '\n> ') + '\n\n' + originalDraft;
+  assert.equal(await page.locator('#chat-text').inputValue(), quotedHuman);
+  assert.equal(commands.length, 0, 'reply button preserves draft without sending');
+  assert.equal(await page.locator('#chat-text').evaluate(node => document.activeElement === node
+    && node.selectionStart === node.value.length && node.selectionEnd === node.value.length), true);
+
+  const system = inputCases[1];
+  const systemRow = page.locator('.timeline-row').filter({ has: page.getByText(system.text, { exact: true }) });
+  await page.locator('#chat-text').fill('选段回复草稿');
+  await systemRow.locator('.event-text').evaluate(node => {
+    const start = node.textContent.indexOf('继续当前任务');
+    const range = document.createRange(); range.setStart(node.firstChild, start);
+    range.setEnd(node.firstChild, start + '继续当前任务'.length);
+    window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+  });
+  await systemRow.locator('.reply-button').click();
+  assert.equal(await page.locator('#chat-text').inputValue(),
+    '> 回复消息 ' + system.id + '\n> 继续当前任务\n\n选段回复草稿');
+  await page.evaluate(() => window.getSelection().removeAllRanges());
+  await page.locator('#chat-text').fill(originalDraft);
+  await systemRow.focus(); await page.keyboard.press('r');
+  assert.equal(await page.locator('#chat-text').inputValue(),
+    '> 回复消息 ' + system.id + '\n> ' + system.text + '\n\n' + originalDraft);
+  assert.equal(commands.length, 0, 'R shortcut changes only the editable draft');
+  await page.locator('#chat-text').fill(quotedHuman);
+  if (process.env.WEB_TEST_EVIDENCE) {
+    await mkdir(process.env.WEB_TEST_EVIDENCE, { recursive: false });
+    for (const [label, width] of [['desktop', 1365], ['narrow', 390]]) {
+      await viewport(width, 1600);
+      await page.locator('#timeline-scroller').evaluate(node => { node.scrollTop = 0; });
+      await page.locator('#chat-text').evaluate(node => { node.scrollTop = 0; });
+      await page.screenshot({ path: join(process.env.WEB_TEST_EVIDENCE, 'inputs-reply-' + label + '.png'), animations: 'disabled' });
+    }
+    await writeFile(join(process.env.WEB_TEST_EVIDENCE, 'input-layout.json'), JSON.stringify({
+      scope: 'Actual Chromium renderer with isolated explicit API fixture; no live account delivery claim',
+      layouts: layoutEvidence, quoted_text: quotedHuman, commands_before_send: commands.length,
+    }, null, 2) + '\n');
+  }
+  await viewport(1365, 900);
+  await page.locator('#timeline-scroller').evaluate(node => { node.scrollTop = node.scrollHeight; });
+  await page.locator('#chat-text').fill('');
   const draft = '中文输入法草稿，仍在组合';
   await page.locator('#chat-text').fill(draft); await page.locator('#chat-text').focus();
   await page.locator('#chat-text').evaluate(node => { node.setSelectionRange(4, 4); node.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '中' })); });
@@ -101,6 +187,16 @@ try {
   await page.waitForFunction(() => document.getElementById('chat-text').value === '');
   assert.equal(commands.length, 1); assert.equal(commands[0].operation.command, 'chat.send');
   assert.equal(commands[0].operation.arguments.text, draft); assert.equal(commands[0].operation.arguments.request_id, commands[0].id);
+  await page.locator('#chat-text').fill(quotedHuman);
+  await page.locator('#chat-send').click();
+  await page.waitForFunction(() => document.getElementById('chat-text').value === '');
+  assert.equal(commands.length, 2);
+  assert.equal(commands[1].operation.command, 'chat.send');
+  assert.equal(commands[1].operation.arguments.text, quotedHuman);
+  assert.equal(commands[1].operation.arguments.request_id, commands[1].id);
+  assert.equal(commands[1].operation.arguments.target, commands[0].operation.arguments.target);
+  assert.equal(commands.some(item => item.operation.command !== 'chat.send'), false,
+    'quoted @/$/slash text remains in an ordinary chat.send payload');
 
   for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
     await emit(`滚动检查 ${pageIndex}`, 16);
@@ -125,7 +221,7 @@ try {
   assert.equal(commands.filter(item => item.operation.command === 'terminal.write').length, 1);
 
   for (const width of [390, 320]) {
-    await page.setViewportSize({ width, height: 844 });
+    await viewport(width, 844);
     for (const tab of ['conversation', 'terminal', 'workers']) {
       await page.locator(`#tab-${tab}`).click();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${tab} must fit ${width}px viewport`);
@@ -143,7 +239,7 @@ try {
   assert.ok(requests.every(request => request.authorization === 'Bearer fixture-pairing-only'));
   assert.equal(requests.some(request => JSON.stringify(request.body).includes('fixture-pairing-only')), false);
   assert.equal(commands.some(item => item.operation.command === 'terminal.resize'), false, 'viewport changes are not terminal commands');
-  process.stdout.write('Browser fixture smoke passed: CSP, protocol envelopes, IME/focus, bounded DOM, scroll continuity, queue receipt, unknown command, mobile panels.\n');
+  process.stdout.write('Browser fixture smoke passed: CSP, protocol envelopes, IME/focus, bounded DOM, scroll continuity, queue receipt, five right-aligned input origins, original-ID quote button/selected excerpt/R shortcut, preserved multiline draft and ordinary quoted delivery, unknown command, mobile panels.\n');
 } finally {
   if (browser) await browser.close();
   server.kill('SIGTERM');

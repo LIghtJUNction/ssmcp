@@ -4,21 +4,44 @@
 
 The default worker is an external agent. It actively connects to the worker window, registers with `role: "worker"`, and calls `ssmcp.worker.wait` to wait for a task. After executing an assigned task, it reports the result with `ssmcp.worker.complete` and waits again. Starting the pool creates task capacity without starting any model.
 
-## Dreaming while dependencies run
+## Member lifecycle and bounded maintenance
 
-Use waiting time for a bounded piece of already authorized work. The coordinator
-can put a small review, failure diagnosis or documentation correction into the
-normal queue while another task builds or waits on an external result. A worker
-must obtain its real claim before starting that work; an idle station does not
-grant authority to modify files.
+Collaboration members have five lifecycle states: `working`, `idle`, `offline`,
+`dreaming` and `retiring`. These are separate from native pool station counts
+and task outcomes. A state change uses `collab.update` with the exact member's
+current `lifecycle.revision` as `expected_revision`. Read the public member
+snapshot first; a stale revision is rejected. Reconcile an unknown update
+outcome from the original state instead of replaying it.
+[Lifecycle state machine](../src/collab/lifecycle.rs)
 
-Within a claim, complete independent useful steps while a dependency runs.
-Report the actual result through `ssmcp.worker.complete`. When no useful work
-remains, use a blocking `ssmcp.worker.wait` or event notification, preserving
-the original wait ID while pending. A timeout or `unknown` receipt never grants
-permission to repeat effects. Dreaming uses existing agents, tasks and receipts.
-The [optional round policy](events.md#one-optional-dreaming-round) limits one
-maintenance round; it does not require every other worker to be idle.
+New members begin `idle` at lifecycle revision 1. The default idle interval is
+300,000 ms (configurable from 1,000 to 86,400,000); the default maintenance
+budget is 30,000 ms (configurable from 1,000 to 55,000). Configure these as
+top-level `idle_after_ms` and `maintenance_budget_ms` fields with the current
+`expected_revision`.
+
+An eligible idle deadline may request one bounded maintenance round. This
+request does not execute work or start a model. Perform only already authorized
+work, retain the returned `round_id`, and report
+`maintenance: {round_id, action: "start"}` with the current revision. Report the
+actual `complete`, `fail`, `cancel` or `unknown` outcome separately. A lifecycle
+status change and a maintenance outcome must use separate updates. New human
+input preempts the round; uncertain running work keeps that outcome until its
+original effects are reconciled. Generated system, timer and worker-event
+inputs remain passive. Budget expiry cancels an unstarted request; a running
+round becomes `unknown`. That outcome neither proves the work stopped nor
+authorizes another execution.
+[Maintenance and preemption](../src/collab/lifecycle.rs) ·
+[Visible generated inputs](../src/http/input_projection.rs)
+
+Work dispatched through the native worker queue still requires its real claim.
+Preserve all claim fields and report the task through `ssmcp.worker.complete`;
+a maintenance round cannot substitute for that claim. Within an authorized
+task, make independent progress while dependencies run. When no useful work
+remains, block on the existing wait or event notification and retain pending
+wait IDs. This policy uses existing agents and does not require every other
+worker to be idle.
+[Lifecycle maintenance and advisory policy](events.md#a-bounded-lifecycle-maintenance-round)
 
 ## Start a pool
 
@@ -309,7 +332,7 @@ The default Activity view shows a compact summary of real submissions, assignmen
 
 Wait cards show the requested target or an authorized, redacted task summary, the actual `ANY`, `ALL`, `SINGLE` or `CHANGE` mode, elapsed time and this call's observation budget. Long task, observer and generation IDs stay in expanded details. `Triggered` means the requested condition caused a return; `Window expired` means this observation returned without establishing completion. `Observation stopped` does not cancel execution. Missing or uncertain receipts remain `Unknown`.
 
-General `await`, standalone `events.wait` and native waits use the same conversation viewport. A local display deadline without a terminal receipt becomes `Unknown`. Public awaits carry declared target references, authenticated public member labels, mode, timing and typed outcomes through negotiated `wait_display_v3`; they do not copy private inbox bodies, task results or unauthorized object metadata. Old peers that do not echo this capability receive no new display frames. Native `exec.wait` uses its real default 55-second window, while `worker.result` defaults to an immediate query and worker `wait`, `wait_for` and capacity-change waits default to five seconds. `wait_available` without a cursor remains an immediate capacity snapshot. Rendering these states does not acquire a task, acknowledge an inbox or change a queue.
+General `await`, standalone `events.wait` and native waits use the same conversation viewport. A local display deadline without a terminal receipt becomes `Unknown`. Public awaits carry declared target references, authenticated public member labels, mode, timing and typed outcomes through negotiated `wait_display_v4`, including durable-observer metadata; peers that negotiate only `wait_display_v3` retain the original short-window format. These displays do not copy private inbox bodies, task results or unauthorized object metadata. Peers that negotiate neither capability receive no new display frames. Native `exec.wait` uses its real default 55-second window, while `worker.result` defaults to an immediate query and worker `wait`, `wait_for` and capacity-change waits default to five seconds. `wait_available` without a cursor remains an immediate capacity snapshot. Rendering these states does not acquire a task, acknowledge an inbox or change a queue.
 
 The pool records these observations in `manager_operations`. Each real call has an `operation_id` within its pool generation. `wait_for` is labelled `any` or `all`; a one-task `result` wait is `single`; a capacity-revision wait is `change`. Only `state: "waiting"` is active. Completed observations move to bounded history with their actual outcome, such as `satisfied`, `timed_out`, `indeterminate`, `unavailable`, `cancelled` or `error`. Existing availability outcomes retain their own names. At most 16 active observations and 64 terminal observations are retained; the active target total is bounded at 128. Targets are not silently dropped to make an accepted wait appear complete.
 

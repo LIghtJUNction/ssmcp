@@ -319,7 +319,7 @@ class Questions(Composer):
         self.native_rejected("ssmcp.ui.message", {"text": "INJECTION\x1b[2J\x1b[?1049l"},
                              "message contains unsupported control characters")
         self.native_rejected("ssmcp.ui.message", {"text": "Cannot impersonate", "role": "user"},
-                             "message requires text and accepts kind, idempotency_key and boolean finish_task")
+                             "message requires text and accepts kind, input_origin, idempotency_key and boolean finish_task")
         front.pump(0.15)
         shot = front.snapshot()
         self.check(shot["alternate_screen"]

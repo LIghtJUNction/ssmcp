@@ -251,6 +251,11 @@ impl Host for BoundHost<'_> {
         if let Some(runtime) = runtime {
             runtime.local_registry().ensure_open().map_err(native)?;
             resources.push(Resource {
+                id: id("time"),
+                schema_version: 1,
+                description: "Bounded read-only waits, actual timing metadata and prompt schedule summaries from this exact runtime; no private bodies or acknowledgements".into(),
+            });
+            resources.push(Resource {
                 id: id("terminals"),
                 schema_version: 1,
                 description: "The current backend's actual terminal list".into(),
@@ -343,6 +348,10 @@ impl Host for BoundHost<'_> {
                     json!({"backend_active":runtime.is_some(),"backend_generation":Counter(self.backend_generation),
                         "native_capabilities":capabilities,"live_cursor":Counter(cursor),"retention":"live_process_memory",
                         "process_id":std::process::id(),"client_id":runtime.as_ref().and_then(|value|value.frontend_client_id())})
+                }
+                "time" => {
+                    no_query(query)?;
+                    self.runtime()?.time_snapshot()
                 }
                 "executions" => {
                     no_query(query)?;

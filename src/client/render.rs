@@ -220,6 +220,9 @@ pub(crate) fn agent_message(
         let (title, color) = match kind {
             super::interface::messages::Kind::Progress => ("Progress", "accent"),
             super::interface::messages::Kind::Answer => ("Answer", "success"),
+            super::interface::messages::Kind::Input => {
+                return Err("generated input requires its scoped input publisher".into());
+            }
         };
         let _ = writeln!(bytes);
         let _ = painted(
@@ -245,6 +248,40 @@ pub(crate) fn agent_message(
     Ok(super::interface::history::remember_visible_reply(
         &owner, text,
     ))
+}
+
+/// Generated prompts share the native conversation and its owner-scoped event
+/// projection. Recording or displaying them never enters a human input queue.
+pub(crate) fn input_message(
+    text: &str,
+    id: &str,
+    origin: super::interface::messages::InputOrigin,
+    source: crate::runtime::call_scope::Source,
+) -> Result<(bool, bool), String> {
+    let owner = source.require_owner()?.clone();
+    let inserted = super::interface::history::record_owned_input(&owner, id, text, origin)?;
+    let shown = super::interface::history::current_owner().as_ref() == Some(&owner);
+    if !inserted {
+        return Ok((shown, true));
+    }
+    let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
+    let event = json!({
+        "type":"ssmcp.message", "role":"tool", "kind":"input", "format":"plain",
+        "text":text, "message_id":id, "input_origin":origin, "author":origin.label(),
+        "completion_permission":false,
+    });
+    let display_source = source.display();
+    crate::session::attach::record_scoped_event("message", &event, &display_source);
+    let mut bytes = Vec::new();
+    let raw = display().lock().unwrap_or_else(|e| e.into_inner()).raw;
+    if raw {
+        let safe = crate::audit::event(event.clone());
+        let _ = writeln!(bytes, "{safe}");
+    } else {
+        let _ = writeln!(bytes, "\n[INPUT] {}\n{}\n", origin.label(), text);
+    }
+    publish_event("message", &event, &bytes, None, display_source);
+    Ok((shown, false))
 }
 
 /// Sanitize a diagnostic without changing native consumers or event archives.

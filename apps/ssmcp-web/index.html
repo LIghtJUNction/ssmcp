@@ -43,6 +43,7 @@
         <button role="tab" id="tab-conversation" data-panel="conversation" aria-controls="panel-conversation" aria-selected="true">对话 <span id="timeline-count" class="count"></span></button>
         <button role="tab" id="tab-terminal" data-panel="terminal" aria-controls="panel-terminal" aria-selected="false" tabindex="-1">终端 <span id="terminal-count" class="count"></span></button>
         <button role="tab" id="tab-workers" data-panel="workers" aria-controls="panel-workers" aria-selected="false" tabindex="-1">Workers <span id="worker-count" class="count"></span></button>
+        <button role="tab" id="tab-waits" data-panel="waits" aria-controls="panel-waits" aria-selected="false" tabindex="-1">等待 <span id="wait-count" class="count"></span></button>
         <span class="live-status" id="observation-status" aria-live="polite"><span class="status-dot"></span><span>未连接</span></span>
       </nav>
 
@@ -110,6 +111,12 @@
           <div class="worker-list" id="worker-list"></div>
           <div class="pagination"><button class="text-button" id="workers-prev">上一页</button><span class="tiny" id="workers-page"></span><button class="text-button" id="workers-next">下一页</button></div>
         </div>
+      </section>
+
+      <section class="panel waits-panel" id="panel-waits" role="tabpanel" aria-labelledby="tab-waits" hidden>
+        <div class="panel-intro"><div><h2>等待与计时</h2><p class="muted">后台等待、实际耗时与定时提示计划。</p></div></div>
+        <div class="empty-state" id="waits-empty">连接后读取真实等待状态。</div>
+        <div id="waits-content" hidden></div>
       </section>
 
       <footer class="statusbar"><span class="mono" id="status-cursor">zbridge v1</span><button class="text-button" id="diagnostics-button">连接详情</button><button class="text-button" id="commands-button">操作记录 <span id="command-count"></span></button></footer>

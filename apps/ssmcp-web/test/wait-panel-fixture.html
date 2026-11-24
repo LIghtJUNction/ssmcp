@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>等待面板 · 固定测试数据</title><link rel="stylesheet" href="../styles.css"></head>
+<body><main class="waits-panel"><div class="panel-intro"><div><h2>等待与计时</h2><p class="muted">固定测试数据 · 宽屏 / 窄屏 · 明色 / 暗色</p></div></div><div id="fixture"></div></main>
+<script type="module">
+import { renderWaitContent } from '../src/wait-view.mjs';
+import { waitFixture } from './wait-fixtures.mjs';
+document.documentElement.dataset.theme = new URLSearchParams(location.search).get('theme') === 'dark' ? 'dark' : 'light';
+renderWaitContent(document.getElementById('fixture'), waitFixture, '固定快照；没有连接、控制操作或结果确认。');
+</script></body></html>

@@ -208,6 +208,13 @@ mod tests {
 
     #[tokio::test]
     async fn launch_does_not_replace_a_live_socket() {
+        if crate::test_process::isolated(
+            "client::chat_io::transport::socket::tests::launch_does_not_replace_a_live_socket",
+        )
+        .await
+        {
+            return;
+        }
         use std::os::unix::fs::PermissionsExt;
 
         let mut random = [0; 16];

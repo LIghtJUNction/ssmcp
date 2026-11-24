@@ -263,6 +263,46 @@ pub(crate) fn record_owned_agent(
     Ok(persisted_id)
 }
 
+/// Commit generated input to its captured owner. A duplicate does not emit again.
+pub(crate) fn record_owned_input(
+    owner: &HistoryOwner,
+    id: &str,
+    text: &str,
+    origin: crate::client::interface::messages::InputOrigin,
+) -> Result<bool, String> {
+    if !super::valid_message_id(id) {
+        return Err("invalid generated conversation message identity".into());
+    }
+    with_owner(owner, |history, owner| {
+        history
+            .record_owned_with_origin(owner, "tool", text, Some(id.to_owned()), Some(origin))
+            .map(|committed| committed.is_some())
+    })
+}
+
+/// Positive evidence only. Missing or evicted records never authorize a retry.
+pub(crate) fn recorded_input(
+    owner: &HistoryOwner,
+    id: &str,
+    text: &str,
+    origin: crate::client::interface::messages::InputOrigin,
+) -> Result<bool, String> {
+    with_owner(owner, |history, owner| {
+        if history.ownership.pending(owner)? {
+            return Ok(false);
+        }
+        let conversation = history.load(owner.id())?;
+        let expected = super::safe_text(text);
+        Ok(conversation.messages.iter().any(|message| {
+            message.id == id
+                && message.role == "tool"
+                && message.input_origin == Some(origin)
+                && !message.truncated
+                && message.content == expected
+        }))
+    })
+}
+
 /// A local reply stays with its question, including when that history is no
 /// longer selected. The deterministic identity prevents duplicate UI receipts.
 pub(crate) fn record_owned_answer(

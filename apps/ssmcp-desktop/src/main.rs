@@ -1,4 +1,5 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+mod composer;
 mod engine;
 mod model;
 mod ui;
@@ -158,10 +159,9 @@ fn run(options: Options) -> Result<(), String> {
         let size = window.size();
         dirty |= presented_size != Some(size);
         if dirty {
-            if let Some(event) = &pending_event {
-                desktop.event(event);
-            }
-            ui.begin(pending_event.take());
+            let event = pending_event.take();
+            let consumed = event.as_ref().is_some_and(|event| desktop.event(event));
+            ui.begin(if consumed { None } else { event });
             let (width, height) = size;
             let mut canvas = window.begin(ui::BG);
             desktop.draw(&mut canvas, &mut ui, &handle, &snapshot, width, height);
@@ -206,7 +206,7 @@ fn run(options: Options) -> Result<(), String> {
                         .map_err(|error| format!("无法写入渲染帧回执：{error}"))?;
                 }
             }
-            if let Some(text) = ui.clipboard.take() {
+            if let Some(text) = ui.clipboard.take().or_else(|| desktop.take_clipboard()) {
                 window.copy(&text);
             }
         }

@@ -1,6 +1,7 @@
 //! Real in-memory broker identities, memberships and queues. No external model,
 //! installed client, or other person's inbox participates in these fixtures.
 use super::*;
+mod durable_tests;
 use crate::{
     identity::Identity,
     wire::{SteeringCommand, SteeringState},
@@ -153,13 +154,23 @@ impl Fixture {
     }
 
     async fn update(&self, member: &Value, status: &str) {
+        let current = self
+            .session
+            .collaboration
+            .lifecycle_snapshot(
+                &self.owner,
+                member["agent_id"].as_str().unwrap(),
+                member["token"].as_str().unwrap(),
+            )
+            .unwrap();
+        let revision = current["lifecycle"]["revision"].as_u64().unwrap();
         self.session
             .collaboration
             .dispatch(
                 &self.owner,
                 "update",
                 json!({"agent_id":member["agent_id"],
-            "token":member["token"],"status":status}),
+            "token":member["token"],"status":status,"expected_revision":revision}),
             )
             .await
             .unwrap();
@@ -247,7 +258,7 @@ async fn windowed_await_replays_one_completed_snapshot_until_acknowledged() {
         .public(
             &fixture.member,
             json!({"window_ms":1000,"targets":[
-                {"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["done"]}
+                {"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["working"]}
             ]}),
         )
         .await;
@@ -262,14 +273,14 @@ async fn windowed_await_replays_one_completed_snapshot_until_acknowledged() {
     )
     .await;
     assert!(error.unwrap_err().contains("ahead"));
-    fixture.update(&fixture.peer, "done").await;
+    fixture.update(&fixture.peer, "working").await;
     let ready = fixture
         .public(&fixture.member, json!({"wait_id":id,"after":0}))
         .await;
     assert_eq!(ready["status"], "ready");
     assert_eq!(ready["cursor"], 1);
     assert_eq!(ready["wait_id"], id);
-    fixture.update(&fixture.peer, "changed").await;
+    fixture.update(&fixture.peer, "idle").await;
     let other = fixture
         .public(&fixture.peer, json!({"wait_id":id,"after":0}))
         .await;
@@ -298,12 +309,12 @@ async fn windowed_await_replays_one_completed_snapshot_until_acknowledged() {
 #[tokio::test]
 async fn windowed_all_keeps_ready_results_and_messages_published_between_windows() {
     let fixture = Fixture::new().await;
-    fixture.update(&fixture.peer, "done").await;
+    fixture.update(&fixture.peer, "working").await;
     let first = fixture
         .public(
             &fixture.member,
             json!({"mode":"all","window_ms":1000,"targets":[
-                {"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["done"]},
+                {"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["working"]},
                 {"type":"agent_messages"},
             ]}),
         )
@@ -317,9 +328,7 @@ async fn windowed_all_keeps_ready_results_and_messages_published_between_windows
         *fixture.record(id).observation_state.lock().unwrap(),
         ObservationState::Resumed
     );
-    fixture
-        .update(&fixture.peer, "changed_after_observation")
-        .await;
+    fixture.update(&fixture.peer, "idle").await;
     fixture
         .session
         .collaboration
@@ -603,7 +612,7 @@ async fn fifty_five_second_window_returns_pending_and_resumes_the_original_wait(
         fixture.public(
             &fixture.member,
             json!({"window_ms":55_000,"targets":[
-                {"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["done"]},
+                {"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["working"]},
             ]}),
         ),
     )
@@ -614,7 +623,7 @@ async fn fifty_five_second_window_returns_pending_and_resumes_the_original_wait(
     assert_eq!(first["status"], "pending");
     assert_eq!(first["cursor"], 0);
     let id = first["wait_id"].as_str().unwrap();
-    fixture.update(&fixture.peer, "done").await;
+    fixture.update(&fixture.peer, "working").await;
     let ready = tokio::time::timeout(
         Duration::from_secs(2),
         fixture.public(&fixture.member, json!({"wait_id":id,"window_ms":55_000})),
@@ -702,7 +711,7 @@ async fn timeout_resumes_same_server_record_and_another_member_cannot_cancel_it(
         .public(
             &fixture.member,
             json!({"targets":[{"type":"agent_status",
-        "agent_id":fixture.peer["agent_id"],"statuses":["done"]}],"timeout_ms":1000}),
+        "agent_id":fixture.peer["agent_id"],"statuses":["working"]}],"timeout_ms":1000}),
         )
         .await;
     assert_eq!(first["status"], "timed_out");
@@ -712,13 +721,13 @@ async fn timeout_resumes_same_server_record_and_another_member_cannot_cancel_it(
         .await;
     assert_eq!(denied["status"], "unauthorized");
     assert!(!*fixture.record(id).cancelled.borrow());
-    fixture.update(&fixture.peer, "done").await;
+    fixture.update(&fixture.peer, "working").await;
     let resumed = fixture
         .public(&fixture.member, json!({"wait_id":id,"timeout_ms":1000}))
         .await;
     assert_eq!(resumed["status"], "ready");
     assert_eq!(resumed["wait_id"], id);
-    assert_eq!(resumed["results"][0]["data"]["agent"]["status"], "done");
+    assert_eq!(resumed["results"][0]["data"]["agent"]["status"], "working");
     assert!(resumed["completion_permission"].is_null());
     let replay = fixture
         .public(&fixture.member, json!({"wait_id":id,"timeout_ms":1000}))
@@ -735,12 +744,12 @@ async fn two_members_observe_independently_even_when_user_wait_slots_are_full() 
     let _permits: Vec<_> = (0..4)
         .map(|_| fixture.session.steering.wait_permit().unwrap())
         .collect();
-    let one = fixture.public(&fixture.member, json!({"targets":[{"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["done"]}],"timeout_ms":2000}));
-    let two = fixture.public(&fixture.peer, json!({"targets":[{"type":"agent_status","agent_id":fixture.member["agent_id"],"statuses":["done"]}],"timeout_ms":2000}));
+    let one = fixture.public(&fixture.member, json!({"targets":[{"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["working"]}],"timeout_ms":2000}));
+    let two = fixture.public(&fixture.peer, json!({"targets":[{"type":"agent_status","agent_id":fixture.member["agent_id"],"statuses":["working"]}],"timeout_ms":2000}));
     let updates = async {
         tokio::task::yield_now().await;
-        fixture.update(&fixture.member, "done").await;
-        fixture.update(&fixture.peer, "done").await;
+        fixture.update(&fixture.member, "working").await;
+        fixture.update(&fixture.peer, "working").await;
     };
     let (one, two, ()) = tokio::time::timeout(Duration::from_millis(500), async {
         tokio::join!(one, two, updates)
@@ -755,7 +764,7 @@ async fn two_members_observe_independently_even_when_user_wait_slots_are_full() 
 #[tokio::test]
 async fn cancelling_a_running_observer_wakes_it_without_removing_the_agent() {
     let fixture = Fixture::new().await;
-    let first = fixture.public(&fixture.member, json!({"targets":[{"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["done"]}],"timeout_ms":1000})).await;
+    let first = fixture.public(&fixture.member, json!({"targets":[{"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["working"]}],"timeout_ms":1000})).await;
     let id = first["wait_id"].as_str().unwrap();
     let mut waiting =
         Box::pin(fixture.public(&fixture.member, json!({"wait_id":id,"timeout_ms":20000})));
@@ -781,7 +790,7 @@ async fn cancelling_a_running_observer_wakes_it_without_removing_the_agent() {
             )
             .unwrap()
             .status,
-        "available"
+        "idle"
     );
 }
 
@@ -1085,7 +1094,7 @@ async fn unknown_objects_and_revoked_membership_have_distinct_typed_outcomes() {
     let unknown = fixture
         .public(
             &fixture.member,
-            json!({"targets":[{"type":"agent_status","agent_id":"missing","statuses":["done"]}]}),
+            json!({"targets":[{"type":"agent_status","agent_id":"missing","statuses":["working"]}]}),
         )
         .await;
     assert_eq!(unknown["status"], "unknown_target");
@@ -1178,7 +1187,7 @@ async fn dropping_the_outer_response_releases_protected_delivery_without_consumi
 #[tokio::test]
 async fn a_real_membership_lease_expiring_during_observation_revokes_the_result() {
     let fixture = Fixture::new().await;
-    let args = json!({"targets":[{"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["done"]}],"timeout_ms":5000});
+    let args = json!({"targets":[{"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["working"]}],"timeout_ms":5000});
     let mut waiting = Box::pin(fixture.public(&fixture.member, args));
     tokio::select! { biased; result = &mut waiting => panic!("unexpected early result {result}"), _ = tokio::task::yield_now() => {} }
     fixture
@@ -1201,7 +1210,7 @@ async fn a_real_membership_lease_expiring_during_observation_revokes_the_result(
             )
             .unwrap()
             .status,
-        "available"
+        "idle"
     );
 }
 

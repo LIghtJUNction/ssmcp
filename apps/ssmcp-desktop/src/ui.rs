@@ -30,6 +30,7 @@ enum Page {
     Terminal,
     Workers,
     Receipts,
+    Waits,
 }
 
 impl Page {
@@ -40,6 +41,7 @@ impl Page {
             Self::Terminal => 2,
             Self::Workers => 3,
             Self::Receipts => 4,
+            Self::Waits => 5,
         }
     }
 }
@@ -50,6 +52,7 @@ struct Layout {
     expanded: bool,
     lines: Vec<String>,
     more: bool,
+    width: f32,
 }
 
 struct Pending {
@@ -67,6 +70,7 @@ pub struct Desktop {
     named_session: String,
     session_page: usize,
     composer: String,
+    composer_editor: crate::composer::Composer,
     terminal_input: String,
     terminal_id: String,
     rows: String,
@@ -76,11 +80,15 @@ pub struct Desktop {
     local_notice: String,
     pending: Option<Pending>,
     unknown_draft: Option<String>,
-    scroll: [f32; 5],
+    scroll: [f32; 6],
+    wait_layout: Option<(Vec<String>, i32, Vec<String>)>,
     pointer: (f32, f32),
     expanded: Option<(usize, Counter)>,
     layouts: VecDeque<Layout>,
     layout_width: f32,
+    selected_message: Option<(String, String)>,
+    message_boxes: Vec<(Rect, String, String)>,
+    reply_thread: ThreadChoice,
     thread_picker: bool,
     thread_scroll: usize,
     queue_view: bool,
@@ -96,6 +104,7 @@ impl Default for Desktop {
             named_session: String::new(),
             session_page: 0,
             composer: String::new(),
+            composer_editor: crate::composer::Composer::default(),
             terminal_input: String::new(),
             terminal_id: String::new(),
             rows: "24".into(),
@@ -105,11 +114,15 @@ impl Default for Desktop {
             local_notice: String::new(),
             pending: None,
             unknown_draft: None,
-            scroll: [0.; 5],
+            scroll: [0.; 6],
+            wait_layout: None,
             pointer: (0., 0.),
             expanded: None,
             layouts: VecDeque::new(),
             layout_width: 0.,
+            selected_message: None,
+            message_boxes: Vec::new(),
+            reply_thread: ThreadChoice::default(),
             thread_picker: false,
             thread_scroll: 0,
             queue_view: false,
@@ -120,11 +133,60 @@ impl Default for Desktop {
 }
 
 impl Desktop {
-    pub fn event(&mut self, event: &NativeEvent) {
-        match event {
-            NativeEvent::Move(x, y) | NativeEvent::Down(x, y) | NativeEvent::Up(x, y) => {
-                self.pointer = (*x, *y)
+    fn quote_message(&mut self, id: &str, text: &str) {
+        match ssmcp::client::replies::quote_reply(id, text, &self.composer, 4096) {
+            Ok(draft) => {
+                self.composer = draft;
+                self.page = Page::Conversation;
+                self.composer_editor.focus_end(&self.composer);
+                self.local_notice = "已引用原消息；在输入框补充回复，可编辑引用。".into();
             }
+            Err(error) => self.local_notice = error,
+        }
+    }
+
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.composer_editor.take_clipboard()
+    }
+
+    pub fn event(&mut self, event: &NativeEvent) -> bool {
+        if matches!(
+            event,
+            NativeEvent::Key {
+                code: 82 | 114,
+                control: true,
+                shift: true,
+                ..
+            }
+        ) && self.page == Page::Conversation
+            && self.pending.is_none()
+        {
+            if let Some((id, text)) = self.selected_message.clone() {
+                self.quote_message(&id, &text);
+            } else {
+                self.local_notice = "先选择一条消息，再按 Ctrl+Shift+R 引用回复。".into();
+            }
+            return true;
+        }
+        if self.page == Page::Conversation
+            && self
+                .composer_editor
+                .event(event, &mut self.composer, self.pending.is_none())
+        {
+            return true;
+        }
+        match event {
+            NativeEvent::Down(x, y) => {
+                self.pointer = (*x, *y);
+                if let Some((_, id, text)) = self
+                    .message_boxes
+                    .iter()
+                    .find(|(r, _, _)| *x >= r.x && *x < r.x + r.w && *y >= r.y && *y < r.y + r.h)
+                {
+                    self.selected_message = Some((id.clone(), text.clone()));
+                }
+            }
+            NativeEvent::Move(x, y) | NativeEvent::Up(x, y) => self.pointer = (*x, *y),
             NativeEvent::Scroll(delta) if self.pointer.0 > SIDE => {
                 if self.thread_picker {
                     self.thread_scroll = if *delta > 0 {
@@ -145,13 +207,20 @@ impl Desktop {
             }
             _ => {}
         }
+        false
     }
 
     pub fn sync(&mut self, view: &View) {
+        if self.reply_thread != view.thread || self.generation != view.generation {
+            self.selected_message = None;
+            self.message_boxes.clear();
+            self.reply_thread = view.thread.clone();
+        }
         if view.generation.is_some() && self.generation != view.generation {
             self.generation = view.generation.clone();
             self.layouts.clear();
-            self.scroll = [0.; 5];
+            self.scroll = [0.; 6];
+            self.wait_layout = None;
             self.expanded = None;
             self.thread_picker = false;
         }
@@ -300,6 +369,9 @@ impl Desktop {
         width: f32,
         height: f32,
     ) {
+        if self.page != Page::Conversation {
+            self.composer_editor.blur();
+        }
         self.sidebar(canvas, ui, handle, view, height);
         let x = SIDE + 36.;
         let w = (width - x - 36.).max(400.);
@@ -391,9 +463,16 @@ impl Desktop {
             (Page::Terminal, "终端"),
             (Page::Workers, "Worker"),
             (Page::Receipts, "回执"),
+            (Page::Waits, "等待"),
         ];
+        let tab_width = (w / tabs.len() as f32).min(94.);
         for (index, (page, label)) in tabs.into_iter().enumerate() {
-            let rect = Rect::new(x + index as f32 * 94., 99., 84., 36.);
+            let rect = Rect::new(
+                x + index as f32 * tab_width,
+                99.,
+                (tab_width - 10.).max(1.),
+                36.,
+            );
             let style = ButtonStyle::Quiet;
             if ui.button(canvas, 20 + index as u64, rect, label, style, true) {
                 self.page = page;
@@ -408,7 +487,7 @@ impl Desktop {
             canvas.ellipsis(
                 "正在等待实际回执…",
                 right - 220.,
-                111.,
+                74.,
                 220.,
                 13,
                 false,
@@ -432,6 +511,7 @@ impl Desktop {
             Page::Terminal => self.terminal(canvas, ui, handle, view, bounds),
             Page::Workers => self.workers(canvas, ui, handle, view, bounds),
             Page::Receipts => self.receipts(canvas, ui, handle, view, bounds),
+            Page::Waits => self.waits(canvas, view, bounds),
         }
         if self.thread_picker {
             self.threads(canvas, ui, handle, view, bounds);
@@ -627,7 +707,7 @@ impl Desktop {
         ) {
             self.thread_picker = !self.thread_picker;
         }
-        let history_bounds = Rect::new(bounds.x, bounds.y + 48., bounds.w, bounds.h - 175.);
+        let history_bounds = Rect::new(bounds.x, bounds.y + 48., bounds.w, bounds.h - 239.);
         if view.resource("conversation") {
             self.history(canvas, ui, &view.conversation, history_bounds, 0);
         } else {
@@ -638,7 +718,7 @@ impl Desktop {
                 "连接一个 CLI 会话后，当前能力允许的对话与线程会显示在这里。",
             );
         }
-        let y = bounds.y + bounds.h - 112.;
+        let y = bounds.y + bounds.h - 176.;
         canvas.line(
             (bounds.x, y - 15.),
             (bounds.x + bounds.w, y - 15.),
@@ -651,24 +731,26 @@ impl Desktop {
         };
         let can_send =
             self.can_command(view, "chat.send") && view.can_send && !view.reloading && exact_target;
-        ui.input(
+        self.composer_editor.draw(
             canvas,
-            302,
-            Rect::new(bounds.x, y, bounds.w - 116., 48.),
-            &mut self.composer,
-            "写下新的输入…",
-            false,
+            ui,
+            Rect::new(bounds.x, y, bounds.w - 116., 112.),
+            &self.composer,
             self.pending.is_none(),
         );
         let unknown_same = self.unknown_draft.as_ref() == Some(&self.composer);
-        if ui.button(
+        let can_submit =
+            can_send && self.pending.is_none() && !self.composer.trim().is_empty() && !unknown_same;
+        let clicked = ui.button(
             canvas,
             303,
-            Rect::new(bounds.x + bounds.w - 104., y, 104., 48.),
+            Rect::new(bounds.x + bounds.w - 104., y + 32., 104., 48.),
             "发送输入",
             ButtonStyle::Primary,
-            can_send && !self.composer.trim().is_empty() && !unknown_same,
-        ) {
+            can_submit,
+        );
+        let shortcut = self.composer_editor.take_submit();
+        if can_submit && (clicked || shortcut) {
             self.command(
                 handle,
                 view,
@@ -678,12 +760,12 @@ impl Desktop {
         }
         let target = match &view.thread {
             ThreadChoice::Agent(id) => format!("目标线程：{id}"),
-            _ => "目标：下一次接收输入的会话".into(),
+            _ => "Enter 换行 · Ctrl+Enter 发送".into(),
         };
         canvas.ellipsis(
             &target,
             bounds.x,
-            y + 61.,
+            y + 125.,
             bounds.w - 170.,
             12,
             false,
@@ -692,7 +774,7 @@ impl Desktop {
         canvas.text(
             &format!("{} / 4096 B", self.composer.len()),
             bounds.x + bounds.w - 108.,
-            y + 61.,
+            y + 125.,
             11,
             false,
             MUTED,
@@ -713,7 +795,7 @@ impl Desktop {
         canvas.ellipsis(
             hint,
             bounds.x,
-            y + 83.,
+            y + 147.,
             bounds.w,
             12,
             false,
@@ -752,6 +834,9 @@ impl Desktop {
         bounds: Rect,
         page: usize,
     ) {
+        if page == 0 {
+            self.message_boxes.clear();
+        }
         if history.rows.is_empty() {
             self.empty(
                 canvas,
@@ -768,11 +853,17 @@ impl Desktop {
         let mut heights = Vec::with_capacity(history.rows.len());
         let mut layouts = Vec::with_capacity(history.rows.len());
         for row in &history.rows {
+            let content_width = if row.input_side {
+                bounds.w * 0.82
+            } else {
+                bounds.w
+            };
             let expanded = self.expanded == Some((page, row.sequence));
             let existing = self.layouts.iter().find(|layout| {
                 layout.page == page
                     && layout.sequence == row.sequence
                     && layout.expanded == expanded
+                    && (layout.width - content_width).abs() <= 1.
             });
             let (lines, more) = if let Some(layout) = existing {
                 (layout.lines.clone(), layout.more)
@@ -780,12 +871,13 @@ impl Desktop {
                 let (lines, more) = wrap(
                     canvas,
                     &row.text,
-                    bounds.w - 40.,
+                    content_width - 40.,
                     15,
                     if expanded { 180 } else { 6 },
                 );
                 self.layouts.push_back(Layout {
                     sequence: row.sequence,
+                    width: content_width,
                     page,
                     expanded,
                     lines: lines.clone(),
@@ -811,12 +903,47 @@ impl Desktop {
         canvas.clip(bounds);
         for (index, row) in history.rows.iter().enumerate() {
             let h = heights[index] - 12.;
+            let row_width = if row.input_side {
+                bounds.w * 0.82
+            } else {
+                bounds.w
+            };
+            let row_x = bounds.x + bounds.w - row_width;
             if y + h >= bounds.y && y <= bounds.y + bounds.h {
-                canvas.rect(Rect::new(bounds.x, y, bounds.w, h), 10., SURFACE);
-                let kind = kind_label(&row.kind);
+                let card = Rect::new(row_x, y, row_width, h);
+                let selected = row.message_id.as_ref().is_some_and(|id| {
+                    self.selected_message
+                        .as_ref()
+                        .is_some_and(|(selected, _)| selected == id)
+                });
+                canvas.rect(card, 10., if selected { BLUE } else { LINE });
+                canvas.rect(
+                    card.inset(1.),
+                    9.,
+                    if row.input_side { BLUE_SOFT } else { SURFACE },
+                );
+                if page == 0
+                    && let Some(id) = &row.message_id
+                {
+                    let top = y.max(bounds.y);
+                    let bottom = (y + h).min(bounds.y + bounds.h);
+                    self.message_boxes.push((
+                        Rect::new(row_x, top, row_width, bottom - top),
+                        id.clone(),
+                        row.text.clone(),
+                    ));
+                }
+                let kind = match row.input_origin.as_deref() {
+                    Some("human") => "用户",
+                    Some("system_hook") => "系统提示",
+                    Some("agent_timer") => "定时提示",
+                    Some("worker_event") => "Worker 事件",
+                    Some("maintenance") => "维护提示",
+                    _ => kind_label(&row.kind),
+                };
                 canvas.text(
                     kind,
-                    bounds.x + 18.,
+                    row_x + 18.,
                     y + 13.,
                     12,
                     true,
@@ -824,16 +951,16 @@ impl Desktop {
                 );
                 canvas.ellipsis(
                     &format!("{}  {}", row.source, row.status),
-                    bounds.x + 105.,
+                    row_x + 105.,
                     y + 13.,
-                    bounds.w - 235.,
+                    row_width - 235.,
                     12,
                     false,
                     MUTED,
                 );
                 canvas.ellipsis(
                     &format!("#{}", row.sequence.0),
-                    bounds.x + bounds.w - 126.,
+                    row_x + row_width - 126.,
                     y + 13.,
                     108.,
                     11,
@@ -843,7 +970,7 @@ impl Desktop {
                 for (line_index, line) in layouts[index].0.iter().enumerate() {
                     canvas.text(
                         line,
-                        bounds.x + 18.,
+                        row_x + 18.,
                         y + 41. + line_index as f32 * 23.,
                         15,
                         false,
@@ -856,7 +983,7 @@ impl Desktop {
                         if ui.button(
                             canvas,
                             10_000 + index as u64 * 2,
-                            Rect::new(bounds.x + 10., footer_y, 64., 26.),
+                            Rect::new(row_x + 10., footer_y, 64., 26.),
                             if self.expanded == Some((page, row.sequence)) {
                                 "收起"
                             } else {
@@ -872,10 +999,28 @@ impl Desktop {
                             };
                         }
                     }
+                    if page == 0
+                        && let Some(id) = &row.message_id
+                    {
+                        use std::hash::{Hash, Hasher};
+                        let mut key = std::hash::DefaultHasher::new();
+                        ("reply", row.sequence.0, id).hash(&mut key);
+                        if ui.button(
+                            canvas,
+                            key.finish(),
+                            Rect::new(row_x + row_width - 166., footer_y, 86., 26.),
+                            "引用回复",
+                            ButtonStyle::Quiet,
+                            self.pending.is_none(),
+                        ) {
+                            self.selected_message = Some((id.clone(), row.text.clone()));
+                            self.quote_message(id, &row.text);
+                        }
+                    }
                     if ui.button(
                         canvas,
                         10_001 + index as u64 * 2,
-                        Rect::new(bounds.x + bounds.w - 70., footer_y, 60., 26.),
+                        Rect::new(row_x + row_width - 70., footer_y, 60., 26.),
                         "复制",
                         ButtonStyle::Quiet,
                         true,
@@ -886,7 +1031,7 @@ impl Desktop {
                 if row.lossy {
                     canvas.text(
                         "已截断 / 有损文本",
-                        bounds.x + bounds.w - 190.,
+                        row_x + row_width - 190.,
                         y + h - 20.,
                         10,
                         false,
@@ -1160,6 +1305,55 @@ impl Desktop {
             false,
             if terminal.incomplete { AMBER } else { MUTED },
         );
+    }
+
+    fn waits(&mut self, canvas: &mut Canvas<'_>, view: &View, bounds: Rect) {
+        canvas.text("等待与计时", bounds.x, bounds.y, 19, true, TEXT);
+        let Some(snapshot) = &view.time else {
+            self.empty(
+                canvas,
+                Rect::new(bounds.x, bounds.y + 48., bounds.w, bounds.h - 48.),
+                "等待数据尚不可用",
+                "连接支持的后端后显示真实等待、读取状态与定时计划。",
+            );
+            return;
+        };
+        canvas.ellipsis(
+            "最近一次实际快照 · 只读 · 刷新状态不会确认或重放结果",
+            bounds.x,
+            bounds.y + 34.,
+            bounds.w,
+            12,
+            false,
+            MUTED,
+        );
+        let body = Rect::new(bounds.x, bounds.y + 68., bounds.w, (bounds.h - 68.).max(1.));
+        let width = body.w.max(1.) as i32;
+        if self
+            .wait_layout
+            .as_ref()
+            .is_none_or(|(source, previous_width, _)| {
+                source != &snapshot.lines || *previous_width != width
+            })
+        {
+            let (mut lines, more) = wrap(canvas, &snapshot.lines.join("\n"), body.w, 13, 16_384);
+            if more {
+                lines.push("显示内容已达到当前面板上限。".into());
+            }
+            self.wait_layout = Some((snapshot.lines.clone(), width, lines));
+        }
+        let lines = &self.wait_layout.as_ref().expect("prepared wait layout").2;
+        let row_height = 24.;
+        self.scroll[5] = self.scroll[5].min((lines.len() as f32 * row_height - body.h).max(0.));
+        canvas.clip(body);
+        for (index, line) in lines.iter().enumerate() {
+            let y = body.y + index as f32 * row_height - self.scroll[5];
+            if y + row_height < body.y || y > body.y + body.h {
+                continue;
+            }
+            canvas.text(line, body.x, y, 13, false, TEXT);
+        }
+        canvas.unclip();
     }
 
     fn workers(

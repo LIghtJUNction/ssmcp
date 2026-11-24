@@ -44,6 +44,7 @@ pub(super) enum View {
     History,
     Logs,
     Tasks,
+    Waits,
 }
 impl View {
     fn name(self) -> &'static str {
@@ -57,6 +58,7 @@ impl View {
             Self::History => "Live logs",
             Self::Logs => "Logs",
             Self::Tasks => "Tasks",
+            Self::Waits => "Waits",
         }
     }
     fn next(self) -> Self {
@@ -69,6 +71,7 @@ impl View {
             Self::History => Self::Logs,
             Self::Logs => Self::Tasks,
             Self::Tasks => Self::Statistics,
+            Self::Waits => Self::Activity,
         }
     }
 }
@@ -211,7 +214,7 @@ pub(super) struct Conversation {
 
 impl Conversation {
     pub(super) fn snapshot(&self) -> Value {
-        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Statistics=>"statistics",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"live_logs",View::Logs=>"logs",View::Tasks=>"tasks" },
+        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Statistics=>"statistics",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"live_logs",View::Logs=>"logs",View::Tasks=>"tasks",View::Waits=>"waits" },
             "focus":if self.content_focus {"content"} else {"input"},
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"native_recipient":self.native_recipient,"native_pending":self.native_pending.is_some(),"editing":self.editing,
@@ -357,7 +360,7 @@ impl State {
             json!({"connected":false,"supported":true,"preview":true,
                 "agents":[
                     {"agent_id":"example-builder","name":"Builder","role":"implementation","status":"working"},
-                    {"agent_id":"example-reviewer","name":"Reviewer","role":"review","status":"available"}],
+                    {"agent_id":"example-reviewer","name":"Reviewer","role":"review","status":"idle"}],
                 "queue":[{"id":"example-request","text":"Keep the interface simple; verify command output and source audit.","status":"queued","target":"next","revision":1}]})
         } else {
             steering::snapshot()
@@ -1410,7 +1413,7 @@ impl State {
             View::Tasks => {
                 self.conversation.tasks.open();
             }
-            View::Logs => {}
+            View::Logs | View::Waits => {}
             View::Activity => {
                 if self.raw_logs {
                     self.notice = Some("Raw transcript · /logs returns to tool details".into());
@@ -1441,7 +1444,7 @@ impl State {
                 self.scroll_logs(-delta);
                 self.events.scroll_by(delta);
             }
-            View::Statistics => {
+            View::Statistics | View::Waits => {
                 self.conversation.detail_scroll =
                     self.conversation.detail_scroll.saturating_add_signed(delta);
             }
@@ -1605,6 +1608,37 @@ impl State {
         }
     }
 
+    fn chat_reply_available(&self) -> bool {
+        !self.help
+            && !self.selection
+            && !self.raw_logs
+            && !self.conversation.logs_open
+            && self.conversation.view == View::Activity
+            && self.geometry.left >= 22
+            && self.events.selected_reply().is_some()
+    }
+
+    fn chat_reply_selected(&mut self) {
+        let Some((id, text)) = self.events.selected_reply() else {
+            return;
+        };
+        match crate::client::replies::quote_reply(
+            &id,
+            &text,
+            self.conversation.composer.text(),
+            crate::wire::MAX_USER_MESSAGE_BYTES,
+        ) {
+            Ok(draft) => {
+                self.conversation.composer.set_text(&draft);
+                self.conversation.content_focus = false;
+                self.notice = Some("已引用原消息 · 补充回复后发送，可直接编辑引用".into());
+                self.chat_persist_draft();
+            }
+            Err(error) => self.notice = Some(error),
+        }
+        self.dirty = true;
+    }
+
     fn chat_key(&mut self, key: Key) {
         self.chat_cancel_native_lookup();
         if self.sleep_key(key) {
@@ -1622,6 +1656,20 @@ impl State {
             return;
         }
         if self.selection {
+            return;
+        }
+        if let Key::Mouse {
+            button: 0,
+            x,
+            y,
+            release: false,
+        } = key
+            && self.chat_reply_available()
+            && y == prompt_top(self.geometry)
+            && x >= self.geometry.left.saturating_sub(10)
+            && x < self.geometry.left.saturating_sub(2)
+        {
+            self.chat_reply_selected();
             return;
         }
         if matches!(key, Key::InputGrow | Key::InputShrink) {
@@ -1753,8 +1801,10 @@ impl State {
             self.question_key(key);
             return;
         }
-        if matches!(self.conversation.view, View::Statistics | View::Agents)
-            && self.conversation.content_focus
+        if matches!(
+            self.conversation.view,
+            View::Statistics | View::Agents | View::Waits
+        ) && self.conversation.content_focus
             && matches!(key, Key::Delete | Key::Newline)
         {
             self.chat_change_view(View::Activity);
@@ -2036,6 +2086,10 @@ impl State {
             self.logs_close_restore();
             return;
         }
+        if self.conversation.view == View::Waits {
+            self.chat_change_view(View::Activity);
+            return;
+        }
         if self.conversation.view == View::Tasks {
             self.conversation.content_focus = self.conversation.tasks.back();
             self.notice = None;
@@ -2118,6 +2172,13 @@ impl State {
             }
             return;
         }
+        if matches!(character, 'r' | 'R')
+            && self.conversation.content_focus
+            && self.chat_reply_available()
+        {
+            self.chat_reply_selected();
+            return;
+        }
         if character == '\u{16}' {
             if let Err(error) = self.chat_start_input(attachments::Source::Clipboard, false) {
                 self.notice = Some(error);
@@ -2157,8 +2218,10 @@ impl State {
                 return;
             }
         }
-        if matches!(self.conversation.view, View::Statistics | View::Agents)
-            && self.conversation.content_focus
+        if matches!(
+            self.conversation.view,
+            View::Statistics | View::Agents | View::Waits
+        ) && self.conversation.content_focus
             && matches!(
                 character,
                 '\n' | '\u{1}' | '\u{5}' | '\u{15}' | '\u{b}' | '\u{17}' | '\u{7f}' | '\u{8}'
@@ -2289,7 +2352,10 @@ impl State {
                 self.help = !self.help;
             }
             ch if !ch.is_control() => {
-                if matches!(self.conversation.view, View::Statistics | View::Agents) {
+                if matches!(
+                    self.conversation.view,
+                    View::Statistics | View::Agents | View::Waits
+                ) {
                     self.chat_change_view(View::Activity);
                 }
                 self.conversation.content_focus = false;
@@ -2603,7 +2669,10 @@ impl State {
         if output == b"\x1b[201~" && !self.keyboard.pasting {
             if let Some(paste) = self.conversation.paste.take() {
                 if !paste.is_empty() {
-                    if matches!(self.conversation.view, View::Statistics | View::Agents) {
+                    if matches!(
+                        self.conversation.view,
+                        View::Statistics | View::Agents | View::Waits
+                    ) {
                         self.chat_change_view(View::Activity);
                     }
                     if self.help {
@@ -3101,6 +3170,7 @@ impl State {
                 rows
             }
             View::Statistics => self.chat_statistics_rows(&data, height),
+            View::Waits => self.chat_wait_rows(height),
             View::History => self.chat_history_rows(height),
             View::Questions => self.question_rows(height),
             View::Logs => self.filtered_logs().unwrap_or_else(|| {
@@ -3211,6 +3281,7 @@ impl State {
                 let connection = super::footer::Connection::from_snapshot(self.preview, &data);
                 let scroll_hint = self.chat_scroll_hint();
                 let wait_hint = self.chat_user_wait_hint();
+                let timing_hint = self.chat_timing_footer_hint();
                 let paste_hint = self.chat_paste_recovery_hint();
                 let native_hint = self.chat_native_hint();
                 let update_hint = self.chat_update_notice();
@@ -3219,7 +3290,8 @@ impl State {
                     || wait_hint.is_some()
                     || paste_hint.is_some()
                     || native_hint.is_some()
-                    || update_hint.is_some();
+                    || update_hint.is_some()
+                    || timing_hint.is_some();
                 let idle_hint = self.chat_idle_tip(
                     now,
                     connection == super::footer::Connection::Connected,
@@ -3243,10 +3315,14 @@ impl State {
                         self.rendered_update_notice = Some(hint);
                         return message;
                     }
+                    if let Some(hint) = timing_hint { return hint; }
                     if let Some(hint) = idle_hint { return hint.into(); }
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
+                    if self.conversation.view == View::Waits {
+                        return "Waits · ↑↓ / PgUp/PgDn scroll · Esc conversation · ←/→ panels · read-only".into();
+                    }
                     if self.conversation.view == View::Statistics {
                         return if self.conversation.detail {
                             "Diagnostics · Enter summary · Esc back · ↑↓ scroll · ←/→ panels".into()
@@ -3363,13 +3439,26 @@ impl State {
                 } else {
                     format!("{mode} · {context}")
                 };
+                let reply = self.chat_reply_available();
                 let clock_width = clock_label
                     .as_ref()
-                    .map_or(0, |label| label.width() as u16 + 3);
+                    .map_or(0, |label| label.width() as u16 + 3)
+                    + if reply { 11 } else { 0 };
                 let title_width = width.saturating_sub(clock_width);
                 let title = fit(&title, title_width);
                 let available = usize::from(g.left).saturating_sub(title.width() + 4);
-                let detail = if let Some(clock) = &clock_label {
+                let detail = if reply {
+                    let clock = clock_label
+                        .as_ref()
+                        .map(|clock| {
+                            fit(
+                                clock,
+                                available.saturating_sub(11).min(usize::from(u16::MAX)) as u16,
+                            )
+                        })
+                        .filter(|clock| !clock.is_empty());
+                    clock.map_or_else(|| "[R 引用]".into(), |clock| format!("{clock} · [R 引用]"))
+                } else if let Some(clock) = &clock_label {
                     fit(clock, available.min(usize::from(u16::MAX)) as u16)
                 } else if g.left == g.cols {
                     let [account, quota] = self.account.compact_rows();
@@ -4564,7 +4653,7 @@ mod tests {
         state.chat_agents();
         let data = json!({"agents":[
             {"agent_id":"agent_prefix_11111111","name":"Builder","status":"working"},
-            {"agent_id":"agent_prefix_22222222","name":"Builder","status":"available"}
+            {"agent_id":"agent_prefix_22222222","name":"Builder","status":"idle"}
         ]});
         let rows = state.chat_agent_rows(&data, 18).join("\n");
         assert!(rows.contains("…11111111"));

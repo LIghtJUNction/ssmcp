@@ -1,5 +1,196 @@
 use super::*;
 
+fn durable_entry(id: &str, elapsed_ms: u64) -> Entry {
+    use crate::wire::wait_display::{DurableObservation, DurableState, DurableStatus};
+    let mut entry = observed_wait(WaitMode::All, WaitOutcome::Triggered);
+    entry.id = id.into();
+    entry.elapsed_ms = elapsed_ms;
+    entry.durable = Some(DurableObservation {
+        state: DurableState::Cached,
+        result_status: Some(DurableStatus::Ready),
+        started_at_ms: 1_795_000_000_000,
+        completed_at_ms: Some(1_795_000_000_000 + elapsed_ms),
+        first_read_at_ms: None,
+        last_read_at_ms: None,
+        acknowledged_at_ms: None,
+        retained_until_ms: Some(1_795_001_800_000 + elapsed_ms),
+        delivery_lag_ms: None,
+        elapsed_total_ms: elapsed_ms,
+        lifetime_ms: 3_600_000,
+        read_window_ms: 55_000,
+        read_windows: 2,
+        replay_count: 0,
+        cursor: 1,
+    });
+    entry
+}
+
+#[test]
+fn retained_duration_samples_require_real_completion_and_exclude_cancelled_unknown_and_legacy() {
+    use crate::wire::wait_display::DurableStatus;
+    let first = durable_entry("first", 1000);
+    let mut cancelled = durable_entry("cancelled", 999_999);
+    cancelled.status = Status::Cancelled;
+    cancelled.durable.as_mut().unwrap().result_status = Some(DurableStatus::Cancelled);
+    let mut unknown = durable_entry("unknown", 999_999);
+    unknown.status = Status::Unknown;
+    let mut no_completion = durable_entry("no-completion", 999_999);
+    no_completion.durable.as_mut().unwrap().completed_at_ms = None;
+    let snapshot = Snapshot {
+        active: vec![],
+        recent: vec![
+            first.clone(),
+            first,
+            durable_entry("second", 9000),
+            durable_entry("third", 2000),
+            cancelled,
+            unknown,
+            no_completion,
+            observed_wait(WaitMode::Any, WaitOutcome::Triggered),
+        ],
+        prompts: vec![],
+    };
+    let stats = dashboard::Stats::from_snapshot(&snapshot);
+    assert_eq!(
+        (stats.count, stats.mean, stats.p50, stats.p95),
+        (3, Some(4000), Some(2000), Some(9000))
+    );
+    assert_eq!((stats.cancelled, stats.unknown), (1, 2));
+    assert_eq!(
+        dashboard::Stats::from_snapshot(&Snapshot::default()).mean,
+        None
+    );
+}
+
+#[test]
+fn durable_read_attempt_ack_and_stale_receipt_remain_distinct() {
+    use crate::wire::wait_display::DurableState;
+    let mut entry = durable_entry("read-states", 81_000);
+    assert_eq!(dashboard::phase(&entry), dashboard::Phase::Unread);
+    entry.durable.as_mut().unwrap().first_read_at_ms = Some(1_795_000_082_000);
+    assert_eq!(dashboard::phase(&entry), dashboard::Phase::ReadAttempt);
+    entry.durable.as_mut().unwrap().state = DurableState::Acknowledged;
+    assert_eq!(dashboard::phase(&entry), dashboard::Phase::Acknowledged);
+    entry.status = Status::Unknown;
+    assert_eq!(dashboard::phase(&entry), dashboard::Phase::Unknown);
+    let text = dashboard::entry_lines(&entry).join("\n");
+    assert!(text.contains("本轮读取窗口 55s"));
+    assert!(text.contains("生命周期上限 1:00:00"));
+    assert!(text.contains("显式确认 · 未知"));
+}
+
+fn dashboard_fixture() -> Snapshot {
+    use crate::wire::wait_display::{DurableState, DurableStatus};
+    let mut active = durable_entry("background-original-id", 83_000);
+    active.status = Status::Running;
+    active.wait.as_mut().unwrap().outcome = WaitOutcome::Pending;
+    active.remaining_ms = Some(3_517_000);
+    let durable = active.durable.as_mut().unwrap();
+    durable.state = DurableState::Waiting;
+    durable.result_status = None;
+    durable.completed_at_ms = None;
+    durable.retained_until_ms = None;
+    durable.cursor = 0;
+    let mut cancelled = durable_entry("cancelled", 4000);
+    cancelled.status = Status::Cancelled;
+    cancelled.durable.as_mut().unwrap().result_status = Some(DurableStatus::Cancelled);
+    let mut unknown = durable_entry("unknown", 6000);
+    unknown.status = Status::Unknown;
+    Snapshot {
+        active: vec![active],
+        recent: vec![
+            durable_entry("completed-unread", 81_000),
+            cancelled,
+            unknown,
+        ],
+        prompts: vec![crate::runtime::time::PromptSummary {
+            id: "schedule-fixture".into(),
+            status: crate::runtime::time::PromptStatus::Scheduled,
+            scope: "native_connection",
+            created_at_unix_ms: 1_795_000_000_000,
+            expires_at_unix_ms: 1_795_003_600_000,
+            lifetime_ms: 3_600_000,
+            next_fire_unix_ms: Some(1_795_000_120_000),
+            interval_ms: Some(60_000),
+            last_fired_at_unix_ms: Some(1_795_000_060_000),
+            pending_count: 1,
+            visibility: "queued",
+            missed_count: 2,
+            tick: 3,
+            retention_after_ack_ms: 300_000,
+        }],
+    }
+}
+
+#[test]
+fn dedicated_wait_view_renders_narrow_wide_light_dark_without_changing_draft_or_queue() {
+    for theme in [
+        crate::client::ui::Theme::Light,
+        crate::client::ui::Theme::Dark,
+    ] {
+        let ui = Ui {
+            theme,
+            ..Ui::default()
+        };
+        for cols in [48, 120] {
+            let mut state = super::super::super::preview_state(40, cols, &ui);
+            state.events.clear();
+            state.panel.tasks.clear();
+            state.conversation.timing_fixture = Some(dashboard_fixture());
+            state.conversation.composer.set_text("KEEP_WAIT_DRAFT");
+            let cursor = state.conversation.composer.cursor();
+            state.chat_change_view(View::Waits);
+            let rendered = screen(&mut state);
+            assert!(rendered.contains("等待与计时"), "{rendered}");
+            assert!(rendered.contains("真实完成样本"), "{rendered}");
+            assert!(rendered.contains("进行中"), "{rendered}");
+            state.chat_move(15);
+            let _ = screen(&mut state);
+            state.chat_escape();
+            assert_eq!(state.conversation.view, View::Activity);
+            assert_eq!(state.conversation.composer.text(), "KEEP_WAIT_DRAFT");
+            assert_eq!(state.conversation.composer.cursor(), cursor);
+            assert!(state.actions.is_empty());
+            assert!(!state.conversation.exit_requested);
+        }
+    }
+}
+
+#[test]
+#[ignore = "export only with the coordinator's matching final test binary and an owned evidence directory"]
+fn export_wait_dashboard_frames() {
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("SSMCP_WAIT_DASHBOARD_FIXTURE_DIR")
+            .expect("owned fixture output directory"),
+    );
+    std::fs::create_dir_all(&directory).unwrap();
+    for (theme_name, theme) in [
+        ("light", crate::client::ui::Theme::Light),
+        ("dark", crate::client::ui::Theme::Dark),
+    ] {
+        let ui = Ui {
+            theme,
+            ..Ui::default()
+        };
+        for cols in [120, 48] {
+            let mut state = super::super::super::preview_state(40, cols, &ui);
+            state.events.clear();
+            state.panel.tasks.clear();
+            state.conversation.composer.set_text("KEEP_WAIT_DRAFT");
+            state.conversation.timing_fixture = Some(dashboard_fixture());
+            state.chat_change_view(View::Waits);
+            for (part, offset) in [("active", 0), ("plans", usize::MAX)] {
+                state.conversation.detail_scroll = offset;
+                let frame = state.chat_frame(Instant::now());
+                let stem = format!("wait-dashboard-{theme_name}-{cols}-{part}");
+                std::fs::write(directory.join(format!("{stem}.ansi")), frame.diff(None)).unwrap();
+                std::fs::write(directory.join(format!("{stem}.json")), serde_json::to_vec(&serde_json::json!({
+                    "rows":40,"cols":cols,"theme":theme_name,"part":part,"renderer":"conversation::chat_frame","fixture":"synthetic"})).unwrap()).unwrap();
+            }
+        }
+    }
+}
+
 fn entry(remaining_ms: Option<u64>, elapsed_ms: u64) -> Entry {
     Entry {
         id: "timer_1_1".into(),
@@ -14,6 +205,7 @@ fn entry(remaining_ms: Option<u64>, elapsed_ms: u64) -> Entry {
         episode: None,
         attribution: None,
         wait: None,
+        durable: None,
     }
 }
 
@@ -63,6 +255,7 @@ fn real_frames_keep_a_live_clock_visible_beside_a_draft_and_specific_notice() {
         state.conversation.timing_fixture = Some(Snapshot {
             active: vec![entry(Some(12_001), 0)],
             recent: vec![],
+            prompts: vec![],
         });
         let first = screen(&mut state);
         assert!(first.contains("剩余 00:13"), "{cols}: {first}");
@@ -102,6 +295,7 @@ fn timing_details_preserve_full_cancel_ids_and_do_not_restore_live_actions() {
     let snapshot = Snapshot {
         active: vec![entry(Some(1000), 2000)],
         recent: vec![],
+        prompts: vec![],
     };
     let text = detail(&snapshot).unwrap();
     assert!(text.contains("#timer_1_1"));
@@ -124,6 +318,7 @@ fn nearest_real_deadline_and_short_expiry_receipt_win_over_open_elapsed_work() {
     let mut snapshot = Snapshot {
         active: vec![open.clone(), late, early],
         recent: vec![],
+        prompts: vec![],
     };
     assert_eq!(selected(&snapshot).unwrap().id, "earlier");
     assert_eq!(clock_label(selected(&snapshot).unwrap()), "剩余 00:06");
@@ -211,6 +406,7 @@ fn mixed_width_time_labels_fit_real_frames_without_changing_draft_or_actions() {
         state.conversation.timing_fixture = Some(Snapshot {
             active: vec![],
             recent: vec![ended],
+            prompts: vec![],
         });
         let frame = screen(&mut state);
         assert!(
@@ -263,11 +459,13 @@ fn wait_snapshot(entry: Entry) -> Snapshot {
         Snapshot {
             active: vec![entry],
             recent: vec![],
+            prompts: vec![],
         }
     } else {
         Snapshot {
             active: vec![],
             recent: vec![entry],
+            prompts: vec![],
         }
     }
 }

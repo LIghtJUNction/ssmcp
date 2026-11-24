@@ -56,7 +56,7 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.client.reload", "ssmcp.client.capabilities",
     "ssmcp.resources.list", "ssmcp.resources.templates", "ssmcp.resources.read",
     "ssmcp.output.read", "ssmcp.output.stat", "ssmcp.output.cleanup",
-    "ssmcp.time.now", "ssmcp.time.wait",
+    "ssmcp.time.now", "ssmcp.time.wait", "ssmcp.time.prompt",
     "ssmcp.exec.start", "ssmcp.exec.list", "ssmcp.exec.status", "ssmcp.exec.wait",
     "ssmcp.exec.read", "ssmcp.exec.write", "ssmcp.exec.resize", "ssmcp.exec.cancel",
     "ssmcp.exec.forget", "ssmcp.exec.events",
@@ -229,6 +229,14 @@ class Harness:
         if status != 200 or "error" in result or result["result"].get("isError"):
             raise AssertionError(f"Tool {name} failed: HTTP {status}, {result}")
         return result["result"]["structuredContent"]
+
+    def lifecycle_update_arguments(self, member, status):
+        """Use one current CAS snapshot; never replay a rejected or unknown update."""
+        members = self.public_call("collab", {"action": "list", "client_id": self.client_id})["agents"]
+        current = next(agent for agent in members if agent["agent_id"] == member["agent_id"])
+        return {"action": "update", "client_id": self.client_id,
+                "agent_id": member["agent_id"], "token": member["token"],
+                "expected_revision": current["lifecycle"]["revision"], "status": status}
 
     def call(self, name, arguments=None, *, modern=True, client_id=None, secret=None):
         """Call a native capability through the public JavaScript interface."""

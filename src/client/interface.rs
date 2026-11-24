@@ -24,6 +24,18 @@ pub(crate) mod user_wait;
 
 static CONFIG_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static UPDATES: Mutex<()> = Mutex::new(());
+
+/// The one serialized native message publisher, also used by retained timers.
+/// Callers must release their own state locks before entering this function.
+pub(crate) fn publish_message(
+    arguments: Value,
+    source: crate::runtime::call_scope::Source,
+) -> Result<Value, String> {
+    source.blocking(|| {
+        let _updates = UPDATES.lock().unwrap_or_else(|error| error.into_inner());
+        messages::send(arguments)
+    })
+}
 static RESIZES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static PENDING_THEME: Mutex<Option<Theme>> = Mutex::new(None);
 
@@ -541,14 +553,14 @@ pub(crate) async fn call(
         let presentation = name == "ssmcp.ui.present";
         let source = crate::runtime::call_scope::Source::capture();
         return tokio::task::spawn_blocking(move || {
-            source.blocking(|| {
-                let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
-                if presentation {
+            if presentation {
+                source.blocking(|| {
+                    let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
                     super::presentation::send(arguments)
-                } else {
-                    messages::send(arguments)
-                }
-            })
+                })
+            } else {
+                publish_message(arguments, source)
+            }
         })
         .await
         .map_err(|_| "message delivery worker stopped".to_owned())?;
