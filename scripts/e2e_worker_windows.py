@@ -644,6 +644,22 @@ class WorkerWindows(Harness):
             raise AssertionError(f"{name} returned a native error: {native}")
         return native["structuredContent"]
 
+    def policy_denial(self, client_id, participant, name, arguments):
+        # call() throws native tool failures. Capture only this expected negative
+        # operation at its real JS boundary; unrelated/runtime failures stay fatal.
+        code = ("try { const response = await call(%s, %s, %s); "
+                "return {rejected:false,response}; } catch (error) { "
+                "return {rejected:true,error:String(error.message ?? error)}; }") % (
+                    json.dumps(client_id), json.dumps(name), json.dumps(arguments))
+        result = self.public_call("code_mode", {
+            "agent": {"client_id": client_id, "id": participant["agent_id"],
+                      "token": participant["token"]}, "code": code,
+        })["result"]
+        if (result.get("rejected") is not True
+                or result.get("error") != "native file mutation blocked by safety policy"):
+            raise AssertionError(f"{name}: expected the exact native safety policy denial, got {result}")
+        return result
+
     def native_file_safety(self, workspace, parent, worker, manager):
         sessions = ((parent, self.coordinators[parent["id"]], "parent"),
                     (worker, manager, "worker"))
@@ -655,10 +671,10 @@ class WorkerWindows(Harness):
             native("ssmcp.fs.write_text", {"path": target.name, "text": label})
             self.check(target.read_text() == label, f"{label}: ordinary native write succeeds")
             for path in ("../outside-safety-fixture",):
-                refusal = native("ssmcp.fs.write_text", {
+                refusal = self.policy_denial(client["id"], participant, "ssmcp.fs.write_text", {
                     "path": path, "text": "synthetic-private-safety-value", "create_parents": True,
-                }, allow_error=True)
-                self.check(refusal.get("isError") is True,
+                })
+                self.check(refusal["rejected"] is True,
                            f"{label}: native safety rejects before mutation")
             policy_target = workspace / ".ssmcp" / "safety" / "attempt.toml"
             native("ssmcp.fs.write_text", {
@@ -667,9 +683,9 @@ class WorkerWindows(Harness):
             self.check(policy_target.read_text() == "ordinary setup",
                        f"{label}: policy directory has no implicit approval barrier")
             denied_dir = workspace / f"policy-blocked-{label}"
-            blocked = native("ssmcp.fs.mkdir", {"path": denied_dir.name, "parents": True},
-                             allow_error=True)
-            self.check(blocked.get("isError") is True and not denied_dir.exists(),
+            blocked = self.policy_denial(client["id"], participant, "ssmcp.fs.mkdir",
+                                         {"path": denied_dir.name, "parents": True})
+            self.check(blocked["rejected"] is True and not denied_dir.exists(),
                        f"{label}: project allow cannot override user approval requirement")
             self.check(not (workspace.parent / "outside-safety-fixture").exists(),
                        f"{label}: rejected traversal has no filesystem effect")
