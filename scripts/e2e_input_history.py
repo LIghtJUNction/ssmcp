@@ -518,7 +518,7 @@ class InputHistory(Composer):
         front.until(lambda shot: "Write and send" in text(shot), "the beginning of full help")
         front.send(END)
         last = "Help: Up/Down, PgUp/PgDn, Home/End scroll; Esc returns."
-        front.until(lambda shot: last in text(shot) and "Native harnesses" in text(shot),
+        front.until(lambda shot: last in text(shot) and "Conversation goal" in text(shot),
                     "the final help section after scrolling to End")
         self.save_shot("help-end", front)
         self.check(True, "the full help document can scroll to its final line")
