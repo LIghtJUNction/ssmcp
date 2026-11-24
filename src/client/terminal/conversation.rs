@@ -4653,7 +4653,7 @@ mod tests {
         state.chat_agents();
         let data = json!({"agents":[
             {"agent_id":"agent_prefix_11111111","name":"Builder","status":"working"},
-            {"agent_id":"agent_prefix_22222222","name":"Builder","status":"available"}
+            {"agent_id":"agent_prefix_22222222","name":"Builder","status":"idle"}
         ]});
         let rows = state.chat_agent_rows(&data, 18).join("\n");
         assert!(rows.contains("…11111111"));

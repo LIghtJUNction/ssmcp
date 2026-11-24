@@ -553,7 +553,7 @@ mod tests {
                     rendered.lines().last().unwrap().contains("等待你的输入"),
                     "{rendered}"
                 );
-                assert!(rendered.contains("运行 00:"), "{rendered}");
+                assert!(rendered.contains("等待 00:13"), "{rendered}");
                 assert_eq!(state.conversation.snapshot()["draft"], draft);
                 state
                     .conversation
