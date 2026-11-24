@@ -54,6 +54,24 @@ def direct_loopback(environment):
     return result
 
 
+def check_restored_draft(harness, before, restored):
+    """Navigation must restore the exact editor state, including an implicit recipient."""
+    harness.check(restored["draft"]["text"] == before["draft"]["text"],
+                  "same-process navigation preserves the exact draft text")
+    harness.check(restored["draft"]["cursor"] == before["draft"]["cursor"],
+                  "same-process navigation preserves the exact UTF-8 cursor")
+    # None is the implicit next caller; the wire queue spells it "next" only
+    # when sending. Compare the saved context without normalizing either value.
+    recipient_fields = ("target", "native_recipient", "native_account", "send_group")
+    harness.check({key: value for key, value in restored["draft_context"].items()
+                   if key in recipient_fields}
+                  == {key: value for key, value in before["draft_context"].items()
+                      if key in recipient_fields},
+                  "same-process navigation preserves the exact recipient")
+    harness.check(restored["draft_context"]["parked"] is None,
+                  "same-process navigation clears the restored parked draft")
+
+
 class Form(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -514,10 +532,7 @@ class RelayComposer(Composer):
         front.send(b"\x1b")
         front.until(lambda shot: parked in input_text(shot), "Escape restores the draft within the same process")
         escaped = self.queue()
-        self.check(escaped["draft"] == before["draft"]
-                   and escaped["draft_context"]["parked"] is None
-                   and escaped["draft_context"]["target"] == "next",
-                   "same-process navigation preserves the exact draft, cursor and recipient")
+        check_restored_draft(self, before, escaped)
         self.select_request(front, first["id"])
         front.send(b"r")
         front.until(lambda shot: first["text"] in input_text(shot), "a fresh parked copy before real reload")
