@@ -36,7 +36,9 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 from e2e_account_gateway import has_platform_consent
 from e2e_account_relay import IDENTITY, wait_for
-from e2e_composer import Composer, ENTER, LEFT, UP, editing_queue, input_text, visible_record
+from e2e_composer import (
+    Composer, ENTER, LEFT, UP, editing_queue, input_text, journal_value, visible_record,
+)
 from e2e_client_ui import empty_composer_ready
 from e2e_dashboard import Decoder, Frontend, sha256, text
 
@@ -483,7 +485,7 @@ class RelayComposer(Composer):
         reply_receipt = self.observe("ssmcp.ui.message", {"text": old_reply, "kind": "progress"})
         before_events = self.live_events()
         self.check(reply_receipt["recorded"] is True and reply_receipt["storage"] == "memory"
-                   and sum(event.get("value", {}).get("message_id") == reply_receipt["message_id"]
+                   and sum(journal_value(event).get("message_id") == reply_receipt["message_id"]
                            for event in before_events["events"]) == 1,
                    "the pre-reload reply belongs to one real event in the current process generation")
         legacy_records, legacy_markers, legacy_ids = self.seed_legacy_state()
@@ -582,7 +584,7 @@ class RelayComposer(Composer):
         self.check(after_events["generation"] != before_events["generation"]
                    and after_events["scope"]["client_id"] == self.client_id
                    and all(marker not in serialized and marker not in text(fresh_screen) for marker in old_context)
-                   and not any(event.get("value", {}).get("message_id") == reply_receipt["message_id"]
+                   and not any(journal_value(event).get("message_id") == reply_receipt["message_id"]
                                and (not reusable_reply_id or event["value"].get("text") == old_reply)
                                for event in after_events["events"]),
                    "the replacement event generation contains no old RAM body or legacy file contents")

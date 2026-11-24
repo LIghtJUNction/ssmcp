@@ -26,7 +26,9 @@ import time
 import zlib
 
 from e2e_account_relay import wait_for
-from e2e_composer import Composer, DOWN, ENTER, ESC, HOME, RIGHT, conversation_question_banner
+from e2e_composer import (
+    Composer, DOWN, ENTER, ESC, HOME, RIGHT, conversation_question_banner, journal_value,
+)
 from e2e_client_ui import column, empty_composer_ready, prompt_text, view
 from e2e_dashboard import sha256, text
 
@@ -435,7 +437,7 @@ class InputHistory(Composer):
                    and duplicate["message_id"] == receipt["message_id"],
                    "an idempotent native reply preserves its ID and is recorded in memory only once")
         events_before = self.live_events()
-        self.check(sum(event.get("value", {}).get("message_id") == receipt["message_id"]
+        self.check(sum(journal_value(event).get("message_id") == receipt["message_id"]
                        for event in events_before["events"]) == 1,
                    "the ui.message receipt identifies exactly one live event")
         pending_text = "HANDOFF_PENDING 界：尚未领取的用户要求"
@@ -473,7 +475,7 @@ class InputHistory(Composer):
         added = self.live_events(limit=8, cursor=events_before["next_cursor"],
                                  generation=events_before["generation"])
         self.check(self.observe("ssmcp.ui.questions", {"id": question["id"]})["question"]["state"] == "pending"
-                   and not any(event.get("value", {}).get("message_id") == receipt["message_id"]
+                   and not any(journal_value(event).get("message_id") == receipt["message_id"]
                                for event in added["events"]) and not marker.exists(),
                    "handoff does not answer questions, duplicate the live reply, or execute shell text from its note")
         suffix = " 补充：继续核对。"
@@ -542,7 +544,7 @@ class InputHistory(Composer):
         reply = "# LIVE_REPLY_FIXTURE\n\n已读取文件、技能和图片。"
         receipt = self.observe("ssmcp.ui.message", {"text": reply})
         before = self.live_events()
-        values = [event.get("value", {}) for event in before["events"]]
+        values = [journal_value(event) for event in before["events"]]
         self.check(receipt["recorded"] is True and receipt["storage"] == "memory"
                    and sum(value.get("message_id") == receipt["message_id"] for value in values) == 1,
                    "current RAM events contain exactly one newly recorded agent reply")
@@ -603,7 +605,7 @@ class InputHistory(Composer):
         self.check(not self.messages(self.work()),
                    "restart does not redeliver the old pending requirement")
         after = self.live_events()
-        values_after = [event.get("value", {}) for event in after["events"]]
+        values_after = [journal_value(event) for event in after["events"]]
         serialized = json.dumps(after["events"], ensure_ascii=False)
         self.check(after["generation"] != before["generation"]
                    and not any(value.get("message_id") == receipt["message_id"]
