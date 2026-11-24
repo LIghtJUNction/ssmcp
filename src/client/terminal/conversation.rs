@@ -3285,12 +3285,17 @@ impl State {
                 let timing_hint = self.chat_timing_footer_hint();
                 let paste_hint = self.chat_paste_recovery_hint();
                 let native_receipt_hint = self.chat_native_priority_hint();
-                let native_hint = self.chat_native_hint();
+                let native_hint = if timing_hint.is_none() {
+                    self.chat_native_hint()
+                } else {
+                    None
+                };
                 let update_hint = self.chat_update_notice();
                 let priority_hint = self.notice.is_some()
                     || scroll_hint.is_some()
                     || wait_hint.is_some()
                     || paste_hint.is_some()
+                    || native_receipt_hint.is_some()
                     || native_hint.is_some()
                     || update_hint.is_some()
                     || timing_hint.is_some();

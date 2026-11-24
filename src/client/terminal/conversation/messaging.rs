@@ -738,7 +738,7 @@ impl State {
         }
     }
 
-    fn chat_background_ids(&self) -> std::collections::BTreeSet<String> {
+    pub(super) fn chat_background_ids(&self) -> std::collections::BTreeSet<String> {
         self.chat_user_wait_snapshot()
             .active
             .iter()

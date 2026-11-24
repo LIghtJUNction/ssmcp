@@ -514,6 +514,7 @@ mod tests {
             let recipient =
                 "client:1111111111111111111111111111111111111111111111111111111111111111";
             state.conversation.native_recipient = Some(recipient.into());
+            state.conversation.native_receipt_background = Some(state.chat_background_ids());
             state.conversation.composer.set_text("Unsent draft 界");
             state.conversation.composer.left();
             let draft = state.conversation.snapshot()["draft"].clone();
