@@ -1323,8 +1323,9 @@ def publish(root=None):
         args = ["cargo", "publish", "--locked", "--no-verify", "--registry", "crates-io",
                 "--package", package, "--target-dir", str(target), "--allow-dirty"]
         subprocess.run([*args, "--dry-run"], cwd=export, check=True)
-        fresh = crate_archive(root, target)
-        if (digest(fresh) != checksum or digest(archive) != checksum
+        # Cargo 1.100 stages the archive used by publish in package/tmp-crate.
+        fresh = target / "package" / "tmp-crate" / archive.name
+        if (not fresh.is_file() or digest(fresh) != checksum or digest(archive) != checksum
                 or release_source(root) != source):
             raise ValueError("fresh package bytes or source graph differ from the verified crate")
         require_registry_export(export, source["commit"], manifest, lock)

@@ -461,7 +461,8 @@ class ReleaseTests(unittest.TestCase):
     def same_dry_run_bytes(self, args, **kwargs):
         if "--dry-run" in args:
             archive = release.crate_archive(self.root)
-            temporary = release.crate_archive(self.root, Path(args[args.index("--target-dir") + 1]))
+            target = Path(args[args.index("--target-dir") + 1])
+            temporary = target / "package" / "tmp-crate" / archive.name
             temporary.parent.mkdir(parents=True)
             temporary.write_bytes(archive.read_bytes())
 
@@ -1466,7 +1467,9 @@ class ReleaseTests(unittest.TestCase):
         def drift(args, **kwargs):
             self.assertIn("--dry-run", args)
             self.same_dry_run_bytes(args)
-            fresh = release.crate_archive(self.root, Path(args[args.index("--target-dir") + 1]))
+            target = Path(args[args.index("--target-dir") + 1])
+            release.crate_archive(self.root, target).write_bytes(path.read_bytes())
+            fresh = target / "package" / "tmp-crate" / path.name
             fresh.write_bytes(b"different fresh crate")
 
         with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
