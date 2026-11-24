@@ -29,6 +29,8 @@ use std::{
 };
 #[cfg(windows)]
 use tokio::sync::oneshot as command_ready;
+#[cfg(test)]
+use tokio::time::timeout;
 #[cfg(windows)]
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -37,7 +39,7 @@ use tokio::{
 };
 use tokio::{
     sync::{Mutex as AsyncMutex, Notify, Semaphore, watch},
-    time::{Instant, timeout, timeout_at},
+    time::{Instant, timeout_at},
 };
 #[cfg(unix)]
 use zrun::{io::AsyncFd, sync as command_ready};
@@ -2116,9 +2118,13 @@ where
     F::Output: Send + 'static,
 {
     #[cfg(unix)]
-    return Driver::get()?.spawn(future);
+    {
+        Driver::get()?.spawn(future)
+    }
     #[cfg(windows)]
-    Ok(tokio::spawn(future))
+    {
+        Ok(tokio::spawn(future))
+    }
 }
 
 async fn capture(

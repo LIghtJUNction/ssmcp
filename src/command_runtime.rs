@@ -8,7 +8,7 @@ use std::{
     pin::pin,
     sync::OnceLock,
     task::Poll,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 pub(crate) use zrun::JoinHandle;
@@ -91,8 +91,9 @@ pub(crate) async fn timeout_at<F: Future>(
     .await
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) async fn timeout<F: Future>(
-    duration: Duration,
+    duration: std::time::Duration,
     future: F,
 ) -> Result<F::Output, DeadlineError> {
     timeout_at(Instant::now() + duration, future).await
