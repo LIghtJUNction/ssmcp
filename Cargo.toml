@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.10.31"
+version = "0.10.32"
 edition = "2024"
 rust-version = "1.100"
 description = "Connect local tools and remote terminals through authenticated MCP sessions"
@@ -236,7 +236,7 @@ tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-
 tokio = { version = "1.54", features = ["test-util"] }
 
 [target.'cfg(unix)'.dependencies]
-zrun = { git = "https://github.com/LIghtJUNction/zrun.git", rev = "16c7581994e7971e5d9beafbb23f59f5fea1de6e", features = ["process"] }
+zrun = { version = "=0.1.0-p0.2", features = ["process"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 portable-pty = "0.9"

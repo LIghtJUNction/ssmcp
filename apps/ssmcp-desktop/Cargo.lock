@@ -1761,7 +1761,7 @@ dependencies = [
 
 [[package]]
 name = "ssmcp"
-version = "0.10.31"
+version = "0.10.32"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -2905,7 +2905,8 @@ dependencies = [
 [[package]]
 name = "zrun"
 version = "0.1.0-p0.2"
-source = "git+https://github.com/LIghtJUNction/zrun.git?rev=16c7581994e7971e5d9beafbb23f59f5fea1de6e#16c7581994e7971e5d9beafbb23f59f5fea1de6e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13b5ac0ee9976690f7e19f20b25f58ced5d8e8ade785106a44cf22dca4f83cbc"
 dependencies = [
  "libc",
  "zrun-executor",
@@ -2918,7 +2919,8 @@ dependencies = [
 [[package]]
 name = "zrun-executor"
 version = "0.1.0-p0.2"
-source = "git+https://github.com/LIghtJUNction/zrun.git?rev=16c7581994e7971e5d9beafbb23f59f5fea1de6e#16c7581994e7971e5d9beafbb23f59f5fea1de6e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f9bdf0f234b7042cca2d020e1661bd2615932ba1dbf2c5314df1c45d64bea19"
 dependencies = [
  "zrun-io",
  "zrun-task",
@@ -2928,7 +2930,8 @@ dependencies = [
 [[package]]
 name = "zrun-io"
 version = "0.1.0-p0.2"
-source = "git+https://github.com/LIghtJUNction/zrun.git?rev=16c7581994e7971e5d9beafbb23f59f5fea1de6e#16c7581994e7971e5d9beafbb23f59f5fea1de6e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "880ad1fbe2a43675bdbd6ee97372e57670c4ec194a33e74f7e351b7f1341e769"
 dependencies = [
  "libc",
  "mio",
@@ -2937,17 +2940,20 @@ dependencies = [
 [[package]]
 name = "zrun-sync"
 version = "0.1.0-p0.2"
-source = "git+https://github.com/LIghtJUNction/zrun.git?rev=16c7581994e7971e5d9beafbb23f59f5fea1de6e#16c7581994e7971e5d9beafbb23f59f5fea1de6e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c27c148843360b832fe251c683c7843359d88f88369df5c5f62ccc10323e3dd7"
 
 [[package]]
 name = "zrun-task"
 version = "0.1.0-p0.2"
-source = "git+https://github.com/LIghtJUNction/zrun.git?rev=16c7581994e7971e5d9beafbb23f59f5fea1de6e#16c7581994e7971e5d9beafbb23f59f5fea1de6e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed34bad6ea136979d22023d26c9853bae06bf7c7989312c021a0600d654b2dd4"
 
 [[package]]
 name = "zrun-time"
 version = "0.1.0-p0.2"
-source = "git+https://github.com/LIghtJUNction/zrun.git?rev=16c7581994e7971e5d9beafbb23f59f5fea1de6e#16c7581994e7971e5d9beafbb23f59f5fea1de6e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94abb6b874ffcfc917605c9d05fe6daa538502d32f74e1a05d9c8a669f722100"
 
 [[package]]
 name = "zsys"
