@@ -456,6 +456,9 @@ ssmcp tools status
 
 `ssmcp tools check` 和 `ssmcp tools update` 只管理官方仓库，项目与全局仓库由各自的 Git 工作流维护。Dreaming 也可使用已有执行、文件和 Git 操作维护这些工作流；初始化本身不创建模型或调度器。[完整命令、可信配置与覆盖规则](docs/tool-repositories.md) · [源码选择与回执](docs/code-mode.md#find-and-iterate-tool-implementations)
 
+从 Code Mode 调用已有 MCP 网关时，先配置 peer，再发现 `peer.` 工具。RC 内嵌配置、文件导入和运行时卸载收录在设计稿中。[接入教程](docs/mcp-peer-tutorial.md) · [RC 设计](docs/mcp-server-rc.md)
+
+
 其他客户端的源码入口与各端验收范围见[客户端](docs/clients.md)；HTTP 接入与配对协议见[GUI 网关](docs/gui-gateway.md)。
 
 ### 命令执行、在途去重与结果缓存

@@ -22,6 +22,8 @@ include = [
     "/docs/recovery.md",
     "/docs/device-control-plane.md",
     "/docs/tool-repositories.md",
+    "/docs/mcp-peer-tutorial.md",
+    "/docs/mcp-server-rc.md",
     "/docs/finish-and-questions.md",
     "/docs/thread-listeners.md",
     "/docs/zcalld-listener.md",

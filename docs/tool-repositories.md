@@ -158,6 +158,10 @@ selection cause explicit errors.
 [Boundary tests](../src/tool_repository/tests.rs) ·
 [Actual JavaScript host tests](../scripts/test_client_capabilities.mjs)
 
+## MCP peers
+
+A tool repository can export a helper for an explicitly configured MCP peer. A new Code Mode call reads the current helper source. Refresh the peer catalog with the native harness tool. [Tutorial](mcp-peer-tutorial.md) · [RC lifecycle design](mcp-server-rc.md)
+
 ## Maintaining workflows with Dreaming
 
 Dreaming uses the existing authenticated execution, task, filesystem and Git

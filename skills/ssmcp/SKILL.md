@@ -1,6 +1,6 @@
 ---
 name: ssmcp
-description: Operate authenticated ssmcp workspaces through list and code_mode. Use for parallel and background commands, bounded waits, client reload, explicitly loaded coding harnesses, scoped file access and audit, standalone Zuse CLI lifecycle management, concise tool search, live project context and skill views, RTK output compression, Linux rsync transfers, and loopback TCP forwarding.
+description: Operate authenticated ssmcp workspaces through list and code_mode. Use for parallel and background commands, bounded waits, client reload, explicitly loaded MCP peers and tool repositories, scoped file access and audit, standalone Zuse CLI lifecycle management, concise tool search, live project context and skill views, RTK output compression, Linux rsync transfers, and loopback TCP forwarding.
 ---
 
 # ssmcp unified workspace bridge
@@ -27,6 +27,14 @@ ssmcp --name workspace --title "Describe this session's task" --allow YOUR_GITHU
 ```
 
 Use the operator's configured SSH destination and authorized identity. Do not copy private SSH keys, disable host-key checks, or work around a network policy. If the caller environment cannot connect, report that exact limitation and continue work on reachable peers.
+
+## Load or refresh an MCP peer
+
+Read [the peer tutorial](../../docs/mcp-peer-tutorial.md) for startup and OAuth. Discover `ssmcp.harnesses.list` and `ssmcp.harnesses.load` on the selected client. For a startup-configured peer, call the load tool with `{provider:"ssmcp",refresh:true}`. Check for `ready` and rediscover `peer.` tools. A fresh tool catalog identifies callable tools and their schemas.
+
+Use `ssmcp tools paths` before editing a tool repository or the user-owned RC. Modify only the authorized source. Validate the factory and confirm its new SHA-256 in the next call's outer `structuredContent.tool_sources`. Keep credentials in the target client's environment or credential store.
+
+For work on inline or file-based MCP configuration, dynamic load, unload, or reload, read [the RC design](../../docs/mcp-server-rc.md). Discover the actual native schema before invoking any proposed operation.
 
 ## Inspect available skills and instruction files
 
