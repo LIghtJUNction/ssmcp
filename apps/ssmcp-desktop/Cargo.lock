@@ -1761,7 +1761,7 @@ dependencies = [
 
 [[package]]
 name = "ssmcp"
-version = "0.10.35"
+version = "0.10.36"
 dependencies = [
  "axum",
  "base64 0.23.1",
