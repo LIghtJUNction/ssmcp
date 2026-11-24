@@ -1650,6 +1650,7 @@ class WorkerWindows(Harness):
 
     def timed_condition_waits(self, frontend, parent, directory, worker, manager, claim):
         generation, task_id = claim["generation"], claim["task_id"]
+        wait_ms = 10_000
         conditions = [{"type": "task_finished", "task_id": task_id},
                       {"type": "worker_idle", "slot": claim["slot"], "epoch": claim["epoch"]}]
         targets = [{"kind": "task_finished", "task_id": task_id},
@@ -1666,12 +1667,12 @@ class WorkerWindows(Harness):
                     previous = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
                     known = {item["operation_id"] for item in previous["manager_operations"]}
                     issued_at = time.monotonic()
-                    observation_deadline = issued_at + 4
+                    observation_deadline = issued_at + wait_ms / 1000 - 1
                     if outer_timeout:
                         # An outer timeout does not cancel an already-dispatched
                         # native operation. Observe its own bounded completion.
                         arguments = {"generation": generation, "mode": "all",
-                                     "conditions": conditions, "wait_ms": 5000}
+                                     "conditions": conditions, "wait_ms": wait_ms}
                         code = "return await call(%s, %s, %s);" % (
                             json.dumps(worker["id"]), json.dumps("ssmcp.worker.wait_for"), json.dumps(arguments))
                         future = pool.submit(self.rpc, "tools/call", {"name": "code_mode", "arguments": {
@@ -1680,7 +1681,7 @@ class WorkerWindows(Harness):
                         }}, modern=True)
                     else:
                         future = pool.submit(self.condition_wait, worker, manager, generation, conditions,
-                                             wait_ms=5000)
+                                             wait_ms=wait_ms)
 
                     def pending_operation():
                         frontend.pump()
@@ -1692,10 +1693,13 @@ class WorkerWindows(Harness):
                     operation = wait_for(pending_operation, timeout=max(0, observation_deadline - time.monotonic()),
                                          description="registering the actual native wait within its observation window")
                     operation_id = operation["operation_id"]
+                    self.check(operation["wait_ms"] == wait_ms,
+                               "the observed operation retains the original native wait budget")
                     evidence = {"waiting": operation}
                     case["outer_timeout" if outer_timeout else "native_timeout"] = evidence
                     if not outer_timeout:
-                        pattern = re.compile(rf"Wait #{operation_id} · ALL · Waiting · (\d+\.\d)s / 5\.0s")
+                        budget = re.escape(f"{wait_ms / 1000:.1f}s")
+                        pattern = re.compile(rf"Wait #{operation_id} · ALL · Waiting · (\d+\.\d)s / {budget}")
 
                         def elapsed_frame():
                             shot = view.frame()
@@ -1740,7 +1744,7 @@ class WorkerWindows(Harness):
                         evidence.update(first_frame=first, later_frame=second,
                                         parent_frame=parent_frame, targets_frame=targets_frame,
                                         observation_seconds=round(time.monotonic() - issued_at, 3))
-                    result = future.result(timeout=7)
+                    result = future.result(timeout=wait_ms / 1000 + 2)
                     if outer_timeout:
                         http_status, response, _ = result
                         native = response.get("result", {})
@@ -1764,7 +1768,7 @@ class WorkerWindows(Harness):
                                     if item["operation_id"] == operation_id)
                         return (current, item) if item["state"] != "waiting" else None
 
-                    current, ended = wait_for(finished_operation, timeout=6,
+                    current, ended = wait_for(finished_operation, timeout=wait_ms / 1000 + 1,
                                               description="the original native observation reaches its own terminal state")
                     self.check(ended["state"] in (("timed_out", "cancelled") if outer_timeout else ("timed_out",))
                                and not any(item["state"] == "waiting" for item in current["manager_operations"])

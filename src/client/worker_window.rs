@@ -1100,7 +1100,9 @@ fn valid_manager_operation(operation: &LinkedManagerOperation) -> bool {
         || operation.slot.is_some()
         || operation.epoch.is_some()
         || operation.summary.is_some()
-        || !operation.wait_ms.is_some_and(|wait| wait <= 5000)
+        || !operation
+            .wait_ms
+            .is_some_and(|wait| wait <= crate::worker::MAX_OBSERVATION_WAIT_MS)
     {
         return false;
     }
@@ -1999,7 +2001,7 @@ mod tests {
             summary: None,
             started_at_ms: 1000,
             elapsed_ms: 1200,
-            wait_ms: Some(5000),
+            wait_ms: Some(crate::worker::MAX_OBSERVATION_WAIT_MS),
         }
     }
 
@@ -2196,7 +2198,10 @@ mod tests {
                 serde_json::json!("completed"),
             ),
             ("/manager_operations/0/mode", serde_json::json!("first")),
-            ("/manager_operations/0/wait_ms", serde_json::json!(5001)),
+            (
+                "/manager_operations/0/wait_ms",
+                serde_json::json!(crate::worker::MAX_OBSERVATION_WAIT_MS + 1),
+            ),
             ("/manager_operations/0/elapsed_ms", serde_json::json!(-1)),
             ("/manager_operations/0/targets", serde_json::json!([])),
             (

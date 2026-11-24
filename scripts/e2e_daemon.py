@@ -548,14 +548,20 @@ class Daemon(Harness):
         reconnecting = wait_for(lambda: (value if (value := self.cli("status", primary))["phase"] == "reconnecting" else False),
                                 timeout=15, description="watchdog reconnect delay")
         delay_observed_at = time.monotonic()
+        # The first retry adds up to 255/1024 of the configured delay and
+        # reports the result rounded up to a whole second.
+        delay_ms = self.delay * 1000
+        max_retry_secs = (delay_ms + delay_ms * 255 // 1024 + 999) // 1000
+        retry_secs = reconnecting["retry_after_secs"]
+        self.metrics["reported_watchdog_retry_seconds"] = retry_secs
         self.check(reconnecting["connection_state"] != "connected" and not reconnecting["auth_available"]
-                   and reconnecting["retry_after_secs"] == self.delay
+                   and isinstance(retry_secs, int) and self.delay <= retry_secs <= max_retry_secs
                    and not (Path(first["state_directory"]) / "auth.json").exists(),
                    "disconnect clears the old account connection state before retrying")
-        second = self.connected(primary, old_id=old_client, timeout=self.delay + 15)
+        second = self.connected(primary, old_id=old_client, timeout=retry_secs + 15)
         retry_elapsed = time.monotonic() - disconnected_at
         retry_wait = time.monotonic() - delay_observed_at
-        self.check(second["connection"]["client_id"] != old_client and retry_wait >= self.delay - 0.2,
+        self.check(second["connection"]["client_id"] != old_client and retry_elapsed >= self.delay - 0.2,
                    "connection watchdog waits the configured delay before a replacement account connection")
         self.check(self.runner_identity(primary) == original_runner
                    and int(self.native_status(primary).get("NRestarts", "0")) == original_restarts,
@@ -579,7 +585,9 @@ class Daemon(Harness):
         finally:
             self.client_id = old_client
         self.authenticate(primary, second)
-        self.check(self.call("ssmcp.exec.list")["jobs"] == [], "the replacement connection does not inherit old command state")
+        jobs = self.call("ssmcp.exec.list")["jobs"]
+        self.check([(job["job_id"], job["mode"], job["running"]) for job in jobs] == [("main", "pty", True)],
+                   "the replacement connection has only its fresh main PTY")
         stale = self.public_call("code_mode", {"code":
             "try {const r=await call(%s,'terminal.status',{});return {accepted:!r.isError};} catch (_) {return {accepted:false};}" % json.dumps(old_client)})
         self.check(not stale["result"]["accepted"], "the stale client ID cannot route a new native call")
