@@ -239,6 +239,35 @@ from e2e_composer import input_text
 from e2e_dashboard import Decoder
 
 
+CHAT_DISABLED = "chat_disabled: human chat is disabled for this client"
+REPLY_UNSUPPORTED = "Native ssmcp.ui.reply is not advertised; send verifies the catalog and otherwise requires a client update."
+
+
+def directory_chat_enabled(client):
+    """Read the authenticated process-directory contract; unknown roles never match."""
+    if (client.get("chat_io_version") != 1 or client.get("kind") != "process"
+            or "unavailable_reason" not in client
+            or type(client.get("reply_native_supported")) is not bool):
+        return None
+    reason = client["unavailable_reason"]
+    if reason == CHAT_DISABLED and client["reply_native_supported"] is False:
+        return False
+    if ((reason is None and client["reply_native_supported"] is True)
+            or (reason == REPLY_UNSUPPORTED and client["reply_native_supported"] is False)):
+        return True
+    return None
+
+
+def directory_pair(clients, workspace, excluding=()):
+    current = [client for client in clients
+               if client.get("cwd") == str(workspace) and client["id"] not in excluding]
+    parents = [client for client in current if directory_chat_enabled(client) is True]
+    children = [client for client in current if directory_chat_enabled(client) is False]
+    if len(parents) == 1 and len(children) == 1 and len(current) == 2:
+        return parents[0], children[0]
+    return None
+
+
 def digest(path):
     result = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -577,18 +606,22 @@ class WorkerWindows(Harness):
         return result["clients"]
 
     def select_pair(self, frontend, workspace, *, excluding=()):
+        observed = []
+
         def connected():
+            nonlocal observed
             frontend.pump()
-            current = [client for client in self.sessions()
-                       if client.get("cwd") == str(workspace) and client["id"] not in excluding]
-            parents = [client for client in current if client.get("chat_enabled") is True]
-            children = [client for client in current if client.get("chat_enabled") is False]
-            if len(parents) == 1 and len(children) == 1 and len(current) == 2:
-                return parents[0], children[0]
+            observed = self.sessions()
+            pair = directory_pair(observed, workspace, excluding)
+            if pair is not None:
+                return pair
             if frontend.process.poll() is not None:
                 raise AssertionError("parent exited before both client connections were ready")
             return None
-        return wait_for(connected, timeout=20, description="one chat parent and one worker connection")
+        try:
+            return wait_for(connected, timeout=20, description="one chat parent and one worker connection")
+        except AssertionError as error:
+            raise AssertionError(f"{error}; observed clients={json.dumps(observed, ensure_ascii=False)}") from error
 
     def join(self, client_id, name, role="main"):
         joined = self.public_call("collab", {"action": "join", "client_id": client_id,
@@ -951,7 +984,7 @@ class WorkerWindows(Harness):
             self.oauth_login({"client_id": parent["id"]})
         frontend.until(empty_composer_ready, "ordinary parent conversation and composer")
         self.check(parent["id"] != worker["id"], f"{label}: parent and worker have separate client identities")
-        self.check(parent.get("chat_enabled") and worker.get("chat_enabled") is False,
+        self.check(directory_chat_enabled(parent) is True and directory_chat_enabled(worker) is False,
                    f"{label}: only the parent exposes human chat")
         self.coordinators[parent["id"]] = self.join(parent["id"], "parent-coordinator")
         manager = self.join(worker["id"], "window-manager")
@@ -1730,7 +1763,7 @@ class WorkerWindows(Harness):
                            timeout=15, description="headless worker connection")
         participant = self.join(current["id"], "headless-manager")
         status = self.bound(current["id"], participant, "ssmcp.worker.status")
-        self.check(current.get("chat_enabled") is False and status["worker"]["total"] == 3,
+        self.check(directory_chat_enabled(current) is False and status["worker"]["total"] == 3,
                    "explicit headless mode retains a direct three-slot worker pool")
         self.check(not events(directory), "headless mode does not invoke a terminal launcher")
         self.stop(process)

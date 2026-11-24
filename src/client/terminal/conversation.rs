@@ -157,6 +157,7 @@ pub(super) struct Conversation {
     native_pending: Option<messaging::Pending>,
     native_retry: Option<messaging::Pending>,
     native_last: Option<Value>,
+    native_receipt_background: Option<std::collections::BTreeSet<String>>,
     native_refreshed: bool,
     native_picker: bool,
     native_lookup: Option<messaging::PendingPicker>,
@@ -3212,6 +3213,7 @@ impl State {
                 let scroll_hint = self.chat_scroll_hint();
                 let wait_hint = self.chat_user_wait_hint();
                 let paste_hint = self.chat_paste_recovery_hint();
+                let native_receipt_hint = self.chat_native_priority_hint();
                 let native_hint = self.chat_native_hint();
                 let update_hint = self.chat_update_notice();
                 let priority_hint = self.notice.is_some()
@@ -3227,7 +3229,7 @@ impl State {
                 );
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
-                } else if self.notice.is_none() {
+                } else if self.notice.is_none() && native_receipt_hint.is_none() {
                     wait_hint
                         .as_ref()
                         .map_or(PanelTone::Muted, |(_, tone)| *tone)
@@ -3235,6 +3237,9 @@ impl State {
                     PanelTone::Muted
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
+                    // A matching message receipt must replace submitting even
+                    // while an unrelated task/wait continues in the background.
+                    if let Some(hint) = native_receipt_hint { return hint; }
                     if let Some((hint, _)) = wait_hint { return hint; }
                     if let Some(hint) = paste_hint { return hint; }
                     if let Some(hint) = native_hint { return hint; }

@@ -685,6 +685,7 @@ impl State {
             ) {
                 let pending = self.conversation.native_pending.take().unwrap();
                 self.conversation.native_last = Some(receipt.clone());
+                self.conversation.native_receipt_background = Some(self.chat_background_ids());
                 if matches!(status, "failed" | "expired") {
                     self.conversation.native_retry = if status == "failed" {
                         Some(pending)
@@ -737,7 +738,39 @@ impl State {
         }
     }
 
-    pub(super) fn chat_native_hint(&self) -> Option<String> {
+    fn chat_background_ids(&self) -> std::collections::BTreeSet<String> {
+        self.chat_user_wait_snapshot()
+            .active
+            .iter()
+            .map(|entry| format!("wait:{}", entry.wait_id))
+            .chain(
+                self.chat_timing_snapshot()
+                    .active
+                    .iter()
+                    .map(|entry| format!("task:{}", entry.id)),
+            )
+            .collect()
+    }
+
+    pub(super) fn chat_native_priority_hint(&self) -> Option<String> {
+        // Pending sends are current actions. A retained receipt only outranks
+        // background work that already existed when this send was confirmed.
+        // A later independent wait/task gets its usual priority immediately;
+        // status refreshes of this receipt do not reset that boundary.
+        if self.conversation.native_pending.is_some()
+            || self
+                .conversation
+                .native_receipt_background
+                .as_ref()
+                .is_some_and(|known| self.chat_background_ids().is_subset(known))
+        {
+            self.chat_native_receipt_hint()
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn chat_native_receipt_hint(&self) -> Option<String> {
         if !matches!(self.conversation.view, View::Activity | View::Agents) {
             return None;
         }
@@ -745,17 +778,29 @@ impl State {
             return Some("Submitting native message · draft retained".into());
         }
         if self.conversation.send_to_group {
+            return None;
+        }
+        let selected = self.conversation.native_recipient.as_deref()?;
+        let receipt = self.conversation.native_last.as_ref()?;
+        (field(receipt, "recipient_id") == selected).then(|| receipt_hint(receipt))
+    }
+
+    pub(super) fn chat_native_hint(&self) -> Option<String> {
+        if !matches!(self.conversation.view, View::Activity | View::Agents) {
+            return None;
+        }
+        if self.conversation.native_pending.is_some() {
+            return self.chat_native_receipt_hint();
+        }
+        if self.conversation.send_to_group {
             return Some(
                 "Group destination · /send <text> · /group list reviews recipients".into(),
             );
         }
-        let selected = self.conversation.native_recipient.as_deref()?;
-        if let Some(receipt) = &self.conversation.native_last
-            && field(receipt, "recipient_id") == selected
-        {
-            return Some(receipt_hint(receipt));
-        }
-        Some("Native message · text only · Enter sends · /message chooses recipient".into())
+        self.conversation.native_recipient.as_ref()?;
+        self.chat_native_receipt_hint().or_else(|| {
+            Some("Native message · text only · Enter sends · /message chooses recipient".into())
+        })
     }
 }
 
@@ -1247,6 +1292,141 @@ mod tests {
         );
         assert_eq!(state.conversation.composer.text(), saved.text);
         assert_eq!(state.conversation.native_recipient, saved.native_recipient);
+    }
+
+    #[test]
+    fn matching_native_receipts_render_over_background_wait_without_another_key() {
+        use crate::client::interface::user_wait::{Entry, Intent, Snapshot};
+
+        let mut state = state(120);
+        state.notice = None;
+        state.conversation.content_focus = false;
+        state.conversation.wait_fixture = Some(Snapshot {
+            connected: true,
+            active: vec![Entry {
+                wait_id: "background-wait".into(),
+                episode_id: "background-episode".into(),
+                intent: Intent::NeedUser,
+                recipient: "next".into(),
+                reason: None,
+                remaining_ms: 12_500,
+                finish_request_id: None,
+                notification_requested: false,
+                notification: None,
+            }],
+            ..Snapshot::default()
+        });
+        assert!(state.chat_user_wait_hint().is_some());
+        let recipient = "client:1111111111111111111111111111111111111111111111111111111111111111";
+        let body = "!touch .native-must-not-execute\n@./missing-native-file\n  消息原文";
+        state.conversation.native_recipient = Some(recipient.into());
+        state.conversation.composer.set_text(body);
+        // Selecting a recipient alone must not hide the background wait.
+        assert!(state.chat_native_receipt_hint().is_none());
+        state.conversation.native_pending = Some(pending(&state, body));
+        let frame = state.chat_frame(Instant::now());
+        assert!(
+            frame
+                .rows
+                .last()
+                .unwrap()
+                .contains("Submitting native message")
+        );
+        let receipt = json!({
+            "request_id":"ui-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "message_id":"native_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "recipient_id":recipient,"text":body,"status":"queued"
+        });
+        // Even a queued receipt must match all three binding fields before
+        // clearing this draft. No input events drive these transitions.
+        for (field, wrong) in [
+            ("request_id", "ui-wrong"),
+            ("recipient_id", "client:wrong"),
+            ("text", "wrong payload"),
+        ] {
+            let mut unrelated = receipt.clone();
+            unrelated[field] = json!(wrong);
+            state.conversation.native_fixture.as_mut().unwrap()["outgoing"] = json!([unrelated]);
+            state.chat_poll_native();
+            assert!(state.conversation.native_pending.is_some());
+            assert_eq!(state.conversation.composer.text(), body);
+        }
+        for (status, label) in [
+            ("queued", "Queued by service"),
+            ("included", "Included in recipient tool response"),
+            ("acknowledged", "Acknowledged by recipient"),
+        ] {
+            let mut current = receipt.clone();
+            current["status"] = json!(status);
+            state.conversation.native_fixture.as_mut().unwrap()["outgoing"] = json!([current]);
+            state.chat_poll_native();
+            assert!(state.conversation.native_pending.is_none());
+            assert_eq!(state.conversation.composer.text(), "");
+            assert_eq!(
+                state.conversation.native_recipient.as_deref(),
+                Some(recipient)
+            );
+            assert!(state.chat_user_wait_hint().is_some());
+            let frame = state.chat_frame(Instant::now());
+            assert!(frame.rows.last().unwrap().contains(label), "{status}");
+        }
+        // A new independent wait must outrank the retained acknowledged receipt.
+        // Elapsed-time changes and receipt refreshes must not reset this boundary.
+        let mut later = state.conversation.wait_fixture.as_ref().unwrap().active[0].clone();
+        later.wait_id = "later-wait".into();
+        later.episode_id = "later-episode".into();
+        state
+            .conversation
+            .wait_fixture
+            .as_mut()
+            .unwrap()
+            .active
+            .push(later);
+        state.conversation.native_fixture.as_mut().unwrap()["outgoing"][0]["updated_at_ms"] =
+            json!(42);
+        state.chat_poll_native();
+        assert!(state.chat_native_priority_hint().is_none());
+        assert!(
+            state
+                .chat_native_receipt_hint()
+                .unwrap()
+                .contains("Acknowledged")
+        );
+        let frame = state.chat_frame(Instant::now());
+        assert!(frame.rows.last().unwrap().contains("等待你的输入"));
+
+        state
+            .conversation
+            .wait_fixture
+            .as_mut()
+            .unwrap()
+            .active
+            .clear();
+        state.conversation.timing_fixture = Some(crate::runtime::time::Snapshot {
+            active: vec![crate::runtime::time::Entry {
+                id: "later-task".into(),
+                kind: "task",
+                label: "Independent task".into(),
+                status: crate::runtime::time::Status::Running,
+                elapsed_ms: 1_000,
+                remaining_ms: None,
+                deadline_unix_ms: None,
+                finished_age_ms: None,
+                cancellable: false,
+                episode: None,
+                attribution: None,
+                wait: None,
+            }],
+            recent: vec![],
+        });
+        assert!(state.chat_native_priority_hint().is_none());
+        let frame = state.chat_frame(Instant::now());
+        assert!(frame.rows.last().unwrap().contains("任务"));
+        assert_eq!(state.conversation.composer.text(), "");
+        assert_eq!(
+            state.conversation.native_recipient.as_deref(),
+            Some(recipient)
+        );
     }
 
     #[test]
