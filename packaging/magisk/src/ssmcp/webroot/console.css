@@ -298,3 +298,7 @@ body[data-view="console"] #status {
 #terminal-cursor { border: 1px solid #999; }
 .terminal-workspace:focus-within #terminal-cursor { border: 0; background: rgba(232, 234, 237, .45); }
 #direct-input { min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; opacity: 0; resize: none; font-size: 16px; }
+
+.terminal-row { height: var(--cell-height); line-height: var(--cell-height); white-space: pre; }
+.terminal-row > span { display: inline-block; height: 100%; vertical-align: top; }
+#screen { -webkit-text-size-adjust: none; text-size-adjust: none; }

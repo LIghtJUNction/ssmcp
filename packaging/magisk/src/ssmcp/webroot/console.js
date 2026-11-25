@@ -1,6 +1,8 @@
 import { el, hasCredential, terminal as localTerminal } from './device-api.js';
 import { hasManagerTransport, managerTerminal, openManagerSetup } from './module-entry.js';
 
+import { drawFrame } from './terminal-frame.js';
+
 const screen = el('screen');
 const direct = el('direct-input');
 const cursor = el('terminal-cursor');
@@ -55,6 +57,7 @@ function setCtrl(armed) {
 function selectTab(id) {
   if (selected === id) return;
   direct.blur();
+  frameRevision = undefined;
   screenCursor = null;
   cursor.hidden = true;
   selected = id;
@@ -151,6 +154,7 @@ async function changeTabs(action) {
 let grid;
 let terminalSize;
 let screenCursor;
+let frameRevision;
 const scaleKey = 'ssmcp-terminal-font-scale';
 let fontScale = 1;
 try {
@@ -228,8 +232,13 @@ function mousePoint(clientX, clientY) {
   if (x < 0 || y < 0 || x >= terminalSize.cols || y >= terminalSize.rows) return null;
   return { x: x + 1, y: y + 1 };
 }
-function mouseInput(button, point, release = false) {
-  if (point) shortcut(`\x1b[<${button};${point.x};${point.y}${release ? 'm' : 'M'}`);
+function mouseReport(button, point, release = false) {
+  return `\x1b[<${button};${point.x};${point.y}${release ? 'm' : 'M'}`;
+}
+function tap(point) {
+  if (!point) return;
+  shortcut(mouseReport(0, point) + mouseReport(0, point, true));
+  if (screenCursor?.visible && point.y === screenCursor.row + 1) direct.focus({ preventScroll: true });
 }
 let swipe = null;
 let pinch = null;
@@ -282,7 +291,7 @@ screen.addEventListener('touchmove', event => {
     const delta = finger.clientY - swipe.lastY;
     const count = Math.min(8, Math.floor(Math.abs(delta) / step));
     const point = mousePoint(swipe.x, swipe.y);
-    for (let i = 0; i < count; i++) mouseInput(delta > 0 ? 64 : 65, point);
+    if (point && count) shortcut(mouseReport(delta > 0 ? 64 : 65, point).repeat(count));
     swipe.lastY += Math.sign(delta) * count * step;
     ignoreClickUntil = performance.now() + 350;
     return;
@@ -299,11 +308,19 @@ screen.addEventListener('touchmove', event => {
     if (!sizeTimer) sizeTimer = setTimeout(resize, 120);
   });
 }, { passive: false });
-screen.addEventListener('touchend', () => {
-  if (swipe?.moved) ignoreClickUntil = performance.now() + 350;
+screen.addEventListener('touchend', event => {
+  if (swipe && swipe.version === generation && !swipe.moved && !pinch && !event.touches.length
+      && window.getSelection()?.isCollapsed !== false) {
+    const finger = event.changedTouches[0];
+    if (finger && Math.hypot(finger.clientX - swipe.x, finger.clientY - swipe.y) < 8) {
+      if (event.cancelable) event.preventDefault();
+      tap(mousePoint(finger.clientX, finger.clientY));
+    }
+  }
+  ignoreClickUntil = performance.now() + 350;
   swipe = null;
   finishPinch();
-});
+}, { passive: false });
 screen.addEventListener('touchcancel', () => {
   swipe = null;
   ignoreClickUntil = performance.now() + 350;
@@ -314,7 +331,7 @@ screen.addEventListener('wheel', event => {
   if (!point || !event.deltaY) return;
   event.preventDefault();
   const count = Math.min(8, Math.max(1, Math.ceil(Math.abs(event.deltaY) / (event.deltaMode === 0 ? 40 : 1))));
-  for (let i = 0; i < count; i++) mouseInput(event.deltaY < 0 ? 64 : 65, point);
+  shortcut(mouseReport(event.deltaY < 0 ? 64 : 65, point).repeat(count));
 }, { passive: false });
 
 let sizeTimer;
@@ -374,27 +391,28 @@ let polling = -1;
 let idleReads = 0;
 let readFailures = 0;
 let readAgain = false;
-let lastRead = 0;
+let lastInput = -Infinity;
 function inputActivity() {
   idleReads = 0;
+  lastInput = performance.now();
   if (document.hidden || !isCurrent(generation)) return;
   if (polling === generation) { readAgain = true; return; }
   clearTimeout(pollTimer);
-  pollTimer = setTimeout(poll, Math.max(30, 180 - (performance.now() - lastRead)));
+  pollTimer = setTimeout(poll, 0);
 }
 async function poll() {
   clearTimeout(pollTimer);
   const version = generation;
   if (!isCurrent(version) || document.hidden || polling === version) return;
   polling = version;
-  lastRead = performance.now();
   try {
-    const snapshot = await terminal('screen', selected);
+    const snapshot = await terminal('screen', selected, { styled: true, since: frameRevision });
     if (!isCurrent(version)) return;
     const next = snapshot.exited ? null : snapshot.cursor;
     const moved = next?.row !== screenCursor?.row || next?.col !== screenCursor?.col || next?.visible !== screenCursor?.visible;
-    if (snapshot.screen === screen.textContent) idleReads = moved ? 0 : idleReads + 1;
-    else { screen.textContent = snapshot.screen; idleReads = 0; }
+    const changed = !snapshot.unchanged && drawFrame(screen, snapshot);
+    frameRevision = snapshot.revision;
+    idleReads = changed || moved ? 0 : idleReads + 1;
     screenCursor = next;
     positionCursor();
     readFailures = 0;
@@ -415,7 +433,7 @@ async function poll() {
     if (polling === version) polling = -1;
     if (isCurrent(version) && !document.hidden) {
       const interval = inManager ? Math.min(1800, 450 + Math.max(0, idleReads - 2) * 250) : 450;
-      pollTimer = setTimeout(poll, readAgain ? 60 : interval);
+      pollTimer = setTimeout(poll, readAgain ? 0 : performance.now() - lastInput < 200 ? 32 : interval);
       readAgain = false;
     }
   }
@@ -458,16 +476,30 @@ const directSequences = {
   ...sequences, Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~',
   Insert: '\x1b[2~', PageUp: '\x1b[5~', PageDown: '\x1b[6~',
 };
-async function write(tab, text) {
-  // Keep rapid key presses in order, tied to the tab that received the gesture.
+const buffered = new Map();
+const utf8 = new TextEncoder();
+function write(tab, text) {
+  // Combine waiting keystrokes without delaying the first write or crossing tabs.
+  const bytes = utf8.encode(text).length;
+  const tail = buffered.get(tab);
+  if (tail && tail.bytes + bytes <= 4096) {
+    tail.text += text;
+    tail.bytes += bytes;
+    return tail.done;
+  }
+  const batch = { text, bytes };
   const previous = writes.get(tab) || Promise.resolve();
-  const pending = previous.then(
-    () => terminal('input', tab, { text }),
-    () => { throw Error('上一条输入失败，后续排队的输入均未发送。'); },
-  );
-  writes.set(tab, pending);
-  try { await pending; if (tab === selected) inputActivity(); }
-  finally { if (writes.get(tab) === pending) writes.delete(tab); }
+  batch.done = previous.then(async () => {
+    if (buffered.get(tab) === batch) buffered.delete(tab);
+    await terminal('input', tab, { text: batch.text });
+    if (tab === selected) inputActivity();
+  }, () => { throw Error('上一条输入失败，后续排队的输入均未发送。'); }).finally(() => {
+    if (buffered.get(tab) === batch) buffered.delete(tab);
+    if (writes.get(tab) === batch.done) writes.delete(tab);
+  });
+  buffered.set(tab, batch);
+  writes.set(tab, batch.done);
+  return batch.done;
 }
 function shortcut(text) {
   const version = generation;
@@ -528,12 +560,8 @@ screen.addEventListener('click', event => {
   if (performance.now() < ignoreClickUntil) return;
   if (window.getSelection()?.isCollapsed !== false) {
     // Keyboard/assistive clicks have no meaningful cell coordinates.
-    if (event.detail) {
-      const point = mousePoint(event.clientX, event.clientY);
-      mouseInput(0, point);
-      mouseInput(0, point, true);
-    }
-    direct.focus({ preventScroll: true });
+    if (event.detail) tap(mousePoint(event.clientX, event.clientY));
+    else direct.focus({ preventScroll: true });
   }
 });
 direct.addEventListener('compositionstart', () => { preedit = true; clearTimeout(commitTimer); });
@@ -568,6 +596,7 @@ function directKey(event) {
 }
 direct.addEventListener('keydown', directKey);
 screen.addEventListener('keydown', directKey);
+el('open-keyboard').onclick = () => direct.focus({ preventScroll: true });
 ctrl.onclick = () => {
   setCtrl(ctrl.getAttribute('aria-pressed') !== 'true');
   direct.focus({ preventScroll: true });
@@ -575,7 +604,7 @@ ctrl.onclick = () => {
 el('keys').addEventListener('mousedown', event => {
   if (document.activeElement === direct) event.preventDefault();
 });
-for (const key of el('keys').querySelectorAll('button:not([data-key=Ctrl])')) {
+for (const key of el('keys').querySelectorAll('button[data-key]:not([data-key=Ctrl])')) {
   key.onclick = () => shortcut(sequences[key.dataset.key]);
 }
 

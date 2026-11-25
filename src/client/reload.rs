@@ -261,14 +261,14 @@ fn validate_executable(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn same_executable(candidate: &Path, running: &Path) -> std::io::Result<bool> {
+pub(super) fn same_executable(candidate: &Path, running: &Path) -> std::io::Result<bool> {
     let candidate = std::fs::metadata(candidate)?;
     let running = std::fs::metadata(running)?;
     Ok(candidate.dev() == running.dev() && candidate.ino() == running.ino())
 }
 
 #[cfg(windows)]
-fn same_executable(candidate: &Path, running: &Path) -> std::io::Result<bool> {
+pub(super) fn same_executable(candidate: &Path, running: &Path) -> std::io::Result<bool> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,

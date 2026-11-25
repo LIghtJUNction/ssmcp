@@ -292,9 +292,13 @@ pub(super) async fn run(args: Vec<OsString>) -> crate::Result<()> {
 async fn android_update(mode: Mode) -> crate::Result<()> {
     const MAGISK_ZIP: &str = "ssmcp-magisk-arm64.zip";
     let executable = std::env::current_exe()?;
-    if !(executable.starts_with("/data/adb/modules/ssmcp")
-        || executable.starts_with("/data/adb/modules_update/ssmcp"))
-    {
+    let module_entry = [
+        "/data/adb/modules/ssmcp/bin/ssmcp",
+        "/data/adb/modules_update/ssmcp/bin/ssmcp",
+    ]
+    .iter()
+    .any(|path| super::reload::same_executable(Path::new(path), &executable).unwrap_or(false));
+    if !module_entry {
         return Err("For the supported Termux installation, run ssmcp update from the ssmcp-debian proot guest.".into());
     }
     let client = crate::http_client::builder()
@@ -314,7 +318,15 @@ async fn android_update(mode: Mode) -> crate::Result<()> {
     }
     let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
     if latest <= current {
-        println!("Installed {} is current for Magisk.", current.tag());
+        if latest == current {
+            println!("Installed {} is current for Magisk.", current.tag());
+        } else {
+            println!(
+                "Installed {} is newer than the published Magisk release {}.",
+                current.tag(),
+                latest.tag()
+            );
+        }
         return Ok(());
     }
     println!(

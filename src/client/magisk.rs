@@ -1,4 +1,6 @@
 //! Owner-launched, loopback-only Android configuration and session console.
+mod frame;
+
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path as Param, State},
@@ -33,10 +35,15 @@ const ONBOARDING: &str = include_str!("../../packaging/magisk/src/ssmcp/onboardi
 const SCRIPT: &str = include_str!("../../packaging/magisk/src/ssmcp/webroot/console.js");
 const STYLE: &str = include_str!("../../packaging/magisk/src/ssmcp/webroot/console.css");
 
+struct ScreenState {
+    parser: vt100::Parser,
+    revision: u64,
+}
+
 struct Terminal {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
-    screen: Arc<Mutex<vt100::Parser>>,
+    screen: Arc<Mutex<ScreenState>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     connected: PathBuf,
 }
@@ -52,13 +59,16 @@ impl Terminal {
         let pair = native_pty_system().openpty(size)?;
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
-        let screen = Arc::new(Mutex::new(vt100::Parser::new(
-            NonZeroU16::new(size.rows).unwrap(),
-            NonZeroU16::new(size.cols).unwrap(),
-            0,
-        )));
+        let screen = Arc::new(Mutex::new(ScreenState {
+            parser: vt100::Parser::new(
+                NonZeroU16::new(size.rows).unwrap(),
+                NonZeroU16::new(size.cols).unwrap(),
+                0,
+            ),
+            revision: 0,
+        }));
         let mut command = CommandBuilder::new(std::env::current_exe()?);
-        command.args([target, "--watchdog", "--no-color"]);
+        command.args([target, "--watchdog"]);
         let mut nonce = [0; 16];
         getrandom::fill(&mut nonce)?;
         let connected = directory.join(format!("connected-{}", crate::hex::encode(nonce)));
@@ -71,7 +81,9 @@ impl Terminal {
         std::thread::spawn(move || {
             let mut buf = [0; 4096];
             while let Ok(n @ 1..) = reader.read(&mut buf) {
-                output.lock().unwrap().process(&buf[..n]);
+                let mut state = output.lock().unwrap();
+                state.parser.process(&buf[..n]);
+                state.revision += 1;
             }
         });
         Ok(Self {
@@ -86,7 +98,11 @@ impl Terminal {
     fn resize(&self, rows: u16, cols: u16) -> Result<()> {
         let rows = NonZeroU16::new(rows.clamp(10, 80)).unwrap();
         let cols = NonZeroU16::new(cols.clamp(32, 200)).unwrap();
-        self.screen.lock().unwrap().set_size(rows, cols);
+        {
+            let mut state = self.screen.lock().unwrap();
+            state.parser.set_size(rows, cols);
+            state.revision += 1;
+        }
         self.master.resize(PtySize {
             rows: rows.get(),
             cols: cols.get(),
@@ -263,10 +279,25 @@ async fn configure_inner(state: &Console, input: Setup) -> Result<Value> {
 enum Action {
     List,
     Open,
-    Close { tab: usize },
-    Screen { tab: usize },
-    Input { tab: usize, text: String },
-    Resize { tab: usize, rows: u16, cols: u16 },
+    Close {
+        tab: usize,
+    },
+    Screen {
+        tab: usize,
+        #[serde(default)]
+        styled: bool,
+        #[serde(default)]
+        since: Option<u64>,
+    },
+    Input {
+        tab: usize,
+        text: String,
+    },
+    Resize {
+        tab: usize,
+        rows: u16,
+        cols: u16,
+    },
 }
 
 async fn terminal(
@@ -291,10 +322,8 @@ async fn terminal(
 }
 
 fn terminal_action(state: &Console, action: Action) -> Result<Value> {
-    let mut sessions = state
-        .sessions
-        .try_lock()
-        .map_err(|_| "Another operation is in progress")?;
+    // Called on a blocking worker. A screen read must not reject concurrent input.
+    let mut sessions = state.sessions.blocking_lock();
     let tab = match action {
         Action::List => {
             let tabs = sessions.tabs.keys().collect::<Vec<_>>();
@@ -325,21 +354,36 @@ fn terminal_action(state: &Console, action: Action) -> Result<Value> {
         Action::Close { .. } => {
             return Err("The boot session cannot be closed from this console".into());
         }
-        Action::Screen { tab } | Action::Input { tab, .. } | Action::Resize { tab, .. } => tab,
+        Action::Screen { tab, .. } | Action::Input { tab, .. } | Action::Resize { tab, .. } => tab,
     };
     let terminal = sessions.tabs.get_mut(&tab).ok_or("Unknown tab")?;
     match action {
-        Action::Screen { .. } => {
+        Action::Screen { styled, since, .. } => {
             let exited = terminal.child.try_wait()?.is_some();
-            let parser = terminal.screen.lock().unwrap();
-            let screen = parser.screen();
+            let state = terminal.screen.lock().unwrap();
+            let screen = state.parser.screen();
             let (row, col) = screen.cursor_position();
-            Ok(json!({
-                "screen": screen.rows(0, screen.size().1.get()).collect::<Vec<_>>().join("\n"),
+            let mut response = json!({
                 "cursor": { "row": row, "col": col, "visible": !exited && !screen.hide_cursor() },
                 "exited": exited,
                 "connected_once": terminal.connected.is_file(),
-            }))
+            });
+            if styled && since == Some(state.revision) {
+                response["unchanged"] = json!(true);
+            } else if styled {
+                response["rows"] = serde_json::to_value(frame::rows(screen))?;
+            } else {
+                response["screen"] = json!(
+                    screen
+                        .rows(0, screen.size().1.get())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
+            if styled {
+                response["revision"] = json!(state.revision);
+            }
+            Ok(response)
         }
         Action::Input { text, .. } if text.len() <= 4096 => {
             terminal.writer.write_all(text.as_bytes())?;
@@ -362,6 +406,9 @@ pub(super) fn signal_connected() {
 async fn asset(Param(file): Param<String>) -> Response {
     match file.as_str() {
         "console.js" => javascript(SCRIPT),
+        "terminal-frame.js" => javascript(include_str!(
+            "../../packaging/magisk/src/ssmcp/webroot/terminal-frame.js"
+        )),
         "setup.js" => javascript(include_str!(
             "../../packaging/magisk/src/ssmcp/onboarding/setup.js"
         )),

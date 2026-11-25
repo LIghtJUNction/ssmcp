@@ -8,12 +8,12 @@ const root = resolve('packaging/magisk/src/ssmcp/webroot');
 const server = createServer(async (req, res) => {
   try {
     const name = new URL(req.url, 'http://localhost').pathname.slice(1) || 'index.html';
-    if (!['index.html', 'console.js', 'console.css', 'device-api.js', 'module-entry.js'].includes(name)) { res.writeHead(404).end(); return; }
+    if (!['index.html', 'console.js', 'console.css', 'device-api.js', 'module-entry.js', 'terminal-frame.js'].includes(name)) { res.writeHead(404).end(); return; }
     res.setHeader('Content-Type', name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html');
     res.end(await readFile(resolve(root, name)));
   } catch { res.writeHead(500).end(); }
 });
-await new Promise(resolve => server.listen(0, '0.0.0.0', resolve));
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] });
 try {
   for (const transport of ['manager', 'loopback']) {
@@ -31,7 +31,16 @@ try {
             if (body.text.startsWith('\x1b[<0;')) window.expanded = true;
             if (body.text.startsWith('\x1b[<65;')) window.scrolled = true;
           }
-          if (body.action === 'screen') return { screen: `${window.expanded ? 'expanded' : 'collapsed'}\n${window.scrolled ? 'older rows' : 'latest rows'}`, cursor: { visible: true, row: 2, col: 1 } };
+          if (body.action === 'screen') {
+            const first = window.expanded ? 'expanded' : 'collapsed';
+            const second = window.scrolled ? 'older rows' : 'latest rows';
+            const cursor = { visible: true, row: 2, col: 3 };
+            if (transport === 'loopback') return { screen: `${first}\n${second}`, cursor };
+            const revision = 1 + Number(window.expanded) + Number(window.scrolled);
+            if (body.since === revision) return { unchanged: true, revision, cursor };
+            return { rows: [[[first.length, first, { flags: 0 }]], [[second.length, second, { flags: 0 }]],
+              [[1, 'A', { fg: 42, flags: 0 }], [2, '中', { fg: 0x01010203, flags: 0 }]]], revision, cursor };
+          }
           return {};
         };
         if (transport === 'manager') window.ksu = { exec(command, options, callback) {
@@ -55,9 +64,21 @@ try {
         return { x: rect.left + parseFloat(style.paddingLeft) + 4.5 * parseFloat(parent.getPropertyValue('--cell-width')),
           y: rect.top + parseFloat(style.paddingTop) + 3.5 * parseFloat(parent.getPropertyValue('--cell-height')) };
       });
+      if (transport === 'manager') {
+        await page.waitForFunction(() => document.querySelectorAll('.terminal-row').length === 3);
+        const reading = await page.evaluate(() => {
+          const glyphs = document.querySelectorAll('.terminal-row:last-child span');
+          return [getComputedStyle(glyphs[0]).color, getComputedStyle(glyphs[1]).color,
+            Math.abs(glyphs[1].getBoundingClientRect().right - document.getElementById('terminal-cursor').getBoundingClientRect().left)];
+        });
+        assert.deepEqual(reading.slice(0, 2), ['rgb(0, 215, 135)', 'rgb(1, 2, 3)']);
+        assert.ok(reading[2] <= 1, 'cursor starts immediately after the two-column glyph');
+      }
       await page.touchscreen.tap(cell.x, cell.y);
-      await page.waitForFunction(() => window.calls.some(call => call.text === '\x1b[<0;5;4m'));
+      await page.waitForFunction(() => window.calls.some(call => call.text === '\x1b[<0;5;4M\x1b[<0;5;4m'));
       await page.waitForFunction(() => document.getElementById('screen').textContent.includes('expanded'));
+      assert.notEqual(await page.evaluate(() => document.activeElement.id), 'direct-input', 'card tap keeps keyboard closed');
+      await page.locator('#open-keyboard').tap();
       await page.keyboard.type('a');
       await page.waitForFunction(() => window.calls.some(call => call.text === 'a'));
       await page.locator('#direct-input').evaluate(node => node.blur());
@@ -79,7 +100,7 @@ try {
       await page.waitForFunction(() => window.calls.some(call => call.text?.startsWith('\x1b[<64;')));
       await page.mouse.move(cell.x, cell.y);
       await page.mouse.wheel(0, 80);
-      await page.waitForFunction(() => window.calls.some(call => call.text === '\x1b[<65;5;4M'));
+      await page.waitForFunction(() => window.calls.some(call => call.text?.includes('\x1b[<65;5;4M')));
       // Pinch continues to adjust the font without sending clicks or wheel input.
       await page.evaluate(() => { window.calls.length = 0; });
       const before = await screen.evaluate(node => parseFloat(getComputedStyle(node).fontSize));

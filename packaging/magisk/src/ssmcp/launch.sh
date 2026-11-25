@@ -21,7 +21,7 @@ read_console_url() {
 start_console() {
     read_console_url && return
     prepare_console_state || return 1
-    HOME="$state/home" TMPDIR="$state" SHELL=/system/bin/sh PATH=/system/bin:/system/xbin \
+    HOME="$state/home" TMPDIR="$state" SHELL=/system/bin/sh PATH="/system/bin:/system/xbin:$state/home/.local/bin" \
         "$MODDIR/bin/ssmcp" __magisk "$state" "$port" </dev/null >>"$state/console.log" 2>&1 &
 }
 open_console() {

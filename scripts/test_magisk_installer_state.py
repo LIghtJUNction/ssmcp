@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from urllib.parse import urlsplit
 
@@ -63,7 +64,7 @@ class InstallerStateTest(unittest.TestCase):
             target.write_text(script, encoding="utf-8")
             target.chmod(0o755)
         for path in (system_bin, installer_bin):
-            for tool in ("mkdir", "chmod", "cp", "mv", "ln", "mktemp", "mkfifo", "rm", "rmdir"):
+            for tool in ("mkdir", "chmod", "cp", "mv", "ln", "mktemp", "mkfifo", "printf", "rm", "rmdir"):
                 (path / tool).symlink_to(shutil.which(tool))
             executable(path / "sleep", "exec /bin/sleep 0.05\n")
         (system_bin / "sh").symlink_to("/bin/sh")
@@ -111,6 +112,13 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
         result = subprocess.run(["/bin/sh", "-c", 'exec 9>&1; exec /bin/sh "$@"', "hook", *args],
                                 env=self.environment, stdout=subprocess.PIPE, check=True, timeout=4)
         return result.stdout.decode()
+
+    def wait_for_console(self):
+        # Some Android shells close extra inherited descriptors before the fixture child exits.
+        deadline = time.monotonic() + 3
+        while not self.owner.is_file() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(self.owner.is_file(), "hook did not publish the console owner")
 
     def install(self):
         self.scratch.mkdir()
@@ -162,7 +170,7 @@ assert.deepEqual(calls, ['/system/bin/sh /data/adb/modules/ssmcp/onboarding/open
                 self.owner.unlink(missing_ok=True)
                 before = len(self.starts.read_text().splitlines())
                 self.shell(self.active / hook, *args)
-                self.assertTrue(self.owner.is_file(), "hook did not start the service")
+                self.wait_for_console()
                 running = self.owner.read_bytes()
                 self.shell(self.active / hook, *args)
                 self.assertEqual(self.owner.read_bytes(), running)
@@ -187,6 +195,7 @@ assert.deepEqual(calls, ['/system/bin/sh /data/adb/modules/ssmcp/onboarding/open
                                          "EV_KEY KEY_VOLUMEUP REPEAT", "EV_KEY KEY_A DOWN", down))
         self.assertEqual(self.starts.read_text(), "")
         self.assertIn("已请求启动本机服务", action(up, down))
+        self.wait_for_console()
         owner = self.owner.read_bytes()
         starts = self.starts.read_bytes()
         self.assertIn("本机服务已运行", action(down))
