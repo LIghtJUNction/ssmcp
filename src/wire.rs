@@ -31,6 +31,9 @@ pub const SESSION_ACCESS_CAPABILITY: &str = "session_access_v1";
 pub const CONTROL_ATTRIBUTION_CAPABILITY: &str = "control_attribution_v1";
 pub(crate) const MAIN_LIFECYCLE_CAPABILITY: &str = "main_lifecycle_v1";
 pub(crate) const CHAT_DISABLED_CAPABILITY: &str = "human_chat_disabled_v1";
+// A read-only native roster probe reuses the v7 Snapshot frame. An older
+// broker responds with CHAT_DISABLED without dropping the worker transport.
+pub(crate) const WORKER_ROSTER_REQUEST: u64 = 1 << 63;
 pub(crate) const CHAT_DISABLED: &str = "chat_disabled: human chat is disabled for this client";
 pub(crate) fn human_chat_tool(name: &str) -> bool {
     matches!(

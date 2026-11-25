@@ -616,6 +616,78 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn worker_native_connection_observes_its_departed_member_with_chat_disabled() {
+        let mut fixture = Fixture::with_disabled_chat(true).await;
+        let membership = fixture
+            .session
+            .collaboration
+            .dispatch(
+                "owner",
+                "join",
+                json!({"name":"native worker", "role":"worker"}),
+            )
+            .await
+            .unwrap();
+        for stage in 0..4 {
+            let id = if stage == 0 {
+                1
+            } else {
+                wire::WORKER_ROSTER_REQUEST + stage
+            };
+            let command = if stage == 3 {
+                SteeringCommand::Cancel {
+                    command_id: "control".into(),
+                    message_id: "missing".into(),
+                    expected_revision: 0,
+                }
+            } else {
+                SteeringCommand::Snapshot {}
+            };
+            wire::write_frame(
+                fixture.writer.as_mut().unwrap(),
+                &Frame::Steering { id, command },
+            )
+            .await
+            .unwrap();
+            let Some(Frame::SteeringReply {
+                id: reply_id,
+                result,
+            }) = wire::read_frame(fixture.reader.as_mut().unwrap())
+                .await
+                .unwrap()
+            else {
+                panic!("missing native worker roster response")
+            };
+            assert_eq!(reply_id, id);
+            if stage == 0 || stage == 3 {
+                assert_eq!(result.unwrap_err(), wire::CHAT_DISABLED);
+                continue;
+            }
+            let roster = result.unwrap();
+            assert_eq!(roster.client_id, fixture.session.client_id());
+            assert!(roster.messages.is_empty());
+            if stage == 1 {
+                assert_eq!(roster.agents.len(), 1);
+                assert_eq!(roster.agents[0].agent_id, membership["agent_id"]);
+                fixture
+                    .session
+                    .collaboration
+                    .dispatch(
+                        "owner",
+                        "leave",
+                        json!({
+                            "agent_id":membership["agent_id"],"token":membership["token"]
+                        }),
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                assert!(roster.agents.is_empty());
+            }
+        }
+    }
+
     struct Fixture {
         broker: Arc<Broker>,
         user: String,

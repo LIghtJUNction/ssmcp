@@ -50,6 +50,7 @@ mod ui_command;
 mod update;
 mod version;
 mod worker_control;
+mod worker_roster;
 mod worker_window;
 #[cfg(target_os = "linux")]
 mod zero;
@@ -3161,7 +3162,7 @@ async fn reclaim_steering(
                     None => return Err("client control channel ended while preparing reload".into()),
                 },
                 frame = incoming.frames.recv() => match frame {
-                    Some(Ok(Some(Frame::SteeringReply { id, result }))) => steering::reply(id, result, &backend)?,
+                    Some(Ok(Some(Frame::SteeringReply { id, result }))) => steering::runtime_reply(id, result, &backend)?,
                     Some(Ok(Some(Frame::MessagesReply { id, result }))) => messaging::reply(id, result),
                     Some(Ok(Some(Frame::AccessReply { id, result }))) => access::reply(id, result),
                     Some(Ok(Some(Frame::CodeModeFinished { completion }))) => backend.code_mode_finished(completion)?,
@@ -3827,6 +3828,9 @@ async fn connect_inner(
             }
         }
     };
+    let mut worker_roster = worker_roster::Poll::new(
+        !chat_enabled && options.worker.is_some() && options.chat.agent == chat_io::Agent::Remote,
+    );
     let mut steering_updates = tokio::time::interval(Duration::from_secs(1));
     steering_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut requests: JoinSet<io::Result<bool>> = JoinSet::new();
@@ -3878,6 +3882,17 @@ async fn connect_inner(
             _ = steering_updates.tick() => {
                 for notice in backend.worker_duration_notices() { terminal::notice(&notice); }
                 if chat_enabled && let Err(error) = steering::poll() { terminal::notice(&error); }
+                if let Some(id) = worker_roster.request(std::time::Instant::now(), || backend.has_registered_workers()) {
+                    let sent = timeout(Duration::from_secs(10), async {
+                        let mut writer = writer.lock().await;
+                        write_frame(&mut *writer, &Frame::Steering { id, command: crate::wire::SteeringCommand::Snapshot {} }).await
+                    }).await;
+                    match sent {
+                        Ok(Ok(())) => {},
+                        Ok(Err(error)) => break Err(error.into()),
+                        Err(_) => break Err("worker roster request write timed out".into()),
+                    }
+                }
                 access::poll();
                 messaging::poll();
             },
@@ -4041,7 +4056,7 @@ async fn connect_inner(
                                         Some(Ok(Some(Frame::ReloadCommit { id: acknowledged }))) if acknowledged == id => return Ok::<(), crate::Error>(()),
                                         Some(Ok(Some(Frame::CodeModeFinished { completion }))) => { backend.code_mode_finished(completion)?; }
                                         Some(Ok(Some(Frame::WaitDisplay { snapshot }))) => { backend.wait_display(snapshot)?; }
-                                        Some(Ok(Some(Frame::SteeringReply { id, result }))) => { steering::reply(id, result, &backend)?; }
+                                        Some(Ok(Some(Frame::SteeringReply { id, result }))) => { steering::runtime_reply(id, result, &backend)?; }
                                         Some(Ok(Some(Frame::MessagesReply { id, result }))) => { messaging::reply(id, result); }
                                         Some(Ok(Some(Frame::AccessReply { id, result }))) => { access::reply(id, result); }
                                         Some(Ok(Some(Frame::Call { id: next_id, .. }))) => {
@@ -4123,7 +4138,13 @@ async fn connect_inner(
                     if let Err(error) = backend.wait_display(snapshot) { break Err(error.into()); }
                 }
                 Some(Ok(Some(Frame::SteeringReply { id, result }))) => {
-                    if let Err(error) = steering::reply(id, result, &backend) { terminal::notice(&error); }
+                    if id >= crate::wire::WORKER_ROSTER_REQUEST && !chat_enabled {
+                        if let Some((sent, agents)) = worker_roster.reply(id, result, &client_id) {
+                            backend.reconcile_worker_roster(sent, &agents);
+                        }
+                    } else if let Err(error) = steering::runtime_reply(id, result, &backend) {
+                        terminal::notice(&error);
+                    }
                 }
                 Some(Ok(Some(Frame::MessagesReply { id, result }))) => messaging::reply(id, result),
                 Some(Ok(Some(Frame::AccessReply { id, result }))) => access::reply(id, result),

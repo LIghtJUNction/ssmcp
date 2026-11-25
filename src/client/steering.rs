@@ -331,7 +331,7 @@ fn now_ms() -> u64 {
         .as_millis()
         .min(u128::from(u64::MAX)) as u64
 }
-fn valid_id(id: &str) -> bool {
+pub(super) fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
         && id
@@ -1825,13 +1825,16 @@ pub(super) fn fail_unsent(id: u64, error: &str) {
 pub(super) fn sent(id: u64) -> bool {
     with(|manager| manager.sent(id))
 }
-pub(super) fn reply(
+pub(super) fn reply(id: u64, result: Result<SteeringSnapshot, String>) -> Result<(), String> {
+    with_history(|manager| manager.reply(id, result))
+}
+pub(super) fn runtime_reply(
     id: u64,
     result: Result<SteeringSnapshot, String>,
     runtime: &crate::runtime::Runtime,
 ) -> Result<(), String> {
     if !runtime.frontend_has_workers() {
-        return with_history(|manager| manager.reply(id, result));
+        return reply(id, result);
     }
     let roster =
         with_history(|manager| manager.worker_reply(id, result, runtime.frontend_client_id()))?;

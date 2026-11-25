@@ -651,6 +651,14 @@ impl Runtime {
             .is_some()
     }
 
+    pub(crate) fn has_registered_workers(&self) -> bool {
+        self.workers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|p| p.queue.has_registered_workers())
+    }
+
     pub(crate) fn reconcile_worker_roster(
         &self,
         sent: std::time::Instant,

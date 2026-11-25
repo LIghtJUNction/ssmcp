@@ -300,6 +300,31 @@ impl Session {
         self.steering_command(command)
     }
 
+    fn native_steering(
+        &self,
+        id: u64,
+        command: wire::SteeringCommand,
+    ) -> Result<wire::SteeringSnapshot, String> {
+        if self.chat_disabled
+            && id >= wire::WORKER_ROSTER_REQUEST
+            && matches!(command, wire::SteeringCommand::Snapshot {})
+        {
+            if !self.is_alive() {
+                return Err("client connection is closed".into());
+            }
+            // This transport belongs to the registered local client. Worker
+            // presence uses the membership registry and never opens the chat queue.
+            return Ok(wire::SteeringSnapshot {
+                schema_version: 1,
+                client_id: self.client_id().into(),
+                revision: 0,
+                agents: self.collaboration.presence()?,
+                messages: Vec::new(),
+            });
+        }
+        self.steering_command(command)
+    }
+
     fn steering_command(
         &self,
         command: wire::SteeringCommand,
@@ -1813,7 +1838,7 @@ impl Broker {
                         timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::MessagesReply { id, result })).await??;
                     }
                     Some(Frame::Steering { id, command }) => {
-                        let result = session.steering_command(command).map(|mut snapshot| {
+                        let result = session.native_steering(id, command).map(|mut snapshot| {
                             // Older v7 clients reject unfamiliar roster fields.
                             if !main_lifecycle {
                                 for member in &mut snapshot.agents {

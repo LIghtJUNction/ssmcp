@@ -64,6 +64,15 @@ impl Slot {
 }
 
 impl<T: Clone> Queue<T> {
+    pub(crate) fn has_registered_workers(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .slots
+            .iter()
+            .any(|s| s.registered.is_some())
+    }
+
     pub(in crate::worker) fn authenticated_contact(&self, actor: &Actor, at: Instant) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(worker) = state
