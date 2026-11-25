@@ -168,6 +168,20 @@ return await exec.run(client.id, {
 
 `cwd` 可指定现有绝对目录，省略时使用客户端启动目录；`env` 只覆盖所列环境变量，其他值继承客户端环境。每个任务独立，某次命令中的 `cd` 不会改变其他命令的工作目录。
 
+## 在同一次调用里启动并等待短任务
+
+如果下一步就是等待结果，可以把两步放在同一个 `code_mode` 请求中。等待返回时一并取回作业 ID 和当前状态。
+
+```javascript
+const started = await exec.start(clientId, { command: ["git", "status", "--short"] });
+const waited = await exec.wait(clientId, started.job_id, { wait_ms: 4000 });
+return { started, waited };
+```
+
+`waited.running` 为 `true` 时，保留 `started.job_id`，后续按该 ID 等待或读取输出。需要在耗时任务运行期间就持有作业 ID 时，先单独启动并保存回执，再按下节续查。如果响应丢失且从未收到作业 ID，执行结果仍待核实，重复启动可能产生第二次执行。
+
+在固定提交 `d0d1f81` 的单机回环测试中，每种任务时长比较四对，交替调整两种方式的先后顺序。80ms 任务从子进程打印前采样到调用方收到最终回执的中位数，从两次请求的 73.483ms 降至一次请求的 12.244ms，逐对差值的中位数为 −61.656ms。350ms 和 1200ms 两组的配对中位差分别为 +0.036ms 和 +1.253ms。24 次执行均核对了退出码、作业身份和输出。
+
 ## 启动后台任务，再继续等待
 
 第一次调用启动任务并保存返回的 `job_id`：
