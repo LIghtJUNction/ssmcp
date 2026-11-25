@@ -181,7 +181,7 @@ impl Record {
             receipt["next_wait"] = json!({"helper":"ui.wait","client_id":self.client_id,
                 "arguments":arguments,"new_tool_call":true});
             receipt["completion_instruction"] = json!(format!(
-                "{context} Actually await next_wait in a new outer call. Reuse the pending ID. Only a verified, consumed Human Yes for this thread can grant may_finish:true."
+                "{context} To continue, actually await next_wait in a new outer tool call. Reuse the pending ID. Only a verified, consumed Human Yes for this thread can grant may_finish:true."
             ));
         }
         receipt
