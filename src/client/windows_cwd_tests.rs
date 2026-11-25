@@ -5,6 +5,7 @@ use crate::{
     backend::shell::Shell, output::OutputStore, platform::ShellPreference, session::SessionSpec,
     wire::Operation,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::json;
 use std::{
     ffi::OsString,
@@ -24,11 +25,11 @@ impl Workspace {
         crate::platform::random_bytes(&mut nonce).unwrap();
         let id = crate::hex::encode(nonce);
         let root = std::env::temp_dir().join(format!("ssmcp cwd 演示 {id}"));
-        let marker = format!("cwd-{id}.marker");
+        let marker = format!("cwd-{id}");
         fs::create_dir(&root).unwrap();
         fs::create_dir(root.join("nested")).unwrap();
         for directory in [&root, &root.join("nested")] {
-            fs::write(directory.join(&marker), "fixture").unwrap();
+            fs::create_dir(directory.join(&marker)).unwrap();
         }
         Self { root, marker }
     }
@@ -46,7 +47,7 @@ async fn write_from_terminal(
     directory: &Path,
     marker: &str,
     ps: bool,
-) -> bool {
+) -> Result<(), String> {
     let expected = if ps {
         use std::path::{Component, Prefix};
         let root = directory.canonicalize().unwrap();
@@ -56,35 +57,76 @@ async fn write_from_terminal(
         let (Prefix::Disk(letter) | Prefix::VerbatimDisk(letter)) = prefix.kind() else {
             panic!("test workspace is not on a local drive");
         };
-        format!("OK:{}", char::from(letter).to_ascii_uppercase())
+        char::from(letter).to_ascii_uppercase().to_string()
     } else {
         "OK".into()
     };
-    let data = if ps {
-        format!(
-            "if (Test-Path -LiteralPath '{marker}') {{ Set-Content -Encoding ASCII -Path out.txt -Value ('OK:' + (Get-Location).Drive.Name.ToUpperInvariant()) }}\r"
-        )
+    // Both writes are relative and require the unique parent to exist. Keep the
+    // interactive line short enough to avoid an unnecessary PSReadLine stress test.
+    let relative = format!(r"{marker}\out.txt");
+    let mut command = Some(if ps {
+        format!("Set-Content {relative} $PWD.Drive.Name\r")
     } else {
-        format!("if exist {marker} echo OK>out.txt\r")
-    };
-    shell
-        .get(id)
-        .unwrap()
-        .perform(Operation::Write { data })
-        .await
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(15), async {
+        format!("echo OK>{relative}\r")
+    });
+    let output = directory.join(marker).join("out.txt");
+    let terminal = shell.get(id)?;
+    let (rows, cols) = super::terminal::pane_size(24, 80);
+    let mut display = vt100::Parser::new_with_callbacks(
+        rows.try_into().unwrap(),
+        cols.try_into().unwrap(),
+        0,
+        super::terminal::Replies::default(),
+    );
+    let mut cursor = 0;
+    let result = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            if fs::read_to_string(directory.join("out.txt"))
-                .is_ok_and(|text| text.trim() == expected)
-            {
-                return;
+            if fs::read_to_string(&output).is_ok_and(|text| text.trim() == expected) {
+                return Ok(());
             }
-            tokio::time::sleep(Duration::from_millis(40)).await;
+            let page = terminal.read_page(cursor, 8192, 100).await?;
+            cursor = page["next_cursor"].as_u64().unwrap();
+            let bytes = STANDARD
+                .decode(page["data_base64"].as_str().unwrap())
+                .unwrap();
+            display.process(&bytes);
+            // This test drives the PTY directly, so it also owns the VT replies
+            // a running client's input loop normally sends to this session.
+            let reply = display.callbacks_mut().take_bytes();
+            if !reply.is_empty() {
+                terminal
+                    .perform(Operation::Write {
+                        data: String::from_utf8(reply).unwrap(),
+                    })
+                    .await?;
+            }
+            if display.screen().contents().trim_end().ends_with('>')
+                && let Some(data) = command.take()
+            {
+                terminal.perform(Operation::Write { data }).await?;
+            }
+            if page["output_eof"] == true {
+                return Err("terminal closed".to_owned());
+            }
         }
     })
-    .await
-    .is_ok()
+    .await;
+    let reason = match result {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(reason)) => reason,
+        Err(_) => "timed out".into(),
+    };
+    let actual = match fs::read_to_string(&output) {
+        Ok(text) => format!("actual marker {text:?}"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing marker".into(),
+        Err(error) => error.to_string(),
+    };
+    Err(format!(
+        "{id} {reason}: {actual} at {}, expected {expected:?}, prompt observed: {}, screen: {:?}",
+        output.display(),
+        command.is_none(),
+        display.screen().contents(),
+    ))
 }
 
 #[tokio::test]
@@ -108,7 +150,7 @@ async fn windows_default_conpty_executes_in_the_canonical_workspace() {
         is_cmd,
         "this regression requires a standard Windows COMSPEC"
     );
-    assert!(writes_here, "default cmd did not write in the workspace");
+    writes_here.unwrap_or_else(|error| panic!("default cmd: {error}"));
 }
 
 #[tokio::test]
@@ -154,12 +196,8 @@ async fn windows_saved_shell_and_named_terminal_write_in_the_requested_directory
         .await;
         shell.shutdown().await;
         assert!(
-            main_works,
-            "restored {choice} did not write in the workspace"
-        );
-        assert!(
-            named_works,
-            "named {choice} did not write in the requested subdirectory"
+            main_works.is_ok() && named_works.is_ok(),
+            "restored {choice}: {main_works:?}, named {choice}: {named_works:?}"
         );
     }
 }
