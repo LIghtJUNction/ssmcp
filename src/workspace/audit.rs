@@ -850,31 +850,29 @@ mod tests {
     async fn read_edit_and_sensitive_events_report_observations_once() {
         let scratch = Scratch::new();
         let workspace = scratch.workspace(OutputStore::global().unwrap());
-        workspace
-            .perform(
-                "ssmcp.fs.write_text",
-                json!({"path":"file","text":"first\nsame\nlast\n"}),
-            )
-            .await
-            .unwrap();
+        write_after_contention(
+            &workspace,
+            json!({"path":"file","text":"first\nsame\nlast\n"}),
+        )
+        .await
+        .unwrap();
         workspace
             .perform("ssmcp.fs.read_text", json!({"path":"file"}))
             .await
             .unwrap();
-        workspace
-            .perform(
-                "ssmcp.fs.edit_text",
-                json!({"path":"file","old_text":"same","new_text":"changed"}),
-            )
-            .await
-            .unwrap();
-        workspace
-            .perform(
-                "ssmcp.fs.write_text",
-                json!({"path":".env","text":"TOKEN=private_value_123456789\n"}),
-            )
-            .await
-            .unwrap();
+        super::super::perform_after_write_contention(
+            &workspace,
+            "ssmcp.fs.edit_text",
+            json!({"path":"file","old_text":"same","new_text":"changed"}),
+        )
+        .await
+        .unwrap();
+        write_after_contention(
+            &workspace,
+            json!({"path":".env","text":"TOKEN=private_value_123456789\n"}),
+        )
+        .await
+        .unwrap();
         let page = workspace
             .perform("ssmcp.fs.events", json!({}))
             .await
