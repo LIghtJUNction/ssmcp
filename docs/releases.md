@@ -23,6 +23,10 @@
 
 以上表格是构建目标，不表示对所有旧操作系统版本都完成了运行验证。Linux GNU 产物由 Ubuntu 22.04 构建，安装基线为 glibc 2.35 或更新版本；完整 Linux 集成检查另在 Ubuntu 24.04 运行。这些产物没有承诺 musl 静态链接或兼容更旧的 glibc，需要不同系统基线时可在目标机器从源码编译。[GitHub runner 列表](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 
+### Android arm64 的 KernelSU / Magisk 模块
+
+从 v0.10.41 起，标准 Release 工作流使用相同源码和锁文件为 Android API 26 构建 arm64 模块。下载 `ssmcp-magisk-arm64.zip` 和同名的 `.sha256` 文件，运行 `sha256sum -c ssmcp-magisk-arm64.zip.sha256` 后，用模块管理器刷入 ZIP。工作流核对模块版本、versionCode、安装入口和 AArch64 客户端，并把 ZIP 的摘要写入 `SHA256SUMS`、大小和摘要写入 `release-manifest.json`。v0.10.40 的模块仍可从原有独立标签下载。[v0.10.40 模块](https://github.com/LIghtJUNction/ssmcp/releases/tag/kernelsu-v0.10.40) · [模块安装说明](../packaging/magisk/README.md)
+
 ### 原生 GUI 客户端
 
 包含 `apps/` 客户端的源码还必须通过独立的 [GUI clients 工作流](../.github/workflows/gui-clients.yml)。它接受完整源码 commit，发布流程以 `platform: all` 调用；Linux 桌面、Windows 桌面、Android 和 iOS 中任何必需检查失败，`finalize` 都不能继续。没有 GUI 源码的历史标签保留原来的 CLI 发布范围。
@@ -215,7 +219,7 @@ python3 scripts/release.py validate --build-only
 
 ### 正式发布顺序
 
-validate 检查 tag、manifest、lockfile、main ancestry、工作区与子模块身份。checks 复用已有 CI；build 矩阵保留 Linux、macOS、Windows 各 x86_64/ARM64 的优化构建、可执行文件冒烟及安装器检查。finalize 在完整检查、六个 CLI 构建及源码中包含的 GUI 客户端检查成功后生成 verified-source 收据，记录源码提交、树、manifest、锁文件、递归子模块、工具链和完整依赖图。基础 CLI 发布有六平台归档、各自的摘要文件、两份安装脚本、SHA256SUMS 与 release-manifest.json，共 16 个公开附件；包含本文四个平台 GUI 客户端时，另有三个程序附件、三个摘要文件和四份 GUI 收据，总计 26 个。源码收据留在独立的 Actions artifact 中。
+validate 检查 tag、manifest、lockfile、main ancestry、工作区与子模块身份。checks 复用已有 CI；build 矩阵保留 Linux、macOS、Windows 各 x86_64/ARM64 的优化构建、可执行文件冒烟及安装器检查。finalize 在完整检查、六个 CLI 构建、适用的 GUI 客户端检查和 Android 模块构建成功后生成 verified-source 收据，记录源码提交、树、manifest、锁文件、递归子模块、工具链和完整依赖图。基础 CLI 发布有六平台归档、各自的摘要文件、两份安装脚本、SHA256SUMS 与 release-manifest.json，共 16 个公开附件；包含本文四个平台 GUI 客户端时，另有三个程序附件、三个摘要文件和四份 GUI 收据，总计 26 个。从 v0.10.41 起，同时包含这四个 GUI 客户端的标准 Release 再加上 arm64 模块 ZIP 和独立摘要，共 28 个公开附件。源码收据留在独立的 Actions artifact 中。
 
 checks 在各原生 runner 上先显式构建 native_plugin_fixture 动态库，再单独执行精确的 native_plugin_runtime_contract ignored 测试。测试本身不会启动 Cargo，缺少预构建制品不会被当作通过。
 

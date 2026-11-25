@@ -29,8 +29,10 @@ TARGETS = {
     "x86_64-pc-windows-msvc": ["ssmcp"],
     "aarch64-pc-windows-msvc": ["ssmcp"],
 }
+MAGISK_ASSET = "ssmcp-magisk-arm64.zip"
 ZRUN_GIT = "https://github.com/LIghtJUNction/zrun.git"
 TAG = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?")
+KERNELSU_TAG = re.compile(r"kernelsu-v(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}")
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_Z_DIRECT = {"zplugin": "zplugin", "zharness": "zharness", "ztuio": "ztuio",
                     "zbridge": "zbridge", "zi18n": "zi18n", "zhex": "zhex"}
@@ -258,8 +260,8 @@ def locked_project_z(lock):
     return packages
 
 
-def application_version_files(root):
-    """Version bytes owned by this application, including its desktop path lock."""
+def cargo_version_files(root):
+    """Cargo manifest and lockfiles which carry the application version."""
     root = Path(root)
     files = [Path("Cargo.toml"), Path("Cargo.lock")]
     desktop = Path("apps/ssmcp-desktop")
@@ -282,6 +284,16 @@ def application_version_files(root):
     return files
 
 
+MAGISK_MANIFEST = Path("packaging/magisk/kam.toml")
+
+
+def application_version_files(root):
+    files = cargo_version_files(root)
+    if (Path(root) / MAGISK_MANIFEST).is_file():
+        files.append(MAGISK_MANIFEST)
+    return files
+
+
 def validate_package(tag, root):
     match = TAG.fullmatch(tag)
     if not match or any(part.isdigit() and len(part) > 1 and part.startswith("0")
@@ -296,10 +308,18 @@ def validate_package(tag, root):
         locked = [p["version"] for p in lock["package"] if p["name"] == name]
         if locked != [package_version]:
             raise ValueError(f"Cargo.lock must contain exactly the manifest's {name} version")
-    for relative in application_version_files(root)[2:]:
+    for relative in cargo_version_files(root)[2:]:
         rows = [row for row in read_toml(root / relative)["package"] if row["name"] == "ssmcp"]
         if len(rows) != 1 or rows[0]["version"] != actual or rows[0].get("source") is not None:
             raise ValueError(f"{relative} must contain exactly this local ssmcp version")
+    module_path = root / MAGISK_MANIFEST
+    if module_path.is_file():
+        prop = read_toml(module_path).get("prop", {})
+        if prop.get("version") != tag or prop.get("id") != "ssmcp":
+            raise ValueError(f"{MAGISK_MANIFEST} must describe ssmcp {tag}")
+        code = prop.get("versionCode")
+        if type(code) is not int or not 1 <= code <= 2147483647:
+            raise ValueError("module versionCode must be a positive 32-bit integer")
     return actual
 
 
@@ -482,7 +502,8 @@ def validate_tag(tag, root=None, *, build_only=False):
                  "publish": str(not build_only).lower(), "create_tag": "false",
                  "build_only": str(build_only).lower(), "release_contract": RELEASE_CONTRACT,
                  "crate_publication": crate_publication(actual, build_only=build_only)["status"],
-                 "gui_clients": str(bool(gui_clients(root))).lower()})
+                 "gui_clients": str(bool(gui_clients(root))).lower(),
+                 "magisk_module": str(requires_magisk(root, actual, build_only)).lower()})
 
 
 def prepare(tag=None, automatic=False, root=None):
@@ -548,7 +569,7 @@ def bump(level, root=None, *, custom_version=None, dry_run=False):
     if manifest_count != 1:
         raise ValueError("expected one matching ssmcp version in Cargo.toml")
     replacements = {manifest_path: manifest}
-    for relative in application_version_files(root)[1:]:
+    for relative in cargo_version_files(root)[1:]:
         lock_path = root / relative
         lock, count = re.subn(
             r'(\[\[package\]\]\nname = "ssmcp"\nversion = ")' + re.escape(old) + r'("\n)',
@@ -556,6 +577,28 @@ def bump(level, root=None, *, custom_version=None, dry_run=False):
         if count != 1:
             raise ValueError(f"expected one matching ssmcp version in {relative}")
         replacements[lock_path] = lock
+    module_path = root / MAGISK_MANIFEST
+    if module_path.is_file():
+        code = read_toml(module_path)["prop"]["versionCode"]
+        if code == 2147483647:
+            raise ValueError("cannot increment module versionCode beyond a signed 32-bit integer")
+        module = module_path.read_text(encoding="utf-8")
+        section = re.search(r'(?ms)^\[prop\][ \t]*(?:#[^\n]*)?\n(.*?)(?=^[ \t]*\[|\Z)', module)
+        if section is None:
+            raise ValueError(f"missing [prop] table in {MAGISK_MANIFEST}")
+        fields, versions = re.subn(
+            r'''(?m)^(version[ \t]*=[ \t]*)(["'])v''' + re.escape(old) + r'''\2([ \t]*(?:#.*)?)$''',
+            lambda m: m[1] + m[2] + "v" + new + m[2] + m[3], section[1])
+        fields, codes = re.subn(
+            r'(?m)^(versionCode[ \t]*=[ \t]*)' + str(code) + r'([ \t]*(?:#.*)?)$',
+            lambda m: m[1] + str(code + 1) + m[2], fields)
+        if (versions, codes) != (1, 1):
+            raise ValueError(f"expected one module version and versionCode in {MAGISK_MANIFEST}")
+        updated = module[:section.start(1)] + fields + module[section.end(1):]
+        prop = tomllib.loads(updated)["prop"]
+        if (prop["version"], prop["versionCode"]) != ("v" + new, code + 1):
+            raise ValueError("updated [prop] version fields did not match the requested bump")
+        replacements[module_path] = updated
     result = {"tag": "v" + new, "version": new, "dry_run": str(dry_run).lower()}
     if not dry_run:
         for path, text in replacements.items():
@@ -925,6 +968,40 @@ def verified_gui_receipts(root, source):
     return receipts
 
 
+def requires_magisk(root, release_version, build_only):
+    # v0.10.40 shipped the module under a separate tag. A preflight can build
+    # the new contract on main before bumping the package version.
+    return (version_key(release_version)[:3] >= (0, 10, 41)
+            or (build_only and (root / "packaging/magisk/kam.toml").is_file()))
+
+
+def verify_magisk_archive(root, archive, release_version):
+    module = root / "packaging/magisk"
+    prop = read_toml(module / "kam.toml")["prop"]
+    if (prop["id"] != "ssmcp" or prop["version"] != "v" + release_version
+            or type(prop["versionCode"]) is not int or prop["versionCode"] <= 0):
+        raise ValueError("Magisk package metadata differs from the release version")
+    with zipfile.ZipFile(archive) as package:
+        entries = package.namelist()
+        if (len(entries) != len(set(entries)) or package.testzip() is not None
+                or any(PurePosixPath(item).is_absolute() or ".." in PurePosixPath(item).parts or "\\" in item
+                       for item in entries)):
+            raise ValueError("invalid Magisk ZIP")
+        required = ("module.prop", "bin/ssmcp", "service.sh", "customize.sh", "action.sh",
+                    "webroot/index.html", "onboarding/index.html", "META-INF/com/google/android/update-binary")
+        if any(item not in entries or package.getinfo(item).file_size == 0 for item in required):
+            raise ValueError("Magisk module is missing an install or runtime entry")
+        lines = package.read("module.prop").decode().splitlines()
+        for key in ("id", "version", "versionCode"):
+            if [line for line in lines if line.startswith(key + "=")] != [f"{key}={prop[key]}"]:
+                raise ValueError(f"Magisk module.prop has incorrect {key}")
+        with package.open("bin/ssmcp") as stream:
+            header = stream.read(64)
+        if (len(header) != 64 or header[:7] != b"\x7fELF\x02\x01\x01"
+                or header[16:18] not in (b"\x02\x00", b"\x03\x00") or header[18:20] != b"\xb7\x00"):
+            raise ValueError("Magisk client must be an AArch64 ELF executable")
+
+
 def checksums(root=None, *, build_only=False, recheck=False):
     """Verify GitHub archives; Publisher raw-client release.json is separate."""
     root = root or ROOT
@@ -934,6 +1011,8 @@ def checksums(root=None, *, build_only=False, recheck=False):
     gui_assets = {spec["asset"] for spec in clients.values() if spec["asset"]}
     gui_proofs = {gui_receipt_name(platform) for platform in clients}
     expected = {archive_name(target, release_version) for target in TARGETS} | gui_assets
+    if requires_magisk(root, release_version, build_only):
+        expected.add(MAGISK_ASSET)
     actual = {p.name for p in output.iterdir() if p.name.endswith((".zip", ".tar.gz", ".apk"))}
     if actual != expected:
         raise ValueError(f"release archive set differs: missing={sorted(expected-actual)}, extra={sorted(actual-expected)}")
@@ -946,6 +1025,8 @@ def checksums(root=None, *, build_only=False, recheck=False):
     for name in sorted(allowed & {p.name for p in output.iterdir()}):
         if (output / name).is_symlink() or not (output / name).is_file():
             raise ValueError(f"release attachment must be a regular file: {name}")
+    if MAGISK_ASSET in expected:
+        verify_magisk_archive(root, output / MAGISK_ASSET, release_version)
     records = []
     for name in sorted(expected):
         path = output / name
@@ -1450,7 +1531,7 @@ def find_release(repository, tag, root=None):
 
 
 def should_mark_latest(repository, release_version, root=None):
-    """Only a stable version newer than every published stable release is Latest."""
+    """Only a stable application version newer than every published stable application release is Latest."""
     candidate = version_key(release_version)
     if "-" in release_version:
         return False
@@ -1469,6 +1550,8 @@ def should_mark_latest(repository, release_version, root=None):
             if item["draft"] or item["prerelease"]:
                 continue
             tag = item.get("tag_name")
+            if isinstance(tag, str) and KERNELSU_TAG.fullmatch(tag):
+                continue
             if not isinstance(tag, str) or not tag.startswith("v") or "-" in tag:
                 raise ValueError("invalid stable release tag; draft retained without choosing Latest")
             published.append(version_key(tag[1:]))

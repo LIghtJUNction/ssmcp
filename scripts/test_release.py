@@ -808,6 +808,46 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "archive set"):
             release.checksums(self.root)
 
+    def test_magisk_archive_joins_the_fixed_release_set_from_0_10_41(self):
+        output = self.fixtures()
+        archive = output / release.MAGISK_ASSET
+        module = self.root / "packaging/magisk"
+        module.mkdir(parents=True)
+        (module / "kam.toml").write_text('[prop]\nid="ssmcp"\nversion="v0.10.41"\nversionCode=1041\n')
+        self.assertFalse(release.requires_magisk(self.root, "0.10.40", False))
+        self.assertTrue(release.requires_magisk(self.root, "0.10.40", True))
+        self.assertTrue(release.requires_magisk(self.root, "0.10.41-rc.1", False))
+        for name in ("Cargo.toml", "Cargo.lock"):
+            path = self.root / name
+            path.write_text(path.read_text().replace("0.5.0", "0.10.41"))
+        self.stub_verified_crate()
+        with self.assertRaisesRegex(ValueError, "archive set"):
+            release.checksums(self.root)
+        files = {name: b"fixture" for name in ("service.sh", "customize.sh", "action.sh",
+                 "webroot/index.html", "onboarding/index.html", "META-INF/com/google/android/update-binary")}
+        elf = bytearray(64)
+        elf[:7], elf[16:20] = b"\x7fELF\x02\x01\x01", b"\x03\x00\xb7\x00"
+        files.update({"bin/ssmcp": elf, "module.prop": b"id=ssmcp\nversion=v0.10.41\nversionCode=1041\n"})
+
+        def stage(overrides):
+            with zipfile.ZipFile(archive, "w") as package:
+                for name, data in (files | overrides).items():
+                    package.writestr(name, data)
+            archive.with_suffix(".zip.sha256").write_text(f"{release.digest(archive)}  {archive.name}\n")
+
+        for invalid, message in (({"bin/ssmcp": b"host binary"}, "AArch64"),
+                                 ({"module.prop": b"id=ssmcp\nversion=v0.10.40"}, "version")):
+            stage(invalid)
+            with self.assertRaisesRegex(ValueError, message):
+                release.checksums(self.root)
+        stage({})
+        release.checksums(self.root)
+        release.checksums(self.root, recheck=True)
+        manifest = json.loads((output / "release-manifest.json").read_text())
+        self.assertIn({"name": archive.name, "bytes": archive.stat().st_size, "sha256": release.digest(archive)},
+                      manifest["artifacts"])
+        self.assertIn(archive.with_suffix(".zip.sha256").read_text(), (output / "SHA256SUMS").read_text())
+
     def test_checksums_reject_tampered_download(self):
         output = self.fixtures()
         next(output.glob("*.zip")).write_bytes(b"tampered")
@@ -982,6 +1022,31 @@ class ReleaseTests(unittest.TestCase):
                 updated = (self.root / "Cargo.lock").read_text()
                 self.assertIn('name = "ssmcp"\nversion = "' + expected + '"', updated)
                 self.assertIn('name = "fixture"\nversion = "0.5.9"', updated)
+                self.assertFalse((self.root / "packaging/magisk/kam.toml").exists())
+
+    def test_bump_workflow_commits_only_module_prop_version_fields(self):
+        module = self.root / "packaging/magisk/kam.toml"
+        module.parent.mkdir(parents=True)
+        original = (
+            "[prop]\nid = 'ssmcp'\nversion = 'v0.5.0' # display\nversionCode = 7 # monotonic\n"
+            '\n[metadata]\nversion = "v0.5.0"\nversionCode = 7\n'
+        )
+        module.write_text(original)
+        self.git("add", "packaging/magisk/kam.toml")
+        self.git("commit", "--quiet", "-m", "module version fixture")
+        baseline = self.git("rev-parse", "HEAD")
+        refs = self.git("show-ref")
+        version = "0.5.1-rc.1"
+        preview = bump_release.prepare("custom", baseline, self.root, custom_version=version, dry_run=True)
+        self.assertEqual(preview["tag"], "v" + version)
+        self.assertEqual(self.git("show-ref"), refs)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        with self.bump_origin():
+            result = bump_release.prepare("custom", baseline, self.root, custom_version=version)
+        expected = original.replace("'v0.5.0'", "'v0.5.1-rc.1'").replace("7 # monotonic", "8 # monotonic")
+        self.assertEqual(module.read_text(), expected)
+        self.assertEqual(self.git("show", result["sha"] + ":packaging/magisk/kam.toml"), expected.rstrip())
+        self.assertEqual(release.validate_package(result["tag"], self.root), version)
 
     def desktop_version_fixture(self):
         desktop = self.root / "apps/ssmcp-desktop"
@@ -2367,8 +2432,15 @@ class GithubReleaseTests(unittest.TestCase):
         self.publish_release()
         self.assertIn("--latest=true", self.operations("edit")[0])
 
+    def test_kernel_su_module_versions_do_not_compete_for_application_latest(self):
+        self.candidate("0.10.41")
+        self.history.append({"tag_name": "kernelsu-v99.0.0", "draft": False, "prerelease": False})
+        self.publish_release()
+        self.assertIn("--latest=true", self.operations("edit")[0])
+
     def test_older_stable_can_publish_without_claiming_latest_from_a_later_page(self):
         self.candidate("0.10.16")
+        self.history.append({"tag_name": "kernelsu-v0.10.40", "draft": False, "prerelease": False})
         self.releases.append({"id": 456, "tag_name": "v0.10.17",
                               "draft": False, "prerelease": False})
         self.publish_release()
@@ -2413,6 +2485,9 @@ class GithubReleaseTests(unittest.TestCase):
                          '[[{"tag_name":"v0.10.17","draft":false}]]',
                          '[[{"tag_name":"v0.10.17","draft":"false","prerelease":false}]]',
                          '[[{"tag_name":"release","draft":false,"prerelease":false}]]',
+                         '[[{"tag_name":"kernelsu-v0.10.040","draft":false,"prerelease":false}]]',
+                         '[[{"tag_name":"kernelsu-v0.10.40-rc.1","draft":false,"prerelease":false}]]',
+                         '[[{"tag_name":"kernelsu-v0.10.40+build","draft":false,"prerelease":false}]]',
                          '[[{"tag_name":"v0.10.01","draft":false,"prerelease":false}]]'):
             with self.subTest(response=response):
                 self.metadata.update(draft=True, assets=[])

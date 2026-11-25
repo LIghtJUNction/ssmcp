@@ -56,6 +56,7 @@ jobs:
       release_contract: ${{ steps.publication.outputs.release_contract }}
       crate_publication: ${{ steps.publication.outputs.crate_publication }}
       gui_clients: ${{ steps.gui_sources.outputs.required }}
+      magisk_module: ${{ steps.tag.outputs.magisk_module }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -280,6 +281,53 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  magisk:
+    needs: validate
+    if: needs.validate.outputs.magisk_module == 'true' && (needs.validate.outputs.publish == 'true' || needs.validate.outputs.build_only == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
+        with:
+          toolchain: 1.100.0
+          targets: aarch64-linux-android
+      - name: Install the Android module build tools
+        run: |
+          ndk_revision=30.0.16248370
+          ndk_dir="$ANDROID_HOME/ndk/$ndk_revision"
+          if [[ ! -f "$ndk_dir/source.properties" ]]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ndk_revision"
+          fi
+          grep -Fx "Pkg.Revision = $ndk_revision" "$ndk_dir/source.properties"
+          printf '%s\n' "ANDROID_NDK_HOME=$ndk_dir" "ANDROID_NDK_ROOT=$ndk_dir" "ANDROID_NDK=$ndk_dir" >> "$GITHUB_ENV"
+          cargo install --locked --version '=4.1.2' cargo-ndk
+          cargo install --locked --git https://github.com/MemDeco-WG/Kam.git --rev 74f50bd219f88633d8cd07d61e89d05478b2fd55 kam # v0.6.12
+      - name: Build and stage the arm64 KernelSU / Magisk module
+        working-directory: packaging/magisk
+        run: |
+          kam_bin="${CARGO_HOME:-$HOME/.cargo}/bin/kam"
+          "$kam_bin" export
+          "$kam_bin" check
+          "$kam_bin" build
+          cd dist
+          unzip -t ssmcp-magisk-arm64.zip
+          cmp ../src/ssmcp/bin/ssmcp <(unzip -p ssmcp-magisk-arm64.zip bin/ssmcp)
+          sha256sum ssmcp-magisk-arm64.zip > ssmcp-magisk-arm64.zip.sha256
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ssmcp-magisk-arm64
+          path: |
+            packaging/magisk/dist/ssmcp-magisk-arm64.zip
+            packaging/magisk/dist/ssmcp-magisk-arm64.zip.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+
   verify_linux_runtime:
     needs: [validate, build]
     if: needs.validate.outputs.publish == 'true' || needs.validate.outputs.build_only == 'true'
@@ -333,7 +381,7 @@ jobs:
             --archive /usr/local/libexec/ssmcp-runtime-test/release.tar.gz
 
   finalize:
-    needs: [validate, checks, build, verify_linux_runtime, gui]
+    needs: [validate, checks, build, verify_linux_runtime, gui, magisk]
     # A legacy source with no GUI clients intentionally skips the reusable job.
     # An apps-present source must succeed on every native platform, including
     # the Linux Release executable's actual Xvfb window check.
@@ -341,6 +389,8 @@ jobs:
       ${{ !cancelled() && needs.validate.result == 'success' &&
           needs.checks.result == 'success' && needs.build.result == 'success' &&
           needs.verify_linux_runtime.result == 'success' &&
+          ((needs.validate.outputs.magisk_module == 'true' && needs.magisk.result == 'success') ||
+           (needs.validate.outputs.magisk_module != 'true' && needs.magisk.result == 'skipped')) &&
           ((needs.validate.outputs.gui_clients == 'true' && needs.gui.result == 'success') ||
            (needs.validate.outputs.gui_clients != 'true' && needs.gui.result == 'skipped')) &&
           (needs.validate.outputs.publish == 'true' || needs.validate.outputs.build_only == 'true') }}
@@ -369,7 +419,7 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           # CI evidence has its own artifact, outside the public asset directory.
-          pattern: 'ssmcp-{x86_64,aarch64,gui}-*'
+          pattern: 'ssmcp-{x86_64,aarch64,gui,magisk}-*'
           merge-multiple: true
           path: dist
       - name: Recheck the source, submodules and existing release tag
@@ -385,7 +435,7 @@ jobs:
       - name: Verify the application source package and normalized registry graph
         if: needs.validate.outputs.publish == 'true' && needs.validate.outputs.crate_publication == 'registry'
         run: python scripts/release.py verify-crate
-      - name: Require every CLI archive, GUI asset and source receipt
+      - name: Require all release archives, installers and source receipts
         run: |
           cp scripts/install.sh scripts/install.ps1 dist/
           if [[ "$RELEASE_CONTRACT" == git-source-v1 && "$BUILD_ONLY" == true ]]; then
