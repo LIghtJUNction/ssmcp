@@ -149,6 +149,7 @@ async function changeTabs(action) {
 }
 
 let grid;
+let terminalSize;
 let screenCursor;
 const scaleKey = 'ssmcp-terminal-font-scale';
 let fontScale = 1;
@@ -211,11 +212,26 @@ function dimensions() {
   screen.parentElement.style.setProperty('--cell-width', grid.width + 'px');
   screen.parentElement.style.setProperty('--cell-height', grid.height + 'px');
   positionCursor();
-  return {
+  terminalSize = {
     cols: Math.max(32, Math.min(200, Math.floor(width / grid.width))),
     rows: Math.max(10, Math.min(80, Math.floor(height / grid.height))),
   };
+  return terminalSize;
 }
+// This is a live TUI screen, not scrollback: send SGR mouse coordinates to
+// the PTY so the native UI can hit-test cards and scroll the touched panel.
+function mousePoint(clientX, clientY) {
+  if (!grid || !terminalSize) return null;
+  const rect = screen.getBoundingClientRect();
+  const x = Math.floor((clientX - rect.left - screen.clientLeft - grid.left + screen.scrollLeft) / grid.width);
+  const y = Math.floor((clientY - rect.top - screen.clientTop - grid.top + screen.scrollTop) / grid.height);
+  if (x < 0 || y < 0 || x >= terminalSize.cols || y >= terminalSize.rows) return null;
+  return { x: x + 1, y: y + 1 };
+}
+function mouseInput(button, point, release = false) {
+  if (point) shortcut(`\x1b[<${button};${point.x};${point.y}${release ? 'm' : 'M'}`);
+}
+let swipe = null;
 let pinch = null;
 let zoomFrame = 0;
 let ignoreClickUntil = 0;
@@ -243,14 +259,34 @@ function finishPinch() {
   pinch = null;
 }
 screen.addEventListener('touchstart', event => {
-  if (event.touches.length === 1) { ignoreClickUntil = 0; return; }
+  if (event.touches.length === 1) {
+    const finger = event.touches[0];
+    swipe = { x: finger.clientX, y: finger.clientY, lastY: finger.clientY, moved: false, version: generation };
+    return;
+  }
+  swipe = null;
+  ignoreClickUntil = performance.now() + 350;
   const distance = fingerDistance(event);
   if (!distance) { finishPinch(); return; }
   if (event.cancelable) event.preventDefault();
   pinch = { distance, scale: fontRatio(), moved: false };
 }, { passive: false });
 screen.addEventListener('touchmove', event => {
-  if (!pinch) return;
+  if (!pinch) {
+    if (!swipe || swipe.version !== generation || event.touches.length !== 1) return;
+    const finger = event.touches[0];
+    if (!swipe.moved && Math.hypot(finger.clientX - swipe.x, finger.clientY - swipe.y) < 8) return;
+    swipe.moved = true;
+    if (event.cancelable) event.preventDefault();
+    const step = Math.max(12, grid?.height ?? 18);
+    const delta = finger.clientY - swipe.lastY;
+    const count = Math.min(8, Math.floor(Math.abs(delta) / step));
+    const point = mousePoint(swipe.x, swipe.y);
+    for (let i = 0; i < count; i++) mouseInput(delta > 0 ? 64 : 65, point);
+    swipe.lastY += Math.sign(delta) * count * step;
+    ignoreClickUntil = performance.now() + 350;
+    return;
+  }
   const distance = fingerDistance(event);
   if (!distance) { finishPinch(); return; }
   if (event.cancelable) event.preventDefault();
@@ -263,8 +299,23 @@ screen.addEventListener('touchmove', event => {
     if (!sizeTimer) sizeTimer = setTimeout(resize, 120);
   });
 }, { passive: false });
-screen.addEventListener('touchend', finishPinch);
-screen.addEventListener('touchcancel', finishPinch);
+screen.addEventListener('touchend', () => {
+  if (swipe?.moved) ignoreClickUntil = performance.now() + 350;
+  swipe = null;
+  finishPinch();
+});
+screen.addEventListener('touchcancel', () => {
+  swipe = null;
+  ignoreClickUntil = performance.now() + 350;
+  finishPinch();
+});
+screen.addEventListener('wheel', event => {
+  const point = mousePoint(event.clientX, event.clientY);
+  if (!point || !event.deltaY) return;
+  event.preventDefault();
+  const count = Math.min(8, Math.max(1, Math.ceil(Math.abs(event.deltaY) / (event.deltaMode === 0 ? 40 : 1))));
+  for (let i = 0; i < count; i++) mouseInput(event.deltaY < 0 ? 64 : 65, point);
+}, { passive: false });
 
 let sizeTimer;
 let resizing = false;
@@ -473,9 +524,17 @@ direct.addEventListener('blur', () => {
   clearTimeout(commitTimer);
   resetDirect();
 });
-screen.addEventListener('click', () => {
+screen.addEventListener('click', event => {
   if (performance.now() < ignoreClickUntil) return;
-  if (window.getSelection()?.isCollapsed !== false) direct.focus({ preventScroll: true });
+  if (window.getSelection()?.isCollapsed !== false) {
+    // Keyboard/assistive clicks have no meaningful cell coordinates.
+    if (event.detail) {
+      const point = mousePoint(event.clientX, event.clientY);
+      mouseInput(0, point);
+      mouseInput(0, point, true);
+    }
+    direct.focus({ preventScroll: true });
+  }
 });
 direct.addEventListener('compositionstart', () => { preedit = true; clearTimeout(commitTimer); });
 direct.addEventListener('compositionend', () => {

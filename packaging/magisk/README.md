@@ -6,7 +6,7 @@
 2. 阅读并确认 root 风险。使用官方中继时还需阅读并接受用户协议和隐私政策。官方中继每月赠送 1 GiB，额外流量由用户在中继网站购买。
 3. 配置成功后，完成页显示所选账号和当前中继的 MCP 地址。需要连接 ChatGPT 时，可在此页查看插件设置说明。回到模块管理器，打开 WebUI 即可操作终端。
 
-完成配置后，设备启动主会话 `ssmcp username@server`，并在每次开机后自动启动。Action 打开音量键菜单。按音量＋切换「查看状态」「启动服务」「退出」，按音量−确认，20 秒无按键会自动退出。日常从模块管理器的 WebUI 操作终端，点屏幕输入，按 Tab 补全。在黑色终端内双指捏合可调节字号，重新打开后会记住。标签栏可新建和切换会话。关闭页面后会话继续运行。
+完成配置后，设备启动主会话 `ssmcp username@server`，并在每次开机后自动启动。Action 打开音量键菜单。按音量＋切换「查看状态」「启动服务」「退出」，按音量−确认，20 秒无按键会自动退出。日常从模块管理器的 WebUI 操作终端，点击终端中的卡片可展开，点击输入区可输入，按 Tab 补全。单指上下滑动会滚动手指所在的终端面板。在黑色终端内双指捏合可调节字号，重新打开后会记住。标签栏可新建和切换会话。关闭页面后会话继续运行。
 
 配置位于 `/data/adb/ssmcp/ssmcp.rc`。可以手工修改唯一一行 `ssmcp username@server`，重启后重新确认目标。刷入更新时会保留目录里的配置和本地状态。更新时，从项目 Releases 下载新版 `ssmcp-magisk-arm64.zip`，在模块管理器中刷入。Termux 可用 `sh scripts/install-ssmcp-termux.sh update [--check]` 在现有 Debian proot 安装中更新。
 
@@ -23,3 +23,15 @@ kam check
 kam build
 unzip -t dist/ssmcp-magisk-arm64.zip
 ```
+
+## WebUI 交互回归
+
+在仓库根目录执行（需要已有 Playwright 和 Chromium）：
+
+```sh
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs CHROMIUM_PATH=/path/to/chromium \
+  node scripts/test_magisk_console_browser.mjs
+python3 scripts/test_magisk_installer_state.py
+```
+
+浏览器回归从模块的 `webroot/index.html` 加载真实脚本和样式，使用隔离的模块管理器桥接 / HTTP fixture，覆盖 320 / 390 像素手机视口的单元格点击、双向触摸滚动、鼠标滚轮、滑动防误触、双指缩放和会话切换。它验证发往 PTY 的 SGR 鼠标输入，不代替真实 Android 管理器、设备 PTY 与原生 TUI 的端到端验收。

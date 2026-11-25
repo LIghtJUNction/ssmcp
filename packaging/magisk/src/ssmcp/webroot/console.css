@@ -272,7 +272,8 @@ body[data-view="console"] #status {
   padding: 4px max(6px, env(safe-area-inset-right)) 4px max(6px, env(safe-area-inset-left));
   overflow: auto;
   overscroll-behavior: contain;
-  touch-action: pan-x pan-y;
+  /* The TUI owns single-finger scrolling; JS also handles font pinch zoom. */
+  touch-action: none;
   scrollbar-color: #333 #000;
   color: #e3e3e3;
   background: #000;
