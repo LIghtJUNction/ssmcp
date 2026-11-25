@@ -471,6 +471,52 @@ fn wait_snapshot(entry: Entry) -> Snapshot {
 }
 
 #[test]
+fn fractional_wait_limits_bound_live_clocks_and_receipts_stop_counting_down() {
+    fn sample(outcome: WaitOutcome, elapsed: u64, window: u64) -> Entry {
+        let mut entry = observed_wait(WaitMode::Any, outcome);
+        entry.wait.as_mut().unwrap().window_ms = Some(window);
+        entry.elapsed_ms = elapsed;
+        entry.remaining_ms = Some(window.saturating_sub(elapsed));
+        entry
+    }
+    for (elapsed, window, limit, bound) in [
+        (42, 6500, "00:06.500", "00:06.500"),
+        (625, 6500, "00:06.500", "00:06"),
+        (1, 250, "250ms", "250ms"),
+        (250, 250, "250ms", "00:00"),
+    ] {
+        let entry = sample(WaitOutcome::Pending, elapsed, window);
+        let card = wait_card(&entry).unwrap();
+        assert!(
+            card.detail
+                .contains(&format!("window limit {limit} · remaining ≤ {bound}"))
+        );
+        if elapsed < window {
+            assert_eq!(clock_label(&entry), format!("观察剩余 ≤ {bound}"));
+        }
+    }
+    for outcome in [
+        WaitOutcome::Triggered,
+        WaitOutcome::WindowExpired,
+        WaitOutcome::ObservationStopped,
+        WaitOutcome::Unknown,
+    ] {
+        let entry = sample(outcome, 42, 6500);
+        let card = wait_card(&entry).unwrap();
+        assert!(
+            card.detail
+                .contains("Elapsed 42ms · window limit 00:06.500")
+        );
+        assert!(!card.detail.contains(" · remaining"));
+        assert!(
+            dashboard::entry_lines(&entry)
+                .iter()
+                .any(|row| row == "本轮读取窗口 00:06.500")
+        );
+    }
+}
+
+#[test]
 fn wait_cards_explain_any_all_budget_and_terminal_outcomes_without_id_noise() {
     for mode in [WaitMode::Any, WaitMode::All] {
         for outcome in [

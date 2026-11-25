@@ -218,11 +218,21 @@ pub(super) fn entry_lines(entry: &Entry) -> Vec<String> {
         ));
     } else {
         if let Some(wait) = &entry.wait {
-            rows.push(format!(
-                "本轮读取窗口 {} · 剩余 {}",
-                optional_duration(wait.window_ms),
-                optional_duration(entry.remaining_ms)
-            ));
+            let mut window = format!(
+                "本轮读取窗口 {}",
+                wait.window_ms
+                    .map(wait_budget)
+                    .unwrap_or_else(|| "未知".into())
+            );
+            if wait.outcome == crate::wire::wait_display::Outcome::Pending
+                && let Some(remaining) = entry.remaining_ms
+            {
+                window.push_str(&format!(
+                    " · 剩余 ≤ {}",
+                    wait_budget(live_wait_bound(remaining, wait.window_ms))
+                ));
+            }
+            rows.push(window);
         }
         rows.push("完成 / 读取 / 确认时间 · 当前记录未提供".into());
     }

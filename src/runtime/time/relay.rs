@@ -79,6 +79,19 @@ impl Observation {
         }
     }
 
+    // A missing receipt can only end our local view. Freeze both counters at
+    // the same monotonic instant, regardless of when the UI last painted.
+    fn mark_unknown(&mut self, now: Instant) {
+        let through = now.min(self.deadline);
+        self.wire.elapsed_ms = self
+            .wire
+            .elapsed_ms
+            .saturating_add(millis(through.saturating_duration_since(self.received)));
+        self.wire.remaining_ms = super::remaining_millis(self.deadline, through);
+        self.wire.outcome = Outcome::Unknown;
+        self.ended = Some(through);
+    }
+
     fn same(&self, wire: &wait_display::Observation) -> bool {
         self.wire.wait_id == wire.wait_id && self.wire.episode == wire.episode
     }
@@ -138,8 +151,7 @@ impl State {
                 && !snapshot.recent.iter().any(|wire| old.same(wire))
             {
                 // Disappearance is not evidence of success or cancellation.
-                old.wire.outcome = Outcome::Unknown;
-                old.wire.elapsed_ms = old.entry(now).elapsed_ms;
+                old.mark_unknown(now);
                 self.retain(old, now);
             }
         }
@@ -174,14 +186,7 @@ impl State {
                 // A lost final frame cannot leave a zombie countdown.
                 // The local budget ending is not evidence of the server's
                 // actual return. Only its typed receipt can establish expiry.
-                observation.wire.elapsed_ms = observation.wire.elapsed_ms.saturating_add(millis(
-                    observation
-                        .deadline
-                        .saturating_duration_since(observation.received),
-                ));
-                observation.wire.remaining_ms = 0;
-                observation.wire.outcome = Outcome::Unknown;
-                observation.ended = Some(observation.deadline);
+                observation.mark_unknown(now);
                 self.retain(observation, now);
             }
         }
@@ -290,6 +295,48 @@ mod tests {
         state.configure(false);
         assert!(state.entries(now).is_empty());
         assert!(state.apply(frame(4, 3), now).is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn disappearing_wait_freezes_both_clocks_at_one_monotonic_instant() {
+        use tokio::{sync::watch, time};
+
+        for (delay, elapsed, remaining, age) in [(375, 475, 1625, 0), (2400, 2100, 0, 400)] {
+            let mut state = State::default();
+            state.configure(true);
+            let now = time::Instant::now();
+            let (tx, mut rx) = watch::channel(frame(1, 1));
+            state
+                .apply(rx.borrow_and_update().clone(), now.into_std())
+                .unwrap();
+            tokio::spawn(async move {
+                time::sleep(Duration::from_millis(delay)).await;
+                tx.send(wait_display::Snapshot {
+                    revision: 2,
+                    active: vec![],
+                    recent: vec![],
+                })
+                .unwrap();
+            });
+            time::timeout(Duration::from_secs(3), rx.changed())
+                .await
+                .unwrap()
+                .unwrap();
+            let observed = time::Instant::now();
+            state
+                .apply(rx.borrow_and_update().clone(), observed.into_std())
+                .unwrap();
+            let retained = state.recent_entries((observed + Duration::from_secs(1)).into_std());
+            assert!(state.entries(observed.into_std()).is_empty());
+            assert_eq!(retained.len(), 1);
+            let receipt = &retained[0];
+            assert_eq!(receipt.wait.as_ref().unwrap().outcome, Outcome::Unknown);
+            assert_eq!(
+                (receipt.elapsed_ms, receipt.remaining_ms),
+                (elapsed, Some(remaining))
+            );
+            assert_eq!(receipt.finished_age_ms, Some(age + 1000));
+        }
     }
 
     #[test]

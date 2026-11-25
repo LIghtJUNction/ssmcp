@@ -68,6 +68,12 @@ fn clock_label(entry: &Entry) -> String {
             }
         ),
         Some(remaining) if !matches!(entry.kind, "task" | "timer") => {
+            if let Some(window) = entry.wait.as_ref().and_then(|wait| wait.window_ms) {
+                return format!(
+                    "观察剩余 ≤ {}",
+                    exact_wait_time(live_wait_bound(remaining, Some(window)))
+                );
+            }
             format!("观察剩余 {}", duration(remaining, true))
         }
         Some(remaining) => format!("剩余 {}", duration(remaining, true)),
@@ -238,6 +244,31 @@ fn wait_duration(ms: u64) -> String {
     }
 }
 
+// The budget is fixed. Keep its millisecond precision even when the live clock
+// ticks in whole seconds.
+fn exact_wait_time(ms: u64) -> String {
+    match ms {
+        1..1000 => format!("{ms}ms"),
+        _ if !ms.is_multiple_of(1000) => format!("{}.{:03}", duration(ms, false), ms % 1000),
+        _ => duration(ms, false),
+    }
+}
+
+fn wait_budget(ms: u64) -> String {
+    if ms.is_multiple_of(1000) {
+        wait_duration(ms)
+    } else {
+        exact_wait_time(ms)
+    }
+}
+
+// A live countdown is an upper bound until the next whole-second tick. Its
+// displayed value cannot exceed the configured window, including at startup.
+fn live_wait_bound(remaining: u64, window: Option<u64>) -> u64 {
+    let rounded = remaining.div_ceil(1000).saturating_mul(1000);
+    window.map_or(rounded, |limit| rounded.min(limit))
+}
+
 fn wait_mode(mode: crate::wire::wait_display::Mode) -> &'static str {
     use crate::wire::wait_display::Mode;
     match mode {
@@ -288,7 +319,7 @@ fn wait_card(entry: &Entry) -> Option<WaitCard> {
         .unwrap_or("Requested condition");
     let budget = wait
         .window_ms
-        .map(|ms| format!("/{}", wait_duration(ms)))
+        .map(|ms| format!("/{}", wait_budget(ms)))
         .unwrap_or_default();
     let heading = format!(
         "{} · {} · {}{budget} · {}",
@@ -321,21 +352,26 @@ fn wait_card(entry: &Entry) -> Option<WaitCard> {
     for (index, target) in wait.targets.iter().enumerate() {
         detail.push(format!("{}. {}", index + 1, panel::safe_text(target)));
     }
-    detail.push(format!(
-        "Elapsed {} · window limit {} · remaining {}",
-        duration(entry.elapsed_ms, false),
+    let mut timing = format!(
+        "Elapsed {} · window limit {}",
+        if wait.outcome == Outcome::Pending {
+            duration(entry.elapsed_ms, false)
+        } else {
+            exact_wait_time(entry.elapsed_ms)
+        },
         wait.window_ms
-            .map(|ms| if ms < 1000 {
-                format!("{ms}ms")
-            } else {
-                duration(ms, false)
-            })
-            .unwrap_or_else(|| "not specified".into()),
-        entry
-            .remaining_ms
-            .map(|ms| duration(ms, true))
+            .map(exact_wait_time)
             .unwrap_or_else(|| "not specified".into())
-    ));
+    );
+    if wait.outcome == Outcome::Pending
+        && let Some(remaining) = entry.remaining_ms
+    {
+        timing.push_str(&format!(
+            " · remaining ≤ {}",
+            exact_wait_time(live_wait_bound(remaining, wait.window_ms))
+        ));
+    }
+    detail.push(timing);
     detail.push(match wait.outcome {
         Outcome::Pending if entry.remaining_ms == Some(0) =>
             "The observation budget has elapsed; the actual return is still pending.",
