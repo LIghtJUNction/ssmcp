@@ -57,6 +57,18 @@ impl CleanupConfig {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn released_job_eligible(&self, path: &Path, elapsed_seconds: u64) -> bool {
+        // Explicitly disposable jobs release on forget/eviction or session close.
+        // A custom rule can narrow that permission or require a retention period.
+        self.enabled
+            && (self.rules.is_empty()
+                || path
+                    .to_str()
+                    .and_then(|p| self.age_for(p, Category::Temporary))
+                    .is_some_and(|age| elapsed_seconds >= age))
+    }
+
     pub(super) fn age_for(&self, path: &str, category: Category) -> Option<u64> {
         if self.rules.is_empty() {
             return Some(self.max_age_seconds);

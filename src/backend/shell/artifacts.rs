@@ -62,6 +62,8 @@ pub(super) struct Artifacts {
     incomplete: bool,
     ledger: Option<Ledger>,
     unstarted: Option<PendingDirectory>,
+    sealed: bool,
+    changed_since_seal: bool,
 }
 
 // A failed initialization or process spawn must not strand an unreported task
@@ -164,8 +166,15 @@ fn ensure_dir(parent: &File, name: &Path) -> io::Result<File> {
         Err(error) => return Err(error),
     }
     let directory = beneath(parent, name)?;
-    if !directory.metadata()?.is_dir() {
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() {
         return Err(io::ErrorKind::NotADirectory.into());
+    }
+    if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o022 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "managed task parent must be owned by this user and not writable by other users",
+        ));
     }
     Ok(directory)
 }
@@ -175,14 +184,15 @@ impl Artifacts {
         let mut nonce = [0u8; 8];
         crate::platform::random_bytes(&mut nonce)?;
         let token = format!("{:016x}", u64::from_be_bytes(nonce));
-        let relative = Path::new(".ssmcp/task-artifacts").join(&token);
+        let relative = Path::new(".ssmcp/workspace/jobs").join(&token);
         let path = workspace.join(&relative);
         // The caller's workspace path was canonicalized. Refuse any symlink
         // inserted into that path since authorization.
         let workspace = open_path(libc::AT_FDCWD, workspace, 0)?;
         let mut ledger = Ledger::new()?;
         let state_dir = ensure_dir(&workspace, Path::new(".ssmcp"))?;
-        let managed = ensure_dir(&state_dir, Path::new("task-artifacts"))?;
+        let project = ensure_dir(&state_dir, Path::new("workspace"))?;
+        let managed = ensure_dir(&project, Path::new("jobs"))?;
         let unstarted = PendingDirectory::new(managed, Path::new(&token))?;
         let root = beneath(&workspace, &relative)?;
         // Watch before spawning, even when the directory is empty.
@@ -202,6 +212,8 @@ impl Artifacts {
             incomplete: false,
             ledger: Some(ledger),
             unstarted: Some(unstarted),
+            sealed: false,
+            changed_since_seal: false,
         })
     }
 
@@ -209,6 +221,10 @@ impl Artifacts {
         if let Some(mut directory) = self.unstarted.take() {
             directory.identity = None;
         }
+    }
+
+    pub(super) fn relative_directory(&self) -> &Path {
+        &self.relative
     }
 
     pub(super) fn description(&self) -> Value {
@@ -223,6 +239,22 @@ impl Artifacts {
         (report["logical_bytes"].as_u64(), self.incomplete)
     }
 
+    // Freeze the observed task lifetime before publishing successful completion.
+    // A later change, even one observed by a status read, disqualifies cleanup.
+    pub(super) fn seal(&mut self) {
+        self.sealed = !self.incomplete && self.update_ledger().is_ok();
+    }
+
+    fn update_ledger(&mut self) -> io::Result<()> {
+        let observed = self
+            .ledger
+            .as_mut()
+            .ok_or_else(|| io::Error::other("artifact ledger is unavailable"))?
+            .update(&self.root)?;
+        self.changed_since_seal |= self.sealed && observed;
+        Ok(())
+    }
+
     pub(super) fn sample(&mut self) -> Value {
         let still_owned = (|| -> io::Result<bool> {
             let current = beneath(&self.workspace, &self.relative)?;
@@ -233,11 +265,7 @@ impl Artifacts {
         if !still_owned {
             self.incomplete = true;
             self.ledger = None;
-        } else if !self
-            .ledger
-            .as_mut()
-            .is_some_and(|ledger| ledger.update(&self.root).is_ok())
-        {
+        } else if self.update_ledger().is_err() {
             // A truncated event batch, unknown watch state or overflow loses
             // coverage. Recover once per sample, and keep the gap visible.
             self.incomplete = true;
@@ -401,7 +429,7 @@ impl Ledger {
         Ok(())
     }
 
-    fn update(&mut self, root: &File) -> io::Result<()> {
+    fn update(&mut self, root: &File) -> io::Result<bool> {
         let mut paths = BTreeMap::new();
         let mut buffer = [0u8; 16 * 1024];
         let mut read = 0;
@@ -471,7 +499,7 @@ impl Ledger {
         for path in paths.keys() {
             self.refresh(root, path, &mut remaining)?;
         }
-        Ok(())
+        Ok(read != 0)
     }
 
     fn largest(&self) -> Vec<Value> {

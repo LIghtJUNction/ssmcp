@@ -395,7 +395,11 @@ impl Runtime {
     ) -> tokio::task::JoinHandle<()> {
         let root = self.tool_root.clone();
         let audit = self.audit.clone();
+        #[cfg(target_os = "linux")]
+        let shell = self.local_shell();
         tokio::spawn(async move {
+            #[cfg(target_os = "linux")]
+            shell.reclaim_released_workspaces().await;
             let result = tokio::task::spawn_blocking(move || {
                 crate::managed_files::cleanup(&root, false, trigger)
             })

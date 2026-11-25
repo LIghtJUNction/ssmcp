@@ -107,6 +107,11 @@ impl Entry {
         deadline: Instant,
     ) -> io::Result<Self> {
         live(deadline)?;
+        if name == ".git" {
+            return Err(io::Error::other(
+                "preserving Git checkout in task workspace",
+            ));
+        }
         if depth > super::MAX_DEPTH {
             return Err(super::bound());
         }
@@ -229,20 +234,21 @@ impl Artifacts {
 
     fn reclaim_inner(&mut self, deadline: Instant, removed: &mut Removed) -> io::Result<()> {
         live(deadline)?;
-        let original = Path::new(self.relative.file_name().expect("task token"));
-        let relative_parent = self.relative.parent().expect("managed parent");
+        if !self.sealed || self.changed_since_seal {
+            return Err(io::Error::other(
+                "task workspace ownership after completion is unverified",
+            ));
+        }
+        let relative = self.relative.clone();
+        let original = Path::new(relative.file_name().expect("task token"));
+        let relative_parent = relative.parent().expect("managed parent");
         let parent = beneath(&self.workspace, relative_parent)?;
         let expected = identity(&self.root.metadata()?);
         if identity(&beneath(&parent, original)?.metadata()?) != expected {
             return Err(changed());
         }
         // Never recover lost coverage as part of authorization to delete.
-        if self.incomplete
-            || !self
-                .ledger
-                .as_mut()
-                .is_some_and(|ledger| ledger.update(&self.root).is_ok())
-        {
+        if self.incomplete || self.update_ledger().is_err() || self.changed_since_seal {
             return Err(io::Error::other("artifact ledger is incomplete"));
         }
         let mut tree = Entry::inspect(
@@ -252,7 +258,7 @@ impl Artifacts {
             &mut { MAX_CLEANUP_ENTRIES },
             deadline,
         )?;
-        if tree.id != expected {
+        if tree.id != expected || self.update_ledger().is_err() || self.changed_since_seal {
             return Err(changed());
         }
 
@@ -308,6 +314,7 @@ mod tests {
         fs::create_dir(&workspace).unwrap();
         let mut artifacts = Artifacts::new(&workspace, 20).unwrap();
         fs::write(artifacts.path.join("payload"), "bytes").unwrap();
+        artifacts.seal();
         let quarantine = artifacts.path.with_file_name(format!(
             ".reclaim-{}",
             artifacts.path.file_name().unwrap().to_string_lossy()

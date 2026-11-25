@@ -24,7 +24,7 @@ async fn tracked_exec_failed_spawn_does_not_leave_unreported_directories() {
             .unwrap_err();
         assert!(error.contains("could not start command"), "{error}");
         assert_eq!(
-            fs::read_dir(fixture.0.join(".ssmcp/task-artifacts"))
+            fs::read_dir(fixture.0.join(".ssmcp/workspace/jobs"))
                 .unwrap()
                 .count(),
             0
@@ -218,7 +218,7 @@ async fn tracked_exec_counts_child_and_workspace_writes_and_isolates_notices() {
     assert_ne!(directory, second_dir);
     assert_eq!(second["artifacts"]["soft_limit_bytes"], 10);
     for path in [directory, second_dir] {
-        let token = path.strip_prefix(".ssmcp/task-artifacts/").unwrap();
+        let token = path.strip_prefix(".ssmcp/workspace/jobs/").unwrap();
         assert_eq!(token.len(), 16);
         assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
@@ -394,7 +394,8 @@ async fn tracked_exec_default_budget_is_opt_in_and_rearms_at_low_water() {
     assert!(!workspace.join(".ssmcp").exists());
 
     fs::create_dir(workspace.join(".ssmcp")).unwrap();
-    let managed = workspace.join(".ssmcp/task-artifacts");
+    fs::create_dir(workspace.join(".ssmcp/workspace")).unwrap();
+    let managed = workspace.join(".ssmcp/workspace/jobs");
     symlink(&outside, &managed).unwrap();
     let args = json!({"command":["/bin/true"],"track_artifacts":true});
     assert!(
@@ -763,4 +764,147 @@ async fn exec_reuse_preserves_independent_starts_and_rejects_incompatible_reques
         );
     }
     assert!(shell.call("ssmcp.exec.start", reusable).await.is_err());
+}
+
+#[tokio::test]
+async fn managed_workspace_uses_project_jobs_and_reclaims_only_released_unchanged_output() {
+    let fixture = Fixture::new();
+    let repository = fixture.0.join("source");
+    fs::create_dir(&repository).unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec![
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "base",
+        ],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(&repository)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    let shell =
+        Shell::with_workspace(fixture.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
+    let owner = source('a', "42", 81, 1);
+    async fn completed(shell: &Shell, owner: &Source, command: &str) -> Value {
+        let job = shell.call_scoped("ssmcp.exec.start",json!({"command":["/bin/sh","-ec",command],"managed_workspace":true,"mode":"pipes"}),owner.clone()).await.unwrap();
+        let done = shell
+            .call("ssmcp.exec.wait", json!({"job_id":job["job_id"]}))
+            .await
+            .unwrap();
+        assert_eq!(done["exit_code"], 0);
+        job
+    }
+    let run = "test \"$PWD\" = \"$TMPDIR\" && test \"$PWD\" = \"$SSMCP_ARTIFACT_DIR\" && printf scratch > generated";
+    let path = |job: &Value| {
+        fixture
+            .0
+            .join(job["artifacts"]["directory"].as_str().unwrap())
+    };
+    let clean = completed(&shell, &owner, run).await;
+    let changed = completed(&shell, &owner, run).await;
+    let git = completed(&shell, &owner, r#"git -C "$SSMCP_PROJECT_ROOT/source" worktree add -q --detach "$PWD/checkout" HEAD && printf keep > project.txt"#).await;
+    let disabled = completed(&shell, &owner, run).await;
+    let ordinary = completed(&shell, &owner, run).await;
+    assert!(path(&clean).starts_with(fixture.0.join(".ssmcp/workspace/jobs")));
+    assert_eq!(
+        clean["cwd"].as_str().unwrap(),
+        path(&clean).to_str().unwrap()
+    );
+    assert_eq!(
+        fs::read(path(&clean).join("generated")).unwrap(),
+        b"scratch"
+    );
+    fs::write(path(&changed).join("user-file"), b"keep").unwrap();
+    // Status reads may consume accounting events. Ownership evidence must survive those reads.
+    shell
+        .call_scoped(
+            "ssmcp.exec.status",
+            json!({"job_id":changed["job_id"]}),
+            owner.clone(),
+        )
+        .await
+        .unwrap();
+    for job in [&clean, &changed, &git] {
+        shell
+            .call("ssmcp.exec.forget", json!({"job_id":job["job_id"]}))
+            .await
+            .unwrap();
+    }
+    assert!(!path(&clean).exists());
+    assert!(path(&ordinary).join("generated").exists());
+    assert_eq!(fs::read(path(&changed).join("user-file")).unwrap(), b"keep");
+    assert!(path(&git).join("checkout/.git").is_file());
+    let mut config = crate::managed_files::config(&fixture.0).unwrap();
+    config.enabled = false;
+    crate::managed_files::set_config(&fixture.0, &config).unwrap();
+    shell
+        .call("ssmcp.exec.forget", json!({"job_id":disabled["job_id"]}))
+        .await
+        .unwrap();
+    shell.reclaim_released_workspaces().await;
+    assert!(path(&disabled).join("generated").is_file());
+    config.enabled = true;
+    crate::managed_files::set_config(&fixture.0, &config).unwrap();
+    shell.reclaim_released_workspaces().await;
+    assert!(!path(&disabled).exists());
+    shell.shutdown().await;
+    assert!(!path(&ordinary).exists());
+    assert!(path(&changed).join("generated").exists());
+    assert!(path(&git).join("project.txt").exists());
+}
+
+#[tokio::test]
+async fn managed_workspace_rejects_conflicting_cwd_and_anonymous_creation() {
+    let fixture = Fixture::new();
+    let shell =
+        Shell::with_workspace(fixture.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
+    let args = json!({"command":["/bin/true"],"managed_workspace":true});
+    assert!(shell.call("ssmcp.exec.start", args.clone()).await.is_err());
+    let mut conflict = args;
+    conflict["cwd"] = json!(".");
+    let error = shell
+        .call_scoped("ssmcp.exec.start", conflict, source('a', "42", 81, 1))
+        .await
+        .unwrap_err();
+    assert!(error.contains("omit cwd"));
+    assert!(!fixture.0.join(".ssmcp/workspace/jobs").exists());
+}
+
+#[tokio::test]
+async fn managed_workspace_retains_unowned_project_paths() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let shell =
+        Shell::with_workspace(fixture.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
+    let jobs = fixture.0.join(".ssmcp/workspace/jobs");
+    fs::create_dir_all(&jobs).unwrap();
+    fs::set_permissions(&jobs, fs::Permissions::from_mode(0o777)).unwrap();
+    fs::write(jobs.join("user-file"), b"keep").unwrap();
+    let error = shell
+        .call_scoped(
+            "ssmcp.exec.start",
+            json!({"command":["/bin/true"],"managed_workspace":true}),
+            source('a', "42", 81, 1),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.contains("not writable by other users"), "{error}");
+    assert_eq!(fs::read(jobs.join("user-file")).unwrap(), b"keep");
+    assert_eq!(fs::read_dir(jobs).unwrap().count(), 1);
 }
