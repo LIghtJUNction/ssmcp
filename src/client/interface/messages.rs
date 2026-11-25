@@ -216,7 +216,7 @@ fn response(receipt: &Receipt, duplicate: bool) -> Value {
         value["finish_task"] = json!(true);
         value["may_finish"] = json!(false);
         value["completion_instruction"] = json!(
-            "This message ACK is not permission to end the task. Only the final outer user_wait receipt with status decided and may_finish true grants permission. Otherwise keep the task active and follow the final outer next_wait. Resume an existing pending finish with its exact request ID; never resend the question. Human No starts a fresh 30-minute Dreaming window. Do not replace that blocking wait with a timer, background sleep, polling loop, or a final answer."
+            "This message ACK is not permission to end the task. Only the final outer user_wait receipt with status decided and may_finish true grants permission. Otherwise keep the task active. When the final outer receipt supplies next_wait, call await ui.wait(clientId, next_wait.arguments) in a new tool call. Resume an existing pending finish with its exact request ID; never resend the question. Human No starts a fresh 30-minute Dreaming window. Do not replace that blocking wait with a timer, background sleep, polling loop, or a final answer."
         );
     }
     value
