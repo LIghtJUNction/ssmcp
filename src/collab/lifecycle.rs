@@ -1006,7 +1006,12 @@ impl Hub {
                             || name.starts_with("ssmcp.worker.")
                             || matches!(
                                 name.as_str(),
-                                "ssmcp.ui.get"
+                                "ssmcp.exec.list"
+                                    | "ssmcp.exec.status"
+                                    | "ssmcp.exec.wait"
+                                    | "ssmcp.exec.read"
+                                    | "ssmcp.exec.events"
+                                    | "ssmcp.ui.get"
                                     | "ssmcp.ui.events"
                                     | "ssmcp.ui.questions"
                                     | "ssmcp.ui.wait"

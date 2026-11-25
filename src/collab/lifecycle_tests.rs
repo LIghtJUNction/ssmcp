@@ -526,6 +526,11 @@ async fn passive_observations_do_not_reset_idle_or_execute_requested_maintenance
         "events.read",
         "worker.events",
         "client.capabilities",
+        "exec.list",
+        "exec.status",
+        "exec.wait",
+        "exec.read",
+        "exec.events",
     ] {
         let operation = native(tool, json!({}));
         let mut call = hub

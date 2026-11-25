@@ -149,3 +149,54 @@ async fn native_capacity_busy_resumes_the_same_wait_after_authenticated_frames_a
     assert!(state.finish_operations.is_empty());
     assert!(!fixture.peer.is_finished());
 }
+
+#[tokio::test]
+async fn public_exec_wait_preserves_the_current_dreaming_episode() {
+    let fixture = Fixture::new().await;
+    fixture.native.lock().unwrap().pending = false;
+    let hub = &fixture.session.collaboration;
+    let snapshot = || {
+        hub.lifecycle_snapshot(&fixture.owner, &fixture.agent_id, &fixture.agent_token)
+            .unwrap()
+    };
+    hub.dispatch(
+        &fixture.owner,
+        "update",
+        json!({
+            "agent_id": fixture.agent_id, "token": fixture.agent_token,
+            "expected_revision": snapshot()["lifecycle"]["revision"], "idle_after_ms": 1000
+        }),
+    )
+    .await
+    .unwrap();
+    let entered = observe(
+        &fixture,
+        json!({"targets":[{"type":"agent_status","agent_id":fixture.agent_id,"statuses":["dreaming"]}],"timeout_ms":3000}),
+    )
+    .await;
+    assert_eq!(entered["structuredContent"]["status"], "ready");
+    let before = snapshot();
+    assert_eq!(before["status"], "dreaming");
+    assert!(before["lifecycle"]["dreaming_since_ms"].is_u64());
+    assert!(before["lifecycle"]["maintenance"]["round_id"].is_string());
+    let result = observe(
+        &fixture,
+        json!({"targets":[{"type":"exec","job_id":"exec_capacity_fixture"}],"timeout_ms":1000}),
+    )
+    .await;
+    assert_eq!(result["structuredContent"]["status"], "ready");
+    assert_eq!(
+        result["structuredContent"]["results"][0]["data"]["exit_code"],
+        0
+    );
+    let after = snapshot();
+    assert_eq!(after["status"], "dreaming");
+    assert_eq!(
+        after["lifecycle"]["dreaming_since_ms"],
+        before["lifecycle"]["dreaming_since_ms"]
+    );
+    assert_eq!(
+        after["lifecycle"]["maintenance"]["round_id"],
+        before["lifecycle"]["maintenance"]["round_id"]
+    );
+}
