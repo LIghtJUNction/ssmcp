@@ -175,10 +175,26 @@ async fn public_exec_wait_preserves_the_current_dreaming_episode() {
     )
     .await;
     assert_eq!(entered["structuredContent"]["status"], "ready");
-    let before = snapshot();
-    assert_eq!(before["status"], "dreaming");
+    let round = &entered["structuredContent"]["results"][0]["data"]["agent"]["lifecycle"]["maintenance"]
+        ["round_id"];
+    assert!(round.is_string());
+    // A foreground status read can publish the due round before the deadline
+    // driver performs its first chore. Observe that same round's receipt.
+    let before = timeout(Duration::from_secs(3), async {
+        loop {
+            let state = snapshot();
+            assert_eq!(state["status"], "dreaming");
+            let maintenance = &state["lifecycle"]["maintenance"];
+            assert_eq!(&maintenance["round_id"], round);
+            if maintenance["local_housekeeping"]["action"] == "release_empty_inbox" {
+                break state;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the deadline driver must finish the idle round's first chore");
     assert!(before["lifecycle"]["dreaming_since_ms"].is_u64());
-    assert!(before["lifecycle"]["maintenance"]["round_id"].is_string());
     let result = observe(
         &fixture,
         json!({"targets":[{"type":"exec","job_id":"exec_capacity_fixture"}],"timeout_ms":1000}),

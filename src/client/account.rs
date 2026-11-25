@@ -710,7 +710,7 @@ pub(super) async fn check_magisk_target(server: &str, username: &str) -> Result<
     Ok(())
 }
 
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn same_subject(credential: &Credential, identity: &Value) -> Result<()> {
     if credential
         .subject

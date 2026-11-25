@@ -89,9 +89,13 @@ release_smoke() (
         sudo -n journalctl -b -u "$smoke_unit" -n 20 --no-pager >&2 || :
         return 1
     fi
+    # Keep the disposable user's config and cache lookups inside its own home.
     local -a as_manager=(sudo -n -H -u "$account" env "XDG_RUNTIME_DIR=/run/user/$smoke_uid"
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$smoke_uid/bus" systemd-run
-        --user --wait --pipe --quiet --collect "--working-directory=$work/home")
+        --user --wait --pipe --quiet --collect "--working-directory=$work/home"
+        "--setenv=HOME=$work/home" "--setenv=XDG_CONFIG_HOME=$work/home/.config"
+        "--setenv=XDG_DATA_HOME=$work/home/.local/share" "--setenv=XDG_STATE_HOME=$work/home/.local/state"
+        "--setenv=XDG_CACHE_HOME=$work/home/.cache")
     # Start the probe and then the exact candidate from inside this user's
     # manager, preserving all ancestor restrictions when the client is admitted.
     "${as_manager[@]}" /bin/bash "$work/check.sh" probe >&2

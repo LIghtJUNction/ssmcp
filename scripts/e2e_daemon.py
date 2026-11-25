@@ -82,7 +82,7 @@ def preflight(binary_dir):
         raise PrerequisiteUnavailable("this actual user-systemd test requires Linux")
     if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
         raise PrerequisiteUnavailable("Python/Linux pidfd support is required for owned-process fault injection")
-    required = ("systemctl", "systemd-run", "journalctl", "stty", "tty", "sleep", "head", "tr")
+    required = ("systemctl", "systemd-run", "journalctl", "bwrap", "stty", "tty", "sleep", "head", "tr")
     programs = {name: shutil.which(name) for name in required}
     missing = [name for name, path in programs.items() if path is None]
     if not (binary_dir / "ssmcp").is_file():
@@ -257,13 +257,42 @@ class Daemon(Harness):
             arguments += ["--no-watchdog"]
         return arguments
 
-    def create(self, name, *, watchdog, executable=None, environment=None):
+    def create(self, name, *, watchdog, executable=None, environment=None, extra_args=()):
         arguments = self.daemon_arguments(name, watchdog=watchdog)
         self.managed.add(name)
-        _, output, _ = self.command(arguments, executable=executable, environment=environment)
+        _, output, _ = self.command([*arguments, *extra_args], executable=executable, environment=environment)
         value = json.loads(output)
         self.validate_status(name, value)
         return value
+
+    def verify_peer_budget(self, status, identity, cpu_percent, memory_bytes):
+        mount_info = Path("/proc/self/mountinfo").read_text().splitlines()
+        self.check(any(row.split()[4] == "/sys/fs/cgroup" and " - cgroup2 " in row for row in mount_info),
+                   "the resource observations come from the kernel's cgroup v2 mount")
+        membership = Path(f"/proc/{identity[0]}/cgroup")
+        before = membership.read_text()
+        groups = [Path(row[3:]) for row in before.splitlines() if row.startswith("0::")]
+        self.check(len(groups) == 1 and groups[0].is_absolute() and ".." not in groups[0].parts,
+                   "the connected peer has a single observable cgroup v2 membership")
+        group = groups[0]
+        unit = group.parent if group.name == "ssmcp-supervisor" else group
+        session = unit.parent
+        self.check(unit.name == status["manager_id"] + ".service"
+                   and re.fullmatch(r"ssmcp-s[0-9a-f]{32}\.slice", session.name)
+                   and session.parent.name == "ssmcp.slice"
+                   and session.parent.parent.name == f"user@{os.geteuid()}.service",
+                   "the peer PID belongs to its named service and its UID's budget slices")
+        limits = Path("/sys/fs/cgroup") / session.relative_to("/")
+        quota, period = map(int, (limits / "cpu.max").read_text().split())
+        memory = int((limits / "memory.max").read_text())
+        swap = int((limits / "memory.swap.max").read_text())
+        self.check(status["resource_limits_requested"] == {"cpu_percent": cpu_percent, "memory_bytes": memory_bytes}
+                   and quota > 0 and period > 0 and quota * 100 <= period * cpu_percent
+                   and 0 < memory <= memory_bytes and swap == 0
+                   and before == membership.read_text() and process_identity(identity[0]) == identity,
+                   "the same live peer has its requested CPU and RAM ceilings and zero swap in the kernel")
+        return {"session_slice": session.name, "quota_us": quota, "period_us": period,
+                "memory_bytes": memory, "swap_bytes": swap}
 
     def authenticate(self, name, status):
         """Authorize the observed account connection through real provider OAuth."""
@@ -523,11 +552,28 @@ class Daemon(Harness):
         self.check(sha256(Path(first["state_directory"]) / "manifest.json") == before,
                    "duplicate daemon creation cannot overwrite a saved session definition")
 
-        self.case = "D07"
-        self.create(peer, watchdog=False)
+        self.case = "D11"
+        stale_runtime = self.directory / "unavailable-user-runtime"
+        stale_runtime.mkdir(mode=0o700)
+        self.check(len(os.fsencode(stale_runtime / "systemd/private")) < 100,
+                   "the stale runtime fixture uses a valid Unix socket pathname")
+        stale_bus = {**self.environment, "XDG_RUNTIME_DIR": str(stale_runtime),
+                     "DBUS_SESSION_BUS_ADDRESS": "unix:path=" + str(stale_runtime / "missing-bus")}
+        raw = subprocess.run([
+            self.programs["systemctl"], "--user", "--no-pager", "show", "--property=Version",
+        ], env=stale_bus, stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
+        self.check(raw.returncode != 0, "raw systemctl cannot reach the manager through the stale hints")
+        cpu_percent, memory_bytes = 50, 256 * 1024 * 1024
+        self.create(peer, watchdog=False, environment=stale_bus,
+                    extra_args=("--cpu-limit", f"{cpu_percent}%", "--memory-limit", str(memory_bytes)))
         peer_status = self.connected(peer)
-        self.capture_live_logs(peer)
         peer_runner = self.runner_identity(peer)
+        self.metrics["stale_manager_environment"] = {
+            "native_probe_exit_code": raw.returncode,
+            "kernel": self.verify_peer_budget(peer_status, peer_runner, cpu_percent, memory_bytes),
+        }
+        self.case = "D07"
+        self.capture_live_logs(peer)
         self.check(peer_status["reconnect_delay_secs"] == 5 and not peer_status["watchdog"],
                    "a daemon without watchdog keeps the default delay but does not enable retries")
         entries = self.cli("list")
@@ -668,29 +714,25 @@ class Daemon(Harness):
         self.authenticate(primary, sixth)
 
         self.case = "D11"
-        unavailable_runtime = self.directory / "unavailable-user-runtime"
-        unavailable_runtime.mkdir(mode=0o700)
-        self.check(len(os.fsencode(unavailable_runtime / "systemd/private")) < 100,
-                   "the negative manager fixture uses a short valid Unix socket pathname")
-        # systemctl may use XDG_RUNTIME_DIR/systemd/private directly, bypassing
-        # DBUS_SESSION_BUS_ADDRESS. Isolate both routes within an owned empty
-        # directory and prove the exact native precondition before launching.
-        missing_bus = {**self.environment, "XDG_RUNTIME_DIR": str(unavailable_runtime),
-                       "DBUS_SESSION_BUS_ADDRESS": "unix:path=" + str(unavailable_runtime / "missing-bus")}
-        unreachable = subprocess.run([
-            self.programs["systemctl"], "--user", "--no-pager", "show", "--property=Version",
-        ], env=missing_bus, stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
-        self.check(unreachable.returncode != 0,
-                   "the negative fixture proves the exact native user-manager probe is unavailable")
-        self.metrics["unavailable_manager_injection"] = {
-            "changed_environment_keys": ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"],
-            "native_probe_exit_code": unreachable.returncode,
-        }
         missing_name = self.names[0] + "-unavailable"
         self.managed.add(missing_name)
-        self.command(self.daemon_arguments(missing_name, watchdog=False),
-                     environment=missing_bus, expected="failure")
-        self.check({entry["name"] for entry in self.cli("list")} == set(self.names),
+        # Hide the UID's actual runtime only in the child mount namespace. Keep
+        # the fixture state writable so a partial definition would be observable.
+        code, _, error = self.command([
+            "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev",
+            "--tmpfs", f"/run/user/{os.geteuid()}",
+            "--bind", str(self.directory), str(self.directory),
+            "--", str(self.binary_dir / "ssmcp"), *self.daemon_arguments(missing_name, watchdog=False),
+        ], executable=self.programs["bwrap"], environment=stale_bus, expected="failure")
+        self.check(b"session budget requires the current UID's systemd user bus" in error,
+                   "daemon creation reports the missing canonical user bus inside the private namespace")
+        self.metrics["unavailable_manager_injection"] = {
+            "isolation": "private mount namespace with empty canonical UID runtime",
+            "daemon_exit_code": code,
+        }
+        failed_directory = self.state_home / ("session-" + hashlib.sha256(missing_name.encode()).hexdigest())
+        self.check(not failed_directory.exists() and not any(self.state_home.glob(".prepare-*"))
+                   and {entry["name"] for entry in self.cli("list")} == set(self.names),
                    "an unavailable user bus leaves no half-created background session")
         self.managed.discard(missing_name)
 
