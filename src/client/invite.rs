@@ -163,18 +163,18 @@ fn render(role: &str, control_id: &str, cwd: &str, pool: Option<&Value>) -> Resu
         Some(pool) => prompt.push_str(&pool.description()),
         None => prompt.push_str("Worker pool: none linked.\n"),
     }
-    prompt.push_str("Read `ssmcp://guide`, `AGENTS.md`, `docs/workers.md`; discover schemas. First bind/reconnect: `await skills.view(clientId,{})` (native `ssmcp.skills.view`).\n");
+    prompt.push_str("Read `ssmcp://guide`, `AGENTS.md`, `docs/workers.md`; discover schemas. Bind/reconnect: `await skills.view(clientId,{})` (native `ssmcp.skills.view`).\n");
     prompt.push_str(match role {
         Role::Coordinator => {
-            "Coordinator: privately `collab.join` (role main) and `collab.bind` control. For a linked pool, bind separately and `ssmcp.worker.attach`. Delegate to standby workers with `ssmcp.worker.submit`. Group tasks in `ssmcp.worker.wait_for` (any), read ready `ssmcp.worker.result`, watch capacity via `ssmcp.worker.wait_available` with cursor. Reconcile via `ssmcp.worker.events`. Use your verified finish receipt and worker-specific human questions."
+            "Coordinator: privately `collab.join` (main), `collab.bind` control. For a linked pool, bind separately; `ssmcp.worker.attach`. Delegate to standby workers via `ssmcp.worker.submit`. Group `ssmcp.worker.wait_for` (any); read ready `ssmcp.worker.result`; track `ssmcp.worker.wait_available` by cursor and reconcile `ssmcp.worker.events`. Use your verified finish receipt and worker-specific human questions."
         }
         Role::Worker => {
-            "External worker: privately `collab.join` (role worker) and `collab.bind` pool. `ssmcp.worker.wait`: preserve each claim unchanged; retain pending request_id across blocking windows (up to 55000ms). `ssmcp.worker.complete`, then wait again using a new request ID. For operator-ordered retirement, complete any current claim; acknowledge its receipt via `ssmcp.worker.release`. For voluntary exit verify the coordinator's human decision reference. Never manage the queue or consume control-session input."
+            "Worker: privately `collab.join` (worker), `collab.bind` pool. `ssmcp.worker.wait` (≤55000ms): retain pending request_id; preserve each claim unchanged. `ssmcp.worker.complete`, then wait again using a new request ID. For operator-ordered retirement, complete any current claim; acknowledge via `ssmcp.worker.release`. Voluntary exit: verify worker-specific Human approval. Never manage the queue or consume control-session input."
         }
     });
     prompt.push('\n');
     prompt.push_str(DREAMING_POLICY);
-    prompt.push_str("\nReconnect: refresh `list` and schemas; verify authorized workspace/control/pool; privately rejoin/bind. Reconcile claims, commits and outcomes before assigning. Preserve `unknown`; never replay or restart models. Follow `ssmcp://recovery`: 1/2/4/8s; prefer verified authorized 007, guarded `ssmcp.007.recover` with matching IDs. Respect stop/revocation; keep blocked work resumable.");
+    prompt.push_str("\nFollow this project across restarts. Save verified device_id/session_id; client_id is temporary. After disconnect, reload or restart, automatically refresh `list` (1/2/4/8s). Verify workspace and any linked `/worker_pool` using trusted routing or fresh invitation. Ambiguous/unverified: request selection. Refresh schemas; privately rejoin/bind replacements. Reconcile claims, commits and receipts; preserve `unknown` without replay. Respect stop/revocation; never restart models. `ssmcp://recovery`: guarded `ssmcp.007.recover` with matching IDs.");
     Ok(prompt)
 }
 
@@ -308,14 +308,18 @@ mod tests {
 
     #[test]
     fn invitations_attempt_reconnect_and_reconcile_before_new_work() {
-        for role in ["", "worker"] {
-            let prompt = render(role, CONTROL_ID, "/project", Some(&pool())).unwrap();
+        let linked = pool();
+        for (role, pool) in [("", None), ("", Some(&linked)), ("worker", Some(&linked))] {
+            let prompt = render(role, CONTROL_ID, "/project", pool).unwrap();
             for instruction in [
-                "Reconnect: refresh `list` and schemas",
-                "verify authorized workspace/control/pool",
-                "privately rejoin/bind",
-                "Reconcile claims, commits and outcomes before assigning",
-                "Preserve `unknown`; never replay or restart models",
+                "Follow this project across restarts",
+                "Save verified device_id/session_id; client_id is temporary",
+                "After disconnect, reload or restart, automatically refresh `list`",
+                "Verify workspace and any linked `/worker_pool` using trusted routing or fresh invitation",
+                "Ambiguous/unverified: request selection",
+                "Refresh schemas; privately rejoin/bind replacements",
+                "Reconcile claims, commits and receipts; preserve `unknown` without replay",
+                "Respect stop/revocation; never restart models",
                 "1/2/4/8s",
                 "guarded `ssmcp.007.recover` with matching IDs",
                 "idle_after_ms (default 5 minutes)",

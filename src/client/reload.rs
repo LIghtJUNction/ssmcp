@@ -12,11 +12,17 @@ use std::{
 };
 
 pub(crate) const TOOL: &str = "ssmcp.client.reload";
+const PROJECT_HANDOFF: &str = concat!(
+    "Automatically refresh list after restart. Find the authorized project using its workspace ",
+    "and verified device/session identity or trusted project handoff. Verify any linked /worker_pool. ",
+    "If identity is unverified or ambiguous, obtain a fresh invitation or explicit operator selection. ",
+    "Rebind the verified current connection and reconcile receipts before resuming. Preserve unknown outcomes."
+);
 
 pub(crate) fn tool() -> Value {
     json!({
         "name": TOOL,
-        "description": "Acknowledge and restart this foreground client from its installed executable, preserving its resolved connection target, other startup arguments, cwd and environment. Reject while other requests are in flight. Stops local background commands, harnesses and forwards. Live logs, drafts and pending requests are discarded at restart. The client reconnects with a new ID; use list again. The relay verifies the selected account again after reconnect; control apps retain their independent sign-in.",
+        "description": format!("Acknowledge and restart this foreground client from its installed executable, preserving its resolved connection target, other startup arguments, cwd and environment. Reject while other requests are in flight. Stops local background commands, harnesses and forwards. Live logs, drafts and pending requests are discarded at restart. The relay verifies the selected account again after reconnect; control apps retain their independent sign-in. {PROJECT_HANDOFF}"),
         "inputSchema": {"type":"object","properties":{},"additionalProperties":false},
         "annotations": {"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false}
     })
@@ -41,7 +47,7 @@ pub(crate) fn acknowledgement(client_id: &str, github_auth: bool) -> Value {
         "auth":if github_auth { "github" } else { "login_code" },
         "oauth_login_required":!github_auth,
         "background_jobs":"stopped",
-        "next_step":"Call list again and select the new client ID by title, name and cwd."
+        "next_step":PROJECT_HANDOFF
     }))
 }
 
@@ -574,6 +580,13 @@ mod tests {
         assert_eq!(ack["structuredContent"]["accepted"], true);
         assert_eq!(ack["structuredContent"]["oauth_login_required"], true);
         assert_eq!(ack["structuredContent"]["client_id"], "old");
+        let next = ack["structuredContent"]["next_step"].as_str().unwrap();
+        assert!(next.contains("Automatically refresh list"));
+        assert!(next.contains("verified device/session identity or trusted project handoff"));
+        assert!(next.contains("Verify any linked /worker_pool"));
+        assert!(next.contains("fresh invitation or explicit operator selection"));
+        assert!(next.contains("reconcile receipts before resuming"));
+        assert!(tool()["description"].as_str().unwrap().contains(next));
     }
 
     #[cfg(unix)]

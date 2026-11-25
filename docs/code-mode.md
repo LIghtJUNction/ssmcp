@@ -105,7 +105,9 @@ Progress and final replies use `say` / `ssmcp.ui.message` or `ssmcp.ui.present`,
 
 ## Reconnect after an unexpected disconnect
 
-Try to reconnect after an unexpected disconnect. Refresh `list` and schemas, then verify the authorized workspace and control/pool link using a fresh invitation or the main client's `/worker_pool` projection. Reuse valid credentials on the original connection; join and bind your own fresh credentials when it is replaced or membership expires. Preserve original claims and job/commit evidence, and reconcile outcomes before fresh assignments. Keep unresolved outcomes `unknown`; never replay uncertain work or restart models. If the link is unverified, stay available with work paused. Explicit exit and retirement requests still apply. See [worker recovery](workers.md#reconnect-after-an-unexpected-disconnect).
+Keep the authorized project and unfinished work when a connection disappears. At bind, record the workspace, server/account and verified device and session IDs when available. A `client_id` routes one connection. After a disconnect, reload or foreground restart, automatically refresh `list` and look up the saved identity where supported. Use the current connection for a verified match in the same workspace. For a linked pool, verify its ID through that control window’s `/worker_pool`. If the new process has an unverified identity or multiple sessions match, obtain a fresh role-specific invitation or explicit operator selection before binding. Refresh the selected session’s schemas.
+
+Reuse valid credentials on the original connection; join and bind your own fresh credentials when it is replaced or membership expires. Preserve original claims and job/commit evidence, and reconcile outcomes before fresh assignments. Keep unresolved outcomes `unknown`; never replay uncertain work or restart models. If the link is unverified, stay available with work paused. Explicit exit and retirement requests still apply. See [worker recovery](workers.md#reconnect-after-an-unexpected-disconnect).
 
 ## Helper contracts
 
@@ -258,7 +260,7 @@ Use `exec.run(clientId,{command:["rtk","--version"],wait_ms:1000})` to inspect t
 
 ### Client reload
 
-`await call(clientId,"ssmcp.client.reload",{})` returns the native MCP acknowledgement for a client restart from the updated installed executable. Inspect `isError`, then `structuredContent`. Stops background work and discards live drafts, queues, event logs and output artifacts; call list again for its new ID. GitHub --allow access persists; login-code connections require new OAuth login.
+`await call(clientId,"ssmcp.client.reload",{})` returns the native MCP acknowledgement for a client restart from the updated installed executable. Inspect `isError`, then `structuredContent`. Stops background work and discards live drafts, queues, event logs and output artifacts; rediscover the authorized project using the reconnect procedure above. GitHub --allow access persists; login-code connections require new OAuth login.
 
 ### outputs
 
