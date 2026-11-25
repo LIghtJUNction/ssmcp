@@ -1913,9 +1913,9 @@ class WorkerWindows(Harness):
                                       "desired_total": state["desired_total"]}
         frontend.send(b"\x01\x0b")
 
-    def departed_member_retirement(self):
-        """A worker that has actually left cannot acknowledge a pending retirement."""
-        label = "departed-member"
+    def outstanding_claim_retirement(self, *, force):
+        """Drive a busy station to target zero via a departure or two physical submissions."""
+        label = "forced-member" if force else "departed-member"
         directory = self.directory / label
         directory.mkdir(mode=0o700)
         workspace = directory / "workspace"
@@ -1949,12 +1949,23 @@ class WorkerWindows(Harness):
         self.pool_projection(frontend, parent, lambda p: p["desired_total"] == 0
                              and p["registered_workers"] == p["total"] == p["working"] == 1,
                              "the live claimant initially retains its station while retiring")
-        left = self.public_call("collab", {"action":"leave", "client_id":pool_id,
-                                "agent_id":executor["agent_id"], "token":executor["token"]})
-        self.check(left.get("left") is True, "original membership left without a worker release or completion")
-        self.pool_projection(frontend, parent, lambda p: p["desired_total"] == p["registered_workers"]
-                             == p["total"] == p["working"] == p["retiring"] == 0,
-                             "both parent and child converge on zero registered, working and retiring stations")
+        if force:
+            frontend.until(lambda frame: "forcibly retire this same worker" in
+                           " ".join(" ".join(frame["rows"]).split()),
+                           "fresh human force-confirmation prompt for the busy station")
+            frontend.send(b"\x01\x0b/worker -\r")
+        else:
+            left = self.public_call("collab", {"action":"leave", "client_id":pool_id,
+                                    "agent_id":executor["agent_id"], "token":executor["token"]})
+            self.check(left.get("left") is True, "original membership left without a worker release or completion")
+        final = self.pool_projection(frontend, parent, lambda p: p["desired_total"] == p["registered_workers"]
+                                     == p["total"] == p["working"] == p["retiring"] == 0,
+                                     "both windows converge on zero registered, working and retiring stations")
+        if force:
+            roster = self.public_call("collab", {"action":"list", "client_id":pool_id})
+            self.check(final["last_resize"].get("forced") is True
+                       and any(a["agent_id"] == executor["agent_id"] for a in roster["agents"]),
+                       "second physical submission retired the exact busy station while its member stayed online")
         result = self.bound(pool_id, manager, "ssmcp.worker.result", {"task_id":first})["task"]
         queued = self.bound(pool_id, manager, "ssmcp.worker.result", {"task_id":second})["task"]
         page = self.bound(pool_id, manager, "ssmcp.worker.tasks")["page"]
@@ -2090,7 +2101,8 @@ class WorkerWindows(Harness):
 
     def run(self):
         self.prepare()
-        self.departed_member_retirement()
+        self.outstanding_claim_retirement(force=False)
+        self.outstanding_claim_retirement(force=True)
         self.default_and_parent_exit()
         self.worker_close()
         self.parent_reload()
@@ -2136,7 +2148,7 @@ class WorkerWindows(Harness):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, required=True)
-    parser.add_argument("--case", choices=("all", "departed-member"), default="all")
+    parser.add_argument("--case", choices=("all", "departed-member", "forced-member", "retirements"), default="all")
     parser.add_argument("--fixture-binary", type=Path,
                         default=os.environ.get("SSMCP_E2E_FIXTURE_BINARY"))
     parser.add_argument("--decoder", type=Path)
@@ -2190,11 +2202,14 @@ def main():
                                     evidence_directory, font_arguments)
             report["status"] = "failed"
             try:
-                if args.case == "departed-member":
-                    harness.prepare()
-                    harness.departed_member_retirement()
-                else:
+                if args.case == "all":
                     harness.run()
+                else:
+                    harness.prepare()
+                    if args.case in ("departed-member", "retirements"):
+                        harness.outstanding_claim_retirement(force=False)
+                    if args.case in ("forced-member", "retirements"):
+                        harness.outstanding_claim_retirement(force=True)
                 report["status"] = "passed"
                 exit_code = 0
             finally:
