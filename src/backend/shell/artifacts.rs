@@ -179,6 +179,31 @@ fn ensure_dir(parent: &File, name: &Path) -> io::Result<File> {
     Ok(directory)
 }
 
+// A plain project has no Git administration to query. Once there is a marker,
+// even a broken one, only a successful bounded registry read permits cleanup.
+pub(super) fn registered_worktrees(
+    project: &Path,
+    deadline: std::time::Instant,
+) -> io::Result<Vec<PathBuf>> {
+    fn present(path: PathBuf) -> io::Result<bool> {
+        match fs::symlink_metadata(path) {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+    for dir in project.ancestors() {
+        if present(dir.join(".git"))?
+            || (present(dir.join("HEAD"))?
+                && present(dir.join("objects"))?
+                && present(dir.join("refs"))?)
+        {
+            return crate::managed_worktrees::registered_paths(project, deadline);
+        }
+    }
+    Ok(Vec::new())
+}
+
 impl Artifacts {
     pub(super) fn new(workspace: &Path, budget: u64) -> io::Result<Self> {
         let mut nonce = [0u8; 8];

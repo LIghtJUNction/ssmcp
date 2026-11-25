@@ -908,3 +908,67 @@ async fn managed_workspace_retains_unowned_project_paths() {
     assert_eq!(fs::read(jobs.join("user-file")).unwrap(), b"keep");
     assert_eq!(fs::read_dir(jobs).unwrap().count(), 1);
 }
+
+#[tokio::test]
+async fn managed_workspace_preserves_nested_git_registration_with_missing_marker() {
+    let fixture = Fixture::new();
+    let shell =
+        Shell::with_workspace(fixture.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
+    let owner = source('a', "42", 81, 1);
+    let job = shell.call_scoped("ssmcp.exec.start", json!({
+        "mode":"pipes", "managed_workspace":true,
+        "command":["/bin/sh","-ec",r#"git -C "$SSMCP_PROJECT_ROOT" init -q
+git -C "$SSMCP_PROJECT_ROOT" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null commit --allow-empty -qm base
+git -C "$SSMCP_PROJECT_ROOT" worktree add -q --detach "$PWD/linked" HEAD
+rm "$PWD/linked/.git"
+printf keep > "$PWD/linked/project.txt""#]}), owner).await.unwrap();
+    let path = fixture
+        .0
+        .join(job["artifacts"]["directory"].as_str().unwrap());
+    let done = shell
+        .call("ssmcp.exec.wait", json!({"job_id":job["job_id"]}))
+        .await
+        .unwrap();
+    assert_eq!(done["exit_code"], 0);
+    let linked = path.join("linked");
+    assert!(!linked.join(".git").exists());
+    let registered = super::artifacts::registered_worktrees(
+        &fixture.0,
+        std::time::Instant::now() + Duration::from_secs(2),
+    )
+    .unwrap();
+    assert!(registered.contains(&linked));
+    shell
+        .call("ssmcp.exec.forget", json!({"job_id":job["job_id"]}))
+        .await
+        .unwrap();
+    shell.reclaim_released_workspaces().await;
+    shell.shutdown().await;
+    assert_eq!(fs::read(linked.join("project.txt")).unwrap(), b"keep");
+}
+
+#[tokio::test]
+async fn managed_workspace_retains_on_unreadable_git_registry_then_retries_a_plain_project() {
+    let fixture = Fixture::new();
+    let shell =
+        Shell::with_workspace(fixture.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
+    fs::write(fixture.0.join(".git"), b"gitdir: missing-directory\n").unwrap();
+    let owner = source('a', "42", 81, 1);
+    let job=shell.call_scoped("ssmcp.exec.start",json!({"managed_workspace":true,"mode":"pipes","command":["/bin/sh","-ec","printf keep > output"]}),owner).await.unwrap();
+    let done = shell
+        .call("ssmcp.exec.wait", json!({"job_id":job["job_id"]}))
+        .await
+        .unwrap();
+    assert_eq!(done["exit_code"], 0);
+    let path = fixture
+        .0
+        .join(job["artifacts"]["directory"].as_str().unwrap());
+    shell
+        .call("ssmcp.exec.forget", json!({"job_id":job["job_id"]}))
+        .await
+        .unwrap();
+    assert_eq!(fs::read(path.join("output")).unwrap(), b"keep");
+    fs::remove_file(fixture.0.join(".git")).unwrap();
+    shell.reclaim_released_workspaces().await;
+    assert!(!path.exists());
+}

@@ -2107,14 +2107,29 @@ impl Shell {
             return;
         }
         let root = self.root.clone();
-        let Ok(Ok(config)) =
-            tokio::task::spawn_blocking(move || crate::managed_files::config(&root)).await
-        else {
-            return;
+        let safety = tokio::task::spawn_blocking(move || -> std::io::Result<_> {
+            let config = crate::managed_files::config(&root)?;
+            if !config.enabled {
+                return Ok(None);
+            }
+            let worktrees = artifacts::registered_worktrees(
+                &root,
+                std::time::Instant::now() + artifacts::CLEANUP_TIME,
+            )?;
+            Ok(Some((config, worktrees)))
+        })
+        .await;
+        let (config, worktrees) = match safety {
+            Ok(Ok(Some(facts))) => facts,
+            Ok(Ok(None)) => return,
+            Ok(Err(error)) => {
+                eprintln!(
+                    "ssmcp: preserving released task workspaces because cleanup eligibility could not be verified: {error}"
+                );
+                return;
+            }
+            Err(_) => return,
         };
-        if !config.enabled {
-            return;
-        }
         let mut jobs = VecDeque::new();
         {
             let mut registry = self.registry();
@@ -2131,6 +2146,12 @@ impl Shell {
                 let Ok(tracked) = artifacts.try_lock() else {
                     return true;
                 };
+                if worktrees.iter().any(|path| {
+                    path.starts_with(&tracked.path)
+                        || (tracked.path.starts_with(path) && !self.root.starts_with(path))
+                }) {
+                    return true;
+                }
                 if !config.released_job_eligible(
                     tracked.relative_directory(),
                     finished.elapsed().as_secs(),
