@@ -685,8 +685,11 @@ class FilePaste(InputHistory):
         config.write_text(config.read_text().replace('layout="chat"', 'layout="logs"'))
         front = self.frontend("logs-interrupt", config)
         self.oauth_login(front.credentials)
-        front.until(lambda shot: shot["alternate_screen"] and "ssmcp" in text(shot),
-                    "the isolated logs layout")
+        front.until(lambda shot: shot["alternate_screen"]
+                    and "CONNECTED client=logs-interrupt mode=shell" in text(shot),
+                    "the isolated shell client connected in the logs view")
+        self.check(self.ui("/config/layout") == "logs" and self.ui("/display/focus") == "logs",
+                   "the owned terminal is in the dedicated logs layout with log input focus")
         image = png_fixture()
         kind, controls = b"raWp", b"\x03\x1d\xff"
         chunk = (struct.pack(">I", len(controls)) + kind + controls
