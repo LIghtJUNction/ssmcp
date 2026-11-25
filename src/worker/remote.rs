@@ -668,6 +668,136 @@ mod tests {
     }
 
     #[test]
+    fn coordinator_handoff_preserves_claims_receipts_and_original_attribution() {
+        use crate::worker::Handoff;
+        let (queue, remote) = service(1);
+        let client = "a".repeat(64);
+        let owner = actor("outgoing");
+        let successor = actor("incoming");
+        let executor = actor("station");
+        let task = queue
+            .submit_managed(owner.clone(), &client, "original", "work", "context", 1)
+            .unwrap();
+        let claim = claimed(&remote, &queue, &executor, "first");
+        let offer = Handoff {
+            id: "b".repeat(32),
+            workspace: "/fixture".into(),
+            control: "c".repeat(64),
+            pool: client.clone(),
+            generation: "remote-fixture".into(),
+            attached_at_ms: 1,
+            predecessor: "outgoing".into(),
+            successor: "incoming".into(),
+            note: "Deliver the existing task after its test completes.".into(),
+        };
+        assert!(
+            queue
+                .accept_handoff(&successor, &client, &offer.id, 2)
+                .is_err()
+        );
+        queue.offer_handoff(offer.clone()).unwrap();
+        for wrong in [
+            owner.clone(),
+            actor("stranger"),
+            Actor {
+                connection: 99,
+                ..successor.clone()
+            },
+            Actor {
+                subject: "other".into(),
+                ..successor.clone()
+            },
+        ] {
+            assert!(queue.accept_handoff(&wrong, &client, &offer.id, 3).is_err());
+        }
+        let mut replacement = offer.clone();
+        replacement.id = "d".repeat(32);
+        queue.offer_handoff(replacement.clone()).unwrap();
+        assert!(
+            queue
+                .accept_handoff(&successor, &client, &offer.id, 3)
+                .is_err()
+        );
+        let receipts = std::thread::scope(|scope| {
+            let accept = || {
+                queue
+                    .accept_handoff(&successor, &client, &replacement.id, 4)
+                    .unwrap()
+            };
+            let first = scope.spawn(accept);
+            let second = scope.spawn(accept);
+            [first.join().unwrap(), second.join().unwrap()]
+        });
+        assert_ne!(receipts[0]["duplicate"], receipts[1]["duplicate"]);
+        assert_eq!(receipts[0]["handoff"]["note"], offer.note);
+        assert_eq!(receipts[0]["manager"], receipts[1]["manager"]);
+        assert_eq!(
+            receipts[0]["live_activity"]["tasks"][0]["owner_thread_id"],
+            "outgoing"
+        );
+        assert_eq!(
+            receipts[0]["live_activity"]["tasks"][0]["worker_thread_id"],
+            "station"
+        );
+        assert!(queue.offer_handoff(offer).is_err());
+        assert!(queue.attach(&owner, &client, 5).is_err());
+        assert!(queue.cancel(&owner, &task.task_id, 5).is_err());
+        assert!(
+            queue
+                .submit_managed(owner.clone(), &client, "late", "text", "context", 5)
+                .is_err()
+        );
+        assert!(
+            queue
+                .submit_managed(
+                    successor.clone(),
+                    &client,
+                    "original",
+                    "changed",
+                    "context",
+                    5
+                )
+                .is_err()
+        );
+        assert_eq!(
+            queue
+                .submit_managed(successor.clone(), &client, "original", "work", "context", 5)
+                .unwrap()
+                .task_id,
+            task.task_id
+        );
+        assert_eq!(queue.snapshot().queued, 0);
+        assert_eq!(claimed(&remote, &queue, &executor, "first"), claim);
+        let result = success(claim);
+        assert!(
+            remote
+                .complete(&queue, &successor, result.clone(), 6)
+                .is_err()
+        );
+        remote.complete(&queue, &executor, result, 6).unwrap();
+        assert_eq!(
+            queue
+                .result(&successor, &task.task_id)
+                .unwrap()
+                .output
+                .as_deref(),
+            Some("confirmed external result")
+        );
+        let page =
+            serde_json::to_value(queue.tasks(&successor, &client, None, 32).unwrap()).unwrap();
+        assert_eq!(page["tasks"][0]["request_id"], "original");
+        assert_eq!(page["tasks"][0]["submitted_by"], "outgoing");
+        assert_eq!(page["tasks"][0]["attempt"], 1);
+        assert_eq!(
+            queue
+                .submit_managed(successor, &client, "new", "new work", "new context", 7)
+                .unwrap()
+                .status,
+            TaskStatus::Queued
+        );
+    }
+
+    #[test]
     fn manager_stop_preserves_remote_claim_until_exact_acknowledgement() {
         let (queue, remote) = service(1);
         let client = "a".repeat(64);

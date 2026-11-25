@@ -186,7 +186,7 @@ fn labelled_targets<T>(
             .task_id
             .as_ref()
             .and_then(|id| state.tasks.get(id))
-            .filter(|task| &task.actor == actor)
+            .filter(|task| task.visible_to(state.manager.as_ref(), actor))
             .map(|task| {
                 let clean = telemetry::display_text(&task.text, super::MAX_TASK_BYTES);
                 let redacted = crate::audit::event(serde_json::Value::String(clean));
@@ -450,67 +450,72 @@ fn evaluate<T>(
     conditions
         .iter()
         .map(|condition| {
-            let (status, reason) =
-                match condition {
-                    WaitCondition::TaskFinished { task_id } => match state.tasks.get(task_id) {
-                        Some(task) if &task.actor != actor => return Err(
+            let (status, reason) = match condition {
+                WaitCondition::TaskFinished { task_id } => match state.tasks.get(task_id) {
+                    Some(task) if !task.visible_to(state.manager.as_ref(), actor) => {
+                        return Err(
                             "worker wait_for task is not retained for this authenticated manager"
                                 .into(),
+                        );
+                    }
+                    Some(task) => match task.view.status {
+                        TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled => {
+                            ("satisfied", None)
+                        }
+                        TaskStatus::Unknown => (
+                            "indeterminate",
+                            Some("task effects are unknown; completion was not confirmed"),
                         ),
-                        Some(task) => match task.view.status {
-                            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled => {
-                                ("satisfied", None)
-                            }
-                            TaskStatus::Unknown => (
-                                "indeterminate",
-                                Some("task effects are unknown; completion was not confirmed"),
-                            ),
-                            _ => ("pending", None),
-                        },
-                        None if initial => return Err(
-                            "worker wait_for task is not retained for this authenticated manager"
-                                .into(),
-                        ),
-                        None => ("unavailable", Some("task is no longer retained")),
+                        _ => ("pending", None),
                     },
-                    WaitCondition::WorkerIdle { slot, epoch } => {
-                        match state
-                            .slots
-                            .get(*slot)
-                            .filter(|worker| worker.enabled && worker.epoch == *epoch)
-                        {
-                            None if initial => return Err(
+                    None if initial => {
+                        return Err(
+                            "worker wait_for task is not retained for this authenticated manager"
+                                .into(),
+                        );
+                    }
+                    None => ("unavailable", Some("task is no longer retained")),
+                },
+                WaitCondition::WorkerIdle { slot, epoch } => {
+                    match state
+                        .slots
+                        .get(*slot)
+                        .filter(|worker| worker.enabled && worker.epoch == *epoch)
+                    {
+                        None if initial => {
+                            return Err(
                                 "worker wait_for slot and epoch do not identify a current worker"
                                     .into(),
-                            ),
-                            None => ("unavailable", Some("worker slot or epoch changed")),
-                            Some(_) if state.closed || state.stopping => {
-                                ("unavailable", Some("worker pool is closed or stopping"))
-                            }
-                            Some(worker) if worker.retirement.is_some() => {
-                                ("unavailable", Some("worker is retiring"))
-                            }
-                            Some(worker)
-                                if matches!(
-                                    worker.state,
-                                    SlotState::Offline(_) | SlotState::Retiring
-                                ) =>
-                            {
-                                ("unavailable", Some("worker is offline or retiring"))
-                            }
-                            Some(worker) if state.remote_ready && worker.registered.is_none() => {
-                                ("unavailable", Some("remote worker is not registered"))
-                            }
-                            Some(worker)
-                                if matches!(worker.state, SlotState::Idle)
-                                    && state.availability.accepting =>
-                            {
-                                ("satisfied", None)
-                            }
-                            Some(_) => ("pending", None),
+                            );
                         }
+                        None => ("unavailable", Some("worker slot or epoch changed")),
+                        Some(_) if state.closed || state.stopping => {
+                            ("unavailable", Some("worker pool is closed or stopping"))
+                        }
+                        Some(worker) if worker.retirement.is_some() => {
+                            ("unavailable", Some("worker is retiring"))
+                        }
+                        Some(worker)
+                            if matches!(
+                                worker.state,
+                                SlotState::Offline(_) | SlotState::Retiring
+                            ) =>
+                        {
+                            ("unavailable", Some("worker is offline or retiring"))
+                        }
+                        Some(worker) if state.remote_ready && worker.registered.is_none() => {
+                            ("unavailable", Some("remote worker is not registered"))
+                        }
+                        Some(worker)
+                            if matches!(worker.state, SlotState::Idle)
+                                && state.availability.accepting =>
+                        {
+                            ("satisfied", None)
+                        }
+                        Some(_) => ("pending", None),
                     }
-                };
+                }
+            };
             Ok(ConditionView {
                 condition: condition.clone(),
                 state: status,

@@ -9,6 +9,8 @@ use std::time::Instant;
 use tokio::sync::watch;
 
 mod events;
+mod handoff;
+pub(crate) use handoff::Handoff;
 mod lifecycle;
 mod operations;
 mod presence;
@@ -71,6 +73,8 @@ impl Manager {
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct TaskSummary {
     task_id: String,
+    request_id: String,
+    submitted_by: Option<String>,
     status: TaskStatus,
     slot: Option<usize>,
     attempt: u64,
@@ -79,10 +83,13 @@ pub(crate) struct TaskSummary {
     replay_safe: bool,
 }
 
-impl From<&TaskView> for TaskSummary {
-    fn from(task: &TaskView) -> Self {
+impl<T> From<&Task<T>> for TaskSummary {
+    fn from(record: &Task<T>) -> Self {
+        let task = &record.view;
         Self {
             task_id: task.task_id.clone(),
+            request_id: record.key.clone(),
+            submitted_by: record.actor.participant.clone(),
             status: task.status,
             slot: task.slot,
             attempt: task.attempt,
@@ -193,6 +200,7 @@ pub(crate) enum Outcome {
 }
 
 struct Task<T> {
+    managed: bool,
     actor: Actor,
     // Public identity captured from the verified station registration at claim
     // time. A later occupant or manager must never be credited with this work.
@@ -202,6 +210,16 @@ struct Task<T> {
     text: String,
     context: T,
     view: TaskView,
+}
+
+impl<T> Task<T> {
+    fn visible_to(&self, manager: Option<&Manager>, actor: &Actor) -> bool {
+        if self.managed {
+            manager.is_some_and(|manager| &manager.actor == actor)
+        } else {
+            &self.actor == actor
+        }
+    }
 }
 
 enum SlotState {
@@ -269,6 +287,8 @@ impl Slot {
 
 struct State<T> {
     manager: Option<Manager>,
+    pending_handoff: Option<(Handoff, Instant)>,
+    accepted_handoff: Option<Handoff>,
     operations: operations::Operations,
     events: events::Journal,
     tasks: BTreeMap<String, Task<T>>,
@@ -283,7 +303,7 @@ struct State<T> {
     availability: AvailabilityProjection,
     closed: bool,
     stopping: bool,
-    unknown_keys: BTreeSet<(Actor, String)>,
+    unknown_keys: BTreeSet<(Option<Actor>, String)>,
     unknown_guard_full: bool,
 }
 
@@ -304,6 +324,8 @@ impl<T: Clone> Queue<T> {
             generation,
             state: Mutex::new(State {
                 manager: None,
+                pending_handoff: None,
+                accepted_handoff: None,
                 operations: operations::Operations::default(),
                 events: events::Journal::default(),
                 tasks: BTreeMap::new(),
@@ -443,10 +465,11 @@ impl<T: Clone> Queue<T> {
             .tasks
             .iter()
             .filter(|(id, task)| {
-                &task.actor == actor && cursor.is_none_or(|cursor| id.as_str() > cursor)
+                task.visible_to(state.manager.as_ref(), actor)
+                    && cursor.is_none_or(|cursor| id.as_str() > cursor)
             })
             .take(limit + 1)
-            .map(|(_, task)| TaskSummary::from(&task.view))
+            .map(|(_, task)| TaskSummary::from(task))
             .collect();
         let more = tasks.len() > limit;
         tasks.truncate(limit);
@@ -635,11 +658,10 @@ impl<T: Clone> Queue<T> {
         {
             return Err("worker pool belongs to a different authenticated manager".into());
         }
-        if let Some(task) = state
-            .tasks
-            .values()
-            .find(|task| task.actor == actor && task.key == key)
-        {
+        let managed = client_id.is_some();
+        if let Some(task) = state.tasks.values().find(|task| {
+            task.managed == managed && (managed || task.actor == actor) && task.key == key
+        }) {
             return if task.text == text {
                 Ok(task.view.clone())
             } else {
@@ -648,7 +670,7 @@ impl<T: Clone> Queue<T> {
         }
         if state
             .unknown_keys
-            .contains(&(actor.clone(), key.to_owned()))
+            .contains(&((!managed).then(|| actor.clone()), key.to_owned()))
         {
             return Err("this worker request_id has an expired unknown result; effects must be reconciled before submitting a new request_id".into());
         }
@@ -689,6 +711,7 @@ impl<T: Clone> Queue<T> {
         state.tasks.insert(
             id.clone(),
             Task {
+                managed,
                 actor,
                 claimed_by: None,
                 claim_epoch: None,
@@ -886,17 +909,17 @@ impl<T: Clone> Queue<T> {
         let task = state
             .tasks
             .get(id)
-            .filter(|task| &task.actor == actor)
+            .filter(|task| task.visible_to(state.manager.as_ref(), actor))
             .ok_or("worker task is not retained for this authenticated caller")?;
         Ok(task.view.clone())
     }
 
     pub(crate) fn cancel(&self, actor: &Actor, id: &str, now_ms: u64) -> Result<TaskView, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let task = state
-            .tasks
+        let State { manager, tasks, .. } = &mut *state;
+        let task = tasks
             .get_mut(id)
-            .filter(|task| &task.actor == actor)
+            .filter(|task| task.visible_to(manager.as_ref(), actor))
             .ok_or("worker task is not retained for this authenticated caller")?;
         let queued = task.view.status == TaskStatus::Queued;
         let cancelling_slot = (task.view.status == TaskStatus::Working)
@@ -1399,7 +1422,9 @@ fn trim<T>(state: &mut State<T>) {
             && task.view.status == TaskStatus::Unknown
         {
             if state.unknown_keys.len() < MAX_UNKNOWN_KEYS {
-                state.unknown_keys.insert((task.actor, task.key));
+                state
+                    .unknown_keys
+                    .insert(((!task.managed).then_some(task.actor), task.key));
             } else {
                 // A bounded guard may refuse new work, but must never
                 // forget uncertain execution and silently replay its key.

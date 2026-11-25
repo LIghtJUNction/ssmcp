@@ -14,7 +14,80 @@ pub(super) fn current_prompt(arguments: &str) -> Result<String, String> {
     let cwd = std::env::current_dir()
         .map_err(|error| format!("Cannot read the current working directory: {error}"))?;
     let pool = super::worker_window::linked_snapshot();
-    render(arguments, control_id, &cwd.to_string_lossy(), pool.as_ref())
+    let cwd = cwd.to_string_lossy();
+    if arguments.split_whitespace().next() == Some("handoff") {
+        let rest = arguments
+            .trim()
+            .strip_prefix("handoff")
+            .expect("matched command")
+            .trim();
+        let (recipient, note) = rest
+            .split_once(char::is_whitespace)
+            .ok_or("Usage: /invite handoff POOL_PARTICIPANT progress-and-todo")?;
+        let offer = build_handoff(control_id, &cwd, pool.as_ref(), recipient, note.trim())?;
+        super::worker_window::send_handoff(&offer)?;
+        return Ok(format!(
+            "@ssmcp\nCoordinator handoff for {}. Workspace {:?}, control {}, pool {}, generation {}. Bind your own control and pool main participants. Call ssmcp.worker.accept_handoff on the pool with {{\"handoff_id\":\"{}\"}}. Retry this ID on a lost receipt. Read the accepted note, page worker.tasks, reconcile original task IDs via worker.result. Preserve unknown outcomes.",
+            recipient, cwd, control_id, offer.pool, offer.generation, offer.id
+        ));
+    }
+    if arguments.trim().is_empty()
+        && let Some(snapshot) = pool.as_ref()
+        && snapshot["manager"]["thread_id"].is_string()
+    {
+        Pool::from_snapshot(snapshot)?;
+        return Ok(format!(
+            "@ssmcp\nJoin control {control_id} and pool {} separately as main using your own credentials. Workspace {cwd:?}. Return your public pool participant ID to the local operator for /invite handoff POOL_PARTICIPANT progress-and-todo. Wait for the addressed invitation before managing tasks.",
+            snapshot["client_id"].as_str().unwrap_or_default()
+        ));
+    }
+    render(arguments, control_id, &cwd, pool.as_ref())
+}
+
+fn build_handoff(
+    control: &str,
+    cwd: &str,
+    pool: Option<&Value>,
+    successor: &str,
+    note: &str,
+) -> Result<crate::worker::Handoff, String> {
+    let snapshot = pool.ok_or(NO_WORKER_POOL)?;
+    let pool = Pool::from_snapshot(snapshot)?;
+    let manager = &snapshot["manager"];
+    let predecessor = manager["thread_id"]
+        .as_str()
+        .ok_or("No attached coordinator to replace")?;
+    if !successor
+        .strip_prefix("agent_")
+        .is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        || successor == predecessor
+    {
+        return Err("Enter the new main participant's public pool ID".into());
+    }
+    if note.is_empty() || note.len() > 2048 || note.chars().any(char::is_control) {
+        return Err(
+            "Supply progress and outstanding work in a single line of up to 2048 bytes".into(),
+        );
+    }
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|_| "could not create a handoff ID")?;
+    Ok(crate::worker::Handoff {
+        id: crate::hex::encode(bytes),
+        workspace: cwd.into(),
+        control: control.into(),
+        pool: pool.client_id.into(),
+        generation: snapshot["generation"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("missing live pool generation")?
+            .into(),
+        predecessor: predecessor.into(),
+        attached_at_ms: manager["attached_at_ms"]
+            .as_u64()
+            .ok_or("manager tenure unavailable")?,
+        successor: successor.into(),
+        note: note.into(),
+    })
 }
 
 fn active_control_id(snapshot: &Value) -> Result<&str, String> {
@@ -201,6 +274,26 @@ mod tests {
             "token": "DO_NOT_DISCLOSE",
             "credentials": {"token": "ALSO_PRIVATE"},
         })
+    }
+
+    #[test]
+    fn local_handoff_binds_successor_and_omits_private_snapshot_fields() {
+        let mut snapshot = pool();
+        let predecessor = format!("agent_{}", "0".repeat(32));
+        let successor = format!("agent_{}", "1".repeat(32));
+        snapshot["manager"] = json!({"thread_id":predecessor,"attached_at_ms":5});
+        snapshot["generation"] = json!("generation");
+        let make =
+            |target, note| build_handoff(CONTROL_ID, "/workspace", Some(&snapshot), target, note);
+        assert!(make(&predecessor, "done").is_err());
+        assert!(make("display-name", "done").is_err());
+        assert!(make(&successor, "").is_err());
+        let offer = make(&successor, "tested commit; reconcile outstanding task").unwrap();
+        assert_eq!(offer.control, CONTROL_ID);
+        assert_eq!(offer.generation, "generation");
+        assert_eq!(offer.successor, successor);
+        assert!(!serde_json::to_string(&offer).unwrap().contains("PRIVATE"));
+        assert_eq!(offer.id.len(), 32);
     }
 
     #[test]

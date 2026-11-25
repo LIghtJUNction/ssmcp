@@ -341,6 +341,13 @@ impl Pool {
                 false,
             ),
             tool(
+                "accept_handoff",
+                "Consume a local operator's coordinator invitation using the named successor's bound pool identity. Retry the same handoff ID after a lost receipt. Read retained task IDs and original request IDs with worker.tasks, then reconcile results before dispatch.",
+                json!({"handoff_id":{"type":"string","minLength":32,"maxLength":32}}),
+                json!(["handoff_id"]),
+                false,
+            ),
+            tool(
                 "tasks",
                 "List only the manager's retained task metadata, ordered by task ID, up to 128 items per page. Prompts, expanded inputs and results are omitted; use result for one task. Terminal retention remains bounded and cursors are not durable across reconnects.",
                 json!({"cursor":{"type":"string","maxLength":256},"limit":{"type":"integer","minimum":1,"maximum":128,"default":32}}),
@@ -806,6 +813,19 @@ impl Pool {
                     .map_err(|error| format!("invalid worker events request: {error}"))?;
                 self.wait_events(&actor, &client_id, request).await
             }
+            "ssmcp.worker.accept_handoff" => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Accept {
+                    handoff_id: String,
+                }
+                let request: Accept = serde_json::from_value(arguments)
+                    .map_err(|error| format!("invalid coordinator handoff: {error}"))?;
+                source.require_owner()?;
+                self.remote()?;
+                self.queue
+                    .accept_handoff(&actor, &client_id, &request.handoff_id, now_ms())
+            }
             "ssmcp.worker.tasks" => {
                 #[derive(Deserialize)]
                 #[serde(deny_unknown_fields)]
@@ -1032,6 +1052,8 @@ fn actor(source: &Source) -> Result<Actor, String> {
 mod command_logs_tests;
 #[cfg(test)]
 mod events_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod handoff_tests;
 #[cfg(test)]
 mod noise_tests;
 #[cfg(test)]
@@ -1724,10 +1746,11 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names.len(), 16);
+        assert_eq!(names.len(), 17);
         for name in [
             "status",
             "attach",
+            "accept_handoff",
             "events",
             "tasks",
             "stop",

@@ -17,6 +17,19 @@ pub(crate) use queue::Retirement;
 mod registry;
 mod remote;
 pub(crate) use pool::Pool;
+pub(crate) use queue::Handoff;
+
+/// Only the locally authenticated parent window can register an offer.
+pub(crate) fn offer_handoff(offer: Handoff) -> Result<(), String> {
+    let pool = view()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .pool
+        .as_ref()
+        .and_then(std::sync::Weak::upgrade)
+        .ok_or("worker pool is unavailable")?;
+    pool.queue.offer_handoff(offer)
+}
 #[cfg(target_os = "linux")]
 pub(crate) use pool::TaskContext;
 pub(crate) use remote::CommandLog;

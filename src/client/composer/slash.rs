@@ -210,6 +210,7 @@ pub(super) fn subcommands(command: &str) -> &'static [SlashCommand] {
             "/paste-retry discard" => "Discard the retained failed paste",
         },
         "/invite" => commands! {
+            "/invite handoff" => "Authorize a named successor with a progress note",
             "/invite worker" => "Prepare an invitation for an external worker",
         },
         "/worker" => commands! {

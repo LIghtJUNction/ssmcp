@@ -998,3 +998,105 @@ fn an_available_station_starts_a_new_work_clock_after_authenticated_membership_e
     q.state.lock().unwrap().slots[0].total_work_ms = telemetry::TWO_HOURS_MS + 1;
     assert_eq!(q.overwork_notices(now, 6).len(), 1);
 }
+
+#[test]
+fn coordinator_handoff_rejects_old_generations_and_keeps_evicted_unknown_guard() {
+    let pool = queue(1);
+    let owner = actor("original");
+    let next = actor("next");
+    let epoch = pool.online(0).unwrap();
+    pool.submit_managed(
+        owner.clone(),
+        MANAGER_CLIENT,
+        "uncertain",
+        "dispatch",
+        "original context",
+        1,
+    )
+    .unwrap();
+    let lease = pool.claim(0, epoch, 2).unwrap().unwrap();
+    pool.finish(
+        &lease,
+        Outcome::Unknown("lost acknowledgement".into()),
+        true,
+        false,
+        3,
+    )
+    .unwrap();
+    let epoch = pool.online(0).unwrap();
+    let offer = Handoff {
+        id: "e".repeat(32),
+        workspace: "/test".into(),
+        control: "c".repeat(64),
+        pool: MANAGER_CLIENT.into(),
+        generation: pool.generation.clone(),
+        predecessor: "original".into(),
+        attached_at_ms: 1,
+        successor: "next".into(),
+        note: "Reconcile the dispatch".into(),
+    };
+    let new_pool = Queue::<()>::new("replacement".into(), 1).unwrap();
+    new_pool.attach(&owner, MANAGER_CLIENT, 1).unwrap();
+    assert!(new_pool.offer_handoff(offer.clone()).is_err());
+    pool.offer_handoff(offer.clone()).unwrap();
+    {
+        let mut state = pool.state.lock().unwrap();
+        state.pending_handoff.as_mut().unwrap().1 =
+            Instant::now() - std::time::Duration::from_secs(601);
+    }
+    assert!(
+        pool.accept_handoff(&next, MANAGER_CLIENT, &offer.id, 3)
+            .is_err()
+    );
+    pool.offer_handoff(offer.clone()).unwrap();
+    let received = pool
+        .accept_handoff(&next, MANAGER_CLIENT, &offer.id, 4)
+        .unwrap();
+    assert_eq!(received["live_activity"]["tasks"][0]["status"], "unknown");
+    let retained = pool
+        .submit_managed(
+            next.clone(),
+            MANAGER_CLIENT,
+            "uncertain",
+            "dispatch",
+            "new context",
+            5,
+        )
+        .unwrap();
+    assert_eq!(retained.status, TaskStatus::Unknown);
+    assert_eq!(retained.task_id, lease.task_id);
+    for index in 0..MAX_FINISHED {
+        pool.submit_managed(
+            next.clone(),
+            MANAGER_CLIENT,
+            &format!("confirmed-{index}"),
+            "work",
+            "ctx",
+            6,
+        )
+        .unwrap();
+        let lease = pool.claim(0, epoch, 7).unwrap().unwrap();
+        pool.finish(
+            &lease,
+            Outcome::Completed("confirmed".into()),
+            true,
+            true,
+            8,
+        )
+        .unwrap();
+    }
+    assert!(pool.result(&next, &retained.task_id).is_err());
+    assert!(
+        pool.submit_managed(
+            next,
+            MANAGER_CLIENT,
+            "uncertain",
+            "dispatch",
+            "new context",
+            9
+        )
+        .unwrap_err()
+        .contains("expired unknown")
+    );
+    assert_eq!(pool.snapshot().queued, 0);
+}

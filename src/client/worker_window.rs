@@ -34,6 +34,8 @@ static LINKED: OnceLock<Mutex<Weak<ParentState>>> = OnceLock::new();
 struct LinkedManager {
     client_id: String,
     thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    attached_at_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -125,6 +127,8 @@ struct LinkedSnapshot {
 }
 
 struct ParentState {
+    writer: OnceLock<TcpStream>,
+    command_lock: Mutex<u64>,
     closed: AtomicBool,
     reload_requested: AtomicBool,
     snapshot: Mutex<Option<(LinkedSnapshot, Instant)>>,
@@ -320,7 +324,6 @@ fn format_overview(snapshot: &LinkedSnapshot) -> String {
 pub(super) struct WindowChild {
     launcher: Child,
     control: Option<TcpStream>,
-    command_lock: Mutex<u64>,
     process: Option<Process>,
     reported_closed: AtomicBool,
     state: Arc<ParentState>,
@@ -358,10 +361,11 @@ pub(super) fn launch(
     let mut window = WindowChild {
         launcher: child,
         control: None,
-        command_lock: Mutex::new(0),
         process: None,
         reported_closed: AtomicBool::new(false),
         state: Arc::new(ParentState {
+            writer: OnceLock::new(),
+            command_lock: Mutex::new(0),
             closed: AtomicBool::new(false),
             reload_requested: AtomicBool::new(false),
             snapshot: Mutex::new(None),
@@ -419,6 +423,11 @@ pub(super) fn launch(
                 stream
                     .set_read_timeout(None)
                     .map_err(|error| error.to_string())?;
+                window
+                    .state
+                    .writer
+                    .set(stream.try_clone().map_err(|error| error.to_string())?)
+                    .map_err(|_| "worker writer already initialized")?;
                 let state = Arc::clone(&window.state);
                 window.watcher = Some(
                     thread::Builder::new()
@@ -477,6 +486,7 @@ impl WindowChild {
             return Err("worker total must be between 0 and 128".into());
         }
         let mut sequence = self
+            .state
             .command_lock
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -524,6 +534,44 @@ impl WindowChild {
         }
         Ok(false)
     }
+}
+
+const MAX_HANDOFF_BYTES: usize = 8192;
+
+fn handoff_frame(offer: &crate::worker::Handoff) -> Result<Vec<u8>, String> {
+    let body = serde_json::to_vec(offer).map_err(|error| error.to_string())?;
+    if body.len() > MAX_HANDOFF_BYTES {
+        return Err("local handoff exceeds 8 KiB".into());
+    }
+    let mut frame = Vec::with_capacity(3 + body.len());
+    frame.push(b'T');
+    frame.extend_from_slice(&(body.len() as u16).to_be_bytes());
+    frame.extend_from_slice(&body);
+    Ok(frame)
+}
+
+pub(super) fn send_handoff(offer: &crate::worker::Handoff) -> Result<(), String> {
+    let state = linked_state().ok_or("no linked worker window")?;
+    let frame = handoff_frame(offer)?;
+    let _writer = state
+        .command_lock
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let current = fresh_snapshot(&state).ok_or("worker connection is stale")?;
+    if current.client_id != offer.pool
+        || current.generation != offer.generation
+        || current.closed
+        || current.stopping
+    {
+        return Err("worker pool changed before the handoff".into());
+    }
+    let mut stream = state.writer.get().ok_or("worker writer is unavailable")?;
+    if let Err(error) = stream.write_all(&frame) {
+        state.closed.store(true, Ordering::Release);
+        let _ = stream.shutdown(Shutdown::Both);
+        return Err(format!("could not send local handoff: {error}"));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -627,11 +675,13 @@ impl ResizeState {
 enum ControlCommand {
     Stop,
     Resize(ResizeRequest),
+    Handoff(crate::worker::Handoff),
 }
 
 /// A fixed-size decoder preserves fragmented commands across read timeouts.
 #[derive(Default)]
 struct ControlDecoder {
+    handoff: Option<Vec<u8>>,
     payload: [u8; 18],
     received: usize,
     opcode: u8,
@@ -639,6 +689,21 @@ struct ControlDecoder {
 
 impl ControlDecoder {
     fn push(&mut self, byte: u8) -> io::Result<Option<ControlCommand>> {
+        if let Some(bytes) = self.handoff.as_mut() {
+            bytes.push(byte);
+            if bytes.len() >= 2 {
+                let len = u16::from_be_bytes([bytes[0], bytes[1]]) as usize;
+                if !(1..=MAX_HANDOFF_BYTES).contains(&len) {
+                    return Err(io::Error::other("invalid worker handoff length"));
+                }
+                if bytes.len() == len + 2 {
+                    let offer = serde_json::from_slice(&bytes[2..]).map_err(io::Error::other)?;
+                    self.handoff = None;
+                    return Ok(Some(ControlCommand::Handoff(offer)));
+                }
+            }
+            return Ok(None);
+        }
         if self.opcode != 0 {
             self.payload[self.received] = byte;
             self.received += 1;
@@ -673,6 +738,10 @@ impl ControlDecoder {
         }
         match byte {
             b'S' => Ok(Some(ControlCommand::Stop)),
+            b'T' => {
+                self.handoff = Some(Vec::new());
+                Ok(None)
+            }
             b'N' | b'H' | b'F' => {
                 self.opcode = byte;
                 self.received = 0;
@@ -692,6 +761,11 @@ impl Drop for WindowChild {
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = None;
         if let Some(stream) = &mut self.control {
+            let _writer = self
+                .state
+                .command_lock
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             let _ = stream.set_nonblocking(false);
             let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
             let _ = stream.write_all(b"S");
@@ -791,6 +865,10 @@ fn connect_child(address: SocketAddr, token: &str) -> io::Result<ChildSession> {
                     Ok(0) => break,
                     Ok(_) => match decoder.push(byte[0]) {
                         Ok(Some(ControlCommand::Stop)) | Err(_) => break,
+                        Ok(Some(ControlCommand::Handoff(offer))) => {
+                            // A stale offer has no effect; only native acceptance is a receipt.
+                            let _ = crate::worker::offer_handoff(offer);
+                        }
                         Ok(Some(ControlCommand::Resize(request))) => {
                             watched
                                 .resize
@@ -1091,6 +1169,7 @@ fn local_snapshot(client_id: &str) -> Option<LinkedSnapshot> {
         manager: snapshot.manager.as_ref().map(|manager| LinkedManager {
             client_id: manager.client_id.clone(),
             thread_id: manager.thread_id.clone(),
+            attached_at_ms: Some(manager.attached_at_ms),
         }),
         total: snapshot.total,
         desired_total: snapshot.desired_total,
@@ -1806,6 +1885,8 @@ mod tests {
     #[test]
     fn reload_updates_are_once_per_owned_window_and_stop_or_eof_never_relaunches() {
         let state = || ParentState {
+            writer: OnceLock::new(),
+            command_lock: Mutex::new(0),
             closed: AtomicBool::new(false),
             reload_requested: AtomicBool::new(false),
             snapshot: Mutex::new(None),
@@ -1898,6 +1979,7 @@ mod tests {
         status.idle = 0;
         status.registered_workers = 128;
         status.manager = Some(LinkedManager {
+            attached_at_ms: None,
             client_id: status.client_id.clone(),
             thread_id: "m".repeat(128),
         });
@@ -1997,6 +2079,8 @@ mod tests {
     #[test]
     fn linked_activity_and_summary_share_the_disconnect_and_three_second_stale_gate() {
         let state = ParentState {
+            writer: OnceLock::new(),
+            command_lock: Mutex::new(0),
             closed: AtomicBool::new(false),
             reload_requested: AtomicBool::new(false),
             snapshot: Mutex::new(Some((fixture_snapshot(), Instant::now()))),
@@ -2045,6 +2129,7 @@ mod tests {
     fn linked_status_exposes_only_the_verified_pool_manager_identity() {
         let mut status = fixture_snapshot();
         status.manager = Some(LinkedManager {
+            attached_at_ms: None,
             client_id: status.client_id.clone(),
             thread_id: "agent_verified_manager".into(),
         });
@@ -2065,6 +2150,7 @@ mod tests {
             ("fixture-client".to_owned(), "agent\nforged".to_owned()),
         ] {
             status.manager = Some(LinkedManager {
+                attached_at_ms: None,
                 client_id: client,
                 thread_id: thread,
             });
@@ -2077,6 +2163,7 @@ mod tests {
     fn fixture_manager_snapshot() -> LinkedSnapshot {
         let mut snapshot = fixture_snapshot();
         snapshot.manager = Some(LinkedManager {
+            attached_at_ms: None,
             client_id: snapshot.client_id.clone(),
             thread_id: "agent_verified_manager".into(),
         });
@@ -2183,6 +2270,8 @@ mod tests {
         assert!(decoded.activity.truncated);
         assert!(format_overview(&decoded).contains("actual-worker"));
         let parent = ParentState {
+            writer: OnceLock::new(),
+            command_lock: Mutex::new(0),
             closed: AtomicBool::new(false),
             reload_requested: AtomicBool::new(false),
             snapshot: Mutex::new(Some((decoded.clone(), Instant::now()))),
@@ -2404,6 +2493,37 @@ mod tests {
         let bytes = metadata_packet(&snapshot);
         assert!(read_child_update(&mut &bytes[..], std::process::id()).is_err());
         assert_eq!(snapshot.manager_operations[0].targets.len(), 128);
+    }
+
+    #[test]
+    fn local_handoff_channel_carries_one_bounded_addressed_offer() {
+        let offer = crate::worker::Handoff {
+            id: "a".repeat(32),
+            workspace: "/fixture".into(),
+            control: "c".repeat(64),
+            pool: "b".repeat(64),
+            generation: "current".into(),
+            predecessor: "old".into(),
+            attached_at_ms: 2,
+            successor: "new".into(),
+            note: "Review the current task receipt".into(),
+        };
+        let frame = handoff_frame(&offer).unwrap();
+        let mut decoder = ControlDecoder::default();
+        for &byte in &frame[..frame.len() - 1] {
+            assert!(decoder.push(byte).unwrap().is_none());
+        }
+        assert_eq!(
+            decoder.push(*frame.last().unwrap()).unwrap(),
+            Some(ControlCommand::Handoff(offer))
+        );
+        assert_eq!(decoder.push(b'S').unwrap(), Some(ControlCommand::Stop));
+        for invalid in [[0u8, 0], [0xff, 0xff]] {
+            let mut decoder = ControlDecoder::default();
+            decoder.push(b'T').unwrap();
+            decoder.push(invalid[0]).unwrap();
+            assert!(decoder.push(invalid[1]).is_err());
+        }
     }
 
     #[test]

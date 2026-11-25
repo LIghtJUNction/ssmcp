@@ -3,6 +3,20 @@ use super::super::activity::{Activity, MAX_ACTIVITY_TASKS, MAX_ACTIVITY_TEXT, Ta
 use super::*;
 
 pub(super) fn activity<T>(state: &State<T>, generation: &str) -> Activity {
+    task_activity(state, generation, |_| true, state.tasks.len())
+}
+
+pub(super) fn managed_activity<T>(state: &State<T>, generation: &str) -> Activity {
+    let count = state.tasks.values().filter(|task| task.managed).count();
+    task_activity(state, generation, |task| task.managed, count)
+}
+
+fn task_activity<T>(
+    state: &State<T>,
+    generation: &str,
+    visible: impl Fn(&Task<T>) -> bool,
+    count: usize,
+) -> Activity {
     // Working slots first, then the actual FIFO, then most recently finished.
     // Wall-clock timestamps and log text never choose or manufacture a result.
     let working = state.slots.iter().filter_map(|slot| match &slot.state {
@@ -15,6 +29,7 @@ pub(super) fn activity<T>(state: &State<T>, generation: &str) -> Activity {
         .chain(state.finished.iter().rev())
         .filter(|id| seen.insert(*id))
         .filter_map(|id| state.tasks.get(id))
+        .filter(|task| visible(task))
         .take(MAX_ACTIVITY_TASKS)
         .map(|task| {
             let original_station = task
@@ -54,8 +69,8 @@ pub(super) fn activity<T>(state: &State<T>, generation: &str) -> Activity {
         .collect();
     Activity {
         generation: generation.to_owned(),
-        omitted: state.tasks.len().saturating_sub(tasks.len()),
-        truncated: state.tasks.len() > tasks.len(),
+        omitted: count.saturating_sub(tasks.len()),
+        truncated: count > tasks.len(),
         tasks,
     }
 }

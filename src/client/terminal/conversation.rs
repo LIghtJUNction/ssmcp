@@ -848,6 +848,9 @@ impl State {
                 self.chat_start_input(attachments::Source::Copy(text), true)?;
             }
             "/invite" => {
+                if self.preview && rest.trim_start().starts_with("handoff") {
+                    return Err("Preview cannot authorize a coordinator handoff".into());
+                }
                 let prompt = crate::client::invite::current_prompt(rest)?;
                 let copied = self.chat_start_input(attachments::Source::Copy(prompt.clone()), true);
                 self.chat_show_local_text(format!("Invitation · Esc closes\n\n{prompt}"));
