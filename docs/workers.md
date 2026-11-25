@@ -308,10 +308,19 @@ done
 
 ## Share work between occupied and idle stations
 
-An idle registered worker can request a piece of a running task. Its
-`worker.wait` receipt lists `share_candidates` from the same pool. A request
-goes to the worker holding the selected parent task. The two workers and the
-pool manager can inspect the request with `ssmcp.worker.share`.
+A registered worker making a blocking `worker.wait` first tries to claim ordinary
+work. If it is still idle, the pool sends one request in that worker's name to a
+peer holding a live claim. The request identifies both participants and their station
+epochs. The claimant reads `share_requests` on its claim wait or progress report.
+The helper reads the latest eight `share_replies` on its own wait or report.
+Either participant can page its retained history with `worker.share({action:"list"})`.
+
+A claimant can decline when it has no independent work. After a decline, an
+unanswered request's 55-second deadline, or a change of claim or station, the
+helper can ask another busy peer. Repeated idle polls never ask the same helper
+station epoch and parent claim twice. Once a claimant accepts, the manager
+submits the exact scope. The helper gives human instructions and ordinary queued
+work priority and starts the child only after it receives its own claim.
 
 | Participant | Native call | Result |
 | --- | --- | --- |

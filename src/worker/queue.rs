@@ -195,6 +195,8 @@ pub(crate) enum Outcome {
 }
 
 struct Task<T> {
+    // One automatic request per helper station epoch for the current claim.
+    asked_helpers: BTreeMap<usize, u64>,
     actor: Actor,
     share: Option<sharing::Destination>,
     // Public identity captured from the verified station registration at claim
@@ -705,6 +707,7 @@ impl<T: Clone> Queue<T> {
         state.tasks.insert(
             id.clone(),
             Task {
+                asked_helpers: BTreeMap::new(),
                 actor,
                 share: destination,
                 claimed_by: None,
@@ -817,17 +820,26 @@ impl<T: Clone> Queue<T> {
             return Ok(None);
         }
         let epoch = worker.epoch;
-        let Some(position) = state.fifo.iter().position(|id| {
-            state.tasks.get(id).is_some_and(|task| {
-                task.actor.provider == actor.provider
-                    && task.actor.subject == actor.subject
-                    && task.actor.connection == actor.connection
-                    && task
+        // Ordinary FIFO work and explicitly requested shares retain their original order.
+        // A child offered through an idle wait may run once that work is exhausted.
+        let Some((position, _)) = state
+            .fifo
+            .iter()
+            .enumerate()
+            .filter_map(|(position, id)| {
+                let task = state.tasks.get(id)?;
+                if !lifecycle::same_account(&task.actor, actor)
+                    || task
                         .share
                         .as_ref()
-                        .is_none_or(|d| d.slot == slot && d.epoch == epoch)
+                        .is_some_and(|d| d.slot != slot || d.epoch != epoch)
+                {
+                    return None;
+                }
+                Some((position, task.share.as_ref().is_some_and(|d| d.automatic)))
             })
-        }) else {
+            .min_by_key(|(_, automatic)| *automatic)
+        else {
             return Ok(None);
         };
         let id = state.fifo.remove(position).expect("checked FIFO position");
@@ -857,6 +869,7 @@ impl<T: Clone> Queue<T> {
         task.claimed_by = claimed_by;
         task.claim_epoch = Some(epoch);
         task.view.slot = Some(slot);
+        task.asked_helpers.clear();
         task.view.attempt += 1;
         task.view.updated_ms = now_ms;
         task.view.replay_safe = false;

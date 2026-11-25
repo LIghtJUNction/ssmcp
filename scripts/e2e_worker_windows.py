@@ -1410,6 +1410,7 @@ class WorkerWindows(Harness):
                    and len(durations) == 1 and durations[0] >= elapsed
                    and completed_slot["total_work_ms"] == durations[0],
                    "completion freezes one real task duration without a fabricated active timer")
+        self.peer_sharing(worker, manager)
         cancelled = self.bound(worker["id"], manager, "ssmcp.worker.submit", {
             "request_id": "worker-windows-cancel-task", "text": "Wait for cancellation in this private fixture.",
         })["task"]["task_id"]
@@ -1451,6 +1452,91 @@ class WorkerWindows(Harness):
         shot = frame()
         text = "\n".join(shot["rows"])
         return shot if all(label in text for label in labels) else None
+
+    def peer_sharing(self, worker, manager):
+        pool = worker["id"]
+        donor, second, helper = self.worker_agents[pool]
+
+        def native(actor, name, **arguments):
+            return self.bound(pool, actor, "ssmcp.worker." + name, arguments)
+
+        def submit(key, text, **extra):
+            return native(manager, "submit", request_id=key, text=text, **extra)["task"]["task_id"]
+
+        def wait(actor, key, ms=0):
+            return native(actor, "wait", request_id=key, wait_ms=ms)
+
+        def complete(actor, claim, text):
+            return native(actor, "complete", claim=claim, status="completed", output=text)
+
+        first_id = submit("peer-first", "Review the first test fixture.")
+        first = wait(donor, "peer-first-claim")["claim"]
+        second_id = submit("peer-second", "Review the second fixture and its independent arithmetic.")
+        other = wait(second, "peer-second-claim")["claim"]
+        self.check(first["task_id"] == first_id and other["task_id"] == second_id,
+                   "both donors own separately admitted live claims")
+        wait(helper, "peer-helper", 250)
+        requests = wait(donor, "peer-first-claim")["share_requests"]
+        self.check(len(requests) == 1 and requests[0]["parent_task_id"] == first_id
+                   and requests[0]["requester"]["participant_id"] == helper["agent_id"]
+                   and requests[0]["claimant"]["participant_id"] == donor["agent_id"]
+                   and requests[0]["origin"] == "worker_wait",
+                   "one real idle wait delivers directly to the original registered claimant")
+        first_share = requests[0]["share_id"]
+        wait(helper, "peer-helper", 250)
+        self.check(wait(donor, "peer-first-claim")["share_requests"] == requests
+                   and not wait(second, "peer-second-claim")["share_requests"],
+                   "repeated empty waits retain a single private request")
+        self.bound(pool, second, "ssmcp.worker.share", {
+            "action": "accept", "share_id": first_share, "text": "unauthorized scope",
+        }, allow_error=True, expected_error="original authenticated claimant")
+        denied = native(donor, "share", action="decline", share_id=first_share)
+        self.check(denied == native(donor, "share", action="decline", share_id=first_share),
+                   "a donor with no independent work declines once")
+        next_wait = wait(helper, "peer-helper", 250)
+        request = wait(second, "peer-second-claim")["share_requests"][0]
+        self.check(denied in next_wait["share_replies"] and request["share_id"] != first_share
+                   and request["parent_task_id"] == second_id
+                   and request["requester"]["participant_id"] == helper["agent_id"],
+                   "the reply returns to the helper and another busy claimant receives the next request")
+        scope = "Compute 4 + 5 for the independent fixture."
+        share = request["share_id"]
+        accepted = native(second, "share", action="accept", share_id=share, text=scope)
+        self.check(accepted == native(second, "share", action="accept", share_id=share, text=scope)
+                   and accepted in wait(helper, "peer-helper")["share_replies"],
+                   "the second claimant sends its exact accepted scope back to the original helper")
+        child = submit("peer-child", scope, share_id=share)
+        self.check(child == submit("peer-child", scope, share_id=share)
+                   and child not in (first_id, second_id), "one accepted scope yields one separate child")
+        leased = wait(helper, "peer-helper")["claim"]
+        self.check(leased["task_id"] == child and leased["slot"] == request["requester"]["slot"]
+                   and leased == wait(helper, "peer-helper")["claim"],
+                   "the designated helper receives exactly one claim for the submitted child")
+        complete(helper, leased, "9")
+        self.check(native(manager, "result", task_id=child, wait_ms=0)["task"]["output"] == "9"
+                   and native(manager, "result", task_id=second_id, wait_ms=0)["task"]["status"] == "working",
+                   "the manager retrieves the child result while the donor retains the parent claim")
+
+        complete(donor, first, "first result")
+        complete(second, other, "second result")
+        old_parent = submit("peer-late-parent", "Own an unrelated parent during priority work.")
+        parent_claim = wait(donor, "peer-late-claim")["claim"]
+        wait(helper, "peer-late-helper", 250)
+        stale = wait(donor, "peer-late-claim")["share_requests"][0]
+        priority = submit("peer-priority", "Carry out the newly queued ordinary instruction.")
+        immediate = wait(helper, "peer-late-helper")["claim"]
+        self.check(parent_claim["task_id"] == old_parent and immediate["task_id"] == priority,
+                   "queued ordinary work preempts an unanswered peer request")
+        self.bound(pool, donor, "ssmcp.worker.share", {
+            "action": "accept", "share_id": stale["share_id"], "text": "late scope",
+        }, allow_error=True, expected_error="expired")
+        self.check(any(r["share_id"] == stale["share_id"] and r["status"] == "expired"
+                       for r in wait(helper, "peer-late-helper")["share_replies"]),
+                   "the helper sees its expired request and a late answer cannot admit new work")
+        complete(helper, immediate, "ordinary result")
+        complete(donor, parent_claim, "parent result")
+        self.cases["peer_sharing"] = {"child_task": child, "child_output": "9",
+                                      "donors": 2, "helper_slot": leased["slot"]}
 
     def condition_wait(self, worker, manager, generation, conditions, *, mode="all", wait_ms=0):
         return self.bound(worker["id"], manager, "ssmcp.worker.wait_for", {

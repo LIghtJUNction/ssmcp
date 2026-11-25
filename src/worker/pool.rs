@@ -693,7 +693,7 @@ impl Pool {
             match remote.claim(&self.queue, actor, request_id, now_ms())? {
                 Claimed::Assigned { claim, lease } => {
                     return Ok(json!({"status":"assigned","claim":claim,
-                        "share_requests":self.queue.share_inbox(actor),
+                        "share_requests":self.queue.share_inbox(actor),"share_replies":self.queue.share_replies(actor),
                         "original_text":lease.text,
                         "text":lease.context.prepared,
                         "cancel_requested":self.queue.cancellation_requested(&lease),
@@ -727,10 +727,11 @@ impl Pool {
                 Claimed::Waiting if wait_ms == 0 || tokio::time::Instant::now() >= deadline => {
                     return Ok(
                         json!({"status":"waiting","execution":"remote","station":self.queue.station_registration(actor),"worker":self.queue.compact_snapshot(),
-                            "share_candidates":self.queue.share_candidates(actor),"wait_hint":remote::WAIT_HINT}),
+                            "share_replies":self.queue.share_replies(actor),"share_candidates":self.queue.share_candidates(actor),"wait_hint":remote::WAIT_HINT}),
                     );
                 }
                 Claimed::Waiting => {
+                    self.queue.offer_idle_help(actor);
                     let _ = tokio::time::timeout_at(deadline, wake.changed()).await;
                 }
             }
@@ -958,7 +959,7 @@ impl Pool {
                         .report(&self.queue, &actor, report, now_ms())?;
                 Ok(json!({"status":"recorded","duplicate":duplicate,
                     "cancel_requested":cancel_requested,"retire_requested":retire_requested,
-                    "share_requests":self.queue.share_inbox(&actor),"worker":self.queue.compact_snapshot()}))
+                    "share_requests":self.queue.share_inbox(&actor),"share_replies":self.queue.share_replies(&actor),"worker":self.queue.compact_snapshot()}))
             }
             "ssmcp.worker.release" => {
                 #[derive(Deserialize)]

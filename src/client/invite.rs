@@ -169,7 +169,7 @@ fn render(role: &str, control_id: &str, cwd: &str, pool: Option<&Value>) -> Resu
             "Coordinator: privately `collab.join` (main), `collab.bind` control. For a linked pool, bind separately; `ssmcp.worker.attach`. Delegate to standby workers via `ssmcp.worker.submit`. Group `ssmcp.worker.wait_for` (any); read ready `ssmcp.worker.result`; track `ssmcp.worker.wait_available` by cursor and reconcile `ssmcp.worker.events`. Use your verified finish receipt and worker-specific human questions."
         }
         Role::Worker => {
-            "Worker: privately `collab.join` (worker), `collab.bind` pool. `ssmcp.worker.wait` (≤55000ms): retain pending request_id; preserve each claim unchanged. `ssmcp.worker.complete`, then wait again using a new request ID. For operator-ordered retirement, complete any current claim; acknowledge via `ssmcp.worker.release`. Voluntary exit: verify worker-specific Human approval. Never manage the queue or consume control-session input."
+            "Worker: privately `collab.join`(worker), `collab.bind` pool. `ssmcp.worker.wait`(≤55000ms): reuse request_id; preserve each claim unchanged. Read `share_requests`/`share_replies`; `worker.share` accepts/declines. `ssmcp.worker.complete`, then wait again using a new request ID. For operator-ordered retirement, complete any current claim; `ssmcp.worker.release`. Voluntary exit requires worker-specific Human approval. Never manage the queue or consume control-session input."
         }
     });
     prompt.push('\n');

@@ -16,6 +16,7 @@ enum Action {
 
 #[derive(Clone)]
 pub(super) struct Destination {
+    pub(super) automatic: bool,
     pub(super) share_id: String,
     pub(super) slot: usize,
     pub(super) epoch: u64,
@@ -68,7 +69,8 @@ impl Station {
 struct Request {
     sequence: u64,
     id: String,
-    key: String,
+    key: Option<String>,
+    reply_due: Option<Instant>,
     parent: String,
     helper: Station,
     claimant: Station,
@@ -80,6 +82,7 @@ struct Request {
 impl Request {
     fn view(&self) -> Value {
         json!({"share_id":self.id,"sequence":self.sequence,"status":self.status.name(),
+            "origin":if self.key.is_none() {"worker_wait"} else {"worker_request"},
             "parent_task_id":self.parent,"requester":self.helper.view(),"claimant":self.claimant.view(),
             "text":self.scope,"child_task_id":self.child})
     }
@@ -104,6 +107,7 @@ impl Requests {
             );
         }
         Ok(Destination {
+            automatic: request.key.is_none(),
             share_id: id.into(),
             slot: request.helper.slot,
             epoch: request.helper.epoch,
@@ -137,6 +141,8 @@ pub(super) fn expire_requests<T>(state: &mut State<T>) {
             .is_some_and(|s| matches!(&s.state, SlotState::Working(id) if id == &r.parent));
         if state.stopping
             || state.closed
+            || (r.status == Status::Requested
+                && r.reply_due.is_some_and(|due| Instant::now() >= due))
             || !helper_idle
             || !owns_parent
             || state
@@ -158,6 +164,151 @@ fn has_targeted_work<T>(state: &State<T>, slot: usize, epoch: u64) -> bool {
     })
 }
 
+fn idle_station<T>(state: &State<T>, actor: &Actor) -> Option<Station> {
+    state
+        .slots
+        .iter()
+        .enumerate()
+        .find(|(_, s)| {
+            s.enabled
+                && s.retirement.is_none()
+                && s.registered.as_ref() == Some(actor)
+                && matches!(s.state, SlotState::Idle)
+        })
+        .map(|(slot, s)| Station {
+            actor: actor.clone(),
+            slot,
+            epoch: s.epoch,
+        })
+}
+
+fn current_claimant<T>(state: &State<T>, task_id: &str) -> Option<Station> {
+    let task = state.tasks.get(task_id)?;
+    let slot = task.view.slot?;
+    let station = state.slots.get(slot)?;
+    if task.view.status != TaskStatus::Working
+        || !station.enabled
+        || station.retirement.is_some()
+        || !matches!(&station.state, SlotState::Working(id) if id == task_id)
+    {
+        return None;
+    }
+    Some(Station {
+        actor: station.registered.clone()?,
+        slot,
+        epoch: station.epoch,
+    })
+}
+
+fn available_helper<T>(s: &State<T>, actor: &Actor) -> Option<Station> {
+    if s.closed
+        || s.stopping
+        || !s.remote_ready
+        || actor.participant.is_none()
+        || s.manager
+            .as_ref()
+            .is_none_or(|m| !lifecycle::same_account(&m.actor, actor))
+        || s.shares
+            .records
+            .iter()
+            .any(|r| r.helper.actor == *actor && r.status.pending())
+    {
+        return None;
+    }
+    let helper = idle_station(s, actor)?;
+    if s.fifo.iter().any(|id| {
+        s.tasks.get(id).is_some_and(|t| {
+            lifecycle::same_account(&t.actor, actor)
+                && t.share
+                    .as_ref()
+                    .is_none_or(|d| d.slot == helper.slot && d.epoch == helper.epoch)
+        })
+    }) {
+        return None;
+    }
+    Some(helper)
+}
+
+fn available_claimants<'a, T>(
+    s: &'a State<T>,
+    helper: &'a Station,
+) -> impl Iterator<Item = (&'a str, Station)> {
+    s.slots.iter().filter_map(move |slot| {
+        let SlotState::Working(id) = &slot.state else {
+            return None;
+        };
+        if s.tasks.get(id)?.asked_helpers.get(&helper.slot) == Some(&helper.epoch)
+            || s.shares
+                .records
+                .iter()
+                .any(|r| r.parent == *id && r.status.pending())
+        {
+            return None;
+        }
+        let claimant = current_claimant(s, id)?;
+        claimant.actor.participant.as_ref()?;
+        Some((id.as_str(), claimant))
+    })
+}
+
+fn record_request<T>(
+    state: &mut State<T>,
+    generation: &str,
+    helper: Station,
+    claimant: Station,
+    task_id: String,
+    request_id: Option<String>,
+    reply_due: Option<Instant>,
+) -> Result<Value, String> {
+    if state
+        .shares
+        .records
+        .iter()
+        .any(|r| r.status.pending() && (r.helper.actor == helper.actor || r.parent == task_id))
+    {
+        return Err(
+            "this idle station or parent task already has an outstanding work-sharing request"
+                .into(),
+        );
+    }
+    if state.shares.records.len() >= RETAINED {
+        let pos = state
+            .shares
+            .records
+            .iter()
+            .position(|r| !r.status.pending())
+            .ok_or("all work-sharing request slots are occupied")?;
+        state.shares.records.remove(pos);
+    }
+    let sequence = state
+        .shares
+        .sequence
+        .checked_add(1)
+        .ok_or("work-sharing request sequence exhausted")?;
+    state.shares.sequence = sequence;
+    state
+        .tasks
+        .get_mut(&task_id)
+        .expect("verified active parent")
+        .asked_helpers
+        .insert(helper.slot, helper.epoch);
+    let r = Request {
+        sequence,
+        id: format!("share_{}_{sequence}", generation),
+        key: request_id,
+        reply_due,
+        parent: task_id,
+        helper,
+        claimant,
+        status: Status::Requested,
+        scope: None,
+        child: None,
+    };
+    let v = r.view();
+    state.shares.records.push_back(r);
+    Ok(v)
+}
+
 impl<T: Clone> Queue<T> {
     pub(in crate::worker) fn share(
         &self,
@@ -168,6 +319,7 @@ impl<T: Clone> Queue<T> {
         let action: Action = serde_json::from_value(args)
             .map_err(|e| format!("invalid work-sharing action: {e}"))?;
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        expire_requests(&mut state);
         let manager = state
             .manager
             .as_ref()
@@ -208,12 +360,9 @@ impl<T: Clone> Queue<T> {
                 {
                     return Err("work-sharing request_id must contain 1..128 bytes without control characters".into());
                 }
-                if let Some(r) = state
-                    .shares
-                    .records
-                    .iter()
-                    .find(|r| r.helper.actor == *actor && r.key == request_id)
-                {
+                if let Some(r) = state.shares.records.iter().find(|r| {
+                    r.helper.actor == *actor && r.key.as_deref() == Some(request_id.as_str())
+                }) {
                     return if r.parent == task_id {
                         Ok(r.view())
                     } else {
@@ -223,82 +372,22 @@ impl<T: Clone> Queue<T> {
                 if state.closed || state.stopping {
                     return Err("worker pool is not accepting work-sharing requests".into());
                 }
-                let helper = state
-                    .slots
-                    .iter()
-                    .enumerate()
-                    .find(|(_, s)| {
-                        s.enabled
-                            && s.retirement.is_none()
-                            && s.registered.as_ref() == Some(actor)
-                            && matches!(s.state, SlotState::Idle)
-                    })
-                    .map(|(slot, s)| Station {
-                        actor: actor.clone(),
-                        slot,
-                        epoch: s.epoch,
-                    })
+                let helper = idle_station(&state, actor)
                     .ok_or("the requester must be a registered idle station")?;
                 if has_targeted_work(&state, helper.slot, helper.epoch) {
                     return Err("a directed child task is already waiting for this station".into());
                 }
-                let claimant = state
-                    .slots
-                    .iter()
-                    .enumerate()
-                    .find(|(_, s)| {
-                        s.enabled
-                            && s.retirement.is_none()
-                            && matches!(&s.state, SlotState::Working(id) if id == &task_id)
-                    })
-                    .and_then(|(slot, s)| {
-                        Some(Station {
-                            actor: s.registered.clone()?,
-                            slot,
-                            epoch: s.epoch,
-                        })
-                    })
-                    .filter(|_| {
-                        state
-                            .tasks
-                            .get(&task_id)
-                            .is_some_and(|t| t.view.status == TaskStatus::Working)
-                    })
+                let claimant = current_claimant(&state, &task_id)
                     .ok_or("target task has no active remote claimant")?;
-                if state.shares.records.iter().any(|r| {
-                    r.status.pending() && (r.helper.actor == *actor || r.parent == task_id)
-                }) {
-                    return Err("this idle station or parent task already has an outstanding work-sharing request".into());
-                }
-                if state.shares.records.len() == RETAINED {
-                    let pos = state
-                        .shares
-                        .records
-                        .iter()
-                        .position(|r| !r.status.pending())
-                        .ok_or("all work-sharing request slots are occupied")?;
-                    state.shares.records.remove(pos);
-                }
-                let sequence = state
-                    .shares
-                    .sequence
-                    .checked_add(1)
-                    .ok_or("work-sharing request sequence exhausted")?;
-                state.shares.sequence = sequence;
-                let r = Request {
-                    sequence,
-                    id: format!("share_{}_{sequence}", self.generation),
-                    key: request_id,
-                    parent: task_id,
+                record_request(
+                    &mut state,
+                    &self.generation,
                     helper,
                     claimant,
-                    status: Status::Requested,
-                    scope: None,
-                    child: None,
-                };
-                let v = r.view();
-                state.shares.records.push_back(r);
-                v
+                    task_id,
+                    Some(request_id),
+                    None,
+                )?
             }
             Action::Accept { share_id, text } => {
                 if text.trim().is_empty() || text.len() > MAX_SCOPE || text.contains('\0') {
@@ -335,64 +424,73 @@ impl<T: Clone> Queue<T> {
                 if !changed {
                     return Ok(record.view());
                 }
-                record.view()
+                let receipt = record.view();
+                // A currently waiting helper can offer help to another claimant.
+                let _ = self.capacity_changed.send(());
+                receipt
             }
         };
         self.changed(&mut state);
         Ok(result)
     }
 
-    pub(in crate::worker) fn share_candidates(&self, actor: &Actor) -> Vec<Value> {
-        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if s.stopping
-            || s.closed
-            || s.manager
-                .as_ref()
-                .is_none_or(|m| !lifecycle::same_account(&m.actor, actor))
-            || !s.slots.iter().enumerate().any(|(index, slot)| {
-                slot.enabled
-                    && slot.retirement.is_none()
-                    && slot.registered.as_ref() == Some(actor)
-                    && matches!(slot.state, SlotState::Idle)
-                    && !has_targeted_work(&s, index, slot.epoch)
-            })
-            || s.shares
-                .records
-                .iter()
-                .any(|r| r.status.pending() && r.helper.actor == *actor)
-        {
-            return Vec::new();
+    /// A positive-duration, authenticated native wait already tried to acquire FIFO work.
+    /// Recheck its eligibility under the same queue lock used to create the peer request.
+    pub(in crate::worker) fn offer_idle_help(&self, actor: &Actor) {
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        expire_requests(&mut s);
+        let Some(helper) = available_helper(&s, actor) else {
+            return;
+        };
+        let candidate = available_claimants(&s, &helper)
+            .next()
+            .map(|(id, claimant)| (id.to_owned(), claimant));
+        if let Some((task_id, claimant)) = candidate {
+            let due = Instant::now()
+                + std::time::Duration::from_millis(crate::worker::MAX_OBSERVATION_WAIT_MS);
+            if record_request(
+                &mut s,
+                &self.generation,
+                helper,
+                claimant,
+                task_id,
+                None,
+                Some(due),
+            )
+            .is_ok()
+            {
+                self.changed(&mut s);
+            }
         }
-        s.slots
+    }
+
+    pub(in crate::worker) fn share_replies(&self, actor: &Actor) -> Vec<Value> {
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        expire_requests(&mut s);
+        s.shares
+            .records
             .iter()
-            .enumerate()
-            .filter_map(|(index, slot)| {
-                let SlotState::Working(task_id) = &slot.state else {
-                    return None;
-                };
-                let claimant = slot.registered.as_ref()?;
-                let requested = s
-                    .shares
-                    .records
-                    .iter()
-                    .any(|request| request.parent == *task_id && request.status.pending());
-                if slot.retirement.is_some()
-                    || s.tasks.get(task_id)?.view.status != TaskStatus::Working
-                    || requested
-                {
-                    return None;
-                }
-                Some(json!({
-                    "task_id": task_id, "slot": index, "epoch": slot.epoch,
-                    "participant_id": claimant.participant
-                }))
-            })
+            .rev()
+            .filter(|r| r.helper.actor == *actor && r.status != Status::Requested)
             .take(8)
+            .map(Request::view)
             .collect()
     }
 
+    pub(in crate::worker) fn share_candidates(&self, actor: &Actor) -> Vec<Value> {
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        expire_requests(&mut s);
+        let Some(helper) = available_helper(&s, actor) else {
+            return Vec::new();
+        };
+        available_claimants(&s,&helper).take(8).map(|(task_id,claimant)|{
+            json!({"task_id":task_id,"slot":claimant.slot,"epoch":claimant.epoch,"participant_id":claimant.actor.participant})
+        }).collect()
+    }
+
     pub(in crate::worker) fn share_inbox(&self, actor: &Actor) -> Vec<Value> {
-        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        expire_requests(&mut s);
         s.shares
             .records
             .iter()
@@ -465,7 +563,7 @@ pub(in crate::worker) fn tool() -> Value {
         names.extend_from_slice(required);
         json!({"type":"object","properties":properties,"required":names,"additionalProperties":false})
     };
-    json!({"name":"ssmcp.worker.share","description":"An idle registered worker requests a split from a busy task owner. The claimant accepts with independent child task text or declines. The verified manager lists requests and dispatches accepted text using worker.submit with share_id. Only the original helper station can acquire the new task through worker.wait. Parent ownership is preserved. Reuse request_id on retry. List is actor-scoped, with at most 16 per page and the last 128 requests retained.",
+    json!({"name":"ssmcp.worker.share","description":"A blocking worker.wait can request one split from a registered busy peer. The requester can also ask explicitly. The claimant reads share_requests and the helper reads share_replies or this scoped list. The claimant accepts with independent child task text or declines. The verified manager lists requests and dispatches accepted text using worker.submit with share_id. Only the original helper station can acquire the new task through worker.wait. Parent ownership is preserved. Reuse request_id on retry. List is actor-scoped, with at most 16 per page and the last 128 requests retained.",
         "inputSchema":{"type":"object","additionalProperties":false,
             "properties":{"action":{},"task_id":{},"request_id":{},"share_id":{},"text":{},"after":{}},
             "oneOf":[variant("request",json!({"task_id":id,"request_id":{"type":"string","minLength":1,"maxLength":128}}),&["task_id","request_id"]),
@@ -552,6 +650,199 @@ mod tests {
                 Some((CLIENT, request["share_id"].as_str())),
             )
         }
+    }
+
+    #[test]
+    fn idle_wait_delivers_to_the_claimant_and_returns_only_authenticated_replies() {
+        let f = PoolFixture::new();
+        f.queue.offer_idle_help(&f.idle);
+        f.queue.offer_idle_help(&f.idle);
+        f.queue.offer_idle_help(&f.other);
+        let inbox = f.queue.share_inbox(&f.donor);
+        assert_eq!(inbox.len(), 1);
+        let r = &inbox[0];
+        assert_eq!(r["origin"], "worker_wait");
+        assert_eq!(r["requester"]["participant_id"], "idle");
+        assert_eq!(r["claimant"]["participant_id"], "donor");
+        assert_eq!(r["parent_task_id"], f.parent.task_id);
+        assert!(f.queue.share_inbox(&f.other).is_empty());
+        assert!(
+            f.queue
+                .share(
+                    &f.other,
+                    CLIENT,
+                    json!({"action":"accept","share_id":r["share_id"],"text":"child scope"})
+                )
+                .is_err()
+        );
+        let accepted = f.accept(r);
+        assert_eq!(f.accept(r), accepted);
+        assert_eq!(f.queue.share_replies(&f.idle), vec![accepted.clone()]);
+        assert!(f.queue.share_replies(&f.other).is_empty());
+        assert_eq!(
+            f.queue
+                .share(&f.manager, CLIENT, json!({"action":"list"}))
+                .unwrap()["requests"][0],
+            accepted
+        );
+        let child = f.dispatch(r, "accepted-child").unwrap();
+        assert_eq!(
+            f.dispatch(r, "accepted-child").unwrap().task_id,
+            child.task_id
+        );
+        assert!(f.queue.claim_remote(&f.other, 6).unwrap().is_none());
+        let lease = f.queue.claim_remote(&f.idle, 7).unwrap().unwrap();
+        assert_eq!(lease.task_id, child.task_id);
+        f.queue
+            .finish(
+                &lease,
+                Outcome::Completed("peer result".into()),
+                true,
+                true,
+                8,
+            )
+            .unwrap();
+        let completed = f.queue.result(&f.manager, &child.task_id).unwrap();
+        assert_eq!(completed.output.as_deref(), Some("peer result"));
+        assert_eq!(
+            f.queue
+                .result(&f.manager, &f.parent.task_id)
+                .unwrap()
+                .status,
+            TaskStatus::Working
+        );
+    }
+
+    #[test]
+    fn decline_or_timeout_advances_only_to_unasked_live_claimants() {
+        let f = PoolFixture::new();
+        f.queue
+            .submit_managed(f.manager.clone(), CLIENT, "second", "second parent", (), 3)
+            .unwrap();
+        let second = f.queue.claim_remote(&f.other, 4).unwrap().unwrap();
+        f.queue.offer_idle_help(&f.idle);
+        let first = f.queue.share_inbox(&f.donor).remove(0);
+        let declined = f
+            .queue
+            .share(
+                &f.donor,
+                CLIENT,
+                json!({"action":"decline","share_id":first["share_id"]}),
+            )
+            .unwrap();
+        f.queue.offer_idle_help(&f.idle);
+        assert!(f.queue.share_inbox(&f.donor).is_empty());
+        assert_eq!(f.queue.share_replies(&f.idle)[0], declined);
+        let next = f.queue.share_inbox(&f.other).remove(0);
+        assert_eq!(next["parent_task_id"], second.task_id);
+        assert_ne!(next["share_id"], first["share_id"]);
+        {
+            let mut state = f.queue.state.lock().unwrap();
+            state.shares.records.back_mut().unwrap().reply_due = Some(Instant::now());
+        }
+        assert!(
+            f.queue
+                .share(
+                    &f.other,
+                    CLIENT,
+                    json!({"action":"accept","share_id":next["share_id"],"text":"late"})
+                )
+                .is_err()
+        );
+        for _ in 0..4 {
+            f.queue.offer_idle_help(&f.idle);
+        }
+        assert!(f.queue.share_inbox(&f.other).is_empty());
+        assert_eq!(f.queue.share_replies(&f.idle)[0]["status"], "expired");
+        assert!(f.dispatch(&next, "late-child").is_err());
+        assert_eq!(
+            f.queue
+                .share(&f.manager, CLIENT, json!({"action":"list"}))
+                .unwrap()["requests"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn an_already_admitted_peer_child_yields_to_ordinary_fifo_work() {
+        let f = PoolFixture::new();
+        f.queue.offer_idle_help(&f.idle);
+        let request = f.queue.share_inbox(&f.donor).remove(0);
+        f.accept(&request);
+        let child = f.dispatch(&request, "child").unwrap();
+        let ordinary = f
+            .queue
+            .submit_managed(
+                f.manager.clone(),
+                CLIENT,
+                "normal",
+                "Handle the new instruction",
+                (),
+                5,
+            )
+            .unwrap();
+        let taken = f.queue.claim_remote(&f.idle, 6).unwrap().unwrap();
+        assert_eq!(taken.task_id, ordinary.task_id);
+        f.queue
+            .finish(
+                &taken,
+                Outcome::Completed("normal complete".into()),
+                true,
+                true,
+                7,
+            )
+            .unwrap();
+        assert_eq!(
+            f.queue.claim_remote(&f.idle, 8).unwrap().unwrap().task_id,
+            child.task_id
+        );
+    }
+
+    #[test]
+    fn normal_fifo_work_precedes_peer_offers_and_late_replies_cannot_dispatch() {
+        let f = PoolFixture::new();
+        let urgent = f
+            .queue
+            .submit_managed(f.manager.clone(), CLIENT, "urgent", "ordinary FIFO", (), 3)
+            .unwrap();
+        f.queue.offer_idle_help(&f.idle);
+        assert!(f.queue.share_inbox(&f.donor).is_empty());
+        let lease = f.queue.claim_remote(&f.idle, 4).unwrap().unwrap();
+        assert_eq!(lease.task_id, urgent.task_id);
+        f.queue
+            .finish(&lease, Outcome::Completed("done".into()), true, true, 5)
+            .unwrap();
+        f.queue.offer_idle_help(&f.idle);
+        let r = f.queue.share_inbox(&f.donor).remove(0);
+        let next = f
+            .queue
+            .submit_managed(
+                f.manager.clone(),
+                CLIENT,
+                "priority",
+                "new instruction",
+                (),
+                6,
+            )
+            .unwrap();
+        assert_eq!(
+            f.queue.claim_remote(&f.idle, 7).unwrap().unwrap().task_id,
+            next.task_id
+        );
+        assert_eq!(f.queue.share_replies(&f.idle)[0]["status"], "expired");
+        assert!(
+            f.queue
+                .share(
+                    &f.donor,
+                    CLIENT,
+                    json!({"action":"accept","share_id":r["share_id"],"text":"late"})
+                )
+                .is_err()
+        );
+        assert!(f.dispatch(&r, "late").is_err());
     }
 
     #[test]
