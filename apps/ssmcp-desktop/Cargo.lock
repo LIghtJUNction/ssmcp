@@ -2906,7 +2906,7 @@ dependencies = [
 [[package]]
 name = "zrun"
 version = "0.1.0-p0.11"
-source = "git+https://github.com/LIghtJUNction/zrun.git#1b82c525b1da8d7c7a6d6ce96dec91df77093e9b"
+source = "git+https://github.com/LIghtJUNction/zrun.git#57e4606f53bb0a88e3034a0688ddc2b898a5ecb8"
 dependencies = [
  "libc",
  "zrun-executor",
@@ -2919,7 +2919,7 @@ dependencies = [
 [[package]]
 name = "zrun-executor"
 version = "0.1.0-p0.11"
-source = "git+https://github.com/LIghtJUNction/zrun.git#1b82c525b1da8d7c7a6d6ce96dec91df77093e9b"
+source = "git+https://github.com/LIghtJUNction/zrun.git#57e4606f53bb0a88e3034a0688ddc2b898a5ecb8"
 dependencies = [
  "zrun-io",
  "zrun-task",
@@ -2929,7 +2929,7 @@ dependencies = [
 [[package]]
 name = "zrun-io"
 version = "0.1.0-p0.11"
-source = "git+https://github.com/LIghtJUNction/zrun.git#1b82c525b1da8d7c7a6d6ce96dec91df77093e9b"
+source = "git+https://github.com/LIghtJUNction/zrun.git#57e4606f53bb0a88e3034a0688ddc2b898a5ecb8"
 dependencies = [
  "libc",
  "mio",
@@ -2938,17 +2938,17 @@ dependencies = [
 [[package]]
 name = "zrun-sync"
 version = "0.1.0-p0.11"
-source = "git+https://github.com/LIghtJUNction/zrun.git#1b82c525b1da8d7c7a6d6ce96dec91df77093e9b"
+source = "git+https://github.com/LIghtJUNction/zrun.git#57e4606f53bb0a88e3034a0688ddc2b898a5ecb8"
 
 [[package]]
 name = "zrun-task"
 version = "0.1.0-p0.11"
-source = "git+https://github.com/LIghtJUNction/zrun.git#1b82c525b1da8d7c7a6d6ce96dec91df77093e9b"
+source = "git+https://github.com/LIghtJUNction/zrun.git#57e4606f53bb0a88e3034a0688ddc2b898a5ecb8"
 
 [[package]]
 name = "zrun-time"
 version = "0.1.0-p0.11"
-source = "git+https://github.com/LIghtJUNction/zrun.git#1b82c525b1da8d7c7a6d6ce96dec91df77093e9b"
+source = "git+https://github.com/LIghtJUNction/zrun.git#57e4606f53bb0a88e3034a0688ddc2b898a5ecb8"
 
 [[package]]
 name = "zsys"
