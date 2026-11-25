@@ -284,6 +284,7 @@ pub(crate) struct Queue<T> {
     generation: String,
     state: Mutex<State<T>>,
     changed: watch::Sender<u64>,
+    capacity_changed: watch::Sender<()>,
 }
 
 impl<T: Clone> Queue<T> {
@@ -319,11 +320,16 @@ impl<T: Clone> Queue<T> {
                 unknown_guard_full: false,
             }),
             changed,
+            capacity_changed: watch::Sender::new(()),
         })
     }
 
     pub(crate) fn subscribe(&self) -> watch::Receiver<u64> {
         self.changed.subscribe()
+    }
+
+    pub(super) fn subscribe_capacity(&self) -> watch::Receiver<()> {
+        self.capacity_changed.subscribe()
     }
 
     fn changed(&self, state: &mut State<T>) {
@@ -334,6 +340,8 @@ impl<T: Clone> Queue<T> {
         if state.availability != availability {
             state.availability = availability;
             state.availability_revision = state.availability_revision.saturating_add(1);
+            // A new subscriber checks the committed projection before parking.
+            let _ = self.capacity_changed.send(());
         }
         state.revision = state.revision.wrapping_add(1);
         self.changed.send_replace(state.revision);
@@ -489,6 +497,13 @@ impl<T: Clone> Queue<T> {
         trim(&mut state);
         self.changed(&mut state);
         Ok(true)
+    }
+
+    pub(super) fn closed(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .closed
     }
 
     pub(crate) fn accepting(&self) -> bool {

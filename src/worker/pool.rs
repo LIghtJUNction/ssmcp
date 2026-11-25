@@ -428,7 +428,7 @@ impl Pool {
         }
         // Subscribe before the authenticated snapshot to avoid missing a change
         // between observing its revision and beginning the wait.
-        let mut wake = self.queue.subscribe();
+        let mut wake = self.queue.subscribe_capacity();
         let initial = self.queue.availability(actor, client_id)?;
         if let Some(after) = &request.after {
             if after.generation != initial.generation {
@@ -662,7 +662,7 @@ impl Pool {
             ));
         }
         let remote = self.remote()?;
-        let mut wake = self.queue.subscribe();
+        let mut wake = self.queue.subscribe_capacity();
         let deadline = tokio::time::Instant::now() + Duration::from_millis(wait_ms);
         loop {
             match remote.claim(&self.queue, actor, request_id, now_ms())? {
@@ -850,7 +850,7 @@ impl Pool {
                 )?;
                 Ok(
                     json!({"task":task,"warnings":prepared.warnings,"worker":self.queue.compact_snapshot(),
-                    "execution":self.execution_name(),"wait_hint":"Use worker.result for this task. Remote agents must claim and explicitly complete it; local executors return to their blocking wait after confirmed cleanup."}),
+                    "execution":self.execution_name(),"wait_hint":"Keep task_id. For one result, block on worker.result; for several, use one worker.wait_for(any task_finished), then read ready results. Use a bounded wait_ms within your transport deadline."}),
                 )
             }
             "ssmcp.worker.result" => {
@@ -995,7 +995,13 @@ mod command_logs_tests;
 #[cfg(test)]
 mod events_tests;
 #[cfg(test)]
+mod noise_tests;
+#[cfg(test)]
 mod observation_tests;
+#[cfg(test)]
+mod saturated_tests;
+#[cfg(test)]
+mod scheduling_tests;
 
 #[cfg(test)]
 mod tests {

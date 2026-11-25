@@ -166,10 +166,10 @@ fn render(role: &str, control_id: &str, cwd: &str, pool: Option<&Value>) -> Resu
     prompt.push_str("Read `ssmcp://guide`, `AGENTS.md`, `docs/workers.md`; discover schemas. First bind/reconnect: `await skills.view(clientId,{})` (native `ssmcp.skills.view`).\n");
     prompt.push_str(match role {
         Role::Coordinator => {
-            "Coordinator: privately `collab.join` (role main) and `collab.bind` control. For a linked pool, bind there separately. Delegate to standby workers via `ssmcp.worker.attach`, `ssmcp.worker.submit`, `ssmcp.worker.tasks`, `ssmcp.worker.result` while working. Use your verified finish receipt for yourself; ask a worker-specific human question for a worker."
+            "Coordinator: privately `collab.join` (role main) and `collab.bind` control. For a linked pool, bind separately and `ssmcp.worker.attach`. Delegate to standby workers with `ssmcp.worker.submit`. Group tasks in `ssmcp.worker.wait_for` (any), read ready `ssmcp.worker.result`, watch capacity via `ssmcp.worker.wait_available` with cursor. Reconcile via `ssmcp.worker.events`. Use your verified finish receipt and worker-specific human questions."
         }
         Role::Worker => {
-            "External worker: privately `collab.join` (role worker) and `collab.bind` pool. `ssmcp.worker.wait`: preserve each claim unchanged; retain pending request_id. `ssmcp.worker.complete`, then wait again using a new request ID. For operator-ordered retirement, complete any current claim; acknowledge its receipt via `ssmcp.worker.release`. For voluntary exit verify the coordinator's human decision reference. Never manage the queue or consume control-session input."
+            "External worker: privately `collab.join` (role worker) and `collab.bind` pool. `ssmcp.worker.wait`: preserve each claim unchanged; retain pending request_id across blocking windows (up to 55000ms). `ssmcp.worker.complete`, then wait again using a new request ID. For operator-ordered retirement, complete any current claim; acknowledge its receipt via `ssmcp.worker.release`. For voluntary exit verify the coordinator's human decision reference. Never manage the queue or consume control-session input."
         }
     });
     prompt.push('\n');
@@ -353,7 +353,14 @@ mod tests {
     #[test]
     fn coordinator_prompt_uses_authenticated_pool_management() {
         let prompt = render("", CONTROL_ID, "/project", Some(&pool())).unwrap();
-        for tool in ["attach", "submit", "tasks", "result"] {
+        for tool in [
+            "attach",
+            "submit",
+            "wait_for",
+            "result",
+            "wait_available",
+            "events",
+        ] {
             assert!(prompt.contains(&format!("ssmcp.worker.{tool}")));
         }
         assert!(prompt.contains("Delegate to standby workers"));

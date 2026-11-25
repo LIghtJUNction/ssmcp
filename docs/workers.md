@@ -266,6 +266,46 @@ The snapshot exposes `manager` and `stopping`. An unbound pool has `manager: nul
 
 `stop` returns `stop_requested: true` and whether this call changed the state. Repeating it is safe. Its `external_execution_stopped: false` explicitly means that requesting a stop does not prove an external model or process has stopped. Running remote tasks remain occupied with cancellation requested until their original claimant acknowledges completion; their slots then go offline. A real connection loss continues to use the existing `unknown` outcome and must not trigger automatic replay.
 
+## Dispatch independent tasks as results arrive
+
+Submit ready work with stable request IDs and retain the returned task IDs and pool generation. Workers can claim queued work as soon as a station frees up. When several results can unblock the next step, use one `worker.wait_for` with `mode: "any"` and a `task_finished` condition per outstanding ID (up to 128). Read `worker.result` once for each satisfied ID, remove it from the outstanding set, and submit newly eligible work immediately. For a single ID, a blocking `worker.result` returns the body in the same call.
+
+When dispatch depends on capacity, take `{generation, revision}` from the last manager receipt's `availability` and pass it as `after` to `worker.wait_available`. On `not_accepting`, inspect the reason. A full queue can drain through an outstanding completion; closure or a stopped pool requires reconciliation. For recovery, read committed `worker.events` from the last processed cursor and verify terminal results by task ID. Reconcile a gap against retained state. Preserve unresolved outcomes as `unknown`.
+
+Set an explicit observation window that leaves room within the transport deadline (up to 55,000 ms). A native wait returns as soon as its condition holds. After an empty window, renew the same outstanding wait or cursor. An idle worker reuses its pending claim request ID until it receives a claim or a terminal receipt.
+
+### Reproduce the scheduling comparison
+
+The pool tests run real claim, completion, condition and event handlers with synthetic task durations. Run the fixed-clock comparison and the progress-wakeup regression with `cargo test --locked --lib worker_scheduler -- --nocapture --test-threads=1`. Run the two wall-clock benchmarks with `cargo test --release --locked --lib worker_scheduler -- --ignored --nocapture --test-threads=1`.
+
+The comparison starts with 12 seconds of idle time, then queues two jobs per worker. Service times are 7, 8 or 9 seconds per job. The reference policy scans pending results every 5 seconds and uses 5-second worker waits. The blocking policy claims with a 55-second window and groups outstanding IDs in a single condition wait. Both retry the first submission, claim, completion and event page. Counts include these retries. The execution interval starts at submission and ends at the final completion.
+
+| Workers | Completed jobs | Handler calls, reference / blocking | Empty responses, reference / blocking | Execution time, both |
+| ---: | ---: | ---: | ---: | ---: |
+| 3 | 6 | 52 / 35 | 23 / 0 | 18 s |
+| 7 | 14 | 114 / 67 | 53 / 0 | 18 s |
+| 17 | 34 | 272 / 148 | 130 / 0 | 18 s |
+
+The event journal verifies unique completions and peak concurrency. The wall-clock saturation test preloads 120 tasks, uses four Tokio threads, and times the drain with all workers already holding a claim. Sample zero warms up each pool size. Model inference and subscription accounting take place outside this fixture.
+
+To repeat the cross-revision comparison from this checkout, install the same test modules into a detached copy of the measured parent. Both binaries use the repository's Release profile. Runs print every sample, task count, peak occupancy and elapsed time.
+
+```sh
+run=$(mktemp -d)
+base="$run/base"
+git worktree add --detach "$base" 28ea7289f26e2b517f364e4b38abb9287a527f6d
+for module in noise_tests saturated_tests scheduling_tests; do
+    cp "src/worker/pool/$module.rs" "$base/src/worker/pool/"
+    printf '\n#[cfg(test)]\nmod %s;\n' "$module" >> "$base/src/worker/pool.rs"
+done
+for version in base candidate candidate base; do
+    tree=.
+    if test "$version" = base; then tree="$base"; fi
+    CARGO_TARGET_DIR="$run/target-$version" cargo test --manifest-path "$tree/Cargo.toml" \
+        --locked --release --lib worker_scheduler_saturated -- --ignored --nocapture --test-threads=1
+done
+```
+
 ## Wait across call windows
 
 Each worker wait observes one request for at most 55,000 milliseconds. A caller can choose a shorter window to leave time for transport and response handling within its own outer deadline. The default remains 5,000 milliseconds for `wait`, `wait_available` and `wait_for`; `result` reads immediately when `wait_ms` is omitted.

@@ -148,7 +148,7 @@ impl<T: Clone> Remote<T> {
         if state.ready {
             return Ok(());
         }
-        if queue.snapshot().closed {
+        if queue.closed() {
             return Err("remote worker connection is closed".into());
         }
         queue.remote_ready()?;
@@ -183,7 +183,7 @@ impl<T: Clone> Remote<T> {
                 task: receipt.task.clone(),
             });
         }
-        if !state.ready || queue.snapshot().closed {
+        if !state.ready || queue.closed() {
             return Err("remote worker connection is not ready or has closed".into());
         }
         if let Some(active) = state
@@ -255,7 +255,7 @@ impl<T: Clone> Remote<T> {
             }
             return Ok((receipt.task.clone(), true));
         }
-        if !state.ready || queue.snapshot().closed {
+        if !state.ready || queue.closed() {
             return Err("remote worker connection is not ready or has closed".into());
         }
         let active = state
@@ -299,7 +299,7 @@ impl<T: Clone> Remote<T> {
                 Err("worker release does not match its authenticated retained receipt".into())
             };
         }
-        if !state.ready || queue.snapshot().closed {
+        if !state.ready || queue.closed() {
             return Err("remote worker connection is not ready or has closed".into());
         }
         queue.release_remote(actor, &retirement, now_ms)?;
@@ -362,7 +362,7 @@ impl<T: Clone> Remote<T> {
                 active.is_some_and(|active| queue.retire_requested(&active.lease)),
             ));
         }
-        if !state.ready || queue.snapshot().closed {
+        if !state.ready || queue.closed() {
             return Err("remote worker connection is not ready or has closed".into());
         }
         let active = state
@@ -557,7 +557,7 @@ mod tests {
         assert!(queue.stop(&owner, &client, 3).unwrap());
         assert!(!queue.stop(&owner, &client, 4).unwrap());
         assert!(queue.snapshot().stopping);
-        assert!(!queue.snapshot().closed);
+        assert!(!queue.closed());
         assert_eq!(queue.snapshot().working, 1);
         assert_eq!(queue.snapshot().idle, 0);
         assert_eq!(queue.snapshot().queued, 0);
