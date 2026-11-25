@@ -4,7 +4,7 @@ use super::*;
 async fn external_notifications_require_account_and_target_and_deduplicate_queue_retries() {
     let fixture = Fixture::new().await;
     let (mut socket, target) = connected(&fixture, Some("42"), true, vec![]).await;
-    let client = reqwest::Client::new();
+    let client = crate::http_client::builder().no_proxy().build().unwrap();
     let url = format!("{}/api/client/webhooks", fixture.base);
     let recipient = destination(&target);
     let post = |at: u64| {
