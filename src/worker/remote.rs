@@ -791,19 +791,23 @@ mod tests {
         let second = actor("second");
         remote.claim(&queue, &first, "a", 1).unwrap();
         remote.claim(&queue, &second, "b", 1).unwrap();
-        let members = vec!["second".into(), "unregistered".into()];
-        let display = queue.snapshot_for_display(&members);
+        let members = vec!["unregistered".into(), "second".into()];
+        queue.set_dreaming_members(members.clone());
+        let display = queue.snapshot();
         assert_eq!(display.idle, 2);
         assert!(!display.slots[0].dreaming);
         assert!(display.slots[1].dreaming);
         assert!(!display.slots[2].dreaming);
-        assert!(!queue.snapshot_for_display(&[]).slots[1].dreaming);
+        assert!(queue.snapshot_with_activity().0.slots[1].dreaming);
+        queue.set_dreaming_members(Vec::new());
+        assert!(!queue.snapshot().slots[1].dreaming);
+        queue.set_dreaming_members(members);
 
         queue
             .submit(actor("manager"), "work", "body", "prepared", 2)
             .unwrap();
         claimed(&remote, &queue, &second, "b");
-        let display = queue.snapshot_for_display(&members);
+        let display = queue.snapshot();
         assert_eq!(display.slots[1].state, "working");
         assert!(!display.slots[1].dreaming);
     }

@@ -122,10 +122,12 @@ impl Pool {
         if let Execution::Local(Err(error)) = &pool.execution {
             pool.unavailable(error);
         }
-        super::view()
+        let mut view = super::view()
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .pool = Some(Arc::downgrade(&pool));
+            .unwrap_or_else(|error| error.into_inner());
+        pool.queue
+            .set_dreaming_members(std::mem::take(&mut view.pending_dreaming_members));
+        view.pool = Some(Arc::downgrade(&pool));
         Ok(pool)
     }
 

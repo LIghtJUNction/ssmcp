@@ -136,7 +136,7 @@ pub(crate) struct Snapshot {
 
 #[derive(Default)]
 struct Display {
-    dreaming_members: Vec<String>,
+    pending_dreaming_members: Vec<String>,
     pending: Option<Snapshot>,
     pool: Option<std::sync::Weak<Pool>>,
 }
@@ -189,22 +189,26 @@ pub(crate) fn prepare_display(config: Config) {
             .collect(),
     });
     view.pool = None;
-    view.dreaming_members.clear();
+    view.pending_dreaming_members.clear();
 }
 
-pub(crate) fn set_dreaming_members(mut members: Vec<String>) {
-    members.sort_unstable();
-    view()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .dreaming_members = members;
+pub(crate) fn set_dreaming_members(members: Vec<String>) {
+    {
+        let mut view = view().lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(pool) = view.pool.as_ref().and_then(std::sync::Weak::upgrade) {
+            pool.queue.set_dreaming_members(members);
+        } else {
+            // The relay can send its roster before native pool initialization.
+            view.pending_dreaming_members = members;
+        }
+    }
     crate::client::terminal::invalidate();
 }
 
 pub(crate) fn display() -> Option<Snapshot> {
     let view = view().lock().unwrap_or_else(|error| error.into_inner());
     if let Some(pool) = view.pool.as_ref().and_then(std::sync::Weak::upgrade) {
-        return Some(pool.queue.snapshot_for_display(&view.dreaming_members));
+        return Some(pool.queue.snapshot());
     }
     view.pending.clone()
 }
