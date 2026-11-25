@@ -1,16 +1,25 @@
 #!/bin/sh
 # Run in Termux: sh install-ssmcp-termux.sh [bin|source] [latest|vX.Y.Z]
+# Or run: sh install-ssmcp-termux.sh update [--check]
 # Install the GNU/Linux CLI in a private Debian userland (64-bit ARM/x86).
 set -eu
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 mode=${1:-bin}
 tag=${2:-latest}
 case "$mode" in
-    bin|source) ;;
-    -h|--help) echo 'sh install-ssmcp-termux.sh [bin|source] [latest|vX.Y.Z]'; exit 0 ;;
-    *) fail 'Choose bin or source.' ;;
+    bin|source|update) ;;
+    -h|--help) printf '%s\n' 'sh install-ssmcp-termux.sh [bin|source] [latest|vX.Y.Z]' 'sh install-ssmcp-termux.sh update [--check]'; exit 0 ;;
+    *) fail 'Choose bin, source or update.' ;;
 esac
 [ "$#" -le 2 ] || fail 'Too many arguments.'
+if [ "$mode" = update ]; then
+    [ -n "${PREFIX:-}" ] && command -v proot-distro >/dev/null || fail 'Run this script in Termux after installing SSMCP.'
+    case "${2:-}" in
+        '') exec proot-distro login ssmcp-debian -- /root/.local/bin/ssmcp update ;;
+        --check) exec proot-distro login ssmcp-debian -- /root/.local/bin/ssmcp update --check ;;
+        *) fail 'Expected update [--check].' ;;
+    esac
+fi
 case "$tag" in latest) ;; *[!v0-9.]*) fail 'Expected latest or vX.Y.Z.' ;; esac
 [ "$tag" = latest ] || printf '%s\n' "$tag" | grep -Exq 'v[0-9]+\.[0-9]+\.[0-9]+' || fail 'Expected latest or vX.Y.Z.'
 case "$(uname -m)" in aarch64|arm64|x86_64|amd64) ;; *) fail 'Use a 64-bit ARM or x86 Termux installation.' ;; esac

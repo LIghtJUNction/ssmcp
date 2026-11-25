@@ -63,6 +63,8 @@ sh install-ssmcp-termux.sh bin
 proot-distro login ssmcp-debian -- /root/.local/bin/ssmcp --version
 ```
 
+Termux 已安装时，用 `sh install-ssmcp-termux.sh update` 更新。需要在已 root 的 Android 上开机运行时，可从源码构建 [SSMCP Magisk 模块](packaging/magisk/README.md)，刷入后通过手机网页配置和查看会话。
+
 Linux / macOS：
 
 ```sh

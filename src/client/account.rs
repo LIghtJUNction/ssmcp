@@ -723,6 +723,16 @@ pub(super) async fn open_browser(url: &Url) -> Result<()> {
         let mut c = Command::new("rundll32.exe");
         c.args(["url.dll,FileProtocolHandler", url.as_str()]);
         c
+    } else if cfg!(target_os = "android") {
+        let mut c = Command::new("/system/bin/am");
+        c.args([
+            "start",
+            "-a",
+            "android.intent.action.VIEW",
+            "-d",
+            url.as_str(),
+        ]);
+        c
     } else if cfg!(target_os = "macos") {
         let mut c = Command::new("/usr/bin/open");
         c.arg(url.as_str());
@@ -906,6 +916,55 @@ async fn authorize_at(root: &Path, args: &Arguments, username: Option<&str>) -> 
         eprintln!("Open the printed link in your browser.");
     }
     finish_authorization(root, authorization).await
+}
+
+#[cfg(target_os = "android")]
+pub(super) async fn magisk_onboarding(
+    server: &str,
+    username: &str,
+    register: bool,
+) -> Result<Option<Url>> {
+    let api = Api::new(server)?;
+    let reply = api
+        .request(
+            Method::GET,
+            &format!("/api/client/account/{username}"),
+            None,
+            None,
+        )
+        .await?;
+    if reply.status != StatusCode::NOT_FOUND {
+        let account = Api::checked(reply)?;
+        if account["username"].as_str() != Some(username)
+            && !account["username_aliases"]
+                .as_array()
+                .is_some_and(|aliases| aliases.iter().any(|alias| alias.as_str() == Some(username)))
+        {
+            return Err("The relay returned a different account.".into());
+        }
+        return Ok(None);
+    }
+    if !register {
+        return Err("Account not found. Register with GitHub, then try connecting again.".into());
+    }
+    let started = api
+        .post(
+            "/api/client/registration/start",
+            None,
+            json!({
+                "username": username,
+                "name": "SSMCP for Magisk",
+            }),
+        )
+        .await?;
+    let secret = started["device_code"]
+        .as_str()
+        .filter(|code| valid_secret(code))
+        .ok_or("The relay did not issue a registration code.")?;
+    let url = started["verification_uri_complete"]
+        .as_str()
+        .ok_or("The relay did not issue a registration URL.")?;
+    Ok(Some(verification_url(server, url, secret)?))
 }
 
 pub(super) async fn dispatch_registration(args: &[OsString]) -> Result<bool> {
