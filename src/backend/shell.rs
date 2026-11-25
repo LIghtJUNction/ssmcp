@@ -1730,11 +1730,6 @@ impl Shell {
             let job = started?;
             return Ok(job.snapshot());
         }
-        #[cfg(windows)]
-        let launch_cwd = crate::platform::child_cwd(Path::new(&args.command[0]), &cwd)
-            .map_err(|error| error.to_string())?;
-        #[cfg(not(windows))]
-        let launch_cwd = &cwd;
         let store = &self.output;
         // Reserve capacity before spawning: rejected requests must never run commands.
         let permit = self.slots.clone().try_acquire_owned().map_err(|_| {
@@ -1760,6 +1755,11 @@ impl Shell {
         } else {
             cwd
         };
+        #[cfg(windows)]
+        let launch_cwd = crate::platform::child_cwd(Path::new(&args.command[0]), &cwd)
+            .map_err(|error| error.to_string())?;
+        #[cfg(not(windows))]
+        let launch_cwd = &cwd;
         let observation = match &self.observer {
             Some(pool) => Some(pool.begin(id.clone(), &json!(args.command), &cwd).await?),
             None => None,
