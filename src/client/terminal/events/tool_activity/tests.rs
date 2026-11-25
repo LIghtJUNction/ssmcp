@@ -153,7 +153,7 @@ fn adjacent_tool_windows_count_read_groups_and_ignore_bookkeeping() {
         view.ingest_event("audit",&json!({"type":"ssmcp.skill.discovered","tool":"ssmcp.skills.list","path":name,"invoked":false}),b"[SKIL] discovered\n");
     }
     command(&mut view, "after-a", 0);
-    assert_eq!(view.read_groups().len(), 1);
+    assert_eq!(view.fold_groups().len(), 1);
     assert_eq!(view.tool_groups().len(), 1);
     let snapshot = view.snapshot();
     assert_eq!(snapshot["tool_groups"][0]["count"], 5);

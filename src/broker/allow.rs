@@ -199,6 +199,7 @@ impl Broker {
 mod tests {
     mod native_messages;
     mod project_continuity;
+    mod repository_events;
     mod session_io;
     use super::*;
     use crate::{
@@ -766,6 +767,116 @@ mod tests {
             1
         );
         close(socket).await;
+    }
+
+    #[tokio::test]
+    async fn guarded_repository_events_reach_the_admitted_controller_after_negotiation() {
+        use crate::events::{Actor, Filter};
+        use crate::wire::repository_events::{CAPABILITY, Event};
+
+        let fixture = Fixture::new().await;
+        let owner = crate::bridge::owner(
+            IDENTITY_RESOURCE,
+            &Authorization::Identity(identity("42", "octocat")),
+        )
+        .unwrap();
+        for offered in [false, true] {
+            let mut request = fixture.request(None, true);
+            if offered {
+                request.headers_mut().insert(
+                    wire::CAPABILITIES_HEADER,
+                    format!(
+                        "{},{},{}",
+                        wire::SESSION_ACCESS_CAPABILITY,
+                        wire::CONTROL_ATTRIBUTION_CAPABILITY,
+                        CAPABILITY
+                    )
+                    .parse()
+                    .unwrap(),
+                );
+            }
+            let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+            let principal = "alice@ssmcp.test";
+            send(
+                &mut socket,
+                Frame::ResolveController {
+                    id: 0,
+                    principal: principal.into(),
+                },
+            )
+            .await;
+            assert!(matches!(receive(&mut socket).await,
+                Frame::ResolvedController { id: 0, principal: ref resolved, ref provider, ref subject }
+                    if resolved == principal && provider == "github" && subject == "42"));
+            send(&mut socket, legacy_self_hello(names(&["alice"]))).await;
+            let Frame::Ready {
+                client_id,
+                capabilities,
+                login_code,
+                login_expires_in,
+                ..
+            } = receive(&mut socket).await
+            else {
+                panic!("guarded device registration must succeed");
+            };
+            assert!(login_code.is_empty());
+            assert_eq!(login_expires_in, 0);
+            assert_eq!(capabilities.iter().any(|cap| cap == CAPABILITY), offered);
+            if offered {
+                let actor = Actor {
+                    owner: owner.clone(),
+                    client_id: client_id.clone(),
+                    agent_id: "observer".into(),
+                };
+                let hub = &fixture.broker.events;
+                let subscription = hub
+                    .subscribe(
+                        &actor,
+                        "guarded-repo",
+                        Filter {
+                            kinds: vec!["repo.*".into()],
+                            ..Default::default()
+                        },
+                        None,
+                    )
+                    .unwrap();
+                let id = subscription["subscription_id"].as_str().unwrap();
+                send(
+                    &mut socket,
+                    Frame::RepositoryEvent {
+                        event: Event::PullRequestOpened {
+                            remote: "origin".into(),
+                            number: 7,
+                        },
+                    },
+                )
+                .await;
+                // A reply to the next frame confirms the event has been processed.
+                send(
+                    &mut socket,
+                    Frame::Access {
+                        id: 1,
+                        command: AccessCommand::List {},
+                    },
+                )
+                .await;
+                assert!(matches!(
+                    receive(&mut socket).await,
+                    Frame::AccessReply {
+                        id: 1,
+                        result: Ok(_)
+                    }
+                ));
+                let page = hub.read(&actor, id, 8).unwrap();
+                let entries = page["events"].as_array().unwrap();
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0]["kind"], "repo.pull_request_opened");
+                assert_eq!(entries[0]["origin"], "system");
+                assert_eq!(entries[0]["client_id"], client_id);
+                assert_eq!(entries[0]["data"], json!({"remote":"origin","number":7}));
+            }
+            close(socket).await;
+        }
     }
 
     #[tokio::test]

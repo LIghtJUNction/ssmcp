@@ -164,17 +164,13 @@ pub(super) struct Group {
     pub(super) start: usize,
     pub(super) members: Vec<usize>,
     pub(super) head: u64,
-    pub(super) source: String,
+    pub(super) title: String,
     pub(super) expanded: bool,
 }
 
 impl Group {
     pub(super) fn contains(&self, index: usize) -> bool {
         self.members.contains(&index)
-    }
-
-    pub(super) fn title(&self) -> String {
-        format!("Read {} items · {}", self.members.len(), self.source)
     }
 }
 
@@ -239,9 +235,9 @@ pub(super) fn groups(events: &VecDeque<Event>, owned: impl Fn(&Event) -> bool) -
         if members.len() >= MIN_READS {
             groups.push(Group {
                 start,
+                title: format!("Read {} items · {}", members.len(), first.source),
                 members,
                 head: events[start].id,
-                source: first.source.clone(),
                 expanded: false,
             });
         }
@@ -519,9 +515,9 @@ mod tests {
                     view.ingest_event("workspace", &event, b"[READ] workspace path\n");
                 }
             }
-            assert_eq!(view.read_groups().len(), 2, "identity {identity}");
+            assert_eq!(view.fold_groups().len(), 2, "identity {identity}");
             assert!(
-                view.read_groups()
+                view.fold_groups()
                     .iter()
                     .all(|group| group.members.len() == 3)
             );
@@ -536,7 +532,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(view.read_groups().len(), 2);
+        assert_eq!(view.fold_groups().len(), 2);
         view.clear();
         controller(&mut view, 1, true);
         for _ in 0..3 {
@@ -551,20 +547,20 @@ mod tests {
         for _ in 0..3 {
             read(&mut view, "ambiguous/SKILL.md");
         }
-        assert_eq!(view.read_groups().len(), 2);
+        assert_eq!(view.fold_groups().len(), 2);
         view.clear();
         for _ in 0..3 {
             read(&mut view, "still-ambiguous/SKILL.md");
         }
         assert!(
-            view.read_groups().is_empty(),
+            view.fold_groups().is_empty(),
             "clearing the display must not forget active callers"
         );
         controller(&mut view, 3, false);
         for _ in 0..3 {
             read(&mut view, "second-again/SKILL.md");
         }
-        assert_eq!(view.read_groups().len(), 1);
+        assert_eq!(view.fold_groups().len(), 1);
     }
 
     #[test]
@@ -628,7 +624,7 @@ mod tests {
             for _ in 0..2 {
                 read(&mut view, "after");
             }
-            assert!(view.read_groups().is_empty(), "barrier {barrier}");
+            assert!(view.fold_groups().is_empty(), "barrier {barrier}");
             assert_eq!(view.events.len(), 5);
             let event = &view.events[2];
             assert_eq!(event.text, text, "raw transcript for barrier {barrier}");
@@ -765,8 +761,8 @@ mod tests {
             &json!({"type":"ssmcp.file.read","path":"missing.css","success":false}),
             b"[ERR] missing.css: file not found\n",
         );
-        assert_eq!(view.read_groups().len(), 1);
-        assert_eq!(view.read_groups()[0].members.len(), 24);
+        assert_eq!(view.fold_groups().len(), 1);
+        assert_eq!(view.fold_groups()[0].members.len(), 24);
         let Some(directory) = std::env::var_os("SSMCP_READ_ACTIVITY_PREVIEW_DIR") else {
             return;
         };

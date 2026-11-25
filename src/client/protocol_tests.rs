@@ -38,6 +38,12 @@ else:
     fcntl.flock(lease.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 trace("lease acquired")
 
+if scenario.startswith("guarded-repo-"):
+    resolution = json.loads(sys.stdin.readline())
+    assert resolution == {"type":"resolve_controller","id":0,"principal":"octocat@ssmcp.test"}
+    print(json.dumps({"type":"resolved_controller","id":0,"principal":resolution["principal"],
+                      "provider":"github","subject":"42"}), flush=True)
+
 hello = json.loads(sys.stdin.readline())
 assert hello["type"] == "hello"
 trace("Hello received")
@@ -88,6 +94,16 @@ code, ttl = ("", 0) if github else ("a" * 64, 600)
 capabilities = []
 if scenario == "session-access":
     capabilities = [os.environ["SSMCP_PROTOCOL_ACCESS_CAPABILITY"]]
+elif scenario.startswith("guarded-repo-"):
+    access = os.environ["SSMCP_PROTOCOL_ACCESS_CAPABILITY"]
+    repo = "repo_events_v1"
+    assert hello["metadata"]["allow"] == ["octocat@ssmcp.test"]
+    parent_offer = os.environ["SSMCP_RELAY_CAPABILITIES"].split(",")
+    assert access in parent_offer and "control_attribution_v1" in parent_offer
+    assert (repo in parent_offer) == (scenario != "guarded-repo-unsolicited")
+    capabilities = [access, "control_attribution_v1"]
+    if scenario != "guarded-repo-no-echo":
+        capabilities.append(repo)
 elif scenario == "messages":
     capabilities = [os.environ["SSMCP_PROTOCOL_MESSAGES_CAPABILITY"]]
 elif scenario == "session-messages":
@@ -105,6 +121,10 @@ elif scenario == "no-expiry":
 respond(json.dumps({"type":"ready", "url":"https://fixture.invalid/mcp",
                     "login_code":code, "login_expires_in":ttl, "client_id":"b"*64,
                     **({"capabilities":capabilities} if capabilities else {})}))
+if scenario == "guarded-repo-negotiated":
+    event = json.loads(sys.stdin.readline())
+    assert event == {"type":"repository_event","event":{"kind":"pull_request_opened","remote":"origin","number":7}}
+    respond(json.dumps({"type":"reply","id":7,"result":{"Ok":True}}))
 # Keep registration live until its test explicitly performs normal cleanup.
 sys.stdin.read()
 "#;
@@ -495,6 +515,103 @@ async fn cancelled_registration_does_not_start_a_transport() {
     assert!(result.is_none());
     assert_eq!(attempts.get(), 0);
     assert!(!registered);
+}
+
+#[tokio::test]
+async fn guarded_repository_events_require_both_offer_and_echo() {
+    const CHILD: &str = "SSMCP_GUARDED_REPOSITORY_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // Admission records a real local controller. Give this process its own
+        // ledger without changing the environment of unrelated parallel tests.
+        let fixture = Fixture::new();
+        let root = fixture.directory.join("auth");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "client::protocol_tests::guarded_repository_events_require_both_offer_and_echo",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("SSMCP_AUTH_HOME", &root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(root.join("controller-accounts.json").is_file());
+        return;
+    }
+
+    for (scenario, offered, enabled) in [
+        ("guarded-repo-negotiated", true, true),
+        ("guarded-repo-no-echo", true, false),
+        ("guarded-repo-unsolicited", false, false),
+    ] {
+        let fixture = Fixture::new();
+        let metadata = metadata(true);
+        let mut registered = false;
+        let result = register_transport(
+            TransportKind::Relay,
+            Some("https://ssmcp.test"),
+            &metadata,
+            &mut registered,
+            || {
+                let mut command = fixture.command(scenario);
+                let relay_command = relay::command(&fixture.python, "https://ssmcp.test");
+                let offer = relay_command
+                    .as_std()
+                    .get_envs()
+                    .find(|(name, _)| *name == "SSMCP_RELAY_CAPABILITIES")
+                    .and_then(|(_, value)| value)
+                    .unwrap();
+                command.env("SSMCP_RELAY_CAPABILITIES", offer);
+                if offered {
+                    relay::offer_repository_events(&mut command);
+                }
+                command
+            },
+            std::future::pending(),
+            READY_LIMIT,
+        )
+        .await;
+        fixture.report_registration(scenario, &result);
+        let mut registration = result.unwrap().unwrap();
+        assert!(registered);
+        assert!(registration.ready.1.is_empty());
+        assert_eq!(registration.ready.2, 0);
+        registration
+            .require_allow_access(&metadata.allow)
+            .await
+            .unwrap();
+        assert_eq!(registration.repository_events, enabled);
+        if enabled {
+            write_frame(
+                &mut registration.writer,
+                &Frame::RepositoryEvent {
+                    event: crate::wire::repository_events::Event::PullRequestOpened {
+                        remote: "origin".into(),
+                        number: 7,
+                    },
+                },
+            )
+            .await
+            .unwrap();
+            let reply = timeout(READY_LIMIT, read_frame(&mut registration.reader))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(matches!(
+                reply,
+                Some(Frame::Reply {
+                    id: 7,
+                    result: Ok(Value::Bool(true))
+                })
+            ));
+        }
+        close(registration).await;
+    }
 }
 
 #[tokio::test]

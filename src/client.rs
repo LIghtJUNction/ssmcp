@@ -2638,6 +2638,7 @@ struct RegisteredTransport {
     messaging_supported: bool,
     chat_disabled_acknowledged: bool,
     worker_dreaming: bool,
+    repository_events: bool,
     time_observation_supported: bool,
     wait_display_version: Option<crate::wire::wait_display::Version>,
     openai_context_supported: bool,
@@ -2766,6 +2767,10 @@ async fn register_transport(
     let durable_wait_offer = relay::durable_wait_display_offer(&transport_command);
     let peer_offer = relay::peer_ports_offer(&transport_command);
     let openai_context_offer = relay::offers(&transport_command, crate::wire::openai::CAPABILITY);
+    let repository_events_offer = relay::offers(
+        &transport_command,
+        crate::wire::repository_events::CAPABILITY,
+    );
     let worker_dreaming_offer =
         relay::offers(&transport_command, crate::wire::WORKER_DREAMING_CAPABILITY);
     let mut process = transport_command.spawn().map_err(|error| {
@@ -2878,6 +2883,10 @@ async fn register_transport(
             capabilities
                 .iter()
                 .any(|cap| cap == crate::wire::project_continuity::CAPABILITY),
+            repository_events_offer
+                && capabilities
+                    .iter()
+                    .any(|cap| cap == crate::wire::repository_events::CAPABILITY),
             openai_context_offer
                 && capabilities
                     .iter()
@@ -2926,6 +2935,7 @@ async fn register_transport(
         peer_ports,
         worker_dreaming,
         project_continuity,
+        repository_events,
         openai_context_supported,
         chat_disabled_acknowledged,
     ) = ready;
@@ -2948,6 +2958,7 @@ async fn register_transport(
         access_supported,
         messaging_supported,
         worker_dreaming,
+        repository_events,
         chat_disabled_acknowledged,
         time_observation_supported,
         wait_display_version,
@@ -3293,6 +3304,9 @@ async fn connect_inner(
             if options.foreground_identity.is_some() {
                 command.env(relay::PROJECT_OFFER_ENV, "1");
             }
+            if options.worker.is_none() && matches!(&transport, Transport::Account { .. }) {
+                relay::offer_repository_events(&mut command);
+            }
             if !chat_enabled && matches!(&transport, Transport::Account { .. }) {
                 let remote_pool =
                     options.worker.is_some() && options.chat.agent == chat_io::Agent::Remote;
@@ -3360,6 +3374,7 @@ async fn connect_inner(
         messaging_supported,
         chat_disabled_acknowledged: _,
         worker_dreaming,
+        repository_events,
         time_observation_supported,
         wait_display_version,
         peer_ports,
@@ -3652,7 +3667,12 @@ async fn connect_inner(
     let git_settings = config::git()?;
     // Git refresh belongs to the connected workspace, including JSONL and
     // background sessions. The display only consumes its optional snapshot.
-    let git_status = git_status::GitStatus::start(PathBuf::from(&metadata.cwd), git_settings);
+    let (event_sender, mut repo_events) = tokio::sync::mpsc::channel(32);
+    let git_status = git_status::GitStatus::start(
+        PathBuf::from(&metadata.cwd),
+        git_settings,
+        repository_events.then_some(event_sender),
+    );
     let mut ui_updates = tokio::time::interval(Duration::from_secs(1));
     ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
@@ -3734,6 +3754,16 @@ async fn connect_inner(
                 if chat_enabled && let Err(error) = steering::poll() { terminal::notice(&error); }
                 access::poll();
                 messaging::poll();
+            },
+            Some(event) = repo_events.recv(), if repository_events => {
+                let sent = timeout(Duration::from_secs(10), async {
+                    write_frame(&mut *writer.lock().await, &Frame::RepositoryEvent { event }).await
+                }).await;
+                match sent {
+                    Ok(Ok(())) => {},
+                    Ok(Err(error)) => break Err(error.into()),
+                    Err(_) => break Err(transport_kind.result_write_timeout().into()),
+                }
             },
             Some(request) = message_commands.recv() => {
                 let sent = timeout(Duration::from_secs(10), async {

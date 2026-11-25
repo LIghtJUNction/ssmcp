@@ -17,6 +17,7 @@ mod correlation;
 mod diff;
 #[cfg(test)]
 mod highlight_tests;
+mod progress_notices;
 mod read_activity;
 #[cfg(all(test, unix))]
 mod source_tests;
@@ -636,13 +637,17 @@ impl EventView {
         })
     }
 
-    fn read_groups(&self) -> Vec<read_activity::Group> {
+    fn fold_groups(&self) -> Vec<read_activity::Group> {
         if self.scope != EventScope::Conversation || !self.query.is_empty() || self.level != 0 {
             return Vec::new();
         }
         let mut groups = read_activity::groups(&self.events, |event| {
             event.owned_by(&self.history_selection)
         });
+        groups.extend(progress_notices::groups(
+            &self.events,
+            &self.history_selection,
+        ));
         for group in &mut groups {
             group.expanded = self.read_expanded.contains(&group.head);
         }
@@ -685,7 +690,7 @@ impl EventView {
 
     fn selection_targets(&self) -> Vec<(u64, bool)> {
         let groups = self.tool_groups();
-        let reads = self.read_groups();
+        let reads = self.fold_groups();
         let mut targets = Vec::new();
         for (index, event) in self.events.iter().enumerate() {
             if !event.matches(&self.query, self.level, self.scope, &self.history_selection) {
@@ -773,7 +778,7 @@ impl EventView {
             return None;
         }
         let index = self.events.iter().position(|event| event.id == id)?;
-        self.read_groups()
+        self.fold_groups()
             .into_iter()
             .find(|group| group.contains(index))
     }
@@ -1952,7 +1957,7 @@ impl EventView {
     }
 
     pub(crate) fn snapshot(&self) -> Value {
-        let groups = self.read_groups();
+        let groups = self.fold_groups();
         let tool_groups = self.tool_groups();
         json!({
             "schema_version":1, "events":self.events.iter().enumerate().map(|(index,event)| json!({
@@ -1969,7 +1974,7 @@ impl EventView {
             "event_scope":self.scope.label(),"diff_mode":self.diff_mode().name(),
             "visible_events":self.events.iter().filter(|event| event.matches(&self.query,self.level,self.scope,&self.history_selection)).count(),
             "visible_cards":self.visible_ids().len(),
-            "read_groups":groups.iter().map(|group|json!({
+            "read_groups":groups.iter().filter(|group| self.events[group.start].meta.read.is_some()).map(|group|json!({
                 "id":group.head,"count":group.members.len(),"expanded":group.expanded,
                 "members":group.members.iter().map(|index|self.events[*index].id).collect::<Vec<_>>()
             })).collect::<Vec<_>>(),
@@ -2013,7 +2018,7 @@ impl EventView {
         {
             self.selected = Some(group.head);
         }
-        let groups = self.read_groups();
+        let groups = self.fold_groups();
         let tool_groups = self.tool_groups();
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
@@ -2120,7 +2125,7 @@ impl EventView {
                             "{}{}",
                             paint(&prefix, "muted", ui, selected && focused),
                             paint(
-                                &clip_plain(&group.title(), body_width),
+                                &clip_plain(&group.title, body_width),
                                 "muted",
                                 ui,
                                 selected && focused
@@ -2143,11 +2148,19 @@ impl EventView {
                             *cached_width != detail_width || *cached_palette != detail_palette
                         })
                     {
-                        let detail = event.meta.read.as_ref().unwrap().details(&event.text);
+                        let detail = event
+                            .meta
+                            .read
+                            .as_ref()
+                            .map(|read| read.details(&event.text));
                         event.cache = Some((
                             detail_width,
                             detail_palette,
-                            styled_rows(&detail, detail_width, ui.color),
+                            styled_rows(
+                                detail.as_deref().unwrap_or(&event.text),
+                                detail_width,
+                                ui.color,
+                            ),
                         ));
                     }
                     for (row, text) in event.cache.as_ref().unwrap().2.iter().enumerate() {
@@ -3037,6 +3050,7 @@ fn unstyled(text: &str) -> String {
 }
 
 struct Notice {
+    progress: Option<[u8; 32]>,
     summary: String,
     tone: &'static str,
 }
@@ -3050,6 +3064,7 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
             let (standby, _) =
                 detail.split_once(" connected external worker(s) are standing by.")?;
             Some(Notice {
+                progress: None,
                 summary: format!("{} 个工位待命", standby.parse::<u64>().ok()?),
                 tone: "muted",
             })
@@ -3058,6 +3073,7 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
             if text.starts_with("Continue authorized work; otherwise await these events") =>
         {
             Some(Notice {
+                progress: None,
                 summary: "协调者等待策略".into(),
                 tone: "muted",
             })
@@ -3066,15 +3082,34 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
             let body =
                 text.strip_prefix("WORKER STATE EVENTS — retained until explicit events.ack\n")?;
             let value: Value = serde_json::from_str(body).ok()?;
+            if value["status"] == "retention_gap" {
+                let lost = &value["retention_gap"];
+                let last = lost["through"].as_u64()?;
+                let resume = lost["resume_after"].as_u64()?;
+                return Some(Notice {
+                    summary: format!("部分旧事件已过期（截至 #{last}），从 #{resume} 之后继续"),
+                    tone: "warning",
+                    progress: None,
+                });
+            }
             if value["error"]
                 .as_str()
                 .is_some_and(|error| error.starts_with("events_gap:"))
             {
                 return Some(Notice {
-                    summary: "事件记录有缺口，需核对任务状态".into(),
+                    progress: None,
+                    summary: "部分旧事件已过期，请从保留位置恢复订阅".into(),
                     tone: "warning",
                 });
             }
+            if let Some(summary) = progress_notices::repository_summary(&value) {
+                return Some(Notice {
+                    summary,
+                    tone: "muted",
+                    progress: None,
+                });
+            }
+            let progress = progress_notices::identity(&value);
             let (label, tone) = match value["kind"].as_str() {
                 Some("worker.completed") => match value["data"]["task_status"].as_str() {
                     Some("failed") => ("任务失败", "error"),
@@ -3084,7 +3119,13 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
                 },
                 Some("task.submitted") => ("任务已提交", "muted"),
                 Some("worker.started") => ("开始执行", "muted"),
-                Some("worker.progress") => ("进度更新", "muted"),
+                Some("worker.progress") => match value["data"]["task_status"].as_str() {
+                    Some("failed") => ("任务失败", "error"),
+                    Some("unknown") => ("任务结果未知", "warning"),
+                    Some("cancelled") => ("任务已取消", "warning"),
+                    Some("cancelling") => ("正在取消", "warning"),
+                    _ => ("进度更新", "muted"),
+                },
                 Some("worker.idle") => ("待命", "muted"),
                 Some("worker.offline") => ("已离线", "warning"),
                 Some("worker.retiring") => ("正在退役", "muted"),
@@ -3100,7 +3141,11 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
                 Some(slot) => format!("工位 {} · {label}", slot + 1),
                 None => label.into(),
             };
-            Some(Notice { summary, tone })
+            Some(Notice {
+                summary,
+                tone,
+                progress,
+            })
         }
         _ => None,
     }
@@ -3413,6 +3458,12 @@ mod tests {
 
     #[test]
     fn coordinator_notices_distinguish_gaps_and_ordinary_inputs() {
+        let restored = r#"WORKER STATE EVENTS — retained until explicit events.ack
+{"status":"retention_gap","history_complete":false,"retention_gap":{"after":28,"through":35,"resume_after":41}}"#;
+        let notice = coordinator_notice(Some("worker_event"), restored).unwrap();
+        assert_eq!(notice.tone, "warning");
+        assert!(notice.summary.contains("#35") && notice.summary.contains("#41"));
+
         let text = r#"WORKER STATE EVENTS — retained until explicit events.ack
 {"status":"unavailable","error":"events_gap: cursor 28 precedes retained cursor 303"}"#;
         assert_eq!(

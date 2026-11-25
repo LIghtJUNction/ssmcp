@@ -522,10 +522,10 @@ impl Registry {
         context: &Context,
         request_id: &str,
         filter: Filter,
-        after: Option<u64>,
+        start: crate::events::SubscriptionStart,
         sources: Vec<Source>,
     ) -> Result<Value, String> {
-        let fingerprint = json!({"filter":filter,"after":after});
+        let fingerprint = json!({"filter":filter,"start":start});
         self.release_finished_runs();
         let mut records = self
             .records
@@ -546,7 +546,7 @@ impl Registry {
             {
                 return Err("events_request_conflict: subscription retry changed its filter or source proof".into());
             }
-            let result = hub.subscribe(&context.actor, request_id, filter, after)?;
+            let result = hub.subscribe(&context.actor, request_id, filter, start)?;
             if result["subscription_id"].as_str() != Some(id.as_str()) {
                 return Err("events_receipt_unknown: subscription identity changed; inspect existing subscriptions".into());
             }
@@ -564,7 +564,7 @@ impl Registry {
         }
         // Synchronous admission under this mutex reserves capacity before the Hub
         // mutates. A concurrent retry cannot replace the original source proofs.
-        let result = hub.subscribe(&context.actor, request_id, filter, after)?;
+        let result = hub.subscribe(&context.actor, request_id, filter, start)?;
         let id = result["subscription_id"]
             .as_str()
             .filter(|id| identifier(id, 128))
@@ -1160,7 +1160,7 @@ pub(crate) async fn dispatch(
                 &context,
                 &request_id,
                 filter,
-                after,
+                after.into(),
                 sources,
             )?;
             if result["status"] == "unsubscribed" {

@@ -3,6 +3,9 @@
 //! Native history fields and NUL terminators: https://git-scm.com/docs/pretty-formats
 use crate::backend::process::Managed;
 mod fetch;
+mod pull_requests;
+mod upstream_events;
+use crate::wire::repository_events::Event;
 pub(crate) use fetch::{FetchSnapshot, FetchState};
 use std::{
     ffi::OsString,
@@ -11,6 +14,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::mpsc;
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
     process::Command,
@@ -141,7 +145,11 @@ pub(crate) struct GitStatus {
 
 impl GitStatus {
     /// Returns immediately. Neither executable resolution nor Git blocks the UI.
-    pub(crate) fn start(cwd: PathBuf, settings: super::config::GitSettings) -> Self {
+    pub(crate) fn start(
+        cwd: PathBuf,
+        settings: super::config::GitSettings,
+        events: Option<mpsc::Sender<Event>>,
+    ) -> Self {
         let initial = GitSnapshot {
             fetch: FetchSnapshot::new(settings.fetch_interval_seconds),
             ..GitSnapshot::default()
@@ -155,10 +163,11 @@ impl GitStatus {
                 settings.fetch_interval_seconds,
                 sender.clone(),
                 refresh.clone(),
+                events.clone(),
                 stopped.clone(),
             ))
         });
-        let task = tokio::spawn(observe(cwd, sender, refresh.clone(), stopped));
+        let task = tokio::spawn(observe(cwd, sender, refresh.clone(), events, stopped));
         Self {
             current,
             refresh,
@@ -211,6 +220,7 @@ async fn observe(
     cwd: PathBuf,
     sender: watch::Sender<Arc<GitSnapshot>>,
     refresh: Arc<Notify>,
+    events: Option<mpsc::Sender<Event>>,
     mut stopped: watch::Receiver<bool>,
 ) {
     let initialize = async {
@@ -241,6 +251,7 @@ async fn observe(
             }
         }
     };
+    let mut upstream = upstream_events::Comparison::default();
     loop {
         if *stopped.borrow() {
             return;
@@ -304,7 +315,15 @@ async fn observe(
         if matches!(result, Err(Failure::Cancelled)) {
             return;
         }
+        let event = events.as_ref().and_then(|_| upstream.observe(&result));
         publish(&sender, result, Instant::now());
+        if let (Some(tx), Some(event)) = (&events, event) {
+            tokio::select! {
+                biased;
+                _ = stopped.changed() => return,
+                _ = tx.send(event) => {}
+            }
+        }
         tokio::select! {
             biased;
             _ = stopped.changed() => return,

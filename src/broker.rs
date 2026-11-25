@@ -320,6 +320,41 @@ impl Session {
         Ok(snapshot)
     }
 
+    fn publish_repository_event(
+        &self,
+        broker: &Broker,
+        event: wire::repository_events::Event,
+    ) -> Result<(), String> {
+        event.validate()?;
+        let kind = event.kind();
+        let data = event.into_data();
+        // Both valid resource scopes use provider subjects from the local grant.
+        // Journal reads still verify the original connection and the caller's ACL.
+        for identity in self.allowed().iter() {
+            if broker.user_policies.is_banned(&identity.subject) {
+                continue;
+            }
+            let authorization = Authorization::Identity(identity.clone());
+            for resource in [IDENTITY_RESOURCE, self.ssh_user.as_str()] {
+                let owner = crate::bridge::owner(resource, &authorization)?;
+                if self
+                    .events
+                    .observes_system_event(&owner, self.client_id(), kind)
+                {
+                    let _ = self.events.publish_system(
+                        &owner,
+                        self.client_id(),
+                        None,
+                        kind,
+                        data.clone(),
+                        (None, None),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The availability signal contains metadata only. Reading this signal
     /// never reserves, delivers, or acknowledges the underlying user message.
     fn publish_user_input_events(
@@ -1492,6 +1527,10 @@ impl Broker {
         let chat_disabled = peer
             .as_ref()
             .map_or(self.local_chat_disabled, |peer| peer.chat_disabled);
+        let repository_events = !allow.is_empty()
+            && peer
+                .as_ref()
+                .is_some_and(|peer| peer.repository_events && !peer.worker_dreaming);
         let worker_dreaming = chat_disabled
             && control_attribution
             && peer.as_ref().is_some_and(|peer| peer.worker_dreaming);
@@ -1527,6 +1566,9 @@ impl Broker {
         }
         if chat_disabled {
             capabilities.push(wire::CHAT_DISABLED_CAPABILITY.into());
+        }
+        if repository_events {
+            capabilities.push(wire::repository_events::CAPABILITY.into());
         }
         if worker_dreaming {
             capabilities.push(wire::WORKER_DREAMING_CAPABILITY.into());
@@ -1869,6 +1911,12 @@ impl Broker {
                     }
                 };
                 match received {
+                    Some(Frame::RepositoryEvent { event }) if repository_events => {
+                        if let Some(registration) = registration && !registration.is_live(&self).await {
+                            return Err("controlled client authorization expired or revoked".into());
+                        }
+                        session.publish_repository_event(&self, event)?;
+                    }
                     Some(Frame::ProjectProof { proof }) if project => {
                         if project_continuity::consume_challenge(&mut project_deadline, std::time::Instant::now()) {
                             self.register_project_proof(&session, proof);

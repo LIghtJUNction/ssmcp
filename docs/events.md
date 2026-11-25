@@ -31,6 +31,8 @@ Native worker metadata also retains its source generation, sequence and time.
 | `message.received` | A message was included in a receive result. This does not prove reading or execution. |
 | `message.acknowledged` | The recipient explicitly confirmed the retained delivery cursor or message. |
 | `user.input_available` | The real user-input queue contains an eligible message. Retrieve its text through the existing user-input delivery path. |
+| `repo.upstream_changed` | The checkout observed a change in local and upstream commit counts. |
+| `repo.pull_request_opened` | The tracked remote advertised a new numbered pull-request head. |
 | `custom.*` | An authenticated agent published its own application event. Its origin remains `agent`. |
 
 System producers run at the corresponding state change. A repeated successful
@@ -82,6 +84,51 @@ lost response does not advance the acknowledged position. Reading again returns
 the retained unacknowledged events. The server rejects a cursor beyond what
 that subscription has delivered. Page limits and `has_more` allow bounded
 draining without returning the entire journal.
+
+## Watch a remote repository
+
+Subscribe to `repo.*` on the connected repository client. For example, this
+manual subscription receives observations made after registration:
+
+```javascript
+const sub = await events.subscribe(clientId, {
+  request_id: "watch-workspace-repo",
+  filter: { kinds: ["repo.*"], client_ids: [clientId] },
+});
+```
+
+Use the returned subscription ID with `events.wait` or `events.read`, and
+acknowledge the page after processing it. Consecutive progress updates for the
+same task and worker appear as a counted summary. The structured page keeps
+the individual events and its original acknowledgement cursor.
+
+The relay delivers repository
+observations to authorized subscriptions on connections that negotiated
+`repo_events_v1`. A coordinator's default managed subscription also includes
+both kinds.
+
+An upstream event identifies the local `branch` and its configured `upstream`.
+`ahead` counts commits unique to the local branch. `behind` counts commits
+unique to the upstream. For example, `ahead: 2, behind: 5` means both branches
+have new work. The next observation after synchronizing can report zero for
+both counts. `previous` holds the prior counts for that tracking relationship
+or null for an initial divergence. A subscription opened after that initial
+observation receives subsequent changes. A failed status read does not change the
+counts. Git compares the local remote-tracking ref, refreshed by the normal
+background fetch or a manual fetch.
+
+The PR observer reads numbered `refs/pull/<number>/head` from the current
+branch's configured remote. Its first successful listing establishes a
+baseline. Later, newly observed higher numbers produce one event each, with
+the remote name and PR number. Updates to an existing PR's head produce no
+additional opening event. This works on hosts that advertise these refs and
+does not require a hosting-service API token. The ref listing provides no PR
+title, review decision, or open/closed status.
+
+Periodic remote checks use `[git].fetch_interval_seconds` (300 seconds by
+default). Setting the interval to zero disables background network checks.
+Local comparisons still reflect changes to the tracking ref after a manual
+fetch. A reconnect establishes a new PR baseline.
 
 ## Automatic worker subscriptions
 
@@ -235,11 +282,33 @@ because it announced that it had suspended.
 
 ## Retention and native sources
 
-The relay journal has hard limits: 1,024 events and 1 MiB per account, at most
-4 KiB per event, and reads of at most 64 events or 64 KiB. The retention window
-is 15 minutes; hard capacity can evict entries sooner. An old or missing cursor
-returns an explicit gap. The server does not pretend that the missing history
-was delivered. Use current authoritative task and message state to recover.
+The relay retains at most 1,024 events and 1 MiB per account for 15 minutes.
+An event can occupy up to 4 KiB. Each read returns at most 64 events or 64 KiB.
+Capacity pressure can evict events sooner. A system event too large to retain
+can also leave a missing sequence between two retained events. If a manual
+subscription reports a gap, reconcile affected tasks and messages, then
+resubscribe from a retained cursor.
+
+Managed subscriptions return surviving events in order, including events
+before a missing sequence. The page's `retained_after` is one less than the
+earliest physically retained sequence, or the journal's latest sequence if
+the journal is empty. A `retention_gap` describes an interval for which the
+subscription's history is incomplete. Its fields have distinct meanings.
+
+| Field | Meaning |
+| --- | --- |
+| `after` | The subscription's currently acknowledged cursor. |
+| `episode_after` | The acknowledged cursor when this outstanding loss was first detected. It stays fixed across partial acknowledgements. |
+| `through` | The highest sequence covered by the loss warning. Earlier matching events can still be available. |
+| `resume_after` | The position from which this page scans retained events, taking the actual acknowledgement and physical retention boundary into account. |
+
+For example, if sequences 1, 2 and 4 survive and sequence 3 is missing, a
+reader starting at 0 can still receive 1 and 2. Acknowledging through 1
+leaves 2 and 4 available. The native conversation shows one warning for that
+loss episode. The structured page continues to report the current boundaries.
+Process the retained events, reconcile missing work by its original ID, and
+acknowledge the page's `next_cursor`. Broadening a filter can also produce a
+warning when the newly selected history is no longer available.
 
 Native worker events originate in the pool's own retained journal. The relay
 reads `ssmcp.worker.events` with a verified source binding and resumes its native

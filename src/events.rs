@@ -85,7 +85,22 @@ struct Event {
     at: Instant,
 }
 
+/// Coordinator subscriptions reconcile expired matches separately from their explicit ACK.
+#[derive(Clone, Copy, PartialEq, Serialize)]
+pub(crate) enum SubscriptionStart {
+    Manual(Option<u64>),
+    Managed,
+}
+
+impl From<Option<u64>> for SubscriptionStart {
+    fn from(after: Option<u64>) -> Self {
+        Self::Manual(after)
+    }
+}
+
 struct Subscription {
+    recover_gaps: bool,
+    gap_episode_after: u64,
     actor: Actor,
     filter: Filter,
     cursor: u64,
@@ -95,11 +110,22 @@ struct Subscription {
     closed: bool,
 }
 
+impl Subscription {
+    fn record_loss(&mut self, through: u64) {
+        // Partial ACKs can consume surviving events before an isolated loss.
+        // Keep a stable identity until the entire previous loss has been acknowledged.
+        if self.lost_through <= self.cursor {
+            self.gap_episode_after = self.cursor;
+        }
+        self.lost_through = self.lost_through.max(through);
+    }
+}
+
 struct SubscribeReceipt {
     actor: Actor,
     request_id: String,
     filter: Filter,
-    after: Option<u64>,
+    start: SubscriptionStart,
     subscription_id: String,
     initial_cursor: u64,
     bytes: usize,
@@ -175,7 +201,7 @@ impl Journal {
                 && (event.audience.is_none()
                     || event.visible_to(&format!("{}:{}", sub.actor.client_id, sub.actor.agent_id)))
             {
-                sub.lost_through = event.seq.max(sub.lost_through);
+                sub.record_loss(event.seq);
             }
         }
     }
@@ -258,6 +284,16 @@ impl Hub {
             .owners
             .get_mut(owner)
             .ok_or_else(|| "events_subscription_unavailable: account journal is absent".into())
+    }
+
+    /// Passive device observations do not allocate journals for unattended accounts.
+    pub(crate) fn observes_system_event(&self, owner: &str, client_id: &str, kind: &str) -> bool {
+        let now = Instant::now();
+        self.locked().owners.get(owner).is_some_and(|journal| {
+            journal.subscriptions.values().any(|sub| {
+                !sub.closed && sub.expires > now && sub.filter.selects(client_id, kind, None, None)
+            })
+        })
     }
 
     pub(crate) fn publish_system(
@@ -448,10 +484,11 @@ impl Hub {
         actor: &Actor,
         request_id: &str,
         filter: Filter,
-        after: Option<u64>,
+        start: impl Into<SubscriptionStart>,
     ) -> Result<Value, String> {
         actor.validate()?;
         identity(request_id, "request_id", 128, true)?;
+        let start = start.into();
         let filter = filter.normalized(actor)?;
         let mut state = self.locked();
         let now = Instant::now();
@@ -463,7 +500,7 @@ impl Hub {
             .position(|receipt| &receipt.actor == actor && receipt.request_id == request_id)
         {
             let receipt = &journal.subscribed[index];
-            if receipt.filter != filter || receipt.after != after {
+            if receipt.filter != filter || receipt.start != start {
                 return Err("events_request_conflict: subscribe request_id was already used with a different filter or cursor".into());
             }
             let id = receipt.subscription_id.clone();
@@ -479,10 +516,13 @@ impl Hub {
             response["duplicate"] = json!(true);
             return Ok(response);
         }
-        let cursor = after.unwrap_or(journal.sequence);
+        let cursor = match start {
+            SubscriptionStart::Manual(Some(after)) => after,
+            _ => journal.sequence,
+        };
         journal.check_cursor(cursor, journal.oldest_cursor)?;
         let bytes = encoded_len(
-            &json!({"actor":actor,"request_id":request_id,"filter":filter,"after":after}),
+            &json!({"actor":actor,"request_id":request_id,"filter":filter,"start":start}),
         )? + 256;
         if journal.subscriptions.len() >= MAX_SUBSCRIPTIONS
             || journal.subscribed.len() >= MAX_SUBSCRIBE_RECEIPTS
@@ -501,6 +541,8 @@ impl Hub {
         }
         let id = format!("subscription_{}", nonce()?);
         let subscription = Subscription {
+            recover_gaps: start == SubscriptionStart::Managed,
+            gap_episode_after: cursor,
             actor: actor.clone(),
             filter: filter.clone(),
             cursor,
@@ -516,7 +558,7 @@ impl Hub {
             actor: actor.clone(),
             request_id: request_id.into(),
             filter,
-            after,
+            start,
             subscription_id: id,
             initial_cursor: cursor,
             bytes,
@@ -556,7 +598,7 @@ impl Hub {
             // A newly selected kind could match an event already discarded.
             if subscription.cursor < oldest_cursor && !filter.kinds_covered_by(&subscription.filter)
             {
-                subscription.lost_through = oldest_cursor;
+                subscription.record_loss(oldest_cursor);
             }
             subscription.filter = filter;
             subscription.delivered = subscription.cursor;
@@ -590,7 +632,9 @@ impl Hub {
         if subscription.closed {
             return Ok(false);
         }
-        journal.check_cursor(subscription.cursor, subscription.lost_through)?;
+        if !subscription.recover_gaps {
+            journal.check_cursor(subscription.cursor, subscription.lost_through)?;
+        }
         let recipient = format!("{}:{}", actor.client_id, actor.agent_id);
         Ok(journal.events.iter().any(|event| {
             event.value["id"].as_str() == Some(event_id)
@@ -628,14 +672,26 @@ impl Hub {
             return Err("events_client_closed: a selected client closed; create a subscription for authorized live clients".into());
         }
         let cursor = subscription.cursor;
-        journal.check_cursor(cursor, subscription.lost_through)?;
+        if !subscription.recover_gaps {
+            journal.check_cursor(cursor, subscription.lost_through)?;
+        }
+        // An isolated failed publication can follow older, still-retained events.
+        // Only the first physical event bounds where a resumed scan can begin.
+        let retained_after = journal
+            .events
+            .front()
+            .map_or(journal.sequence, |e| e.seq - 1);
+        let scan_after = cursor.max(retained_after);
+        let managed = subscription.recover_gaps;
+        let lost = (managed && cursor < subscription.lost_through)
+            .then_some((subscription.gap_episode_after, subscription.lost_through));
         let filter = &subscription.filter;
         let recipient = format!("{}:{}", actor.client_id, actor.agent_id);
         let mut events = Vec::new();
-        let mut next_cursor = cursor;
+        let mut next_cursor = scan_after;
         let mut bytes = 0;
         let mut has_more = false;
-        for event in journal.events.iter().filter(|event| event.seq > cursor) {
+        for event in journal.events.iter().filter(|event| event.seq > scan_after) {
             if event.visible_to(&recipient)
                 && filter.matches(event)
                 && !event.excluded_wait(actor, filter.include_own_waits, exclude_origin_wait_id)
@@ -658,13 +714,21 @@ impl Hub {
             .expect("validated subscription");
         subscription.delivered = subscription.delivered.max(next_cursor);
         journal.touch(subscription_id, now);
-        Ok(json!({
-            "status":if events.is_empty() {"pending"} else {"ready"},
+        let mut result = json!({
+            "status":if events.is_empty() && lost.is_none() {"pending"} else {"ready"},
             "subscription_id":subscription_id,"events":events,"cursor":cursor,
             "next_cursor":next_cursor,"has_more":has_more,
             "oldest_cursor":journal.oldest_cursor,"latest_cursor":journal.sequence,
             "retention_ms":RETENTION.as_millis() as u64,
-        }))
+        });
+        if managed {
+            result["retained_after"] = json!(retained_after);
+        }
+        if let Some((episode_after, through)) = lost {
+            result["retention_gap"] = json!({"after":cursor, "episode_after":episode_after, "through":through, "resume_after":scan_after});
+            result["history_complete"] = json!(false);
+        }
+        Ok(result)
     }
 
     pub(crate) fn ack(
@@ -893,24 +957,33 @@ impl Filter {
     }
 
     fn matches(&self, event: &Event) -> bool {
-        self.client_ids.contains(&event.client_id)
+        self.selects(
+            &event.client_id,
+            &event.kind,
+            event.actor_id.as_deref(),
+            event.value["data"]["task_id"].as_str(),
+        )
+    }
+
+    fn selects(
+        &self,
+        client_id: &str,
+        kind: &str,
+        actor: Option<&str>,
+        task: Option<&str>,
+    ) -> bool {
+        self.client_ids.iter().any(|id| id == client_id)
             && (self.kinds.is_empty()
-                || self.kinds.iter().any(|kind| {
-                    kind == "*"
-                        || kind == &event.kind
-                        || kind.strip_suffix(".*").is_some_and(|prefix| {
-                            event.kind.starts_with(prefix)
-                                && event.kind.as_bytes().get(prefix.len()) == Some(&b'.')
+                || self.kinds.iter().any(|pattern| {
+                    pattern == "*"
+                        || pattern == kind
+                        || pattern.strip_suffix(".*").is_some_and(|prefix| {
+                            kind.starts_with(prefix)
+                                && kind.as_bytes().get(prefix.len()) == Some(&b'.')
                         })
                 }))
-            && self
-                .actor_id
-                .as_ref()
-                .is_none_or(|actor| event.actor_id.as_ref() == Some(actor))
-            && self
-                .task_id
-                .as_ref()
-                .is_none_or(|task| event.value["data"]["task_id"].as_str() == Some(task.as_str()))
+            && self.actor_id.as_deref().is_none_or(|id| Some(id) == actor)
+            && self.task_id.as_deref().is_none_or(|id| Some(id) == task)
     }
 }
 

@@ -105,6 +105,15 @@ fn restrict_to_self(command: &mut Command) {
     );
 }
 
+pub(super) fn offer_repository_events(command: &mut Command) {
+    if let Some(offer) = parent_offer(command) {
+        command.env(
+            "SSMCP_RELAY_CAPABILITIES",
+            format!("{offer},{}", crate::wire::repository_events::CAPABILITY),
+        );
+    }
+}
+
 pub(super) fn offer_chat_disabled(command: &mut Command, worker: bool) {
     let offer = command
         .as_std()
@@ -233,6 +242,7 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::wait_display::TIME_CAPABILITY
                 | crate::wire::CHAT_DISABLED_CAPABILITY
                 | crate::wire::openai::CAPABILITY
+                | crate::wire::repository_events::CAPABILITY
                 | crate::wire::MAIN_LIFECYCLE_CAPABILITY
                 | crate::wire::WORKER_DREAMING_CAPABILITY
                 | crate::wire::peer_port::CAPABILITY

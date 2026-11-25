@@ -324,22 +324,10 @@ fn acquire(
 }
 
 fn fetch_command(git: &Path, root: &Path, target: &Target) -> Result<Command, Error> {
-    let mut command =
-        base_command(git, root).map_err(|_| Error::Failed("Git workspace is unavailable"))?;
+    let mut command = pull_requests::remote_command(git, root)
+        .map_err(|_| Error::Failed("Git workspace is unavailable"))?;
     command
         .args([
-            "-c",
-            "credential.interactive=false",
-            "-c",
-            "core.askPass=",
-            "-c",
-            if cfg!(windows) {
-                "core.hooksPath=NUL"
-            } else {
-                "core.hooksPath=/dev/null"
-            },
-            "-c",
-            "core.sshCommand=ssh -oBatchMode=yes -oConnectTimeout=10 -oStrictHostKeyChecking=yes",
             "fetch",
             "--quiet",
             "--atomic",
@@ -355,11 +343,6 @@ fn fetch_command(git: &Path, root: &Path, target: &Target) -> Result<Command, Er
         ])
         .arg(&target.remote)
         .arg(format!("+{}:{}", target.source, target.destination));
-    command
-        .env("GIT_ALLOW_PROTOCOL", "https:http:ssh:file")
-        .env("GIT_ASKPASS", "")
-        .env("GIT_SSH_VARIANT", "ssh")
-        .env("GCM_INTERACTIVE", "Never");
     Ok(command)
 }
 
@@ -390,10 +373,10 @@ async fn attempt(
     sender: &watch::Sender<Arc<GitSnapshot>>,
     refresh: &Notify,
     stopped: &mut watch::Receiver<bool>,
-) -> Result<(), Error> {
+) -> Result<Option<String>, Error> {
     let Some((target, common)) = target(git, root, stopped).await? else {
         update(sender, FetchState::NoUpstream, None, None);
-        return Ok(());
+        return Ok(None);
     };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -405,7 +388,7 @@ async fn attempt(
         .map_err(|_| Error::Failed("Git fetch coordination failed"))??;
     let Some(mut lease) = lease else {
         update(sender, FetchState::Waiting, Some(&target.remote), None);
-        return Ok(());
+        return Ok(Some(target.remote));
     };
     update(sender, FetchState::Running, Some(&target.remote), None);
     let result = run(fetch_command(git, root, &target)?, FETCH_TIMEOUT, stopped).await;
@@ -418,7 +401,7 @@ async fn attempt(
         Ok(result) if result.code == Some(0) => {
             update(sender, FetchState::Fresh, Some(&target.remote), None);
             refresh.notify_one();
-            Ok(())
+            Ok(Some(target.remote))
         }
         Ok(_) => Err(Error::Failed(
             "Git fetch failed; check remote credentials or network",
@@ -432,6 +415,7 @@ pub(super) async fn observe(
     interval: u64,
     sender: watch::Sender<Arc<GitSnapshot>>,
     refresh: Arc<Notify>,
+    events: Option<mpsc::Sender<Event>>,
     mut stopped: watch::Receiver<bool>,
 ) {
     let initialize = async {
@@ -455,12 +439,38 @@ pub(super) async fn observe(
         );
         return;
     };
+    let mut pulls = pull_requests::PullRequests::default();
     loop {
         if *stopped.borrow() {
             return;
         }
         match attempt(&git, &root, interval, &sender, &refresh, &mut stopped).await {
-            Ok(()) => {}
+            Ok(Some(remote)) => {
+                if let Some(tx) = &events {
+                    match pulls.observe(&git, &root, &remote, &mut stopped).await {
+                        Ok(numbers) => {
+                            for number in numbers {
+                                let event = Event::PullRequestOpened {
+                                    remote: remote.clone(),
+                                    number,
+                                };
+                                if event.validate().is_ok() {
+                                    tokio::select! {
+                                        biased;
+                                        _ = stopped.changed() => return,
+                                        result = tx.send(event) => if result.is_err() { return; },
+                                    }
+                                }
+                            }
+                        }
+                        Err(Failure::Cancelled) => return,
+                        Err(_) => {} // Retry at the next remote refresh with the same baseline.
+                    }
+                }
+            }
+            Ok(None) => {
+                pulls = pull_requests::PullRequests::default();
+            }
             Err(Error::Cancelled) => return,
             Err(Error::Failed(error)) => {
                 let remote = sender.borrow().fetch.remote.clone();
@@ -644,11 +654,13 @@ mod tests {
             &["commit", "--allow-empty", "-qm", "second remote update"],
         );
         git(&executable, &source, &["push", "-q", "origin", "main"]);
+        let (events, mut observed) = mpsc::channel(8);
         let observer = GitStatus::start(
             root.clone(),
             crate::client::config::GitSettings {
                 fetch_interval_seconds: 60,
             },
+            Some(events),
         );
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
@@ -658,6 +670,23 @@ mod tests {
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(event) = observed.recv().await {
+                if let Event::UpstreamChanged {
+                    upstream,
+                    ahead: 0,
+                    behind: 2,
+                    ..
+                } = event
+                {
+                    assert_eq!(upstream, "origin/main");
+                    return;
+                }
+            }
+            panic!("observer closed before emitting the remote comparison");
         })
         .await
         .unwrap();

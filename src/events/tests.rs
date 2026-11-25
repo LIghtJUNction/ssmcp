@@ -1022,3 +1022,131 @@ fn narrowing_selected_kinds_after_unrelated_eviction_does_not_invent_loss() {
         own["event_id"]
     );
 }
+
+#[test]
+fn managed_retention_resumes_without_acknowledging_or_skipping_retained_events() {
+    let hub = Hub::default();
+    let a = actor("owner", "control", "main");
+    let filter = Filter {
+        kinds: vec!["worker.completed".into()],
+        client_ids: vec!["pool".into()],
+        ..Filter::default()
+    };
+    let id = hub
+        .subscribe(&a, "managed", filter.clone(), SubscriptionStart::Managed)
+        .unwrap()["subscription_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let manual = hub.subscribe(&a, "manual", filter, None).unwrap()["subscription_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let emit = |kind, audience| {
+        hub.publish_system("owner", "pool", None, kind, json!({}), (audience, None))
+            .unwrap()
+    };
+    let evict = || hub.locked().owners.get_mut("owner").unwrap().evict_front();
+    emit("worker.progress", None);
+    evict();
+    emit("worker.completed", Some(vec!["control:other".into()]));
+    evict();
+    let pending = hub.read(&a, &id, 1).unwrap();
+    assert_eq!(pending["status"], "pending");
+    assert_eq!(pending["cursor"], 0);
+    assert_eq!(pending["next_cursor"], 2);
+    assert!(pending.get("retention_gap").is_none());
+    assert_eq!(hub.read(&a, &manual, 8).unwrap()["status"], "pending");
+
+    emit("worker.completed", None);
+    evict();
+    assert!(
+        hub.read(&a, &manual, 8)
+            .unwrap_err()
+            .starts_with("events_gap:")
+    );
+    emit("worker.progress", None);
+    evict();
+    let alone = hub.read(&a, &id, 1).unwrap();
+    assert_eq!(alone["events"], json!([]));
+    assert_eq!(alone["status"], "ready");
+    assert_eq!(
+        alone["retention_gap"],
+        json!({"after":0,"episode_after":0,"through":3,"resume_after":4})
+    );
+    let first = emit("worker.completed", None);
+    let second = emit("worker.completed", None);
+    let page = hub.read(&a, &id, 1).unwrap();
+    assert_eq!(page["cursor"], 0);
+    assert_eq!(page["retention_gap"], alone["retention_gap"]);
+    assert_eq!(page["events"][0]["seq"], first["seq"]);
+    assert_eq!(page["has_more"], true);
+    assert!(
+        hub.contains_pending_event(&a, &id, first["event_id"].as_str().unwrap())
+            .unwrap()
+    );
+    assert_eq!(hub.read(&a, &id, 1).unwrap(), page);
+    assert!(hub.ack(&a, &id, second["seq"].as_u64().unwrap()).is_err());
+    hub.ack(&a, &id, page["next_cursor"].as_u64().unwrap())
+        .unwrap();
+    let next = hub.read(&a, &id, 1).unwrap();
+    assert!(next.get("retention_gap").is_none());
+    assert_eq!(next["events"][0]["seq"], second["seq"]);
+}
+
+#[test]
+fn sparse_system_loss_preserves_older_matches_and_one_episode_across_partial_acks() {
+    let hub = Hub::default();
+    let a = actor("owner", "control", "main");
+    let id = hub
+        .subscribe(&a, "managed", Filter::default(), SubscriptionStart::Managed)
+        .unwrap()["subscription_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let missing = || {
+        let error = hub
+            .publish_system(
+                &a.owner,
+                &a.client_id,
+                None,
+                "worker.progress",
+                json!({"summary":"x".repeat(MAX_EVENT_BYTES)}),
+                (None, None),
+            )
+            .unwrap_err();
+        assert!(error.starts_with("events_event_too_large:"));
+    };
+    let first = publish(&hub, &a.owner, &a.client_id, 1);
+    let second = publish(&hub, &a.owner, &a.client_id, 2);
+    missing();
+    let fourth = publish(&hub, &a.owner, &a.client_id, 4);
+    for (after, expected) in [(0, &first), (1, &second), (2, &fourth)] {
+        let page = hub.read(&a, &id, 1).unwrap();
+        assert_eq!(page["retained_after"], 0);
+        assert_eq!(page["oldest_cursor"], 3);
+        assert_eq!(page["cursor"], after);
+        assert_eq!(
+            page["retention_gap"],
+            json!({"after":after, "episode_after":0,
+            "through":3, "resume_after":after})
+        );
+        assert_eq!(page["events"][0]["id"], expected["event_id"]);
+        assert_eq!(page["next_cursor"], expected["seq"]);
+        assert_eq!(hub.read(&a, &id, 1).unwrap(), page);
+        if after == 0 {
+            assert!(hub.ack(&a, &id, 3).is_err());
+        }
+        hub.ack(&a, &id, sequence(&page)).unwrap();
+    }
+    assert!(hub.read(&a, &id, 1).unwrap().get("retention_gap").is_none());
+    missing();
+    let next = hub.read(&a, &id, 1).unwrap();
+    assert_eq!(
+        next["retention_gap"],
+        json!({"after":4, "episode_after":4,
+        "through":5, "resume_after":4})
+    );
+    assert_eq!(next["events"], json!([]));
+    assert_eq!(next["next_cursor"], 5);
+}

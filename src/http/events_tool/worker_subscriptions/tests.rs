@@ -469,6 +469,211 @@ async fn advancing_retention_boundary_keeps_one_visible_gap_and_the_latest_recei
         assert_eq!(result, Some(notice));
         assert_eq!(attempted, expected_writes);
     }
+    let gap = json!({"after":50,"through":53,"resume_after":60});
+    let retained = json!({"seq":61,"kind":"worker.completed","data":{"task_id":"retained"}});
+    let page = json!({"status":"ready","subscription_id":entry.subscription_id,
+        "cursor":50,"oldest_cursor":60,"next_cursor":61,"has_more":false,
+        "retention_gap":gap,"history_complete":false,"events":[retained]});
+    let mut written = Vec::new();
+    for (probes_used, expected_events) in [(MAX_PROBES - 1, 0), (0, 1), (0, 1)] {
+        let mut probes = probes_used;
+        let result = {
+            let delivery = visible_notice(
+                &report,
+                &target,
+                &context,
+                &entry,
+                page.clone(),
+                tokio::time::Instant::now() + Duration::from_secs(2),
+                &mut probes,
+            );
+            tokio::pin!(delivery);
+            loop {
+                tokio::select! {
+                    result = &mut delivery => break result.unwrap(),
+                    call = fixture.native.native_reply_with(TestFixture::input_receipt) => {
+                        let text = call["arguments"]["text"].as_str().unwrap();
+                        written.push(serde_json::from_str::<Value>(text.strip_prefix(HEADER).unwrap()).unwrap());
+                    }
+                }
+            }
+        };
+        assert_eq!(result["cursor"], 50);
+        assert_eq!(result["retention_gap"], gap);
+        assert_eq!(result["events"].as_array().unwrap().len(), expected_events);
+        if expected_events == 0 {
+            assert_eq!(result["next_cursor"], 60);
+            assert_eq!(result["has_more"], true);
+        } else {
+            assert_eq!(result, page);
+        }
+    }
+    assert_eq!(
+        written,
+        vec![
+            json!({"status":"retention_gap","subscription_id":entry.subscription_id,
+        "retention_gap":gap,"history_complete":false}),
+            retained
+        ]
+    );
+}
+
+#[tokio::test]
+async fn sparse_retention_keeps_real_notices_and_one_warning_across_partial_ack() {
+    async fn deliver(
+        fixture: &mut Fixture,
+        notice: &Value,
+        budget: usize,
+        writes: &mut Vec<Value>,
+    ) -> Value {
+        let context = fixture.context().await;
+        let entry = fixture
+            .native
+            .broker
+            .event_subscriptions
+            .workers
+            .get(&context)
+            .unwrap();
+        let report = CodeRunReport {
+            broker: fixture.native.broker.clone(),
+            user: IDENTITY_RESOURCE.into(),
+            access_token: fixture.native.access_token.clone(),
+            run: fixture.run.clone(),
+            delivered: true,
+        };
+        let target = EligibleUserResponse {
+            session: context.session.clone(),
+            owner: fixture.owner.clone(),
+            binding: Some(context.binding.clone()),
+            may_claim: false,
+            waiting: false,
+        };
+        let mut attempted = MAX_PROBES - budget;
+        let observed = visible_notice(
+            &report,
+            &target,
+            &context,
+            &entry,
+            notice.clone(),
+            tokio::time::Instant::now() + Duration::from_secs(2),
+            &mut attempted,
+        );
+        tokio::pin!(observed);
+        loop {
+            tokio::select! {
+                result = &mut observed => return result.expect("a published prefix"),
+                call = fixture.native.native_reply_with(TestFixture::input_receipt) => {
+                    let text = call["arguments"]["text"].as_str().unwrap().strip_prefix(HEADER).unwrap();
+                    writes.push(serde_json::from_str(text).unwrap());
+                }
+            }
+        }
+    }
+
+    fn drop_oversized(fixture: &Fixture) {
+        let err = fixture
+            .native
+            .broker
+            .events
+            .publish_system(
+                &fixture.owner,
+                fixture.pool.client_id(),
+                fixture.pool_member["agent_id"].as_str(),
+                "worker.completed",
+                json!({"task_id":"lost","detail":"x".repeat(5000)}),
+                (None, None),
+            )
+            .unwrap_err();
+        assert!(err.starts_with("events_event_too_large"));
+    }
+
+    let mut fixture = Fixture::new(true).await;
+    fixture.bind_main().await;
+    let context = fixture.context().await;
+    let id = fixture
+        .native
+        .broker
+        .event_subscriptions
+        .workers
+        .get(&context)
+        .unwrap()
+        .subscription_id
+        .unwrap();
+    let read = || json!({"action":"read","subscription_id":id});
+    let ack = |through: u64| json!({"action":"ack","subscription_id":id,"through":through});
+    let first = fixture.emit("worker.completed")["seq"].as_u64().unwrap();
+    let second = fixture.emit("worker.completed")["seq"].as_u64().unwrap();
+    drop_oversized(&fixture);
+    let last = fixture.emit("worker.completed")["seq"].as_u64().unwrap();
+    let page = fixture.control(read()).await.unwrap();
+    let gap = page["retention_gap"].clone();
+    let missing = gap["through"].as_u64().unwrap();
+    assert!(second < missing && missing < last);
+    assert!(page["retained_after"].as_u64().unwrap() < first);
+    let seqs = |page: &Value| {
+        page["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["seq"].as_u64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(seqs(&page), [first, second, last]);
+
+    let mut writes = Vec::new();
+    let boundary = deliver(&mut fixture, &page, 1, &mut writes).await;
+    assert!(seqs(&boundary).is_empty());
+    assert_eq!(boundary["next_cursor"], gap["resume_after"]);
+    assert!(boundary["next_cursor"].as_u64().unwrap() < first);
+    let prefix = deliver(&mut fixture, &page, 1, &mut writes).await;
+    assert_eq!(seqs(&prefix), [first]);
+    assert_eq!(prefix["next_cursor"], first);
+    // With no new native probes, only already recorded publications may be returned.
+    assert_eq!(deliver(&mut fixture, &page, 0, &mut writes).await, prefix);
+    fixture.control(ack(first)).await.unwrap();
+    let partial = fixture.control(read()).await.unwrap();
+    assert_eq!(
+        partial["retention_gap"]["episode_after"],
+        gap["episode_after"]
+    );
+    assert_eq!(partial["retention_gap"]["after"], first);
+    assert_eq!(seqs(&partial), [second, last]);
+    assert_eq!(
+        deliver(&mut fixture, &partial, 2, &mut writes).await,
+        partial
+    );
+
+    // Extend the outstanding loss before acknowledging its original high-water mark.
+    drop_oversized(&fixture);
+    fixture.control(ack(missing)).await.unwrap();
+    let extended = fixture.control(read()).await.unwrap();
+    assert_eq!(seqs(&extended), [last]);
+    assert_eq!(
+        extended["retention_gap"]["episode_after"],
+        gap["episode_after"]
+    );
+    assert!(extended["retention_gap"]["through"].as_u64().unwrap() > last);
+    assert_eq!(
+        deliver(&mut fixture, &extended, 0, &mut writes).await,
+        extended
+    );
+    assert_eq!(writes.len(), 4);
+    assert_eq!(writes[0]["status"], "retention_gap");
+    assert_eq!(writes[1]["seq"], first);
+    assert_eq!(writes[2]["seq"], second);
+    assert_eq!(writes[3]["seq"], last);
+
+    fixture
+        .control(ack(extended["next_cursor"].as_u64().unwrap()))
+        .await
+        .unwrap();
+    drop_oversized(&fixture);
+    let next = fixture.control(read()).await.unwrap();
+    assert_ne!(next["retention_gap"]["episode_after"], gap["episode_after"]);
+    assert!(seqs(&next).is_empty());
+    assert_eq!(deliver(&mut fixture, &next, 1, &mut writes).await, next);
+    assert_eq!(writes.len(), 5);
+    assert_eq!(writes[4]["status"], "retention_gap");
 }
 
 #[tokio::test]
@@ -1042,4 +1247,18 @@ fn text_summary_keeps_authoritative_machine_receipts_and_user_content() {
     let text = result["content"][1]["text"].as_str().unwrap();
     assert!(text.contains("11 worker.completed (failed)"));
     assert!(!text.contains("fixture event detail"));
+}
+
+#[test]
+fn consecutive_progress_is_compact_but_task_boundaries_and_outcomes_stay_visible() {
+    let event = |seq, task: &str, status: &str| json!({"seq":seq,"kind":"worker.progress","actor_id":"a","client_id":"pool","data":{"slot":0,"epoch":2,"attempt":1,"task_id":task,"task_status":status}});
+    let notice = json!({"subscription_id":"sub","events":[event(7,"one","working"),event(9,"one","working"),
+        event(11,"two","working"),event(13,"two","unknown")]});
+    assert_eq!(
+        notice_summary(&notice),
+        "sub: 7–9 worker.progress ×2 11 worker.progress 13 worker.progress (unknown)"
+    );
+    let response =
+        append_values(&json!({}), std::slice::from_ref(&notice), MAX_NOTICE_BYTES).unwrap();
+    assert_eq!(response["structuredContent"]["worker_events"][0], notice);
 }

@@ -9,6 +9,7 @@ pub mod device_address;
 pub mod messages;
 pub mod openai;
 pub mod project_continuity;
+pub mod repository_events;
 pub mod versions;
 pub mod wait_display;
 pub use attribution::{ControlAccount, ControlAgent, ControlAttribution};
@@ -642,6 +643,9 @@ pub enum Frame {
         proof: project_continuity::Proof,
     },
     ProjectForget {},
+    RepositoryEvent {
+        event: repository_events::Event,
+    },
     Access {
         id: u64,
         command: AccessCommand,

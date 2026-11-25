@@ -113,6 +113,7 @@ impl Fixture {
             openai_context: false,
             main_lifecycle: false,
             worker_dreaming: false,
+            repository_events: false,
             project_continuity: false,
             peer_ports: opted_in && config.auto_candidates.is_none(),
             peer_ports_auto: opted_in && config.auto_candidates.is_some(),

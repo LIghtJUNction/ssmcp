@@ -9,6 +9,8 @@ use serde_json::Map;
 pub(crate) const DEFAULT_KINDS: &[&str] = &[
     "user.input_available",
     "agent.maintenance_requested",
+    crate::wire::repository_events::UPSTREAM_CHANGED,
+    crate::wire::repository_events::PULL_REQUEST_OPENED,
     "task.submitted",
     "worker.started",
     "worker.progress",
@@ -62,7 +64,9 @@ enum AdvisoryPage {
 
 impl AdvisoryPage {
     fn from_notice(notice: &Value) -> Option<Self> {
-        if let Some(cursor) = gap_cursor(notice) {
+        if let Some(cursor) = gap_episode(notice)
+            && notice["events"].as_array().is_none_or(Vec::is_empty)
+        {
             return Some(Self::Gap(cursor));
         }
         let events = notice["events"].as_array()?;
@@ -419,7 +423,7 @@ async fn ensure(
                     task_id: None,
                     include_own_waits: false,
                 },
-                None,
+                crate::events::SubscriptionStart::Managed,
                 proofs,
             )?;
             let id = receipt["subscription_id"]
@@ -878,22 +882,58 @@ fn notice_summary(notice: &Value) -> String {
     if notice["status"] == "read_required" {
         return format!("{id}: events.read (limit 1) before ACK.");
     }
+    use std::fmt::Write;
     let mut summary = format!("{id}:");
-    for event in notice["events"].as_array().into_iter().flatten() {
-        use std::fmt::Write;
+    if let Some(through) = notice["retention_gap"]["through"].as_u64() {
         let _ = write!(
             summary,
-            " {} {}",
-            event["seq"],
-            event["kind"].as_str().unwrap_or("?")
+            " event history incomplete through {through}. Reading retained events."
         );
+    }
+    let events = notice["events"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let mut rest = events;
+    while let Some((event, following)) = rest.split_first() {
+        let kind = event["kind"].as_str().unwrap_or("?");
+        let mut count = 1;
+        if kind == "worker.progress"
+            && event["client_id"].is_string()
+            && event["actor_id"].is_string()
+            && event["data"]["task_id"].is_string()
+            && event["data"]["task_status"] == "working"
+        {
+            count += following
+                .iter()
+                .take_while(|next| {
+                    next["kind"] == kind
+                        && next["data"]["task_status"] == "working"
+                        && next["client_id"] == event["client_id"]
+                        && next["actor_id"] == event["actor_id"]
+                        && ["task_id", "slot", "epoch", "attempt"]
+                            .iter()
+                            .all(|key| next["data"][key] == event["data"][key])
+                })
+                .count();
+        }
+        if count > 1 {
+            let _ = write!(
+                summary,
+                " {}–{} {kind} ×{count}",
+                event["seq"],
+                rest[count - 1]["seq"]
+            );
+        } else {
+            let _ = write!(summary, " {} {kind}", event["seq"]);
+        }
         if let Some(status @ ("failed" | "unknown" | "cancelled" | "cancelling")) =
             event["data"]["task_status"].as_str()
         {
             let _ = write!(summary, " ({status})");
         }
+        rest = &rest[count..];
     }
-    summary.push_str(". See structuredContent.worker_events or events.read before ACK.");
     summary
 }
 
@@ -1001,9 +1041,15 @@ async fn publication_authorized(
     )
 }
 
-// The retained boundary and latest sequence move while the same subscriber
-// is stuck at one cursor. They describe the observation, not a new gap.
-fn gap_cursor(notice: &Value) -> Option<u64> {
+// A partial acknowledgement or a later loss can change both gap boundaries
+// while the original unacknowledged loss episode is still active.
+fn gap_episode(notice: &Value) -> Option<u64> {
+    if let Some(episode) = notice["retention_gap"]["episode_after"]
+        .as_u64()
+        .or_else(|| notice["retention_gap"]["after"].as_u64())
+    {
+        return Some(episode);
+    }
     if notice["status"] != "unavailable" {
         return None;
     }
@@ -1026,23 +1072,23 @@ async fn visible_notice(
     let id = entry.subscription_id.as_deref()?;
     let events = notice["events"].as_array()?.clone();
     let acknowledged = notice["cursor"].as_u64().unwrap_or(0);
-    // Gap/read-required metadata is also visible. It never claims an event ACK.
-    let items = if events.is_empty() {
-        vec![(None, serde_json::to_string(&notice).ok()?)]
-    } else {
-        events
-            .iter()
-            .map(|event| {
-                Some((
-                    Some(event["seq"].as_u64()?),
-                    serde_json::to_string(event).ok()?,
-                ))
-            })
-            .collect::<Option<Vec<_>>>()?
-    };
-    let gap = gap_cursor(&notice).filter(|_| events.is_empty());
+    let retained_after = notice["retained_after"].as_u64().unwrap_or(0);
+    let active_gap_key = gap_episode(&notice).map(|after| format!("{id}:gap:{after}"));
+    // A loss receipt and the surviving events have separate stable message IDs.
+    let mut items = Vec::new();
+    let recovered = notice["retention_gap"].is_object();
+    if recovered {
+        let boundary = json!({"status":"retention_gap", "subscription_id":id,
+            "retention_gap":notice["retention_gap"], "history_complete":false});
+        items.push((None, gap_episode(&notice), boundary.to_string()));
+    } else if events.is_empty() {
+        items.push((None, gap_episode(&notice), notice.to_string()));
+    }
+    for event in &events {
+        items.push((Some(event["seq"].as_u64()?), None, event.to_string()));
+    }
     let mut visible = 0usize;
-    for (sequence, body) in items {
+    for (sequence, gap, body) in items {
         let identity = match (sequence, gap) {
             (Some(sequence), _) => format!("{id}:{sequence}"),
             (None, Some(cursor)) => format!("{id}:gap:{cursor}"),
@@ -1056,11 +1102,12 @@ async fn visible_notice(
                 .unwrap_or_else(|error| error.into_inner());
             // Only the real Hub cursor proves ACK. Unknown writes are retained
             // even past ACK; absence from a pruned event page is not no-effect.
-            markers.retain(|_, marker| {
-                !marker.publication.replaceable()
+            markers.retain(|key, marker| {
+                active_gap_key.as_ref() == Some(key)
+                    || !marker.publication.replaceable()
                     || marker
                         .sequence
-                        .is_none_or(|sequence| sequence > acknowledged)
+                        .is_none_or(|seq| seq > acknowledged && seq > retained_after)
             });
             if let Some(marker) = markers.get(&identity) {
                 // A gap keeps its original visible diagnostic and receipt. The
@@ -1077,7 +1124,7 @@ async fn visible_notice(
                 markers.insert(
                     identity,
                     VisibleMarker {
-                        sequence,
+                        sequence: sequence.or_else(|| notice["retention_gap"]["through"].as_u64()),
                         publication: publication.clone(),
                     },
                 );
@@ -1102,9 +1149,14 @@ async fn visible_notice(
     if visible == 0 {
         return None;
     }
-    if !events.is_empty() && visible < events.len() {
-        notice["events"] = json!(&events[..visible]);
-        notice["next_cursor"] = events[visible - 1]["seq"].clone();
+    let visible_events = visible - usize::from(recovered);
+    if visible_events < events.len() {
+        notice["events"] = json!(&events[..visible_events]);
+        notice["next_cursor"] = if visible_events == 0 {
+            notice["retention_gap"]["resume_after"].clone()
+        } else {
+            events[visible_events - 1]["seq"].clone()
+        };
         notice["has_more"] = json!(true);
     }
     Some(notice)
