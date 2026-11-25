@@ -26,15 +26,18 @@ const TOKEN: &str = "cl_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 struct Home(PathBuf);
 impl Home {
     fn new() -> Self {
-        let unique = SystemTime::now()
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "ssmcp-allow-account-{}-{unique}",
-            std::process::id()
+            "ssmcp-allow-account-{}-{timestamp}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir_all(path.join("auth")).unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::create_dir(path.join("auth")).unwrap();
         fs::set_permissions(path.join("auth"), fs::Permissions::from_mode(0o700)).unwrap();
         fs::write(path.join("config.toml"), "[ui]\ncolor = false\n").unwrap();
         Self(path)

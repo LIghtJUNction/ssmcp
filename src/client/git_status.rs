@@ -951,13 +951,16 @@ mod tests {
     struct Directory(PathBuf);
     impl Directory {
         fn new() -> Self {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
             let path = std::env::temp_dir().join(format!(
-                "ssmcp-git-status-{}-{}",
+                "ssmcp-git-status-{}-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
-                    .as_nanos()
+                    .as_nanos(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             std::fs::create_dir(&path).unwrap();
             Self(path)
