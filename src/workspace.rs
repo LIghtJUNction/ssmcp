@@ -65,17 +65,19 @@ struct Root {
 }
 struct Listener {
     socket: TcpListener,
-    closed: watch::Sender<bool>,
     _permit: OwnedSemaphorePermit,
+    // Fields drop in declaration order. Close receipts wait for this sender to drop.
+    closed: watch::Sender<bool>,
 }
 struct Stream {
     reader: Mutex<OwnedReadHalf>,
     writer: Mutex<OwnedWriteHalf>,
     address: SocketAddr,
     peer: SocketAddr,
-    closed: watch::Sender<bool>,
     write_closed: AtomicBool,
     _permit: OwnedSemaphorePermit,
+    // Keep last so both socket halves and the permit are released before acknowledgement.
+    closed: watch::Sender<bool>,
 }
 #[derive(Clone)]
 enum Handle {
@@ -83,15 +85,20 @@ enum Handle {
     Stream(Arc<Stream>),
 }
 impl Handle {
-    fn close(&self) {
-        match self {
-            Self::Listener(value) => {
-                value.closed.send_replace(true);
-            }
-            Self::Stream(value) => {
-                value.closed.send_replace(true);
-            }
-        }
+    fn signal_close(&self) -> &watch::Sender<bool> {
+        let closed = match self {
+            Self::Listener(value) => &value.closed,
+            Self::Stream(value) => &value.closed,
+        };
+        closed.send_replace(true);
+        closed
+    }
+    async fn close_and_wait(self) {
+        // A new receiver has already seen the closing value. Its channel closes
+        // when the final pending operation releases its handle.
+        let mut released = self.signal_close().subscribe();
+        drop(self);
+        while released.changed().await.is_ok() {}
     }
     fn description(&self, id: &str) -> Value {
         match self {
@@ -272,7 +279,7 @@ impl Workspace {
             ),
             tool(
                 "ssmcp.net.close",
-                "Close a listener or stream and cancel its pending operations. Repeated closes are harmless.",
+                "Close a listener or stream and cancel pending operations. closed=true confirms local socket and capacity release. closed=false means this call found no registered handle.",
                 json!({"id":id}),
                 &["id"],
                 false,
@@ -361,10 +368,11 @@ impl Workspace {
             "ssmcp.net.close" => {
                 let args: HandleArgs = parse(arguments)?;
                 let handle = self.handles.lock().unwrap().remove(&args.id);
-                if let Some(handle) = &handle {
-                    handle.close();
-                }
-                Ok(json!({"closed":handle.is_some()}))
+                let Some(handle) = handle else {
+                    return Ok(json!({"closed":false}));
+                };
+                handle.close_and_wait().await;
+                Ok(json!({"closed":true}))
             }
             "ssmcp.net.list" => {
                 let _: Empty = parse(arguments)?;
@@ -386,7 +394,7 @@ impl Workspace {
     fn insert(&self, handle: Handle) -> Result<String, String> {
         let mut handles = self.handles.lock().unwrap();
         if self.closed.load(Ordering::Acquire) {
-            handle.close();
+            handle.signal_close();
             return Err("workspace is closed".into());
         }
         let id = format!(
@@ -421,9 +429,9 @@ impl Workspace {
             writer: Mutex::new(writer),
             address,
             peer,
-            closed,
             write_closed: AtomicBool::new(false),
             _permit: permit,
+            closed,
         })))?;
         Ok(json!({"id":id,"address":address.to_string(),"peer":peer.to_string()}))
     }
@@ -435,8 +443,8 @@ impl Workspace {
         let (closed, _) = watch::channel(false);
         let id = self.insert(Handle::Listener(Arc::new(Listener {
             socket,
-            closed,
             _permit: permit,
+            closed,
         })))?;
         Ok(json!({"id":id,"address":address.to_string(),"port":address.port()}))
     }
@@ -561,7 +569,7 @@ impl Workspace {
         self.events.close();
         self.root.safety_events.close();
         for (_, handle) in handles.drain() {
-            handle.close();
+            handle.signal_close();
         }
     }
 }
@@ -1978,6 +1986,84 @@ mod tests {
                 .is_err()
         );
     }
+    #[tokio::test]
+    async fn tcp_listener_close_hands_off_the_port_and_capacity_after_pending_accept() {
+        use futures_util::FutureExt;
+
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace();
+        let listener = call(&workspace, "ssmcp.net.listen", json!({})).await;
+        let id = &listener["id"];
+        let mut accept = std::pin::pin!(
+            workspace.perform("ssmcp.net.accept", json!({"id":id,"wait_ms":MAX_WAIT_MS}),)
+        );
+        assert!(accept.as_mut().now_or_never().is_none());
+        assert_eq!(workspace.slots.available_permits(), MAX_HANDLES - 2);
+
+        let mut close = std::pin::pin!(workspace.perform("ssmcp.net.close", json!({"id":id})));
+        assert!(close.as_mut().now_or_never().is_none());
+        // The first caller owns the receipt. An overlapping close finds no entry.
+        assert_eq!(
+            call(&workspace, "ssmcp.net.close", json!({"id":id})).await,
+            json!({"closed":false})
+        );
+        assert_eq!(accept.await.unwrap_err(), "TCP listener is closed");
+        assert_eq!(
+            timeout(Duration::from_secs(1), close)
+                .await
+                .unwrap()
+                .unwrap(),
+            json!({"closed":true})
+        );
+        assert_eq!(workspace.slots.available_permits(), MAX_HANDLES);
+        let rebound = call(
+            &workspace,
+            "ssmcp.net.listen",
+            json!({"port":listener["port"]}),
+        )
+        .await;
+        assert_eq!(rebound["address"], listener["address"]);
+    }
+
+    #[tokio::test]
+    async fn tcp_stream_close_releases_both_halves_and_capacity_after_pending_read() {
+        use futures_util::FutureExt;
+
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let stream = call(
+            &workspace,
+            "ssmcp.net.connect",
+            json!({"port":listener.local_addr().unwrap().port()}),
+        )
+        .await;
+        let (mut peer, _) = listener.accept().await.unwrap();
+        let id = &stream["id"];
+        let mut read = std::pin::pin!(
+            workspace.perform("ssmcp.net.read", json!({"id":id,"wait_ms":MAX_WAIT_MS}),)
+        );
+        assert!(read.as_mut().now_or_never().is_none());
+        let mut close = std::pin::pin!(workspace.perform("ssmcp.net.close", json!({"id":id})));
+        assert!(close.as_mut().now_or_never().is_none());
+        assert_eq!(read.await.unwrap_err(), "TCP stream is closed");
+        assert_eq!(
+            timeout(Duration::from_secs(1), close)
+                .await
+                .unwrap()
+                .unwrap(),
+            json!({"closed":true})
+        );
+        assert_eq!(workspace.slots.available_permits(), MAX_HANDLES);
+        assert_eq!(
+            timeout(Duration::from_secs(1), peer.read(&mut [0]))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+    }
+
     #[tokio::test]
     async fn tcp_limits_loopback_scope_and_close_cancel_waiters() {
         let scratch = Scratch::new();
