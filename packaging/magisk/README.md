@@ -1,6 +1,6 @@
 # SSMCP for KernelSU / Magisk
 
-适用于 Android 8 及以上版本的 arm64-v8a 设备。从[模块发行页](https://github.com/LIghtJUNction/ssmcp/releases/tag/kernelsu-v0.10.40)下载 `ssmcp-magisk-arm64.zip`，使用模块管理器刷入。首次安装会尝试打开本机的安装引导。也可从模块 WebUI 点击「打开安装引导」。首次配置前，模块只运行本地网页服务。
+适用于 Android 8 及以上版本的 arm64-v8a 设备。下载 [ssmcp-magisk-arm64.zip](https://github.com/LIghtJUNction/ssmcp/releases/latest/download/ssmcp-magisk-arm64.zip)，使用模块管理器刷入。首次安装会尝试打开本机的安装引导。也可从模块 WebUI 点击「打开安装引导」。首次配置前，模块只运行本地网页服务。
 
 1. 输入你的 SSMCP 用户名和中继域名。已有账号可直接连接。新账号选定名字后，点击 GitHub 注册，完成绑定后返回连接。
 2. 阅读并确认 root 风险。使用官方中继时还需阅读并接受用户协议和隐私政策。官方中继每月赠送 1 GiB，额外流量由用户在中继网站购买。
