@@ -73,6 +73,9 @@ impl Broker {
             .charge(outbound, bytes)
             .await
             .map_err(|_| TrafficError::Banned)?;
+        if let Some(accounting) = &self.relay_accounting {
+            return accounting.reserve(subject, outbound, bytes).await;
+        }
         if !self.portal.has_storage() {
             // Explicit legacy deployments without account storage have no quota
             // product. In account mode an unowned session is rejected at attach.

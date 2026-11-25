@@ -14,6 +14,7 @@ use std::{
 };
 
 pub(super) const MAX_KEYS: usize = 20;
+pub(super) mod external;
 const MAX_ACCOUNTS: usize = 4096;
 const MAX_HANDLE_ALIASES: usize = 128;
 const MAX_DATABASE: u64 = 8 * 1024 * 1024;
@@ -95,6 +96,8 @@ struct Database {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     announcement: String,
     accounts: BTreeMap<String, Account>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external: Option<external::Bindings>,
 }
 
 pub(crate) struct Store {
@@ -205,7 +208,8 @@ impl Store {
             Err(e) => return Err(e.into()),
         };
         validate(&database)?;
-        let traffic = super::traffic::TrafficLedger::open(&directory)?;
+        let traffic =
+            super::traffic::TrafficLedger::open_for_store(&directory, database.external.is_some())?;
         let mut store = Self {
             directory,
             _lock: lock,

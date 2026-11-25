@@ -5,6 +5,7 @@ mod dashboard;
 mod dashboard_view;
 pub mod frontend;
 mod guide;
+pub(crate) mod relay_accounting;
 mod sessions;
 mod setup;
 pub(crate) mod store;
@@ -292,6 +293,9 @@ impl Portal {
     /// Opt-in durable portal storage. Startup fails if permissions, format or locking are unsafe.
     pub fn open(path: &Path) -> crate::Result<Self> {
         let store = Store::open(path)?;
+        if store.is_external_accounting() {
+            return Err("external relay accounting requires a dedicated state directory".into());
+        }
         let persisted = sessions::Sessions::open(path)?;
         let active = persisted.restore(crate::management::now());
         Ok(Self {
