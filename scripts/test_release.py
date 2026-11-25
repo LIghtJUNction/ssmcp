@@ -2,8 +2,9 @@
 
 import base64
 import contextlib
-import json
+import hashlib
 import io
+import json
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -531,12 +532,19 @@ class ReleaseTests(unittest.TestCase):
                 (directory / "renderer.log").write_text("fixture: OpenGL renderer string: llvmpipe\n")
             elif platform == "windows":
                 binary = directory / "ssmcp-desktop.exe"
-                binary.write_bytes(b"MZfixture executable")
+                binary.write_bytes(b"MZ" + b"\0" * 58 + (64).to_bytes(4, "little") + b"PE\0\0\x64\x86fixture desktop")
             elif platform == "android":
                 binary = directory / "app-debug.apk"
                 with zipfile.ZipFile(binary, "w") as archive:
                     archive.writestr("AndroidManifest.xml", "fixture manifest")
                     archive.writestr("classes.dex", "fixture bytecode")
+            if platform in {"linux", "windows"}:
+                name = "ssmcp.exe" if platform == "windows" else "ssmcp"
+                companion = directory / name
+                companion.write_bytes(binary.read_bytes() + b" fixture CLI")
+                proof = {"file": name, "bytes": companion.stat().st_size, "sha256": release.digest(companion),
+                         "source_commit": sha, "target": spec["target"], "profile": spec["profile"]}
+                (directory / "cli-executable.json").write_text(json.dumps(proof))
             fixtures[platform] = (directory, binary)
             if package:
                 release.package_gui(platform, directory, binary, self.root)
@@ -555,17 +563,68 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue(all(row["source"]["commit"] == manifest["commit"] for row in manifest["gui_clients"]))
         self.assertIsNone(next(row for row in manifest["gui_clients"] if row["platform"] == "ios")["asset"])
         with zipfile.ZipFile(output / release.GUI_CLIENTS["windows"]["asset"]) as archive:
-            self.assertEqual(set(archive.namelist()), {"ssmcp-desktop.exe", "README.md", "LICENSE", "build-source.json"})
-            self.assertEqual(archive.read("ssmcp-desktop.exe"), b"MZfixture executable")
+            self.assertEqual(set(archive.namelist()), {"ssmcp-desktop.exe", "ssmcp.exe", "README.md", "LICENSE", "build-source.json"})
+            windows = next(row for row in manifest["gui_clients"] if row["platform"] == "windows")
+            self.assertEqual(hashlib.sha256(archive.read("ssmcp.exe")).hexdigest(), windows["companion_cli"]["sha256"])
+            self.assertEqual(json.loads(archive.read("build-source.json"))["companion_cli"], windows["companion_cli"])
         linux = next(row for row in manifest["gui_clients"] if row["platform"] == "linux")
         self.assertEqual(linux["profile"], "release")
         self.assertEqual(linux["window"]["source_commit"], manifest["commit"])
         with tarfile.open(output / release.GUI_CLIENTS["linux"]["asset"], "r:gz") as archive:
-            self.assertEqual(set(archive.getnames()), {"ssmcp-desktop", "README.md", "LICENSE", "build-source.json"})
+            self.assertEqual(set(archive.getnames()), {"ssmcp-desktop", "ssmcp", "README.md", "LICENSE", "build-source.json"})
             self.assertEqual(archive.getmember("ssmcp-desktop").mode, 0o755)
-            self.assertEqual(json.load(archive.extractfile("build-source.json")), linux["source"])
+            self.assertEqual(archive.getmember("ssmcp").mode, 0o755)
+            self.assertEqual(json.load(archive.extractfile("build-source.json")),
+                             {**linux["source"], "companion_cli": linux["companion_cli"]})
         result = release.validate_tag(None, self.root, build_only=True)
         self.assertEqual(result["gui_clients"], "true")
+
+    def test_desktop_packaging_rejects_missing_substituted_or_wrong_profile_cli(self):
+        fixtures = self.gui_fixtures(package=False)
+        for platform in ("linux", "windows"):
+            evidence, desktop = fixtures[platform]
+            proof = evidence / "cli-executable.json"
+            metadata = json.loads(proof.read_text())
+            cli = desktop.parent / metadata["file"]
+            payload = cli.read_bytes()
+            with self.subTest(platform=platform):
+                cli.unlink()
+                with self.assertRaisesRegex(ValueError, "companion CLI"):
+                    release.package_gui(platform, evidence, desktop, self.root)
+                cli.write_bytes(payload[:-1] + b"?")
+                with self.assertRaisesRegex(ValueError, "differ"):
+                    release.package_gui(platform, evidence, desktop, self.root)
+                cli.write_bytes(payload)
+                proof.write_text(json.dumps({**metadata, "profile": "wrong"}))
+                with self.assertRaisesRegex(ValueError, "profile"):
+                    release.package_gui(platform, evidence, desktop, self.root)
+                proof.write_text(json.dumps(metadata))
+        evidence, desktop = fixtures["windows"]
+        wrong = bytearray((evidence / "ssmcp.exe").read_bytes())
+        wrong[68:70] = b"\x64\xaa"  # Valid PE signature with the ARM64 machine type.
+        (evidence / "ssmcp.exe").write_bytes(wrong)
+        with self.assertRaisesRegex(ValueError, "x86_64 PE"):
+            release.package_gui("windows", evidence, desktop, self.root)
+
+    def test_windows_finalize_rechecks_inner_cli_even_if_outer_checksums_match(self):
+        output = self.fixtures()
+        self.gui_fixtures()
+        self.stub_verified_crate()
+        archive = output / release.GUI_CLIENTS["windows"]["asset"]
+        receipt_path = output / release.gui_receipt_name("windows")
+        with zipfile.ZipFile(io.BytesIO(archive.read_bytes())) as before, zipfile.ZipFile(archive, "w") as after:
+            for item in before.infolist():
+                data = before.read(item)
+                if item.filename == "ssmcp.exe":
+                    data = data[:-1] + b"?"
+                after.writestr(item, data)
+        sha = release.digest(archive)
+        archive.with_name(archive.name + ".sha256").write_text(f"{sha}  {archive.name}\n")
+        receipt = json.loads(receipt_path.read_text())
+        receipt["asset"].update(sha256=sha, bytes=archive.stat().st_size)
+        receipt_path.write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(ValueError, "companion CLI bytes differ"):
+            release.checksums(self.root)
 
     def test_apps_present_cannot_finalize_without_every_gui_asset_and_test_receipt(self):
         output = self.fixtures()

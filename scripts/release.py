@@ -11,6 +11,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -763,14 +764,61 @@ def validate_linux_gui_executable(stream):
         raise ValueError("the Linux GUI build must provide an x86_64 ELF executable")
 
 
-def verify_linux_gui_archive(archive, source, window):
+def validate_windows_x64_executable(stream):
+    header = stream.read(64)
+    if len(header) == 64 and header[:2] == b"MZ":
+        offset = int.from_bytes(header[60:64], "little")
+        if 64 <= offset <= 1024 * 1024:
+            stream.seek(offset)
+            if stream.read(6) == b"PE\0\0\x64\x86":
+                return
+    raise ValueError("the Windows desktop bundle requires x86_64 PE executables")
+
+
+def check_companion_receipt(cli, platform, source):
+    spec = GUI_CLIENTS[platform]
+    expected = {"file": "ssmcp.exe" if platform == "windows" else "ssmcp",
+                "target": spec["target"], "profile": spec["profile"], "source_commit": source["commit"]}
+    if (not isinstance(cli, dict) or any(cli.get(key) != value for key, value in expected.items())
+            or type(cli.get("bytes")) is not int or cli["bytes"] < 20
+            or not re.fullmatch(r"[0-9a-f]{64}", str(cli.get("sha256", "")))):
+        raise ValueError("companion CLI receipt does not match the desktop source, target or profile")
+
+
+def verify_companion_stream(stream, platform, cli):
+    if platform == "windows":
+        validate_windows_x64_executable(stream)
+    else:
+        validate_linux_gui_executable(stream)
+    stream.seek(0)
+    if hashlib.file_digest(stream, "sha256").hexdigest() != cli["sha256"]:
+        raise ValueError("companion CLI bytes differ from the independently tested executable")
+
+
+def verify_windows_gui_archive(archive, source, cli):
+    with zipfile.ZipFile(archive) as package:
+        expected = {"ssmcp-desktop.exe", "ssmcp.exe", "README.md", "LICENSE", "build-source.json"}
+        if (len(package.infolist()) != len(expected) or set(package.namelist()) != expected
+                or any(info.is_dir() or stat.S_ISLNK(info.external_attr >> 16) for info in package.infolist())):
+            raise ValueError("Windows GUI archive must contain the two sibling executables and source proof")
+        with package.open("ssmcp-desktop.exe") as stream:
+            validate_windows_x64_executable(stream)
+        if package.getinfo("ssmcp.exe").file_size != cli["bytes"]:
+            raise ValueError("Windows companion CLI size differs from the checked executable")
+        with package.open("ssmcp.exe") as stream:
+            verify_companion_stream(stream, "windows", cli)
+        if json.loads(package.read("build-source.json")) != {**source, "companion_cli": cli}:
+            raise ValueError("Windows GUI archived source proof differs from the release checkout")
+
+
+def verify_linux_gui_archive(archive, source, window, cli):
     """Bind the published executable and source proof to the actual window probe."""
     with tarfile.open(archive, "r:gz") as package:
         members = package.getmembers()
-        expected = {"ssmcp-desktop", "README.md", "LICENSE", "build-source.json"}
+        expected = {"ssmcp-desktop", "ssmcp", "README.md", "LICENSE", "build-source.json"}
         if (len(members) != len(expected) or {member.name for member in members} != expected
                 or not all(member.isfile() for member in members)):
-            raise ValueError("Linux GUI archive must contain only the executable, instructions, license and source proof")
+            raise ValueError("Linux GUI archive must contain only the two executables, instructions, license and source proof")
         binary = package.getmember("ssmcp-desktop")
         if binary.size != window["binary_bytes"] or binary.mode != 0o755:
             raise ValueError("Linux GUI archive differs from the executable tested in the native window")
@@ -779,8 +827,13 @@ def verify_linux_gui_archive(archive, source, window):
         with package.extractfile(binary) as stream:
             if hashlib.file_digest(stream, "sha256").hexdigest() != window["binary_sha256"]:
                 raise ValueError("Linux GUI archive differs from the executable tested in the native window")
+        companion = package.getmember("ssmcp")
+        if companion.size != cli["bytes"] or companion.mode != 0o755:
+            raise ValueError("Linux companion CLI has the wrong size or executable mode")
+        with package.extractfile(companion) as stream:
+            verify_companion_stream(stream, "linux", cli)
         with package.extractfile("build-source.json") as stream:
-            if json.load(stream) != source:
+            if json.load(stream) != {**source, "companion_cli": cli}:
                 raise ValueError("Linux GUI archived source proof differs from the release checkout")
 
 
@@ -847,24 +900,40 @@ def package_gui(platform, evidence, binary=None, root=None):
             with binary.open("rb") as stream:
                 if platform == "linux":
                     validate_linux_gui_executable(stream)
-                elif stream.read(2) != b"MZ":
-                    raise ValueError("the Windows GUI build must provide a PE executable")
+                else:
+                    validate_windows_x64_executable(stream)
             if platform == "linux" and (digest(binary) != receipt["window"]["binary_sha256"]
                                          or binary.stat().st_size != receipt["window"]["binary_bytes"]):
                 raise ValueError("Linux GUI executable changed after its native window check")
+            proof = evidence / "cli-executable.json"
+            if proof.is_symlink() or not proof.is_file():
+                raise ValueError("missing companion CLI build receipt")
+            cli = json.loads(proof.read_text(encoding="utf-8-sig"))
+            check_companion_receipt(cli, platform, source)
+            companion = binary.parent / cli["file"]
+            if companion.is_symlink() or not companion.is_file() or companion.stat().st_size != cli["bytes"]:
+                raise ValueError("required sibling companion CLI is missing or changed")
+            with companion.open("rb") as stream:
+                verify_companion_stream(stream, platform, cli)
+            receipt["companion_cli"] = cli
+            receipt["evidence"][proof.name] = digest(proof)
             epoch = int(command("git", "show", "-s", "--format=%ct", "HEAD", cwd=root))
             with tempfile.TemporaryDirectory(prefix="ssmcp-desktop-package-") as temporary:
                 stage = Path(temporary)
                 executable = stage / ("ssmcp-desktop.exe" if platform == "windows" else "ssmcp-desktop")
                 shutil.copyfile(binary, executable)
+                shutil.copyfile(companion, stage / cli["file"])
                 if platform == "linux":
                     executable.chmod(0o755)
+                    (stage / cli["file"]).chmod(0o755)
                 shutil.copyfile(root / "LICENSE", stage / "LICENSE")
                 shutil.copyfile(root / spec["directory"] / "README.md", stage / "README.md")
-                (stage / "build-source.json").write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+                (stage / "build-source.json").write_text(json.dumps({**source, "companion_cli": cli}, indent=2) + "\n", encoding="utf-8")
                 write_archive(stage, archive, epoch)
             if platform == "linux":
-                verify_linux_gui_archive(archive, source, receipt["window"])
+                verify_linux_gui_archive(archive, source, receipt["window"], cli)
+            else:
+                verify_windows_gui_archive(archive, source, cli)
         else:
             with zipfile.ZipFile(binary) as apk:
                 if not {"AndroidManifest.xml", "classes.dex"} <= set(apk.namelist()):
@@ -916,11 +985,18 @@ def verified_gui_receipts(root, source):
                           if artifact is not None else None)
         if receipt.get("asset") != expected_asset:
             raise ValueError(f"GUI artifact does not match its successful build: {platform}")
+        if platform in {"linux", "windows"}:
+            cli = receipt.get("companion_cli")
+            check_companion_receipt(cli, platform, source)
+            if "cli-executable.json" not in evidence:
+                raise ValueError("missing companion CLI evidence hash")
+        if platform == "windows":
+            verify_windows_gui_archive(artifact, expected_source, cli)
         if platform == "linux":
             validate_linux_gui_window(receipt.get("window"), source["commit"])
             if not {"window.json", "window.log", "xwininfo.log", "renderer.log"} <= evidence.keys():
                 raise ValueError("Linux native window evidence hashes are missing")
-            verify_linux_gui_archive(artifact, expected_source, receipt["window"])
+            verify_linux_gui_archive(artifact, expected_source, receipt["window"], cli)
         receipts.append(receipt)
     return receipts
 
