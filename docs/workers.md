@@ -274,6 +274,18 @@ The snapshot exposes `manager` and `stopping`. An unbound pool has `manager: nul
 
 ## Dispatch independent tasks as results arrive
 
+Use the public `await` tool for a long observation. It leaves the relay's four JavaScript runners available for other work. When a connector exposes only `code_mode`, check `ssmcp://limits` for `code_mode_native_await: true`. Supply the same typed arguments as a complete JSON string in `code`. Set the outer `agent` to your own joined member for that pool. For example, these are the outer tool arguments for an idle worker:
+
+```json
+{
+  "code": "{\"await\":{\"targets\":[{\"type\":\"worker_assignment\",\"request_id\":\"claim-17\"}],\"window_ms\":20000}}",
+  "agent": {"client_id":"POOL_CLIENT_ID","id":"MEMBER_ID","token":"PRIVATE_TOKEN"},
+  "timeout_ms": 25000
+}
+```
+
+Read `status`, `wait_id`, and `results` directly from `structuredContent`. For a pending window, resume its `wait_id`. If the initial response is lost, retain the worker assignment's original `request_id`. For coordinator waits, supply one `worker_result` target per known `task_id` and use `mode: "any"`. A JavaScript `waitFor(...)` or `call(...)` keeps its enclosing runner occupied until it returns. On an older relay, use a short native read or the connector's direct blocking notification and reconcile by task ID.
+
 Submit ready work with stable request IDs and retain the returned task IDs and pool generation. Workers can claim queued work as soon as a station frees up. When several results can unblock the next step, use one `worker.wait_for` with `mode: "any"` and a `task_finished` condition per outstanding ID (up to 128). Read `worker.result` once for each satisfied ID, remove it from the outstanding set, and submit newly eligible work immediately. For a single ID, a blocking `worker.result` returns the body in the same call.
 
 When dispatch depends on capacity, take `{generation, revision}` from the last manager receipt's `availability` and pass it as `after` to `worker.wait_available`. On `not_accepting`, inspect the reason. A full queue can drain through an outstanding completion; closure or a stopped pool requires reconciliation. For recovery, read committed `worker.events` from the last processed cursor and verify terminal results by task ID. Reconcile a gap against retained state. Preserve unresolved outcomes as `unknown`.

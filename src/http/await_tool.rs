@@ -40,7 +40,7 @@ pub(crate) fn limits() -> Value {
         "server_issued_wait_id":true,"cancel_changes_target":false,"acknowledges_inbox":false,
         "acknowledges_event_subscription":false,
         "grants_completion_permission":false,"public_wait_uses_javascript_slot":false,
-        "helper_uses_enclosing_javascript_slot":true})
+        "code_mode_native_await":true,"helper_uses_enclosing_javascript_slot":true})
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -147,6 +147,51 @@ pub(super) struct Arguments {
     pub(super) controller: Option<Controller>,
     #[serde(skip)]
     pub(super) openai_context: Option<crate::wire::openai::OpenAiContext>,
+}
+
+/// Some MCP clients only expose code_mode. A complete JSON envelope calls the
+/// native waiter directly. Its quoted key and colon cannot begin a JS statement.
+pub(super) fn connector_arguments(code: &CodeArguments) -> Result<Option<Arguments>, String> {
+    let marker = code
+        .code
+        .trim_start()
+        .strip_prefix('{')
+        .and_then(|body| body.trim_start().strip_prefix(r#""await""#))
+        .is_some_and(|rest| rest.trim_start().starts_with(':'));
+    if !marker {
+        return Ok(None);
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Envelope {
+        #[serde(rename = "await")]
+        arguments: serde_json::Map<String, Value>,
+    }
+    let Envelope { mut arguments } = serde_json::from_str(&code.code)
+        .map_err(|_| "native await requires one complete JSON object with the sole key await")?;
+    let agent = code
+        .agent
+        .as_ref()
+        .ok_or("set code_mode.agent to the bound participant for native await")?;
+    if arguments.contains_key("agent") {
+        return Err("put private credentials only in code_mode.agent".into());
+    }
+    if code
+        .tool_client_id
+        .as_ref()
+        .is_some_and(|id| id != &agent.client_id)
+        || arguments
+            .get("client_id")
+            .is_some_and(|id| id.as_str() != Some(&agent.client_id))
+    {
+        return Err("native await must use the same client as code_mode.agent".into());
+    }
+    arguments.insert("client_id".into(), json!(agent.client_id));
+    arguments.insert("agent".into(), json!({"id":agent.id,"token":agent.token}));
+    let mut args = Arguments::parse(Value::Object(arguments))?;
+    args.controller = code.controller_context.clone();
+    args.openai_context = code.openai_context.clone();
+    Ok(Some(args))
 }
 
 fn identifier(value: &str, limit: usize) -> bool {

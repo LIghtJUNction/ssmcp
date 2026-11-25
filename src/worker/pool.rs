@@ -920,7 +920,7 @@ impl Pool {
                 )?;
                 Ok(
                     json!({"task":task,"warnings":prepared.warnings,"worker":self.queue.compact_snapshot(),
-                    "execution":self.execution_name(),"wait_hint":"Keep task_id. For one result, block on worker.result; for several, use one worker.wait_for(any task_finished), then read ready results. Use a bounded wait_ms within your transport deadline."}),
+                    "execution":self.execution_name(),"wait_hint":"Keep task_id. Prefer native await with worker_result targets and window_ms (see docs/workers.md for code_mode native await). For one result, block on worker.result; for several, use one worker.wait_for(any task_finished), then read ready results. Use a bounded wait_ms within your transport deadline."}),
                 )
             }
             "ssmcp.worker.result" => {

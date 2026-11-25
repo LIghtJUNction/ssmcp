@@ -1247,3 +1247,147 @@ async fn activation_rechecks_completion_after_an_older_lease_is_released() {
     assert_eq!(error, (Status::Unavailable, "await_already_resolved"));
     assert!(!record.active.load(Ordering::Acquire));
 }
+
+#[test]
+fn connector_envelope_is_explicit_and_binds_only_the_outer_member() {
+    let parse = |code: &str, agent: Value, source: Value| {
+        let input: CodeArguments = serde_json::from_value(json!({
+            "code":code,"agent":agent,"tool_client_id":source
+        }))
+        .unwrap();
+        connector_arguments(&input)
+    };
+    let member = json!({"client_id":"selected","id":"member","token":"a".repeat(64)});
+    for js in [
+        r#"return {"await":4};"#,
+        r#"{ "await"; return 5; }"#,
+        "await waitFor(id, args)",
+    ] {
+        assert!(parse(js, Value::Null, Value::Null).unwrap().is_none());
+    }
+    let list = r#"{ "await" : {"op":"list"} }"#;
+    assert!(parse(list, Value::Null, Value::Null).is_err());
+    assert!(parse(list, member.clone(), json!("other")).is_err());
+    for invalid in [
+        r#"{"await":{"op":"list","client_id":"other"}}"#,
+        r#"{"await":{"op":"list","agent":{}}}"#,
+        r#"{"await":{"op":"list","unexpected":1}}"#,
+        r#"{"await":{"op":"list"},"extra":1}"#,
+        r#"{"await":{"op":"list"},"await":{"op":"list"}}"#,
+        r#"{"await":{"op":"list"}}; return 1;"#,
+    ] {
+        assert!(
+            parse(invalid, member.clone(), Value::Null).is_err(),
+            "{invalid}"
+        );
+    }
+    let typed = parse(list, member, json!("selected")).unwrap().unwrap();
+    assert_eq!(typed.client_id, "selected");
+    assert_eq!(typed.agent.unwrap().id, "member");
+}
+
+#[tokio::test]
+async fn four_connector_waits_wake_on_one_message_and_keep_it_unread() {
+    let fixture = Fixture::new().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let routes = crate::http::router(fixture.broker.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+    let client = crate::http_client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap();
+    let request = |args: Value| {
+        let auth = json!({"client_id":fixture.session.client_id(), "id":fixture.member["agent_id"],"token":fixture.member["token"]});
+        let outer =
+            json!({"code":json!({"await":args}).to_string(),"agent":auth,"timeout_ms":12_000});
+        let http = client.post(&endpoint).bearer_auth(&fixture.token)
+            .header("MCP-Protocol-Version","2025-06-18").header("Accept","application/json, text/event-stream")
+            .json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"code_mode","arguments":outer}}));
+        async move {
+            let body: Value = http
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert!(
+                body.get("error").is_none() && body["result"]["isError"] != true,
+                "{body}"
+            );
+            body["result"]["structuredContent"].clone()
+        }
+    };
+    let mut observers = tokio::task::JoinSet::new();
+    for _ in 0..4 {
+        observers.spawn(request(
+            json!({"targets":[{"type":"agent_messages"}],"window_ms":10_000}),
+        ));
+    }
+    tokio::time::timeout(Duration::from_secs(6), async {
+        loop {
+            let pending = fixture
+                .broker
+                .awaiting
+                .records
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|r| r.active.load(Ordering::Acquire))
+                .count();
+            if pending == 4 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("four concurrent native observations");
+    let list = request(json!({"op":"list"})).await;
+    assert!(list.get("tool_sources").is_none());
+    fixture
+        .session
+        .collaboration
+        .dispatch(
+            &fixture.owner,
+            "send",
+            json!({
+                "agent_id":fixture.peer["agent_id"],"token":fixture.peer["token"],
+                "to":fixture.member["agent_id"],"payload":{"message":"ready"}
+            }),
+        )
+        .await
+        .unwrap();
+    let mut ids = std::collections::BTreeSet::new();
+    while let Some(response) = observers.join_next().await {
+        let result = response.unwrap();
+        assert_eq!(result["status"], "ready");
+        assert_eq!(result["results"][0]["data"]["acked_cursor"], 0);
+        assert_eq!(
+            result["results"][0]["data"]["messages"][0]["from"],
+            fixture.peer["agent_id"]
+        );
+        assert!(ids.insert(result["wait_id"].as_str().unwrap().to_owned()));
+        assert!(result.get("tool_sources").is_none());
+    }
+    assert_eq!(ids.len(), 4);
+    let retained = fixture
+        .public(
+            &fixture.member,
+            json!({"targets":[{"type":"agent_messages"}]}),
+        )
+        .await;
+    assert_eq!(
+        retained["results"][0]["data"]["messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(retained["results"][0]["data"]["acked_cursor"], 0);
+    server.abort();
+}
