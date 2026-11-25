@@ -399,7 +399,7 @@ fn guidance(
     }
     let maintenance = round.map_or_else(String::new, |round| {
         format!(
-            " Maintenance {}: one authorized {} task, {} ms. Use collab.update with the current revision and original round_id; yield to input and preserve unknown.",
+            " Maintenance {}: one authorized {} action, {} ms. Use collab.update with current revision and original round_id. New work resets the 30-minute Dreaming window; preserve unknown.",
             round.round_id, round.repository, round.budget_ms
         )
     });

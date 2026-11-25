@@ -4,6 +4,7 @@
 //! Participant credentials bind a mailbox to that authenticated identity.
 //! Messages stay in memory until acknowledged or the membership/session ends.
 pub(crate) mod lifecycle;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -17,6 +18,8 @@ use tokio::{
     sync::{Notify, Semaphore, watch},
     time::Instant,
 };
+
+pub(crate) const DREAMING_POLICY: &str = include_str!("collab/dreaming_policy.txt");
 
 const LEASE_MS: u64 = 15 * 60 * 1000;
 const MAX_AGENTS: usize = 64;

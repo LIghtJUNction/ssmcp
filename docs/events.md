@@ -294,7 +294,7 @@ preempts further maintenance, and the native budget deadline ends the round.
 Do not infer an outcome from a timer, elapsed budget or a repeated hint.
 [Lifecycle updates and maintenance receipts](workers.md#member-lifecycle-and-bounded-maintenance)
 
-During a dependency wait, a suitable chore might inspect an existing failure,
+A dependency wait inside an active claim remains working. A suitable authorized chore might inspect an existing failure,
 review a pending patch or improve the current task's documentation. When no
 useful authorized work remains, wait for input or worker events using the
 existing bounded observation contract.

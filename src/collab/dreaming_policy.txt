@@ -1,0 +1,1 @@
+Wait for idle_after_ms (default 5 minutes) before Dreaming. New input/claim: resume working immediately; reset timing. One chore defaults to 30 seconds. Request offline only after 30 continuous Dreaming minutes. Keep one pending request quietly. Human No: wait another full 30 minutes. Only matching explicit Human Yes permits voluntary retirement/offline/leave.

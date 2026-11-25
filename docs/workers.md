@@ -44,6 +44,20 @@ authorizes another execution.
 [Maintenance and preemption](../src/collab/lifecycle.rs) ·
 [Visible generated inputs](../src/http/input_projection.rs)
 
+### Voluntary offline requests
+
+Main and worker participants enter Dreaming after the configured uninterrupted idle interval (five minutes by default). An active claim remains working while its dependencies run. A new human instruction or claim restores working immediately, invalidates any prior exit permission and starts the idle/Dreaming sequence over. Wait for the relay deadline; preserve the original outcome of any interrupted work.
+
+To request voluntary offline, read the exact member's live `status`, `lifecycle.dreaming_since_ms` and `lifecycle.dreaming_elapsed_ms`. The status must still be `dreaming` and the uninterrupted elapsed time must be at least 1,800,000 ms. Keep the same member, connection and episode start with the request. The default 30,000 ms allowance bounds one maintenance action. Between actions, keep blocking on notifications. If continuous time cannot be verified, remain available.
+
+The coordinator uses the control thread's real `ui.wait(intent:"finish")` decision only for its own exit. Preserve one pending request ID across observation windows and wait quietly. Only a matching final outer `may_finish:true` with a consumed Yes from the local Human authorizes voluntary exit. On No, bookmark the current episode and elapsed value and wait another uninterrupted 1,800,000 ms **from the refusal** before requesting again. Recheck the member, episode and outstanding work before acting.
+
+A worker forwards one request with its member, pool and episode start to the bound coordinator and continues blocking on `worker.wait`. The coordinator asks the control-window user one explicit **worker-only** question through `ssmcp.ui.ask` using one retained idempotency key, naming the worker and episode. Read the exact question's answered record and verify the unambiguous Yes and `answer_actor.origin == "human"`. Relay the question ID, control session, answer revision and episode to the worker for verification through the authorized control context. A coordinator's own decision, a pending or skipped question, a missing receipt, and silence leave the worker available. A new claim invalidates the request. New work always takes priority, including work arriving while the human is deciding.
+
+After approval, finish or reconcile outstanding claims; use the real retirement/release protocol for an attached station. If there is no exact retirement receipt or authorized station-removal path, keep waiting.
+
+An agent must not bypass this process using `collab.update`, `leave`, `retiring`, pool resize, `worker.release`, or by letting a lease expire. An actual operator-ordered stop, revocation or station retirement follows its existing draining and acknowledgement protocol. It can remove capacity independently of voluntary offline. Never start or restart a model to obtain a decision.
+
 Work dispatched through the native worker queue still requires its real claim.
 Preserve all claim fields and report the task through `ssmcp.worker.complete`;
 a maintenance round cannot substitute for that claim. Within an authorized

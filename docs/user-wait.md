@@ -58,6 +58,8 @@ return await ui.wait(client.id, {
 
 真实用户选择 No 时，决定保留 `status: "denied"`、`choice: "no"`、Human 来源和修订号，`consumed` 与 `may_finish` 都为 `false`。Yes 只由原提问线程按精确申请和修订号消费一次；以后读取或续等已完成的申请会得到 `consumed: false`，不能再次取得结束许可。其他 agent 不能代替用户批准 Yes。
 
+成员须在同一 Dreaming 窗口内连续达到 1,800,000 毫秒才可申请主动离线。Human No 后转入普通输入或事件等待，自拒绝起再满 30 分钟才可新建申请。新需求或 claim 立即恢复 working，旧窗口和批准失效。[完整申请流程](workers.md#voluntary-offline-requests)
+
 超时不是 No，也不是 Yes。保留响应中实际返回的 `finish_request_id`，在新的 `code_mode` 调用中重新绑定同一线程，并将该 ID 传给 `ui.wait(..., {intent: 'finish', finish_request_id, ...})` 续等；不要猜测申请 ID。此参数仅适用于 `finish`，必须是 1–128 字节的可见 ASCII 精确 ID。取消、新的相关用户输入、断线或重连、撤权、绑定失效都不能批准结束；应处理实际回执或新的用户要求，而不是重放旧许可。[续等与清理](../src/client/interface/questions/workflow.rs)
 
 普通进度、`ui.message` / `ui.present` 的 `kind: "answer"`、`ui.reply` 以及代码执行完成通知仍可正常提交。这是结束前取得真实用户决定的协议；MCP 不能拦截任意外部模型自行停止或发送最终发言，也不会从模型参数推断用户同意。

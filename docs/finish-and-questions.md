@@ -1,6 +1,6 @@
 # 结束决定、异步问题与原生消息
 
-准备结束对话前，通过 `ui.wait(intent: "finish")` 请求本机真实用户决定。先绑定已验证的提问线程，读取最终外层 `structuredContent.user_wait`：只有匹配的 Human Yes 被原线程按精确申请和修订号消费，并经最终权限与输入复核返回 `status: "decided"`、`may_finish: true`，才允许本轮结束。超时、普通消息、取消以及问题列表中的批准状态都不能代替这份回执。[完整参数与回执](user-wait.md#结束前取得真实用户决定) · [服务端协调](../src/http/user_wait.rs)
+成员连续空闲达到配置期限（默认 5 分钟）进入 Dreaming，连续 Dreaming 满 30 分钟后才可申请主动离线。明确拒绝后从该次拒绝起再等完整 30 分钟，待决沿用原申请 ID 安静等待。新需求或 claim 立即恢复 working 并重置计时。协调器为自己申请时，通过 `ui.wait(intent: "finish")` 请求本机真实用户决定。先绑定已验证的提问线程，读取最终外层 `structuredContent.user_wait`：只有匹配的 Human Yes 被原线程按精确申请和修订号消费，并经最终权限与输入复核返回 `status: "decided"`、`may_finish: true`，才允许本轮结束。超时、普通消息、取消以及问题列表中的批准状态都不能代替这份回执。[完整参数与回执](user-wait.md#结束前取得真实用户决定) · [服务端协调](../src/http/user_wait.rs)
 
 ## 申请结束
 

@@ -161,16 +161,18 @@ fn render(role: &str, control_id: &str, cwd: &str, pool: Option<&Value>) -> Resu
         Some(pool) => prompt.push_str(&pool.description()),
         None => prompt.push_str("Worker pool: none linked.\n"),
     }
+    prompt.push_str("Read `ssmcp://guide`, `AGENTS.md`, `docs/workers.md`; discover schemas. First bind/reconnect: `await skills.view(clientId,{})` (native `ssmcp.skills.view`).\n");
     prompt.push_str(match role {
         Role::Coordinator => {
-            "Coordinator: read `ssmcp://guide`, `AGENTS.md`, and `docs/workers.md`. Discover current schemas. Use `collab.join` (`role: \"main\"`) and `collab.bind` with your private credentials in the control session. For a linked pool, join/bind there; manage assignments with `ssmcp.worker.attach`, `ssmcp.worker.submit`, `ssmcp.worker.tasks`, and `ssmcp.worker.result`. Delegate to standby workers while continuing your work. During waits, queue bounded authorized chores (Dreaming); use blocking notifications when none remain."
+            "Coordinator: privately `collab.join` (role main) and `collab.bind` control. For a linked pool, bind there separately. Delegate to standby workers via `ssmcp.worker.attach`, `ssmcp.worker.submit`, `ssmcp.worker.tasks`, `ssmcp.worker.result` while working. Use your verified finish receipt for yourself; ask a worker-specific human question for a worker."
         }
         Role::Worker => {
-            "External worker; start no model. Read `ssmcp://guide`, `AGENTS.md`, `docs/workers.md`. Discover pool schemas. `collab.join` (`role: \"worker\"`), `collab.bind`: use your private credentials. `ssmcp.worker.wait`: preserve each claim unchanged. `ssmcp.worker.complete`: report actual outcomes, then wait again using a new request ID; retry the original wait ID. On exit, complete any current claim, call `ssmcp.worker.release` using its current schema, and stop. Do not attach/submit, consume control-session next-caller input, or replay `unknown` work. During dependency waits, do bounded authorized chores within your claim (Dreaming); otherwise block for notifications."
+            "External worker: privately `collab.join` (role worker) and `collab.bind` pool. `ssmcp.worker.wait`: preserve each claim unchanged; retain pending request_id. `ssmcp.worker.complete`, then wait again using a new request ID. For operator-ordered retirement, complete any current claim; acknowledge its receipt via `ssmcp.worker.release`. For voluntary exit verify the coordinator's human decision reference. Never manage the queue or consume control-session input."
         }
     });
-    prompt.push_str("\nOn unexpected disconnect, try reconnecting: refresh `list` and schemas, verify the authorized workspace/control/pool link, and rejoin/bind your own fresh credentials if needed. Reconcile saved claims, commits and job outcomes before fresh assignments. Preserve `unknown`; never replay uncertain work or restart models.");
-    prompt.push_str("\nRead `ssmcp://recovery`: four attempts (1/2/4/8s); prefer verified authorized 007 and guarded `ssmcp.007.recover` with matching IDs. Respect stop/revocation; unavailable recovery leaves blocked/resumable tasks.");
+    prompt.push('\n');
+    prompt.push_str(crate::collab::DREAMING_POLICY);
+    prompt.push_str("\nReconnect: refresh `list` and schemas; verify authorized workspace/control/pool; privately rejoin/bind. Reconcile claims, commits and outcomes before assigning. Preserve `unknown`; never replay or restart models. Follow `ssmcp://recovery`: 1/2/4/8s; prefer verified authorized 007, guarded `ssmcp.007.recover` with matching IDs. Respect stop/revocation; keep blocked work resumable.");
     Ok(prompt)
 }
 
@@ -307,14 +309,24 @@ mod tests {
         for role in ["", "worker"] {
             let prompt = render(role, CONTROL_ID, "/project", Some(&pool())).unwrap();
             for instruction in [
-                "On unexpected disconnect, try reconnecting",
-                "refresh `list` and schemas",
-                "verify the authorized workspace/control/pool link",
-                "rejoin/bind your own fresh credentials if needed",
-                "Reconcile saved claims, commits and job outcomes before fresh assignments",
-                "Preserve `unknown`; never replay uncertain work or restart models",
+                "Reconnect: refresh `list` and schemas",
+                "verify authorized workspace/control/pool",
+                "privately rejoin/bind",
+                "Reconcile claims, commits and outcomes before assigning",
+                "Preserve `unknown`; never replay or restart models",
+                "1/2/4/8s",
+                "guarded `ssmcp.007.recover` with matching IDs",
+                "idle_after_ms (default 5 minutes)",
+                "resume working immediately; reset timing",
+                "30 continuous Dreaming minutes",
+                "Keep one pending request",
+                "Human No: wait another full 30 minutes",
+                "matching explicit Human Yes",
             ] {
                 assert!(prompt.contains(instruction), "{role:?}: {instruction}");
+            }
+            for overview in ["await skills.view(clientId,{})", "ssmcp.skills.view"] {
+                assert_eq!(prompt.matches(overview).count(), 1, "{role:?}: {overview}");
             }
         }
     }
@@ -329,8 +341,9 @@ mod tests {
         assert!(prompt.contains("then wait again using a new request ID"));
         assert!(prompt.contains("complete any current claim"));
         assert!(prompt.contains("ssmcp.worker.release"));
-        assert!(prompt.contains("using its current schema, and stop"));
-        assert!(prompt.contains("Do not attach/submit, consume control-session next-caller input, or replay `unknown` work."));
+        assert!(prompt.contains("operator-ordered retirement"));
+        assert!(prompt.contains(crate::collab::DREAMING_POLICY));
+        assert!(prompt.contains("Never manage the queue or consume control-session input."));
         assert!(!prompt.contains("ssmcp.worker.attach"));
         assert!(!prompt.contains("ssmcp.worker.submit"));
     }
@@ -342,6 +355,7 @@ mod tests {
             assert!(prompt.contains(&format!("ssmcp.worker.{tool}")));
         }
         assert!(prompt.contains("Delegate to standby workers"));
+        assert!(prompt.contains(crate::collab::DREAMING_POLICY));
     }
 
     #[test]

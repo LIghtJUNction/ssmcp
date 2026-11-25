@@ -38,7 +38,7 @@ For work on inline or file-based MCP configuration, dynamic load, unload, or rel
 
 ## Inspect available skills and instruction files
 
-Use `context.roots(id)` to discover the workspace and explicitly granted read-only context roots. Start with `skills.view(id)` for a live Markdown index that overlays project skills on global roots. Use `skills.list(id,{scope:"effective"})` for the same resolved metadata, or `skills.list(id)` for all project entries. Same-name valid project skills win; inspect root, path and shadowed origins. Read a selected document with `skills.read(id,{root:entry.root.id,path:entry.path})`. Follow next_cursor with the same scan options; restart without a cursor when the scan changes.
+Use `context.roots(id)` to discover the workspace and explicitly granted read-only context roots. On first binding or reconnect, use `await skills.view(clientId,{})` (native `ssmcp.skills.view`) once for a live Markdown index that overlays project skills on global roots. Use `skills.list(id,{scope:"effective"})` for the same resolved metadata, or `skills.list(id)` for all project entries. Same-name valid project skills win; inspect root, path and shadowed origins. Read a selected document with `skills.read(id,{root:entry.root.id,path:entry.path})`. Follow next_cursor with the same scan options; restart without a cursor when the scan changes.
 
 Use standard MCP resources/read as a second channel: read `ssmcp://clients/{id}/agents` for the current instruction chain, `/skills` for project metadata, `/skills?scope=effective` for resolved metadata, and `/skills/view` for the effective Markdown view. Follow each metadata entry's readUri for exact skill or instruction text. Every read fetches current files; reread after edits, additions or deletions. The transport has no subscriptions, so previously loaded host context updates only on a new read.
 
@@ -199,13 +199,15 @@ Confirm the returned state is `running` before reading the listener address on t
 
 Use `return await ui.wait(clientId,{intent:"need_user",timeout_ms:20000})` when user input is needed. Only the final outer `structuredContent.user_wait` entry with `status:"received"` and matching `user_messages` confirms message delivery. Read those messages before continuing.
 
-Before ending, bind the existing asking participant and request a real local Human No/Yes decision:
+Wait for the configured idle deadline (default five minutes) before entering Dreaming. New human work or a claim restores working immediately and invalidates the old episode. Verify the member's continuous `dreaming_elapsed_ms` has reached 1,800,000 ms for the same `dreaming_since_ms` before requesting voluntary offline. An individual maintenance action defaults to 30 seconds. Keep one pending request and resume it quietly. After a Human No, wait a new full 30 minutes from the refusal. Use the coordinator's own finish decision only for that coordinator. For a worker, obtain a separate control-window human question naming the worker and episode and verify the original human Yes. If verification is unavailable, keep waiting. Respect an explicit operator stop or revocation.
+
+For an eligible coordinator, bind the existing asking participant and request a real local Human No/Yes decision:
 
 ```js
 await collab.bind(clientId, {agent_id: participant.agent_id, token: participant.token});
 return await ui.wait(clientId, {
   intent: "finish",
-  reason: "The work is ready. May this conversation end now?",
+  reason: "May this coordinator go offline after 30 continuous minutes of Dreaming?",
   timeout_ms: 20000,
   notify: false,
 });

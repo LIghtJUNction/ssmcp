@@ -8,6 +8,10 @@ After delivering an answer, call the current authenticated `ui.wait` helper and 
 
 Worker-to-coordinator reports use collaboration messages and the exact worker claim; after reporting, return to `worker.wait` rather than opening a human-input wait.
 
+## Returning to work and requesting voluntary offline
+
+A main or worker with new human work or a claim returns to `working` immediately. Wait for the real idle deadline (default five minutes) before Dreaming. Verify 30 continuous minutes of the same Dreaming episode before asking to go offline. The default 30-second maintenance action has its own budget. Keep a single pending request and block quietly; after a Human No wait a full new 30 minutes before asking again. Only the explicit local Human Yes for this member and episode permits voluntary offline. Main uses its verified finish receipt. Workers use the coordinator's specifically addressed human question and original answer reference, remaining available if that evidence is missing. Do not bypass this policy with retirement, release, leave or lease expiration. See [worker lifecycle](docs/workers.md#voluntary-offline-requests).
+
 ## Generated artifacts
 
 Commit source code, text reports, manifests, and test inputs. Store generated screenshots, recordings, archives, compiled binaries, and acceptance bundles in Google Drive or GitHub Release assets; do not add them to Git, including with `git add -f`.

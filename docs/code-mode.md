@@ -381,7 +381,9 @@ For ordinary messages, the helper's `ready` status reserves input but does not d
 
 ### Before ending the conversation
 
-Bind an existing participant with its real ID and private token, then request the local user's decision:
+Deliver completed work as an ordinary answer. In the absence of work, wait for the verified member's idle deadline (default five minutes). Check that `status` is `dreaming` and that `lifecycle.dreaming_elapsed_ms` for this same `dreaming_since_ms` has reached 1,800,000 ms before requesting voluntary offline. A maintenance action has a separate default 30-second budget. New human input or a worker claim restores working and resets eligibility immediately. Missing duration evidence means keep waiting.
+
+Only for the coordinator's own eligible exit, bind the original thread and request the local user's decision:
 
 ```js
 await collab.bind(clientId, {
@@ -390,7 +392,7 @@ await collab.bind(clientId, {
 });
 return await ui.wait(clientId, {
   intent: "finish",
-  reason: "The work is ready. Should this conversation end now?",
+  reason: "The coordinator has completed 30 continuous minutes of Dreaming. Should this coordinator go offline?",
   timeout_ms: 20000,
   notify: false,
 });
@@ -400,7 +402,9 @@ If ordinary input is already queued for this recipient, the server delivers it t
 
 Read the **final outer** `structuredContent.user_wait` entry for this client and wait. End only when it has `intent: "finish"`, `status: "decided"` and `may_finish: true`, with the same exact `finish_request_id` and `finish_decision.request_id`. The decision must have `status: "completed"`, `choice: "yes"`, `actor: {origin: "human"}`, a positive `revision`, `consumed: true`, and `invalidation_reason: null`. An inner JavaScript result may still say `decision_ready` with `may_finish: false`; it is not the final permission receipt. [Receipt commit](../src/code_mode/user_wait.rs)
 
-Human No returns a denied decision and `may_finish: false`. Only the original asking thread can consume the exact Human Yes once; reading or resuming an already completed request returns `consumed: false` and grants no new permission. Other agents cannot approve Yes for the user. Local question state such as `approved` is insufficient until the final outer response rechecks authority, connection, thread and input episode. [Decision rules](../src/client/interface/questions/requests.rs)
+Keep one pending request. Resume that exact ID quietly; send no repeated question. Human No returns a denied decision and `may_finish: false`. Stay available, use ordinary input/event waits and record the episode's current elapsed time. Wait a further 1,800,000 uninterrupted ms after the refusal before a new application. Only the original asking thread can consume the exact Human Yes once; reading or resuming an already completed request returns `consumed: false` and grants no new permission. Other agents cannot approve Yes for the user. Local question state such as `approved` is insufficient until the final outer response rechecks authority, connection, thread and input episode. [Decision rules](../src/client/interface/questions/requests.rs)
+
+Workers send one request naming themselves, their pool and their current Dreaming episode to their coordinator. The coordinator uses a worker-specific `ssmcp.ui.ask` in the control window and verifies the original answered question, unambiguous Yes, and `answer_actor.origin == "human"`. Return its ID, revision and episode for verification. Never use the coordinator's own finish decision for a worker. Preserve unresolved requests without reminders. Explicit operator-ordered removal follows its normal retirement protocol. [Worker approval procedure](workers.md#voluntary-offline-requests)
 
 Progress, ordinary `answer` messages, `ui.reply` and code-run completion remain available. They do not themselves grant permission to end, and MCP cannot force an arbitrary external model to keep running or intercept every external final reply. Follow the decision protocol before ending; do not claim a global enforcement boundary. The retired `request_finish`, `ssmcp.ui.finish`, `ssmcp.ui.answer` and public `await` finish target stay retired. See [user waiting](user-wait.md) for the live red countdown, local cancellation and complete receipt fields.
 

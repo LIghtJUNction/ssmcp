@@ -148,7 +148,8 @@ impl Record {
                 .finish_decision
                 .as_ref()
                 .is_some_and(|decision| decision.status == FinishStatus::Denied);
-            let mut arguments = json!({"intent":"finish","timeout_ms":DEFAULT_TIMEOUT_MS});
+            let mut arguments =
+                json!({"intent":"need_user","timeout_ms":DEFAULT_TIMEOUT_MS,"notify":false});
             // Terminal decisions return immediately when read again. Only a
             // still-live Pending/Approved request can be resumed as a wait.
             if !authority
@@ -161,16 +162,17 @@ impl Record {
                     )
                 })
             {
+                arguments["intent"] = json!("finish");
                 arguments["finish_request_id"] = json!(decision.request_id);
             }
             let context = if authority {
                 "Restore authorization and bind the original asking thread."
             } else if input {
-                "Handle the delivered user_messages first."
+                "Handle the delivered user_messages first. Resume working and reset the Dreaming window."
             } else if self.outcome == Outcome::DecisionReady {
                 "Check the final outer receipt for the decision."
             } else if denied {
-                "The user explicitly declined. Continue the requested work."
+                "The user explicitly declined. Continue Dreaming for 30 more minutes before another voluntary exit request. New work takes priority."
             } else {
                 "No consumed Human Yes; the task remains active."
             };
@@ -179,7 +181,7 @@ impl Record {
             receipt["next_wait"] = json!({"helper":"ui.wait","client_id":self.client_id,
                 "arguments":arguments,"new_tool_call":true});
             receipt["completion_instruction"] = json!(format!(
-                "{context} When ready to finish, actually await next_wait in a new outer tool call. Only a verified, consumed Human Yes can grant may_finish:true."
+                "{context} Actually await next_wait in a new outer call. Reuse the pending ID. Only a verified, consumed Human Yes for this thread can grant may_finish:true."
             ));
         }
         receipt
@@ -811,7 +813,15 @@ mod tests {
             assert_eq!(receipt["task_active"], true);
             assert_eq!(receipt["next_wait"]["helper"], "ui.wait");
             assert_eq!(receipt["next_wait"]["new_tool_call"], true);
-            assert_eq!(receipt["next_wait"]["arguments"]["intent"], "finish");
+            assert_eq!(
+                receipt["next_wait"]["arguments"]["intent"],
+                if matches!(status, "pending" | "approved") {
+                    "finish"
+                } else {
+                    "need_user"
+                }
+            );
+            assert_eq!(receipt["next_wait"]["arguments"]["notify"], false);
             assert_eq!(receipt["next_wait"]["arguments"]["timeout_ms"], 20_000);
             assert_eq!(
                 receipt["next_wait"]["arguments"]["finish_request_id"] == "question_exact",

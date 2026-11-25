@@ -373,7 +373,7 @@ impl Pool {
                 json!({"request_id":{"type":"string","minLength":1,"maxLength":128},"wait_ms":{"type":"integer","minimum":0,"maximum":MAX_OBSERVATION_WAIT_MS,"default":5000}}), json!(["request_id"]), false),
             tool("claim", "Nonblocking worker.wait. Only a verified remote participant can claim one same-account task; assigning a slot does not execute the text.",
                 json!({"request_id":{"type":"string","minLength":1,"maxLength":128}}), json!(["request_id"]), false),
-            tool("complete", "Report a remote task's result using the exact claim and authenticated claimant. This records an external agent report, not independently observed OS completion. Identical retries are idempotent while retained; changed results and stale claims are rejected. After completion return to worker.wait.",
+            tool("complete", "Report a remote task's result using the exact claim and authenticated claimant. This records an external agent report, not independently observed OS completion. Identical retries are idempotent while retained; changed results and stale claims are rejected. After completion return to worker.wait; the idle deadline precedes Dreaming. Completion alone does not authorize offline.",
                 json!({
                     "claim":claim_schema,
                     "status":{"type":"string","enum":["completed","failed","cancelled"]},
@@ -386,7 +386,7 @@ impl Pool {
                     "progress":{"type":"string","minLength":1,"maxLength":1024},
                     "detail":{"type":"string","minLength":1,"maxLength":1024}}),
                 json!(["claim","request_id","event"]), false),
-            tool("release", "Acknowledge the exact retirement receipt returned by worker.wait, using the same authenticated worker. First finish the active claim and stop starting work; release is refused while a task remains active. Only this acknowledgement removes the station. Identical retained retries are idempotent. This records your shutdown acknowledgement; it does not kill an external model or process. After success, leave your collaboration session if needed and stop waiting.",
+            tool("release", "Acknowledge the exact pool-ordered retirement receipt returned by worker.wait, using the same authenticated worker. First finish the active claim and stop starting work; release is refused while a task remains active. Only this acknowledgement removes the station. Identical retained retries are idempotent. This records your shutdown acknowledgement; it does not kill an external model or process. After success, leave your collaboration session if needed and stop waiting.",
                 json!({"retirement":retirement_schema}), json!(["retirement"]), false),
         ]);
         tools
@@ -673,7 +673,7 @@ impl Pool {
                         "cancel_requested":self.queue.cancellation_requested(&lease),
                         "retire_requested":self.queue.retire_requested(&lease),
                         "execution":"remote","worker":self.queue.compact_snapshot(),
-                        "wait_hint":"Use your own tools to perform this task, then call worker.complete with this exact claim. Reuse this wait request_id to observe cancellation; delivery alone never completes it."}));
+                        "wait_hint":"Resume working immediately; this claim resets any Dreaming time and invalidates its exit request. Use your own tools to perform this task, then call worker.complete with this exact claim. Reuse this wait request_id to observe cancellation; delivery alone never completes it."}));
                 }
                 Claimed::Completed { claim, task } => {
                     return Ok(
@@ -685,7 +685,7 @@ impl Pool {
                 Claimed::Retiring { retirement } => {
                     return Ok(json!({"status":"retiring","retirement":retirement,
                         "execution":"remote","worker":self.queue.compact_snapshot(),
-                        "wait_hint":"The pool requested shutdown of your station. Stop starting work, ensure your owned activity has stopped, then call worker.release with this exact retirement receipt. Do not leave before acknowledging release."}));
+                        "wait_hint":"The pool ordered retirement of this station. Stop starting work, ensure your owned activity has stopped, then call worker.release with this exact retirement receipt. Do not leave before acknowledging release."}));
                 }
                 Claimed::Released { retirement } => {
                     return Ok(json!({"status":"released","retirement":retirement,
