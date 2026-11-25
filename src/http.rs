@@ -933,7 +933,7 @@ fn client_info(session: &Session) -> Value {
 fn usage() -> Value {
     json!({
         "language": "javascript",
-        "clients": "Record the verified device_id/session_id and workspace at bind. On disconnect, list with both saved IDs for read-only handoff guidance. If only the old client ID is known, match device_sessions.last_connection_id in the owner inventory. For an unverified or fresh process, obtain a new /invite, /invite worker, or explicit operator selection and verify the control/pool link.",
+        "clients": "Record the verified device_id/session_id and workspace at bind. On disconnect, list with both saved IDs for read-only handoff guidance. Plain list includes retained, verified reconnects in handoffs. Query list with the old client_id for an exact read-only hint, then select the new client_id explicitly and refresh its schemas. For an unverified or fresh process, obtain a new /invite, /invite worker, or explicit operator selection and verify the control/pool link.",
         "tools": "Discover only needed schemas with tools.search(id,{query,name_prefix,include_schemas:true}).",
         "call": "call(id,name,args) invokes the exact discovered native tool. Read structuredContent and isError.",
         "exec": "exec.run starts and reads one command; exec.parallel batches independent commands; exec.start returns a job for long work. Preserve job IDs and stream cursors.",
@@ -954,7 +954,20 @@ async fn list(
     arguments: ListArguments,
 ) -> Result<Value, String> {
     if let Some(id) = arguments.client_id {
-        let session = broker.client(user, authorization, &id).await?;
+        let session = match broker.client(user, authorization, &id).await {
+            Ok(session) => session,
+            Err(error) => {
+                let live = broker.clients(user, authorization).await?;
+                let (mut matches, count) =
+                    verified_reconnects(broker, user, authorization, &live, Some(&id));
+                if count == 1 {
+                    // A catalog cursor and member credentials belong to the old connection.
+                    // Returning metadata here must never dispatch a catalog request to its successor.
+                    return Ok(json!({"tools":[], "nextCursor":null, "handoff":matches.remove(0)}));
+                }
+                return Err(error);
+            }
+        };
         let mut page = session
             .call_with_authorization(
                 Operation::ListTools {
@@ -1004,8 +1017,49 @@ async fn list(
     let mut result = json!({"clients":clients,"device_sessions":inventory,"code_mode":usage()});
     if let (Some(device_id), Some(session_id)) = (&arguments.device_id, &arguments.session_id) {
         result["handoff"] = session_handoff(&sessions, device_id, session_id, inventory.first());
+    } else if arguments.device_id.is_none() {
+        let (handoffs, total) = verified_reconnects(broker, user, authorization, &sessions, None);
+        if total > handoffs.len() {
+            result["handoffs_total"] = json!(total);
+        }
+        result["handoffs"] = json!(handoffs);
     }
     Ok(result)
+}
+
+/// Only a retained owner record and an independently authorized live route can
+/// connect the two IDs. The caller explicitly selects a new connection afterward.
+fn verified_reconnects(
+    broker: &Broker,
+    user: &str,
+    authorization: &Authorization,
+    sessions: &[Arc<Session>],
+    previous_id: Option<&str>,
+) -> (Vec<Value>, usize) {
+    const PREVIEW_LIMIT: usize = 64;
+    let mut handoffs = Vec::new();
+    let mut total = 0;
+    for session in sessions {
+        let info = session.info();
+        let Some(route) = &info.routing else { continue };
+        if !session.is_alive() || !authorization.permits(session) {
+            continue;
+        }
+        for old in broker
+            .device_routes
+            .previous_connection_ids(user, authorization, &info)
+        {
+            if previous_id.is_some_and(|id| id != old) {
+                continue;
+            }
+            total += 1;
+            if handoffs.len() < PREVIEW_LIMIT {
+                handoffs.push(json!({"status":"same_session","previous_client_id":old,
+                    "client_id":info.id,"device_id":route.device_id,"session_id":route.session_id}));
+            }
+        }
+    }
+    (handoffs, total)
 }
 
 /// Descriptive only. The input sessions have already passed the caller's live
@@ -2145,7 +2199,7 @@ pub(crate) fn tool_definitions() -> Value {
         temporary_links::tool_definition(),
         {
             "name":"list",
-            "description":"List live clients authorized for this identity and endpoint, with signed device/session addresses when supported. Exact device_id/session_id lookup includes a read-only handoff after disconnect. A fresh process needs a new invitation or explicit operator selection. Display aliases are not authority. Retained offline owner inventory is descriptive and cannot execute. client_id returns that client's full native schemas; follow nextCursor. Prefer tools.search in code_mode for targeted discovery.",
+            "description":"List live clients authorized for this identity and endpoint, with signed device/session addresses when supported. Exact device_id/session_id lookup includes a read-only handoff after disconnect. A fresh process needs a new invitation or explicit operator selection. Display aliases are not authority. Plain list includes up to 64 verified owner reconnects. A retained old client_id returns a read-only handoff when its signed session is live. Select the current client_id to fetch that client's native schemas; follow nextCursor. Prefer tools.search in code_mode for targeted discovery.",
             "inputSchema":{"type":"object","properties":{
                 "client_id":{"type":"string","minLength":1,"maxLength":64},
                 "device_id":{"type":"string","pattern":"^dev_[0-9a-f]{64}$","description":"Exact verified device ID from list; filters discovery and never executes or broadcasts."},

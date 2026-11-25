@@ -1154,7 +1154,7 @@ impl Broker {
         accessible_sessions(&sessions, user, authorization)
             .find(|session| session.client_id() == id)
             .cloned()
-            .ok_or_else(|| "client is unavailable; call list to refresh connected clients. Look up the previously verified device_id/session_id, or obtain a fresh /invite from the new control window after a manual restart. Preserve unknown outcomes; never replay work.".into())
+            .ok_or_else(|| "client is unavailable; call list to refresh connected clients. Query list with the old client_id for a verified reconnect, look up the previously verified device_id/session_id, or obtain a fresh /invite from the new control window after a manual restart. Preserve unknown outcomes; never replay work.".into())
     }
 
     /// Test fixtures may close one existing wire connection without revoking

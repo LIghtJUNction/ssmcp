@@ -3,7 +3,11 @@
 //! still select the exact current connection.
 use super::*;
 use crate::wire::device_address::{Identity as DeviceIdentity, Proof};
-use std::{collections::HashMap, sync::Mutex, time::Instant};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Mutex,
+    time::Instant,
+};
 
 const CHALLENGE_TTL: Duration = Duration::from_secs(30);
 const WINDOW: Duration = Duration::from_secs(60);
@@ -12,13 +16,19 @@ const MAX_CHALLENGES: usize = 4096;
 const MAX_SUBJECT_PENDING: usize = 128;
 const MAX_SUBJECT_PER_MINUTE: usize = 256;
 const MAX_INVENTORY: usize = 8192;
+const MAX_PREVIOUS_CONNECTIONS: usize = 8;
 
 struct Challenge {
     subject: String,
     credential: String,
     expires: Instant,
 }
+struct PreviousConnection {
+    id: String,
+    expires: Instant,
+}
 struct Record {
+    previous: VecDeque<PreviousConnection>,
     subject: String,
     user: String,
     info: wire::ClientInfo,
@@ -146,9 +156,34 @@ impl Hub {
                 return Err("device inventory capacity reached; no connection was replaced");
             }
         }
+        // The session key indexes a signed address. Preserve its prior connection
+        // IDs only inside the original device, owner and endpoint boundary.
+        let mut previous = VecDeque::new();
+        if let Some(prior) = state.inventory.remove(&address.session_id)
+            && prior.subject == subject
+            && prior.user == user
+            && prior
+                .info
+                .routing
+                .as_ref()
+                .is_some_and(|route| route.device_id == address.device_id)
+        {
+            previous = prior.previous;
+            previous.retain(|item| item.expires > now && item.id != info.id);
+            if !prior.connected && prior.info.id != info.id {
+                if previous.len() == MAX_PREVIOUS_CONNECTIONS {
+                    previous.pop_front();
+                }
+                previous.push_back(PreviousConnection {
+                    id: prior.info.id,
+                    expires: prior.expires,
+                });
+            }
+        }
         state.inventory.insert(
             address.session_id.clone(),
             Record {
+                previous,
                 subject: subject.into(),
                 user: user.into(),
                 info: info.clone(),
@@ -164,12 +199,52 @@ impl Hub {
         let Some(address) = &info.routing else { return };
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(record) = state.inventory.get_mut(&address.session_id)
+            && record.connected
             && record.info.id == info.id
         {
             record.connected = false;
             record.observed_at = super::now();
             record.expires = Instant::now() + INVENTORY_TTL;
         }
+    }
+
+    /// The caller supplies a live session after applying its current ACL. A
+    /// predecessor ID is descriptive and never used to select a dispatch target.
+    pub(crate) fn previous_connection_ids(
+        &self,
+        user: &str,
+        authorization: &Authorization,
+        current: &wire::ClientInfo,
+    ) -> Vec<String> {
+        let (Authorization::Identity(identity), Some(address)) = (authorization, &current.routing)
+        else {
+            return Vec::new();
+        };
+        let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(record) = state.inventory.get(&address.session_id) else {
+            return Vec::new();
+        };
+        if identity.provider != "github"
+            || record.subject != identity.subject
+            || (user != crate::broker::IDENTITY_RESOURCE && user != record.user)
+            || !record.connected
+            || record.info.id != current.id
+            || address.connection_id != current.id
+            || record
+                .info
+                .routing
+                .as_ref()
+                .is_none_or(|route| route.device_id != address.device_id)
+        {
+            return Vec::new();
+        }
+        let now = Instant::now();
+        record
+            .previous
+            .iter()
+            .filter(|item| item.expires > now)
+            .map(|item| item.id.clone())
+            .collect()
     }
 
     /// Offline history is owner-only. Live delegated sessions remain in clients;
@@ -274,6 +349,101 @@ mod tests {
         assert!(
             hub.verify(&owner, "https://relay.example", &p.header().unwrap())
                 .is_err()
+        );
+    }
+    #[test]
+    fn previous_connection_ids_are_bounded_and_keep_the_original_disconnect_expiry() {
+        let hub = Hub::default();
+        let owner = registration("42", "one");
+        let auth = Authorization::Identity(owner.identity.clone());
+        let signed = proof(&hub, &owner);
+        let identity = hub
+            .verify(&owner, "https://relay.example", &signed.header().unwrap())
+            .unwrap();
+        let connection = |n| {
+            let id = format!("{n:064x}");
+            wire::ClientInfo {
+                routing: Some(identity.address(&id, "work", "host")),
+                id,
+                name: "work".into(),
+                title: None,
+                mode: wire::Mode::Shell,
+                cwd: "/tmp".into(),
+                hostname: "host".into(),
+            }
+        };
+        for n in 0..=MAX_PREVIOUS_CONNECTIONS {
+            let info = connection(n);
+            hub.connected("42", "gh-42", &info).unwrap();
+            hub.disconnected(&info);
+            assert!(
+                hub.previous_connection_ids("gh-42", &auth, &info)
+                    .is_empty()
+            );
+        }
+        let current = connection(MAX_PREVIOUS_CONNECTIONS + 1);
+        hub.connected("42", "gh-42", &current).unwrap();
+        let previous: Vec<_> = (1..=MAX_PREVIOUS_CONNECTIONS)
+            .map(|n| connection(n).id)
+            .collect();
+        assert_eq!(
+            hub.previous_connection_ids("gh-42", &auth, &current),
+            previous
+        );
+        let stranger = Authorization::Identity(registration("43", "other").identity);
+        assert!(
+            hub.previous_connection_ids("gh-42", &stranger, &current)
+                .is_empty()
+        );
+        assert!(
+            hub.previous_connection_ids("other-endpoint", &auth, &current)
+                .is_empty()
+        );
+        assert!(
+            hub.previous_connection_ids("gh-42", &auth, &connection(0))
+                .is_empty()
+        );
+        assert!(
+            hub.inventory("gh-42", &auth)[0]
+                .get("previous_connection_ids")
+                .is_none()
+        );
+        let key = current.routing.as_ref().unwrap().session_id.clone();
+        {
+            let mut state = hub.0.lock().unwrap();
+            state.inventory.get_mut(&key).unwrap().previous[0].expires = Instant::now();
+        }
+        assert_eq!(
+            hub.previous_connection_ids("gh-42", &auth, &current)
+                .as_slice(),
+            &previous[1..]
+        );
+        hub.disconnected(&current);
+        let expiry = Instant::now() + Duration::from_secs(600);
+        hub.0
+            .lock()
+            .unwrap()
+            .inventory
+            .get_mut(&key)
+            .unwrap()
+            .expires = expiry;
+        hub.disconnected(&current);
+        assert_eq!(hub.0.lock().unwrap().inventory[&key].expires, expiry);
+        hub.connected("42", "gh-42", &connection(12)).unwrap();
+        assert_eq!(
+            hub.0.lock().unwrap().inventory[&key]
+                .previous
+                .back()
+                .unwrap()
+                .expires,
+            expiry
+        );
+        hub.disconnected(&connection(12));
+        hub.connected("42", "other-endpoint", &connection(13))
+            .unwrap();
+        assert!(
+            hub.previous_connection_ids("other-endpoint", &auth, &connection(13))
+                .is_empty()
         );
     }
     #[test]

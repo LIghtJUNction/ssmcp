@@ -219,6 +219,7 @@ async fn proven_socket(base: &str, token: &str, proof: &str, hostname: &str) -> 
 #[derive(Default)]
 struct DeviceCounters {
     calls: AtomicU64,
+    catalog_reads: AtomicU64,
     receive_payload_bytes: AtomicU64,
     send_payload_bytes: AtomicU64,
     alive: AtomicBool,
@@ -295,9 +296,12 @@ impl SimulatedDevice {
                 };
                 if let wire::Frame::Call { id, operation, .. } = frame {
                     let result = match operation {
-                        Operation::ListTools { .. } => Ok(
-                            json!({"tools":[{"name":"fixture.echo","description":"Isolated routing acceptance echo","inputSchema":{"type":"object"}}]}),
-                        ),
+                        Operation::ListTools { .. } => {
+                            observed.catalog_reads.fetch_add(1, Ordering::SeqCst);
+                            Ok(
+                                json!({"tools":[{"name":"fixture.echo","description":"Isolated routing acceptance echo","inputSchema":{"type":"object"}}]}),
+                            )
+                        }
                         Operation::CallTool { name, .. } if name == "fixture.lose_receipt" => {
                             observed.calls.fetch_add(1, Ordering::SeqCst);
                             let _ = socket.close(None).await;
@@ -550,6 +554,142 @@ async fn ten_verified_devices_route_through_one_mcp_without_cross_account_or_rec
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn signed_reconnect_handoff_lists_the_same_session_without_replaying_lost_work() {
+    let fixture = AddressFixture::new().await;
+    let http = crate::http_client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap();
+    let identity = SimulatedIdentity::new(81);
+    let stable = identity.identity(&fixture.base, "123");
+    let mut old =
+        SimulatedDevice::connect(&http, &fixture.base, &fixture.owner, &identity, 1, "host").await;
+    let uncertain = http
+        .post(format!("{}/api/client/call", fixture.base))
+        .bearer_auth(&fixture.owner)
+        .json(&json!({"client_id":old.client_id,"name":"fixture.lose_receipt","arguments":{}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(uncertain.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(old.counters.calls.load(Ordering::SeqCst), 1);
+    old.disconnect().await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let page =
+                mcp_request(&http, &fixture.base, &fixture.owner_mcp, "list", json!({})).await;
+            if mcp_value(&page)["device_sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| {
+                    item["last_connection_id"] == old.client_id && item["status"] == "offline"
+                })
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("old connection did not leave the live registry");
+
+    let mut current = SimulatedDevice::connect(
+        &http,
+        &fixture.base,
+        &fixture.owner,
+        &identity,
+        2,
+        "renamed-host",
+    )
+    .await;
+    assert_ne!(old.client_id, current.client_id);
+    let page = mcp_request(&http, &fixture.base, &fixture.owner_mcp, "list", json!({})).await;
+    let entries = mcp_value(&page)["handoffs"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "{page}");
+    let handoff = &entries[0];
+    assert_eq!(handoff["status"], "same_session");
+    assert_eq!(handoff["previous_client_id"], old.client_id);
+    assert_eq!(handoff["client_id"], current.client_id);
+    assert_eq!(handoff["device_id"], stable.device_id);
+    assert_eq!(handoff["session_id"], stable.session_id);
+
+    let catalogs = current.counters.catalog_reads.load(Ordering::SeqCst);
+    let stale_catalog = mcp_request(
+        &http,
+        &fixture.base,
+        &fixture.owner_mcp,
+        "list",
+        json!({"client_id":old.client_id}),
+    )
+    .await;
+    let stale_page = mcp_value(&stale_catalog);
+    assert_eq!(&stale_page["handoff"], handoff);
+    assert_eq!(stale_page["tools"], json!([]));
+    assert_eq!(
+        current.counters.catalog_reads.load(Ordering::SeqCst),
+        catalogs
+    );
+
+    let live_catalog = mcp_request(
+        &http,
+        &fixture.base,
+        &fixture.owner_mcp,
+        "list",
+        json!({"client_id":current.client_id}),
+    )
+    .await;
+    let live_page = mcp_value(&live_catalog);
+    assert_eq!(live_page["client"]["id"], current.client_id);
+    assert!(
+        live_page["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "fixture.echo")
+    );
+    assert_eq!(
+        current.counters.catalog_reads.load(Ordering::SeqCst),
+        catalogs + 1
+    );
+
+    let hidden = mcp_request(
+        &http,
+        &fixture.base,
+        &fixture.stranger_mcp,
+        "list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(mcp_value(&hidden)["handoffs"], json!([]));
+    let hidden = mcp_request(
+        &http,
+        &fixture.base,
+        &fixture.stranger_mcp,
+        "list",
+        json!({"client_id":old.client_id}),
+    )
+    .await;
+    assert!(
+        hidden.get("error").is_some() || hidden["result"]["isError"] == true,
+        "{hidden}"
+    );
+    assert!(!hidden.to_string().contains(&current.client_id), "{hidden}");
+    assert!(!hidden.to_string().contains(&stable.session_id), "{hidden}");
+
+    let denied = http
+        .post(format!("{}/api/client/call", fixture.base))
+        .bearer_auth(&fixture.owner)
+        .json(&json!({"client_id":old.client_id,"name":"fixture.echo","arguments":{}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+    assert_eq!(current.counters.calls.load(Ordering::SeqCst), 0);
+    current.disconnect().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn manual_restart_handoff_discovers_candidates_without_transferring_work() {
     let fixture = AddressFixture::new().await;
     let http = crate::http_client::builder()
@@ -630,6 +770,15 @@ async fn manual_restart_handoff_discovers_candidates_without_transferring_work()
     );
     assert!(handoff.get("client_id").is_none());
     assert_eq!(mcp_value(&one)["clients"], json!([]));
+    let plain = discover(&fixture.owner_mcp, json!({})).await;
+    assert_eq!(mcp_value(&plain)["handoffs"], json!([]));
+    let catalogs = replacement.counters.catalog_reads.load(Ordering::SeqCst);
+    let old_catalog = discover(&fixture.owner_mcp, json!({"client_id":original.client_id})).await;
+    assert_eq!(old_catalog["result"]["isError"], true);
+    assert_eq!(
+        replacement.counters.catalog_reads.load(Ordering::SeqCst),
+        catalogs
+    );
     let stale = mcp_request(
         &http,
         &fixture.base,
