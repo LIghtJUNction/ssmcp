@@ -1,8 +1,8 @@
 [prop]
 id = "ssmcp"
 name = "SSMCP"
-version = "v0.10.46"
-versionCode = 1046
+version = "v0.10.47"
+versionCode = 1047
 author = "LIghtJUNction"
 description = "SSMCP session console for Android"
 
