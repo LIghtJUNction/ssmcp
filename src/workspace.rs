@@ -1534,10 +1534,13 @@ mod managed_file_integration_tests {
             json!({"path":".ssmcp/tmp/new.txt","text":"must not appear","temporary":true,"overwrite":true,"create_parents":true}),
         ).await.is_err());
         assert!(!scratch.0.join(".ssmcp").exists());
-        workspace.perform(
+        perform_after_write_contention(
+            &workspace,
             "ssmcp.fs.write_text",
             json!({"path":".ssmcp/tmp/existing.txt","text":"keep existing content","create_parents":true}),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         let before = managed_files::list(&scratch.0).unwrap();
         assert!(workspace.perform(
             "ssmcp.fs.write_text",

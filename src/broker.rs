@@ -2770,6 +2770,7 @@ mod tests {
             authorization: Some(grant),
             binding: Some(binding.clone()),
             reply,
+            native_prompt_lookup_error: None,
             traffic_failure: TrafficFailureState::default(),
         };
         assert!(original.validate_binding(call.binding.as_ref()).is_ok());
