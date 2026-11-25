@@ -218,5 +218,5 @@ case ":$PATH:" in
     *":$install_dir:"*) ;;
     *) printf 'Add this directory to PATH: %s\n' "$install_dir" ;;
 esac
-printf 'Sign in: ssmcp login --server %s\n' 'https://ssmcp.lmm.best'
-printf 'Then enter your project directory and run: ssmcp\n'
+printf 'From your project directory, replace YOUR_USERNAME with your account name and run:\n'
+printf 'ssmcp YOUR_USERNAME@%s\n' 'ssmcp.lmm.best'

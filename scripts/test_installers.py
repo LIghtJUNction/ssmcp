@@ -133,6 +133,9 @@ else:
             combined = result.stdout + result.stderr
             if (result.returncode == 0) != success:
                 raise AssertionError("unexpected installer outcome:\n" + combined)
+            if success and ("ssmcp YOUR_USERNAME@ssmcp.lmm.best" not in combined.splitlines()
+                            or "ssmcp login" in combined):
+                raise AssertionError("invalid post-install connection command:\n" + combined)
             if error and error.lower() not in combined.lower():
                 raise AssertionError("missing installer diagnostic: " + error + "\n" + combined)
 

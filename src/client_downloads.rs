@@ -202,12 +202,13 @@ pub fn configured(
         Some(Err(error)) => return Err(error.into()),
         None => None,
     };
+    let relay = origin.strip_prefix("https://").unwrap_or(&origin);
     let state = Downloads {
         install_shell: INSTALL_SH
-            .replace("'https://ssmcp.lmm.best'", &shell_quote(&origin))
+            .replace("'ssmcp.lmm.best'", &shell_quote(relay))
             .into(),
         install_powershell: INSTALL_POWERSHELL
-            .replace("'https://ssmcp.lmm.best'", &powershell_quote(&origin))
+            .replace("'ssmcp.lmm.best'", &powershell_quote(relay))
             .into(),
         shell: SH
             .replace("@@ORIGIN@@", &shell_quote(&origin))
@@ -664,12 +665,15 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(response.headers()["cache-control"], "no-store");
             let source = response.text().await.unwrap();
-            assert!(source.contains("https://configured.example"));
             assert!(!source.contains("injected.example"));
             assert!(!source.contains("@@ORIGIN@@"));
             if !path.starts_with("client/") {
-                assert!(source.contains("Sign in: ssmcp login --server"));
-                assert!(!source.contains("'https://ssmcp.lmm.best'"));
+                assert!(source.contains("ssmcp YOUR_USERNAME@"));
+                assert!(source.contains("'configured.example'"));
+                assert!(!source.contains("ssmcp login"));
+                assert!(!source.contains("ssmcp.lmm.best"));
+            } else {
+                assert!(source.contains("https://configured.example"));
             }
         }
         let response = client
