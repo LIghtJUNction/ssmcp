@@ -85,15 +85,19 @@ fn recipient_list_tracks_member_lifecycle_across_updates() {
         );
         state.chat_change_view(View::Agents);
         state.conversation.selected_agent = Some("member:worker".into());
-        for (status, label) in [
-            ("idle", "Idle"),
-            ("dreaming", "Dreaming"),
-            ("working", "Working"),
+        for (status, active, label) in [
+            ("idle", None, "Idle"),
+            ("dreaming", None, "Unknown"),
+            ("dreaming", Some(false), "Pending"),
+            ("dreaming", Some(true), "Dreaming"),
+            ("idle", Some(true), "Dreaming"),
+            ("working", None, "Working"),
         ] {
-            let data = json!({"agents":[{"name":"Compiler","agent_id":"worker","status":status}],"queue":[]});
+            let data = json!({"agents":[{"name":"Compiler","agent_id":"worker",
+                "status":status,"dreaming_active":active}],"queue":[]});
             let rows = state.chat_session_rows(&data, 24).join("\n");
             assert!(rows.contains(&format!("{label} · Compiler")), "{rows}");
-            if status != "dreaming" {
+            if label != "Dreaming" {
                 assert!(!rows.contains("Dreaming"), "{rows}");
             }
             if width == 120 {

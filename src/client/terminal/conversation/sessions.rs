@@ -120,11 +120,9 @@ fn member_lifecycle(entry: &Value) -> Option<&'static str> {
         return None;
     }
     match field(entry, "status") {
-        "working" => Some("Working"),
-        "idle" => Some("Idle"),
-        "offline" => Some("Offline"),
-        "dreaming" => Some("Dreaming"),
-        "retiring" => Some("Retiring"),
+        "working" | "idle" | "dreaming" | "offline" | "retiring" => {
+            Some(main_status::member_lifecycle(entry).1)
+        }
         _ => None,
     }
 }

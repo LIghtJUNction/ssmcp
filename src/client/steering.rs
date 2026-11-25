@@ -1953,6 +1953,7 @@ mod tests {
                 agent_id: "agent_one".into(),
                 name: "Actual member".into(),
                 status: "working".into(),
+                dreaming_active: None,
                 role: None,
             }],
             messages,

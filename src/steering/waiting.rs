@@ -203,6 +203,7 @@ mod tests {
             name: "A".into(),
             role: None,
             status: "active".into(),
+            dreaming_active: None,
         }];
         queue
             .command(

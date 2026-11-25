@@ -1421,6 +1421,7 @@ impl Broker {
         let access_supported =
             !legacy_account_self && peer.as_ref().is_some_and(|peer| peer.session_access);
         let control_attribution = peer.as_ref().is_some_and(|peer| peer.control_attribution);
+        let main_lifecycle = peer.as_ref().is_some_and(|peer| peer.main_lifecycle);
         let native_messages =
             registration.is_some() && peer.as_ref().is_some_and(|peer| peer.native_messages);
         let version_notice_supported = peer.as_ref().is_some_and(|peer| peer.version_notice);
@@ -1806,7 +1807,15 @@ impl Broker {
                         timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::MessagesReply { id, result })).await??;
                     }
                     Some(Frame::Steering { id, command }) => {
-                        let result = session.steering_command(command);
+                        let result = session.steering_command(command).map(|mut snapshot| {
+                            // Older v7 clients reject unfamiliar roster fields.
+                            if !main_lifecycle {
+                                for member in &mut snapshot.agents {
+                                    member.dreaming_active = None;
+                                }
+                            }
+                            snapshot
+                        });
                         let frame = Frame::SteeringReply { id, result };
                         timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                     }

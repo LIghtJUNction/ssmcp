@@ -63,6 +63,10 @@ impl View {
         true
     }
 
+    pub(super) fn disconnected(&self) -> bool {
+        matches!(self.status, Status::Disconnected)
+    }
+
     pub(super) fn rows(&self) -> [String; 3] {
         let id = if self.client_id.is_empty() {
             "—"

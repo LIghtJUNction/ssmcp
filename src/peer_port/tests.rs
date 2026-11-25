@@ -111,6 +111,7 @@ impl Fixture {
             time_observation: false,
             chat_disabled: false,
             openai_context: false,
+            main_lifecycle: false,
             peer_ports: opted_in && config.auto_candidates.is_none(),
             peer_ports_auto: opted_in && config.auto_candidates.is_some(),
         };

@@ -75,7 +75,7 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
         .env(
             "SSMCP_RELAY_CAPABILITIES",
             format!(
-                "{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{}",
                 crate::wire::SESSION_ACCESS_CAPABILITY,
                 crate::wire::CONTROL_ATTRIBUTION_CAPABILITY,
                 crate::wire::messages::CAPABILITY,
@@ -83,7 +83,8 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
                 crate::wire::wait_display::CAPABILITY,
                 crate::wire::wait_display::DURABLE_CAPABILITY,
                 crate::wire::wait_display::TIME_CAPABILITY,
-                crate::wire::openai::CAPABILITY
+                crate::wire::openai::CAPABILITY,
+                crate::wire::MAIN_LIFECYCLE_CAPABILITY
             ),
         )
         .stdin(Stdio::piped())
@@ -237,6 +238,7 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::wait_display::TIME_CAPABILITY
                 | crate::wire::CHAT_DISABLED_CAPABILITY
                 | crate::wire::openai::CAPABILITY
+                | crate::wire::MAIN_LIFECYCLE_CAPABILITY
                 | crate::wire::peer_port::CAPABILITY
                 | crate::wire::peer_port::AUTO_CAPABILITY
         ) || capabilities[..index].contains(value)
@@ -528,6 +530,11 @@ mod tests {
         assert_eq!(access_capability_header(Some(&both)).unwrap(), both);
         let all = format!("{both},{}", crate::wire::messages::CAPABILITY);
         assert_eq!(access_capability_header(Some(&all)).unwrap(), all);
+        let lifecycle = format!("{all},{}", crate::wire::MAIN_LIFECYCLE_CAPABILITY);
+        assert_eq!(
+            access_capability_header(Some(&lifecycle)).unwrap(),
+            lifecycle
+        );
         let duplicate_messages = format!("{all},{}", crate::wire::messages::CAPABILITY);
         assert!(access_capability_header(Some(&duplicate_messages)).is_none());
         let versions = format!("{all},{}", crate::wire::versions::CAPABILITY);

@@ -333,6 +333,10 @@ impl Hub {
                 name: agent.name.clone(),
                 role: agent.role.clone(),
                 status: agent.lifecycle.status.as_str().into(),
+                dreaming_active: {
+                    let active = agent.lifecycle.dreaming_since_ms().is_some();
+                    (active || agent.lifecycle.status.as_str() == "dreaming").then_some(active)
+                },
             })
             .collect())
     }
@@ -353,6 +357,7 @@ impl Hub {
                         name: agent.name.clone(),
                         role: agent.role.clone(),
                         status: agent.lifecycle.status.as_str().into(),
+                        dreaming_active: None,
                     },
                 )
             })
@@ -373,6 +378,7 @@ impl Hub {
             name: agent.name.clone(),
             role: agent.role.clone(),
             status: agent.lifecycle.status.as_str().into(),
+            dreaming_active: None,
         })
     }
 

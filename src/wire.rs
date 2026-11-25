@@ -28,6 +28,7 @@ pub const MAX_ALLOWED_PRINCIPALS: usize = 32;
 pub const SESSION_ACCESS_CAPABILITY: &str = "session_access_v1";
 /// Relay-derived account/agent attribution, separately negotiated for strict v7 peers.
 pub const CONTROL_ATTRIBUTION_CAPABILITY: &str = "control_attribution_v1";
+pub(crate) const MAIN_LIFECYCLE_CAPABILITY: &str = "main_lifecycle_v1";
 pub(crate) const CHAT_DISABLED_CAPABILITY: &str = "human_chat_disabled_v1";
 pub(crate) const CHAT_DISABLED: &str = "chat_disabled: human chat is disabled for this client";
 pub(crate) fn human_chat_tool(name: &str) -> bool {
@@ -84,6 +85,9 @@ pub struct SteeringAgent {
     pub name: String,
     pub role: Option<String>,
     pub status: String,
+    /// Present only for an opted-in local roster when a Dreaming episode matters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dreaming_active: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

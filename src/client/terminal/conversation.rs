@@ -14,6 +14,7 @@ mod hints;
 mod history;
 mod listener;
 pub(super) mod logout;
+mod main_status;
 mod messaging;
 mod openai;
 mod paste;
@@ -125,6 +126,8 @@ pub(super) struct Conversation {
     wait_observations: timing::WaitFeed,
     #[cfg(test)]
     worker_activity_fixture: Option<Value>,
+    #[cfg(test)]
+    main_roster_fixture: Option<Value>,
     #[cfg(test)]
     statistics_fixture: Option<Value>,
     pub(super) preferred_input_rows: Option<u16>,
@@ -355,6 +358,10 @@ impl State {
     }
 
     pub(super) fn chat_data(&self) -> Value {
+        #[cfg(test)]
+        if let Some(data) = &self.conversation.main_roster_fixture {
+            return data.clone();
+        }
         if self.preview {
             json!({"connected":false,"supported":true,"preview":true,
                 "agents":[
@@ -3419,21 +3426,18 @@ impl State {
                 } else {
                     format!("{}{suffix}", self.conversation.canvas.label(g.left))
                 };
-                if g.left < 32 {
-                    self.chat_line(&format!("SSMCP main · {label}"), PanelTone::Muted, g.left)
-                } else {
-                    let label = fit(&label, g.left.saturating_sub(16));
-                    let title = fit(
-                        &format!("  SSMCP main{}", self.context_label),
-                        g.left.saturating_sub(label.width() as u16 + 4),
-                    );
-                    let gap = usize::from(g.left).saturating_sub(title.width() + label.width() + 2);
-                    format!(
-                        "{}{}",
-                        self.tone(PanelTone::Heading, &title),
-                        self.tone(PanelTone::Muted, &format!("{}{label}  ", " ".repeat(gap))),
-                    )
-                }
+                let status = main_status::from_roster(
+                    &data,
+                    &self.conversation.process_id,
+                    self.link_metrics.disconnected(),
+                );
+                let (title, detail) =
+                    main_status::header(&self.context_label, &label, status, g.left);
+                format!(
+                    "{}{}",
+                    self.tone(PanelTone::Heading, &title),
+                    self.tone(PanelTone::Muted, &detail)
+                )
             } else if (1..top).contains(&index) {
                 self.chat_line(
                     &format!("  {}", self.announcements[usize::from(index - 1)]),
@@ -4544,6 +4548,74 @@ mod tests {
         let header = screen.lines().next().unwrap().trim();
         assert!(header.starts_with("SSMCP main  /  alpha-project  /  Review uploads"));
         assert!(header.ends_with("queue  4/7"));
+    }
+
+    #[test]
+    fn live_main_header_tracks_its_local_roster_without_chat_events() {
+        let ui = Ui {
+            sidebar: false,
+            ..Ui::default()
+        };
+        for width in [20, 32, 48, 100] {
+            let mut state = super::super::preview_state(24, width, &ui);
+            state.set_context("/workspace/ssmcp", None);
+            state.conversation.process_id = "room".into();
+            let initial = state.events.snapshot()["retained_events"].clone();
+            let mut data = json!({"connected":true,"supported":true,"session_id":"room",
+                "agents":[{"role":"worker","status":"working"},{"role":"Coordinator","status":"idle"}],
+                "queue":[]});
+            for (status, active, expected) in [
+                ("idle", None, "Idle"),
+                ("working", None, "Working"),
+                ("dreaming", None, "Unknown"),
+                ("dreaming", Some(false), "Pending"),
+                ("dreaming", Some(true), "Dreaming"),
+                ("idle", Some(true), "Dreaming"),
+                ("working", None, "Working"),
+                ("retiring", None, "Retiring"),
+                ("offline", None, "Offline"),
+            ] {
+                data["agents"][1]["status"] = json!(status);
+                data["agents"][1]["dreaming_active"] = json!(active);
+                state.conversation.main_roster_fixture = Some(data.clone());
+                let screen = display(&mut state).screen().contents();
+                let header = screen.lines().next().unwrap();
+                assert!(header.contains(expected), "{width}: {header}");
+                assert!(header.width() <= width as usize);
+                if width == 100 {
+                    assert!(
+                        header.contains("SSMCP main  /  ssmcp")
+                            && header.trim_end().ends_with("conversation"),
+                        "{header}"
+                    );
+                }
+            }
+            data["agents"][1]["status"] = json!("working");
+            data["session_id"] = json!("previous-room");
+            state.conversation.main_roster_fixture = Some(data);
+            assert!(
+                display(&mut state)
+                    .screen()
+                    .contents()
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .contains("Unknown")
+            );
+            state
+                .link_metrics
+                .begin(1, "room", crate::client::link_metrics::Status::Disconnected);
+            assert!(
+                display(&mut state)
+                    .screen()
+                    .contents()
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .contains("Offline")
+            );
+            assert_eq!(state.events.snapshot()["retained_events"], initial);
+        }
     }
 
     #[test]
