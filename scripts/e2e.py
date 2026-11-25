@@ -73,7 +73,8 @@ BUILTIN_TOOLS = frozenset({
 
 WORKER_TOOLS = frozenset({
     "ssmcp.worker.status", "ssmcp.worker.attach", "ssmcp.worker.tasks",
-    "ssmcp.worker.events",
+    "ssmcp.worker.events", "ssmcp.worker.share",
+    "ssmcp.worker.station_state", "ssmcp.worker.station_reset",
     "ssmcp.worker.stop", "ssmcp.worker.resize", "ssmcp.worker.submit", "ssmcp.worker.result",
     "ssmcp.worker.cancel", "ssmcp.worker.wait", "ssmcp.worker.wait_available", "ssmcp.worker.wait_for", "ssmcp.worker.claim", "ssmcp.worker.complete",
     "ssmcp.worker.report", "ssmcp.worker.release",
@@ -607,8 +608,8 @@ class Harness:
                 "raise SystemExit(99)\n"
             )
             wrapper.chmod(0o700)
-        # Each child gets only the owned fixture account and isolated lifecycle
-        # state. Never consult the developer's saved login or reload handoff.
+        # The device starts with private empty controller and session state.
+        # The fixture's controller OAuth credentials stay outside this child.
         state = self.directory / f"{label}-state"
         state.mkdir(mode=0o700)
         (state / "auth").mkdir(mode=0o700)
@@ -628,7 +629,7 @@ class Harness:
             "SSMCP_CLIENT_CONFIG": str(config),
             "SSMCP_UI_CONFIG": str(config),
         })
-        return self.account_gateway.seed_login(environment)
+        return environment
 
     def start_client(self, label="client", *, name="workstation", cwd=None,
                      destination=None, extra_env=None):

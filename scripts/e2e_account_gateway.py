@@ -102,7 +102,6 @@ class AccountGateway:
         self.process = None
         self.directory = None
         self.exit_code = None
-        self.pending_auth_homes = []
 
     @property
     def prepared(self):
@@ -168,41 +167,19 @@ class AccountGateway:
                 "the isolated account has the expected stable provider identity and handle")
         status, result, _ = h.request("GET", path="/healthz", secret="")
         h.check(status == 200 and result.strip() == "ok", "the real production account router is healthy")
-        for root in self.pending_auth_homes:
-            self.write_login(root)
-        self.pending_auth_homes.clear()
 
     def validate_account_identity(self, identity):
         return validate_account_identity(self.harness, self.directory, identity)
 
-    def seed_login(self, environment):
-        """Write only this fixture's real account credential into this child home."""
-        root = Path(environment["SSMCP_AUTH_HOME"])
-        if not self.prepared:
-            if root not in self.pending_auth_homes:
-                self.pending_auth_homes.append(root)
-            return environment
-        self.write_login(root)
-        return environment
-
-    def write_login(self, root):
-        h = self.harness
-        private_json(root / (hashlib.sha256(h.origin.encode()).hexdigest() + ".json"), {
-            "server": h.origin, "token": h.account_token,
-            "principal": h.identity["principal"], "subject": h.identity["subject"],
-            "username": h.identity["username"], "expires_at": h.account_expires_at,
-        })
-        selected = root / "default"
-        with selected.open("x", encoding="utf-8") as stream:
-            os.chmod(selected, 0o600)
-            stream.write(h.origin)
-
-    def client_command(self, *, name="workstation", shell="/bin/sh", extra_args=()):
+    def client_command(self, *, name="workstation", shell="/bin/sh", extra_args=(), legacy=False):
         h = self.harness
         reconnect = () if "--no-watchdog" in extra_args or "--reconnect-delay" in extra_args else ("--reconnect-delay", "1")
         if not getattr(h, "origin", ""):
             raise RuntimeError("prepare the owned account router before creating a client")
-        return [str(h.binary_dir / "ssmcp"), "--server", h.origin, "--name", name,
+        target = ["--server", h.origin]
+        if not legacy:
+            target += ["--username", h.identity["username"]]
+        return [str(h.binary_dir / "ssmcp"), *target, "--name", name,
                 "--shell", shell, "--no-setup", *reconnect, *extra_args]
 
     def validate_connection_record(self, value):

@@ -2746,7 +2746,14 @@ where
                 "relay rejected controller admission: {message}"
             ))));
         }
-        _ => {
+        None => {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "relay transport closed before the controller admission reply",
+            )
+            .into());
+        }
+        Some(_) => {
             return Err(Box::new(relay::PermanentFailure(
                 "the relay must support device controller admission; update ssmcpd".into(),
             )));
@@ -4725,6 +4732,36 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(title.title.as_deref(), Some("resume"));
+    }
+
+    #[tokio::test]
+    async fn admission_eof_retries_but_explicit_rejection_and_incompatible_frames_stop() {
+        let principal = "fixture@relay.example".to_string();
+        let allow = [principal.clone()];
+        for (frame, retry) in [
+            (None, true),
+            (
+                Some(Frame::Reject {
+                    message: "denied".into(),
+                }),
+                false,
+            ),
+            (Some(Frame::ResolveController { id: 0, principal }), false),
+        ] {
+            let mut bytes = Vec::new();
+            if let Some(frame) = frame {
+                write_frame(&mut bytes, &frame).await.unwrap();
+            }
+            let error = admit_controller(
+                &mut bytes.as_slice(),
+                &mut tokio::io::sink(),
+                "https://relay.example",
+                &allow,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(watchdog_retries(true, Some(error.as_ref())), retry);
+        }
     }
 
     #[test]

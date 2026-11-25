@@ -23,6 +23,7 @@ import tempfile
 import time
 
 from e2e import Harness
+from e2e_account_gateway import private_json
 
 
 OFFICIAL_V13_SHA256 = "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa"
@@ -106,11 +107,22 @@ class LegacyHarness(Harness):
             (directory / name).symlink_to(Path(executable).resolve())
         (directory / "python3").symlink_to(Path(sys.executable).resolve())
         state = private_directory(self.directory / (label + "-state"))
-        return self.account_gateway.seed_login(isolated_environment(state, directory))
+        environment = isolated_environment(state, directory)
+        root = Path(environment["SSMCP_AUTH_HOME"])
+        private_json(root / (hashlib.sha256(self.origin.encode()).hexdigest() + ".json"), {
+            "server": self.origin, "token": self.account_token,
+            "principal": self.identity["principal"], "subject": self.identity["subject"],
+            "username": self.identity["username"], "expires_at": self.account_expires_at,
+        })
+        selected = root / "default"
+        with selected.open("x", encoding="utf-8") as stream:
+            os.chmod(selected, 0o600)
+            stream.write(self.origin)
+        return environment
 
     def client_command(self, *, name="workstation", shell="/bin/sh", extra_args=()):
-        return super().client_command(
-            name=name, shell=shell, extra_args=("--no-browser", *extra_args))
+        return self.account_gateway.client_command(
+            name=name, shell=shell, extra_args=("--no-browser", *extra_args), legacy=True)
 
     def native(self, client_id, name, arguments):
         status, result, _ = self.request("POST", {

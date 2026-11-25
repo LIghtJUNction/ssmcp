@@ -248,7 +248,8 @@ class Daemon(Harness):
         return identity
 
     def daemon_arguments(self, name, *, watchdog):
-        arguments = ["--daemon", "--server", self.origin, "--no-setup", "--name", name,
+        arguments = ["--daemon", "--server", self.origin, "--username", self.identity["username"],
+                     "--no-setup", "--name", name,
                      "--title", "daemon lifecycle validation", "--shell", "/bin/sh"]
         if watchdog:
             arguments += ["--watchdog", "--reconnect-delay", str(self.delay)]
@@ -286,16 +287,24 @@ class Daemon(Harness):
         directory = Path(status["state_directory"])
         auth_home = Path(self.environment["SSMCP_AUTH_HOME"])
         account = auth_home / (hashlib.sha256(self.origin.encode()).hexdigest() + ".json")
+        ledger = auth_home / "controller-accounts.json"
         paths = [self.state_home, directory, directory / "manifest.json", directory / "state.json",
-                 directory / "ssmcp", auth_home, account, auth_home / "default"]
+                 directory / "ssmcp", auth_home, ledger]
         self.check(all(path.lstat().st_uid == os.getuid() and not path.is_symlink()
                        and not stat.S_IMODE(path.stat().st_mode) & 0o077 for path in paths),
-                   "saved executable, management state and account login are owned and private")
+                   "saved executable, management state and controller ledger are owned and private")
         self.check(not any(directory.glob("lifecycle*.jsonl")),
                    "the fresh private session creates no automatic lifecycle log files")
-        saved = json.loads(account.read_text())
-        self.check(saved.get("server") == self.origin and saved.get("token") == self.account_token,
-                   "the daemon uses only the owned fixture account credential")
+        self.check(not account.exists(),
+                   "the passive daemon has no stored controller bearer credential")
+        entries = json.loads(ledger.read_text())["entries"]
+        self.check(any(entry.get("relay") == self.origin
+                       and entry.get("target") == self.identity["username"]
+                       and entry.get("provider") == self.identity["provider"]
+                       and entry.get("subject") == self.identity["subject"]
+                       and entry.get("status") == "default"
+                       and entry.get("first_verified") is not None for entry in entries),
+                   "the daemon observed verified control by its selected fixture account")
         self.check(status["executable_sha256"] == self.image_sha
                    and sha256(directory / "ssmcp") == self.image_sha,
                    "saved executable SHA-256 matches the tested source image")

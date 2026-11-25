@@ -1896,7 +1896,10 @@ class WorkerWindows(Harness):
                    "the replacement preserves requested capacity without inheriting the old manager or workers")
         expected = list(original["argv"])
         endpoint_index = expected.index("--server")
-        expected[endpoint_index + 2:endpoint_index + 2] = ["--username", self.identity["username"]]
+        self.check(expected.count("--username") == 1
+                   and expected[endpoint_index + 1:endpoint_index + 4]
+                   == [self.origin, "--username", self.identity["username"]],
+                   "the child originally selected the exact named loopback account")
         expected[expected.index("--worker") + 1] = "4"
         self.check(current["cwd"] == str(workspace) and current["argv"] == expected,
                    "worker-only reload pins the account and preserves literal arguments and cwd")

@@ -97,12 +97,15 @@ mod tests {
             "client::update::terminal::tests::slash_update_follows_the_replaced_installation_entry";
         if std::env::var_os(CHILD).is_none() {
             let directory = super::super::tests::temporary();
-            let entry = directory.join("ssmcp fixture");
+            // Exercise an aliased parent even on hosts whose temp directory is canonical.
+            let alias = directory.join("alias");
+            symlink(".", &alias).unwrap();
+            let entry = alias.join("ssmcp fixture");
             symlink(std::env::current_exe().unwrap(), &entry).unwrap();
-            let output = std::process::Command::new(entry)
+            let output = std::process::Command::new(&entry)
                 .args(["--exact", TEST, "--nocapture"])
                 .current_dir(&directory)
-                .env(CHILD, "1")
+                .env(CHILD, &entry)
                 .output()
                 .unwrap();
             fs::remove_dir_all(directory).unwrap();
@@ -116,7 +119,7 @@ mod tests {
         }
 
         // A foreground client pins this same entry before its first connection.
-        let entry = std::env::current_dir().unwrap().join("ssmcp fixture");
+        let entry = std::path::PathBuf::from(std::env::var_os(CHILD).unwrap());
         assert_eq!(crate::client::reload::installed_program().unwrap(), entry);
         assert!(entry.is_symlink());
         let replace = |fixture| {

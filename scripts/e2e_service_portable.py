@@ -2,10 +2,10 @@
 """Portable client service acceptance without native installation or a broker.
 
 Runs a real foreground supervisor in a fresh SSMCP_SESSION_HOME. An owned
-loopback HTTP fixture supplies a synthetic account and rejects every WebSocket
-handshake with retryable HTTP 503. The real CLI stores the fixture login using
-its platform-private credential writer. No browser, external OAuth service,
-installed service, existing session or model account is used.
+loopback HTTP fixture rejects unauthenticated WebSocket handshakes with HTTP
+503 before controller admission. The real CLI uses an explicit fixture account
+target. No browser, external OAuth service, installed service, existing session
+or model account is used.
 
 Usage:
     python scripts/e2e_service_portable.py --bin-dir target/debug \
@@ -272,7 +272,11 @@ class Portable:
             if value.get("connection_state") == "connected":
                 raise AssertionError("unavailable-gateway fixture unexpectedly connected")
             if value.get("attempt", 0) > 0 and value.get("last_error"):
-                return value
+                if value.get("phase") == "disconnected":
+                    raise AssertionError(
+                        f"{name} treated the handshake outage as terminal: {value['last_error']}")
+                if value.get("phase") == "reconnecting" and value.get("retry_after_secs"):
+                    return value
             return False
 
         value = wait_for(observed, f"failed loopback account connection for {name}")
@@ -382,9 +386,18 @@ class Portable:
 
         def retried_connection():
             value = self.action("status", "portable-restored")
-            return value if value.get("attempt", 0) > restored["attempt"] else False
+            if value.get("generation") != restored["generation"]:
+                raise AssertionError("supervisor replaced the runner during a retryable 503 outage")
+            if (value.get("attempt", 0) > restored["attempt"]
+                    and value.get("phase") == "reconnecting" and value.get("retry_after_secs")):
+                return value
+            return False
 
         retried = wait_for(retried_connection, "ordinary account outage retry")
+        self.samples["outage_retry"] = {
+            "generation": retried["generation"], "first_attempt": restored["attempt"],
+            "next_attempt": retried["attempt"], "retry_after_secs": retried["retry_after_secs"],
+        }
         self.check(retried["generation"] == restored["generation"],
                    "a retryable account gateway outage retains the same supervised worker generation")
 
@@ -514,7 +527,7 @@ def main():
         "revision": args.revision, "platform": sys.platform, "status": "failed",
         "scope": "isolated foreground supervisor; installation previews only",
         "transport": "owned loopback account gateway; HTTP 503 before WebSocket upgrade",
-        "account": "synthetic local login saved by the real client",
+        "account": "explicit passive device target; no login credential",
         "external_oauth": False, "models_started": False,
         "checks": [], "samples": {},
     }

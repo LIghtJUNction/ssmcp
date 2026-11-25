@@ -86,13 +86,6 @@ class Form(HTMLParser):
             self.links.append(attrs["href"])
 
 
-def private_json(path, value):
-    with path.open("x", encoding="utf-8") as stream:
-        os.chmod(path, 0o600)
-        json.dump(value, stream, ensure_ascii=False)
-        stream.write("\n")
-
-
 class RelayFrontend(Frontend):
     """Reuse the physical terminal/decoder, with an account relay entry point."""
 
@@ -119,16 +112,6 @@ class RelayFrontend(Frontend):
             "SSMCP_UI_CONFIG": str(config), "TERM": "xterm-256color",
             "NO_COLOR": "1", "COLUMNS": str(cols), "LINES": str(rows),
         })
-        root = Path(environment["SSMCP_AUTH_HOME"])
-        private_json(root / (hashlib.sha256(harness.origin.encode()).hexdigest() + ".json"), {
-            "server": harness.origin, "token": harness.account_token,
-            "principal": harness.identity["principal"], "subject": harness.identity["subject"],
-            "username": harness.identity["username"], "expires_at": harness.account_expires_at,
-        })
-        selected = root / "default"
-        selected.write_text(harness.origin)
-        selected.chmod(0o600)
-
         def own_controlling_terminal():
             os.setsid()
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
@@ -136,7 +119,7 @@ class RelayFrontend(Frontend):
 
         self.process = subprocess.Popen(
             [str(harness.binary_dir / "ssmcp"), "--server", harness.origin,
-             "--name", label, "--shell", "/bin/sh", "--no-setup", "--reconnect-delay", "1"],
+             "--username", harness.identity["username"], "--name", label, "--shell", "/bin/sh", "--no-setup", "--reconnect-delay", "1"],
             stdin=self.slave, stdout=subprocess.PIPE, stderr=self.slave,
             cwd=harness.workspace, env=environment, preexec_fn=own_controlling_terminal,
         )
