@@ -957,3 +957,68 @@ fn managed_wake_check_reports_evicted_history_without_claiming_delivery() {
             .starts_with("events_gap:")
     );
 }
+
+#[test]
+fn unrelated_evictions_do_not_create_a_gap_in_an_existing_subscription() {
+    let hub = Hub::default();
+    let operator = actor("owner", "device-A", "coordinator");
+    let sub = subscriber(&hub, &operator, "watch-A", None);
+    for i in 0..=MAX_EVENTS {
+        publish(&hub, "owner", "device-B", i);
+    }
+    let own = publish(&hub, "owner", "device-A", 0);
+    let page = hub.read(&operator, &sub, 1).unwrap();
+    assert_eq!(page["cursor"], 0);
+    assert_eq!(page["events"][0]["id"], own["event_id"]);
+    assert_eq!(page["next_cursor"], own["seq"]);
+    assert_eq!(
+        hub.read(&operator, &sub, 1).unwrap()["events"],
+        page["events"]
+    );
+    hub.ack(&operator, &sub, sequence(&page)).unwrap();
+    assert_eq!(hub.read(&operator, &sub, 1).unwrap()["events"], json!([]));
+}
+
+#[test]
+fn oversized_system_event_does_not_erase_another_devices_pending_receipt() {
+    let hub = Hub::default();
+    let a = actor("owner", "device-A", "coordinator");
+    let b = actor("owner", "device-B", "coordinator");
+    let sub_a = subscriber(&hub, &a, "watch-A", None);
+    let sub_b = subscriber(&hub, &b, "watch-B", None);
+    let kept = publish(&hub, "owner", "device-A", 0);
+    let missed = hub.publish_system(
+        "owner",
+        "device-B",
+        Some("worker"),
+        "worker.progress",
+        json!({"summary":"x".repeat(MAX_EVENT_BYTES)}),
+        (None, None),
+    );
+    assert!(missed.is_err());
+    let page = hub.read(&a, &sub_a, 2).unwrap();
+    assert_eq!(page["events"][0]["id"], kept["event_id"]);
+    assert!(
+        hub.read(&b, &sub_b, 2)
+            .unwrap_err()
+            .starts_with("events_gap:")
+    );
+}
+
+#[test]
+fn narrowing_selected_kinds_after_unrelated_eviction_does_not_invent_loss() {
+    let hub = Hub::default();
+    let a = actor("owner", "device-A", "coordinator");
+    let id = subscriber(&hub, &a, "narrow", None);
+    for i in 0..=MAX_EVENTS {
+        publish(&hub, "owner", "unrelated", i);
+    }
+    hub.update_kinds(&a, &id, vec!["worker.*".into()]).unwrap();
+    hub.update_kinds(&a, &id, vec!["worker.progress".into()])
+        .unwrap();
+    let own = publish(&hub, "owner", "device-A", 0);
+    assert_eq!(
+        hub.read(&a, &id, 2).unwrap()["events"][0]["id"],
+        own["event_id"]
+    );
+}

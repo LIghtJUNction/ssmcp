@@ -90,6 +90,7 @@ struct Subscription {
     filter: Filter,
     cursor: u64,
     delivered: u64,
+    lost_through: u64,
     expires: Instant,
     closed: bool,
 }
@@ -161,22 +162,33 @@ impl Journal {
     fn evict_front(&mut self) {
         if let Some(event) = self.events.pop_front() {
             self.event_bytes -= event.retained_bytes;
-            self.oldest_cursor = event.seq;
+            self.record_loss(&event);
         }
     }
 
-    fn system_gap(&mut self, seq: u64) {
-        // The successful source operation has an event we could not retain.
-        // Advance an explicit loss boundary; never make an old cursor appear
-        // current or synthesize a completed task from the missing metadata.
-        self.sequence = seq;
-        self.oldest_cursor = seq;
-        self.events.clear();
-        self.event_bytes = 0;
+    fn record_loss(&mut self, event: &Event) {
+        self.oldest_cursor = self.oldest_cursor.max(event.seq);
+        for sub in self.subscriptions.values_mut() {
+            if sub.cursor < event.seq
+                && sub.filter.matches(event)
+                && !event.excluded_wait(&sub.actor, sub.filter.include_own_waits, None)
+                && (event.audience.is_none()
+                    || event.visible_to(&format!("{}:{}", sub.actor.client_id, sub.actor.agent_id)))
+            {
+                sub.lost_through = event.seq.max(sub.lost_through);
+            }
+        }
     }
 
-    fn check_cursor(&self, cursor: u64) -> Result<(), String> {
-        if cursor < self.oldest_cursor {
+    fn system_gap(&mut self, event: &Event) {
+        // The source succeeded but this publication could not be retained.
+        // Older retained entries remain readable for unaffected subscriptions.
+        self.sequence = event.seq;
+        self.record_loss(event);
+    }
+
+    fn check_cursor(&self, cursor: u64, lost_through: u64) -> Result<(), String> {
+        if cursor < lost_through {
             return Err(format!(
                 "events_gap: cursor {cursor} precedes retained cursor {}; latest cursor {}; resubscribe with an explicit retained cursor after reconciling the gap",
                 self.oldest_cursor, self.sequence
@@ -357,16 +369,27 @@ impl Hub {
             "actor_id":publication.actor_id,"time_ms":now_ms(),"data":publication.data,
         });
         let value_bytes = encoded_len(&value)?;
+        let audience_bytes = encoded_len(&json!(publication.audience))?;
+        let retained_bytes = value_bytes + audience_bytes;
+        let event = Event {
+            seq,
+            client_id: publication.client_id.clone(),
+            actor_id: publication.actor_id.clone(),
+            kind: publication.kind.clone(),
+            audience: publication.audience.clone(),
+            value,
+            value_bytes,
+            retained_bytes,
+            at: now,
+        };
         if value_bytes > MAX_EVENT_BYTES {
             if publication.origin == "system" {
-                journal.system_gap(seq);
+                journal.system_gap(&event);
                 drop(state);
                 self.changed.notify_waiters();
             }
             return Err("events_event_too_large: serialized event exceeds 4096 bytes".into());
         }
-        let audience_bytes = encoded_len(&json!(publication.audience))?;
-        let retained_bytes = value_bytes + audience_bytes;
         let response = json!({
             "status":"published","event_id":event_id,"seq":seq,"cursor":seq,
             "client_id":publication.client_id,"kind":publication.kind,
@@ -392,7 +415,7 @@ impl Hub {
                     > MAX_RECEIPT_BYTES)
         {
             if publication.origin == "system" {
-                journal.system_gap(seq);
+                journal.system_gap(&event);
                 drop(state);
                 self.changed.notify_waiters();
             }
@@ -405,17 +428,7 @@ impl Hub {
         }
         journal.sequence = seq;
         journal.event_bytes += retained_bytes;
-        journal.events.push_back(Event {
-            seq,
-            client_id: publication.client_id.clone(),
-            actor_id: publication.actor_id.clone(),
-            kind: publication.kind.clone(),
-            audience: publication.audience.clone(),
-            value,
-            value_bytes,
-            retained_bytes,
-            at: now,
-        });
+        journal.events.push_back(event);
         if let Some(key) = key {
             journal.published.push_back(PublishReceipt {
                 key,
@@ -467,7 +480,7 @@ impl Hub {
             return Ok(response);
         }
         let cursor = after.unwrap_or(journal.sequence);
-        journal.check_cursor(cursor)?;
+        journal.check_cursor(cursor, journal.oldest_cursor)?;
         let bytes = encoded_len(
             &json!({"actor":actor,"request_id":request_id,"filter":filter,"after":after}),
         )? + 256;
@@ -492,6 +505,7 @@ impl Hub {
             filter: filter.clone(),
             cursor,
             delivered: cursor,
+            lost_through: cursor,
             expires: now + RETENTION,
             closed: false,
         };
@@ -533,11 +547,17 @@ impl Hub {
         let mut filter = subscription.filter.clone();
         filter.kinds = kinds;
         let filter = filter.normalized(actor)?;
+        let oldest_cursor = journal.oldest_cursor;
         let subscription = journal
             .subscriptions
             .get_mut(subscription_id)
             .expect("validated subscription");
         if subscription.filter != filter {
+            // A newly selected kind could match an event already discarded.
+            if subscription.cursor < oldest_cursor && !filter.kinds_covered_by(&subscription.filter)
+            {
+                subscription.lost_through = oldest_cursor;
+            }
             subscription.filter = filter;
             subscription.delivered = subscription.cursor;
         }
@@ -570,7 +590,7 @@ impl Hub {
         if subscription.closed {
             return Ok(false);
         }
-        journal.check_cursor(subscription.cursor)?;
+        journal.check_cursor(subscription.cursor, subscription.lost_through)?;
         let recipient = format!("{}:{}", actor.client_id, actor.agent_id);
         Ok(journal.events.iter().any(|event| {
             event.value["id"].as_str() == Some(event_id)
@@ -608,7 +628,7 @@ impl Hub {
             return Err("events_client_closed: a selected client closed; create a subscription for authorized live clients".into());
         }
         let cursor = subscription.cursor;
-        journal.check_cursor(cursor)?;
+        journal.check_cursor(cursor, subscription.lost_through)?;
         let filter = &subscription.filter;
         let recipient = format!("{}:{}", actor.client_id, actor.agent_id);
         let mut events = Vec::new();
@@ -628,6 +648,9 @@ impl Hub {
                 events.push(event.value.clone());
             }
             next_cursor = event.seq;
+        }
+        if !has_more {
+            next_cursor = journal.sequence;
         }
         let subscription = journal
             .subscriptions
@@ -851,6 +874,22 @@ impl Filter {
         self.client_ids.sort();
         self.client_ids.dedup();
         Ok(self)
+    }
+
+    // update_kinds preserves every other selector. An old wildcard covers
+    // its literal descendants and narrower wildcard patterns.
+    fn kinds_covered_by(&self, previous: &Filter) -> bool {
+        previous.kinds.is_empty()
+            || previous.kinds.iter().any(|kind| kind == "*")
+            || (!self.kinds.is_empty()
+                && self.kinds.iter().all(|new| {
+                    previous.kinds.iter().any(|old| {
+                        old == new
+                            || old
+                                .strip_suffix('*')
+                                .is_some_and(|prefix| new.starts_with(prefix))
+                    })
+                }))
     }
 
     fn matches(&self, event: &Event) -> bool {
