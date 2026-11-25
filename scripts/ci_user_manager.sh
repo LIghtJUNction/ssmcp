@@ -32,7 +32,77 @@ test "${RUNNER_ENVIRONMENT:-}" = github-hosted
 state="$RUNNER_TEMP/ssmcp-manager"
 dropin="/run/systemd/system/$unit.d/95-ssmcp-ci-delegation.conf"
 
+# A new manager reads Delegate= at first start. Jammy's already running
+# hosted runner manager may have only memory/pids and can reject a restart.
+release_smoke() (
+    local binary
+    binary=$(realpath "$1")
+    test -x "$binary"
+    if probe >&2; then
+        exec "$binary" --list-tools --shell /bin/sh
+    fi
+
+    local work account smoke_uid smoke_unit='' override=''
+    work=$(mktemp -d /tmp/ssmcp-release-smoke.XXXXXXXX)
+    account="ssmcp-ci-${BASHPID}-${RANDOM}"
+    local added=false configured=false new_dir=false linger=false
+    # Invoked on both success and failure by the EXIT trap below.
+    # shellcheck disable=SC2329
+    cleanup() {
+        local status=$?
+        trap - EXIT
+        set +e
+        if $linger; then sudo -n loginctl disable-linger "$account" >&2 || status=1; fi
+        if [[ -n $smoke_unit ]]; then
+            timeout 30s sudo -n systemctl stop "$smoke_unit" >&2 || status=1
+        fi
+        if $configured; then
+            sudo -n rm -f -- "$override" || status=1
+            if $new_dir; then sudo -n rmdir -- "$(dirname "$override")" || status=1; fi
+            sudo -n systemctl daemon-reload >&2 || status=1
+        fi
+        if $added; then sudo -n userdel "$account" >&2 || status=1; fi
+        sudo -n rm -rf -- "$work" || status=1
+        exit "$status"
+    }
+    trap cleanup EXIT
+    # Only this disposable UID can read its home; the enclosing directory
+    # permits traversal to the immutable binary and probe copied by the runner.
+    chmod 0711 "$work"
+    install -m 0755 "$binary" "$work/ssmcp"
+    install -m 0755 "$0" "$work/check.sh"
+    sudo -n useradd --user-group --no-create-home --home-dir "$work/home" --shell /bin/bash "$account"
+    added=true
+    smoke_uid=$(id -u "$account")
+    smoke_unit="user@$smoke_uid.service"
+    sudo -n install -d -m 0700 -o "$account" -g "$account" "$work/home"
+    override="/run/systemd/system/$smoke_unit.d/95-ssmcp-release-delegation.conf"
+    test ! -e "$override"
+    if [[ ! -d $(dirname "$override") ]]; then new_dir=true; fi
+    sudo -n install -d -m 0755 "$(dirname "$override")"
+    printf '%s\n' '[Service]' 'Delegate=cpu memory pids' | sudo -n tee "$override" >/dev/null
+    configured=true
+    sudo -n systemctl daemon-reload
+    sudo -n loginctl enable-linger "$account"
+    linger=true
+    if ! timeout 30s sudo -n systemctl start "$smoke_unit"; then
+        sudo -n journalctl -b -u "$smoke_unit" -n 20 --no-pager >&2 || :
+        return 1
+    fi
+    local -a as_manager=(sudo -n -H -u "$account" env "XDG_RUNTIME_DIR=/run/user/$smoke_uid"
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$smoke_uid/bus" systemd-run
+        --user --wait --pipe --quiet --collect "--working-directory=$work/home")
+    # Start the probe and then the exact candidate from inside this user's
+    # manager, preserving all ancestor restrictions when the client is admitted.
+    "${as_manager[@]}" /bin/bash "$work/check.sh" probe >&2
+    "${as_manager[@]}" "$work/ssmcp" --list-tools --shell /bin/sh
+)
+
 case "${1:-}" in
+    release-smoke)
+        test "$#" -eq 2
+        release_smoke "$2"
+        ;;
     prepare)
         mkdir -p "$state"
         if ! timeout 5s systemctl --user show --property=Version > /dev/null; then
@@ -75,5 +145,5 @@ case "${1:-}" in
             rm "$state/linger"
         fi
         ;;
-    *) echo "usage: $0 prepare|restore|probe" >&2; exit 2 ;;
+    *) echo "usage: $0 prepare|restore|probe|release-smoke EXECUTABLE" >&2; exit 2 ;;
 esac

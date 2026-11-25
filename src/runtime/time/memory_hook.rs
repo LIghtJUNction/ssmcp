@@ -59,6 +59,7 @@ impl Notice {
         }
     }
 
+    #[cfg(any(target_os = "linux", all(unix, test)))]
     pub(crate) fn event_type(&self) -> &'static str {
         match self {
             Self::Memory { .. } => "exec.memory_limit_exceeded",

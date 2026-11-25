@@ -3,6 +3,7 @@ use crate::{Result, platform};
 use reqwest::{Client, Method, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+#[cfg(any(test, target_os = "linux"))]
 use sha2::{Digest, Sha256};
 use std::{
     ffi::OsString,
@@ -21,8 +22,10 @@ pub(super) mod status;
 pub(super) const DEFAULT_SERVER: &str = "https://ssmcp.lmm.best";
 const STORE_LIMIT: usize = 32 * 1024;
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
+#[cfg(any(test, target_os = "linux"))]
 const MAX_USERNAME_ALIASES: usize = 128;
 
+#[cfg(any(test, target_os = "linux"))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Credential {
@@ -36,6 +39,7 @@ pub(super) struct Credential {
     pub expires_at: u64,
 }
 
+#[cfg(any(test, target_os = "linux"))]
 impl std::fmt::Debug for Credential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Credential")
@@ -56,6 +60,7 @@ fn now() -> u64 {
         .as_secs()
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn valid_secret(value: &str) -> bool {
     (32..=1024).contains(&value.len())
         && value
@@ -63,6 +68,7 @@ fn valid_secret(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn valid_credential(value: &Credential) -> Result<()> {
     if normalize_server(&value.server)? != value.server
         || crate::wire::canonical_github_principal(&value.principal)? != value.principal
@@ -274,6 +280,7 @@ pub(super) fn connection_username(server: &str) -> Result<String> {
     Err("choose an account with ssmcp username@server, or run ssmcp local".into())
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn credential_path(root: &Path, server: &str) -> PathBuf {
     root.join(format!(
         "{}.json",
@@ -291,6 +298,7 @@ fn selected_server(root: &Path, explicit: Option<&str>) -> Result<String> {
     normalize_server(DEFAULT_SERVER)
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn load_at(root: &Path, server: Option<&str>, include_expired: bool) -> Result<Option<Credential>> {
     match verify_directory(root) {
         Ok(()) => {}
@@ -349,6 +357,7 @@ pub(super) fn resolve_server(explicit: Option<&str>) -> Result<String> {
 }
 
 /// Resolve only the selected origin; never borrow another server's credential.
+#[cfg(target_os = "linux")]
 pub(super) async fn credentials(server: Option<&str>) -> Result<Option<Credential>> {
     let server = resolve_server(server)?;
     load_at(&state_root()?, Some(&server), false)
@@ -512,6 +521,7 @@ impl Api {
         }
         Ok(reply.value)
     }
+    #[cfg(any(test, target_os = "linux"))]
     async fn get(&self, route: &str, token: &str) -> Result<Value> {
         Self::checked(self.request(Method::GET, route, Some(token), None).await?)
     }
@@ -566,6 +576,7 @@ impl Arguments {
     }
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn public_identity(value: &Value) -> Result<Value> {
     let identity = value.get("identity").unwrap_or(value);
     let login = identity["login"]

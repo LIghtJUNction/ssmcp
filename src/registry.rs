@@ -573,8 +573,15 @@ mod tests {
     fn worker_pool_catalog_installs_all_native_routes() {
         let registry = Registry::new();
         let catalog = crate::worker::Pool::tools();
-        assert_eq!(catalog.len(), 16);
+        assert_eq!(catalog.len(), 19);
         registry.replace(Provider::Worker, catalog.clone()).unwrap();
+        for name in [
+            "ssmcp.worker.station_state",
+            "ssmcp.worker.station_reset",
+            "ssmcp.worker.share",
+        ] {
+            assert_eq!(registry.lookup(name).unwrap().provider, Provider::Worker);
+        }
         for descriptor in catalog {
             let name = descriptor["name"].as_str().unwrap();
             let registered = registry.lookup(name).unwrap();

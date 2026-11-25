@@ -1,5 +1,6 @@
 //! Connection-local observations from the client's configured Git workspace.
 use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "linux", test))]
 use serde_json::{Value, json};
 
 pub const CAPABILITY: &str = "repo_events_v1";
@@ -65,7 +66,10 @@ impl Event {
             Err("invalid repository event metadata".into())
         }
     }
+}
 
+#[cfg(any(target_os = "linux", test))]
+impl Event {
     pub(crate) fn kind(&self) -> &'static str {
         match self {
             Self::UpstreamChanged { .. } => UPSTREAM_CHANGED,

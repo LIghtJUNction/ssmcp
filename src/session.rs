@@ -851,6 +851,7 @@ fn public_connection(value: &Value) -> Value {
 
 /// A saved definition's identity is independent of its display name, executable
 /// PID and connection generation. Removing/recreating the definition gets a new ID.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn definition_id(directory: &Path) -> Result<String> {
     let _guard = lock(&directory.join("definition-id.lock"), false)?;
     if let Some(id) = existing_definition_id(directory)? {

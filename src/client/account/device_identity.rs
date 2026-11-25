@@ -1,11 +1,17 @@
 //! Per-origin installation signing key. Private material stays in the account
 //! store; only a fresh challenge proof is sent over the existing trusted TLS path.
+#[cfg(any(test, target_os = "linux"))]
 use super::*;
-use crate::wire::device_address::{self, Proof};
+#[cfg(any(test, target_os = "linux"))]
+use crate::wire::device_address;
+#[cfg(target_os = "linux")]
+use crate::wire::device_address::Proof;
+#[cfg(any(test, target_os = "linux"))]
 use ring::signature::Ed25519KeyPair;
 
 pub(crate) const SESSION_ENV: &str = "SSMCP_RELAY_SESSION_KEY";
 
+#[cfg(any(test, target_os = "linux"))]
 fn key_at(root: &Path, server: &str) -> Result<Ed25519KeyPair> {
     create_tree(root)?;
     verify_directory(root)?;
@@ -27,6 +33,7 @@ fn key_at(root: &Path, server: &str) -> Result<Ed25519KeyPair> {
     })
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) async fn proof_header(
     server: &str,
     token: &str,

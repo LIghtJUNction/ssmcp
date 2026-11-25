@@ -1,6 +1,6 @@
 //! A project key signs one fresh Ready connection ID, independently of account credentials.
 use super::device_address::{decode, encode};
-use ring::signature::{self, Ed25519KeyPair, KeyPair};
+use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde::{Deserialize, Serialize};
 
 pub const CAPABILITY: &str = "project_continuity_v1";
@@ -45,7 +45,9 @@ impl Proof {
         Ok(proof)
     }
 
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn verifies(&self, origin: &str, client_id: &str) -> bool {
+        use ring::signature;
         let (Ok(public), Ok(signature), Ok(message)) = (
             decode::<32>(&self.public_key),
             decode::<64>(&self.signature),
