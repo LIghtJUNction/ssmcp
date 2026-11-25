@@ -1,3 +1,5 @@
+const DREAMING_POLICY: &str = include_str!("../collab/dreaming_policy.txt");
+
 use serde_json::Value;
 
 const NO_CONTROL_SESSION: &str = "Connect the control session before creating an invitation.";
@@ -171,7 +173,7 @@ fn render(role: &str, control_id: &str, cwd: &str, pool: Option<&Value>) -> Resu
         }
     });
     prompt.push('\n');
-    prompt.push_str(crate::collab::DREAMING_POLICY);
+    prompt.push_str(DREAMING_POLICY);
     prompt.push_str("\nReconnect: refresh `list` and schemas; verify authorized workspace/control/pool; privately rejoin/bind. Reconcile claims, commits and outcomes before assigning. Preserve `unknown`; never replay or restart models. Follow `ssmcp://recovery`: 1/2/4/8s; prefer verified authorized 007, guarded `ssmcp.007.recover` with matching IDs. Respect stop/revocation; keep blocked work resumable.");
     Ok(prompt)
 }
@@ -342,7 +344,7 @@ mod tests {
         assert!(prompt.contains("complete any current claim"));
         assert!(prompt.contains("ssmcp.worker.release"));
         assert!(prompt.contains("operator-ordered retirement"));
-        assert!(prompt.contains(crate::collab::DREAMING_POLICY));
+        assert!(prompt.contains(DREAMING_POLICY));
         assert!(prompt.contains("Never manage the queue or consume control-session input."));
         assert!(!prompt.contains("ssmcp.worker.attach"));
         assert!(!prompt.contains("ssmcp.worker.submit"));
@@ -355,7 +357,7 @@ mod tests {
             assert!(prompt.contains(&format!("ssmcp.worker.{tool}")));
         }
         assert!(prompt.contains("Delegate to standby workers"));
-        assert!(prompt.contains(crate::collab::DREAMING_POLICY));
+        assert!(prompt.contains(DREAMING_POLICY));
     }
 
     #[test]

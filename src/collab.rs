@@ -19,8 +19,6 @@ use tokio::{
     time::Instant,
 };
 
-pub(crate) const DREAMING_POLICY: &str = include_str!("collab/dreaming_policy.txt");
-
 const LEASE_MS: u64 = 15 * 60 * 1000;
 const MAX_AGENTS: usize = 64;
 const MAX_PAYLOAD: usize = 16 * 1024;
