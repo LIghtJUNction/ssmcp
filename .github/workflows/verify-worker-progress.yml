@@ -1,0 +1,17 @@
+name: Verify worker progress candidate
+on:
+  push:
+    branches: [qa/verify-progress-921f]
+    paths: [.github/workflows/verify-worker-progress.yml]
+permissions:
+  contents: read
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: '9bec7ebd3fc16250ea85c2e67e50bf660e1694fd'
+  graphics:
+    uses: ./.github/workflows/gui-clients.yml
+    with:
+      ref: '9bec7ebd3fc16250ea85c2e67e50bf660e1694fd'
+      platform: all
