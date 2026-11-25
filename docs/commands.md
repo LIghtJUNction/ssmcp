@@ -1,35 +1,24 @@
 # 客户端命令与独立任务
 
-## 连接、账号与设备列表
+## 连接与会话列表
 
-控制者先在目标中继登录；被控设备明确指定允许的账号，设备本身可以不登录：
+被控端在项目目录指定控制者已登记的中继用户名。控制者在 MCP 应用中添加同一中继的 `/mcp` 地址，完成 OAuth 后使用 MCP 的 `list` 发现设备。[首次连接](onboarding.md)
 
-~~~sh
-# 控制者注册或复用该服务器的登录。
-ssmcp alice@relay.example
-
-# 在被控设备的项目目录运行。
-ssmcp --server https://relay.example \
-  --allow alice@relay.example --name device-b
-
-# 控制者另开终端，查看并操作获准设备。
-ssmcp list --server https://relay.example
-ssmcp -i --server https://relay.example --client SESSION_ID
-~~~
-
-| 命令 | 用途 |
+| 在设备上执行 | 用途 |
 | --- | --- |
-| `ssmcp username@server` | 登录或注册账号，并连接自己的设备 |
-| `ssmcp --server URL --allow USER@SERVER` | 明确授权控制者并连接被控设备 |
-| `ssmcp whoami [--server URL]` | 确认所选服务器上的登录身份 |
-| `ssmcp logout [--server URL] [--json]` | 清理该服务器的本机凭据，并报告远端撤销结果；离线也能退出 |
-| `ssmcp list` / `ls` / `sessions list --remote` | 列出账号在所选服务器可控的在线设备 |
-| `ssmcp -i` / `list -i` | 选择设备并进入远端终端，Ctrl-] 离开 |
-| `ssmcp sessions list` / `attach NAME` | 管理当前设备保存的本机后台会话 |
+| `ssmcp alice@relay.example` | 向中继建立被控连接，允许账号 alice |
+| `ssmcp --server URL --username NAME` | 分别指定中继和已登记的控制者用户名 |
+| `ssmcp whoami USER@SERVER --json` | 查询指定用户名在中继上的公开信息 |
+| `ssmcp list` 或 `ssmcp ls` | 列出当前用户的本机保存会话及登记中的前台实例 |
+| `ssmcp list --json` | 以 JSON 读取本机会话列表 |
+| `ssmcp attach TARGET` | 使用本机列表中的 `saved:名称` 或 `live:实例ID` 接入运行中会话，Ctrl-] 分离 |
+| `ssmcp attach --read-only TARGET` | 旁观本机会话 |
+| `ssmcp controllers list --json` | 查看本机记录的控制者身份和批准状态 |
+| `ssmcp controllers history --json` | 按序查看本机保存的控制访问与批准记录 |
 
-用户名采用 3–32 个 ASCII 字符，首字符为字母、末字符为字母或数字，中间还可使用 `_` 或 `-`。名单中的用户名须已在目标服务器注册，并与本次连接的服务器匹配。凭据按服务器隔离；已登录设备省略名单时只允许自己，显式名单只授权其中的账号。[用户名](named-accounts.md) · [完整账号与设备流程](client-accounts.md)
+授权名单中的用户名须已在目标服务器登记。设备名称与工作目录用于辨认连接。[用户名](named-accounts.md) · [账号与设备](client-accounts.md)
 
-看门狗默认开启，`--no-watchdog` 可禁用；显式停止后不会继续恢复。设备访问授权使用 `--allow 用户名@服务器`，获准接入的 Agent 用 `collab.join` 登记会话内身份。主窗口中的 `/invite` 和 `/invite worker` 生成协作接入说明，沿用现有账号授权。[首次连接](onboarding.md)
+看门狗默认开启，`--no-watchdog` 可禁用；显式停止后不会继续恢复。设备访问授权使用 `用户名@服务器`，获准接入的 Agent 用 `collab.join` 登记会话内身份。主窗口中的 `/invite` 和 `/invite worker` 生成协作接入说明，沿用现有账号授权。[首次连接](onboarding.md)
 
 ## 工具仓库入口与连接诊断
 
@@ -124,7 +113,7 @@ ssmcp --worker 2 --daemon
 
 前台默认使用 `dark` 主题和 `chat` 布局，连续显示执行记录，底部输入框用于追加用户要求。默认七列中的最左侧是统计页，展示会话进程 ID、本连接已登记的会话线程 ID、worker 管理者线程、OS PID 和实际计数；关联池的身份与计数单列显示。Enter 提交到队列；`/queue` 管理待交付项，`/sessions` 或 `/message` 显式选择收件人，`/audit` 打开源码审计。`/agents` 与旧的默认 Agent 页已移除。Tab 切换输入与内容焦点，滚轮或 PgUp/PgDn 直接浏览当前内容；`/filter 文本` 搜索日志，F9 切换类别。[客户端 UI 与队列原子接口](client-ui.md)
 
-输入框要求通过支持协议 v7 的连接附加到下一次符合目标的 `code_mode` 响应，已交付不代表模型已阅读或执行。需要直接终端输入时，在另一个终端运行 `ssmcp -i`；自定义前端使用 `terminal.read/write/resize`。`ssmcp attach NAME` 用于观察本地后台会话，目前不转发 attach 输入框的要求队列；后台连接可通过 `ssmcp.ui.queue` 管理要求。独立命令继续使用下方的 `exec.*`。
+输入框要求通过支持协议 v7 的连接附加到下一次符合目标的 `code_mode` 响应，已交付不代表模型已阅读或执行。需要直接终端输入时，授权的 MCP 控制端使用 `terminal.read/write/resize`。`ssmcp attach NAME` 用于观察本地后台会话，目前不转发 attach 输入框的要求队列；后台连接可通过 `ssmcp.ui.queue` 管理要求。独立命令继续使用下方的 `exec.*`。
 
 对话、事件和要求队列只保留在当前进程内。`ssmcp.ui.events` 按经过验证的归属与线程分页读取当前保留内容；退出或重载后无法继续读取旧进程内容。客户端不自动写入会话 JSONL、历史归档或上下文记忆文件。显式使用 `--log-format jsonl` 时，事件输出给调用方的日志消费者；是否保存由该消费者决定。
 

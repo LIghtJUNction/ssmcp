@@ -4,7 +4,7 @@
 
 下文涉及 `--ssh`、SSH 目标和 `--allow ...@github` 的示例与认证说明仅记录已退役的 SSH 接入方式，不作为当前启动命令。当前账号连接使用 `ssmcp alice@relay.example`；新建后台会话使用 `ssmcp sessions create workstation alice@relay.example`，授权步骤见[客户端账号与授权](client-accounts.md)。
 
-本页说明连接标题、客户端重载、本机后台会话及长输出读取。公开 MCP 工具依次为 `link`、`list`、`code_mode`、`collab`、`await`、`events` 和 `messages`。客户端重载通过 `code_mode` 中的 `call` 调用原生 `ssmcp.client.reload`；`outputs` 是读取输出的 JavaScript 原语。`ssmcp sessions list` 枚举本地保存会话；登录后使用 `ssmcp list` 查看账号可控的在线会话，使用 `ssmcp attach process PROCESS_ID` 进入远程聊天，其中 `PROCESS_ID` 来自 `ssmcp list`；使用 `ssmcp -i` 选择远程 Shell PTY，详见[客户端账号、授权与被控设备](client-accounts.md)。
+本页说明连接标题、客户端重载、本机后台会话及长输出读取。公开 MCP 工具依次为 `link`、`list`、`code_mode`、`collab`、`await`、`events` 和 `messages`。客户端重载通过 `code_mode` 中的 `call` 调用原生 `ssmcp.client.reload`；`outputs` 是读取输出的 JavaScript 原语。`ssmcp list` 枚举当前用户的本地会话，`ssmcp attach NAME` 连接本机运行中的会话。远程控制者在授权的 MCP 应用中使用 `list` 选择在线设备。[设备授权](client-accounts.md)
 
 ## 用标题说明本次任务
 

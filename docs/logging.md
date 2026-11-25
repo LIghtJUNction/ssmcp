@@ -30,7 +30,7 @@ stdout 用于连接信息。重定向 stdout 或选择 JSONL 时，保留单行�
 
 真实交互终端默认启用 `ui.dashboard = true` 和 `layout = "chat"`。主区域连续显示调用、输出和结果，底部保留用户要求输入框，右侧显示登记成员、要求队列、控制者、任务、原生进度、Git 状态与最近提交。F2 在活动、源码审计、成员、队列内容间切换；F3 收起侧栏。也可配置 `split`、`audit`、`logs` 专用布局。[完整配置与预览](client-ui.md) · [布局](../src/client/panel.rs)
 
-仪表盘中的文字用于用户要求和本地命令，不会传给隐藏的 PTY。Tab 切换输入与内容焦点。需要直接终端输入时，在另一个终端运行 `ssmcp -i`，或由自定义前端调用 `terminal.read/write/resize`。面板只接收文字和语义颜色；分支、路径、任务名和进度消息中的控制字符转成可见文字，按 Unicode 显示宽度截断。`NO_COLOR` 和 `--no-color` 仅关闭颜色。JSONL、重定向 stderr、`TERM=dumb` 或 `ui.dashboard = false` 保留行式输出。[终端原语](terminal-control.md)
+仪表盘中的文字用于用户要求和本地命令，不会传给隐藏的 PTY。Tab 切换输入与内容焦点。远程交互终端由获准的控制端调用 `terminal.read/write/resize`。面板只接收文字和语义颜色；分支、路径、任务名和进度消息中的控制字符转成可见文字，按 Unicode 显示宽度截断。`NO_COLOR` 和 `--no-color` 仅关闭颜色。JSONL、重定向 stderr、`TERM=dumb` 或 `ui.dashboard = false` 保留行式输出。[终端原语](terminal-control.md)
 
 Git 状态在授权启动目录独立查询，约每 2 秒刷新；读取本地 Git 信息，不执行 fetch；面板不展示工作区文件正文。右栏显示分支、已知的 ahead/behind、暂存/工作区/未跟踪项计数、冲突和少量路径。未跟踪目录可能作为一项计数。查询失败时保留的旧数据标为 Last known state；没有成功观测时显示 pending、unavailable 或 checking，不报告工作区干净。Git 观察不代替成功文件操作的审计事件。[Git 观察器](../src/client/git_status.rs) · [Git porcelain v2 与后台刷新](https://git-scm.com/docs/git-status)
 

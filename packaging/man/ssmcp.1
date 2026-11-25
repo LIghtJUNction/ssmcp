@@ -6,31 +6,28 @@ ssmcp \- connect devices and control authorized terminals through an MCP gateway
 .I username@server
 .RB [ options ]
 .PP
-.B ssmcp
-.I username@server
-.B \-\-register
-.RB [ \-\-no-browser ]
-.RB [ \-\-json ]
-.PP
 .B ssmcp local
 .RB [ \-\-listen " IP:PORT" ]
 .RB [ \-\-socket " PATH" ]
 .PP
-.B ssmcp
-.IR "whoami | logout"
-.RB [ \-\-server " https://origin" ]
+.B ssmcp whoami
+.RI [ username@server ]
 .RB [ \-\-json ]
 .PP
 .B ssmcp list
-.RB [ \-\-server " https://origin" ]
-.RB [ \-\-json " | " \-i ]
-.RB [ \-\-client " id" ]
-.RB [ \-\-terminal " id" ]
+.RB [ \-\-json ]
 .PP
-.B ssmcp \-i
-.RB [ \-\-server " https://origin" ]
-.RB [ \-\-client " id" ]
-.RB [ \-\-terminal " id" ]
+.B ssmcp attach
+.RB [ \-\-read-only ]
+.RI [ target ]
+.PP
+.B ssmcp controllers
+.IR "list | history"
+.RB [ \-\-json ]
+.PP
+.B ssmcp controllers
+.IR "approve | revoke"
+.I relay provider subject
 .PP
 .B ssmcp
 .RB [ \-\-server " https://origin" ]
@@ -74,32 +71,33 @@ Operator-managed external Pi and OpenCode services are not terminated. Login-cod
 connection are revoked. GitHub identity grants remain subject to their own
 lifetimes and each currently connected client's allow policy.
 .SH CLIENT ACCOUNTS
-.TP
-.B ssmcp username@server \-\-register
-Register a new username by confirming the request in the browser. The CLI
-receives a registration receipt. The relay account page manages names and
-personal announcements. Administrators manage the server announcement there.
+The device selects the controller's registered relay username. The controller
+uses the relay account portal for account settings and authorizes the MCP
+application to discover or operate devices.
 .TP
 .B ssmcp whoami username@server
 Read public information for the named relay account. Use \-\-json for its
 account name and announcements.
 .TP
-.B ssmcp logout
-Revoke the selected client login on the server and remove its local credential.
-.TP
 .B ssmcp list
-List online sessions the current GitHub account can control. The alias is ls;
-\-\-json provides machine-readable results. Use list \-i or standalone
-ssmcp \-i to select a session and enter its terminal. \-\-client ID selects
-a known session; \-\-terminal ID selects an existing terminal (default main).
-Ctrl-C is delivered to that terminal; Ctrl-] detaches and leaves it running.
-These account commands are separate from saved local sessions list and attach.
-.PP
-The control commands use an existing controller credential. New controllers
-can authorize through the relay MCP URL.
-.UR https://github.com/LIghtJUNction/ssmcp/blob/main/docs/client-accounts.md
-Account and device connection documentation
-.UE
+List this user's local sessions. The alias is ls. Use \-\-json for the exact
+targets, including saved:NAME and live:INSTANCE.
+.TP
+.B ssmcp attach TARGET
+Attach to a running session on this device. A plain name selects a saved
+session. Use \-\-read-only to observe and Ctrl-] to detach.
+.TP
+.B ssmcp controllers list
+Show the local controller accounts and approval states. The first controller
+selected on this device becomes the default after its verified first use.
+Additional accounts require the device operator's approval.
+.TP
+.B ssmcp controllers history
+Show the last 256 ordered target, verified access and local decision events.
+Use \-\-json to read stable subjects, connection IDs and Unix timestamps.
+.TP
+.B ssmcp controllers approve|revoke RELAY PROVIDER SUBJECT
+Confirm a decision for the exact observed account in the device terminal.
 .SH PERSISTENT CLIENT SERVICE
 The client service is ssmcp.service; it is separate from the remote ssmcpd gateway.
 Install a system unit with an explicit non-root owner, then enable and start it:
@@ -107,7 +105,7 @@ Install a system unit with an explicit non-root owner, then enable and start it:
 .nf
 sudo /path/to/ssmcp service install --system --user alice
 sudo systemctl enable --now ssmcp
-ssmcp sessions create dev --ssh --allow alice@github my-ssmcp
+ssmcp sessions create dev alice@ssmcp.example.com
 ssmcp attach
 ssmcp attach dev
 .fi
@@ -512,8 +510,7 @@ Quote names containing internal spaces. Saved names are unique within the chosen
 state directory; ordinary foreground display names may still repeat.
 .TP
 .B ssmcp sessions list
-List saved local sessions, including stopped sessions. Use ssmcp list for
-online account sessions; sessions list \-\-remote is an account-list alias.
+List local sessions. Use the authorized MCP application to discover online relay devices.
 .TP
 .BI "ssmcp sessions status " NAME
 Report manager_state, manager_active and manager_pid separately from
@@ -638,12 +635,12 @@ output thresholds.
 .SH EXAMPLES
 .nf
 ssmcp alice@ssmcp.example.com --name laptop
-ssmcp alice@ssmcp.example.com --register --no-browser
 ssmcp whoami alice@ssmcp.example.com --json
 ssmcp local
 ssmcp --name laptop
 ssmcp list
-ssmcp -i --client CLIENT_ID
+ssmcp attach saved:dev
+ssmcp controllers history --json
 ssmcp --no-watchdog --name one-attempt
 ssmcp --list-tools
 .fi

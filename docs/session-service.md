@@ -2,11 +2,11 @@
 
 ssmcp 服务保存具名客户端会话，终端通过 attach 接入它们。会话继续拥有服务器连接、PTY 和命令；关闭 attach 窗口只分离显示与输入端。显式 close 会停止会话并保留配置，start 可以再次启动。
 
-`ssmcp sessions list` 与裸 `ssmcp attach` 列出本机保存会话，`ssmcp attach --local NAME` 连接指定本机会话。查看已授权的在线会话使用 `ssmcp list`；进入远程聊天使用 `ssmcp attach process PROCESS_ID`，其中 `PROCESS_ID` 来自 `ssmcp list`，不是操作系统 PID；进入远程 Shell PTY 使用 `ssmcp -i`，详见[客户端账号与授权](client-accounts.md)。
+`ssmcp list` 列出当前用户的本机保存会话与登记中的前台实例。复制列表中的 `target` 给 `ssmcp attach`，可按 `saved:名称` 或 `live:实例ID` 接入选定的运行中会话。`ssmcp sessions list` 可用于查询本机保存的会话。另一台设备上的会话由控制者在授权的 MCP 应用中发现。[设备授权](client-accounts.md)
 
 ## Linux：安装、启用、启动
 
-下方示例使用 HTTPS 账号连接。先以运行服务的同一普通用户执行 `ssmcp login --server https://relay.example` 完成授权，再安装客户端服务和创建会话。系统服务始终以明确指定的普通用户运行，使用该用户的 HOME、状态目录和连接配置。
+下方示例为当前普通用户安装系统服务。服务使用该用户的 HOME、状态目录和连接配置。创建会话时指定允许控制它的中继用户名。
 
 ```sh
 sudo "$(command -v ssmcp)" service install --system --user "$(id -un)"
@@ -91,7 +91,7 @@ ssmcp attach -- list
 
 attach 复用客户端界面展示会话事件。日志区滚轮直接回看；`/audit` 打开源码审计，`/filter 文本` 筛选日志，F9 切换日志类别，F1 查看帮助。输入框与内容区通过 Tab 切换焦点，内容区中的 ↑/↓ 用于浏览记录。源码审计需要客户端与服务器都支持协议 v6 或更新版本，旧连接继续提供其已有事件。[界面与原子操作](client-ui.md)
 
-Ctrl-] 分离并恢复本地终端模式，后台会话继续运行。仪表盘中的普通输入不会交给隐藏 PTY；需要直接交互时，在另一终端运行 `ssmcp -i`，或为 attach 使用 `dashboard = false` 的配置。直接终端输入模式中的 Ctrl-C 发送给选中的 PTY。只读前端不发送输入，不改变工作终端尺寸。
+Ctrl-] 分离并恢复本地终端模式，后台会话继续运行。仪表盘中的普通输入不会交给隐藏 PTY；本机 attach 可通过 `dashboard = false` 启用直接终端输入。直接终端输入模式中的 Ctrl-C 发送给选中的 PTY。只读前端不发送输入，不改变工作终端尺寸。
 
 当前 attach 不转发自己的输入框要求队列，也不持有后台连接的队列传输。管理后台要求时，通过该在线客户端的 `ssmcp.ui.queue` 原子接口；重新启动后台会话使用 `ssmcp sessions restart NAME`。输入框 `/reload` 的重启与草稿交接功能用于直接持有服务器连接的前台客户端。
 

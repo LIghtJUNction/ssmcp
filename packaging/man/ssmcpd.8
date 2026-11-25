@@ -191,8 +191,11 @@ session. A login-code grant is revoked when its issuing connection disconnects.
 Registrations and OAuth state are in memory and end when the daemon exits, so
 a daemon restart requires registration and login again in both modes.
 .SH CLIENT DOWNLOADS AND ACCOUNT ROUTING
-The routes /client/install.sh and /client/install.ps1 provide temporary bootstrap
-scripts. Their download origin comes from configured public_url, never from the
+The routes /client/install.sh and /client/install.ps1 install a compatible
+device client. Pass one controller target as username@server to the shell
+bootstrap or with the PowerShell -Account parameter. The older --allow and
+-Allow installer spellings accept one target as well.
+Their download origin comes from configured public_url, never from the
 request Host header. /client/bin/{target} accepts only supported platform
 triples. Place the extracted executables in client_download_dir with these
 exact filenames (ssmcp-{target}, with .exe appended for Windows):

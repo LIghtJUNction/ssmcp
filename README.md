@@ -94,21 +94,13 @@ ssmcp update           # 校验下载后替换当前安装
 ssmcp alice@relay.example.com --name dev --title "开发与测试"
 ```
 
-把服务器地址换成自己的服务地址。首次连接引导 GitHub 授权，并在该服务器绑定你选择的用户名。后续直接运行 `ssmcp`，即可复用最近的授权账号；没有图形浏览器时使用 `--no-browser`。
-
-客户端主动建立 HTTPS/WSS 连接，无需在设备上开放入站端口。保持终端或后台客户端运行，就能使用它的工作区和工具。
-
-```sh
-ssmcp list       # 查看已授权的在线进程与已登记线程
-ssmcp -i         # 进入一台设备的交互终端
-ssmcp whoami    # 查看当前账号
-```
+把 `alice` 换成控制者在该中继登记的用户名。设备从当前项目目录主动建立 HTTPS/WSS 连接，接受该账号获准的操作。账号登录在控制者的浏览器完成。下次直接运行 `ssmcp` 可以复用上一次前台连接目标。
 
 完整步骤见[账号与设备](docs/client-accounts.md)和[默认服务器与可信公钥](docs/client-server.md)。
 
 ### 3. 接入 MCP
 
-将终端显示的 `https://你的服务器/mcp` 加入 ChatGPT 或其他支持 OAuth 的 MCP 客户端，再完成该应用的授权。CLI 登录与 MCP 应用授权分别管理。
+将终端显示的 `https://你的服务器/mcp` 加入 ChatGPT 或其他支持 OAuth 的 MCP 客户端，再完成该应用的授权。授权后，在 MCP 应用中调用 `list` 查找这条连接。
 
 对外 MCP 入口以实际服务的工具目录为准，当前源码包含以下入口：
 
@@ -124,7 +116,7 @@ ssmcp whoami    # 查看当前账号
 
 `link` 的候选实现调用目标客户端的图片读取工具，单图上限 400 KiB；默认 120 秒失效，首次 GET 会消费链接，HEAD 不消费。创建返回 URL、资源链接和清理 ID，不返回图片 base64。是否已部署须查看当前服务目录。[临时图片链接 API](docs/image-links.md)
 
-由被控端用户在愿意开放的项目目录运行 `ssmcp 用户名@中继服务器`。这里填写控制者在该中继已注册的用户名，被控端无需登录。控制者用 MCP 应用完成该中继的 OAuth 授权。连接成功后，直接运行 `ssmcp` 会复用上一次连接。使用 `ssmcp 用户名@中继服务器 --register` 注册新用户名，账号及公告设置在中继网页管理。
+由被控端用户在愿意开放的项目目录运行 `ssmcp 用户名@中继服务器`。这里填写控制者在该中继已注册的用户名，被控端无需登录。控制者用 MCP 应用完成该中继的 OAuth 授权。连接成功后，直接运行 `ssmcp` 会复用上一次连接。用户名和公告在中继的账户页面管理。
 
 主窗口中的 `/invite` 生成会话内工作组协作说明，Agent 通过 `collab.join` 登记会话身份。协作邀请与设备授权各自独立。[账号与授权](docs/client-accounts.md)
 
@@ -239,7 +231,7 @@ Linux 上可以使用 `ssmcp local` 在当前项目启动本地 MCP 会话，无
 ~~~sh
 ssmcp context create here --local
 ssmcp context create work --server https://relay.example.com
-ssmcp --context work --name dev
+ssmcp --context work --username alice --name dev
 ssmcp context use here
 ~~~
 
@@ -331,40 +323,17 @@ return await events.policy(controlId, {
 
 `enabled`、`window_ms`、`kinds` 和 `strategy` 可调整；`strategy` 是建议文本。长等待使用公开 `await` 或 `events` 工具：`await` 的单次读取窗口默认 20 秒、最长 55 秒，公开 `events.wait` 默认且最长 55 秒；JavaScript 内的 `events.wait` 默认且最多等待 1 秒。后台观察期限与这些读取窗口分别计算。跨窗口保留 `wait_id`，处理事件后分别确认事件与等待结果游标；输入事件只负责唤醒，正文仍通过原输入通道领取。[订阅、绑定与等待示例](docs/events.md) · [JavaScript 短等待](docs/code-mode.md#events)
 
-### 从命令行连接对话与传递结果
+### 查看和接入本机保存的会话
 
-`ssmcp list` 把当前账号可控制的在线进程及其已登记线程自动组织成树。例如，两条连接各有一个登记成员时，默认输出如下；名称和主机名取自实际连接：
-
-~~~text
-  #  NAME / HOST
-  1  workstation [process] · devbox
-  2  ├─ Main / next unbound caller [main]
-  3  └─ reviewer [thread]
-  4  worker-pool [process] · devbox
-  5  ├─ Main / next unbound caller [main]
-  6  └─ worker-a [thread]
-Numbers identify this exact list for 5 minutes. Use ssmcp list --json for full IDs.
-Process chat input fans out to its listed main and registered threads.
-~~~
-
-每个 `[process]` 是一条在线客户端连接，后面显示主机名。其子项 `[main]` 是未绑定成员调用的主接收入口，`[thread]` 是通过 `collab.join` 登记的成员。不同进程各自成树；层级只表示线程登记在哪条连接上。同名进程或线程仍保留各自的编号。[目录来源](src/broker/session_io.rs)
-
-左列数字可直接用于 `attach` 和 `send`：例如 `thread 3` 只选择 reviewer，`process 1` 选择 workstation 及该次列表中的主入口和登记成员。每次 `list`（含 `--json`）保存新的五分钟编号快照；远端顺序变化不会改写已有快照的目标。需要完整进程或线程 ID 时使用 `ssmcp list --json`，在 `selection.entries` 中按 `number` 查找 `id`。显示名称不会被当成线程身份。[选择规则](docs/client-accounts.md#选择进程与线程)
-
-远程 `attach` 默认连接所选对象的聊天输入与输出：
+在被控设备上运行 `ssmcp list` 查看当前用户的本机会话。列表中的 `target` 可以直接传给 `ssmcp attach`。`saved:` 标识保存的后台会话，`live:` 标识登记中的前台实例。例如，以下命令查看列表并接入名为 `dev` 的后台会话。
 
 ~~~sh
 ssmcp list
-ssmcp attach thread 3
-ssmcp send process 1 '检查当前改动' | ssmcp wait --any
-ssmcp send thread THREAD_ID '整理当前结论' |
-  ssmcp wait --gather |
-  ssmcp send thread NEXT_THREAD_ID --stdin
+ssmcp list --json
+ssmcp attach saved:dev
 ~~~
 
-`send` 输出请求回执，`wait` 输出接收者的实际最终回复。可以等待任意一条、全部，或用 `--count N` 等待 N 个输入的结果；确认收到输入和进度更新都不算完成。输入在接收者下一次符合条件的原生调用响应中交付，这些命令不启动模型；停止等待或退出 attach 也不取消尚未完成的工作。[收发与等待](docs/client-accounts.md#发送输入与等待实际回复)
-
-聊天收发需要中继与接收端客户端同时支持相应接口，仅更新本机程序不会更新远端服务。请求和回复保存在服务端的有界内存中，最长保留 1 小时，服务端重启会丢失这批状态。原有 Shell 终端仍可用 `ssmcp -i` 或 `ssmcp attach process PROCESS_ID --terminal main`；本地保存会话使用 `ssmcp attach --local NAME`。[兼容与保留边界](docs/client-accounts.md#聊天接口的兼容与保留边界)
+使用 `ssmcp attach --read-only dev` 可以旁观。按 Ctrl-] 分离后，后台会话继续运行。本机列表和 attach 在中继离线时也可用。要查找另一台设备，请在授权的 MCP 应用中调用 `list`，按返回的客户端 ID 选择连接。[本机会话](docs/session-service.md) · [设备与控制者](docs/client-accounts.md)
 
 成员事件只展示当前进程保留、能够核对真实身份的内容。`ssmcp.ui.events` 按经过验证的归属与线程分页读取；显示名称不会被用来推断线程身份。[实时事件与界面接口](docs/client-ui.md)
 

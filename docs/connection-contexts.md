@@ -1,6 +1,6 @@
 # 选择本地或远程连接
 
-连接 context 给一个目标起名字，例如 `here` 表示本机，`work` 表示一个 HTTPS 中继。随后用同一个 `--context` 参数选择目标，或为新连接保存默认选择。名字只负责找到端点；账号授权仍由该端点自己的凭据决定。[选择实现](../src/client/connection_context.rs) · [账号与授权](client-accounts.md)
+连接 context 给一个目标起名字，例如 `here` 表示本机，`work` 表示一个 HTTPS 中继。随后用同一个 `--context` 参数选择目标，或为新连接保存默认选择。名字只负责找到端点；中继按设备指定的账号名单验证控制者。[选择实现](../src/client/connection_context.rs) · [账号与授权](client-accounts.md)
 
 本文描述当前源码中的命令。运行 `ssmcp context --help` 可确认已安装版本是否支持。远程 context 使用 HTTPS；本地 context 使用现有 Linux 前台模式，其运行前提见[本地运行](local-mode.md#运行前提)。
 
@@ -18,11 +18,10 @@ ssmcp context list
 
 名字长 1–64 个 ASCII 字符，以字母或数字开头，后面可使用字母、数字、点、下划线和连字符。重复创建同名目标会报错。
 
-先为远程目标登录，再启动该目标的新连接：
+连接中继时，为这条被控连接指定允许的账号。
 
 ~~~sh
-ssmcp --context work login
-ssmcp --context work --name dev
+ssmcp --context work --username alice --name dev
 ~~~
 
 本地目标可以直接启动：
@@ -38,14 +37,13 @@ ssmcp --context here --name local-dev
 `--context` 只影响本次命令。例如：
 
 ~~~sh
-ssmcp --context work list
-ssmcp whoami --context work
+ssmcp --context work --username alice
 ~~~
 
 在支持这种环境赋值语法的 Shell 中，也可以为一条命令指定：
 
 ~~~sh
-SSMCP_CONTEXT=work ssmcp list
+SSMCP_CONTEXT=work ssmcp --username alice
 ~~~
 
 要保存新连接的默认目标：
@@ -53,10 +51,10 @@ SSMCP_CONTEXT=work ssmcp list
 ~~~sh
 ssmcp context use work
 ssmcp context show
-ssmcp --name dev
+ssmcp --name dev --username alice
 ~~~
 
-SSMCP 按下列规则解析新连接和需要中继的账号命令：
+SSMCP 按下列规则选择新连接的目标。
 
 | 输入 | 实际规则 |
 | --- | --- |
@@ -69,7 +67,7 @@ SSMCP 按下列规则解析新连接和需要中继的账号命令：
 
 被选中的名字不存在、环境变量为空或名字格式无效时，命令会明确失败。一个过期的保存选择可以通过有效的 `--context NAME` 临时覆盖，或用 `context use --default` 清除。配置文件本身损坏或包含无效端点时，需要先修正配置。
 
-`whoami`、远程设备列表等中继命令在选择 `local` context 时会报错；本地模式的 MCP 地址和授权方式见[本地运行](local-mode.md)。`config`、`ui`、`update` 等本地管理命令不接受前置 `--context`。
+`ssmcp list` 读取本机会话。查看中继上的在线设备时，在授权的 MCP 应用中使用 `list`。本地模式的 MCP 地址和授权方式见[本地运行](local-mode.md)。`config`、`ui`、`update` 等本地管理命令不接受前置 `--context`。
 
 这些是 SSMCP 自己的选择规则。命名连接目标的组织方式参考了 [Docker contexts](https://docs.docker.com/engine/manage-resources/contexts/)，并不依赖 Docker 的环境变量或配置文件。
 
@@ -133,7 +131,7 @@ endpoint = "https://relay.example.com"
 
 端点字段只接受本地模式或 HTTPS origin，不保存账号令牌、TLS 私钥或正在运行的任务。命令编辑时保留已有 UI、浏览器和 Git 配置。配置文件路径仍遵循 `SSMCP_CLIENT_CONFIG` 等[现有规则](client-server.md#直接编辑配置文件)。
 
-账号凭据继续按服务器 origin 保存；改名、切换或删除 context 不会把另一台服务器的凭据转给当前目标。服务器公钥固定也仍使用独立的[信任配置](client-server.md#信任公钥写到哪里)。切换到另一个中继后，按需要在该中继登录。
+切换中继后，请指定在该中继已登记的用户名。远程操作者通过 MCP 应用授权新中继。服务器公钥固定使用独立的[信任配置](client-server.md#信任公钥写到哪里)。
 
 本地 context 沿用 Linux 前台运行方式，不增加后台会话管理。选择在创建连接时解析一次。保存的 session 记录解析后的具体目标；恢复旧 session、连接重试、正在执行的任务和已有问答队列继续使用原目标。`context use` 只改变以后创建的连接。连接 context 也不改变 `--context-root` 的文件访问范围，或 `/context`、`/switch` 管理的对话上下文。
 

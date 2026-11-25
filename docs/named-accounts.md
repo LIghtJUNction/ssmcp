@@ -1,12 +1,12 @@
 # 用户名入口与服务器管理
 
-客户端用一个命令选择服务器和自己的用户名：
+设备使用控制者的中继用户名建立被控连接。假设控制者在该中继的用户名为 `alice`，在设备要共享的目录运行以下命令。
 
 ```sh
 ssmcp alice@ssmcp.example.com
 ```
 
-第一次连接时，客户端打开 GitHub 授权页面。页面显示申请的 ssmcp 用户名和 GitHub 身份；确认后绑定账号并继续连接。以后执行同一命令会复用这台服务器的凭据。无需先执行独立的登录命令。
+控制者在该中继的账户网页用 GitHub 登录，可在账户页查看或修改用户名。在 MCP 应用中授权同一账号后，控制者可以发现已将其加入名单的设备。
 
 ## 用户名与身份
 
@@ -23,7 +23,7 @@ ssmcp alice@ssmcp.example.com
 
 ## 修改用户名
 
-登录门户后，在首页账户信息中选择“修改用户名”。改名后 GitHub 身份、设备归属、既有授权和登录会话继续有效，旧用户名保留给原账号。相同用户名提交、失败请求和 CLI 的首次用户名绑定均不计入改名次数。
+登录门户后，在首页账户信息中选择“修改用户名”。改名后 GitHub 身份、设备归属、既有授权和登录会话继续有效，旧用户名保留给原账号。相同用户名提交、失败请求和首次用户名绑定均不计入改名次数。
 
 服务器默认每个账号在 UTC 自然月内可成功改名一次。账户页显示本月剩余次数，服务器重启也会保留用量。管理员可以在 `ssmcpd.toml` 的 `[portal]` 段设置 `monthly_username_rename_limit`，例如设为 `3`，再重启服务。设为 `0` 会关闭账户页的改名功能。
 
@@ -33,29 +33,15 @@ ssmcp alice@ssmcp.example.com
 # 自定义服务器端口。
 ssmcp alice@ssmcp.example.com:8443
 
-# 没有桌面浏览器时，复制终端显示的链接到浏览器完成确认。
-ssmcp --no-browser alice@ssmcp.example.com
-
 # 为当前设备指定便于辨认的会话名。
 ssmcp --name workstation alice@ssmcp.example.com
-
-# 在另一个终端查看在线设备、进入终端。
-ssmcp whoami
-ssmcp list
-ssmcp -i
 ```
 
-凭据按服务器隔离保存。客户端验证服务器返回的 GitHub 身份和用户名，凭据过期或收到认证失效响应时，前台连接会重新发起授权。服务器暂时不可用、限流或拒绝访问时保留本地凭据，并显示具体错误。后台会话需要在前台完成授权，不会自行打开浏览器。
-
-`ssmcp username@server` 使用 HTTPS/WSS。维护旧 SSH 连接时显式选择 `--ssh`，或使用已有的 SSH 专用参数；SSH 详细配置见[客户端配置](configuration.md)。
+`ssmcp username@server` 通过 HTTPS/WSS 发起连接。设备端显式指定允许的控制者，控制者的 OAuth 授权在其 MCP 应用中完成。[客户端配置](configuration.md)
 
 ## 配置管理员
 
-先用目标用户名完成一次连接和 GitHub 绑定，例如：
-
-```sh
-ssmcp maintainer@ssmcp.example.com
-```
+先用拟任管理员的 GitHub 账号登录中继的账户网页，确认或设置其平台用户名，例如 `maintainer`。
 
 随后通过服务器自己的 SSH 管理账号登录，编辑 `/etc/ssmcpd/ssmcpd.toml`。在已有的 `[portal]` 段中配置：
 
@@ -102,10 +88,10 @@ sudo systemctl restart ssmcpd
 
 ## 验证实现
 
-- [客户端入口和凭据](../src/client/account.rs)
+- [被控端入口](../src/client/account.rs)
 - [用户名规则](../src/username.rs)
 - [账号存储和原子绑定](../src/portal/store.rs)
-- [浏览器确认和设备登录](../src/portal/setup.rs)
+- [账户门户与浏览器确认](../src/portal/setup.rs)
 - [账号策略、凭据撤销和断开连接](../src/broker/management.rs)
 - [共享带宽预算](../src/user_policy.rs)
 - [HTTP/WSS 集成测试](../src/device.rs)

@@ -10,90 +10,47 @@ ssmcp alice@relay.example
 
 连接成功后，直接运行 `ssmcp` 会复用上一次前台连接目标。可随时给出另一个 `username@server` 或 `local`。`--context` 和 `SSMCP_CONTEXT` 可为本次启动明确选择连接方式。用户名和服务器会显示在启动日志中。开发环境可明确写 `alice@http://127.0.0.1:PORT`，普通主机名默认走 HTTPS。
 
-## 注册和查询账号
+## 设置控制者账号
 
-```sh
-ssmcp alice@relay.example --register
-ssmcp whoami alice@relay.example --json
-```
+控制者在中继的账户网页用 GitHub 登录。账户页显示服务器分配的用户名，可在“修改用户名”中选择自己的名称。把这个名称和中继地址交给被控设备的使用者即可。用户名是 3–32 个 ASCII 字符，首字符为字母，末字符为字母或数字，中间可用下划线和连字符。[用户名规则](../src/username.rs) · [账户网页](../src/portal/view.rs)
 
-注册在浏览器确认新的用户名，返回账号信息。CLI 不接收账号登录凭据。已有用户名直接用于设备连接；账号设置、改名及公告编辑在中继网页进行。老版本留下的控制端凭据仍可用于已有控制命令，并可通过 `ssmcp logout` 清除。
-
-用户名使用 3–32 个 ASCII 字符，首字符为字母，末字符为字母或数字，中间可用下划线和连字符。用户名绑定稳定账号 ID。[用户名规则](../src/username.rs) · [账号存储](../src/portal/store.rs)
+设备端可通过 `ssmcp whoami alice@relay.example --json` 查询该用户名的公开信息。此查询按命令中给出的中继和用户名执行。
 
 ## 公告
 
 在中继网页登录后，账户页可以保存个人公告。留空恢复默认的 `{username} · {time} · 你好`。在自定义文字中也可使用这两个变量，时间显示为 UTC。管理员在同一页面维护全站公告，留空可清除。公告会显示在连接到该账号的客户端顶部，每 30 秒刷新，并可通过账号只读接口查询；请使用可公开显示的文字。
 
-## 控制端：登录后查看与调用
+## 设备上的控制账号记录
 
-控制者登录后，可以按真实的进程或线程身份连接对话。这里的进程指一条在线客户端连接；线程指该连接中经 `collab.join` 登记的成员。主接收入口（main）接收未绑定成员的调用，使用 `client:CLIENT_ID` 标识；它不是另一个模型实例。[目录来源](../src/broker/session_io.rs) · [目标解析](../src/client/account/directory.rs)
+设备在本机记录由中继验证的控制账号。身份由中继地址、身份提供方和稳定账号 ID 组成；登录名只用于显示。首次连接时，为本机明确选择、已由中继解析的目标预留位置。首次经中继验证的控制操作确认其默认身份。设备保留后续不同账号的记录，等待本机操作者批准。
 
-~~~sh
-ssmcp list --server https://relay.example
-ssmcp list --server https://relay.example --json
-ssmcp attach process PROCESS_ID
-ssmcp attach thread THREAD_ID
-ssmcp attach thread THREAD_NUMBER --read-only
-ssmcp attach thread client:CLIENT_ID
-ssmcp attach --local workstation
-~~~
-
-ChatGPT 等 MCP 应用使用该服务器的 `/mcp` OAuth 入口。下列 CLI 控制命令需要以前已授权的控制端凭据。新接入请通过 MCP 应用授权。`list` 只返回当前账号有权控制的在线连接及其真实登记成员；知道 ID或修改显示名称都不能替代控制端认证。[HTTP 控制接口](../src/device.rs) · [MCP 授权](../src/http.rs)
-
-### 选择进程与线程
-
-`ssmcp list` 的树形目录把进程、主接收入口和已登记线程分别编号。默认显示名称、类型和进程主机名；`ssmcp list --json` 的 `selection.entries` 给出每个 `number` 对应的完整 `id`。进程可用完整客户端 ID、确切且唯一的进程名称或列表序号选择；线程使用完整成员 ID、唯一的 `agent_…` ID 或序号。名称只是显示信息，同名线程不能互相替代。[目录与选择实现](../src/client/account/directory.rs)
-
-每次 `list`（含 `--json`）保存新的编号快照，保留 5 分钟，并绑定服务器 origin 和登录身份。远端列表顺序变化不会改变已有快照中数字指向的对象；对象或成员消失、类型不符、快照过期时会要求重新选择。用数字选择进程时，接收集合固定为那次列表中的主接收入口和成员；后来加入的成员不会被悄悄加入本次发送。[快照校验](../src/client/account/directory.rs)
-
-远程 `attach` 默认连接聊天输入与输出。按 Enter 提交输入；进程输入发给所选目录中的主接收入口及已登记线程，线程输入只发给确切的目标。Ctrl-] 或 Ctrl-C 退出观察，已经提交的工作继续运行。`--read-only` 仅查看，不发送聊天输入、终端输入或终端尺寸变更。[聊天连接](../src/client/account/chat.rs) · [attach 路由](../src/client/account/attach.rs)
-
-原有 Shell PTY 需要显式选择。使用 `ssmcp -i` 打开终端选择器，或指定进程与已存在的终端 ID；普通 PTY 模式的 Ctrl-C 发给远端 Shell，Ctrl-] 分离。这里的终端编号属于即时终端选择器，不会改写 `ssmcp list` 保存的聊天目录编号。[PTY 连接](../src/client/account.rs)
+在设备终端运行 `ssmcp controllers list --json` 查看身份、状态和时间。仅完成中继用户名解析时，`first_verified` 为空；收到归属已验证的控制操作后，该字段记录观察时间。摘要时间按分钟合并。运行 `ssmcp controllers history --json` 可按序号查看最近 256 条事件，区分目标解析、每条真实连接上控制者首次获准或被拒、以及本机批准和撤销。同一账号在同一连接连续执行工具只记录一次访问。新连接或准入结果变化会产生新的访问记录。升级已有的汇总记录时会保留原批准状态和时间摘要，逐条访问记录从新版本观察到的事件开始。选择具体账号时，请使用列表中的三个完整身份字段。
 
 ~~~sh
-ssmcp -i --server https://relay.example --client PROCESS_ID
-ssmcp attach process PROCESS_ID --terminal main
-ssmcp attach process PROCESS_ID --terminal main --read-only
+ssmcp controllers list --json
+ssmcp controllers history --json
+ssmcp controllers approve https://relay.example github 12345
+ssmcp controllers revoke https://relay.example github 12345
 ~~~
 
-本地保存会话仍可离线连接。`ssmcp sessions list` 与裸 `ssmcp attach` 查看本机保存的会话；已有的普通本地名称优先走本地路径，`--remote` 明确选择在线对象，`--local` 明确选择本地保存会话。数字或 `process`、`thread` 等有语法含义的本地名称可用 `ssmcp attach --local -- NAME`。本地定义损坏、权限错误或会话停止均报告本地错误。[本地与远程选择](../src/client/account/attach.rs)
+`12345` 是示例稳定账号 ID。命令在本机终端显示选中的身份并等待操作者输入 `yes`。批准只影响这台设备的本地策略，中继仍会检查控制者的身份和设备名单。
 
-### 发送输入与等待实际回复
+## 从控制端发现设备
 
-`send` 提交一条输入，并把请求回执 JSON 写到 stdout。回执包含请求 ID 和本次固定的接收集合；进程发送最多覆盖 32 个主入口及成员，线程发送只有一个接收者。输入可以是一个带引号的参数，也可以从 UTF-8 stdin 读取；进度提示写到 stderr，便于管道传递回执。[发送实现](../src/client/account/send.rs)
+在 ChatGPT 等 MCP 应用添加该中继的 `/mcp` 地址，并通过 OAuth 授权控制者账号。调用 MCP 的 `list`，根据工作目录和设备信息选择连接，再用实际返回的客户端 ID 查询工具与调用。中继逐次核对账号、连接和授权名单。[MCP 入口](../src/http.rs) · [设备路由](../src/device.rs)
+
+## 在设备上查看本机会话
+
+`ssmcp list --json` 列出当前用户的本机会话。每行的 `target` 可以原样传给 `ssmcp attach`。保存的后台定义使用 `saved:名称`；登记中的前台使用 `live:实例ID`。两个前台的显示名可以相同，请用列表返回的完整目标选定实例。
 
 ~~~sh
-ssmcp send thread THREAD_ID '检查失败用例'
-ssmcp send process PROCESS_ID --stdin < request.txt
-ssmcp send thread THREAD_ID '检查失败用例' --request-id io_review_01
+ssmcp list --json
+ssmcp attach saved:workstation
+ssmcp attach --read-only saved:workstation
+ssmcp attach -- list
 ~~~
 
-回执确认输入已入队，实际交付要等接收者下一次符合身份条件的原生调用响应。主接收入口只交给匹配账号的未绑定调用，成员输入只交给匹配的已认证成员；`send`、`wait` 和 `attach` 不启动模型或新 agent。重试同一个请求 ID 必须保持文字和完整接收集合一致；只得到入队或交付确认，还不能当作任务完成。[交付边界](../src/http/session_io.rs) · [请求与身份检查](../src/broker/session_io.rs)
-
-`wait` 只把 `result/done` 或 `result/error` 当成最终回复。默认等待全部输入；`--any` / `--any-of` / `--anyof` 等待任意一个，`--all` / `--gather` 等待全部，`--count N` / `--n-of N` 等待 N 个不同输入的结果。同一个线程回答两条不同请求可以计为两个结果，每个 `input_id` 只计一次；交付确认和 `progress/running` 不计入数量。[等待与计数](../src/client/account/wait.rs)
-
-~~~sh
-# 输出实际回复文字；请求回执通过管道进入 wait。
-ssmcp send process PROCESS_ID '检查当前改动' | ssmcp wait --any
-
-# 所选进程至少有两个接收者时，等待其中两个结果。
-ssmcp send process PROCESS_ID '检查当前改动' |
-  ssmcp wait --count 2 --timeout 120
-
-# 把实际回复交给另一个已登记线程。
-ssmcp send thread THREAD_ID '整理当前结论' |
-  ssmcp wait --gather |
-  ssmcp send thread NEXT_THREAD_ID --stdin
-
-# 已有请求可再次读取；--json 输出每行一个最终回复对象。
-ssmcp wait io_review_01 --all --json
-ssmcp send thread THREAD_ID '检查失败用例' --wait --json
-~~~
-
-等待结束只结束本地等待，未完成的工作继续运行。`--any` 或 `--count N` 最多输出所需数量的结果；其他结果保留在服务端，可在保留期内再次 `wait`。重复等待会重新读取已保留的结果，不是从共享队列取走结果。输出的最终回复包含错误，或等待超时，都会使命令以非零状态退出；已经写到 stdout 的真实回复仍可被下一条管道命令读取。[等待循环](../src/client/account/wait.rs)
-
-管道输入不能改变命令选用的服务器或账号。`wait` 接受回执 JSON、JSONL 或请求 ID，并核对服务器 origin、账号和固定接收身份；需要其他服务器时显式传 `--server`。`--timeout` 限制 stdin 到达 EOF 之后的回复等待，不限制上游写 stdin 的时长。下游 `send` 的单条输入仍限 16 KiB，多个回复拼接后超过限制时需要显式拆分或缩减。[输入与回执校验](../src/client/account/wait.rs) · [输入大小限制](../src/client/account/send.rs)
+最后一条连接名为 `list` 的本机会话。Ctrl-] 分离后原会话继续运行。出现本机名称缺失、定义有误或会话停止时，可运行 `ssmcp sessions status NAME` 检查。[本机会话服务](session-service.md)
 
 ### 查看线程历史
 
@@ -103,24 +60,13 @@ ssmcp send thread THREAD_ID '检查失败用例' --wait --json
 
 线程事件使用当前进程的有界内存窗口，最多保留 4096 个事件、2 MiB。当前读取接口为 `ssmcp.ui.events`，使用 `action: "thread"` 与实际 `client_id`；可传 `agent_id` 或 `main: true`，二者互斥。不传这两个过滤参数时返回所选进程范围的聚合事件，包括无法归属到具体线程的内容。分页沿用 `generation` 和 `next_cursor`，并检查 `retention_gap_possible`。[事件参数与分页](conversation-history.md)
 
-同一进程断网重连保留内存窗口；退出、重启或 `/reload` 会清空。旧会话和记忆文件不参与恢复，也不会被迁移删除。远程 `attach --read-only` 读取所选客户端的身份筛选事件及本账号的已确认回复，不会恢复模型内部对话状态。[窗口限制](../src/session/attach.rs) · [远程观察](../src/client/account/chat.rs)
+同一进程断网重连保留内存窗口；退出、重启或 `/reload` 会清空。旧会话和记忆文件不参与恢复，也不会被迁移删除。控制端可通过获准连接的原生事件接口读取保留记录。[窗口限制](../src/session/attach.rs)
 
-### 聊天接口的兼容与保留边界
+<a id="聊天接口的兼容与保留边界"></a>
 
-聊天收发需要命令所在客户端、接收端客户端和中继都支持相应接口。中继提供 `/api/client/io`、线程目录、定向输入交付和回复确认；接收端提供真实的 `ssmcp.ui.reply` 与 `ssmcp.ui.events`。仅更新本机客户端不会给旧中继增加这些能力；旧接收端不能在未支持回复接口时被加入聊天队列，原有显式 PTY 入口仍可使用。[HTTP 接口](../src/device/session_io.rs) · [原生回复确认](../src/http/session_io.rs)
+### 中继保存的请求与回复
 
-请求和回复最多保留 1 小时，保留期从请求创建时计算。状态位于服务端内存，服务端重启会丢失未完成请求及已保留回复；容量满时拒绝新的请求或进度，最终回复预留所需空间。连接或成员失效后，待处理输入标为过期，不会改投同名对象或新连接。这套接口不提供跨服务端重启的持久任务队列。[保留与容量实现](../src/broker/session_io.rs)
-
-| 范围 | 限制 |
-| --- | --- |
-| 单次发送 | 1–32 个确切接收者；输入最多 16 KiB UTF-8，控制字符仅允许换行和 Tab |
-| 单次等待 | 最多 32 个请求 ID；`--count N` 支持 1–1024，不能超过这些请求中的输入总数 |
-| 等待超时 | 0.001–86400 秒；不取消接收者工作 |
-| 服务端请求保留 | 全局最多 1024 条、每账号最多 128 条，最长 1 小时 |
-| 服务端输出预算 | 总预算 16 MiB；每请求最多 2 MiB、256 条进度与最终输出 |
-| 客户端线程事件 | 进程内最多 4096 个事件、2 MiB 预算；不补造缺失的记录身份 |
-
-这些限制分别来自[输入解析](../src/client/account/send.rs)、[等待解析](../src/client/account/wait.rs)、[服务端账本](../src/broker/session_io.rs)和[事件窗口](../src/session/attach.rs)。版本号或显示名称不能替代真实工具目录和接口检查。
+中继的会话 I/O 接口按账号、连接和接收者记录请求与回复。接收端通过 `ssmcp.ui.reply` 提交回复。单个请求的保留期自创建起最长一小时，服务端重启会清空内存队列。连接或成员失效后，待处理输入标为过期。[HTTP 接口](../src/device/session_io.rs) · [回复确认](../src/http/session_io.rs) · [服务端记录](../src/broker/session_io.rs)
 
 ## 修改名单与连接生命周期
 
@@ -160,15 +106,10 @@ cargo test --locked --offline --test allow_account
 
 这些测试使用隔离账号存储、loopback HTTP / WebSocket 和假登录凭据，覆盖名单解析、实际控制端认证、请求与结果计费、共享账号隔离及 CLI 输出；不向真实账号授权，也不部署服务器。
 
-聊天收发、身份筛选与 CLI 管道有独立的本地回归入口：
+服务端请求归属和本机事件过滤另有定向测试。
 
 ~~~sh
 cargo test --locked --offline --lib broker::session_io::tests
-cargo test --locked --offline --lib broker::allow::tests::session_io
 cargo test --locked --offline --lib http::session_io::tests
-cargo test --locked --offline --lib client::account::
 cargo test --locked --offline --lib session::attach::thread_history::tests
-python3 scripts/e2e_account_interactive.py --bin-dir /path/to/candidate-binaries
 ~~~
-
-CLI 脚本只需要候选 `ssmcp`，使用自己的 loopback HTTP 接口和真实 PTY Shell；Rust 回归另行检查真实服务端路由、WebSocket 连接和回复归属。[CLI 夹具](../scripts/e2e_account_interactive.py) · [服务端夹具](../src/broker/allow/tests/session_io.rs)
