@@ -145,6 +145,7 @@ jobs:
           python3 scripts/test_release.py
           python3 scripts/test_setup_server.py
           python3 scripts/test_installer_download_bounds.py
+          SSMCP_UPSTREAM_INSTALLER="$PWD/scripts/install.sh" python3 scripts/test_termux_install.py
           python3 scripts/test_collect_native_validation_kit.py
       - name: Check JavaScript orchestration helpers
         run: make test-code-mode
