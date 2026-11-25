@@ -424,3 +424,7 @@ fn windows_extended_only_directory_uses_exact_alias_or_fails_before_cmd() {
         assert_eq!(passed.as_os_str(), canonical.as_os_str());
     }
 }
+
+#[cfg(target_arch = "aarch64")]
+#[path = "windows_arm_shell_tests.rs"]
+mod arm;
