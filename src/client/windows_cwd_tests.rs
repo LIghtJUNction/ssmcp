@@ -47,9 +47,22 @@ async fn write_from_terminal(
     marker: &str,
     ps: bool,
 ) -> bool {
+    let expected = if ps {
+        use std::path::{Component, Prefix};
+        let root = directory.canonicalize().unwrap();
+        let Some(Component::Prefix(prefix)) = root.components().next() else {
+            panic!("test workspace has no drive prefix");
+        };
+        let (Prefix::Disk(letter) | Prefix::VerbatimDisk(letter)) = prefix.kind() else {
+            panic!("test workspace is not on a local drive");
+        };
+        format!("OK:{}", char::from(letter).to_ascii_uppercase())
+    } else {
+        "OK".into()
+    };
     let data = if ps {
         format!(
-            "if (Test-Path -LiteralPath '{marker}') {{ Set-Content -Encoding ASCII out.txt OK }}\r"
+            "if (Test-Path -LiteralPath '{marker}') {{ Set-Content -Encoding ASCII -Path out.txt -Value ('OK:' + (Get-Location).Drive.Name.ToUpperInvariant()) }}\r"
         )
     } else {
         format!("if exist {marker} echo OK>out.txt\r")
@@ -62,7 +75,9 @@ async fn write_from_terminal(
         .unwrap();
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            if fs::read_to_string(directory.join("out.txt")).is_ok_and(|text| text.trim() == "OK") {
+            if fs::read_to_string(directory.join("out.txt"))
+                .is_ok_and(|text| text.trim() == expected)
+            {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(40)).await;

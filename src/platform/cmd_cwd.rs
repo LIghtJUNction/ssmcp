@@ -1,6 +1,13 @@
 //! cmd.exe treats even a local verbatim drive path as a UNC current directory
 //! and silently switches to the Windows directory. Adapt its launch argument,
 //! keeping the canonical path for authorization, session state and receipts.
+//! PowerShell also needs the DOS spelling to start on a normal filesystem drive.
+
+fn is_powershell(name: &std::ffi::OsStr) -> bool {
+    ["powershell", "powershell.exe", "pwsh", "pwsh.exe"]
+        .iter()
+        .any(|candidate| name.eq_ignore_ascii_case(candidate))
+}
 
 /// Only an absolute drive spelling fits cmd's current-directory contract.
 /// Leave space for the trailing separator and NUL in a MAX_PATH buffer.
@@ -55,18 +62,28 @@ mod windows {
             ext.eq_ignore_ascii_case(OsStr::new("bat"))
                 || ext.eq_ignore_ascii_case(OsStr::new("cmd"))
         });
-        if !is_cmd && !is_batch {
+        let powershell = program.file_name().is_some_and(super::is_powershell);
+        if !is_cmd && !is_batch && !powershell {
             return Ok(Cow::Borrowed(cwd));
         }
         if matches!(cwd.components().next(), Some(Component::Prefix(prefix))
             if matches!(prefix.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..)))
         {
-            return Err(unsupported());
+            return if powershell {
+                Ok(Cow::Borrowed(cwd))
+            } else {
+                Err(unsupported())
+            };
         }
         let canonical = cwd.canonicalize()?;
         let path: Vec<_> = canonical.as_os_str().encode_wide().collect();
         if let Some(ordinary) = verified_spelling(&path, &canonical) {
             return Ok(Cow::Owned(ordinary));
+        }
+        // PowerShell can address UNC and extended-only paths with its provider.
+        // Avoid changing their semantics (or exposing an 8.3 alias as its location).
+        if powershell {
+            return Ok(Cow::Borrowed(cwd));
         }
         // A short alias can represent long local paths on volumes with 8.3 names.
         // Network shares cannot become a drive by dropping their namespace prefix.
@@ -141,6 +158,16 @@ mod tests {
 
     fn ordinary(path: &str) -> Option<String> {
         drive_spelling(&path.encode_utf16().collect::<Vec<_>>()).map(String::from_utf16_lossy)
+    }
+
+    #[test]
+    fn recognises_both_powershell_launchers_and_leaves_custom_programs_alone() {
+        for name in ["powershell", "PowerShell.EXE", "pwsh", "PwSh.eXe"] {
+            assert!(super::is_powershell(name.as_ref()));
+        }
+        for name in ["powershell-host.exe", "powershell.cmd", "tool.exe"] {
+            assert!(!super::is_powershell(name.as_ref()));
+        }
     }
 
     #[test]
