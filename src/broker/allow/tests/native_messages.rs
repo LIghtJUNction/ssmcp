@@ -1,5 +1,6 @@
 //! Real websocket/device registration plus normal fixture OAuth grants.
 mod broadcast;
+mod webhooks;
 use super::*;
 use crate::wire::messages::{self, Command, Origin, Reply, Status};
 

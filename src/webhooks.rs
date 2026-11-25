@@ -4,10 +4,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    fs::File,
+    fs::OpenOptions,
     io::Read,
     net::IpAddr,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -15,8 +15,8 @@ const CONFIG_BYTES: u64 = 64 * 1024;
 const PAYLOAD_BYTES: usize = 32 * 1024;
 
 pub struct Webhooks {
-    root: PathBuf,
-    client: Client,
+    config: Configuration,
+    client: Option<Client>,
 }
 
 #[derive(Default, Deserialize)]
@@ -82,38 +82,83 @@ fn endpoint(value: &str) -> Result<Url, String> {
 
 impl Webhooks {
     pub fn new(root: PathBuf) -> Result<Self, String> {
-        let root = root
-            .canonicalize()
-            .map_err(|_| "webhook workspace is unavailable")?;
+        Self::with_config(
+            &root,
+            std::env::var_os("SSMCP_WEBHOOK_CONFIG")
+                .map(PathBuf::from)
+                .as_deref(),
+        )
+    }
+
+    fn with_config(workspace: &Path, path: Option<&Path>) -> Result<Self, String> {
+        let Some(path) = path else {
+            return Ok(Self {
+                config: Configuration::default(),
+                client: None,
+            });
+        };
+        let config = Self::configuration(workspace, path)?;
         let client = crate::http_client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(10))
             .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION"), " webhook"))
             .build()
             .map_err(|_| "cannot initialize webhook transport")?;
-        Ok(Self { root, client })
+        Ok(Self {
+            config,
+            client: Some(client),
+        })
     }
 
-    fn configuration(&self) -> Result<Configuration, String> {
-        let path = self.root.join(".ssmcp/webhooks.json");
-        let canonical = match path.canonicalize() {
-            Ok(path) => path,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Configuration {
-                    schema_version: 1,
-                    ..Configuration::default()
-                });
-            }
-            Err(_) => return Err("cannot open webhook configuration".into()),
-        };
-        if !canonical.starts_with(&self.root) {
-            return Err("webhook configuration must stay inside the workspace".into());
+    fn configuration(workspace: &Path, path: &Path) -> Result<Configuration, String> {
+        if !path.is_absolute() {
+            return Err("SSMCP_WEBHOOK_CONFIG must be an absolute operator-owned file".into());
         }
-        let file = File::open(canonical).map_err(|_| "cannot read webhook configuration")?;
+        let workspace = workspace
+            .canonicalize()
+            .map_err(|_| "webhook workspace is unavailable")?;
+        let canonical = path
+            .canonicalize()
+            .map_err(|_| "cannot open operator webhook configuration")?;
+        if canonical.starts_with(&workspace)
+            || std::fs::symlink_metadata(path)
+                .map_err(|_| "cannot inspect operator webhook configuration")?
+                .file_type()
+                .is_symlink()
+        {
+            return Err(
+                "operator webhook configuration must be outside the workspace and not a symlink"
+                    .into(),
+            );
+        }
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let file = options
+            .open(&canonical)
+            .map_err(|_| "cannot read operator webhook configuration")?;
         let metadata = file
             .metadata()
             .map_err(|_| "cannot inspect webhook configuration")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            // The process owner, or an administrator, controls the named destinations.
+            if ![unsafe { libc::geteuid() }, 0].contains(&metadata.uid())
+                || metadata.mode() & 0o022 != 0
+            {
+                return Err(
+                    "operator webhook configuration has unsafe ownership or write permissions"
+                        .into(),
+                );
+            }
+        }
         if !metadata.is_file() || metadata.len() > CONFIG_BYTES {
             return Err("webhook configuration must be a file of at most 64 KiB".into());
         }
@@ -124,8 +169,8 @@ impl Webhooks {
         if bytes.len() as u64 > CONFIG_BYTES {
             return Err("webhook configuration exceeds 64 KiB".into());
         }
-        let config: Configuration = serde_json::from_slice(&bytes)
-            .map_err(|_| "invalid .ssmcp/webhooks.json configuration")?;
+        let config: Configuration =
+            serde_json::from_slice(&bytes).map_err(|_| "invalid operator webhook configuration")?;
         if config.schema_version != 1 || config.destinations.len() > 64 {
             return Err(
                 "webhook configuration requires schema_version 1 and at most 64 destinations"
@@ -163,7 +208,7 @@ impl Webhooks {
         vec![
             json!({
                 "name":"ssmcp.webhooks.list",
-                "description":"List configured notification destinations from .ssmcp/webhooks.json. Endpoints and credentials are never returned. No network request is made.",
+                "description":"List the notification destinations configured by the operator at client startup. Endpoints and credentials are never returned. No network request is made.",
                 "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
                 "annotations":{"readOnlyHint":true,"destructiveHint":false,"openWorldHint":false}
             }),
@@ -189,12 +234,10 @@ impl Webhooks {
                 if !arguments.as_object().is_some_and(|v| v.is_empty()) {
                     return Err("webhooks.list accepts an empty object".into());
                 }
-                let destinations: Vec<_> = self.configuration()?.destinations.into_iter()
+                let destinations: Vec<_> = self.config.destinations.iter()
                     .map(|(name, value)| json!({"name":name,"description":value.description,"authenticated":value.token_env.is_some()}))
                     .collect();
-                Ok(
-                    json!({"schema_version":1,"destinations":destinations,"config_path":self.root.join(".ssmcp/webhooks.json")}),
-                )
+                Ok(json!({"schema_version":1,"destinations":destinations}))
             }
             "ssmcp.webhooks.notify" => {
                 let input: Notification = serde_json::from_value(arguments)
@@ -212,11 +255,10 @@ impl Webhooks {
                 {
                     return Err("notification requires valid destination/event IDs, 1–16384 bytes of text and at most 32 KiB of data".into());
                 }
-                let config = self.configuration()?;
-                let destination = config
+                let destination = self.config
                     .destinations
                     .get(&input.destination)
-                    .ok_or("unknown webhook destination; configure .ssmcp/webhooks.json first")?;
+                    .ok_or("unknown webhook destination; configure SSMCP_WEBHOOK_CONFIG before starting the client")?;
                 let id = if let Some(id) = input.delivery_id {
                     id
                 } else {
@@ -231,6 +273,8 @@ impl Webhooks {
                 });
                 let mut request = self
                     .client
+                    .as_ref()
+                    .ok_or("no operator webhook transport configured")?
                     .post(endpoint(&destination.url)?)
                     .header("X-Ssmcp-Event", &input.event)
                     .header("X-Ssmcp-Delivery-Id", &id)
@@ -278,12 +322,12 @@ mod tests {
                 std::process::id(),
                 u128::from_le_bytes(random)
             ));
-            std::fs::create_dir_all(path.join(".ssmcp")).unwrap();
+            std::fs::create_dir_all(path.join("workspace")).unwrap();
             Self(path)
         }
         fn configure(&self, url: &str) {
             std::fs::write(
-                self.0.join(".ssmcp/webhooks.json"),
+                self.0.join("operator.json"),
                 json!({"schema_version":1,"destinations":{"build":{"url":url}}}).to_string(),
             )
             .unwrap();
@@ -298,7 +342,7 @@ mod tests {
     #[tokio::test]
     async fn unconfigured_destinations_make_no_request_and_schema_is_bounded() {
         let fixture = Fixture::new();
-        let webhooks = Webhooks::new(fixture.0.clone()).unwrap();
+        let webhooks = Webhooks::with_config(&fixture.0.join("workspace"), None).unwrap();
         assert_eq!(
             webhooks
                 .perform("ssmcp.webhooks.list", json!({}))
@@ -353,7 +397,11 @@ mod tests {
         });
         let fixture = Fixture::new();
         fixture.configure(&format!("http://{address}/hook"));
-        let webhooks = Webhooks::new(fixture.0.clone()).unwrap();
+        let webhooks = Webhooks::with_config(
+            &fixture.0.join("workspace"),
+            Some(&fixture.0.join("operator.json")),
+        )
+        .unwrap();
         let args = json!({"destination":"build","event":"build.done","text":"Tests passed","data":{"passed":3},"delivery_id":"delivery-1"});
         let result = webhooks
             .perform("ssmcp.webhooks.notify", args.clone())
@@ -369,6 +417,11 @@ mod tests {
             .unwrap();
         assert!(!listed.to_string().contains("/hook"));
         fixture.configure(&format!("http://{address}/redirect"));
+        let webhooks = Webhooks::with_config(
+            &fixture.0.join("workspace"),
+            Some(&fixture.0.join("operator.json")),
+        )
+        .unwrap();
         assert!(
             webhooks
                 .perform("ssmcp.webhooks.notify", args)
@@ -382,22 +435,16 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn configuration_cannot_escape_the_workspace() {
+    async fn repository_files_and_symlinks_cannot_select_credentials_or_destinations() {
         let fixture = Fixture::new();
-        let outside = Fixture::new();
-        outside.configure("https://example.com/notify");
-        std::os::unix::fs::symlink(
-            outside.0.join(".ssmcp/webhooks.json"),
-            fixture.0.join(".ssmcp/webhooks.json"),
-        )
-        .unwrap();
-        let webhooks = Webhooks::new(fixture.0.clone()).unwrap();
-        assert!(
-            webhooks
-                .perform("ssmcp.webhooks.list", json!({}))
-                .await
-                .unwrap_err()
-                .contains("inside")
-        );
+        fixture.configure("https://example.com/notify");
+        let config = fixture.0.join("operator.json");
+        let workspace = fixture.0.join("workspace");
+        let local = workspace.join("webhooks.json");
+        std::fs::copy(&config, &local).unwrap();
+        assert!(Webhooks::with_config(&workspace, Some(&local)).is_err());
+        let link = fixture.0.join("linked.json");
+        std::os::unix::fs::symlink(&local, &link).unwrap();
+        assert!(Webhooks::with_config(&workspace, Some(&link)).is_err());
     }
 }

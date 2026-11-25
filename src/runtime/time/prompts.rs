@@ -8,6 +8,8 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use tokio::time::Instant;
 
 pub(crate) const TOOL: &str = "ssmcp.time.prompt";
+pub(crate) const UNKNOWN_PROMPT_TIMER: &str =
+    "unknown prompt timer for this exact caller and native connection";
 const MAX_SCHEDULES: usize = 32;
 const MAX_RECORDS: usize = 128;
 const MAX_TEMPLATE_BYTES: usize = 8192;
@@ -535,8 +537,29 @@ impl State {
         });
         let more = events.len() > limit;
         events.truncate(limit);
-        Ok(json!({"events":events,"more":more,"ack_required":true,
-            "visibility_deferred":deferred}))
+        let mut reply = json!({"events":events,"more":more,"ack_required":true,
+            "visibility_deferred":deferred});
+        // This claim covers the authenticated member on this native connection,
+        // even if the selected history changes. Never report another member's state.
+        if timer_id.is_none()
+            && owner.connection.is_some()
+            && owner
+                .attribution
+                .as_ref()
+                .is_some_and(|a| a.agent.is_some())
+        {
+            let mut own = self
+                .records
+                .values()
+                .filter(|r| r.owner.same_controller(owner))
+                .peekable();
+            if own.peek().is_none() {
+                reply["member_has_no_prompt_timers"] = json!(true);
+            } else if own.all(|r| !r.status.active() && r.pending.is_none()) {
+                reply["member_prompt_delivery_idle"] = json!(true);
+            }
+        }
+        Ok(reply)
     }
 
     pub(super) fn summaries(&self, owner: &Option<super::HistoryOwner>) -> Vec<PromptSummary> {
@@ -559,9 +582,7 @@ impl State {
         self.records
             .get_mut(id)
             .filter(|record| &record.owner == owner)
-            .ok_or_else(|| {
-                "unknown prompt timer for this exact caller and native connection".into()
-            })
+            .ok_or_else(|| UNKNOWN_PROMPT_TIMER.into())
     }
 
     fn request(
@@ -1057,6 +1078,73 @@ mod tests {
             )
             .unwrap()["events"]
             .clone()
+    }
+
+    #[test]
+    fn empty_hint_is_bound_to_the_member_and_includes_future_timers() {
+        let mut state = State::default();
+        let now = Instant::now();
+        let member = |id: &str| {
+            let mut owner = owner(11);
+            owner.attribution = Some(
+                serde_json::from_value(json!({
+                    "account":{"provider":"github","subject":"42","login":"account"},
+                    "agent":{"id":id,"name":"member"}
+                }))
+                .unwrap(),
+            );
+            owner
+        };
+        let a = member("agent_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let b = member("agent_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        let hint = |state: &mut State, owner: &Owner| {
+            state.read_events(owner, None, 4, true).unwrap()["member_has_no_prompt_timers"] == true
+        };
+        assert!(
+            !hint(&mut state, &owner(11)),
+            "unattributed callers are not cached"
+        );
+        assert!(hint(&mut state, &a));
+        let id = add(&mut state, b.clone(), schedule("later", 60_000, None), now);
+        assert!(hint(&mut state, &a), "another owner cannot change our hint");
+        assert!(
+            !hint(&mut state, &b),
+            "a quiet future timer still needs observation"
+        );
+        assert!(
+            state
+                .read_events(&b, Some(&id), 4, true)
+                .unwrap()
+                .get("member_has_no_prompt_timers")
+                .is_none()
+        );
+        let later = now + Duration::from_secs(61);
+        state.tick(later, 1_061_000);
+        let pending = state.records[&id].pending.clone().unwrap();
+        let check = state.read_events(&b, None, 4, true).unwrap();
+        assert_eq!(check["visibility_deferred"], 1);
+        assert!(check.get("member_prompt_delivery_idle").is_none());
+        state
+            .request(
+                b.clone(),
+                "test",
+                Request::Ack {
+                    timer_id: id.clone(),
+                    event_id: pending.event_id,
+                    revision: pending.revision,
+                },
+                later,
+                1_061_000,
+            )
+            .unwrap();
+        assert!(
+            state.records.contains_key(&id),
+            "retained ACK remains addressable"
+        );
+        assert_eq!(
+            state.read_events(&b, None, 4, true).unwrap()["member_prompt_delivery_idle"],
+            true
+        );
     }
 
     #[test]

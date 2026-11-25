@@ -16,6 +16,8 @@ use crate::{
     wire::ControlAttribution,
 };
 pub(crate) use execution::ExecutionTiming;
+#[cfg(target_os = "linux")]
+pub(crate) use prompts::UNKNOWN_PROMPT_TIMER;
 pub(crate) use prompts::{PromptStatus, PromptSummary};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -64,6 +66,12 @@ struct Owner {
 
 impl PartialEq for Owner {
     fn eq(&self, other: &Self) -> bool {
+        self.same_controller(other) && self.thread == other.thread && self.history == other.history
+    }
+}
+
+impl Owner {
+    fn same_controller(&self, other: &Self) -> bool {
         let same_attribution = match (&self.attribution, &other.attribution) {
             (None, None) => true,
             (Some(left), Some(right)) => {
@@ -84,14 +92,9 @@ impl PartialEq for Owner {
         };
         // Login and participant names are presentation metadata. Renaming them
         // must not replace an authenticated account, member or conversation.
-        same_attribution
-            && self.connection == other.connection
-            && self.thread == other.thread
-            && self.history == other.history
+        same_attribution && self.connection == other.connection
     }
-}
 
-impl Owner {
     fn from_source(source: &Source) -> Self {
         Self {
             connection: source.call.as_ref().map(|call| call.connection()),

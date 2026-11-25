@@ -271,6 +271,7 @@ pub struct Runtime {
     time: Arc<time::Clock>,
     files: Arc<Files>,
     plugins: plugins::Plugins,
+    webhooks: crate::webhooks::Webhooks,
     output: Arc<OutputStore>,
     audit: Arc<EventLog>,
     code_audit: CodeAudit,
@@ -344,6 +345,8 @@ impl Runtime {
         registry.replace(Provider::Output, OutputStore::tools())?;
         registry.replace(Provider::Reload, vec![crate::client::reload::tool()])?;
         registry.replace(Provider::ManagedFiles, crate::managed_files::tools())?;
+        let webhooks = crate::webhooks::Webhooks::new(root.clone())?;
+        registry.replace(Provider::Webhooks, crate::webhooks::Webhooks::tools())?;
         if sessions.is_some() {
             registry.replace(
                 Provider::Sessions,
@@ -364,6 +367,7 @@ impl Runtime {
             time,
             files,
             plugins,
+            webhooks,
             code_audit: CodeAudit::new(audit.clone()),
             call_connection: call_scope::connection(),
             client_id: OnceLock::new(),
@@ -943,6 +947,11 @@ impl Runtime {
                     None => Err("session management was not granted with --session-control".into()),
                 },
                 Provider::Audit => self.audit.read(arguments).await.map(backend::result),
+                Provider::Webhooks => self
+                    .webhooks
+                    .perform(&tool.native_name, arguments)
+                    .await
+                    .map(backend::result),
                 Provider::ManagedFiles => {
                     let root = self.tool_root.clone();
                     let name = tool.native_name.clone();

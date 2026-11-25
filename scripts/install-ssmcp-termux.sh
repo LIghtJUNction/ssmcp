@@ -26,8 +26,9 @@ case "$(uname -m)" in aarch64|arm64|x86_64|amd64) ;; *) fail 'Use a 64-bit ARM o
 command -v pkg >/dev/null && [ -n "${PREFIX:-}" ] || fail 'Run this script in Termux.'
 if ! command -v proot-distro >/dev/null; then pkg install -y proot-distro; fi
 container=ssmcp-debian
-installed=$(proot-distro list --quiet) || fail 'Current proot-distro required; update the Termux package.'
-if ! printf '%s\n' "$installed" | grep -Fxq "$container"; then
+runtime=${TERMUX__PREFIX:-$PREFIX}/var/lib/proot-distro
+# proot-distro 5 migrates a legacy rootfs on the first login.
+if [ ! -d "$runtime/containers/$container/rootfs" ] && [ ! -d "$runtime/installed-rootfs/$container" ]; then
     proot-distro install debian:bookworm --name "$container"
 fi
 

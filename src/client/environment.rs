@@ -48,6 +48,10 @@ fn skips_environment(args: &[OsString]) -> Result<bool, String> {
     {
         return Ok(true);
     }
+    if matches!(args, [group, command, ..] if group == "mcp" && command == "install") {
+        // Installation runs the operator's Codex CLI and edits its user configuration.
+        return Ok(true);
+    }
     if matches!(
         args.first().and_then(|arg| arg.to_str()),
         Some("paths" | "--help" | "--help-full" | "-h")

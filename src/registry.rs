@@ -20,6 +20,7 @@ pub enum Provider {
     Plugins,
     Workspace,
     ManagedFiles,
+    Webhooks,
     Context,
     Rsync,
     Output,
@@ -47,6 +48,7 @@ impl Provider {
             Self::Plugins => "plugins",
             Self::Workspace => "workspace",
             Self::ManagedFiles => "managed_files",
+            Self::Webhooks => "webhooks",
             Self::Context => "context",
             Self::Rsync => "rsync",
             Self::Output => "output",
@@ -342,6 +344,9 @@ fn prepare(
             Provider::Ui => id.starts_with("ssmcp.ui."),
             Provider::Exec => id.starts_with("ssmcp.exec."),
             Provider::Time => id.starts_with("ssmcp.time."),
+            Provider::Webhooks => {
+                matches!(id.as_str(), "ssmcp.webhooks.list" | "ssmcp.webhooks.notify")
+            }
             Provider::Computer => matches!(
                 id.as_str(),
                 "ssmcp.computer.version"

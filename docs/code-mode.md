@@ -450,3 +450,7 @@ Call exact native names and preserve their schemas and approval requirements. He
 ### Temporary image links
 
 The public MCP link tool creates a short-lived link for an authorized client image path with action:create, client_id, path and optional ttl_secs (default 120, maximum 900). Use action:cleanup with the returned id to revoke that link. This is a public relay tool, not a native client call. See [image links](image-links.md) for the exact lifetime and access rules.
+
+## Webhook notifications
+
+Use `ssmcp.webhooks.list` to discover the operator’s named destinations and `ssmcp.webhooks.notify` to send an event. The account gateway can queue it in one authorized native mailbox. [Configuration and queue receipts](webhooks.md)

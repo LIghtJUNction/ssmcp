@@ -92,6 +92,7 @@ impl Recipient {
 pub enum Origin {
     LocalUser,
     Agent,
+    Webhook,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

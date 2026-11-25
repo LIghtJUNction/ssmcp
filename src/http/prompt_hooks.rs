@@ -3,12 +3,134 @@ use super::{CodeRunReport, EligibleUserResponse, Operation, response_authorizati
 use crate::code_mode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 pub(crate) const TOOL: &str = "ssmcp.time.prompt";
 const MAX_EVENTS: usize = 4;
 const MAX_PROBES: usize = 4;
 const MAX_APPEND_BYTES: usize = 128 * 1024;
+
+/// One native Session. Only a settled generation can certify an idle member.
+#[derive(Default)]
+pub(crate) struct ProbeInterest(Mutex<HashMap<String, MemberTimers>>);
+
+#[derive(Default)]
+struct MemberTimers {
+    owner: String,
+    dispatched: u64,
+    confirmed: u64,
+    idle: bool,
+    may_report_task_failure: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Probe {
+    Skip,
+    Read(Option<u64>),
+}
+
+impl ProbeInterest {
+    fn plan(&self, member: &code_mode::RunBinding) -> Probe {
+        let members = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        match members.get(&member.agent_id) {
+            None if members.len() < 128 => Probe::Read(Some(0)),
+            Some(state)
+                if state.owner == member.owner
+                    && !state.may_report_task_failure
+                    && state.dispatched == state.confirmed
+                    && state.dispatched != u64::MAX =>
+            {
+                if state.idle {
+                    Probe::Skip
+                } else {
+                    Probe::Read(Some(state.dispatched))
+                }
+            }
+            _ => Probe::Read(None),
+        }
+    }
+
+    fn update(&self, member: &code_mode::RunBinding, f: impl FnOnce(&mut MemberTimers)) {
+        let mut members = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        if members.len() >= 128 && !members.contains_key(&member.agent_id) {
+            return;
+        }
+        let state = members
+            .entry(member.agent_id.clone())
+            .or_insert_with(|| MemberTimers {
+                owner: member.owner.clone(),
+                ..Default::default()
+            });
+        if state.owner == member.owner {
+            f(state);
+        }
+    }
+
+    /// An extension or opaque command can create a native process whose crash
+    /// is reported long after the call returns. An idle timer page cannot
+    /// certify that such a process has finished. Only known passive operations
+    /// can preserve this member's eligibility for the idle-clock shortcut.
+    pub(crate) fn observe_operation(&self, member: &code_mode::RunBinding, operation: &Operation) {
+        let passive = match operation {
+            Operation::Status {} | Operation::Read { .. } | Operation::ListTools { .. } => true,
+            Operation::CallTool { name, .. } => matches!(
+                name.as_str(),
+                TOOL | "ssmcp.time.now"
+                    | "ssmcp.time.wait"
+                    | "ssmcp.exec.status"
+                    | "ssmcp.exec.read"
+                    | "ssmcp.exec.wait"
+                    | "ssmcp.output.read"
+                    | "ssmcp.fs.stat"
+                    | "ssmcp.fs.read"
+                    | "ssmcp.fs.list"
+                    | "ssmcp.client.capabilities"
+                    | "ssmcp.ui.events"
+                    | "ssmcp.ui.get"
+                    | "ssmcp.ui.history"
+                    | "ssmcp.ui.questions"
+                    | "ssmcp.ui.question_delivery"
+                    | "ssmcp.ui.question_ack"
+                    | "ssmcp.ui.tool_summary"
+                    | "ssmcp.resources.list"
+                    | "ssmcp.resources.templates"
+                    | "ssmcp.resources.read"
+            ),
+            _ => false,
+        };
+        if !passive {
+            self.update(member, |state| state.may_report_task_failure = true);
+        }
+    }
+
+    pub(crate) fn dispatched(&self, member: &code_mode::RunBinding) {
+        self.update(member, |state| {
+            state.dispatched = state.dispatched.saturating_add(1);
+            state.idle = false;
+        });
+    }
+
+    pub(crate) fn confirmed(&self, member: &code_mode::RunBinding) {
+        self.update(member, |state| {
+            state.confirmed = state.confirmed.saturating_add(1);
+        });
+    }
+
+    fn saw_idle(&self, member: &code_mode::RunBinding, generation: u64) {
+        self.update(member, |state| {
+            if generation == state.dispatched
+                && generation == state.confirmed
+                && generation != u64::MAX
+            {
+                state.idle = true;
+            }
+        });
+    }
+}
 
 pub(crate) fn advertises(tool: &Value) -> bool {
     tool["name"] == TOOL
@@ -168,6 +290,10 @@ pub(super) async fn append(
         if !same_binding(report, target) {
             continue;
         }
+        let binding = target.binding.as_ref().expect("same_binding checked");
+        let Probe::Read(generation) = target.session.prompt_interests.plan(binding) else {
+            continue;
+        };
         let Some(authorization) = response_authorization(report, target) else {
             continue;
         };
@@ -194,12 +320,29 @@ pub(super) async fn append(
         if let Ok(Ok(reply)) = reply
             && let Some(events) = events(&reply)
         {
-            let structured = &reply["structuredContent"];
+            let body = &reply["structuredContent"];
+            if let Some(generation) = generation
+                && events.is_empty()
+                && ["memory_limit_hooks", "task_crash_hooks"]
+                    .iter()
+                    .all(|key| {
+                        body.get(key)
+                            .is_none_or(|value| value.as_array().is_some_and(Vec::is_empty))
+                    })
+                && (body["member_has_no_prompt_timers"] == true
+                    || body["member_prompt_delivery_idle"] == true)
+                && body["more"] == false
+                && body["visibility_deferred"] == 0
+            {
+                target
+                    .session
+                    .prompt_interests
+                    .saw_idle(binding, generation);
+            }
             let failures = ["memory_limit_hooks", "task_crash_hooks"]
                 .into_iter()
                 .flat_map(|key| {
-                    structured
-                        .get(key)
+                    body.get(key)
                         .and_then(Value::as_array)
                         .filter(|items| items.len() <= MAX_EVENTS)
                         .into_iter()
@@ -271,6 +414,40 @@ mod tests {
         json!({"isError":false,"structuredContent":{"schema_version":1,"provenance":"agent_timer","scope":"native_connection","completion_permission":false,
             "ack_required":true,"events":[{"event_id":"prompt_one_event_1","revision":1,"timer_id":"prompt_one","provenance":"agent_timer","completion_permission":false,
             "scheduled_at_unix_ms":1000,"fired_at_unix_ms":1250,"delay_ms":250,"tick":1,"missed":0,"body":"retained reminder"}]}})
+    }
+
+    #[test]
+    fn probe_interest_is_local_to_native_connection_and_bounded_per_member() {
+        let binding = |id: usize| code_mode::RunBinding {
+            owner: "owner".into(),
+            agent_id: format!("member-{id}"),
+            token: "unused".into(),
+        };
+        let first = ProbeInterest::default();
+        let member = binding(0);
+        first.saw_idle(&member, 0);
+        assert_eq!(first.plan(&member), Probe::Skip);
+        assert_eq!(ProbeInterest::default().plan(&member), Probe::Read(Some(0)));
+        assert_eq!(first.plan(&binding(1)), Probe::Read(Some(0)));
+        first.dispatched(&member);
+        first.saw_idle(&member, 0);
+        assert_eq!(first.plan(&member), Probe::Read(None));
+        first.dispatched(&member);
+        first.confirmed(&member);
+        assert_eq!(first.plan(&member), Probe::Read(None));
+        first.confirmed(&member);
+        first.saw_idle(&member, 0);
+        assert_eq!(
+            first.plan(&member),
+            Probe::Read(Some(2)),
+            "late empty reply"
+        );
+        first.saw_idle(&member, 2);
+        assert_eq!(first.plan(&member), Probe::Skip);
+        for id in 1..=128 {
+            first.saw_idle(&binding(id), 0);
+        }
+        assert_eq!(first.plan(&binding(128)), Probe::Read(None));
     }
 
     #[test]

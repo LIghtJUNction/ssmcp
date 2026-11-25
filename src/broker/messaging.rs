@@ -455,6 +455,68 @@ impl Broker {
         Ok(result)
     }
 
+    pub(crate) async fn queue_webhook(
+        self: &Arc<Self>,
+        user: &str,
+        token: &str,
+        recipient_id: &str,
+        text: String,
+        request_id: String,
+    ) -> Result<messages::Receipt, String> {
+        let (client_id, _) = messages::parse_recipient(recipient_id)?;
+        let auth = self
+            .authenticate_now(user, token)
+            .ok_or("authorization expired")?;
+        let caller = identity(&auth)?;
+        let session = self.client(user, &auth, client_id).await?;
+        let recipient = session.message_recipient(recipient_id)?;
+        if recipient.account.provider != caller.provider
+            || recipient.account.subject != caller.subject
+        {
+            return Err("recipient is unavailable".into());
+        }
+        // An older device cannot decode a webhook sender in its native inbox.
+        let capabilities = session
+            .call_with_authorization(
+                crate::wire::Operation::CallTool {
+                    name: "ssmcp.client.capabilities".into(),
+                    arguments: json!({}),
+                },
+                None,
+                &auth,
+            )
+            .await?;
+        if capabilities["structuredContent"]["webhook_notifications"].as_u64() != Some(1) {
+            return Err("recipient does not support webhook notifications".into());
+        }
+        let sender = Sender {
+            kind: Origin::Webhook,
+            account: account(caller),
+            client_id: client_id.into(),
+            agent: None,
+        };
+        let command = Command::Send {
+            recipient_id: recipient_id.into(),
+            text,
+            request_id,
+        };
+        let reply = self
+            .dispatch_message(
+                &session,
+                auth,
+                sender,
+                None,
+                command.into(),
+                Admission::OAuth { user, token },
+            )
+            .await?;
+        reply
+            .receipts
+            .into_iter()
+            .next()
+            .ok_or_else(|| "no webhook queue receipt".into())
+    }
+
     pub(super) async fn local_message_command(
         self: &Arc<Self>,
         source: &Arc<Session>,
@@ -566,6 +628,12 @@ impl Broker {
                     .filter(|session| self.message_authorized(session, &authorization))
                     .ok_or("recipient client is unavailable or no longer authorized")?;
                 let recipient = target.message_recipient(&recipient_id)?;
+                if sender.kind == Origin::Webhook
+                    && (recipient.account.provider != caller.provider
+                        || recipient.account.subject != caller.subject)
+                {
+                    return Err("recipient is unavailable".into());
+                }
                 if !self.message_recipient_live(target, &recipient) {
                     return Err("recipient account is unavailable or no longer authorized".into());
                 }

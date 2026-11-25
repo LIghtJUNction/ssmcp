@@ -21,11 +21,16 @@ tool = p(sys.argv[0]).name
 with (state/'calls').open('a') as log:
     log.write(json.dumps([tool, *args])+'\n')
 if tool == 'proot-distro':
-    if args == ['list','--quiet']:
-        if (state/'container').exists(): print('ssmcp-debian')
-    elif args == ['install','debian:bookworm','--name','ssmcp-debian']:
-        (state/'container').touch()
+    runtime = p(os.environ.get('TERMUX__PREFIX') or os.environ['PREFIX']) / 'var/lib/proot-distro'
+    rootfs = runtime / 'containers/ssmcp-debian/rootfs'
+    legacy = runtime / 'installed-rootfs/ssmcp-debian'
+    if args == ['install','debian:bookworm','--name','ssmcp-debian']:
+        rootfs.mkdir(parents=True)
     elif args[:5] == ['login','ssmcp-debian','--','/bin/sh','-s']:
+        if legacy.is_dir() and not rootfs.exists():
+            rootfs.parent.mkdir(parents=True, exist_ok=True)
+            legacy.rename(rootfs)
+        if not rootfs.is_dir(): sys.exit(1)
         os.execv('/bin/sh', ['/bin/sh', *args[4:]])
     else: sys.exit(2)
 elif tool == 'curl':
@@ -93,6 +98,7 @@ class TermuxInstall(unittest.TestCase):
         self.dest = home / '.local/bin/ssmcp'
         self.env = dict(os.environ, HOME=str(home), PREFIX=str(self.base / 'prefix'),
                         FIXTURE=str(self.base), PATH=f'{tools}:/usr/bin:/bin')
+        self.env.pop('TERMUX__PREFIX', None)
         self.calls = self.base / 'calls'
 
     def install(self, *args, success=True):
@@ -107,6 +113,19 @@ class TermuxInstall(unittest.TestCase):
         cmds = [json.loads(line) for line in self.calls.read_text().splitlines()]
         self.assertEqual(sum(c[:2]==['proot-distro','install'] for c in cmds),1)
         self.assertFalse(any(c[0] in ('git','rustup') for c in cmds))
+
+    def test_legacy_guest_is_migrated_by_login_without_reinstalling(self):
+        prefix = self.base / 'custom-termux-prefix'
+        self.env['TERMUX__PREFIX'] = str(prefix)
+        runtime = prefix / 'var/lib/proot-distro'
+        legacy = runtime / 'installed-rootfs/ssmcp-debian'
+        legacy.mkdir(parents=True)
+        (legacy / 'existing-data').write_text('keep')
+        self.install('bin','v0.10.39')
+        self.install('bin','v0.10.39')
+        self.assertEqual((runtime / 'containers/ssmcp-debian/rootfs/existing-data').read_text(), 'keep')
+        self.assertFalse(any(json.loads(line)[:2] == ['proot-distro','install']
+                             for line in self.calls.read_text().splitlines()))
 
     def test_checksum_failure_preserves_client(self):
         self.dest.parent.mkdir(parents=True)

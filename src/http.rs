@@ -41,6 +41,7 @@ mod temporary_links;
 mod tool_sources;
 mod tool_summaries;
 mod user_wait;
+mod webhooks;
 mod worker_reminders;
 
 pub fn router(broker: Arc<Broker>) -> Router {
@@ -57,6 +58,10 @@ pub fn router(broker: Arc<Broker>) -> Router {
         )
         .merge(crate::device::routes())
         .merge(temporary_links::routes())
+        .route(
+            "/api/client/webhooks",
+            axum::routing::post(webhooks::receive),
+        )
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/{user}", any(endpoint))
         .with_state(broker)
@@ -75,6 +80,10 @@ pub fn relay_router(broker: Arc<Broker>) -> Router {
         .merge(crate::portal::relay_accounting::routes(
             broker.relay_accounting.is_some(),
         ))
+        .route(
+            "/api/client/webhooks",
+            axum::routing::post(webhooks::receive),
+        )
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/mcp", any(relay_endpoint))
         .with_state(broker)
