@@ -1,4 +1,4 @@
-name: Linux UI tail QA at 53d5d768
+name: Linux UI tail QA at 76514a3a
 on:
   push:
     branches: [qa/ui-tail-53d5d768]
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 53d5d7686a70340008f6712d42c040bfd5957788
+          ref: 76514a3a3305ee7e3baa53da33a67e491fa7c8b3
           submodules: recursive
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
@@ -39,7 +39,7 @@ jobs:
       - name: Build exact source, decoder and controlled account fixture
         id: build
         run: |
-          test "$(git rev-parse HEAD)" = 53d5d7686a70340008f6712d42c040bfd5957788
+          test "$(git rev-parse HEAD)" = 76514a3a3305ee7e3baa53da33a67e491fa7c8b3
           cargo build --locked --bins --example vt_snapshot
           fixture="$(cargo test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"
           test -x "$fixture"
@@ -48,7 +48,7 @@ jobs:
           #!/bin/bash
           set -eu
           case_name=$1; shift
-          private=$(mktemp -d "$RUNNER_TEMP/qa-$case_name.XXXXXX")
+          private=$(mktemp -d /tmp/q.XXXXXX)
           mkdir -p "$private/home" "$private/tmp"
           exec env -i HOME="$private/home" TMPDIR="$private/tmp" PATH=/usr/bin:/bin USER="$(id -un)" LOGNAME="$(id -un)" SHELL=/bin/bash LANG=C.UTF-8 TERM=xterm-256color XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}" SSMCP_E2E_FIXTURE_BINARY="$SSMCP_E2E_FIXTURE_BINARY" PYTHONUNBUFFERED=1 python3 "$@"
           SH
@@ -61,6 +61,16 @@ jobs:
           out="$RUNNER_TEMP/qa-results/questions"
           mkdir -p "$out"
           "$RUNNER_TEMP/qa-e2e" questions scripts/e2e_questions.py --bin-dir "$PWD/target/debug" --out "$out/results" --report "$out/report.json"
+      - name: Save failing questions report immediately
+        if: ${{ failure() && steps.questions.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui-tail-76514a3a-questions
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/qa-results/questions/report.json
+            ${{ runner.temp }}/qa-results/questions/results/report.json
       - name: Run input_history
         id: input_history
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -69,6 +79,16 @@ jobs:
           out="$RUNNER_TEMP/qa-results/input_history"
           mkdir -p "$out"
           "$RUNNER_TEMP/qa-e2e" input_history scripts/e2e_input_history.py --bin-dir "$PWD/target/debug" --out "$out/results"
+      - name: Save failing input_history report immediately
+        if: ${{ failure() && steps.input_history.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui-tail-76514a3a-input_history
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/qa-results/input_history/report.json
+            ${{ runner.temp }}/qa-results/input_history/results/report.json
       - name: Run presentations
         id: presentations
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -77,6 +97,16 @@ jobs:
           out="$RUNNER_TEMP/qa-results/presentations"
           mkdir -p "$out"
           "$RUNNER_TEMP/qa-e2e" presentations scripts/e2e_presentations.py --bin-dir "$PWD/target/debug" --out "$out/results" --report "$out/report.json"
+      - name: Save failing presentations report immediately
+        if: ${{ failure() && steps.presentations.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui-tail-76514a3a-presentations
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/qa-results/presentations/report.json
+            ${{ runner.temp }}/qa-results/presentations/results/report.json
       - name: Run file_paste
         id: file_paste
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -85,6 +115,16 @@ jobs:
           out="$RUNNER_TEMP/qa-results/file_paste"
           mkdir -p "$out"
           "$RUNNER_TEMP/qa-e2e" file_paste scripts/e2e_file_paste.py --bin-dir "$PWD/target/debug" --out "$out/results" --report "$out/report.json"
+      - name: Save failing file_paste report immediately
+        if: ${{ failure() && steps.file_paste.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui-tail-76514a3a-file_paste
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/qa-results/file_paste/report.json
+            ${{ runner.temp }}/qa-results/file_paste/results/report.json
       - name: Run relay_composer
         id: relay_composer
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -93,6 +133,16 @@ jobs:
           out="$RUNNER_TEMP/qa-results/relay_composer"
           mkdir -p "$out"
           "$RUNNER_TEMP/qa-e2e" relay_composer scripts/e2e_relay_composer.py --bin-dir "$PWD/target/debug" --fixture-binary "$SSMCP_E2E_FIXTURE_BINARY" --report "$out/report.json"
+      - name: Save failing relay_composer report immediately
+        if: ${{ failure() && steps.relay_composer.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui-tail-76514a3a-relay_composer
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/qa-results/relay_composer/report.json
+            ${{ runner.temp }}/qa-results/relay_composer/results/report.json
       - name: Run interactions
         id: interactions
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -100,7 +150,17 @@ jobs:
         run: |
           out="$RUNNER_TEMP/qa-results/interactions"
           mkdir -p "$out"
-          "$RUNNER_TEMP/qa-e2e" interactions scripts/e2e_interactions.py --bin-dir "$PWD/target/debug" --decoder "$PWD/target/debug/examples/vt_snapshot" --fixture-binary "$SSMCP_E2E_FIXTURE_BINARY" --source-revision 53d5d7686a70340008f6712d42c040bfd5957788 --out "$out/results"
+          "$RUNNER_TEMP/qa-e2e" interactions scripts/e2e_interactions.py --bin-dir "$PWD/target/debug" --decoder "$PWD/target/debug/examples/vt_snapshot" --fixture-binary "$SSMCP_E2E_FIXTURE_BINARY" --source-revision 76514a3a3305ee7e3baa53da33a67e491fa7c8b3 --out "$out/results"
+      - name: Save failing interactions report immediately
+        if: ${{ failure() && steps.interactions.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui-tail-76514a3a-interactions
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/qa-results/interactions/report.json
+            ${{ runner.temp }}/qa-results/interactions/results/report.json
       - name: Run worker_windows
         id: worker_windows
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -108,7 +168,17 @@ jobs:
         run: |
           out="$RUNNER_TEMP/qa-results/worker_windows"
           mkdir -p "$out"
-          "$RUNNER_TEMP/qa-e2e" worker_windows scripts/e2e_worker_windows.py --bin-dir "$PWD/target/debug" --decoder "$PWD/target/debug/examples/vt_snapshot" --fixture-binary "$SSMCP_E2E_FIXTURE_BINARY" --source-revision 53d5d7686a70340008f6712d42c040bfd5957788 --report "$out/report.json" --evidence-dir "$out/evidence"
+          "$RUNNER_TEMP/qa-e2e" worker_windows scripts/e2e_worker_windows.py --bin-dir "$PWD/target/debug" --decoder "$PWD/target/debug/examples/vt_snapshot" --fixture-binary "$SSMCP_E2E_FIXTURE_BINARY" --source-revision 76514a3a3305ee7e3baa53da33a67e491fa7c8b3 --report "$out/report.json" --evidence-dir "$out/evidence"
+      - name: Save failing worker_windows report immediately
+        if: ${{ failure() && steps.worker_windows.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui-tail-76514a3a-worker_windows
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/qa-results/worker_windows/report.json
+            ${{ runner.temp }}/qa-results/worker_windows/results/report.json
       - name: Run daemon
         id: daemon
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -116,7 +186,17 @@ jobs:
         run: |
           out="$RUNNER_TEMP/qa-results/daemon"
           mkdir -p "$out"
-          "$RUNNER_TEMP/qa-e2e" daemon scripts/e2e_daemon.py --bin-dir "$PWD/target/debug" --timeout 300 --report "$out/report.json" --revision 53d5d7686a70340008f6712d42c040bfd5957788
+          "$RUNNER_TEMP/qa-e2e" daemon scripts/e2e_daemon.py --bin-dir "$PWD/target/debug" --timeout 300 --report "$out/report.json" --revision 76514a3a3305ee7e3baa53da33a67e491fa7c8b3
+      - name: Save failing daemon report immediately
+        if: ${{ failure() && steps.daemon.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui-tail-76514a3a-daemon
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/qa-results/daemon/report.json
+            ${{ runner.temp }}/qa-results/daemon/results/report.json
       - name: Record all independent outcomes
         if: always()
         run: |
@@ -135,7 +215,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: ui-tail-qa-53d5d768
+          name: ui-tail-qa-76514a3a
           retention-days: 3
           path: |
             ${{ runner.temp }}/qa-results/status.txt
