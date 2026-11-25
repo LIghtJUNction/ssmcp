@@ -55,6 +55,14 @@ Windows 用户推荐桌面版。桌面版复用 CLI 的会话和权限系统，�
 
 需要命令行、自动化或后台服务的专业开发者可安装 CLI：
 
+Android 上使用 Termux 安装 CLI，默认校验并安装正式版预编译包。首次运行会创建 Debian Bookworm 容器。需要在手机上编译时，把最后的 `bin` 改为 `source`。两个模式都接受可选版本号。
+
+```sh
+curl -fL https://raw.githubusercontent.com/LIghtJUNction/ssmcp/main/scripts/install-ssmcp-termux.sh -o install-ssmcp-termux.sh
+sh install-ssmcp-termux.sh bin
+proot-distro login ssmcp-debian -- /root/.local/bin/ssmcp --version
+```
+
 Linux / macOS：
 
 ```sh
