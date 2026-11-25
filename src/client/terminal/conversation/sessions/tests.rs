@@ -71,6 +71,39 @@ fn session_hierarchy_keeps_exact_process_and_thread_ids_without_duplicate_local_
 }
 
 #[test]
+fn recipient_list_tracks_member_lifecycle_across_updates() {
+    for width in [48, 120] {
+        let mut state = preview_state(
+            28,
+            width,
+            &Ui {
+                layout: Layout::Chat,
+                sidebar: false,
+                color: false,
+                ..Ui::default()
+            },
+        );
+        state.chat_change_view(View::Agents);
+        state.conversation.selected_agent = Some("member:worker".into());
+        for (status, label) in [
+            ("idle", "Idle"),
+            ("dreaming", "Dreaming"),
+            ("working", "Working"),
+        ] {
+            let data = json!({"agents":[{"name":"Compiler","agent_id":"worker","status":status}],"queue":[]});
+            let rows = state.chat_session_rows(&data, 24).join("\n");
+            assert!(rows.contains(&format!("{label} · Compiler")), "{rows}");
+            if status != "dreaming" {
+                assert!(!rows.contains("Dreaming"), "{rows}");
+            }
+            if width == 120 {
+                assert!(rows.contains(&format!("Status · {label}")), "{rows}");
+            }
+        }
+    }
+}
+
+#[test]
 fn process_header_without_an_advertised_inbox_is_not_a_wildcard_recipient() {
     let id = "3".repeat(64);
     let thread = format!("agent_{}", "a".repeat(32));

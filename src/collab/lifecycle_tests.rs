@@ -98,11 +98,13 @@ async fn new_input_preempts_running_maintenance_and_rejects_stale_reports() {
     .await
     .unwrap();
     let stale = running["agent"]["lifecycle"]["revision"].clone();
+    assert_eq!(hub.presence().unwrap()[0].status, "dreaming");
     hub.user_input_queued("wrong-owner", &id, "input-1", 1);
     assert_eq!(snapshot(&hub, &id, &token)["status"], "dreaming");
     hub.user_input_queued("owner", &id, "input-1", 1);
     let preempted = snapshot(&hub, &id, &token);
     assert_eq!(preempted["status"], "working");
+    assert_eq!(hub.presence().unwrap()[0].status, "working");
     assert_eq!(preempted["lifecycle"]["maintenance"]["status"], "unknown");
     assert!(preempted["lifecycle"]["unknown_outcomes"].as_u64().unwrap() > 0);
     assert!(

@@ -113,6 +113,22 @@ fn session_summary(entry: &Value) -> Option<&str> {
         .find(|value| !value.trim().is_empty())
 }
 
+// Only the collaboration roster supplies lifecycle states. Native messaging
+// reachability and observed tool activity describe different things.
+fn member_lifecycle(entry: &Value) -> Option<&'static str> {
+    if field(entry, "session_role") != "thread" || field(entry, "kind") == "native" {
+        return None;
+    }
+    match field(entry, "status") {
+        "working" => Some("Working"),
+        "idle" => Some("Idle"),
+        "offline" => Some("Offline"),
+        "dreaming" => Some("Dreaming"),
+        "retiring" => Some("Retiring"),
+        _ => None,
+    }
+}
+
 impl State {
     pub(super) fn chat_observed_history(&mut self, run_id: &str) {
         if self.audit.open_run(run_id) {
@@ -229,8 +245,11 @@ impl State {
             ),
             ("".into(), PanelTone::Normal),
             (panel::safe_text(field(entry, "name")), PanelTone::Accent),
-            ("".into(), PanelTone::Normal),
         ];
+        if let Some(status) = member_lifecycle(entry) {
+            rows.push((format!("Status · {status}"), PanelTone::Normal));
+        }
+        rows.push(("".into(), PanelTone::Normal));
         identity_rows(
             &mut rows,
             "Client ID",
@@ -396,6 +415,8 @@ impl State {
             let model = panel::safe_text(field(entry, "model"));
             let label = if observed && !model.is_empty() {
                 format!("{name} · {model}")
+            } else if let Some(status) = member_lifecycle(entry) {
+                format!("{status} · {name}")
             } else {
                 name
             };
