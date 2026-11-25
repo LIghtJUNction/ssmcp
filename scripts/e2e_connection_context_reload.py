@@ -148,11 +148,21 @@ class ContextReload(Local):
         self.check(b'current = "other"' in changed_config,
                    "the private persisted default now selects a different HTTPS target")
 
+        if self.cross_features:
+            # Replace only the fixture's private install, exactly as an updater does.
+            staged = self.executable.with_suffix(".new")
+            shutil.copy2(self.executable, staged)
+            staged.replace(self.executable)
+            self.check(os.readlink(f"/proc/{pid}/exe").endswith(" (deleted)"),
+                       "the running image was unlinked before the reload request")
         acknowledgement = self.call("ssmcp.client.reload", {})
         self.check(acknowledgement["accepted"], "the real native reload tool acknowledges the owned client")
         replacement = self.read_replacement()
         self.check(self.client.pid == pid and process_identity(pid) == identity,
                    "the same owned process actually reexecutes instead of being replaced by the fixture")
+        if self.cross_features:
+            self.check(os.path.samefile(f"/proc/{pid}/exe", self.executable),
+                       "reexec opened the replacement inode at the original installation entry")
         self.check(self.http_port == self.listen_port,
                    "the replacement stays in local mode and preserves its explicit loopback listener")
         self.oauth_login(replacement)
@@ -176,7 +186,8 @@ class ContextReload(Local):
                        "the original environment selector is retained but cannot redirect the fixed target")
         self.check(Path(environment["SSMCP_CLIENT_CONFIG"]).read_bytes() == changed_config,
                    "reload never rewrites the changed context store")
-        self.check(not list(Path(environment["SSMCP_AUTH_HOME"]).iterdir()),
+        auth_files = {path.name for path in Path(environment["SSMCP_AUTH_HOME"]).iterdir()}
+        self.check(auth_files <= {"last-connection.json"},
                    "local reload never creates or borrows a remote account credential")
 
     def close(self):

@@ -1861,7 +1861,7 @@ struct WorkerController {
 impl WorkerController {
     fn new(options: &Options, arguments: &[OsString]) -> crate::Result<Self> {
         Ok(Self {
-            executable: std::env::current_exe()?,
+            executable: reload::installed_program()?.to_owned(),
             arguments: reload::connection_arguments(arguments.to_vec(), options, false)?,
             cwd: std::env::current_dir()?,
             preserve_worker_agent: options.worker.is_some(),
@@ -2412,6 +2412,8 @@ pub async fn run() -> crate::Result<()> {
         }
         return Ok(());
     }
+    // Remember the launch entry before the first connection or later updates.
+    reload::installed_program()?;
     let mut ui = if service.is_some() {
         ui::Ui::default()
     } else {
@@ -3335,7 +3337,7 @@ async fn connect_inner(
     let restart = reload::Restart::capture(options, service.is_some())?;
     let metadata = options.metadata()?;
     let wire_metadata = options.registration_metadata()?;
-    let executable = std::env::current_exe()?;
+    let executable = reload::installed_program()?.to_owned();
     #[cfg(all(test, unix))]
     let executable = output_expiry_fixture::transport_executable(executable)?;
     if let (Some(username), Some(server)) = (&options.username, &options.server) {

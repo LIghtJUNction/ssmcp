@@ -51,34 +51,53 @@ pub(crate) struct Restart {
     cwd: PathBuf,
 }
 
+/// Pin the verified installation entry once per process. Resolving argv[0]
+/// against the running inode again after an update loses that identity.
+pub(super) fn installed_program() -> Result<&'static Path, String> {
+    static PROGRAM: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    PROGRAM
+        .get_or_init(|| {
+            let entry = std::env::args_os()
+                .next()
+                .ok_or("client executable path is missing")?;
+            let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+            #[cfg(target_os = "linux")]
+            let running = PathBuf::from("/proc/self/exe");
+            #[cfg(not(target_os = "linux"))]
+            let running = std::env::current_exe().map_err(|error| error.to_string())?;
+            resolve_entry(&entry, &cwd, std::env::var_os("PATH").as_deref())
+                .and_then(|path| {
+                    if same_executable(&path, &running).map_err(|error| error.to_string())? {
+                        // Compare the resolved file identity but retain the entry
+                        // path, so changing its installation symlink still works.
+                        Ok(path)
+                    } else {
+                        Err("client argv[0] names a different executable".into())
+                    }
+                })
+                .or_else(|_| {
+                    // exec -a can supply any display name, including the name of
+                    // another program in PATH. Only the actual client is a fallback.
+                    let path = std::env::current_exe().map_err(|error| error.to_string())?;
+                    if !same_executable(&path, &running).map_err(|error| error.to_string())? {
+                        return Err(
+                            "current executable path no longer names the running image".into()
+                        );
+                    }
+                    validate_executable(&path)?;
+                    Ok::<_, String>(path)
+                })
+        })
+        .as_deref()
+        .map_err(Clone::clone)
+}
+
 impl Restart {
     pub(super) fn capture(options: &super::Options, saved_session: bool) -> crate::Result<Self> {
-        let mut args = std::env::args_os();
-        let entry = args.next().ok_or("client executable path is missing")?;
+        let args = std::env::args_os().skip(1);
         let cwd = std::env::current_dir()?;
-        #[cfg(target_os = "linux")]
-        let running = PathBuf::from("/proc/self/exe");
-        #[cfg(not(target_os = "linux"))]
-        let running = std::env::current_exe()?;
-        let program = resolve_entry(&entry, &cwd, std::env::var_os("PATH").as_deref())
-            .and_then(|path| {
-                if same_executable(&path, &running).map_err(|error| error.to_string())? {
-                    // Compare the resolved file identity but retain the entry
-                    // path, so changing its installation symlink still works.
-                    Ok(path)
-                } else {
-                    Err("client argv[0] names a different executable".into())
-                }
-            })
-            .or_else(|_| {
-                // exec -a can supply any display name, including the name of
-                // another program in PATH. Only the actual client is a fallback.
-                let path = std::env::current_exe().map_err(|error| error.to_string())?;
-                validate_executable(&path)?;
-                Ok::<_, String>(path)
-            })?;
         Ok(Self {
-            program,
+            program: installed_program()?.to_owned(),
             arguments: connection_arguments(args.collect(), options, saved_session)?,
             cwd,
         })
@@ -587,5 +606,87 @@ mod tests {
             resolve_entry(current.file_name().unwrap(), directory, Some(&path)).unwrap(),
             current
         );
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reload_uses_launch_entry_after_atomic_update_and_reconnect() {
+        use std::{fs, process::Command, time::SystemTime};
+        const CHILD: &str = "SSMCP_TEST_RELOAD_ATOMIC_CHILD";
+        const TEST: &str =
+            "client::reload::tests::reload_uses_launch_entry_after_atomic_update_and_reconnect";
+        if std::env::var_os(CHILD).is_none() {
+            let root = std::env::temp_dir().join(format!(
+                "ssmcp-reload-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir(&root).unwrap();
+            let install = root.join("ssmcp");
+            fs::copy(std::env::current_exe().unwrap(), &install).unwrap();
+            let other = root.join("other");
+            fs::create_dir(&other).unwrap();
+            let decoy = other.join("ssmcp");
+            fs::write(&decoy, "#!/bin/sh\nexit 75\n").unwrap();
+            fs::set_permissions(&decoy, fs::Permissions::from_mode(0o755)).unwrap();
+            let output = Command::new(&install)
+                .arg0("ssmcp")
+                .args(["--exact", TEST, "--nocapture"])
+                .current_dir(&root)
+                .env(CHILD, "1")
+                .env("PATH", std::env::join_paths([&root, &other]).unwrap())
+                .output()
+                .unwrap();
+            fs::remove_dir_all(&root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let transcript = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                transcript.contains(&format!(
+                    "updated at {}\n--exact\n{TEST}\n--nocapture\n",
+                    root.display()
+                )),
+                "{transcript}"
+            );
+            return;
+        }
+
+        let options = super::super::Options::parse(args(&["--server", "https://test.example"]))
+            .unwrap()
+            .unwrap();
+        let capture = || Restart::capture(&options, true).unwrap();
+        let first = capture();
+        fs::write(
+            "staged",
+            "#!/bin/sh\nprintf 'updated at %s\\n' \"$PWD\"\nprintf '%s\\n' \"$@\"\n",
+        )
+        .unwrap();
+        fs::set_permissions("staged", fs::Permissions::from_mode(0o644)).unwrap();
+        fs::rename("staged", "ssmcp").unwrap();
+        assert!(
+            std::env::current_exe()
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes()
+                .ends_with(b" (deleted)")
+        );
+        assert!(first.accept(&json!({}), 0, "fixture", true).is_err());
+        fs::rename("ssmcp", "staged").unwrap();
+        // The other executable is now first in PATH. It cannot stand in for
+        // a missing installation, including on a new transport connection.
+        let reconnected = capture();
+        assert!(reconnected.accept(&json!({}), 0, "fixture", true).is_err());
+        assert!(reconnected.execute().is_err());
+        fs::set_permissions("staged", fs::Permissions::from_mode(0o755)).unwrap();
+        fs::rename("staged", "ssmcp").unwrap();
+        let restart = capture();
+        restart.accept(&json!({}), 0, "fixture", true).unwrap();
+        restart.execute().unwrap();
+        unreachable!("exec replaced the fixture process");
     }
 }
