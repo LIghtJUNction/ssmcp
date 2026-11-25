@@ -8,8 +8,6 @@ prepare_console_state() {
     if [ ! -e "$state/ssmcp.rc" ]; then
         cp "$MODDIR/ssmcp.rc" "$state/ssmcp.rc" || return 1
     fi
-    export HOME="$state/home" TMPDIR="$state" SHELL=/system/bin/sh
-    export PATH=/system/bin:/system/xbin
 }
 read_console_url() {
     [ -s "$state/console.url" ] || return 1
@@ -23,7 +21,8 @@ read_console_url() {
 start_console() {
     read_console_url && return
     prepare_console_state || return 1
-    "$MODDIR/bin/ssmcp" __magisk "$state" "$port" </dev/null >>"$state/console.log" 2>&1 &
+    HOME="$state/home" TMPDIR="$state" SHELL=/system/bin/sh PATH=/system/bin:/system/xbin \
+        "$MODDIR/bin/ssmcp" __magisk "$state" "$port" </dev/null >>"$state/console.log" 2>&1 &
 }
 open_console() {
     case "${1:-terminal}" in setup|terminal) ;; *) return 1 ;; esac
