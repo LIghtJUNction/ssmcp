@@ -204,6 +204,8 @@ jobs:
             --fixture-binary "$SSMCP_E2E_FIXTURE_BINARY" \
             --report "$RUNNER_TEMP/ssmcp-multi-user-runtime-report.json"
       - run: cargo build --locked --bins --example vt_snapshot
+      - name: Connect a local harness through OAuth and Code Mode
+        run: python3 scripts/e2e_local_harness.py --bin-dir target/debug
       - name: Preserve the Linux candidate client
         if: matrix.runner == 'ubuntu-24.04' && github.event_name == 'workflow_dispatch' && github.workflow == 'CI'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

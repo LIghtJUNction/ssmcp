@@ -10,12 +10,12 @@
 
 ```sh
 ssmcp mcp install --harness codex
-ssmcp local --listen 127.0.0.1:8765
+ssmcp mcp
 ```
 
 注册命令将名称 `ssmcp-local` 和当前系统用户的回环 MCP 地址写入 Codex。重复安装会复用相同的入口，已有同名条目指向其他地址时会提示检查。首次授权时，在另一个终端运行 `codex mcp login ssmcp-local`，输入本机会话 `/logs` 显示的一次性登录码。授权后，可通过 `list` 选择该会话，并通过 `code_mode` 使用其原生工具。
 
-要使用其他端口，在两个命令中都指定同一个 `--listen IP:PORT`。本地会话退出后，工作区工具随之下线。重新启动后，Codex 保留服务器地址，授权使用新会话的一次性登录码。
+`ssmcp mcp` 支持与 `ssmcp local` 相同的前台选项，默认使用固定端口 8765。要使用其他端口，在两个命令中都指定同一个 `--listen IP:PORT`。本地会话退出后，工作区工具随之下线。重新启动后，Codex 保留服务器地址，授权使用新会话的一次性登录码。
 
 ## 运行前提
 

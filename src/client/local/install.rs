@@ -4,12 +4,18 @@ use serde::Deserialize;
 use std::{ffi::OsString, net::SocketAddr, process::Command};
 
 const NAME: &str = "ssmcp-local";
-const HELP: &str = "Usage: ssmcp mcp install [--harness codex] [--listen IP:PORT]
+pub(in crate::client) const HELP: &str = "Usage: ssmcp mcp [local options]
+       ssmcp mcp install [--harness codex] [--listen IP:PORT]
 
-Register the Linux local control endpoint with Codex. The default listener is
-127.0.0.1:8765. Start `ssmcp local --listen IP:PORT` in the workspace to
-control. Use the one-time code from /logs when Codex requests authorization.
+Run `ssmcp mcp` in the workspace to control. This starts the Linux local host
+on 127.0.0.1:8765. See `ssmcp local --help` for the other local host options.
+The install subcommand registers this endpoint with Codex. To use another port,
+pass the same --listen IP:PORT to both commands. Authorize with the code from /logs.
 ";
+
+pub(in crate::client) fn default_listener() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], 8765))
+}
 
 fn listener(args: &[OsString]) -> crate::Result<SocketAddr> {
     let mut address = None;
@@ -38,7 +44,7 @@ fn listener(args: &[OsString]) -> crate::Result<SocketAddr> {
             _ => return Err(HELP.into()),
         }
     }
-    Ok(address.unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 8765))))
+    Ok(address.unwrap_or_else(default_listener))
 }
 
 #[derive(Deserialize)]
@@ -99,7 +105,7 @@ pub(in crate::client) fn run(args: &[OsString]) -> crate::Result<()> {
         }
     }
     println!(
-        "Run `ssmcp local --listen {listen}` in the workspace to control. Authorize with `codex mcp login {NAME}` and the one-time code from /logs."
+        "Run `ssmcp mcp --listen {listen}` in the workspace to control. Authorize with `codex mcp login {NAME}` and the one-time code from /logs."
     );
     Ok(())
 }

@@ -87,7 +87,8 @@ Start
   ssmcp                         Reuse your last successful connection
   ssmcp --worker N              Open chat and a worker window with N slots
   ssmcp local                   Start a same-machine MCP session on Linux
-  ssmcp mcp install             Register the local control endpoint in Codex (Linux)
+  ssmcp mcp                     Start local MCP for your harness on Linux
+  ssmcp mcp install             Register that control endpoint in Codex
   ssmcp alice@relay.example     Make this device available to that account
   ssmcp list [--json]           List this OS user's saved local sessions
   ssmcp attach NAME             Reopen a running local session
@@ -135,6 +136,7 @@ const HELP_FULL: &str = r#"ssmcp — connect this device and manage its local se
 Usage: ssmcp username@server [options]
        ssmcp [--server URL] [options]
        ssmcp [connection options] --worker N
+       ssmcp mcp [local options]                       (Linux)
        ssmcp mcp install [--harness codex] [--listen IP:PORT]  (Linux)
        ssmcp whoami [USERNAME@SERVER] [--json]
        ssmcp list [--json]
@@ -608,7 +610,8 @@ impl Options {
                 "conversation resume is no longer available; start ssmcp for a live session".into(),
             );
         }
-        let mut local_mode = args.peek().is_some_and(|arg| arg == "local");
+        let mcp_mode = args.peek().is_some_and(|arg| arg == "mcp");
+        let mut local_mode = mcp_mode || args.peek().is_some_and(|arg| arg == "local");
         if local_mode {
             args.next();
         }
@@ -617,7 +620,11 @@ impl Options {
             return Err("ssmcp local currently requires Linux".into());
         }
         #[cfg(target_os = "linux")]
-        let (mut listen, mut public_url, mut socket) = (None, None, None);
+        let (mut listen, mut public_url, mut socket) = (
+            mcp_mode.then(|| local::install::default_listener().to_string()),
+            None,
+            None,
+        );
         let mut destination = None;
         let mut server = None;
         let mut context = None;
@@ -721,7 +728,7 @@ impl Options {
                 Some("-h" | "--help") => {
                     #[cfg(target_os = "linux")]
                     if local_mode {
-                        print!("{}", local::HELP);
+                        print!("{}", if mcp_mode { local::install::HELP } else { local::HELP });
                         return Ok(None);
                     }
                     print!("{HELP}");
@@ -2091,7 +2098,9 @@ pub async fn run() -> crate::Result<()> {
         print!("{}", version::render(request)?);
         return Ok(());
     }
-    if args.first().is_some_and(|arg| arg == "mcp") {
+    if args.first().is_some_and(|arg| arg == "mcp")
+        && args.get(1).is_some_and(|arg| arg == "install")
+    {
         #[cfg(target_os = "linux")]
         return local::install::run(&args[1..]);
         #[cfg(not(target_os = "linux"))]
@@ -4883,6 +4892,32 @@ mod tests {
             ],
         ] {
             assert!(Options::parse(args.into_iter().map(OsString::from)).is_err());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn mcp_host_and_installer_share_the_endpoint_across_reload() {
+        for (args, expected) in [
+            (vec!["mcp"], local::install::default_listener()),
+            (
+                vec!["mcp", "--listen", "[::1]:9876"],
+                "[::1]:9876".parse().unwrap(),
+            ),
+        ] {
+            let args = args.into_iter().map(OsString::from).collect::<Vec<_>>();
+            let options = Options::parse(args.clone()).unwrap().unwrap();
+            assert_eq!(options.local.as_ref().unwrap().listen, expected);
+            let restart = reload::connection_arguments(args, &options, false).unwrap();
+            assert_eq!(
+                Options::parse(restart)
+                    .unwrap()
+                    .unwrap()
+                    .local
+                    .unwrap()
+                    .listen,
+                expected
+            );
         }
     }
 

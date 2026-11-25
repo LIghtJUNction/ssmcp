@@ -191,7 +191,12 @@ pub(super) fn connection_arguments(
         return Ok(arguments);
     }
     let mut pinned = if options.is_local() {
-        vec![OsString::from("local")]
+        let command = if arguments.first().is_some_and(|arg| arg == "mcp") {
+            "mcp"
+        } else {
+            "local"
+        };
+        vec![OsString::from(command)]
     } else {
         vec![
             OsString::from("--server"),
@@ -207,7 +212,10 @@ pub(super) fn connection_arguments(
         pinned.extend([OsString::from("--username"), OsString::from(username)]);
     }
     let mut arguments = arguments.into_iter().peekable();
-    if arguments.peek().is_some_and(|argument| argument == "local") {
+    if arguments
+        .peek()
+        .is_some_and(|argument| argument == "local" || argument == "mcp")
+    {
         arguments.next();
     }
     while let Some(argument) = arguments.next() {
