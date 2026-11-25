@@ -12,6 +12,8 @@
 
 ssmcp 把多个已授权的 Astra Pro 会话连接到你的开发机，围绕同一项目分工、交换进度、执行命令并汇总结果。命令和工具在你的开发环境中运行，所需结果与上下文通过已授权的会话传递。
 
+在 Linux 开发机上，SSMCP 默认用内嵌的 **zrun 运行时**启动和管理 Agent 发起的命令。Agent 可以一次提交多条独立命令，并从各自的作业读取输出与退出码。[zrun 与批量命令执行](#zrun-与批量命令执行)
+
 **Linux 与 macOS 是首要支持目标。** 功能开发、兼容性修复和日常验收优先覆盖这两个平台；Windows 客户端持续适配，并提供对应的原生测试与发布附件。
 
 同一个账号可以同时连接多台设备，Agent 通过一个 MCP 端点选择具体设备和会话。**受控设备无需登录你的 AI 账号**：AI 应用持有 MCP 授权，设备持有自己的 SSMCP 授权；命令在被选中的设备上执行。CLI 面向专业开发者，适合脚本、服务管理和诊断；Windows 用户的日常连接与任务管理优先使用[桌面版](apps/ssmcp-desktop/README.md)。
@@ -467,9 +469,27 @@ ssmcp tools status
 
 ### 命令执行、在途去重与结果缓存
 
-- **命令执行（可用）**。Code Mode 编排调用，宿主负责授权、执行和作业生命周期，原有审批仍适用。用 `exec.start` 启动后台命令并取得 `job_id`，再用 `exec.status`、`exec.read` 或 `exec.wait` 查询、读取输出或等待，用 `exec.cancel` 请求取消。原生 `ssmcp.exec.wait` 省略 `wait_ms` 时等待目标完成，显式 `wait_ms: 0` 则立即读取状态。窗口到期返回 `wait_status: "pending"`，作业继续运行。下次传入同一个 `job_id` 即可读取完成状态。命令默认没有执行期限，可设置 `timeout_ms` 终止超时进程。Code Mode 和中继调用各自仍有传输或编排期限。当前并发容量用尽时拒绝新启动，按负载接纳新命令的等待队列仍在规划中。[Code Mode 命令接口](docs/code-mode.md#exec)
-- **在途去重（云端原型）**。同一授权范围内，参数和执行条件一致的受控只读请求同时到达时，可以共享一次尚在运行的执行。取消一个请求不影响其他仍在等待的请求。云端测试中，10 个请求共享 1 次实际执行，节省 9 次启动。生产去重尚未接通，草稿中的 Stats 指标显示 `unavailable`。[合并与计数设计](docs/design/controlled-execution-coalescing.md)
-- **命令结果缓存（规划中）**。短时复用符合条件的已完成结果，避免在相同条件下再次启动进程。缓存按工作区版本（generation）校验，工作区标记为已变更、版本不一致或状态未知时按未命中处理。计划采用短 TTL、全局条目数和总字节数上限、单条大小上限，以及低开销的自动过期清理，缓存命中与在途去重分开统计。任意 Shell、写操作、授权与发布判断默认不使用缓存。
+#### zrun 与批量命令执行
+
+zrun 是 Project Z 的进程运行时，也提供独立的 Linux 交互 shell。SSMCP 在 Linux 客户端内链接 zrun，用它启动子进程、等待退出、回收进程，并通过作业接口交付输出。Agent 调用 `exec.run`、`exec.start` 或用 `exec.parallel` 提交多条命令都会进入宿主的执行后端。这条默认路径省去了为每条命令再启动一个命令解释器的开销。macOS 的普通管道命令也使用 zrun 进程后端。Windows 由平台原生后端管理进程。[进程后端](src/backend/process.rs) · [zrun 项目](https://github.com/LIghtJUNction/zrun)
+
+命令用参数数组表示。`["git", "status", "--short"]` 直接启动 Git，带空格的文件名也只占一个参数。需要管道、重定向等 shell 语法时，在数组中写明解释器。下面同时查询工作区状态和已跟踪文件数。`clientId` 取自已授权设备的 `list` 结果。第二条需要设备的 `PATH` 中有 `zrun`。
+
+```javascript
+const jobs = await exec.parallel(clientId, [
+  {command: ["git", "status", "--short"], mode: "pipes"},
+  {command: ["zrun", "-c", "git ls-files | wc -l"], mode: "pipes"},
+], {concurrency: 2, wait_ms: 3000});
+return jobs;
+```
+
+`exec.start` 返回 `job_id`，适合稍后用 `exec.wait` 等待或用 `exec.read` 取回结果。等待窗口到期后作业继续运行，沿用同一 `job_id` 即可。需要终端输入和控制键时可显式使用 `mode: "pty"`。指定 `bash -c` 的命令继续遵循 Bash 语法，已有脚本可以沿用原解释器。[Code Mode 命令接口](docs/code-mode.md#exec)
+
+配套 zrun 提供原生 Tab 命令和路径补全、历史建议与多行粘贴。要把本地 zrun 直接接入支持 MCP 的 AI 客户端，可运行 `zrun ai config` 获取 stdio 配置。其 `shell_run_compact` 工具把连续相同的完整行合并计数，保留退出码，并分别摘要标准输出和错误输出。`output_read` 可分页读取已捕获的原始字节。[zrun 的 AI 与 shell 接口](https://github.com/LIghtJUNction/zrun/blob/main/docs/agent-shell.md)
+
+#### 在途去重与结果缓存
+
+默认情况下，每次 Agent 命令调用独立执行。对于输入版本明确、可重复的只读管道命令，可显式传入 `reuse: {input_version: "…", ttl_ms: 0}`，让同一授权线程中并发的等价请求共享同一 `job_id`。设置正的 `ttl_ms` 后，完整成功结果可在有效期内复用，最长 5 分钟。调用方负责在实际输入变化时更换 `input_version`。回执中的 `reuse.status` 区分 `started`、`joined` 和 `cached`，可据此核对实际启动数。[宿主复用实现](src/backend/shell/reuse.rs)
 
 ### 管理 Zuse CLI
 
