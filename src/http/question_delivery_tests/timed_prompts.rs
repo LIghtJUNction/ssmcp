@@ -4,12 +4,7 @@ use super::*;
 #[tokio::test]
 async fn passive_await_delivers_retained_timer_hooks_without_ack_or_user_consumption() {
     let fixture = Fixture::with_timing(true).await;
-    let event = json!({
-        "event_id":"prompt_fixture_event_1","revision":1,"timer_id":"prompt_fixture",
-        "provenance":"agent_timer","completion_permission":false,
-        "scheduled_at_unix_ms":1000,"fired_at_unix_ms":1250,"delay_ms":250,
-        "tick":1,"missed":0,"body":"Inspect the original job; never replay an unknown operation."
-    });
+    let event = timer_event();
     fixture.native.lock().unwrap().prompt_reply = Some(json!({
         "isError":false,"structuredContent":{
             "schema_version":1,"scope":"native_connection","provenance":"agent_timer",
@@ -63,4 +58,122 @@ async fn passive_await_delivers_retained_timer_hooks_without_ack_or_user_consump
     assert_eq!(fixture.native.lock().unwrap().prompt_reads, 4);
     assert_eq!(fixture.message_status(&mailbox_id).await, "queued");
     fixture.assert_summary_observation_did_not_consume_questions();
+}
+
+fn timer_event() -> Value {
+    json!({
+        "event_id":"prompt_fixture_event_1","revision":1,"timer_id":"prompt_fixture",
+        "provenance":"agent_timer","completion_permission":false,
+        "scheduled_at_unix_ms":1000,"fired_at_unix_ms":1250,"delay_ms":250,
+        "tick":1,"missed":0,"body":"Inspect the original job; never replay an unknown operation."
+    })
+}
+
+#[tokio::test]
+async fn idle_member_avoids_empty_probes_and_lost_schedule_receipt_keeps_delivery_live() {
+    let fixture = Fixture::with_timing(true).await;
+    let empty = json!({"isError":false,"structuredContent":{
+        "schema_version":1,"scope":"native_connection","provenance":"agent_timer",
+        "completion_permission":false,"ack_required":true,"more":false,"visibility_deferred":0,
+        "member_has_no_prompt_timers":true,"events":[]
+    }});
+    fixture.native.lock().unwrap().prompt_reply = Some(empty.clone());
+    fixture
+        .native_call(fixture.run(), prompt_hooks::TOOL)
+        .await
+        .unwrap();
+    let observe =
+        || fixture.public_await(json!({"targets":[{"type":"job","id":"missing_idle_probe"}]}));
+    // First eligible response reconciles a fresh connection with the actual native clock.
+    observe().await;
+    assert_eq!(fixture.native.lock().unwrap().prompt_reads, 2);
+    for _ in 0..32 {
+        let run = fixture.run();
+        fixture
+            .native_call(run.clone(), "ssmcp.fs.stat")
+            .await
+            .unwrap();
+        let response = finish_user_response(&fixture.report(run), original()).await;
+        assert!(response["structuredContent"].get("result").is_some());
+        assert!(response["structuredContent"].get("prompt_hooks").is_none());
+    }
+    assert_eq!(fixture.native.lock().unwrap().prompt_reads, 2);
+    fixture
+        .native_call(fixture.run(), prompt_hooks::TOOL)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.native.lock().unwrap().prompt_reads,
+        3,
+        "explicit read remains available"
+    );
+
+    // Simulate a dispatched schedule whose native receipt cannot confirm its outcome.
+    // An empty read before its delayed commit must not disarm the next probe.
+    let host = code_host(
+        fixture.broker.clone(),
+        "mcp".into(),
+        fixture.token.clone(),
+        fixture.run(),
+        None,
+        "lost schedule receipt".into(),
+        Default::default(),
+    );
+    let scheduled = tokio::spawn(host(HostRequest::Call {
+        client_id: fixture.session.client_id().into(),
+        name: prompt_hooks::TOOL.into(),
+        arguments: json!({"action":"schedule","request_id":"late",
+        "after_ms":1,"template":"inspect"}),
+    }));
+    timeout(Duration::from_secs(3), async {
+        while fixture.native.lock().unwrap().held_replies.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    observe().await;
+    scheduled.abort();
+    assert!(scheduled.await.unwrap_err().is_cancelled());
+    fixture.release_held.send(()).unwrap();
+    let mut due = empty;
+    let body = due["structuredContent"].as_object_mut().unwrap();
+    body.remove("member_has_no_prompt_timers");
+    body.insert("events".into(), json!([timer_event()]));
+    fixture.native.lock().unwrap().prompt_reply = Some(due);
+    for _ in 0..2 {
+        assert_eq!(
+            observe().await["structuredContent"]["prompt_hooks"][0]["event"],
+            timer_event()
+        );
+    }
+    assert_eq!(fixture.native.lock().unwrap().prompt_reads, 6);
+}
+
+#[tokio::test]
+async fn unhinted_legacy_empty_reads_are_reconciled_on_each_response() {
+    let fixture = Fixture::with_timing(true).await;
+    fixture.native.lock().unwrap().prompt_reply = Some(
+        json!({"isError":false,"structuredContent":{
+            "schema_version":1,"scope":"native_connection","provenance":"agent_timer",
+            "completion_permission":false,"ack_required":true,"more":false,"visibility_deferred":0,"events":[]
+        }}),
+    );
+    fixture
+        .native_call(fixture.run(), prompt_hooks::TOOL)
+        .await
+        .unwrap();
+    fixture
+        .public_await(json!({"targets":[{"type":"job","id":"missing_legacy_prompt"}]}))
+        .await;
+    assert_eq!(fixture.native.lock().unwrap().prompt_reads, 2);
+    for _ in 0..32 {
+        let run = fixture.run();
+        fixture
+            .native_call(run.clone(), "ssmcp.fs.stat")
+            .await
+            .unwrap();
+        finish_user_response(&fixture.report(run), original()).await;
+    }
+    assert_eq!(fixture.native.lock().unwrap().prompt_reads, 34);
 }

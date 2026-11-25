@@ -196,6 +196,7 @@ pub struct Session {
     tool_summary_advertised: AtomicBool,
     io_reply_advertised: AtomicBool,
     prompt_hooks_advertised: AtomicBool,
+    pub(crate) prompt_interests: crate::http::prompt_hooks::ProbeInterest,
     thread_events_advertised: AtomicBool,
     login: Mutex<Option<LoginCode>>,
     // Membership may change, but grants always identify immutable provider subjects.
@@ -673,6 +674,14 @@ impl Session {
                 )
             })
             .transpose()?;
+        if let Some(member) = &binding
+            && matches!(&operation, Operation::CallTool { name, arguments }
+                if name == crate::http::prompt_hooks::TOOL && arguments["action"] == "schedule")
+        {
+            // Invalidate before the native dispatch can commit, including when its
+            // receipt is lost. A queue rejection here only causes extra reads.
+            self.prompt_interests.observe(member, false);
+        }
         let (reply, response) = oneshot::channel();
         if self
             .sender
@@ -1101,6 +1110,7 @@ impl Broker {
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
             prompt_hooks_advertised: AtomicBool::new(false),
+            prompt_interests: Default::default(),
             thread_events_advertised: AtomicBool::new(false),
             login: Mutex::new(Some(LoginCode {
                 value: login_code.into(),
@@ -1555,6 +1565,7 @@ impl Broker {
                 tool_summary_advertised: AtomicBool::new(false),
                 io_reply_advertised: AtomicBool::new(false),
                 prompt_hooks_advertised: AtomicBool::new(false),
+                prompt_interests: Default::default(),
                 thread_events_advertised: AtomicBool::new(false),
                 login: Mutex::new((!restricted).then(|| LoginCode {
                     value: login_code.clone(),
@@ -2468,6 +2479,7 @@ mod tests {
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
             prompt_hooks_advertised: AtomicBool::new(false),
+            prompt_interests: Default::default(),
             thread_events_advertised: AtomicBool::new(false),
             login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),

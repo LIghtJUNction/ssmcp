@@ -531,8 +531,24 @@ impl State {
         });
         let more = events.len() > limit;
         events.truncate(limit);
-        Ok(json!({"events":events,"more":more,"ack_required":true,
-            "visibility_deferred":deferred}))
+        let mut reply = json!({"events":events,"more":more,"ack_required":true,
+            "visibility_deferred":deferred});
+        // This claim covers the authenticated member on this native connection,
+        // even if the selected history changes. Never report another member's state.
+        if timer_id.is_none()
+            && owner.connection.is_some()
+            && owner
+                .attribution
+                .as_ref()
+                .is_some_and(|a| a.agent.is_some())
+            && !self
+                .records
+                .values()
+                .any(|r| r.owner.same_controller(owner))
+        {
+            reply["member_has_no_prompt_timers"] = json!(true);
+        }
+        Ok(reply)
     }
 
     pub(super) fn summaries(&self, owner: &Option<super::HistoryOwner>) -> Vec<PromptSummary> {
@@ -1026,6 +1042,46 @@ mod tests {
             )
             .unwrap()["events"]
             .clone()
+    }
+
+    #[test]
+    fn empty_hint_is_bound_to_the_member_and_includes_future_timers() {
+        let mut state = State::default();
+        let now = Instant::now();
+        let member = |id: &str| {
+            let mut owner = owner(11);
+            owner.attribution = Some(
+                serde_json::from_value(json!({
+                    "account":{"provider":"github","subject":"42","login":"account"},
+                    "agent":{"id":id,"name":"member"}
+                }))
+                .unwrap(),
+            );
+            owner
+        };
+        let a = member("agent_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let b = member("agent_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        let hint = |state: &mut State, owner: &Owner| {
+            state.read_events(owner, None, 4, true).unwrap()["member_has_no_prompt_timers"] == true
+        };
+        assert!(
+            !hint(&mut state, &owner(11)),
+            "unattributed callers are not cached"
+        );
+        assert!(hint(&mut state, &a));
+        let id = add(&mut state, b.clone(), schedule("later", 60_000, None), now);
+        assert!(hint(&mut state, &a), "another owner cannot change our hint");
+        assert!(
+            !hint(&mut state, &b),
+            "a quiet future timer still needs observation"
+        );
+        assert!(
+            state
+                .read_events(&b, Some(&id), 4, true)
+                .unwrap()
+                .get("member_has_no_prompt_timers")
+                .is_none()
+        );
     }
 
     #[test]

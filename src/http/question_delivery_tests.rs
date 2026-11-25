@@ -385,8 +385,21 @@ impl Fixture {
                         }
                         let mut output = match name.as_str() {
                             "ssmcp.time.prompt" => {
-                                assert_eq!(arguments, json!({"action":"read","limit":4}));
-                                state.prompt_reads += 1;
+                                match arguments["action"].as_str() {
+                                    Some("read") => {
+                                        assert_eq!(arguments, json!({"action":"read","limit":4}));
+                                        state.prompt_reads += 1;
+                                    }
+                                    Some("schedule") => {
+                                        assert_eq!(arguments["request_id"], "late");
+                                        state.held_replies.push(Frame::Reply {
+                                            id,
+                                            result: Ok(json!({"isError":false,"content":[]})),
+                                        });
+                                        continue;
+                                    }
+                                    other => panic!("unexpected prompt fixture action: {other:?}"),
+                                }
                                 state
                                     .prompt_reply
                                     .clone()

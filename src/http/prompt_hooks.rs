@@ -3,12 +3,42 @@ use super::{CodeRunReport, EligibleUserResponse, Operation, response_authorizati
 use crate::code_mode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 pub(crate) const TOOL: &str = "ssmcp.time.prompt";
 const MAX_EVENTS: usize = 4;
 const MAX_PROBES: usize = 4;
 const MAX_APPEND_BYTES: usize = 128 * 1024;
+
+/// Per native Session. A dispatched schedule can outlive a cancelled RPC; keep
+/// probing that member for the rest of the connection, even after an empty reply.
+#[derive(Default)]
+pub(crate) struct ProbeInterest(Mutex<HashMap<String, (String, bool)>>);
+
+impl ProbeInterest {
+    fn idle(&self, member: &code_mode::RunBinding) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&member.agent_id)
+            .is_some_and(|(owner, idle)| owner == &member.owner && *idle)
+    }
+
+    pub(crate) fn observe(&self, member: &code_mode::RunBinding, idle: bool) {
+        let mut members = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((owner, known_idle)) = members.get_mut(&member.agent_id) {
+            // A late empty read cannot undo a schedule that raced with it.
+            *known_idle &= idle && owner == &member.owner;
+        } else if members.len() < 128 {
+            members.insert(member.agent_id.clone(), (member.owner.clone(), idle));
+        }
+        // A full cache falls back to normal reads for every further member.
+    }
+}
 
 pub(crate) fn advertises(tool: &Value) -> bool {
     tool["name"] == TOOL
@@ -168,6 +198,10 @@ pub(super) async fn append(
         if !same_binding(report, target) {
             continue;
         }
+        let binding = target.binding.as_ref().expect("same_binding checked");
+        if target.session.prompt_interests.idle(binding) {
+            continue;
+        }
         let Some(authorization) = response_authorization(report, target) else {
             continue;
         };
@@ -194,6 +228,14 @@ pub(super) async fn append(
         if let Ok(Ok(reply)) = reply
             && let Some(events) = events(&reply)
         {
+            let body = &reply["structuredContent"];
+            if events.is_empty()
+                && body["member_has_no_prompt_timers"] == true
+                && body["more"] == false
+                && body["visibility_deferred"] == 0
+            {
+                target.session.prompt_interests.observe(binding, true);
+            }
             observed.push((index, events));
         }
     }
@@ -233,6 +275,28 @@ mod tests {
         json!({"isError":false,"structuredContent":{"schema_version":1,"provenance":"agent_timer","scope":"native_connection","completion_permission":false,
             "ack_required":true,"events":[{"event_id":"prompt_one_event_1","revision":1,"timer_id":"prompt_one","provenance":"agent_timer","completion_permission":false,
             "scheduled_at_unix_ms":1000,"fired_at_unix_ms":1250,"delay_ms":250,"tick":1,"missed":0,"body":"retained reminder"}]}})
+    }
+
+    #[test]
+    fn probe_interest_is_local_to_native_connection_and_bounded_per_member() {
+        let binding = |id: usize| code_mode::RunBinding {
+            owner: "owner".into(),
+            agent_id: format!("member-{id}"),
+            token: "unused".into(),
+        };
+        let first = ProbeInterest::default();
+        let member = binding(0);
+        first.observe(&member, true);
+        assert!(first.idle(&member));
+        assert!(!ProbeInterest::default().idle(&member));
+        assert!(!first.idle(&binding(1)));
+        first.observe(&member, false);
+        first.observe(&member, true);
+        assert!(!first.idle(&member));
+        for id in 1..=128 {
+            first.observe(&binding(id), true);
+        }
+        assert!(!first.idle(&binding(128)));
     }
 
     #[test]
