@@ -1015,7 +1015,11 @@ fn selecting_one_of_five_pending_retirements_keeps_the_target_and_exact_epoch() 
         let candidate = q.select_pending_retirement(0, m.connection).unwrap();
         assert_eq!(candidate.slot, slot);
         assert_eq!(q.snapshot().desired_total, 0);
-        assert!(q.force_retirement(&candidate, |_| None, 5).unwrap().is_some());
+        assert!(
+            q.force_retirement(&candidate, |_| None, 5)
+                .unwrap()
+                .is_some()
+        );
     }
     assert_eq!(q.snapshot().registered_workers, 0);
     assert_eq!(q.snapshot().total, 0);
