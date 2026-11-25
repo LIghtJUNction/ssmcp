@@ -474,7 +474,9 @@ impl State {
                     field(entry, "status")
                 )
             } else if !process && let Some(summary) = summary {
-                format!("     {indent}{identity} · {}", panel::safe_text(summary))
+                let prefix = format!("     {indent}{identity} · ");
+                let available = usize::from(list_width).saturating_sub(prefix.width());
+                format!("{prefix}{}", panel::fit(summary, available))
             } else {
                 format!("     {indent}{identity} · {role}")
             };
