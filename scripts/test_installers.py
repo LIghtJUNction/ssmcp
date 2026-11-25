@@ -15,10 +15,16 @@ import release
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("target", choices=release.TARGETS)
+    parser.add_argument(
+        "--windows-smoke-binary", type=Path, metavar="EXE",
+        help="install this locally built Windows client once and verify the success instructions",
+    )
     args = parser.parse_args()
     name = release.asset_name(args.target)
     source = release.ROOT / "dist" / name
     windows = "windows" in args.target
+    if args.windows_smoke_binary and not windows:
+        parser.error("--windows-smoke-binary requires a Windows target")
     expected_version = "ssmcp " + release.version()
 
     with tempfile.TemporaryDirectory(prefix="ssmcp installer ") as temporary:
@@ -26,7 +32,13 @@ def main():
         fixture = root / "downloads"
         fixture.mkdir()
         archive = fixture / name
-        shutil.copyfile(source, archive)
+        if args.windows_smoke_binary:
+            stage = root / "stage"
+            stage.mkdir()
+            shutil.copyfile(args.windows_smoke_binary, stage / "ssmcp.exe")
+            release.write_archive(stage, archive, 0)
+        else:
+            shutil.copyfile(source, archive)
         sums = fixture / "SHA256SUMS"
         sums.write_text(release.digest(archive) + "  " + name + "\n", encoding="ascii")
         install_dir = root / "user bin"
@@ -40,11 +52,12 @@ def main():
             "SSMCP_TEST_DOWNLOAD_LOG": str(root / "download-routes.log"),
         })
         if windows:
-            subprocess.run(
-                ["pwsh", "-NoProfile", "-File", str(release.ROOT / "scripts/test_installer_helpers.ps1")],
-                check=True,
-                timeout=120,
-            )
+            if not args.windows_smoke_binary:
+                subprocess.run(
+                    ["pwsh", "-NoProfile", "-File", str(release.ROOT / "scripts/test_installer_helpers.ps1")],
+                    check=True,
+                    timeout=120,
+                )
             wrapper = root / "install-test.ps1"
             wrapper.write_text(
                 """$ErrorActionPreference = 'Stop'
@@ -143,6 +156,11 @@ else:
         actual = subprocess.check_output([str(installed), "--version"], text=True).strip()
         if actual != expected_version:
             raise AssertionError(actual)
+        if args.windows_smoke_binary:
+            if release.digest(installed) != release.digest(args.windows_smoke_binary):
+                raise AssertionError("installed executable differs from this build")
+            print("Windows installer passed: installed this build and printed the account connection command")
+            return
         companion = install_dir / "zrun"
         if not windows:
             actual = subprocess.check_output([str(companion), "--version"], text=True).strip()

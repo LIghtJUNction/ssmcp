@@ -384,6 +384,12 @@ jobs:
         run: |
           target/debug/ssmcp --version
           target/debug/ssmcp --help
+      - name: Verify the installed Windows client's connection instructions
+        if: runner.os == 'Windows'
+        env:
+          INSTALLER_TARGET: ${{ runner.arch == 'ARM64' && 'aarch64-pc-windows-msvc' || 'x86_64-pc-windows-msvc' }}
+        shell: pwsh
+        run: python scripts/test_installers.py $env:INSTALLER_TARGET --windows-smoke-binary target/debug/ssmcp.exe
       - name: Save validated native development client
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
