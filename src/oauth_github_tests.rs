@@ -254,6 +254,7 @@ impl Fixture {
                 openai_context: false,
                 main_lifecycle: false,
                 worker_dreaming: false,
+                project_continuity: false,
                 peer_ports: false,
                 peer_ports_auto: false,
                 chat_disabled: false,

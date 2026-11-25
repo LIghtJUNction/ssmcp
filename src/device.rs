@@ -390,6 +390,7 @@ pub(crate) struct DevicePeer {
     pub openai_context: bool,
     pub main_lifecycle: bool,
     pub worker_dreaming: bool,
+    pub project_continuity: bool,
     pub peer_ports: bool,
     pub peer_ports_auto: bool,
 }
@@ -407,6 +408,7 @@ impl From<Registration> for DevicePeer {
             openai_context: false,
             main_lifecycle: false,
             worker_dreaming: false,
+            project_continuity: false,
             peer_ports: false,
             peer_ports_auto: false,
             account: Some(account),
@@ -851,6 +853,12 @@ async fn connect(
         peer_ports_auto: capability_requested(&headers, wire::peer_port::AUTO_CAPABILITY),
         openai_context: capability_requested(&headers, wire::openai::CAPABILITY),
         main_lifecycle: capability_requested(&headers, wire::MAIN_LIFECYCLE_CAPABILITY),
+        project_continuity: {
+            let mut values = headers
+                .get_all(wire::project_continuity::OFFER_HEADER)
+                .iter();
+            values.next().is_some_and(|v| v.as_bytes() == b"1") && values.next().is_none()
+        },
         worker_dreaming: capability_requested(&headers, wire::WORKER_DREAMING_CAPABILITY),
     };
     let transport = broker

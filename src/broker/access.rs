@@ -46,6 +46,7 @@ impl Session {
                             "allow list accepts at most {MAX_ALLOWED_PRINCIPALS} accounts"
                         ));
                     }
+                    broker.project_continuity.forget(self.client_id());
                     allow.push(identity);
                     Some(format!("Allowed {principal} on this connection"))
                 }
@@ -64,6 +65,7 @@ impl Session {
                 if allow.len() == 1 {
                     return Err("cannot remove the last allowed account; close this connection to stop access".into());
                 }
+                broker.project_continuity.forget(self.client_id());
                 allow.remove(index);
                 self.steering.wake_waiters();
                 Some(format!("Revoked {principal} on this connection"))

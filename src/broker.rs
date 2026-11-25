@@ -12,6 +12,7 @@ mod event_tests;
 mod execution_group;
 mod management;
 mod messaging;
+mod project_continuity;
 mod relay_access;
 pub use relay_access::RelayAccess;
 pub(crate) mod session_io;
@@ -843,6 +844,7 @@ pub struct Broker {
     pub(crate) events: Arc<crate::events::Hub>,
     pub(crate) event_subscriptions: crate::http::events_tool::Registry,
     pub(crate) worker_events: worker_events::Sources,
+    project_continuity: project_continuity::Registry,
     native_messages: crate::messaging::Hub,
     pub(crate) session_io: session_io::Hub,
     pub oauth: crate::oauth::OAuth,
@@ -915,6 +917,7 @@ impl Broker {
             events: Arc::default(),
             event_subscriptions: crate::http::events_tool::Registry::default(),
             worker_events: worker_events::Sources::default(),
+            project_continuity: Default::default(),
             native_messages: crate::messaging::Hub::default(),
             session_io: session_io::Hub::default(),
             portal: crate::portal::Portal::default(),
@@ -1459,7 +1462,17 @@ impl Broker {
             && peer
                 .as_ref()
                 .is_some_and(|p| p.peer_ports_auto && !p.peer_ports);
+        // Ordinary foreground relay registrations carry no account bearer. Proofs never
+        // populate device routing, ownership, or an access credential.
+        let project = anonymous
+            && access_supported
+            && control_attribution
+            && !chat_disabled
+            && peer.as_ref().is_some_and(|p| p.project_continuity);
         let mut capabilities = Vec::new();
+        if project {
+            capabilities.push(wire::project_continuity::CAPABILITY.into());
+        }
         if registration.is_some_and(|r| r.device_identity.is_some()) {
             capabilities.push(wire::device_address::CAPABILITY.into());
         }
@@ -1633,7 +1646,7 @@ impl Broker {
         let mut pending: HashMap<u64, PendingCall> = HashMap::new();
         let mut result: crate::Result<()> = tokio::select! {
             biased;
-            _ = session.disconnect.notified() => Ok(()),
+            _ = session.disconnect.notified() => { self.project_continuity.forget(&client_id); Ok(()) },
             _ = async {
                 match &owner_policy {
                     Some(policy) => policy.wait_banned().await,
@@ -1654,6 +1667,7 @@ impl Broker {
                 })
             } else { None };
             wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone(), capabilities, version_notice }).await?;
+            let mut project_deadline = project.then(|| std::time::Instant::now() + project_continuity::PROOF_WINDOW);
             let mut next_id = 0u64;
             let mut delivered_runs = std::collections::VecDeque::<(String, Option<Authorization>)>::new();
             let mut dispatches: BillingQueue<DispatchReady> = FuturesUnordered::new();
@@ -1807,6 +1821,15 @@ impl Broker {
                     }
                 };
                 match received {
+                    Some(Frame::ProjectProof { proof }) if project => {
+                        if project_continuity::consume_challenge(&mut project_deadline, std::time::Instant::now()) {
+                            self.register_project_proof(&session, proof);
+                        }
+                    }
+                    Some(Frame::ProjectForget {}) if project => {
+                        project_deadline = None;
+                        self.project_continuity.forget(&client_id);
+                    }
                     Some(Frame::Access { id, command }) => {
                         // Only this credential-bound connection can edit its own session.
                         // Capability negotiation grants no authority by itself.
@@ -1918,6 +1941,13 @@ impl Broker {
         drop(writer);
         session.alive.store(false, Ordering::Release);
         session.wait_display.close();
+        if project {
+            if result.is_ok() {
+                self.project_continuity.disconnected(&client_id);
+            } else {
+                self.project_continuity.forget(&client_id);
+            }
+        }
         self.device_routes.disconnected(&session.info);
         self.native_messages.close_connection(&session);
         session.collaboration.close();
