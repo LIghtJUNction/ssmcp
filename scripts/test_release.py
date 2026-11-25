@@ -521,7 +521,7 @@ class ReleaseTests(unittest.TestCase):
                 binary = directory / "ssmcp-desktop"
                 binary.write_bytes(b"\x7fELF\x02\x01\x01" + b"\0" * 11 + b"\x3e\0fixture executable")
                 window = {"source_commit": sha, "target": spec["target"], "profile": "release",
-                          "backend": "x11-opengl", "renderer": "llvmpipe", "title": "ssmcp-desktop · 本地工作台",
+                          "backend": "x11-opengl", "renderer": "llvmpipe", "title": "ssmcp-desktop",
                           "mapped": True, "width": 1180, "height": 800, "exit_after_ms": 10000,
                           "exit_code": 0, "elapsed_ms": 10248, "binary_bytes": binary.stat().st_size,
                           "binary_sha256": release.digest(binary)}

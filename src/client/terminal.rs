@@ -1540,11 +1540,15 @@ impl Keyboard {
 }
 
 #[derive(Default)]
-struct Replies {
+pub struct Replies {
     bytes: Vec<u8>,
     dropped: u64,
 }
 impl Replies {
+    pub fn take_bytes(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.bytes)
+    }
+
     fn push(&mut self, bytes: &[u8]) {
         if self.bytes.len().saturating_add(bytes.len()) <= MAX_REPLIES {
             self.bytes.extend_from_slice(bytes);

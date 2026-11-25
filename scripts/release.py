@@ -744,7 +744,7 @@ def validate_gui_test_log(platform, text):
 def validate_linux_gui_window(window, source_commit):
     expected = {"source_commit": source_commit, "target": GUI_CLIENTS["linux"]["target"],
                 "profile": "release", "backend": "x11-opengl", "renderer": "llvmpipe",
-                "title": "ssmcp-desktop · 本地工作台", "mapped": True, "exit_after_ms": 10000,
+                "title": "ssmcp-desktop", "mapped": True, "exit_after_ms": 10000,
                 "exit_code": 0}
     if (not isinstance(window, dict) or any(window.get(key) != value for key, value in expected.items())
             or window.get("mapped") is not True

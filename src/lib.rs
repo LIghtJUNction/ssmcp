@@ -12,6 +12,7 @@ mod collab;
 mod command_runtime;
 pub mod computer;
 pub mod context;
+pub mod desktop_terminal;
 #[cfg(target_os = "linux")]
 pub(crate) mod events;
 pub(crate) mod hex;

@@ -98,6 +98,13 @@ impl Composer {
         self.preferred_x = None;
         self.reveal = true;
     }
+    pub fn focused(&self) -> bool {
+        self.focused
+    }
+    pub fn focus_at(&mut self, text: &str, index: usize) {
+        self.focus_end(text);
+        self.move_to(text, index, false);
+    }
     pub fn blur(&mut self) {
         self.focused = false;
         self.bounds = None;

@@ -1,6 +1,10 @@
 # ssmcp-desktop
 
-使用 **zgpui 原生窗口 + zbridge 协议**连接已有 ssmcp CLI 会话的桌面客户端。Linux 使用 X11 / OpenGL，也提供 X11 软件渲染构建；Windows 使用 Win32 / WGL。界面和连接运行在同一个应用进程中。
+双击打开桌面版，在已填好的 `ssmcp ` 后输入 `用户名@服务器域名`，按 Enter 连接。点击输入框下方的 `ssmcp.lmm.best` 即可填入默认中继并保留用户名。客户端在本地检查账号格式和服务器地址。连接后的输出和错误由真实 CLI 显示在同一窗口中，会话退出后可按 Enter 修改地址。
+
+窗口使用 zgpui。在 Linux 上通过原生 PTY 运行 CLI，在 Windows 上通过 ConPTY 运行 CLI。桌面程序先使用同目录的 `ssmcp` 或 `ssmcp.exe`，再查找 PATH。安装包中的两个文件应放在同一目录。
+
+`--session` 和 `--directory` 可观察或控制已有会话。这种模式通过 zbridge 连接现有 CLI。
 
 ## 可以完成的工作
 
@@ -13,18 +17,18 @@
 | Worker | 分页读取实际站位、登记状态、任务、进度和用时；使用当前 `pool_generation` 调整目标容量 |
 | 回执 | 保留原请求 ID、原后端代次及真实操作结果；输入队列单独显示 CLI 的投递状态 |
 
-界面默认只读。只有用户申请到控制租约，而且当前能力确实公布相应命令，写入按钮才可用。窗口关闭或主动断开只释放桌面 lease，已有 CLI 会话继续运行。
+已有会话的观察界面默认只读。只有用户申请到控制租约，而且当前能力确实公布相应命令，写入按钮才可用。窗口关闭或主动断开只释放桌面 lease，已有 CLI 会话继续运行。
 
 ## 启动
 
-在运行 ssmcp CLI 的同一用户身份下启动：
+启动连接终端或打开已有会话：
 
 ```sh
 ssmcp-desktop
 ssmcp-desktop --session my-session
 ```
 
-从左侧选择已保存的会话，或输入一个已有会话名称。程序通过公开的 `RemoteFrontend::connect_named` 解析会话，不猜测私有数据目录。
+使用 `--session` 进入已有会话界面后，可从左侧选择其他已保存会话。程序通过公开的 `RemoteFrontend::connect_named` 解析会话，不猜测私有数据目录。
 
 明确申请控制可以在窗口内点击「申请控制」，也可以在启动时指定：
 
@@ -111,7 +115,7 @@ cargo build --manifest-path apps/ssmcp-desktop/Cargo.toml \
 
 交叉编译验证和 Windows 实机交互验收是不同检查。当前源码没有安装器、自更新器或系统服务注册逻辑。
 
-## 连接与一致性
+## 已有会话的连接与一致性
 
 原生窗口只在主线程绘制。一个独立的 current-thread Tokio 线程持有 `RemoteFrontend`、`BridgeModel` 和 `EventObserver`。两者通过容量为 16 的操作队列和有界视图快照通信。空闲窗口等待系统事件，后台未改变时不重复绘制。
 
@@ -127,7 +131,7 @@ cargo build --manifest-path apps/ssmcp-desktop/Cargo.toml \
 
 所有协议计数器保持为 `Counter(u64)`，在线上和界面中使用完整十进制字符串。事件页通过完整校验后才更新画面，再提交 `next_cursor`。发现 `retention_gap` 时先刷新当前状态，终端解析器重新建立，界面明确标注缺口。代次变化会清理旧的实时投影；旧操作回执仍保留。
 
-## 当前边界
+## 已有会话观察界面的边界
 
 - 连接的是同一用户已有的本地 CLI 会话。远程网络、HTTP gateway、账号登录和启动新会话由 CLI 负责。
 - 对话与事件各保留至多 320 条、约 256 KiB 文本。早期记录被省略时显示数量；CLI 的上游内存保留窗口仍是最终历史边界。

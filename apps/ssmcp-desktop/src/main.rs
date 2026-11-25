@@ -1,6 +1,8 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod composer;
+mod console;
 mod engine;
+mod launcher;
 mod model;
 mod ui;
 
@@ -86,7 +88,7 @@ fn options() -> Result<Option<Options>, String> {
             }
             Some("--help" | "-h") => {
                 println!(
-                    "ssmcp-desktop [--session NAME | --directory PATH] [--control] [--font FAMILY]\n\n原生 Windows / Linux 客户端；默认只观察已有的 CLI 会话。\n--directory 使用显式提供的私有服务目录，不打印其内容。\n--exit-after-ms N 用于真实窗口的有界构建验收。\n--first-frame-receipt PATH 与有界验收一起使用，首次 present 返回后新建回执文件。\n--frame-receipts PATH 记录最多 4096 次 present 回执，用于尺寸变化后的真实窗口验收。"
+                    "ssmcp-desktop [--session NAME | --directory PATH] [--control] [--font FAMILY]\n\n无参数启动连接终端；--session 或 --directory 可观察已有会话。\n--directory 使用显式提供的私有服务目录，不打印其内容。\n--exit-after-ms N 用于真实窗口的有界构建验收。\n--first-frame-receipt PATH 与有界验收一起使用，首次 present 返回后新建回执文件。\n--frame-receipts PATH 记录最多 4096 次 present 回执，用于尺寸变化后的真实窗口验收。"
                 );
                 return Ok(None);
             }
@@ -106,7 +108,7 @@ fn options() -> Result<Option<Options>, String> {
 }
 
 fn run(options: Options) -> Result<(), String> {
-    let mut window = Window::new("ssmcp-desktop · 本地工作台", 1180, 800)?;
+    let mut window = Window::new("ssmcp-desktop", 1180, 800)?;
     let family = options
         .font
         .as_deref()
@@ -116,7 +118,11 @@ fn run(options: Options) -> Result<(), String> {
             "Noto Sans CJK SC"
         });
     window.set_font_family(family)?;
-    let mut handle = engine::Handle::start(options.target, options.control)?;
+    let mut handle = options
+        .target
+        .map(|target| engine::Handle::start(Some(target), options.control))
+        .transpose()?;
+    let mut launcher = launcher::Launcher::default();
     let mut desktop = ui::Desktop::default();
     let mut ui = Ui::default();
     let started = Instant::now();
@@ -147,10 +153,14 @@ fn run(options: Options) -> Result<(), String> {
         if matches!(pending_event, Some(Event::Close)) {
             break;
         }
-        let next_revision = handle.revision();
+        let next_revision = handle
+            .as_ref()
+            .map_or_else(|| launcher.revision(), engine::Handle::revision);
         if revision != next_revision {
-            snapshot = handle.snapshot();
-            desktop.sync(&snapshot);
+            if let Some(handle) = &handle {
+                snapshot = handle.snapshot();
+                desktop.sync(&snapshot);
+            }
             revision = next_revision;
             dirty = true;
         }
@@ -160,11 +170,25 @@ fn run(options: Options) -> Result<(), String> {
         dirty |= presented_size != Some(size);
         if dirty {
             let event = pending_event.take();
-            let consumed = event.as_ref().is_some_and(|event| desktop.event(event));
+            let consumed = event.as_ref().is_some_and(|event| {
+                if handle.is_some() {
+                    desktop.event(event)
+                } else {
+                    launcher.event(event)
+                }
+            });
             ui.begin(if consumed { None } else { event });
             let (width, height) = size;
-            let mut canvas = window.begin(ui::BG);
-            desktop.draw(&mut canvas, &mut ui, &handle, &snapshot, width, height);
+            let mut canvas = window.begin(if handle.is_some() {
+                ui::BG
+            } else {
+                launcher::BG
+            });
+            if let Some(handle) = &handle {
+                desktop.draw(&mut canvas, &mut ui, handle, &snapshot, width, height);
+            } else {
+                launcher.draw(&mut canvas, &mut ui, width, height);
+            }
             ui.end();
             drop(canvas);
             window.present();
@@ -206,18 +230,31 @@ fn run(options: Options) -> Result<(), String> {
                         .map_err(|error| format!("无法写入渲染帧回执：{error}"))?;
                 }
             }
-            if let Some(text) = ui.clipboard.take().or_else(|| desktop.take_clipboard()) {
+            if let Some(text) = ui
+                .clipboard
+                .take()
+                .or_else(|| desktop.take_clipboard())
+                .or_else(|| launcher.take_clipboard())
+            {
                 window.copy(&text);
             }
         }
-        pending_event = window.event(150);
+        pending_event = window.event(if launcher.active() {
+            24
+        } else if handle.is_some() || options.exit_after.is_some() {
+            150
+        } else {
+            1250
+        });
         dirty = match &pending_event {
             Some(Event::Move(x, y)) => ui.pointer_changed(*x, *y),
             Some(_) => true,
             None => false,
         };
     }
-    handle.shutdown();
+    if let Some(handle) = &mut handle {
+        handle.shutdown();
+    }
     Ok(())
 }
 

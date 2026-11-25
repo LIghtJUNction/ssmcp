@@ -394,7 +394,7 @@ jobs:
           (evidence / "renderer.log").write_text(renderer.stdout)
           if renderer.returncode or "llvmpipe" not in renderer.stdout.lower():
               raise SystemExit("The Xvfb display must provide Mesa llvmpipe OpenGL")
-          title = "ssmcp-desktop · 本地工作台"
+          title = "ssmcp-desktop"
           window = {"source_commit": os.environ["SOURCE_COMMIT"], "target": "x86_64-unknown-linux-gnu",
                     "profile": "release", "backend": "x11-opengl", "renderer": "llvmpipe", "title": title,
                     "mapped": False, "width": 0, "height": 0, "exit_after_ms": 10000,
