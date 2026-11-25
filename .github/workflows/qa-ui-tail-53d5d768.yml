@@ -1,0 +1,143 @@
+name: Linux UI tail QA at 53d5d768
+on:
+  push:
+    branches: [qa/ui-tail-53d5d768]
+    paths: [.github/workflows/qa-ui-tail-53d5d768.yml]
+permissions:
+  contents: read
+jobs:
+  acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 53d5d7686a70340008f6712d42c040bfd5957788
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
+        with:
+          toolchain: 1.100.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: linux-acceptance-ubuntu-24.04
+          cache-bin: false
+          save-if: "false"
+      - name: Install production CI prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends dbus-user-session nodejs bubblewrap util-linux rsync apparmor-profiles shellcheck python3-pil fonts-dejavu-core
+          if test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict && grep -q Y /sys/module/apparmor/parameters/enabled; then
+            sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+            sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          fi
+      - name: Prepare the real runner user manager
+        run: bash scripts/ci_user_manager.sh prepare
+      - name: Build exact source, decoder and controlled account fixture
+        id: build
+        run: |
+          test "$(git rev-parse HEAD)" = 53d5d7686a70340008f6712d42c040bfd5957788
+          cargo build --locked --bins --example vt_snapshot
+          fixture="$(cargo test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"
+          test -x "$fixture"
+          echo "SSMCP_E2E_FIXTURE_BINARY=$(realpath "$fixture")" >> "$GITHUB_ENV"
+          cat > "$RUNNER_TEMP/qa-e2e" <<'SH'
+          #!/bin/bash
+          set -eu
+          case_name=$1; shift
+          private=$(mktemp -d "$RUNNER_TEMP/qa-$case_name.XXXXXX")
+          mkdir -p "$private/home" "$private/tmp"
+          exec env -i HOME="$private/home" TMPDIR="$private/tmp" PATH=/usr/bin:/bin USER="$(id -un)" LOGNAME="$(id -un)" SHELL=/bin/bash LANG=C.UTF-8 TERM=xterm-256color XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}" SSMCP_E2E_FIXTURE_BINARY="$SSMCP_E2E_FIXTURE_BINARY" PYTHONUNBUFFERED=1 python3 "$@"
+          SH
+          chmod 700 "$RUNNER_TEMP/qa-e2e"
+      - name: Run questions
+        id: questions
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 9
+        run: |
+          out="$RUNNER_TEMP/qa-results/questions"
+          mkdir -p "$out"
+          "$RUNNER_TEMP/qa-e2e" questions scripts/e2e_questions.py --bin-dir "$PWD/target/debug" --out "$out/results" --report "$out/report.json"
+      - name: Run input_history
+        id: input_history
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 9
+        run: |
+          out="$RUNNER_TEMP/qa-results/input_history"
+          mkdir -p "$out"
+          "$RUNNER_TEMP/qa-e2e" input_history scripts/e2e_input_history.py --bin-dir "$PWD/target/debug" --out "$out/results"
+      - name: Run presentations
+        id: presentations
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 9
+        run: |
+          out="$RUNNER_TEMP/qa-results/presentations"
+          mkdir -p "$out"
+          "$RUNNER_TEMP/qa-e2e" presentations scripts/e2e_presentations.py --bin-dir "$PWD/target/debug" --out "$out/results" --report "$out/report.json"
+      - name: Run file_paste
+        id: file_paste
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 9
+        run: |
+          out="$RUNNER_TEMP/qa-results/file_paste"
+          mkdir -p "$out"
+          "$RUNNER_TEMP/qa-e2e" file_paste scripts/e2e_file_paste.py --bin-dir "$PWD/target/debug" --out "$out/results" --report "$out/report.json"
+      - name: Run relay_composer
+        id: relay_composer
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 9
+        run: |
+          out="$RUNNER_TEMP/qa-results/relay_composer"
+          mkdir -p "$out"
+          "$RUNNER_TEMP/qa-e2e" relay_composer scripts/e2e_relay_composer.py --bin-dir "$PWD/target/debug" --fixture-binary "$SSMCP_E2E_FIXTURE_BINARY" --report "$out/report.json"
+      - name: Run interactions
+        id: interactions
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 9
+        run: |
+          out="$RUNNER_TEMP/qa-results/interactions"
+          mkdir -p "$out"
+          "$RUNNER_TEMP/qa-e2e" interactions scripts/e2e_interactions.py --bin-dir "$PWD/target/debug" --decoder "$PWD/target/debug/examples/vt_snapshot" --fixture-binary "$SSMCP_E2E_FIXTURE_BINARY" --source-revision 53d5d7686a70340008f6712d42c040bfd5957788 --out "$out/results"
+      - name: Run worker_windows
+        id: worker_windows
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 9
+        run: |
+          out="$RUNNER_TEMP/qa-results/worker_windows"
+          mkdir -p "$out"
+          "$RUNNER_TEMP/qa-e2e" worker_windows scripts/e2e_worker_windows.py --bin-dir "$PWD/target/debug" --decoder "$PWD/target/debug/examples/vt_snapshot" --fixture-binary "$SSMCP_E2E_FIXTURE_BINARY" --source-revision 53d5d7686a70340008f6712d42c040bfd5957788 --report "$out/report.json" --evidence-dir "$out/evidence"
+      - name: Run daemon
+        id: daemon
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 9
+        run: |
+          out="$RUNNER_TEMP/qa-results/daemon"
+          mkdir -p "$out"
+          "$RUNNER_TEMP/qa-e2e" daemon scripts/e2e_daemon.py --bin-dir "$PWD/target/debug" --timeout 300 --report "$out/report.json" --revision 53d5d7686a70340008f6712d42c040bfd5957788
+      - name: Record all independent outcomes
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/qa-results"
+          cat > "$RUNNER_TEMP/qa-results/status.txt" <<'END'
+          questions ${{ steps.questions.outcome }}
+          input_history ${{ steps.input_history.outcome }}
+          presentations ${{ steps.presentations.outcome }}
+          file_paste ${{ steps.file_paste.outcome }}
+          relay_composer ${{ steps.relay_composer.outcome }}
+          interactions ${{ steps.interactions.outcome }}
+          worker_windows ${{ steps.worker_windows.outcome }}
+          daemon ${{ steps.daemon.outcome }}
+          END
+          cat "$RUNNER_TEMP/qa-results/status.txt" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: ui-tail-qa-53d5d768
+          retention-days: 3
+          path: |
+            ${{ runner.temp }}/qa-results/status.txt
+            ${{ runner.temp }}/qa-results/*/report.json
+            ${{ runner.temp }}/qa-results/*/results/report.json
