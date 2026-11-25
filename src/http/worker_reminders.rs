@@ -17,7 +17,6 @@ const MAX_REMINDERS: usize = 4;
 const MAX_PROBES: usize = 8;
 const MAX_APPEND_BYTES: usize = 4096;
 const MAX_CACHE_ENTRIES: usize = 256;
-const REPEAT_AFTER: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct Scope {
@@ -190,7 +189,7 @@ struct PendingReminder {
 
 #[derive(Default)]
 struct Cache {
-    entries: HashMap<Scope, (Counts, Instant)>,
+    entries: HashMap<Scope, Instant>,
     pending: HashMap<Scope, PendingReminder>,
 }
 
@@ -237,32 +236,32 @@ impl Cache {
             .is_some_and(|current| current.publication.same(&pending.publication))
         {
             self.pending.remove(&scope);
-            self.emitted(scope, pending.counts, now);
+            self.emitted(scope, now);
         }
     }
 
-    fn due(&mut self, scope: &Scope, counts: &Counts, now: Instant) -> bool {
+    fn due(&mut self, scope: &Scope, counts: &Counts) -> bool {
         if !counts.should_remind() {
             self.entries.remove(scope);
             return false;
         }
-        self.entries.get(scope).is_none_or(|(old, emitted)| {
-            old != counts || now.saturating_duration_since(*emitted) >= REPEAT_AFTER
-        })
+        // The action is the same whether one or five workers are available.
+        // Re-arm only after observing the previous availability episode end.
+        !self.entries.contains_key(scope)
     }
 
-    fn emitted(&mut self, scope: Scope, counts: Counts, now: Instant) {
+    fn emitted(&mut self, scope: Scope, now: Instant) {
         if !self.entries.contains_key(&scope) && self.entries.len() >= MAX_CACHE_ENTRIES {
             let oldest = self
                 .entries
                 .iter()
-                .min_by_key(|(_, (_, at))| *at)
+                .min_by_key(|(_, at)| **at)
                 .map(|(key, _)| key.clone());
             if let Some(oldest) = oldest {
                 self.entries.remove(&oldest);
             }
         }
-        self.entries.insert(scope, (counts, now));
+        self.entries.insert(scope, now);
     }
 }
 
@@ -339,11 +338,12 @@ impl GuidanceCache {
         }
     }
 
-    fn due(&self, scope: &Scope, policy: &Policy, now: Instant) -> bool {
+    fn due(&self, scope: &Scope, policy: &Policy) -> bool {
         policy.enabled
-            && self.entries.get(scope).is_none_or(|(old, emitted, _)| {
-                old != policy || now.saturating_duration_since(*emitted) >= REPEAT_AFTER
-            })
+            && self
+                .entries
+                .get(scope)
+                .is_none_or(|(old, _, _)| old != policy)
     }
 
     fn dreaming_due(&self, scope: &Scope, round: &Dreaming) -> bool {
@@ -639,7 +639,7 @@ pub(super) async fn append(
         };
         let pending = {
             let mut cache = cache().lock().unwrap_or_else(|error| error.into_inner());
-            if !cache.due(&scope, &pool.counts, Instant::now()) {
+            if !cache.due(&scope, &pool.counts) {
                 continue;
             }
             cache.reserve(
@@ -751,7 +751,7 @@ pub(super) async fn append(
             let round = live_round.as_ref().filter(|round| {
                 policy.enabled && response["isError"] != true && cache.dreaming_due(&scope, round)
             });
-            if !cache.due(&scope, &policy, Instant::now()) && round.is_none() {
+            if !cache.due(&scope, &policy) && round.is_none() {
                 continue;
             }
             let mut hint = guidance(
@@ -1115,23 +1115,21 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_counts_are_throttled_and_state_changes_rearm_immediately() {
+    fn standby_hint_reports_one_availability_episode() {
         let mut cache = Cache::default();
         let key = scope("main");
         let counts = pool_from_reply(&reply()).unwrap().counts;
         let now = Instant::now();
-        assert!(cache.due(&key, &counts, now));
-        cache.emitted(key.clone(), counts.clone(), now);
-        assert!(!cache.due(&key, &counts, now + Duration::from_secs(29)));
-        assert!(cache.due(&key, &counts, now + REPEAT_AFTER));
+        assert!(cache.due(&key, &counts));
+        cache.emitted(key.clone(), now);
+        assert!(!cache.due(&key, &counts));
         let mut changed = counts.clone();
         changed.idle = 2;
         changed.working = 1;
-        assert!(cache.due(&key, &changed, now));
-        cache.emitted(key.clone(), changed.clone(), now);
+        assert!(!cache.due(&key, &changed));
         changed.queued = 1;
-        assert!(!cache.due(&key, &changed, now));
-        assert!(cache.due(&key, &counts, now));
+        assert!(!cache.due(&key, &changed));
+        assert!(cache.due(&key, &counts));
     }
 
     #[test]
@@ -1140,7 +1138,7 @@ mod tests {
         let key = scope("main");
         let counts = pool_from_reply(&reply()).unwrap().counts;
         let now = Instant::now();
-        cache.emitted(key.clone(), counts.clone(), now);
+        cache.emitted(key.clone(), now);
         let mut variants = vec![scope("another-main")];
         let mut other = key.clone();
         other.owner = "another-owner".into();
@@ -1152,20 +1150,18 @@ mod tests {
         other.connection = 2;
         variants.push(other);
         for other in variants {
-            assert!(cache.due(&other, &counts, now));
+            assert!(cache.due(&other, &counts));
         }
-        assert!(!cache.due(&key, &counts, now));
+        assert!(!cache.due(&key, &counts));
     }
 
     #[test]
     fn cache_stays_bounded_across_retired_connections() {
         let mut cache = Cache::default();
-        let counts = pool_from_reply(&reply()).unwrap().counts;
         let now = Instant::now();
         for index in 0..=MAX_CACHE_ENTRIES {
             cache.emitted(
                 scope(&format!("main-{index}")),
-                counts.clone(),
                 now + Duration::from_millis(index as u64),
             );
         }
@@ -1341,12 +1337,12 @@ mod tests {
             now,
             Some(round.round_id.clone()),
         );
-        assert!(cache.due(&key, &policy, now + REPEAT_AFTER));
+        assert!(!cache.due(&key, &policy));
         assert!(!cache.dreaming_due(&key, round));
-        cache.emitted(key.clone(), policy.clone(), now + REPEAT_AFTER, None);
+        cache.emitted(key.clone(), policy.clone(), now, None);
         assert!(!cache.dreaming_due(&key, round));
         policy.enabled = false;
-        assert!(!cache.due(&key, &policy, now + REPEAT_AFTER));
+        assert!(!cache.due(&key, &policy));
         policy.enabled = true;
         policy.dreaming.as_mut().unwrap().budget_ms = 2000;
         assert!(!cache.dreaming_due(&key, policy.dreaming.as_ref().unwrap()));
@@ -1355,25 +1351,23 @@ mod tests {
     }
 
     #[test]
-    fn guidance_is_throttled_but_policy_edits_take_effect_immediately() {
+    fn unchanged_wait_policy_stays_quiet_and_edits_take_effect_immediately() {
         let mut cache = GuidanceCache::default();
         let key = scope("main");
         let now = Instant::now();
         let policy = Policy::default();
-        assert!(cache.due(&key, &policy, now));
+        assert!(cache.due(&key, &policy));
         cache.emitted(key.clone(), policy.clone(), now, None);
-        assert!(!cache.due(&key, &policy, now + Duration::from_secs(29)));
-        assert!(cache.due(&key, &policy, now + REPEAT_AFTER));
+        assert!(!cache.due(&key, &policy));
         let mut changed = policy.clone();
         changed.window_ms = 1000;
-        assert!(cache.due(&key, &changed, now));
+        assert!(cache.due(&key, &changed));
         cache.emitted(key.clone(), changed.clone(), now, None);
         changed.enabled = false;
-        assert!(!cache.due(&key, &changed, now));
+        assert!(!cache.due(&key, &changed));
         assert!(cache.entries.contains_key(&key));
         changed.enabled = true;
-        assert!(!cache.due(&key, &changed, now));
-        assert!(cache.due(&key, &changed, now + REPEAT_AFTER));
+        assert!(!cache.due(&key, &changed));
     }
 
     #[test]
@@ -1392,13 +1386,13 @@ mod tests {
         assert_eq!(cache.entries.len(), MAX_CACHE_ENTRIES);
         assert!(!cache.entries.contains_key(&scope("0")));
         let old = scope("1");
-        assert!(!cache.due(&old, &policy, now));
+        assert!(!cache.due(&old, &policy));
         let mut reconnected = old.clone();
         reconnected.connection = 2;
-        assert!(cache.due(&reconnected, &policy, now));
+        assert!(cache.due(&reconnected, &policy));
         let mut other_owner = old;
         other_owner.owner = "other".into();
-        assert!(cache.due(&other_owner, &policy, now));
+        assert!(cache.due(&other_owner, &policy));
     }
 
     #[test]

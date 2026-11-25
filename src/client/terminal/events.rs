@@ -148,9 +148,13 @@ impl Event {
         true
     }
 
+    fn always_open_in_chat(&self) -> bool {
+        self.meta.kind == Kind::Conversation && self.meta.notice_summary.is_none()
+    }
+
     fn expanded(&self, scope: EventScope) -> bool {
         match scope {
-            EventScope::Conversation => self.meta.kind == Kind::Conversation || self.chat_expanded,
+            EventScope::Conversation => self.always_open_in_chat() || self.chat_expanded,
             EventScope::All => self.expanded,
         }
     }
@@ -1296,7 +1300,11 @@ impl EventView {
             meta.raw_message = true;
             // Redact only the display copy; the native message stays intact.
             let display = crate::audit::event(Value::String(text.to_owned()));
-            self.ingest_inner(display.as_str().unwrap_or_default().as_bytes(), meta);
+            let text = display.as_str().unwrap_or_default();
+            if !meta.user && meta.input {
+                meta.notice_summary = coordinator_notice(event["input_origin"].as_str(), text);
+            }
+            self.ingest_inner(text.as_bytes(), meta);
         } else if meta.command
             && let Some(source) = crate::client::render::interactive_command_source(event)
         {
@@ -1834,7 +1842,7 @@ impl EventView {
                 && event.matches(&self.query, self.level, self.scope, &self.history_selection)
         }) {
             if self.scope == EventScope::Conversation {
-                if event.meta.kind == Kind::Conversation {
+                if event.always_open_in_chat() {
                     return false;
                 }
                 event.set_chat_expanded(!event.chat_expanded);
@@ -1875,7 +1883,7 @@ impl EventView {
             return false;
         };
         let changed = if self.scope == EventScope::Conversation {
-            if event.meta.kind == Kind::Conversation {
+            if event.always_open_in_chat() {
                 return false;
             }
             event.set_chat_expanded(expanded)
@@ -2177,6 +2185,14 @@ impl EventView {
             }
             let conversation = chat && event.meta.kind == Kind::Conversation;
             if conversation && event.image.is_none() {
+                if let Some(summary) = &event.meta.notice_summary
+                    && !event.chat_expanded
+                    && self.query.is_empty()
+                {
+                    let heading = clip_plain(&format!("  ▸ {summary}"), width);
+                    rows.push((event.id, paint(&heading, "muted", ui, selected && focused)));
+                    continue;
+                }
                 let input = event.meta.user || event.meta.input;
                 let tone = if input { "accent" } else { "heading" };
                 let marker = if input { "❯" } else { "●" };
@@ -3017,6 +3033,63 @@ fn unstyled(text: &str) -> String {
     sanitize(text, false)
 }
 
+/// Only generated notices get a disclosure row. The original redacted message
+/// stays available through Enter, search and Logs.
+fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<String> {
+    match origin? {
+        "system_hook" if text.starts_with("Worker pool ") => {
+            let (_, detail) = text.split_once(": ")?;
+            let (standby, _) =
+                detail.split_once(" connected external worker(s) are standing by.")?;
+            Some(format!("{} 个工位待命", standby.parse::<u64>().ok()?))
+        }
+        "system_hook"
+            if text.starts_with("Continue authorized work; otherwise await these events") =>
+        {
+            Some("协调者等待策略".into())
+        }
+        "worker_event" => {
+            let body =
+                text.strip_prefix("WORKER STATE EVENTS — retained until explicit events.ack\n")?;
+            let value: Value = serde_json::from_str(body).ok()?;
+            if value["error"]
+                .as_str()
+                .is_some_and(|error| error.starts_with("events_gap:"))
+            {
+                return Some("事件记录有缺口，需核对任务状态".into());
+            }
+            let label = match value["kind"].as_str() {
+                Some("worker.completed") => match value["data"]["task_status"].as_str() {
+                    Some("failed") => "任务失败",
+                    Some("cancelled") => "任务已取消",
+                    Some("completed") => "任务完成",
+                    _ => "任务已结束",
+                },
+                Some("task.submitted") => "任务已提交",
+                Some("worker.started") => "开始执行",
+                Some("worker.progress") => "进度更新",
+                Some("worker.idle") => "待命",
+                Some("worker.offline") => "已离线",
+                Some("worker.retiring") => "正在退役",
+                Some("worker.cancelling") => "正在取消",
+                Some("worker.unknown") => "任务结果未知",
+                Some("agent.maintenance_requested") => "维护请求",
+                Some("user.input_available") => "收到新指令",
+                _ if value["status"] == "unavailable" => "事件来源不可用",
+                _ if value["status"] == "read_required" => "有事件待查阅",
+                _ => "工作池事件",
+            };
+            Some(
+                match value["data"]["slot"].as_u64().filter(|slot| *slot < 128) {
+                    Some(slot) => format!("工位 {} · {label}", slot + 1),
+                    None => label.into(),
+                },
+            )
+        }
+        _ => None,
+    }
+}
+
 fn retained_text(bytes: &[u8]) -> (String, bool) {
     retained_text_with_note(
         bytes,
@@ -3254,6 +3327,55 @@ mod tests {
             "{rows}"
         );
         assert_eq!(message, original);
+    }
+
+    #[test]
+    fn worker_notice_is_one_line_until_opened_and_keeps_its_raw_detail() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        let event = json!({"kind":"worker.completed","data":{"slot":2,"task_status":"failed"},
+            "seq":42,"event_id":"original-detail"});
+        let text = format!("WORKER STATE EVENTS — retained until explicit events.ack\n{event}");
+        view.ingest_event(
+            "message",
+            &json!({"type":"ssmcp.message","role":"assistant",
+            "kind":"input","input_origin":"worker_event","text":text}),
+            b"",
+        );
+        let render = |view: &mut EventView| view.render(100, 10, &plain_ui(), true).join("\n");
+        let collapsed = render(&mut view);
+        assert!(collapsed.contains("工位 3 · 任务失败"));
+        assert!(!collapsed.contains("original-detail"));
+        assert!(view.open());
+        assert!(render(&mut view).contains("original-detail"));
+        assert!(view.back());
+        assert_eq!(render(&mut view), collapsed);
+
+        view.ingest_event(
+            "message",
+            &json!({"type":"ssmcp.message","role":"user","text":text}),
+            b"",
+        );
+        assert!(render(&mut view).contains("original-detail"));
+    }
+
+    #[test]
+    fn coordinator_notices_distinguish_gaps_and_ordinary_inputs() {
+        let text = r#"WORKER STATE EVENTS — retained until explicit events.ack
+{"status":"unavailable","error":"events_gap: cursor 28 precedes retained cursor 303"}"#;
+        assert_eq!(
+            coordinator_notice(Some("worker_event"), text).as_deref(),
+            Some("事件记录有缺口，需核对任务状态")
+        );
+        assert!(coordinator_notice(Some("system_hook"), text).is_none());
+        let standby = "Worker pool abc: 5 connected external worker(s) are standing by. Delegate suitable work.";
+        assert_eq!(
+            coordinator_notice(Some("system_hook"), standby).as_deref(),
+            Some("5 个工位待命")
+        );
+        assert!(
+            coordinator_notice(Some("system_hook"), "Keep this custom hook visible.").is_none()
+        );
     }
 
     #[test]

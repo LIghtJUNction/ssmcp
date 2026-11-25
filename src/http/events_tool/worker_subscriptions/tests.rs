@@ -341,6 +341,60 @@ async fn configured_worker_selection_and_explicit_ack_control_real_wake_and_repl
 }
 
 #[tokio::test]
+async fn advancing_retention_boundary_keeps_one_visible_gap_and_the_latest_receipt() {
+    let mut fixture = Fixture::new(true).await;
+    fixture.bind_main().await;
+    let context = fixture.context().await;
+    let entry = fixture
+        .native
+        .broker
+        .event_subscriptions
+        .workers
+        .get(&context)
+        .unwrap();
+    let report = CodeRunReport {
+        broker: fixture.native.broker.clone(),
+        user: IDENTITY_RESOURCE.into(),
+        access_token: fixture.native.access_token.clone(),
+        run: fixture.run.clone(),
+        delivered: true,
+    };
+    let target = EligibleUserResponse {
+        session: context.session.clone(),
+        owner: fixture.owner.clone(),
+        binding: Some(context.binding.clone()),
+        may_claim: false,
+        waiting: false,
+    };
+    let mut attempted = 0;
+    for (cursor, oldest, expected_writes) in [(28, 303, 1), (28, 450, 1), (32, 480, 2)] {
+        let notice = json!({"status":"unavailable","events":[],"history_complete":false,
+            "error": format!("events_gap: cursor {cursor} precedes retained cursor {oldest}; latest cursor {}", oldest + 1024)});
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let result = {
+            let observed = visible_notice(
+                &report,
+                &target,
+                &context,
+                &entry,
+                notice.clone(),
+                deadline,
+                &mut attempted,
+            );
+            tokio::pin!(observed);
+            loop {
+                tokio::select! {
+                    result = &mut observed => break result,
+                    _ = fixture.native.native_reply_with(TestFixture::input_receipt) => {}
+                }
+            }
+        };
+        assert_eq!(result, Some(notice));
+        assert_eq!(attempted, expected_writes);
+    }
+}
+
+#[tokio::test]
 async fn worker_notice_sleeps_without_events_and_wakes_without_consuming_input_or_cursor() {
     let mut fixture = Fixture::new(true).await;
     fixture.bind_main().await;

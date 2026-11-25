@@ -154,6 +154,7 @@ pub(super) struct Meta {
     pub(super) message_id: Option<String>,
     pub(super) author: String,
     pub(super) raw_message: bool,
+    pub(super) notice_summary: Option<String>,
     pub(super) plain_message: bool,
     pub(super) keys: Vec<String>,
     pub(super) status: Option<Status>,
@@ -368,6 +369,7 @@ impl Meta {
 
     pub(super) fn bytes(&self) -> usize {
         self.author.len()
+            + self.notice_summary.as_ref().map_or(0, String::len)
             + self
                 .history
                 .local_id()

@@ -879,6 +879,19 @@ async fn publication_authorized(
     )
 }
 
+// The retained boundary and latest sequence move while the same subscriber
+// is stuck at one cursor. They describe the observation, not a new gap.
+fn gap_cursor(notice: &Value) -> Option<u64> {
+    if notice["status"] != "unavailable" {
+        return None;
+    }
+    let error = notice["error"]
+        .as_str()?
+        .strip_prefix("events_gap: cursor ")?;
+    let (cursor, _) = error.split_once(" precedes retained cursor ")?;
+    cursor.parse().ok()
+}
+
 async fn visible_notice(
     report: &CodeRunReport,
     target: &EligibleUserResponse,
@@ -905,11 +918,13 @@ async fn visible_notice(
             })
             .collect::<Option<Vec<_>>>()?
     };
+    let gap = gap_cursor(&notice).filter(|_| events.is_empty());
     let mut visible = 0usize;
     for (sequence, body) in items {
-        let identity = match sequence {
-            Some(sequence) => format!("{id}:{sequence}"),
-            None => format!("{id}:notice:{body}"),
+        let identity = match (sequence, gap) {
+            (Some(sequence), _) => format!("{id}:{sequence}"),
+            (None, Some(cursor)) => format!("{id}:gap:{cursor}"),
+            (None, None) => format!("{id}:notice:{body}"),
         };
         let text = format!("{HEADER}{body}");
         let publication = {
@@ -926,7 +941,9 @@ async fn visible_notice(
                         .is_none_or(|sequence| sequence > acknowledged)
             });
             if let Some(marker) = markers.get(&identity) {
-                if !marker.publication.matches(&text, "worker_event") {
+                // A gap keeps its original visible diagnostic and receipt. The
+                // structured response below still returns the current boundaries.
+                if gap.is_none() && !marker.publication.matches(&text, "worker_event") {
                     return None;
                 }
                 marker.publication.clone()
