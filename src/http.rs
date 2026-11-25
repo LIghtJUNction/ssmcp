@@ -933,7 +933,7 @@ fn client_info(session: &Session) -> Value {
 fn usage() -> Value {
     json!({
         "language": "javascript",
-        "clients": "Record the verified device_id/session_id and workspace at bind. On disconnect, list with both saved IDs for read-only handoff guidance. Plain list includes retained, verified reconnects in handoffs. Query list with the old client_id for an exact read-only hint, then select the new client_id explicitly and refresh its schemas. For an unverified or fresh process, obtain a new /invite, /invite worker, or explicit operator selection and verify the control/pool link.",
+        "clients": "On disconnect, query list with the old client_id or inspect plain list handoffs for verified project and device predecessors in your authorization scope. A unique same_session or same_project hint identifies a candidate for a fresh binding. Verify the workspace and control/pool link, select the current client_id and refresh its schemas. Without a unique verified successor, obtain a fresh /invite or /invite worker.",
         "tools": "Discover only needed schemas with tools.search(id,{query,name_prefix,include_schemas:true}).",
         "call": "call(id,name,args) invokes the exact discovered native tool. Read structuredContent and isError.",
         "exec": "exec.run starts and reads one command; exec.parallel batches independent commands; exec.start returns a job for long work. Preserve job IDs and stream cursors.",
@@ -1027,8 +1027,8 @@ async fn list(
     Ok(result)
 }
 
-/// Only a retained owner record and an independently authorized live route can
-/// connect the two IDs. The caller explicitly selects a new connection afterward.
+/// Sessions come from the caller's resource-scoped directory. Each source
+/// checks its retained authorization before disclosing a predecessor.
 fn verified_reconnects(
     broker: &Broker,
     user: &str,
@@ -1036,30 +1036,75 @@ fn verified_reconnects(
     sessions: &[Arc<Session>],
     previous_id: Option<&str>,
 ) -> (Vec<Value>, usize) {
-    const PREVIEW_LIMIT: usize = 64;
-    let mut handoffs = Vec::new();
-    let mut total = 0;
+    use std::collections::BTreeMap;
+
+    // Group by predecessor before applying the preview limit. A later live
+    // session may refer to a predecessor that is already in the preview.
+    let mut groups: BTreeMap<String, Vec<Successor<'_>>> = BTreeMap::new();
     for session in sessions {
-        let info = session.info();
-        let Some(route) = &info.routing else { continue };
         if !session.is_alive() || !authorization.permits(session) {
             continue;
         }
-        for old in broker
+        let info = session.info();
+        let signed = broker
             .device_routes
-            .previous_connection_ids(user, authorization, &info)
-        {
-            if previous_id.is_some_and(|id| id != old) {
+            .previous_connection_ids(user, authorization, &info);
+        let project = broker.project_previous(session, authorization);
+        let distinct_project = project.filter(|id| !signed.contains(id));
+        let sources = signed
+            .into_iter()
+            .map(|id| (id, true))
+            .chain(distinct_project.map(|id| (id, false)));
+        for (old, signed_session) in sources {
+            if old == info.id || previous_id.is_some_and(|id| id != old) {
                 continue;
             }
-            total += 1;
-            if handoffs.len() < PREVIEW_LIMIT {
-                handoffs.push(json!({"status":"same_session","previous_client_id":old,
-                    "client_id":info.id,"device_id":route.device_id,"session_id":route.session_id}));
-            }
+            let address = if signed_session {
+                info.routing
+                    .as_ref()
+                    .map(|r| (r.device_id.clone(), r.session_id.clone()))
+            } else {
+                None
+            };
+            groups.entry(old).or_default().push(Successor {
+                client_id: session.client_id(),
+                address,
+            });
         }
     }
-    (handoffs, total)
+
+    let total = groups.len();
+    let preview = groups
+        .into_iter()
+        .take(64)
+        .map(|(previous, candidates)| reconnect_hint(&previous, &candidates))
+        .collect();
+    (preview, total)
+}
+
+struct Successor<'a> {
+    client_id: &'a str,
+    // Present only when this exact edge was attested by the signed device route.
+    address: Option<(String, String)>,
+}
+
+const VERIFIED_NEXT: &str = "Select this current client only after checking the original workspace and the live control/pool link. Refresh schemas, then privately rejoin and bind each connection with your own credentials. Reconcile the original claims and commits. Keep unconfirmed outcomes unknown and never replay them.";
+
+fn reconnect_hint(previous: &str, candidates: &[Successor<'_>]) -> Value {
+    if let [one] = candidates {
+        let mut hint = json!({"previous_client_id":previous, "client_id":one.client_id,
+            "status":"same_project", "next":VERIFIED_NEXT});
+        if let Some((device, session)) = &one.address {
+            hint["status"] = json!("same_session");
+            hint["device_id"] = json!(device);
+            hint["session_id"] = json!(session);
+        }
+        return hint;
+    }
+    let ids: Vec<_> = candidates.iter().take(8).map(|s| s.client_id).collect();
+    json!({"status":"ambiguous", "previous_client_id":previous, "candidate_count":candidates.len(),
+        "candidate_client_ids":ids,
+        "next":"Multiple authorized successors refer to this predecessor. Obtain a fresh /invite or /invite worker and verify the original workspace and control/pool link before binding."})
 }
 
 /// Descriptive only. The input sessions have already passed the caller's live
@@ -1083,7 +1128,7 @@ fn session_handoff(
         }
         if route.session_id == session_id {
             return json!({"status":"same_session","client_id":info.id,
-                "next":"Verify the original workspace and current control/pool link. On a new connection, refresh schemas and join and bind separately with fresh member credentials. Reconcile original claims; preserve unknown outcomes."});
+                "next":VERIFIED_NEXT});
         }
         if previous_cwd == Some(info.cwd.as_str()) {
             count += 1;
@@ -1095,7 +1140,7 @@ fn session_handoff(
     json!({
         "status":match count { 0 => "unavailable", 1 => "confirmation_required", _ => "ambiguous" },
         "candidate_count":count, "candidate_client_ids":candidates,
-        "next":"Discovery only. Obtain a fresh /invite or /invite worker, or have the operator identify the new control session and its pool. Verify the workspace and current pool link before binding. Preserve unknown outcomes. Never restart stopped sessions, reuse old member credentials, or replay tasks."
+        "next":"Refresh list with the old client_id to check for a verified project predecessor under the original authorization. If no unique verified successor is available, obtain a fresh /invite or /invite worker. Verify the workspace and current pool link before binding. Preserve unknown outcomes. Never restart stopped sessions, reuse old member credentials, or replay tasks."
     })
 }
 
@@ -2199,7 +2244,7 @@ pub(crate) fn tool_definitions() -> Value {
         temporary_links::tool_definition(),
         {
             "name":"list",
-            "description":"List live clients authorized for this identity and endpoint, with signed device/session addresses when supported. Exact device_id/session_id lookup includes a read-only handoff after disconnect. A fresh process needs a new invitation or explicit operator selection. Display aliases are not authority. Plain list includes up to 64 verified owner reconnects. A retained old client_id returns a read-only handoff when its signed session is live. Select the current client_id to fetch that client's native schemas; follow nextCursor. Prefer tools.search in code_mode for targeted discovery.",
+            "description":"List live clients authorized for this identity and endpoint, with signed device/session addresses when supported. Exact device_id/session_id lookup includes a read-only handoff after disconnect. Plain list includes up to 64 retained predecessor hints for authorized signed sessions and verified projects. Query an old client_id for read-only metadata. Multiple verified candidates require confirmation. A name or directory alone requires a fresh invitation or explicit operator selection. Select the current client_id to fetch that client's native schemas; follow nextCursor. Prefer tools.search in code_mode for targeted discovery.",
             "inputSchema":{"type":"object","properties":{
                 "client_id":{"type":"string","minLength":1,"maxLength":64},
                 "device_id":{"type":"string","pattern":"^dev_[0-9a-f]{64}$","description":"Exact verified device ID from list; filters discovery and never executes or broadcasts."},
@@ -2435,6 +2480,30 @@ impl Fault {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn project_reconnect_hints_require_one_distinct_verified_successor() {
+        let project = |id| Successor {
+            client_id: id,
+            address: None,
+        };
+        let unique = reconnect_hint("old", &[project("new")]);
+        assert_eq!(unique["status"], "same_project");
+        assert_eq!(unique["client_id"], "new");
+        assert!(unique.get("device_id").is_none());
+
+        let candidates: Vec<_> = ["a", "b", "c", "d", "e", "f", "g", "h", "i"]
+            .map(project)
+            .into();
+        let conflict = reconnect_hint("old", &candidates);
+        assert_eq!(conflict["status"], "ambiguous");
+        assert_eq!(conflict["candidate_count"], 9);
+        assert_eq!(
+            conflict["candidate_client_ids"].as_array().unwrap().len(),
+            8
+        );
+        assert!(conflict.get("client_id").is_none());
+    }
+
     #[test]
     fn forged_reload_results_cannot_establish_a_delivery_exception() {
         let reload = ReloadDelivery::default();

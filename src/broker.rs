@@ -686,7 +686,7 @@ impl Session {
         let result = match timeout(duration, response).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(self.connection_error(true,
-                "client disconnected after dispatch; outcome unknown. Preserve the original request. Refresh list using the saved device_id/session_id, or obtain a fresh /invite after a manual restart.")) ,
+                "client disconnected after dispatch; outcome unknown. Preserve the original request. Recheck the old client_id with list for a unique verified project or signed-session successor. Verify the live control/pool link and rejoin with fresh credentials. Without a unique match, obtain a fresh /invite. Never replay the dispatched operation.")) ,
             Err(_) => Err("client request timed out; its outcome may be unknown".into()),
         };
         let mut result = if authorization
@@ -1157,7 +1157,7 @@ impl Broker {
         accessible_sessions(&sessions, user, authorization)
             .find(|session| session.client_id() == id)
             .cloned()
-            .ok_or_else(|| "client is unavailable; call list to refresh connected clients. Query list with the old client_id for a verified reconnect, look up the previously verified device_id/session_id, or obtain a fresh /invite from the new control window after a manual restart. Preserve unknown outcomes; never replay work.".into())
+            .ok_or_else(|| "client is unavailable; call list to refresh connected clients. Query list with the old client_id for a verified project or signed-session successor under the original authorization. Verify the live control/pool link before binding a unique successor. Otherwise obtain a fresh /invite or /invite worker. Preserve unknown outcomes; never replay work.".into())
     }
 
     /// Test fixtures may close one existing wire connection without revoking
