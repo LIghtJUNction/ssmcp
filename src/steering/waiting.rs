@@ -204,6 +204,7 @@ mod tests {
             role: None,
             status: "active".into(),
             dreaming_active: None,
+            activity: None,
         }];
         queue
             .command(

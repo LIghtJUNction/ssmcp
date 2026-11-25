@@ -389,6 +389,7 @@ pub(crate) struct DevicePeer {
     pub chat_disabled: bool,
     pub openai_context: bool,
     pub main_lifecycle: bool,
+    pub main_activity: bool,
     pub peer_ports: bool,
     pub peer_ports_auto: bool,
 }
@@ -405,6 +406,7 @@ impl From<Registration> for DevicePeer {
             chat_disabled: false,
             openai_context: false,
             main_lifecycle: false,
+            main_activity: false,
             peer_ports: false,
             peer_ports_auto: false,
             account: Some(account),
@@ -849,6 +851,7 @@ async fn connect(
         peer_ports_auto: capability_requested(&headers, wire::peer_port::AUTO_CAPABILITY),
         openai_context: capability_requested(&headers, wire::openai::CAPABILITY),
         main_lifecycle: capability_requested(&headers, wire::MAIN_LIFECYCLE_CAPABILITY),
+        main_activity: capability_requested(&headers, wire::MAIN_ACTIVITY_CAPABILITY),
     };
     let transport = broker
         .admit_transport()

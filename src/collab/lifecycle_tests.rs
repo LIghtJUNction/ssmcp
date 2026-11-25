@@ -941,3 +941,79 @@ async fn dreaming_episode_outlives_bounded_chores_and_input_resets_its_clock() {
     assert_eq!(life.status, Status::Working);
     assert!(life.public()["dreaming_elapsed_ms"].is_null());
 }
+
+#[tokio::test(start_paused = true)]
+async fn main_activity_tracks_dispatch_receipts_and_membership_time_without_lease_progress() {
+    use crate::wire::MainPhase;
+    let hub = Hub::for_session("main-display");
+    let (id, token) = member(&hub, "owner", "main");
+    let observation = || {
+        hub.display_presence(true)
+            .unwrap()
+            .into_iter()
+            .find(|agent| agent.agent_id == id)
+            .unwrap()
+            .activity
+            .unwrap()
+    };
+    let start = |name, args| {
+        hub.prepare_native_activity("owner", &id, &token, &native(name, args))
+            .unwrap()
+    };
+    assert!(hub.presence().unwrap()[0].activity.is_none());
+    let (worker, _) = member(&hub, "owner", "worker");
+    assert!(
+        hub.display_presence(true)
+            .unwrap()
+            .iter()
+            .find(|a| a.agent_id == worker)
+            .unwrap()
+            .activity
+            .is_none()
+    );
+    for _ in 0..18 {
+        tokio::time::advance(Duration::from_secs(600)).await;
+        hub.bind("owner", &id, &token).unwrap();
+        for (name, args) in [
+            ("ui.get", json!({})),
+            ("time.now", json!({})),
+            ("exec.status", json!({})),
+            ("exec.wait", json!({"wait_ms":0})),
+            ("ui.message", json!({"kind":"input"})),
+        ] {
+            let mut read = start(name, args);
+            read.dispatched();
+            read.finish(&receipt(json!({})));
+        }
+    }
+    let old = observation();
+    assert_eq!(old.connected_ms, 3 * 3_600_000);
+    assert_eq!((old.phase, old.observed_age_ms), (MainPhase::Quiet, None));
+    let mut work = start("fs.edit_text", json!({}));
+    assert_eq!(observation().phase, MainPhase::Quiet);
+    work.dispatched();
+    let mut wait = start("exec.wait", json!({"wait_ms":45000}));
+    wait.dispatched();
+    assert_eq!(observation().phase, MainPhase::Work);
+    work.finish(&receipt(json!({})));
+    assert_eq!(observation().phase, MainPhase::Wait);
+    drop(wait);
+    assert_eq!(observation().phase, MainPhase::Recent);
+    tokio::time::advance(Duration::from_secs(75)).await;
+    hub.bind("owner", &id, &token).unwrap();
+    assert_eq!(observation().observed_age_ms, Some(75_000));
+    let mut lost = start("exec.start", json!({}));
+    lost.dispatched();
+    drop(lost);
+    assert_eq!(observation().phase, MainPhase::Unknown);
+    let (new, _) = member(&hub, "owner", "main");
+    let second = hub
+        .display_presence(true)
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.agent_id == new)
+        .unwrap()
+        .activity
+        .unwrap();
+    assert_eq!((second.connected_ms, second.phase), (0, MainPhase::Quiet));
+}

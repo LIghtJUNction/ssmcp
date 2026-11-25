@@ -75,7 +75,7 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
         .env(
             "SSMCP_RELAY_CAPABILITIES",
             format!(
-                "{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{}",
                 crate::wire::SESSION_ACCESS_CAPABILITY,
                 crate::wire::CONTROL_ATTRIBUTION_CAPABILITY,
                 crate::wire::messages::CAPABILITY,
@@ -84,7 +84,8 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
                 crate::wire::wait_display::DURABLE_CAPABILITY,
                 crate::wire::wait_display::TIME_CAPABILITY,
                 crate::wire::openai::CAPABILITY,
-                crate::wire::MAIN_LIFECYCLE_CAPABILITY
+                crate::wire::MAIN_LIFECYCLE_CAPABILITY,
+                crate::wire::MAIN_ACTIVITY_CAPABILITY
             ),
         )
         .stdin(Stdio::piped())
@@ -239,6 +240,7 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::CHAT_DISABLED_CAPABILITY
                 | crate::wire::openai::CAPABILITY
                 | crate::wire::MAIN_LIFECYCLE_CAPABILITY
+                | crate::wire::MAIN_ACTIVITY_CAPABILITY
                 | crate::wire::peer_port::CAPABILITY
                 | crate::wire::peer_port::AUTO_CAPABILITY
         ) || capabilities[..index].contains(value)

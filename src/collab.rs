@@ -83,6 +83,7 @@ struct Agent {
     lifecycle: lifecycle::Lifecycle,
     capabilities: Vec<String>,
     joined_at_ms: u64,
+    main_activity: lifecycle::MainObservation,
     last_seen_ms: u64,
     expires_at_ms: u64,
     expires: Instant,
@@ -321,7 +322,15 @@ impl Hub {
 
     /// Public roster for the connected local client's UI. Mailboxes, owner keys
     /// and private participant tokens never cross this interface.
+    #[cfg(test)]
     pub(crate) fn presence(&self) -> Result<Vec<crate::wire::SteeringAgent>, String> {
+        self.display_presence(false)
+    }
+
+    pub(crate) fn display_presence(
+        &self,
+        include_activity: bool,
+    ) -> Result<Vec<crate::wire::SteeringAgent>, String> {
         let state = self.locked()?;
         Ok(state
             .agents
@@ -331,6 +340,9 @@ impl Hub {
                 name: agent.name.clone(),
                 role: agent.role.clone(),
                 status: agent.lifecycle.status.as_str().into(),
+                activity: (include_activity
+                    && crate::wire::coordinator_role(agent.role.as_deref()))
+                .then(|| agent.main_activity.snapshot(Instant::now())),
                 dreaming_active: {
                     let active = agent.lifecycle.dreaming_since_ms().is_some();
                     (active || agent.lifecycle.status.as_str() == "dreaming").then_some(active)
@@ -356,6 +368,7 @@ impl Hub {
                         role: agent.role.clone(),
                         status: agent.lifecycle.status.as_str().into(),
                         dreaming_active: None,
+                        activity: None,
                     },
                 )
             })
@@ -377,6 +390,7 @@ impl Hub {
             role: agent.role.clone(),
             status: agent.lifecycle.status.as_str().into(),
             dreaming_active: None,
+            activity: None,
         })
     }
 
@@ -577,6 +591,7 @@ impl Hub {
             lifecycle: lifecycle::Lifecycle::new(Instant::now(), now),
             capabilities,
             joined_at_ms: now,
+            main_activity: lifecycle::MainObservation::new(Instant::now()),
             last_seen_ms: now,
             expires_at_ms,
             expires: Instant::now() + Duration::from_millis(LEASE_MS),

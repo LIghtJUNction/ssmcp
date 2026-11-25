@@ -122,6 +122,7 @@ pub(super) struct Conversation {
     pub(super) composer: Composer,
     idle_tips: hints::IdleTips,
     pub(super) worker_activity_rows: u16,
+    pub(super) main_jobs: main_status::Jobs,
     worker_assignments: worker_operations::ConversationFeed,
     wait_observations: timing::WaitFeed,
     #[cfg(test)]
@@ -307,6 +308,24 @@ impl State {
                 json!({"agent_id":"configured", "name":label,
                 "role":"configured chat agent","status":"explicit chat dispatch"}),
             );
+        }
+        if entries
+            .iter()
+            .any(|entry| crate::wire::coordinator_role(entry["role"].as_str()))
+        {
+            let timing = self.chat_timing_snapshot();
+            for entry in &mut entries {
+                if crate::wire::coordinator_role(entry["role"].as_str()) {
+                    let activity = main_status::for_member(
+                        entry,
+                        data["roster_age_ms"].as_u64().unwrap_or(0),
+                        &timing,
+                        &self.conversation.main_jobs,
+                    );
+                    entry["display_status"] = json!(activity.label);
+                    entry["display_connection"] = json!(activity.badge(self.geometry.left));
+                }
+            }
         }
         sessions::arrange(
             entries,
@@ -3127,7 +3146,16 @@ impl State {
         self.events.set_scope(events::EventScope::Conversation);
         self.conversation.logs_open = self.conversation.view == View::Logs;
         self.chat_updates();
-        self.chat_wait_observations();
+        let data = self.chat_data();
+        let timing = self.chat_timing_snapshot();
+        let headline = main_status::from_roster(
+            &data,
+            &self.conversation.process_id,
+            self.link_metrics.disconnected(),
+            &timing,
+            &self.conversation.main_jobs,
+        );
+        self.chat_wait_observations(timing);
         if let Some(pool) = self.chat_worker_operations() {
             for entry in self.conversation.worker_assignments.update(&pool) {
                 self.events
@@ -3141,7 +3169,6 @@ impl State {
         }
         self.chat_refresh_completions();
         let g = self.geometry;
-        let data = self.chat_data();
         let agents = items(&data, "agents");
         let observed = self.audit.observed_controllers();
         let grouped_callers = self.caller_tracker.groups(&observed, &data);
@@ -3426,13 +3453,9 @@ impl State {
                 } else {
                     format!("{}{suffix}", self.conversation.canvas.label(g.left))
                 };
-                let status = main_status::from_roster(
-                    &data,
-                    &self.conversation.process_id,
-                    self.link_metrics.disconnected(),
-                );
+                let status = headline.badge(g.left);
                 let (title, detail) =
-                    main_status::header(&self.context_label, &label, status, g.left);
+                    main_status::header(&self.context_label, &label, &status, g.left);
                 format!(
                     "{}{}",
                     self.tone(PanelTone::Heading, &title),
@@ -4566,7 +4589,7 @@ mod tests {
                 "queue":[]});
             for (status, active, expected) in [
                 ("idle", None, "Idle"),
-                ("working", None, "Working"),
+                ("working", None, "Unknown"),
                 ("dreaming", None, "Unknown"),
                 ("dreaming", Some(false), "Pending"),
                 ("dreaming", Some(true), "Dreaming"),
@@ -4576,6 +4599,11 @@ mod tests {
                 ("offline", None, "Offline"),
             ] {
                 data["agents"][1]["status"] = json!(status);
+                data["agents"][1]["activity"] = if expected == "Working" {
+                    json!({"phase":"work","observed_age_ms":0,"connected_ms":2500})
+                } else {
+                    Value::Null
+                };
                 data["agents"][1]["dreaming_active"] = json!(active);
                 state.conversation.main_roster_fixture = Some(data.clone());
                 let screen = display(&mut state).screen().contents();
@@ -4589,6 +4617,29 @@ mod tests {
                         "{header}"
                     );
                 }
+            }
+            for (connected, phase, age, expected) in [
+                (7_199_999, "recent", 59_999, "Recent"),
+                (7_200_000, "recent", 60_000, "Quiet"),
+                (10_800_000, "wait", 65_000, "Waiting"),
+            ] {
+                data["agents"][1]["status"] = json!("working");
+                data["agents"][1]["activity"] =
+                    json!({"phase":phase,"connected_ms":connected,"observed_age_ms":age});
+                state.conversation.main_roster_fixture = Some(data.clone());
+                let screen = display(&mut state).screen().contents();
+                let header = screen.lines().next().unwrap();
+                assert!(header.contains(expected), "{width} {header}");
+                assert_eq!(
+                    header.contains("/invite"),
+                    connected >= 7_200_000,
+                    "{width} {header}"
+                );
+                assert_eq!(
+                    header.contains('!') || header.contains("handoff recommended"),
+                    connected >= 10_800_000,
+                    "{width} {header}"
+                );
             }
             data["agents"][1]["status"] = json!("working");
             data["session_id"] = json!("previous-room");

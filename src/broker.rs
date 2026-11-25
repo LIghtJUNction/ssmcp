@@ -304,6 +304,7 @@ impl Session {
         &self,
         id: u64,
         command: wire::SteeringCommand,
+        main_activity: bool,
     ) -> Result<wire::SteeringSnapshot, String> {
         if self.chat_disabled
             && id >= wire::WORKER_ROSTER_REQUEST
@@ -322,21 +323,31 @@ impl Session {
                 messages: Vec::new(),
             });
         }
-        self.steering_command(command)
+        self.steering_command_for_display(command, main_activity)
     }
 
     fn steering_command(
         &self,
         command: wire::SteeringCommand,
     ) -> Result<wire::SteeringSnapshot, String> {
+        self.steering_command_for_display(command, false)
+    }
+
+    fn steering_command_for_display(
+        &self,
+        command: wire::SteeringCommand,
+        activity: bool,
+    ) -> Result<wire::SteeringSnapshot, String> {
         if !self.is_alive() {
             return Err("client connection is closed".into());
         }
         self.require_chat()?;
         let changed = !matches!(&command, wire::SteeringCommand::Snapshot {});
-        let snapshot =
-            self.steering
-                .command(self.client_id(), self.collaboration.presence()?, command)?;
+        let snapshot = self.steering.command(
+            self.client_id(),
+            self.collaboration.display_presence(activity)?,
+            command,
+        )?;
         if changed {
             self.publish_user_input_events(&snapshot, None);
         }
@@ -1452,6 +1463,7 @@ impl Broker {
         let access_supported =
             !legacy_account_self && peer.as_ref().is_some_and(|peer| peer.session_access);
         let control_attribution = peer.as_ref().is_some_and(|peer| peer.control_attribution);
+        let main_activity = peer.as_ref().is_some_and(|peer| peer.main_activity);
         let main_lifecycle = peer.as_ref().is_some_and(|peer| peer.main_lifecycle);
         let native_messages =
             registration.is_some() && peer.as_ref().is_some_and(|peer| peer.native_messages);
@@ -1838,7 +1850,7 @@ impl Broker {
                         timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::MessagesReply { id, result })).await??;
                     }
                     Some(Frame::Steering { id, command }) => {
-                        let result = session.native_steering(id, command).map(|mut snapshot| {
+                        let result = session.native_steering(id, command, main_activity).map(|mut snapshot| {
                             // Older v7 clients reject unfamiliar roster fields.
                             if !main_lifecycle {
                                 for member in &mut snapshot.agents {
