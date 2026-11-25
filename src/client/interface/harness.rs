@@ -19,7 +19,6 @@ static BINDING: OnceLock<Mutex<Option<Binding>>> = OnceLock::new();
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) fn bind(runtime: &Arc<Runtime>) {
-    crate::client::update::terminal::remember_executable();
     let mut binding = BINDING
         .get_or_init(|| Mutex::new(None))
         .lock()
