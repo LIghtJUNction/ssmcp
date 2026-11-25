@@ -414,14 +414,15 @@ impl State {
             let indent = if process { "" } else { "  " };
             let name = panel::safe_text(field(entry, "name"));
             let model = panel::safe_text(field(entry, "model"));
+            let lifecycle = member_lifecycle(entry);
             let label = if observed && !model.is_empty() {
                 format!("{name} · {model}")
-            } else if let Some(status) = member_lifecycle(entry) {
+            } else if let Some(status) = lifecycle {
                 format!("{status} · {name}")
             } else {
                 name
             };
-            let title = format!(" {marker} {indent}{check} {label}");
+            let mut title = format!(" {marker} {indent}{check} {label}");
             let id = if process {
                 field(entry, "client_id")
             } else if observed {
@@ -460,24 +461,29 @@ impl State {
             } else {
                 short_id(id)
             };
+            let calls = lifecycle.and_then(|_| entry["tool_calls_10m"].as_u64());
             let subtitle = if observed {
                 format!(
                     "     {indent}{identity} · {} calls · {}",
                     entry["calls"],
                     field(entry, "status")
                 )
-            } else if member_lifecycle(entry).is_some()
-                && let Some(calls) = entry["tool_calls_10m"].as_u64()
-            {
+            } else if !process && let Some(summary) = session_summary(entry) {
+                if let Some(calls) = calls {
+                    // The second line identifies same-name threads by ID and summary.
+                    let count = format!(" · {calls}/10m");
+                    let available = usize::from(list_width).saturating_sub(count.width());
+                    title = format!("{}{count}", panel::fit(&title, available));
+                }
+                let prefix = format!("     {indent}{identity} · ");
+                let available = usize::from(list_width).saturating_sub(prefix.width());
+                format!("{prefix}{}", panel::fit(summary, available))
+            } else if let Some(calls) = calls {
                 if list_width < 35 {
                     format!("     {indent}{calls}/10m · {identity}")
                 } else {
                     format!("     {indent}{calls} calls/10m · {identity}")
                 }
-            } else if !process && let Some(summary) = session_summary(entry) {
-                let prefix = format!("     {indent}{identity} · ");
-                let available = usize::from(list_width).saturating_sub(prefix.width());
-                format!("{prefix}{}", panel::fit(summary, available))
             } else {
                 format!("     {indent}{identity} · {role}")
             };

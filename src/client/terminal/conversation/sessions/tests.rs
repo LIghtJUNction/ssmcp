@@ -152,6 +152,40 @@ fn recipients_show_measured_tool_calls_and_the_activity_offline_projection() {
 }
 
 #[test]
+fn same_name_members_keep_their_id_summary_and_measured_calls_together() {
+    let data = json!({"agents":[
+        {"name":"Shared name","agent_id":"agent_0000000011111111","role":"review",
+         "status":"idle","tool_calls_10m":0},
+        {"name":"Shared name","agent_id":"agent_0000000022222222","role":"build",
+         "status":"working","tool_calls_10m":52}
+    ]});
+    for columns in [32, 48, 104, 120] {
+        let mut state = preview_state(
+            28,
+            columns,
+            &Ui {
+                layout: Layout::Chat,
+                sidebar: false,
+                color: false,
+                ..Ui::default()
+            },
+        );
+        state.chat_change_view(View::Agents);
+        let rows = state.chat_session_rows(&data, 24);
+        for (count, identity) in [
+            ("0/10m", "…11111111 · review"),
+            ("52/10m", "…22222222 · build"),
+        ] {
+            assert!(
+                rows.windows(2)
+                    .any(|pair| pair[0].contains(count) && pair[1].contains(identity)),
+                "{columns} columns: {rows:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn process_header_without_an_advertised_inbox_is_not_a_wildcard_recipient() {
     let id = "3".repeat(64);
     let thread = format!("agent_{}", "a".repeat(32));
