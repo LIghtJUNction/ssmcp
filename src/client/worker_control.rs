@@ -18,7 +18,7 @@ impl Confirmation {
             && snapshot["client_id"].as_str() == Some(self.client_id.as_str())
             && snapshot["desired_total"].as_u64() == Some(self.target as u64)
             // An in-flight claim keeps the selected station in the working count.
-            && snapshot["total"].as_u64() == (self.target as u64).checked_add(1)
+            && snapshot["total"].as_u64().is_some_and(|n| n > self.target as u64)
             && snapshot["last_resize"]["accepted"].as_bool() == Some(true)
             && snapshot["last_resize"]["target"].as_u64() == Some(self.target as u64)
             && snapshot["last_resize"]["request_id"].as_u64() == Some(self.request_id)
@@ -195,6 +195,9 @@ mod tests {
         let state = serde_json::json!({"generation":"generation","client_id":"client","desired_total":3,"total":4,"working":1,"retiring":0,
                                      "last_resize":{"request_id":7,"confirm_slot":4,"target":3,"accepted":true}});
         assert!(ticket.matches(&state));
+        let mut batch = state.clone();
+        batch["total"] = serde_json::json!(8);
+        assert!(ticket.matches(&batch));
         let mut idle = state.clone();
         idle["retiring"] = serde_json::json!(1);
         assert!(ticket.matches(&idle));

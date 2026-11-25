@@ -578,7 +578,21 @@ pub(super) fn send_handoff(offer: &crate::worker::Handoff) -> Result<(), String>
 pub(super) enum ResizeAction {
     Resize,
     RetireOne,
+    SelectPending,
     Confirm(u64),
+}
+
+impl ResizeAction {
+    fn forced_outcome(self, receipt: &serde_json::Value) -> Result<Option<bool>, String> {
+        if !matches!(self, Self::Confirm(_)) {
+            return Ok(None);
+        }
+        match receipt["forced_stations"].as_u64() {
+            Some(0) => Ok(Some(false)),
+            Some(1) => Ok(Some(true)),
+            _ => Err("The number of forcibly retired workers could not be verified.".into()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -597,6 +611,7 @@ impl ResizeRequest {
         frame.push(match self.action {
             ResizeAction::Resize => b'N',
             ResizeAction::RetireOne => b'H',
+            ResizeAction::SelectPending => b'P',
             ResizeAction::Confirm(prior) if prior != 0 && prior < self.request_id => b'F',
             ResizeAction::Confirm(_) => return Err("invalid retirement confirmation".into()),
         });
@@ -628,8 +643,8 @@ struct ResizeReceipt {
     error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     confirm_slot: Option<usize>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    forced: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    forced: Option<bool>,
 }
 
 #[derive(Default)]
@@ -720,6 +735,7 @@ impl ControlDecoder {
                 let action = match opcode {
                     b'N' => ResizeAction::Resize,
                     b'H' => ResizeAction::RetireOne,
+                    b'P' => ResizeAction::SelectPending,
                     _ => {
                         let prior = u64::from_be_bytes(self.payload[10..18].try_into().unwrap());
                         if prior == 0 || prior >= request_id {
@@ -742,7 +758,7 @@ impl ControlDecoder {
                 self.handoff = Some(Vec::new());
                 Ok(None)
             }
-            b'N' | b'H' | b'F' => {
+            b'N' | b'H' | b'P' | b'F' => {
                 self.opcode = byte;
                 self.received = 0;
                 Ok(None)
@@ -996,7 +1012,11 @@ impl ChildState {
                     io::Error::other("resize result does not match the active request")
                 })?;
             let mut confirm_slot = None;
-            if resize.highest_id == request.request_id && request.action == ResizeAction::RetireOne
+            if resize.highest_id == request.request_id
+                && matches!(
+                    request.action,
+                    ResizeAction::RetireOne | ResizeAction::SelectPending
+                )
             {
                 let targets = result
                     .as_ref()
@@ -1012,12 +1032,16 @@ impl ChildState {
                     resize.offered = Some((request.request_id, request.target, targets));
                 }
             }
-            let error = result.err().map(|message| bounded_resize_error(&message));
+            let outcome = result.and_then(|receipt| request.action.forced_outcome(&receipt));
+            let (forced, error) = match outcome {
+                Ok(forced) => (forced, None),
+                Err(error) => (None, Some(bounded_resize_error(&error))),
+            };
             resize.receipt = Some(ResizeReceipt {
                 request_id: request.request_id,
                 target: total,
                 accepted: error.is_none(),
-                forced: matches!(request.action, ResizeAction::Confirm(_)) && error.is_none(),
+                forced,
                 error,
                 confirm_slot,
             });
@@ -1122,6 +1146,7 @@ pub(super) fn apply_pending_resize(runtime: &crate::runtime::Runtime) -> Result<
     let result = match request.action {
         ResizeAction::Resize => runtime.resize_workers(request.target),
         ResizeAction::RetireOne => runtime.human_resize_workers(request.target),
+        ResizeAction::SelectPending => runtime.human_select_pending_retirement(request.target),
         ResizeAction::Confirm(prior) => {
             let targets = state
                 .resize
@@ -1402,6 +1427,7 @@ fn validate_snapshot(snapshot: &LinkedSnapshot, pid: u32) -> io::Result<()> {
                 || receipt
                     .confirm_slot
                     .is_some_and(|slot| !receipt.accepted || !(1..=128).contains(&slot))
+                || receipt.forced.is_some() && (!receipt.accepted || receipt.confirm_slot.is_some())
                 || receipt.target > 128
                 || receipt.accepted == receipt.error.is_some()
                 || receipt
@@ -2000,7 +2026,7 @@ mod tests {
         .unwrap();
         status.last_resize = Some(ResizeReceipt {
             confirm_slot: None,
-            forced: false,
+            forced: None,
             request_id: 7,
             target: 3,
             accepted: false,
@@ -2558,6 +2584,29 @@ mod tests {
     }
 
     #[test]
+    fn force_receipt_reports_who_completed_retirement() {
+        let action = ResizeAction::Confirm(7);
+        assert_eq!(
+            action.forced_outcome(&serde_json::json!({"forced_stations":0})),
+            Ok(Some(false))
+        );
+        assert_eq!(
+            action.forced_outcome(&serde_json::json!({"forced_stations":1})),
+            Ok(Some(true))
+        );
+        for receipt in [
+            serde_json::json!({}),
+            serde_json::json!({"forced_stations":2}),
+        ] {
+            assert!(action.forced_outcome(&receipt).is_err());
+        }
+        assert_eq!(
+            ResizeAction::SelectPending.forced_outcome(&serde_json::json!({})),
+            Ok(None)
+        );
+    }
+
+    #[test]
     fn explicit_confirm_carries_a_distinct_request_and_cannot_replay() {
         let first = ResizeRequest {
             request_id: 7,
@@ -2569,7 +2618,11 @@ mod tests {
             target: 2,
             action: ResizeAction::Confirm(7),
         };
-        for frame in [first, second] {
+        let select_existing = ResizeRequest {
+            action: ResizeAction::SelectPending,
+            ..first
+        };
+        for frame in [first, select_existing, second] {
             let encoded = frame.encode().unwrap();
             let mut decoder = ControlDecoder::default();
             for byte in &encoded[..encoded.len() - 1] {

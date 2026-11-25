@@ -1949,8 +1949,12 @@ impl WorkerController {
                         .as_str()
                         .unwrap_or("worker resize was rejected");
                     terminal::notice(&format!("Worker target unchanged: {error}"));
-                } else if receipt["forced"].as_bool() == Some(true) {
-                    terminal::notice("The confirmed worker has been forcibly retired.");
+                } else if let Some(forced) = receipt["forced"].as_bool() {
+                    terminal::notice(if forced {
+                        "The confirmed worker has been forcibly retired."
+                    } else {
+                        "The selected worker had already retired. No other station was changed."
+                    });
                 } else if let Some(slot) = receipt["confirm_slot"].as_u64()
                     && let (Some(generation), Some(client_id)) = (
                         snapshot["generation"].as_str(),
@@ -1992,8 +1996,16 @@ impl WorkerController {
                         terminal::notice("No connected worker window can accept this retirement.");
                         continue;
                     };
+                    let (Some(total), Some(desired)) =
+                        (state["total"].as_u64(), state["desired_total"].as_u64())
+                    else {
+                        terminal::notice(
+                            "The worker count is unavailable. Wait for a fresh snapshot.",
+                        );
+                        continue;
+                    };
                     if self.pending.is_some()
-                        || state["desired_total"].as_u64() != Some(self.desired as u64)
+                        || self.desired != previous_target
                         || state["stopping"] == true
                         || state["closed"] == true
                     {
@@ -2011,10 +2023,17 @@ impl WorkerController {
                             ticket.target,
                             worker_window::ResizeAction::Confirm(ticket.request_id),
                         )
+                    } else if total > desired {
+                        // The existing shrink may have come from -N or the pool manager.
+                        // Only this fresh local command can nominate a specific station.
+                        (desired as usize, worker_window::ResizeAction::SelectPending)
                     } else {
-                        if state["retiring"] != 0 || state["total"] != state["desired_total"] {
+                        if total != desired
+                            || state["retiring"] != 0
+                            || desired != self.desired as u64
+                        {
                             terminal::notice(
-                                "A retirement is already pending. Wait for its receipt.",
+                                "A worker change is in progress. Wait for its receipt.",
                             );
                             continue;
                         }
