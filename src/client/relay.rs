@@ -109,7 +109,7 @@ pub(super) fn restrict_to_self(command: &mut Command) {
     );
 }
 
-pub(super) fn offer_chat_disabled(command: &mut Command) {
+pub(super) fn offer_chat_disabled(command: &mut Command, worker: bool) {
     let offer = command
         .as_std()
         .get_envs()
@@ -117,10 +117,12 @@ pub(super) fn offer_chat_disabled(command: &mut Command) {
         .and_then(|(_, value)| value)
         .and_then(|value| value.to_str())
         .map_or_else(String::new, |value| format!("{value},"));
-    command.env(
-        "SSMCP_RELAY_CAPABILITIES",
-        format!("{offer}{}", crate::wire::CHAT_DISABLED_CAPABILITY),
-    );
+    let mut offer = format!("{offer}{}", crate::wire::CHAT_DISABLED_CAPABILITY);
+    if worker {
+        offer.push(',');
+        offer.push_str(crate::wire::WORKER_DREAMING_CAPABILITY);
+    }
+    command.env("SSMCP_RELAY_CAPABILITIES", offer);
 }
 
 /// The actual parent-generated offer, including the self-only override.
@@ -165,12 +167,9 @@ pub(super) fn negotiated_peer_ports(
     })
 }
 
-pub(super) fn openai_context_offer(command: &Command) -> bool {
-    parent_offer(command).is_some_and(|offer| {
-        offer
-            .split(',')
-            .any(|value| value.trim() == crate::wire::openai::CAPABILITY)
-    })
+pub(super) fn offers(command: &Command, capability: &str) -> bool {
+    parent_offer(command)
+        .is_some_and(|offer| offer.split(',').any(|value| value.trim() == capability))
 }
 
 pub(super) fn timing_offer(command: &Command) -> (bool, bool) {
@@ -239,6 +238,7 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::CHAT_DISABLED_CAPABILITY
                 | crate::wire::openai::CAPABILITY
                 | crate::wire::MAIN_LIFECYCLE_CAPABILITY
+                | crate::wire::WORKER_DREAMING_CAPABILITY
                 | crate::wire::peer_port::CAPABILITY
                 | crate::wire::peer_port::AUTO_CAPABILITY
         ) || capabilities[..index].contains(value)
@@ -512,6 +512,30 @@ mod metrics_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_dreaming_offer_only_appears_for_worker_pools_and_fits_the_header() {
+        let mut command = command(Path::new("ssmcp"), "https://broker.test", None);
+        assert!(!offers(&command, crate::wire::WORKER_DREAMING_CAPABILITY));
+        let mut no_input = Command::new("ssmcp");
+        offer_chat_disabled(&mut no_input, false);
+        assert!(!offers(&no_input, crate::wire::WORKER_DREAMING_CAPABILITY));
+        // Exercise the longest mutually exclusive peer-port offer regardless of environment.
+        let mut caps: Vec<_> = parent_offer(&command)
+            .unwrap()
+            .split(',')
+            .filter(|name| {
+                *name != crate::wire::peer_port::CAPABILITY
+                    && *name != crate::wire::peer_port::AUTO_CAPABILITY
+            })
+            .collect();
+        caps.push(crate::wire::peer_port::AUTO_CAPABILITY);
+        let caps = caps.join(",");
+        command.env("SSMCP_RELAY_CAPABILITIES", caps);
+        offer_chat_disabled(&mut command, true);
+        assert!(offers(&command, crate::wire::WORKER_DREAMING_CAPABILITY));
+        assert!(offers(&command, crate::wire::CHAT_DISABLED_CAPABILITY));
+    }
 
     #[test]
     fn access_capability_header_requires_explicit_support_from_the_parent() {

@@ -1445,6 +1445,9 @@ impl Broker {
         let chat_disabled = peer
             .as_ref()
             .map_or(self.local_chat_disabled, |peer| peer.chat_disabled);
+        let worker_dreaming = chat_disabled
+            && control_attribution
+            && peer.as_ref().is_some_and(|peer| peer.worker_dreaming);
         let peer_ports = access_supported
             && control_attribution
             && peer
@@ -1467,6 +1470,9 @@ impl Broker {
         }
         if chat_disabled {
             capabilities.push(wire::CHAT_DISABLED_CAPABILITY.into());
+        }
+        if worker_dreaming {
+            capabilities.push(wire::WORKER_DREAMING_CAPABILITY.into());
         }
         if access_supported {
             capabilities.push(wire::SESSION_ACCESS_CAPABILITY.into());
@@ -1655,6 +1661,7 @@ impl Broker {
             let mut expiry = tokio::time::interval(Duration::from_secs(1));
             let mut wait_updates = session.wait_display.subscribe();
             let mut wait_revision = 0;
+            let mut last_dreaming_members = Vec::new();
             loop {
                 // Keep the same read future across requests/ticks: partial JSON frames
                 // must not be discarded when another select branch becomes ready.
@@ -1781,6 +1788,14 @@ impl Broker {
                             // remote lookup, or mailbox polling is required.
                             self.refresh_native_connection(&session);
                             session.wait_display.refresh(&self, &session);
+                            if worker_dreaming {
+                                let members = session.collaboration.dreaming_members()?;
+                                if members != last_dreaming_members {
+                                    let frame = Frame::WorkerDreaming { members: members.clone() };
+                                    timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
+                                    last_dreaming_members = members;
+                                }
+                            }
                             let expired: Vec<_> = pending.iter().filter(|(_, call)| Instant::now() >= call.deadline).map(|(id, _)| *id).collect();
                             for id in expired {
                                 if let Some(call) = pending.remove(&id) {

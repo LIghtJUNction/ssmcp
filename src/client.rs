@@ -2773,6 +2773,7 @@ struct RegisteredTransport {
     access_supported: bool,
     messaging_supported: bool,
     chat_disabled_acknowledged: bool,
+    worker_dreaming: bool,
     time_observation_supported: bool,
     wait_display_version: Option<crate::wire::wait_display::Version>,
     openai_context_supported: bool,
@@ -2838,7 +2839,9 @@ async fn register_transport(
     let timing_offer = relay::timing_offer(&transport_command);
     let durable_wait_offer = relay::durable_wait_display_offer(&transport_command);
     let peer_offer = relay::peer_ports_offer(&transport_command);
-    let openai_context_offer = relay::openai_context_offer(&transport_command);
+    let openai_context_offer = relay::offers(&transport_command, crate::wire::openai::CAPABILITY);
+    let worker_dreaming_offer =
+        relay::offers(&transport_command, crate::wire::WORKER_DREAMING_CAPABILITY);
     let mut process = transport_command.spawn().map_err(|error| {
         format!(
             "could not start {} process: {error}",
@@ -2917,7 +2920,8 @@ async fn register_transport(
                     capability.as_str(),
                     crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
                         | crate::wire::CHAT_DISABLED_CAPABILITY
-                )
+                ) || (worker_dreaming_offer
+                    && capability == crate::wire::WORKER_DREAMING_CAPABILITY)
             }),
             capabilities
                 .iter()
@@ -2931,6 +2935,13 @@ async fn register_transport(
             relay::negotiated_timing(timing_offer, &capabilities).0,
             relay::negotiated_wait_display(timing_offer.1, durable_wait_offer, &capabilities),
             relay::negotiated_peer_ports(peer_offer, &capabilities),
+            worker_dreaming_offer
+                && capabilities
+                    .iter()
+                    .any(|capability| capability == crate::wire::WORKER_DREAMING_CAPABILITY)
+                && capabilities
+                    .iter()
+                    .any(|capability| capability == crate::wire::CHAT_DISABLED_CAPABILITY),
             openai_context_offer
                 && capabilities
                     .iter()
@@ -2978,6 +2989,7 @@ async fn register_transport(
         time_observation_supported,
         wait_display_version,
         peer_ports,
+        worker_dreaming,
         openai_context_supported,
         chat_disabled_acknowledged,
     ) = ready;
@@ -3010,6 +3022,7 @@ async fn register_transport(
         ready,
         access_supported,
         messaging_supported,
+        worker_dreaming,
         chat_disabled_acknowledged,
         time_observation_supported,
         wait_display_version,
@@ -3061,6 +3074,20 @@ async fn send_steering(
     Ok(())
 }
 
+fn apply_worker_dreaming(members: Vec<String>) -> Result<(), String> {
+    if members.len() > crate::wire::MAX_COLLAB_MEMBERS
+        || members.iter().any(|id| {
+            !id.strip_prefix("agent_").is_some_and(|suffix| {
+                suffix.len() == 32 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+        })
+    {
+        return Err("invalid worker Dreaming roster".into());
+    }
+    crate::worker::set_dreaming_members(members);
+    Ok(())
+}
+
 /// Freeze mutations and reclaim queued requests before tearing down their room.
 /// Delivery can win a takeback race; those requests remain delivered and never replay.
 async fn reclaim_steering(
@@ -3068,6 +3095,7 @@ async fn reclaim_steering(
     writer: &Arc<Mutex<tokio::process::ChildStdin>>,
     commands: &mut mpsc::Receiver<steering::Transport>,
     backend: &Runtime,
+    worker_dreaming: bool,
 ) -> crate::Result<()> {
     steering::begin_reload()?;
     timeout(Duration::from_secs(15), async {
@@ -3085,6 +3113,7 @@ async fn reclaim_steering(
                     Some(Ok(Some(Frame::AccessReply { id, result }))) => access::reply(id, result),
                     Some(Ok(Some(Frame::CodeModeFinished { completion }))) => backend.code_mode_finished(completion)?,
                     Some(Ok(Some(Frame::WaitDisplay { snapshot }))) => backend.wait_display(snapshot)?,
+                    Some(Ok(Some(Frame::WorkerDreaming { members }))) if worker_dreaming => apply_worker_dreaming(members)?,
                     Some(Ok(Some(Frame::Call { id, .. }))) => {
                         let mut writer = writer.lock().await;
                         write_frame(&mut *writer, &Frame::Reply { id, result: Err("client reload is preparing; refresh clients after reconnection".into()) }).await?;
@@ -3367,7 +3396,9 @@ async fn connect_inner(
                 relay::restrict_to_self(&mut command);
             }
             if !chat_enabled && matches!(&transport, Transport::Account { .. }) {
-                relay::offer_chat_disabled(&mut command);
+                let remote_pool =
+                    options.worker.is_some() && options.chat.agent == chat_io::Agent::Remote;
+                relay::offer_chat_disabled(&mut command, remote_pool);
             }
             if matches!(&transport, Transport::Account { .. })
                 && ui.dashboard
@@ -3412,6 +3443,7 @@ async fn connect_inner(
         access_supported,
         messaging_supported,
         chat_disabled_acknowledged: _,
+        worker_dreaming,
         time_observation_supported,
         wait_display_version,
         peer_ports,
@@ -3848,7 +3880,7 @@ async fn connect_inner(
                     };
                     match accepted {
                         Err(error) => { steering::abort_reload(&error); terminal::notice(&error); }
-                        Ok(()) => match reclaim_steering(&mut incoming, &writer, &mut steering_commands, &backend).await {
+                        Ok(()) => match reclaim_steering(&mut incoming, &writer, &mut steering_commands, &backend, worker_dreaming).await {
                             Ok(()) => { reload_requested = true; break Ok(()); }
                             Err(error) => { steering::abort_reload(&error.to_string()); terminal::notice(&error.to_string()); }
                         },
@@ -3942,7 +3974,7 @@ async fn connect_inner(
                             backend.validate_reload().and_then(|()| restart.accept(arguments, requests.len(), &client_id, github_auth))
                         };
                         if response.is_ok()
-                            && let Err(error) = reclaim_steering(&mut incoming, &writer, &mut steering_commands, &backend).await {
+                            && let Err(error) = reclaim_steering(&mut incoming, &writer, &mut steering_commands, &backend, worker_dreaming).await {
                                 steering::abort_reload(&error.to_string());
                                 response = Err(error.to_string());
                             }
@@ -3967,6 +3999,7 @@ async fn connect_inner(
                                         Some(Ok(Some(Frame::ReloadCommit { id: acknowledged }))) if acknowledged == id => return Ok::<(), crate::Error>(()),
                                         Some(Ok(Some(Frame::CodeModeFinished { completion }))) => { backend.code_mode_finished(completion)?; }
                                         Some(Ok(Some(Frame::WaitDisplay { snapshot }))) => { backend.wait_display(snapshot)?; }
+                                        Some(Ok(Some(Frame::WorkerDreaming { members }))) if worker_dreaming => { apply_worker_dreaming(members)?; }
                                         Some(Ok(Some(Frame::SteeringReply { id, result }))) => { steering::reply(id, result)?; }
                                         Some(Ok(Some(Frame::MessagesReply { id, result }))) => { messaging::reply(id, result); }
                                         Some(Ok(Some(Frame::AccessReply { id, result }))) => { access::reply(id, result); }
@@ -4045,6 +4078,9 @@ async fn connect_inner(
                 Some(Ok(Some(Frame::CodeModeFinished { completion }))) => {
                     if let Err(error) = backend.code_mode_finished(completion) { break Err(error.into()); }
                 }
+                Some(Ok(Some(Frame::WorkerDreaming { members }))) if worker_dreaming => {
+                    if let Err(error) = apply_worker_dreaming(members) { break Err(error.into()); }
+                }
                 Some(Ok(Some(Frame::WaitDisplay { snapshot }))) => {
                     if let Err(error) = backend.wait_display(snapshot) { break Err(error.into()); }
                 }
@@ -4072,6 +4108,9 @@ async fn connect_inner(
     };
     if reload_requested && options.worker_window_child {
         worker_window::child_prepare_reload();
+    }
+    if worker_dreaming {
+        crate::worker::set_dreaming_members(Vec::new());
     }
     backend.stop_workers();
     peer_ports.shutdown().await;

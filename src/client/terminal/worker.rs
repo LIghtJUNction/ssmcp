@@ -319,7 +319,7 @@ impl Monitor {
         let mut navigation = Vec::new();
         let mut col = 0;
         for slot in snapshot.slots.iter().skip(self.first).take(count) {
-            let (tone, symbol, label) = slot_state(slot.state);
+            let (tone, symbol, label) = slot_state(slot);
             let text = if width < 24 {
                 format!(
                     "{}#{:02} {symbol} ",
@@ -1055,7 +1055,7 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
         budget.saturating_sub(1).max(1),
     );
     if rows.len() < budget {
-        let (tone, _, state) = slot_state(slot.state);
+        let (tone, _, state) = slot_state(slot);
         let elapsed = slot
             .current_task_elapsed_ms
             .map(|ms| format!(" · {}", duration(ms)))
@@ -1462,8 +1462,9 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
     output
 }
 
-fn slot_state(state: &str) -> (PanelTone, &'static str, &'static str) {
-    match state {
+fn slot_state(slot: &SlotView) -> (PanelTone, &'static str, &'static str) {
+    match slot.state {
+        "idle" if slot.dreaming => (PanelTone::Accent, "☾", "Dreaming"),
         "idle" => (PanelTone::Success, "○", "idle"),
         "working" => (PanelTone::Warning, "●", "working"),
         "offline" => (PanelTone::Error, "×", "offline"),
@@ -2001,6 +2002,7 @@ mod tests {
                     reason: None,
                     logs: Vec::new(),
                     next_log_sequence: 0,
+                    dreaming: false,
                 },
                 SlotView {
                     slot: 1,
@@ -2020,6 +2022,7 @@ mod tests {
                     reason: None,
                     logs: Vec::new(),
                     next_log_sequence: 0,
+                    dreaming: false,
                 },
                 SlotView {
                     slot: 2,
@@ -2039,6 +2042,7 @@ mod tests {
                     reason: Some("waiting for readiness".into()),
                     logs: Vec::new(),
                     next_log_sequence: 0,
+                    dreaming: false,
                 },
             ],
         }
@@ -2075,6 +2079,27 @@ mod tests {
         );
         parser.process(&frame.diff(None));
         parser
+    }
+
+    #[test]
+    fn worker_dreaming_is_visible_while_the_station_stays_idle() {
+        let mut snapshot = snapshot();
+        for cols in [18, 32, 100] {
+            let mut state = state(20, cols, false);
+            snapshot.slots[0].dreaming = true;
+            let frame = state.worker_frame(Some(&snapshot));
+            let text = screen(&frame).screen().contents();
+            assert!(text.contains("Idle 1"), "{text}");
+            assert!(
+                text.contains(if cols < 24 { "☾" } else { "Dreaming" }),
+                "{text}"
+            );
+
+            snapshot.slots[0].dreaming = false;
+            let frame = state.worker_frame(Some(&snapshot));
+            let text = screen(&frame).screen().contents();
+            assert!(!text.contains('☾') && !text.contains("Dreaming"), "{text}");
+        }
     }
 
     #[test]
@@ -2224,6 +2249,7 @@ mod tests {
             reason: None,
             logs: Vec::new(),
             next_log_sequence: 0,
+            dreaming: false,
         }));
         assert!(
             !screen(&state.worker_frame(Some(&snapshot)))

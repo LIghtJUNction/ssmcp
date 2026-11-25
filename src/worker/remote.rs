@@ -785,6 +785,30 @@ mod tests {
     }
 
     #[test]
+    fn worker_dreaming_matches_only_the_registered_idle_participant() {
+        let (queue, remote) = service(3);
+        let first = actor("first");
+        let second = actor("second");
+        remote.claim(&queue, &first, "a", 1).unwrap();
+        remote.claim(&queue, &second, "b", 1).unwrap();
+        let members = vec!["second".into(), "unregistered".into()];
+        let display = queue.snapshot_for_display(&members);
+        assert_eq!(display.idle, 2);
+        assert!(!display.slots[0].dreaming);
+        assert!(display.slots[1].dreaming);
+        assert!(!display.slots[2].dreaming);
+        assert!(!queue.snapshot_for_display(&[]).slots[1].dreaming);
+
+        queue
+            .submit(actor("manager"), "work", "body", "prepared", 2)
+            .unwrap();
+        claimed(&remote, &queue, &second, "b");
+        let display = queue.snapshot_for_display(&members);
+        assert_eq!(display.slots[1].state, "working");
+        assert!(!display.slots[1].dreaming);
+    }
+
+    #[test]
     fn simultaneous_remote_claimants_cannot_share_a_slot_or_a_task() {
         let (queue, remote) = service(2);
         for key in ["one", "two"] {

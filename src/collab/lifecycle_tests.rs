@@ -82,6 +82,47 @@ async fn idle_deadline_notifies_without_any_roster_or_timer_poll() {
 }
 
 #[tokio::test]
+async fn worker_dreaming_roster_tracks_only_confirmed_members_in_this_connection() {
+    let pool = Hub::for_session("worker-pool");
+    let (id, token) = member(&pool, "owner", "worker");
+    let other = Hub::for_session("other-connection");
+    let _idle = member(&pool, "owner", "worker");
+    let request = update(&pool, &id, &token, json!({"status":"dreaming"}))
+        .await
+        .unwrap();
+    assert!(pool.dreaming_members().unwrap().is_empty());
+    let round = &request["agent"]["lifecycle"]["maintenance"]["round_id"];
+    update(
+        &pool,
+        &id,
+        &token,
+        json!({"maintenance":{"round_id":round,"action":"start"}}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        pool.dreaming_members().unwrap().as_slice(),
+        std::slice::from_ref(&id)
+    );
+    assert!(other.dreaming_members().unwrap().is_empty());
+    update(
+        &pool,
+        &id,
+        &token,
+        json!({"maintenance":{"round_id":round,"action":"complete"}}),
+    )
+    .await
+    .unwrap();
+    let roster = pool.presence().unwrap();
+    let worker = roster.iter().find(|member| member.agent_id == id).unwrap();
+    assert_eq!(worker.status, "dreaming");
+    assert_eq!(worker.dreaming_active, Some(true));
+    assert_eq!(pool.dreaming_members().unwrap(), vec![id.clone()]);
+    pool.user_input_queued("owner", &id, "new-work", 1);
+    assert!(pool.dreaming_members().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn new_input_preempts_running_maintenance_and_rejects_stale_reports() {
     let hub = Hub::for_session("input-room");
     let (id, token) = member(&hub, "owner", "main");

@@ -253,6 +253,7 @@ impl Fixture {
                 time_observation: false,
                 openai_context: false,
                 main_lifecycle: false,
+                worker_dreaming: false,
                 peer_ports: false,
                 peer_ports_auto: false,
                 chat_disabled: false,

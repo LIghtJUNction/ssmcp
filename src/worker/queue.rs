@@ -1153,19 +1153,23 @@ impl<T: Clone> Queue<T> {
     }
 
     pub(crate) fn snapshot(&self) -> Snapshot {
+        self.snapshot_for_display(&[])
+    }
+
+    pub(crate) fn snapshot_for_display(&self, dreaming_members: &[String]) -> Snapshot {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        self.snapshot_locked(&state)
+        self.snapshot_locked(&state, dreaming_members)
     }
 
     pub(crate) fn snapshot_with_activity(&self) -> (Snapshot, super::Activity) {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         (
-            self.snapshot_locked(&state),
+            self.snapshot_locked(&state, &[]),
             projection::activity(&state, &self.generation),
         )
     }
 
-    fn snapshot_locked(&self, state: &State<T>) -> Snapshot {
+    fn snapshot_locked(&self, state: &State<T>, dreaming_members: &[String]) -> Snapshot {
         let slots: Vec<_> = state
             .slots
             .iter()
@@ -1187,6 +1191,12 @@ impl<T: Clone> Queue<T> {
                     slot: index,
                     epoch: slot.epoch,
                     state: name,
+                    dreaming: matches!(slot.state, SlotState::Idle)
+                        && slot
+                            .registered
+                            .as_ref()
+                            .and_then(|actor| actor.participant.as_ref())
+                            .is_some_and(|id| dreaming_members.binary_search(id).is_ok()),
                     task_id,
                     reason,
                     logs: slot.logs.iter().cloned().collect(),

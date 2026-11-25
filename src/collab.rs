@@ -20,7 +20,7 @@ use tokio::{
 };
 
 const LEASE_MS: u64 = 15 * 60 * 1000;
-const MAX_AGENTS: usize = 64;
+const MAX_AGENTS: usize = crate::wire::MAX_COLLAB_MEMBERS;
 const MAX_PAYLOAD: usize = 16 * 1024;
 const MAX_INBOX_MESSAGES: usize = 128;
 const MAX_INBOX_BYTES: usize = 256 * 1024;
@@ -336,6 +336,23 @@ impl Hub {
                     (active || agent.lifecycle.status.as_str() == "dreaming").then_some(active)
                 },
             })
+            .collect())
+    }
+
+    /// Stable order permits sending only changes. Worker registration and capacity
+    /// live on the client; only its exact current members can match this snapshot.
+    pub(crate) fn dreaming_members(&self) -> Result<Vec<String>, String> {
+        Ok(self
+            .locked()?
+            .agents
+            .values()
+            .filter(|agent| {
+                matches!(
+                    agent.lifecycle.status,
+                    lifecycle::Status::Dreaming | lifecycle::Status::Idle
+                ) && agent.lifecycle.dreaming_since_ms().is_some()
+            })
+            .map(|agent| agent.id.clone())
             .collect())
     }
 

@@ -40,6 +40,9 @@ pub(crate) struct SlotView {
     pub(crate) slot: usize,
     pub(crate) epoch: u64,
     pub(crate) state: &'static str,
+    /// Display-only relay observation. An idle station stays available for work.
+    #[serde(skip)]
+    pub(crate) dreaming: bool,
     pub(crate) task_id: Option<String>,
     pub(crate) reason: Option<String>,
     pub(crate) logs: Vec<SlotLog>,
@@ -133,6 +136,7 @@ pub(crate) struct Snapshot {
 
 #[derive(Default)]
 struct Display {
+    dreaming_members: Vec<String>,
     pending: Option<Snapshot>,
     pool: Option<std::sync::Weak<Pool>>,
 }
@@ -166,6 +170,7 @@ pub(crate) fn prepare_display(config: Config) {
                 slot,
                 epoch: 0,
                 state: "offline",
+                dreaming: false,
                 task_id: None,
                 reason: Some("waiting for the authenticated worker connection".into()),
                 logs: Vec::new(),
@@ -184,12 +189,22 @@ pub(crate) fn prepare_display(config: Config) {
             .collect(),
     });
     view.pool = None;
+    view.dreaming_members.clear();
+}
+
+pub(crate) fn set_dreaming_members(mut members: Vec<String>) {
+    members.sort_unstable();
+    view()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .dreaming_members = members;
+    crate::client::terminal::invalidate();
 }
 
 pub(crate) fn display() -> Option<Snapshot> {
     let view = view().lock().unwrap_or_else(|error| error.into_inner());
     if let Some(pool) = view.pool.as_ref().and_then(std::sync::Weak::upgrade) {
-        return Some(pool.queue.snapshot());
+        return Some(pool.queue.snapshot_for_display(&view.dreaming_members));
     }
     view.pending.clone()
 }

@@ -29,6 +29,8 @@ pub const SESSION_ACCESS_CAPABILITY: &str = "session_access_v1";
 /// Relay-derived account/agent attribution, separately negotiated for strict v7 peers.
 pub const CONTROL_ATTRIBUTION_CAPABILITY: &str = "control_attribution_v1";
 pub(crate) const MAIN_LIFECYCLE_CAPABILITY: &str = "main_lifecycle_v1";
+pub(crate) const WORKER_DREAMING_CAPABILITY: &str = "worker_dreaming_v1";
+pub(crate) const MAX_COLLAB_MEMBERS: usize = 64;
 pub(crate) const CHAT_DISABLED_CAPABILITY: &str = "human_chat_disabled_v1";
 pub(crate) const CHAT_DISABLED: &str = "chat_disabled: human chat is disabled for this client";
 pub(crate) fn human_chat_tool(name: &str) -> bool {
@@ -649,6 +651,10 @@ pub enum Frame {
     /// is display metadata, never a native call, queue receipt or permission.
     WaitDisplay {
         snapshot: wait_display::Snapshot,
+    },
+    /// Authenticated, connection-local member IDs for the opted-in pool display.
+    WorkerDreaming {
+        members: Vec<String>,
     },
     Reply {
         id: u64,
