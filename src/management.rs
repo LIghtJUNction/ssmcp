@@ -118,6 +118,9 @@ pub struct DashboardSnapshot {
     pub scope: Scope,
     pub generated_at: u64,
     pub sessions: Vec<SessionSnapshot>,
+    /// Foreign connections permitted by the caller's live MCP ACL. Only public client info crosses the socket.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shared_sessions: Vec<crate::wire::ClientInfo>,
     pub stats: DashboardStats,
     pub audit: Vec<AuditEvent>,
     pub audit_next_before: Option<u64>,

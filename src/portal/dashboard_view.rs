@@ -167,12 +167,20 @@ pub(super) fn sessions(
     body.push_str(&heading(
         snapshot,
         "我的会话",
-        "查看属于你的在线连接，检查工作目录，按需断开会话。",
+        "查看你拥有或获准使用的在线连接。",
         "/account/sessions",
     ));
     body.push_str(r#"<dl class="metrics">"#);
-    body.push_str(&metric(snapshot.stats.active_sessions, "在线会话"));
-    body.push_str(&metric(snapshot.stats.hosts, "报告的主机"));
+    let visible_count = snapshot.sessions.len() + snapshot.shared_sessions.len();
+    let host_count = snapshot
+        .sessions
+        .iter()
+        .map(|s| &s.hostname)
+        .chain(snapshot.shared_sessions.iter().map(|s| &s.hostname))
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    body.push_str(&metric(visible_count, "在线会话"));
+    body.push_str(&metric(host_count, "报告的主机"));
     body.push_str(&metric(snapshot.retention_days as usize, "历史保留天数"));
     body.push_str("</dl>");
     if let Some(traffic) = &snapshot.traffic {
@@ -180,14 +188,29 @@ pub(super) fn sessions(
         body.push_str(&traffic_panel(traffic));
         body.push_str("</section>");
     }
-    body.push_str(r#"<section class="dashboard-section"><div class="dashboard-section-heading"><h2>在线连接</h2><a class="text-link" href="/account/history">查看连接历史 ↗</a></div><p class="dashboard-note">名称、主机和工作目录由客户端报告；会话归属按服务器验证的账户确认。</p>"#);
-    body.push_str(&session_cards(
-        snapshot,
-        csrf,
-        "/account/sessions",
-        accounts,
-        public_url,
-    ));
+    body.push_str(r#"<section class="dashboard-section"><div class="dashboard-section-heading"><h2>在线连接</h2><a class="text-link" href="/account/history">查看连接历史 ↗</a></div>"#);
+    if !snapshot.sessions.is_empty() || snapshot.shared_sessions.is_empty() {
+        if !snapshot.sessions.is_empty() {
+            body.push_str("<h3>我拥有的会话</h3>");
+        }
+        body.push_str(&session_cards(
+            snapshot,
+            csrf,
+            "/account/sessions",
+            accounts,
+            public_url,
+        ));
+    }
+    if !snapshot.shared_sessions.is_empty() {
+        body.push_str(r#"<h3>获准使用的会话</h3><div class="session-list">"#);
+        for session in &snapshot.shared_sessions {
+            body.push_str(&format!(
+                r#"<article class="session-card" id="session-{}"><header class="session-heading"><h4>{}</h4><span class="status signed-in">在线 · {}</span></header><dl class="session-facts"><div class="session-id"><dt>会话 ID</dt><dd><code>{}</code></dd></div><div><dt>主机</dt><dd><code>{}</code></dd></div><div class="session-path"><dt>工作目录</dt><dd><code>{}</code></dd></div></dl></article>"#,
+                escape(&session.id), escape(&session.name), session.mode.name(), escape(&session.id), escape(&session.hostname), escape(&session.cwd)
+            ));
+        }
+        body.push_str("</div>");
+    }
     body.push_str("</section>");
     page("我的会话", &body)
 }
@@ -665,6 +688,7 @@ mod tests {
             scope: Scope::All,
             generated_at: 1_700_000_000,
             sessions: vec![own, foreign],
+            shared_sessions: vec![],
             stats: crate::management::DashboardStats {
                 active_sessions: 2,
                 owners: 2,
@@ -696,6 +720,7 @@ mod tests {
             scope: Scope::Own,
             generated_at: 1_700_000_000,
             sessions: vec![],
+            shared_sessions: vec![],
             stats: crate::management::DashboardStats {
                 active_sessions: 0,
                 owners: 0,

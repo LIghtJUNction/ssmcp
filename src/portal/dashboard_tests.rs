@@ -358,3 +358,123 @@ async fn user_policy_requires_admin_and_csrf_and_keeps_ban_when_saving_rate() {
     task.abort();
     let _ = task.await;
 }
+
+#[tokio::test]
+async fn account_sessions_matches_live_mcp_grants_without_granting_management() {
+    use crate::{
+        history::{AuditConfig, AuditLog},
+        management::{ManagementPolicy, ManagementServer},
+    };
+    let temp = Temp::new();
+    let socket = temp.0.join("management.sock");
+    let server = ManagementServer::bind(&socket).await.unwrap();
+    let mut broker = Broker::new("https://ssmcp.test".into());
+    broker.configure_management(
+        ManagementPolicy::default(),
+        Arc::new(AuditLog::open(&temp.0.join("audit"), AuditConfig::default()).unwrap()),
+    );
+    broker.portal = Portal::open(&temp.0.join("accounts")).unwrap();
+    broker.portal.configure_management(socket);
+    let alice = broker
+        .portal
+        .storage(|store| {
+            let identity = |subject: &str, login: &str| Identity {
+                provider: "github".into(),
+                subject: subject.into(),
+                login: login.into(),
+            };
+            let alice = identity("123", "alice");
+            store.login(&alice)?;
+            store.login(&identity("456", "owner"))?;
+            store.login(&identity("789", "outsider"))?;
+            Ok(alice)
+        })
+        .await
+        .unwrap();
+    let browser = |id| {
+        let (raw, csrf) = browser_session(&broker.portal, id);
+        (format!("{}={raw}", crate::portal::COOKIE), csrf)
+    };
+    let (guest_cookie, csrf) = browser("123");
+    let (owner_cookie, _) = browser("456");
+    let (outsider_cookie, _) = browser("789");
+    let shared = broker.test_register_identity("gh-456", alice.clone()).await;
+    let private = broker.test_register("gh-456", "fixture").await;
+    let token = broker.oauth.test_identity_tokens("mcp", "123");
+    let broker = Arc::new(broker);
+    let management = tokio::spawn(server.run(broker.clone()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let routes = crate::http::router(broker.clone());
+    let http = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+    let client = crate::http_client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let listed: serde_json::Value = client.post(format!("{base}/mcp"))
+        .bearer_auth(token["access_token"].as_str().unwrap())
+        .header("accept", "application/json")
+        .header("mcp-protocol-version", "2025-03-26")
+        .json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list","arguments":{}}}))
+        .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    let clients = listed["result"]["structuredContent"]["clients"]
+        .as_array()
+        .unwrap();
+    assert_eq!(clients.len(), 1);
+    assert_eq!(clients[0]["id"], shared.client_id());
+
+    let page = async |cookie: &str| {
+        client
+            .get(format!("{base}/account/sessions"))
+            .header("cookie", cookie)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+    };
+    let guest = page(&guest_cookie).await;
+    assert!(
+        guest.contains(shared.client_id()),
+        "MCP lists the granted client, but the account page omitted it"
+    );
+    assert!(guest.contains("<dt>在线会话</dt><dd>1</dd>") && guest.contains("获准使用的会话"));
+    assert!(!guest.contains(private.client_id()) && !guest.contains("disconnect-control"));
+    assert!(!guest.contains("session-access") && !guest.contains("当前没有在线会话"));
+    let owner = page(&owner_cookie).await;
+    assert!(owner.contains(shared.client_id()) && owner.contains(private.client_id()));
+    assert!(owner.contains("我拥有的会话") && owner.contains("disconnect-control"));
+    let outsider = page(&outsider_cookie).await;
+    assert!(outsider.contains("<dt>在线会话</dt><dd>0</dd>"));
+    assert!(!outsider.contains(shared.client_id()) && !outsider.contains(private.client_id()));
+    let denied = client
+        .post(format!("{base}/account/sessions/disconnect"))
+        .header("cookie", &guest_cookie)
+        .header("origin", "https://ssmcp.test")
+        .form(&[
+            ("csrf", csrf.as_str()),
+            ("session_id", shared.client_id()),
+            ("return_to", "/account/sessions"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 404);
+    assert!(shared.is_alive());
+
+    let owned = broker.test_register_identity("gh-123", alice).await;
+    let refreshed = page(&guest_cookie).await;
+    assert!(refreshed.contains("<dt>在线会话</dt><dd>2</dd>"));
+    assert!(refreshed.contains("<dt>报告的主机</dt><dd>1</dd>"));
+    assert_eq!(
+        refreshed
+            .matches(&format!(r#"id="session-{}""#, owned.client_id()))
+            .count(),
+        1
+    );
+    http.abort();
+    management.abort();
+}
