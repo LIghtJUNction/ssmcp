@@ -461,10 +461,10 @@ fn entry(path: &Path) -> Result<ToolEntry, String> {
     let bytes = read_file(&manifest_path, MAX_RC)?;
     let manifest: Manifest =
         serde_json::from_slice(&bytes).map_err(|e| format!("invalid tool manifest: {e}"))?;
+    let relative = manifest.entry.strip_prefix(".").unwrap_or(&manifest.entry);
     if manifest.schema != "ssmcp-tools-v1"
-        || manifest.entry.as_os_str().is_empty()
-        || manifest
-            .entry
+        || relative.as_os_str().is_empty()
+        || relative
             .components()
             .any(|c| !matches!(c, Component::Normal(_)))
     {
@@ -473,7 +473,7 @@ fn entry(path: &Path) -> Result<ToolEntry, String> {
                 .into(),
         );
     }
-    let entry = path.join(&manifest.entry);
+    let entry = path.join(relative);
     let canonical = entry.canonicalize().map_err(|e| e.to_string())?;
     if !canonical.starts_with(path) {
         return Err("tool entry escapes its registered repository".into());

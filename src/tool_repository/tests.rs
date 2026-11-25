@@ -443,6 +443,51 @@ async fn global_init_uses_plural_tools_and_disable_preserves_broken_source_and_g
 }
 
 #[tokio::test]
+async fn enabling_a_project_factory_accepts_dot_relative_entry_paths() {
+    let temporary = Temporary::new(&std::env::temp_dir()).unwrap();
+    let paths = local_paths(&temporary.0);
+    let project = paths.project();
+    let entry_path = project.join("dist/tools.js");
+    let manifest_path = project.join("manifest.json");
+    let factory = "core => ({ projectVersion: () => '1.0' })";
+    std::fs::create_dir_all(entry_path.parent().unwrap()).unwrap();
+    write_new(&entry_path, factory.as_bytes()).unwrap();
+    std::fs::write(
+        &manifest_path,
+        br#"{"schema":"ssmcp-tools-v1","entry":"./dist/tools.js"}"#,
+    )
+    .unwrap();
+    git::owned(async move {
+        local::manage_owned(&paths, local::Operation::Enable(local::Scope::Project)).await?;
+        let dotted = load_configured(&paths).await?;
+        let extension = dotted.sources.last().unwrap();
+        assert_eq!(extension.name, "project");
+        assert_eq!(extension.code, factory);
+        assert_eq!(extension.path, entry_path.display().to_string());
+        std::fs::write(
+            &manifest_path,
+            br#"{"schema":"ssmcp-tools-v1","entry":"dist/tools.js"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            dotted.provenance(),
+            load_configured(&paths).await?.provenance()
+        );
+        for invalid in [".", "./", "./../tools.js"] {
+            std::fs::write(
+                &manifest_path,
+                json!({"schema":"ssmcp-tools-v1","entry":invalid}).to_string(),
+            )
+            .unwrap();
+            assert!(entry(&project).is_err(), "{invalid}");
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn enabling_existing_sources_preserves_files_and_migrates_their_old_rc_registration() {
     let temporary = Temporary::new(&std::env::temp_dir()).unwrap();
     let paths = local_paths(&temporary.0);
