@@ -3,6 +3,7 @@
 mod artifact_tests;
 #[cfg(target_os = "linux")]
 mod artifacts;
+mod completion;
 #[cfg(all(test, target_os = "linux"))]
 mod native_exec_bench;
 #[cfg(all(test, target_os = "linux"))]
@@ -636,7 +637,7 @@ impl Shell {
                 return Err(format!("could not start PTY command: {error}"));
             }
         };
-        let (cancel, mut cancel_rx) = watch::channel(false);
+        let (cancel, cancel_rx) = watch::channel(false);
         let (input_stopped, _) = watch::channel(false);
         let mut stderr = Output::new(&self.output, format!("job:{}:stderr", args.id));
         stderr.finish(None);
@@ -688,43 +689,30 @@ impl Shell {
             let Ok(worker_command) = start.await else {
                 return;
             };
-            let outcome = tokio::select! {
-                biased;
-                _ = cancel_rx.changed() => (None, true, false, None, None),
-                result = async {
-                    if let Some(deadline) = timing.deadline {
-                        command_timeout(deadline, terminal.wait_exit()).await
-                    } else { Ok(terminal.wait_exit().await) }
-                } => match result {
-                    Ok(Ok((code, signal))) => (code, false, false, None, signal),
-                    Ok(Err(error)) => (None, false, false, Some(error.to_string()), None),
-                    Err(DeadlineError::Elapsed) => (None, false, true, None, None),
-                    #[cfg(unix)]
-                    Err(DeadlineError::Reactor(error)) => (None, false, false, Some(error.to_string()), None),
-                }
-            };
+            let outcome =
+                completion::observe(terminal.wait_exit(), cancel_rx, timing.deadline).await;
             worker.stop_input();
             terminal.shutdown().await;
             {
                 let mut state = worker.state();
                 drop(permit);
                 state.running = false;
-                state.exit_code = outcome.0;
-                state.cancelled = outcome.1;
-                state.timed_out = outcome.2;
-                state.error = outcome.3;
-                state.exit_signal = outcome.4;
+                state.exit_code = outcome.code;
+                state.cancelled = outcome.cancelled;
+                state.timed_out = outcome.timed_out;
+                state.error = outcome.error;
+                state.exit_signal = outcome.signal;
                 state.finished = Some(Instant::now());
             }
-            let status = if outcome.1 {
+            let status = if outcome.cancelled {
                 "cancelled".to_owned()
-            } else if outcome.2 {
+            } else if outcome.timed_out {
                 "timed out".to_owned()
             } else if let Some(error) = &worker.state().error {
                 format!("failed: {error}")
-            } else if let Some(code) = outcome.0 {
+            } else if let Some(code) = outcome.code {
                 format!("exit {code}")
-            } else if let Some(signal) = outcome.4 {
+            } else if let Some(signal) = outcome.signal {
                 format!("signal {signal}")
             } else {
                 "finished without a reported exit status".into()
@@ -1910,25 +1898,18 @@ impl Shell {
         let events = self.events.clone();
         let worker = job.clone();
         command_task(async move {
-            let Ok(worker_command) = start.await else { return };
+            let Ok(worker_command) = start.await else {
+                return;
+            };
             let out = command_task(capture(worker.clone(), stdout, "stdout", events.clone()));
             let err = command_task(capture(worker.clone(), stderr, "stderr", events.clone()));
-            let mut cancel_rx = cancel_rx;
-            let outcome = tokio::select! {
-                biased;
-                _=cancel_rx.changed() => (None,true,false,None,None),
-                result=async {
-                    if let Some(deadline) = worker.timing.deadline {
-                        command_timeout(deadline, process.wait()).await
-                    } else { Ok(process.wait().await) }
-                } => match result {
-                    Ok(Ok(status)) => (status.code(),false,false,None,exit_signal(&status)),
-                    Ok(Err(error)) => (None,false,false,Some(error.to_string()),None),
-                    Err(DeadlineError::Elapsed) => (None,false,true,None,None),
-                    #[cfg(unix)]
-                    Err(DeadlineError::Reactor(error)) => (None,false,false,Some(error.to_string()),None),
-                }
+            let exit = async {
+                process
+                    .wait()
+                    .await
+                    .map(|status| (status.code(), exit_signal(&status)))
             };
+            let outcome = completion::observe(exit, cancel_rx, worker.timing.deadline).await;
             // Wake blocked/queued writers before waiting for their pipe lock.
             // Command cancellation and execution deadlines must not wait for
             // a reader that has stopped consuming stdin.
@@ -1949,14 +1930,14 @@ impl Shell {
                 // status cannot exclude supervisor escalation/failure.
                 #[cfg(target_os = "linux")]
                 {
-                    state.tree_reaped = outcome.0 == Some(0);
+                    state.tree_reaped = outcome.code == Some(0);
                     state.usage = usage;
                 }
-                state.exit_code = outcome.0;
-                state.cancelled = outcome.1;
-                state.timed_out = outcome.2;
-                state.error = outcome.3;
-                state.exit_signal = outcome.4;
+                state.exit_code = outcome.code;
+                state.cancelled = outcome.cancelled;
+                state.timed_out = outcome.timed_out;
+                state.error = outcome.error;
+                state.exit_signal = outcome.signal;
                 state.finished = Some(Instant::now());
             }
             // Terminal Stats reads only the completed projection. A blocked
