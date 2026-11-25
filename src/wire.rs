@@ -8,6 +8,7 @@ mod attribution;
 pub mod device_address;
 pub mod messages;
 pub mod openai;
+pub mod project_continuity;
 pub mod versions;
 pub mod wait_display;
 pub use attribution::{ControlAccount, ControlAgent, ControlAttribution};
@@ -602,6 +603,10 @@ pub enum Frame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         version_notice: Option<versions::Notice>,
     },
+    ProjectProof {
+        proof: project_continuity::Proof,
+    },
+    ProjectForget {},
     Access {
         id: u64,
         command: AccessCommand,
