@@ -223,7 +223,7 @@ class Composer(Dashboard):
         front.until(lambda shot: view(shot, destination), f"local {command} column")
 
     def activate_column(self, front, name):
-        state = self.ui("/display/conversation")["canvas"]
+        state = self.ui("/display/conversation/canvas")
         index = state["columns"].index(name)
         distance = index - state["active"]
         if distance:
@@ -233,7 +233,7 @@ class Composer(Dashboard):
                     or (name == "conversation" and (view(shot, "conversation")
                                                    or conversation_question_banner(shot))),
                     f"horizontal navigation to the existing {name} column")
-        observed = self.ui("/display/conversation")["canvas"]
+        observed = self.ui("/display/conversation/canvas")
         if observed["active"] != index or observed["columns"] != state["columns"]:
             raise AssertionError("horizontal navigation changed the canvas or reached the wrong column")
 

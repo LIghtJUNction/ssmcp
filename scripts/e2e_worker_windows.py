@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import shutil
 import signal
 import struct
 import subprocess
@@ -1900,6 +1901,13 @@ class WorkerWindows(Harness):
                    and expected[endpoint_index + 1:endpoint_index + 4]
                    == [self.origin, "--username", self.identity["username"]],
                    "the child originally selected the exact named loopback account")
+        # Each window gets a newly allocated systemd scope in the same session slice.
+        pattern = r"--unit=ssmcp-window-[0-9a-f]{32}\.scope"
+        old_scopes = [arg for arg in expected if re.fullmatch(pattern, arg)]
+        new_scopes = [arg for arg in current["argv"] if re.fullmatch(pattern, arg)]
+        self.check(len(old_scopes) == len(new_scopes) == 1 and old_scopes != new_scopes,
+                   "the replacement worker uses a fresh window scope")
+        expected[expected.index(old_scopes[0])] = new_scopes[0]
         expected[expected.index("--worker") + 1] = "4"
         self.check(current["cwd"] == str(workspace) and current["argv"] == expected,
                    "worker-only reload pins the account and preserves literal arguments and cwd")
@@ -2014,24 +2022,39 @@ class WorkerWindows(Harness):
         directory = self.directory / "daemon-dispatch"
         directory.mkdir(mode=0o700)
         environment = self.environment("daemon-dispatch", directory)
-        # This narrowly checks dispatch into the existing background-service
-        # path. Full user-systemd lifecycle coverage remains in e2e_daemon.py.
-        service_log = directory / "service.jsonl"
-        for name in ("systemctl", "systemd-run"):
-            program = Path(environment["PATH"]) / name
-            program.write_text(
-                f"#!{sys.executable}\nimport json, sys\n"
-                f"with open({str(service_log)!r}, 'a') as stream:\n"
-                "    stream.write(json.dumps(sys.argv) + '\\n')\n"
-                "sys.stderr.write('private fixture service manager unavailable\\n')\n"
-                "raise SystemExit(77)\n"
-            )
-            program.chmod(0o700)
-        command = self.client_command(name="daemon-worker", extra_args=("--worker", "3", "--daemon", "--no-watchdog"))
-        result = subprocess.run(command, cwd=directory, env=environment, stdin=subprocess.DEVNULL,
-                                capture_output=True, timeout=15)
-        self.check(result.returncode != 0 and service_log.is_file(),
-                   "daemon worker dispatches to the existing background service manager")
+        # Native manager discovery uses the UID's canonical runtime and system
+        # executables. Hide the bus only from this child to exercise that path.
+        bwrap = shutil.which("bwrap")
+        if not bwrap:
+            raise RuntimeError("daemon dispatch requires bubblewrap")
+        def launch(*mode):
+            command = self.client_command(name="daemon-worker", extra_args=("--worker", "3", "--no-watchdog", *mode))
+            return subprocess.run([
+                bwrap, "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev",
+                "--tmpfs", f"/run/user/{os.geteuid()}",
+                "--bind", str(self.directory), str(self.directory), "--", *command,
+            ], cwd=directory, env=environment, stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
+
+        state = Path(environment["SSMCP_SESSION_HOME"])
+        lock_path = state / "manage.lock"
+        missing_bus = b"session budget requires the current UID's systemd user bus"
+        self.check(not lock_path.exists(), "the private session root starts without a management lock")
+        foreground = launch()
+        self.check(foreground.returncode != 0 and missing_bus in foreground.stderr and not lock_path.exists(),
+                   "foreground worker admission reaches the missing bus without entering saved-session management")
+        daemon = launch("--daemon")
+        self.check(daemon.returncode != 0 and missing_bus in daemon.stderr and lock_path.is_file(),
+                   "daemon worker enters saved-session management before checking the missing user bus")
+        # Hold the file created by the actual daemon command. Only the saved-session
+        # path checks this lock before it tries to contact the user manager.
+        with lock_path.open("rb") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            busy = launch("--daemon")
+        self.check(busy.returncode != 0 and b"another session operation or runner is already active" in busy.stderr
+                   and missing_bus not in busy.stderr,
+                   "daemon worker honors the held saved-session lock before manager discovery")
+        self.check(not any(state.glob("session-*")) and not any(state.glob(".prepare-*")),
+                   "unavailable daemon management leaves no complete or partial saved session")
         self.check(not events(directory), "daemon dispatch never launches an interactive worker window")
 
     def run(self):

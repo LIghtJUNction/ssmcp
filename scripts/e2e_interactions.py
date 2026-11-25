@@ -142,7 +142,7 @@ class Interactions(InputHistory):
         front.send(SHIFT_UP)
         return self.wait_state(
             front, lambda item: item["view"] == "questions" and item["answering"] == request_id,
-            "Shift+Up opening the exact pending request")
+            "Shift+Up opening the exact pending request", fields=("view", "answering"))
 
     def pending_recall(self, front):
         delivered_text = "UP_ALREADY_DELIVERED"
@@ -313,13 +313,15 @@ class Interactions(InputHistory):
         self.quiet_until(
             front, lambda shot: "argv[0]" in text(shot) and "State: running" in text(shot),
             "native command details arrive without keyboard input or UI observation")
-        state = self.ui("/display/conversation")
-        self.check(state["view"] == "tasks" and state["tasks"]["source"] == "native"
-                   and state["tasks"]["loaded"] is True and state["tasks"]["detail"]
-                   and state["tasks"]["selected_id"] == job["job_id"]
-                   and isinstance(state["tasks"]["selected_job"], dict),
+        # The full conversation can repeat this long command in multiple views.
+        # Read the selected task fields within the public 8 KiB projection limit.
+        tasks = "/display/conversation/tasks"
+        self.check(self.ui("/display/conversation/view") == "tasks"
+                   and self.ui(f"{tasks}/source") == "native"
+                   and self.ui(f"{tasks}/loaded") is True and self.ui(f"{tasks}/detail")
+                   and self.ui(f"{tasks}/selected_id") == job["job_id"],
                    "the completed asynchronous read selects the exact real native job")
-        self.check(state["tasks"]["selected_job"]["command"] == argv,
+        self.check(self.ui(f"{tasks}/selected_job/command") == argv,
                    "display redaction does not modify native command arguments")
 
         def save_frame(name, columns, shot):
@@ -372,10 +374,9 @@ class Interactions(InputHistory):
         self.quiet_until(
             front, lambda shot: "isnolongerretained." in "".join(text(shot).split()),
             "an exact missing command ID renders its own unavailable result")
-        state = self.ui("/display/conversation")
-        self.check(state["view"] == "tasks" and state["tasks"]["detail"]
-                   and state["tasks"]["selected_id"] == missing
-                   and state["tasks"]["selected_job"] is None,
+        self.check(self.ui("/display/conversation/view") == "tasks" and self.ui(f"{tasks}/detail")
+                   and self.ui(f"{tasks}/selected_id") == missing
+                   and self.ui(f"{tasks}/selected_job") is None,
                    "a missing exact ID never falls back to another retained task")
         for columns in (120, 48):
             front.resize(32, columns)
@@ -428,7 +429,7 @@ class Interactions(InputHistory):
         self.check(view["answer"] == answer and view["delivery"] == "pending"
                    and view["answer_actor"]["origin"] == "human",
                    "local answer records actual human origin and remains pending before requester work")
-        self.check(self.ui("/display/conversation")["draft"]["text"] == draft,
+        self.check(self.ui("/display/conversation/draft")["text"] == draft,
                    "answering a question leaves the main draft byte-for-byte unchanged")
         self.capture_pair(front, "answer-pending", "Answer queued")
         # Request identity and source preparation alone do not claim answers.
@@ -483,7 +484,7 @@ class Interactions(InputHistory):
         self.check(receipt["accepted"] is True and receipt["recorded"] is True and receipt["storage"] == "memory"
                    and receipt.get("finish_request_id") is None,
                    "a real final message commits without completion approval")
-        self.check(self.ui("/display/conversation")["draft"]["text"] == draft,
+        self.check(self.ui("/display/conversation/draft")["text"] == draft,
                    "retirement and final display preserve the user's unsent draft")
         self.capture_pair(front, "final-without-approval", "Final result without completion approval")
 
