@@ -205,6 +205,7 @@ jobs:
             --report "$RUNNER_TEMP/ssmcp-multi-user-runtime-report.json"
       - run: cargo build --locked --bins --example vt_snapshot
       - name: Connect a local harness through OAuth and Code Mode
+        if: hashFiles('scripts/e2e_local_harness.py') != ''
         run: python3 scripts/e2e_local_harness.py --bin-dir target/debug
       - name: Preserve the Linux candidate client
         if: matrix.runner == 'ubuntu-24.04' && github.event_name == 'workflow_dispatch' && github.workflow == 'CI'
