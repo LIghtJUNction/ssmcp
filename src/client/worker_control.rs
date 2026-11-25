@@ -3,11 +3,82 @@ use std::sync::{Mutex, OnceLock};
 
 const CAPACITY: usize = 8;
 const MAX_DELTA: i32 = 128;
-static REQUESTS: OnceLock<Mutex<VecDeque<i32>>> = OnceLock::new();
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(super) struct Confirmation {
+    pub request_id: u64,
+    pub target: usize,
+    pub generation: String,
+    pub client_id: String,
+}
+
+impl Confirmation {
+    pub fn matches(&self, snapshot: &serde_json::Value) -> bool {
+        snapshot["generation"].as_str() == Some(self.generation.as_str())
+            && snapshot["client_id"].as_str() == Some(self.client_id.as_str())
+            && snapshot["desired_total"].as_u64() == Some(self.target as u64)
+            && snapshot["retiring"].as_u64() == Some(1)
+            && snapshot["last_resize"]["request_id"].as_u64() == Some(self.request_id)
+            && snapshot["last_resize"]["confirm_slot"].is_u64()
+    }
+}
+
+pub(super) enum Request {
+    Delta(i32),
+    RetireOne(Option<Confirmation>),
+}
+
+#[derive(Default)]
+struct Input {
+    requests: VecDeque<Request>,
+    offered: Option<Confirmation>,
+}
+
+impl Input {
+    fn submit(&mut self, command: Command) -> Result<(), String> {
+        if self.requests.len() >= CAPACITY {
+            return Err(
+                "Worker changes are still pending. Try again after the current change finishes."
+                    .into(),
+            );
+        }
+        // Capture consent on this physical submission. Input already queued
+        // before a prompt was shown cannot retroactively confirm that prompt.
+        let request = match command {
+            Command::RetireOne => Request::RetireOne(self.offered.take()),
+            Command::Delta(delta) => {
+                self.offered = None;
+                Request::Delta(delta)
+            }
+            Command::List => return Err("Listing workers does not resize the pool.".into()),
+        };
+        self.requests.push_back(request);
+        Ok(())
+    }
+}
+
+fn input() -> &'static Mutex<Input> {
+    static STATE: OnceLock<Mutex<Input>> = OnceLock::new();
+    STATE.get_or_init(Default::default)
+}
+
+pub(super) fn offer(ticket: Confirmation) {
+    input()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .offered = Some(ticket);
+}
+
+pub(super) fn cancel_offer() {
+    input()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .offered = None;
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Command {
     List,
+    RetireOne,
     Delta(i32),
 }
 
@@ -16,10 +87,13 @@ pub(super) fn parse(arguments: &str) -> Result<Command, String> {
     if arguments == "ls" {
         return Ok(Command::List);
     }
+    if arguments == "-" {
+        return Ok(Command::RetireOne);
+    }
     let (sign, digits) = match arguments.as_bytes().first() {
         Some(b'+') => (1, &arguments[1..]),
         Some(b'-') => (-1, &arguments[1..]),
-        _ => return Err("Usage: /worker ls | /worker +N | /worker -N.".into()),
+        _ => return Err("Usage: /worker ls | /worker +N | /worker -N | /worker -.".into()),
     };
     if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) {
         return Err("Use a whole worker count from 1 to 128.".into());
@@ -33,29 +107,15 @@ pub(super) fn parse(arguments: &str) -> Result<Command, String> {
     Ok(Command::Delta(sign * amount))
 }
 
-pub(super) fn enqueue_delta(delta: i32) -> Result<(), String> {
-    if delta == 0 || !(-MAX_DELTA..=MAX_DELTA).contains(&delta) {
-        return Err("Use a whole worker count from 1 to 128.".into());
-    }
-    let mut requests = REQUESTS
-        .get_or_init(Default::default)
+pub(super) fn enqueue(command: Command) -> Result<(), String> {
+    input()
         .lock()
-        .map_err(|_| "The worker request queue is unavailable.".to_owned())?;
-    if requests.len() >= CAPACITY {
-        return Err(
-            "Worker changes are still pending. Try again after the current change finishes.".into(),
-        );
-    }
-    requests.push_back(delta);
-    Ok(())
+        .map_err(|_| "The worker request queue is unavailable.".to_owned())?
+        .submit(command)
 }
 
-pub(super) fn take() -> Option<i32> {
-    REQUESTS
-        .get_or_init(Default::default)
-        .lock()
-        .ok()?
-        .pop_front()
+pub(super) fn take() -> Option<Request> {
+    input().lock().ok()?.requests.pop_front()
 }
 
 #[cfg(test)]
@@ -64,6 +124,7 @@ mod tests {
     #[test]
     fn accepts_explicit_worker_count_changes() {
         assert_eq!(parse("ls"), Ok(Command::List));
+        assert_eq!(parse(" - "), Ok(Command::RetireOne));
         assert_eq!(parse(" +3 "), Ok(Command::Delta(3)));
         assert_eq!(parse("-128"), Ok(Command::Delta(-128)));
     }
@@ -81,6 +142,66 @@ mod tests {
             "+3 more",
         ] {
             assert!(parse(text).is_err(), "{text}");
+        }
+    }
+    #[test]
+    fn only_a_fresh_local_submission_after_notice_can_confirm_once() {
+        let mut ui = Input::default();
+        let ticket = Confirmation {
+            request_id: 7,
+            target: 3,
+            generation: "generation".into(),
+            client_id: "client".into(),
+        };
+        ui.submit(Command::RetireOne).unwrap();
+        ui.submit(Command::RetireOne).unwrap();
+        ui.offered = Some(ticket.clone());
+        assert!(matches!(
+            ui.requests.pop_front(),
+            Some(Request::RetireOne(None))
+        ));
+        assert!(matches!(
+            ui.requests.pop_front(),
+            Some(Request::RetireOne(None))
+        ));
+        ui.submit(Command::RetireOne).unwrap();
+        ui.submit(Command::RetireOne).unwrap();
+        assert!(
+            matches!(ui.requests.pop_front(),Some(Request::RetireOne(Some(value))) if value==ticket)
+        );
+        assert!(matches!(
+            ui.requests.pop_front(),
+            Some(Request::RetireOne(None))
+        ));
+        ui.offered = Some(ticket);
+        ui.submit(Command::Delta(-1)).unwrap();
+        assert!(ui.offered.is_none());
+    }
+
+    #[test]
+    fn confirmation_requires_the_displayed_pool_and_retirement() {
+        let ticket = Confirmation {
+            request_id: 7,
+            target: 3,
+            generation: "generation".into(),
+            client_id: "client".into(),
+        };
+        let state = serde_json::json!({"generation":"generation","client_id":"client","desired_total":3,"retiring":1,
+                                     "last_resize":{"request_id":7,"confirm_slot":4}});
+        assert!(ticket.matches(&state));
+        for (key, value) in [
+            ("generation", serde_json::json!("other")),
+            ("client_id", serde_json::json!("other")),
+            ("desired_total", serde_json::json!(2)),
+            ("retiring", serde_json::json!(0)),
+            (
+                "last_resize",
+                serde_json::json!({"request_id":8,"confirm_slot":4}),
+            ),
+        ] {
+            let mut changed = state.clone();
+            changed[key] = value;
+            assert!(!ticket.matches(&changed));
         }
     }
 }

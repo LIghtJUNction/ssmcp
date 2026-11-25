@@ -227,7 +227,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/worker",
-        description: "List or resize worker stations: /worker ls | +N | -N",
+        description: "List or resize stations: /worker ls | +N | -N | - (request one retirement)",
     },
     SlashCommand {
         name: "/track-command",

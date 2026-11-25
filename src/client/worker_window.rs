@@ -311,7 +311,7 @@ fn format_overview(snapshot: &LinkedSnapshot) -> String {
             snapshot.activity.omitted
         );
     }
-    text.push_str("\n/worker +N adds stations\n/worker -N retires stations after acknowledgement");
+    text.push_str("\n/worker +N adds stations\n/worker -N requests cooperative retirement\n/worker - requests one retirement; submit it again after the confirmation prompt to force that same worker offline");
     text
 }
 
@@ -472,7 +472,7 @@ impl WindowChild {
     }
 
     /// Send an absolute desired size; a later snapshot reports actual core state.
-    pub(super) fn request_resize(&self, total: usize) -> Result<u64, String> {
+    pub(super) fn request_resize(&self, total: usize, action: ResizeAction) -> Result<u64, String> {
         if total > 128 {
             return Err("worker total must be between 0 and 128".into());
         }
@@ -486,7 +486,12 @@ impl WindowChild {
         let request_id = (*sequence)
             .checked_add(1)
             .ok_or("worker resize request counter is exhausted")?;
-        let command = resize_command(request_id, total)?;
+        let command = ResizeRequest {
+            request_id,
+            target: total,
+            action,
+        }
+        .encode()?;
         *sequence = request_id;
         let mut stream = self
             .control
@@ -521,21 +526,49 @@ impl WindowChild {
     }
 }
 
-fn resize_command(request_id: u64, total: usize) -> Result<[u8; 11], String> {
-    if total > 128 || request_id == 0 {
-        return Err("worker total must be between 0 and 128 with a nonzero request ID".into());
-    }
-    let mut command = [0; 11];
-    command[0] = b'N';
-    command[1..3].copy_from_slice(&(total as u16).to_be_bytes());
-    command[3..].copy_from_slice(&request_id.to_be_bytes());
-    Ok(command)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ResizeAction {
+    Resize,
+    RetireOne,
+    Confirm(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ResizeRequest {
     request_id: u64,
     target: usize,
+    action: ResizeAction,
+}
+
+impl ResizeRequest {
+    fn encode(self) -> Result<Vec<u8>, String> {
+        if self.target > 128 || self.request_id == 0 {
+            return Err("worker resize requires a valid total and request ID".into());
+        }
+        let mut frame = Vec::with_capacity(19);
+        frame.push(match self.action {
+            ResizeAction::Resize => b'N',
+            ResizeAction::RetireOne => b'H',
+            ResizeAction::Confirm(prior) if prior != 0 && prior < self.request_id => b'F',
+            ResizeAction::Confirm(_) => return Err("invalid retirement confirmation".into()),
+        });
+        frame.extend_from_slice(&(self.target as u16).to_be_bytes());
+        frame.extend_from_slice(&self.request_id.to_be_bytes());
+        if let ResizeAction::Confirm(prior) = self.action {
+            frame.extend_from_slice(&prior.to_be_bytes());
+        }
+        Ok(frame)
+    }
+}
+
+#[cfg(test)]
+fn resize_command(request_id: u64, target: usize) -> Result<Vec<u8>, String> {
+    ResizeRequest {
+        request_id,
+        target,
+        action: ResizeAction::Resize,
+    }
+    .encode()
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -545,6 +578,10 @@ struct ResizeReceipt {
     target: usize,
     accepted: bool,
     error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    confirm_slot: Option<usize>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    forced: bool,
 }
 
 #[derive(Default)]
@@ -552,6 +589,38 @@ struct ResizeState {
     pending: Option<ResizeRequest>,
     active: Option<ResizeRequest>,
     receipt: Option<ResizeReceipt>,
+    highest_id: u64,
+    // Only this authenticated parent/child control channel holds the exact
+    // cooperative retirement identity, including its generation and epoch.
+    offered: Option<(u64, usize, Vec<crate::worker::Retirement>)>,
+}
+
+impl ResizeState {
+    fn receive(&mut self, request: ResizeRequest) {
+        if request.request_id <= self.highest_id {
+            return;
+        }
+        self.highest_id = request.request_id;
+        if !matches!(request.action, ResizeAction::Confirm(_)) {
+            self.offered = None;
+        }
+        self.pending = Some(request);
+    }
+
+    fn consume(
+        &mut self,
+        request: ResizeRequest,
+        prior: u64,
+    ) -> Result<Vec<crate::worker::Retirement>, String> {
+        let (id, target, identities) = self
+            .offered
+            .take()
+            .ok_or("This retirement confirmation has expired.")?;
+        if id != prior || target != request.target || self.highest_id != request.request_id {
+            return Err("The pending retirement changed. No worker was forced offline.".into());
+        }
+        Ok(identities)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -563,36 +632,49 @@ enum ControlCommand {
 /// A fixed-size decoder preserves fragmented commands across read timeouts.
 #[derive(Default)]
 struct ControlDecoder {
-    payload: [u8; 10],
+    payload: [u8; 18],
     received: usize,
-    reading: bool,
+    opcode: u8,
 }
 
 impl ControlDecoder {
     fn push(&mut self, byte: u8) -> io::Result<Option<ControlCommand>> {
-        if self.reading {
+        if self.opcode != 0 {
             self.payload[self.received] = byte;
             self.received += 1;
-            if self.received == self.payload.len() {
-                self.reading = false;
+            let length = if self.opcode == b'F' { 18 } else { 10 };
+            if self.received == length {
+                let opcode = std::mem::take(&mut self.opcode);
                 let target = usize::from(u16::from_be_bytes(self.payload[..2].try_into().unwrap()));
-                let request_id = u64::from_be_bytes(self.payload[2..].try_into().unwrap());
+                let request_id = u64::from_be_bytes(self.payload[2..10].try_into().unwrap());
                 if target > 128 || request_id == 0 {
                     return Err(io::Error::other(
                         "invalid worker resize target or request ID",
                     ));
                 }
+                let action = match opcode {
+                    b'N' => ResizeAction::Resize,
+                    b'H' => ResizeAction::RetireOne,
+                    _ => {
+                        let prior = u64::from_be_bytes(self.payload[10..18].try_into().unwrap());
+                        if prior == 0 || prior >= request_id {
+                            return Err(io::Error::other("invalid retirement confirmation ID"));
+                        }
+                        ResizeAction::Confirm(prior)
+                    }
+                };
                 return Ok(Some(ControlCommand::Resize(ResizeRequest {
                     request_id,
                     target,
+                    action,
                 })));
             }
             return Ok(None);
         }
         match byte {
             b'S' => Ok(Some(ControlCommand::Stop)),
-            b'N' => {
-                self.reading = true;
+            b'N' | b'H' | b'F' => {
+                self.opcode = byte;
                 self.received = 0;
                 Ok(None)
             }
@@ -714,7 +796,7 @@ fn connect_child(address: SocketAddr, token: &str) -> io::Result<ChildSession> {
                                 .resize
                                 .lock()
                                 .unwrap_or_else(|error| error.into_inner())
-                                .pending = Some(request);
+                                .receive(request);
                         }
                         Ok(None) => {}
                     },
@@ -803,7 +885,7 @@ impl ChildState {
         Ok(())
     }
 
-    fn take_resize(&self) -> Option<usize> {
+    fn take_resize(&self) -> Option<ResizeRequest> {
         if self.stop.load(Ordering::Acquire) {
             return None;
         }
@@ -816,7 +898,7 @@ impl ChildState {
         }
         let request = resize.pending.take()?;
         resize.active = Some(request);
-        Some(request.target)
+        Some(request)
     }
 
     fn report_resize(
@@ -835,12 +917,31 @@ impl ChildState {
                 .ok_or_else(|| {
                     io::Error::other("resize result does not match the active request")
                 })?;
+            let mut confirm_slot = None;
+            if resize.highest_id == request.request_id && request.action == ResizeAction::RetireOne
+            {
+                let targets = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|receipt| receipt.get("retirement_targets"))
+                    .and_then(|v| {
+                        serde_json::from_value::<Vec<crate::worker::Retirement>>(v.clone()).ok()
+                    });
+                if let Some(targets) = targets
+                    && targets.len() == 1
+                {
+                    confirm_slot = Some(targets[0].slot + 1);
+                    resize.offered = Some((request.request_id, request.target, targets));
+                }
+            }
             let error = result.err().map(|message| bounded_resize_error(&message));
             resize.receipt = Some(ResizeReceipt {
                 request_id: request.request_id,
                 target: total,
                 accepted: error.is_none(),
+                forced: matches!(request.action, ResizeAction::Confirm(_)) && error.is_none(),
                 error,
+                confirm_slot,
             });
             resize.active = None;
         }
@@ -932,17 +1033,29 @@ fn bounded_resize_error(message: &str) -> String {
     text
 }
 
-pub(super) fn report_resize_result(
-    total: usize,
-    result: Result<serde_json::Value, String>,
-) -> Result<(), String> {
-    let state = CHILD_SESSION
-        .get()
-        .and_then(Weak::upgrade)
-        .ok_or("Workers window has no parent control channel")?;
+/// Only the authenticated local control stream dispatches force requests.
+pub(super) fn apply_pending_resize(runtime: &crate::runtime::Runtime) -> Result<(), String> {
+    let Some(state) = CHILD_SESSION.get().and_then(Weak::upgrade) else {
+        return Ok(());
+    };
+    let Some(request) = state.take_resize() else {
+        return Ok(());
+    };
+    let result = match request.action {
+        ResizeAction::Resize => runtime.resize_workers(request.target),
+        ResizeAction::RetireOne => runtime.human_resize_workers(request.target),
+        ResizeAction::Confirm(prior) => {
+            let targets = state
+                .resize
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .consume(request, prior);
+            targets.and_then(|targets| runtime.force_worker_retirements(&targets))
+        }
+    };
     state
-        .report_resize(total, result)
-        .map_err(|error| format!("could not report Workers resize result: {error}"))
+        .report_resize(request.target, result)
+        .map_err(|error| format!("Could not report worker change: {error}"))
 }
 
 pub(super) fn child_stop_requested() -> bool {
@@ -950,13 +1063,6 @@ pub(super) fn child_stop_requested() -> bool {
         .get()
         .and_then(Weak::upgrade)
         .is_some_and(|state| state.stop.load(Ordering::Acquire))
-}
-
-pub(super) fn take_resize_request() -> Option<usize> {
-    CHILD_SESSION
-        .get()
-        .and_then(Weak::upgrade)
-        .and_then(|state| state.take_resize())
 }
 
 impl Drop for ChildSession {
@@ -1214,6 +1320,9 @@ fn validate_snapshot(snapshot: &LinkedSnapshot, pid: u32) -> io::Result<()> {
         || !snapshot.activity.valid()
         || snapshot.last_resize.as_ref().is_some_and(|receipt| {
             receipt.request_id == 0
+                || receipt
+                    .confirm_slot
+                    .is_some_and(|slot| !receipt.accepted || !(1..=128).contains(&slot))
                 || receipt.target > 128
                 || receipt.accepted == receipt.error.is_some()
                 || receipt
@@ -1808,6 +1917,8 @@ mod tests {
         }))
         .unwrap();
         status.last_resize = Some(ResizeReceipt {
+            confirm_slot: None,
+            forced: false,
             request_id: 7,
             target: 3,
             accepted: false,
@@ -2307,6 +2418,7 @@ mod tests {
                 decoder.push(encoded[10]).unwrap(),
                 Some(ControlCommand::Resize(ResizeRequest {
                     request_id: 42,
+                    action: ResizeAction::Resize,
                     target
                 }))
             );
@@ -2323,6 +2435,76 @@ mod tests {
             assert_eq!(decoder.push(byte).unwrap(), None);
         }
         assert!(decoder.push(invalid[10]).is_err());
+    }
+
+    #[test]
+    fn explicit_confirm_carries_a_distinct_request_and_cannot_replay() {
+        let first = ResizeRequest {
+            request_id: 7,
+            target: 2,
+            action: ResizeAction::RetireOne,
+        };
+        let second = ResizeRequest {
+            request_id: 8,
+            target: 2,
+            action: ResizeAction::Confirm(7),
+        };
+        for frame in [first, second] {
+            let encoded = frame.encode().unwrap();
+            let mut decoder = ControlDecoder::default();
+            for byte in &encoded[..encoded.len() - 1] {
+                assert_eq!(decoder.push(*byte).unwrap(), None);
+            }
+            assert_eq!(
+                decoder.push(*encoded.last().unwrap()).unwrap(),
+                Some(ControlCommand::Resize(frame))
+            );
+        }
+        assert!(
+            ResizeRequest {
+                request_id: 7,
+                ..second
+            }
+            .encode()
+            .is_err()
+        );
+        let mut state = ResizeState::default();
+        state.receive(first);
+        assert_eq!(state.pending.take(), Some(first));
+        state.receive(first);
+        assert_eq!(state.pending, None);
+        let identity = crate::worker::Retirement {
+            id: "r1".into(),
+            generation: "pool-A".into(),
+            slot: 2,
+            epoch: 11,
+        };
+        state.offered = Some((7, 2, vec![identity.clone()]));
+        state.receive(second);
+        assert_eq!(state.consume(second, 7).unwrap(), vec![identity.clone()]);
+        state.pending.take();
+        state.receive(second);
+        assert_eq!(state.pending, None);
+        assert!(state.consume(second, 7).is_err());
+        state.offered = Some((7, 2, vec![identity.clone()]));
+        assert!(
+            state
+                .consume(
+                    ResizeRequest {
+                        target: 1,
+                        ..second
+                    },
+                    7
+                )
+                .is_err()
+        );
+        state.offered = Some((7, 2, vec![identity]));
+        state.receive(ResizeRequest {
+            request_id: 9,
+            action: ResizeAction::Resize,
+            ..second
+        });
+        assert!(state.consume(second, 7).is_err());
     }
 
     #[test]
@@ -2349,6 +2531,7 @@ mod tests {
             if session.state.resize.lock().unwrap().pending
                 == Some(ResizeRequest {
                     request_id: 2,
+                    action: ResizeAction::Resize,
                     target: 0,
                 })
             {
@@ -2358,7 +2541,7 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         assert!(!session.state.stop.load(Ordering::Acquire));
-        assert_eq!(session.state.take_resize(), Some(0));
+        assert_eq!(session.state.take_resize().map(|r| r.target), Some(0));
         assert_eq!(session.state.take_resize(), None);
         assert!(
             session
@@ -2386,8 +2569,8 @@ mod tests {
         parent.write_all(&resize_command(3, 0).unwrap()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            if let Some(total) = session.state.take_resize() {
-                assert_eq!(total, 0);
+            if let Some(request) = session.state.take_resize() {
+                assert_eq!(request.target, 0);
                 break;
             }
             assert!(Instant::now() < deadline);

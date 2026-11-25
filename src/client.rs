@@ -1906,6 +1906,7 @@ impl WorkerController {
                 // Drop its owned handle before opening exactly one replacement.
                 self.window = None;
                 self.pending = None;
+                worker_control::cancel_offer();
                 terminal::notice("Reloading worker window; this chat session stays connected.");
                 // Re-check parent stop intent on the next UI tick before launch.
                 return;
@@ -1913,12 +1914,14 @@ impl WorkerController {
             Some((Ok(true), false)) => {
                 self.window = None;
                 self.pending = None;
+                worker_control::cancel_offer();
                 self.desired = 0;
                 terminal::notice("Worker window closed; this chat session remains available.");
             }
             Some((Err(error), _)) => {
                 self.window = None;
                 self.pending = None;
+                worker_control::cancel_offer();
                 self.desired = 0;
                 terminal::notice(&format!(
                     "Worker window: {error}. This chat session remains available."
@@ -1943,6 +1946,26 @@ impl WorkerController {
                         .as_str()
                         .unwrap_or("worker resize was rejected");
                     terminal::notice(&format!("Worker target unchanged: {error}"));
+                } else if receipt["forced"].as_bool() == Some(true) {
+                    terminal::notice("The confirmed worker has been forcibly retired.");
+                } else if let Some(slot) = receipt["confirm_slot"].as_u64()
+                    && let (Some(generation), Some(client_id)) = (
+                        snapshot["generation"].as_str(),
+                        snapshot["client_id"].as_str(),
+                    )
+                {
+                    let ticket = worker_control::Confirmation {
+                        request_id: id,
+                        target,
+                        generation: generation.into(),
+                        client_id: client_id.into(),
+                    };
+                    if self.desired == target && ticket.matches(snapshot) {
+                        terminal::notice(&format!(
+                            "Worker #{slot} retirement requested. Submit /worker - again to forcibly retire this same worker without its acknowledgement; unfinished work may become unknown."
+                        ));
+                        worker_control::offer(ticket);
+                    }
                 }
             }
         }
@@ -1950,12 +1973,63 @@ impl WorkerController {
         // A bounded batch keeps input responsive even if another producer is busy.
         let previous_target = self.desired;
         for _ in 0..8 {
-            let Some(delta) = worker_control::take() else {
+            let Some(request) = worker_control::take() else {
                 break;
             };
-            match worker_total_after_delta(self.desired, delta) {
-                Ok(total) => self.desired = total,
-                Err(error) => terminal::notice(&error),
+            match request {
+                worker_control::Request::Delta(delta) => {
+                    match worker_total_after_delta(self.desired, delta) {
+                        Ok(total) => self.desired = total,
+                        Err(error) => terminal::notice(&error),
+                    }
+                }
+                worker_control::Request::RetireOne(ticket) => {
+                    let (Some(window), Some(state)) = (&self.window, &snapshot) else {
+                        terminal::notice("No connected worker window can accept this retirement.");
+                        continue;
+                    };
+                    if self.pending.is_some()
+                        || state["desired_total"].as_u64() != Some(self.desired as u64)
+                        || state["stopping"] == true
+                        || state["closed"] == true
+                    {
+                        terminal::notice("A worker change is in progress. Wait for its receipt.");
+                        continue;
+                    }
+                    let (target, action) = if let Some(ticket) = ticket {
+                        if !ticket.matches(state) {
+                            terminal::notice(
+                                "That worker retirement has changed. The confirmation expired.",
+                            );
+                            continue;
+                        }
+                        (
+                            ticket.target,
+                            worker_window::ResizeAction::Confirm(ticket.request_id),
+                        )
+                    } else {
+                        if state["retiring"] != 0 || state["total"] != state["desired_total"] {
+                            terminal::notice(
+                                "A retirement is already pending. Wait for its receipt.",
+                            );
+                            continue;
+                        }
+                        let Some(target) = self.desired.checked_sub(1) else {
+                            terminal::notice("There are no worker stations to retire.");
+                            continue;
+                        };
+                        (target, worker_window::ResizeAction::RetireOne)
+                    };
+                    match window.request_resize(target, action) {
+                        Ok(id) => {
+                            self.desired = target;
+                            self.pending = Some((id, target));
+                        }
+                        Err(error) => terminal::notice(&format!(
+                            "Could not request worker retirement: {error}"
+                        )),
+                    }
+                }
             }
         }
 
@@ -2005,7 +2079,7 @@ impl WorkerController {
                 && snapshot["closed"].as_bool() != Some(true)
                 && actual.is_some_and(|actual| actual != self.desired)
             {
-                match window.request_resize(self.desired) {
+                match window.request_resize(self.desired, worker_window::ResizeAction::Resize) {
                     Ok(id) => self.pending = Some((id, self.desired)),
                     Err(error) => {
                         self.desired = actual.unwrap_or(0);
@@ -3894,15 +3968,9 @@ async fn connect_inner(
                     }
                 }
                 if options.worker_window_child
-                    && let Some(total) = worker_window::take_resize_request()
+                    && let Err(error) = worker_window::apply_pending_resize(&backend)
                 {
-                    let result = backend.resize_workers(total);
-                    if let Err(error) = &result {
-                        terminal::notice(&format!("Worker resize rejected: {error}"));
-                    }
-                    if let Err(error) = worker_window::report_resize_result(total, result) {
-                        terminal::notice(&format!("Worker resize receipt: {error}"));
-                    }
+                    terminal::notice(&error);
                 }
                 if let Some(controller) = &options.worker_window {
                     controller.lock().await.poll().await;

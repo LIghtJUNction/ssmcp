@@ -849,8 +849,8 @@ impl State {
                             .unwrap_or_else(|| "SSMCP workers · Esc closes\n\nNo worker window is connected.\nUse /worker +N to open one with N offline stations.".into());
                         self.chat_show_local_text(text);
                     }
-                    Command::Delta(delta) => {
-                        worker_control::enqueue_delta(delta)?;
+                    command @ (Command::Delta(_) | Command::RetireOne) => {
+                        worker_control::enqueue(command)?;
                         self.notice = Some(
                             "Worker change queued · active workers must confirm departure".into(),
                         );
