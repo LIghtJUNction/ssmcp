@@ -269,6 +269,18 @@ jobs:
         run: |
           read -r -a build_args <<< "$BUILD_ARGS"
           cargo build --locked --release --target "$TARGET" "${build_args[@]}"
+      - name: Start the native Linux client with enforced resource limits
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if ! dpkg-query -W -f='${db:Status-Abbrev}' dbus-user-session 2>/dev/null | grep -q '^ii'; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends dbus-user-session
+          fi
+          trap 'bash scripts/ci_user_manager.sh restore' EXIT
+          bash scripts/ci_user_manager.sh prepare
+          "target/$TARGET/release/ssmcp" --list-tools --shell /bin/sh > "$RUNNER_TEMP/ssmcp-release-tools.json"
+          python3 -c 'import json, sys; tools = json.load(open(sys.argv[1]))["tools"]; sys.exit(0 if any(t["name"] == "ssmcp.exec.start" for t in tools) else "missing native execution tool")' "$RUNNER_TEMP/ssmcp-release-tools.json"
       - name: Smoke test and package executables
         run: python scripts/release.py package --target "$TARGET"
       - name: Verify native installation, update and failed-download handling

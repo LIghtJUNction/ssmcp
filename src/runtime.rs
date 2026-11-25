@@ -693,13 +693,15 @@ impl Runtime {
         attribution: Option<&crate::wire::ControlAttribution>,
         context: Option<&crate::wire::CodeContext>,
     ) -> Result<Arc<call_scope::CallScope>, String> {
-        call_scope::CallScope::from_relay_for_client(
+        let scope = call_scope::CallScope::from_relay_for_client(
             self.call_connection,
             self.client_id.get().map(String::as_str),
             request_id,
             attribution,
             context,
-        )
+        )?;
+        let _ = scope.clock.set(Arc::downgrade(&self.time));
+        Ok(scope)
     }
 
     pub(crate) fn relay_call_scope(

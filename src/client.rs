@@ -2298,6 +2298,19 @@ pub async fn run() -> crate::Result<()> {
         }
         return Ok(());
     }
+    let metadata_only = options.list_tools
+        && options.harness.is_none()
+        && options.tty.is_none()
+        && options.shell.is_none();
+    #[cfg(target_os = "linux")]
+    if !metadata_only {
+        if let Err(error) = crate::session_budget::enter() {
+            if let Some(runner) = &service {
+                runner.record("disconnected", 0, None, None, Some(&error.to_string()))?;
+            }
+            return Err(error);
+        }
+    }
     // Remember the launch entry before the first connection or later updates.
     reload::installed_program()?;
     let mut ui = if service.is_some() {
@@ -2384,8 +2397,20 @@ pub async fn run() -> crate::Result<()> {
     let mut terminate = terminate_signal()?;
     if options.list_tools {
         let management = session_control(&options, service.as_ref())?;
+        let startup = async {
+            if metadata_only {
+                Backend::for_discovery()
+            } else {
+                Backend::start_with_harness(
+                    options.shell_preference()?,
+                    options.tty.as_deref(),
+                    options.harness.as_ref(),
+                )
+                .await
+            }
+        };
         let backend = tokio::select! {
-            result = timeout(Duration::from_secs(120), Backend::start_with_harness(options.shell_preference()?, options.tty.as_deref(), options.harness.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
+            result = timeout(Duration::from_secs(120), startup) => result.map_err(|_| "local backend startup timed out")??,
             _ = interrupt.recv() => return Ok(()),
             _ = terminate.recv() => return Ok(()),
         };
@@ -3051,7 +3076,7 @@ async fn reclaim_steering(
                     Some(Ok(Some(Frame::CodeModeFinished { completion }))) => backend.code_mode_finished(completion)?,
                     Some(Ok(Some(Frame::WaitDisplay { snapshot }))) => backend.wait_display(snapshot)?,
                     Some(Ok(Some(Frame::WorkerDreaming { members }))) if worker_dreaming => apply_worker_dreaming(members)?,
-                    Some(Ok(Some(Frame::Call { id, .. }))) => {
+                    Some(Ok(Some(Frame::Call { id, .. } | Frame::LocalTaskCall { id, .. }))) => {
                         let mut writer = writer.lock().await;
                         write_frame(&mut *writer, &Frame::Reply { id, result: Err("client reload is preparing; refresh clients after reconnection".into()) }).await?;
                     },
@@ -3877,7 +3902,14 @@ async fn connect_inner(
                 render::set_git_status(git_status.snapshot());
             },
             received = incoming.frames.recv() => {
+                let mut local_task_participant = None;
                 let (maintenance, frame) = match received {
+                    Some(Ok(Some(Frame::LocalTaskCall { id, operation, client_id: original, agent_id, controller, code_context })))
+                        if options.is_local() && operation.uses_local_task_participant() && original == client_id
+                            && code_context.session_id.is_none() && code_context.thread_id.is_none() => {
+                        local_task_participant = Some(agent_id);
+                        (false, Some(Ok(Some(Frame::Call { id, operation, controller, attribution: None, code_context: Some(code_context), openai_context: None }))))
+                    }
                     Some(Ok(Some(Frame::RelayMaintenance { id, operation }))) if operation.is_relay_maintenance() => (
                         true,
                         Some(Ok(Some(Frame::Call { id, operation, controller: None, attribution: None, code_context: None, openai_context: None }))),
@@ -3924,6 +3956,10 @@ async fn connect_inner(
                         Ok(scoped) => scoped,
                         Err(error) => break Err(error.into()),
                     };
+                    if let Some(agent_id) = local_task_participant
+                        && let Err(error) = call_scope.bind_local_task_participant(agent_id) {
+                        break Err(error.into());
+                    }
                     let mut code_call = match backend.begin_code_call(&operation, id, controller.as_ref(), attribution.as_deref(), code_context) {
                         Ok(call) => call,
                         Err(error) => break Err(error.into()),
@@ -3966,7 +4002,7 @@ async fn connect_inner(
                                         Some(Ok(Some(Frame::SteeringReply { id, result }))) => { steering::reply(id, result)?; }
                                         Some(Ok(Some(Frame::MessagesReply { id, result }))) => { messaging::reply(id, result); }
                                         Some(Ok(Some(Frame::AccessReply { id, result }))) => { access::reply(id, result); }
-                                        Some(Ok(Some(Frame::Call { id: next_id, .. }))) => {
+                                        Some(Ok(Some(Frame::Call { id: next_id, .. } | Frame::LocalTaskCall { id: next_id, .. }))) => {
                                             let mut writer = writer.lock().await;
                                             write_frame(&mut *writer, &Frame::Reply { id: next_id, result: Err("client reload is already pending; call list after reconnection".into()) }).await?;
                                         }

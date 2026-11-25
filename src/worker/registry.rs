@@ -532,12 +532,20 @@ pub(crate) fn properties(allocation: Allocation) -> Vec<String> {
 }
 
 async fn systemctl(args: &[String]) -> Result<Vec<u8>, String> {
-    let mut all = vec!["--user".into(), "--no-pager".into()];
-    all.extend_from_slice(args);
+    let mut manager =
+        crate::session_budget::manager_command("systemctl").map_err(|e| e.to_string())?;
+    manager.args(["--user", "--no-pager"]).args(args);
+    let words = crate::session::limits::scope::argv(&manager)
+        .into_iter()
+        .map(|word| {
+            word.into_string()
+                .map_err(|_| "systemctl argument is not UTF-8")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     crate::backend::run_helper(
         Path::new("/"),
-        "systemctl",
-        &all,
+        &words[0],
+        &words[1..],
         None,
         16 * 1024,
         Duration::from_secs(10),

@@ -67,14 +67,13 @@ pub(crate) struct JobConfig<'a> {
     pub size: Option<(u16, u16)>,
     pub live: bool,
     pub output_event: Option<OutputEvent>,
-    pub enforce_memory: bool,
+    pub memory: Option<&'a crate::backend::command_memory::CommandMemory>,
 }
 
 pub struct Terminal {
     master: Mutex<Option<Arc<File>>>,
     child: Mutex<Option<Child>>,
     leader: OwnedFd,
-    memory: Mutex<Option<crate::backend::command_memory::CommandMemory>>,
     pid: libc::pid_t,
     output: Mutex<Output>,
     changed: Arc<Notify>,
@@ -145,7 +144,7 @@ impl Terminal {
                 size: None,
                 live,
                 output_event: None,
-                enforce_memory: false,
+                memory: None,
             },
             output_store,
         )
@@ -163,7 +162,7 @@ impl Terminal {
             size,
             live,
             output_event,
-            enforce_memory,
+            memory,
         } = config;
         if argv.is_empty() || argv[0].is_empty() {
             return Err("PTY command must not be empty".into());
@@ -205,12 +204,7 @@ impl Terminal {
                 Ok(())
             });
         }
-        let memory = if enforce_memory {
-            crate::backend::command_memory::CommandMemory::prepare()?
-        } else {
-            None
-        };
-        if let Some(memory) = &memory {
+        if let Some(memory) = memory {
             memory.attach(&mut command)?;
         }
         let mut child = zrun::process::spawn(&mut command, &driver.io)?;
@@ -230,7 +224,6 @@ impl Terminal {
             master: Mutex::new(Some(Arc::new(master))),
             child: Mutex::new(Some(child)),
             leader,
-            memory: Mutex::new(memory),
             pid,
             output: Mutex::new(Output {
                 capture: Some(output_store.capture("terminal_session")),
@@ -590,7 +583,6 @@ impl Terminal {
                 let _ = child.wait(&driver.timer).await;
             }
         }
-        drop(self.memory.lock().unwrap().take());
         self.writer.lock().await.take();
         let reader = self.reader.lock().unwrap().take();
         if let Some(mut reader) = reader

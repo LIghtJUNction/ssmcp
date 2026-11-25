@@ -34,6 +34,7 @@ async fn client_resources_are_versioned_paged_fresh_and_permission_scoped() {
     std::fs::create_dir_all(&root.0).unwrap();
     let document = "Complete client-owned instruction line.\n".repeat(2048);
     std::fs::write(root.0.join("AGENTS.md"), &document).unwrap();
+    ssmcp::enter_session_budget().expect("admit the native test process before spawning commands");
     let backend = Backend::with_output(
         Path::new("/bin/sh"),
         root.0.clone(),

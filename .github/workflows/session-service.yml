@@ -3,6 +3,9 @@ name: Session service
 on:
   pull_request:
     paths:
+      - 'src/session_budget.rs'
+      - 'src/session_budget/**'
+      - 'scripts/ci_user_manager.sh'
       - 'src/session.rs'
       - 'src/session/**'
       - 'src/client.rs'
@@ -45,13 +48,16 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends nodejs bubblewrap apparmor-profiles
+          sudo apt-get install --yes --no-install-recommends dbus-user-session nodejs bubblewrap apparmor-profiles
           if test -e /sys/module/apparmor/parameters/enabled && grep -q Y /sys/module/apparmor/parameters/enabled; then
             if test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict; then
               sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
               sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
             fi
           fi
+      - name: Prepare the Linux user manager and verify delegated limits
+        if: runner.os == 'Linux'
+        run: bash scripts/ci_user_manager.sh prepare
       - name: Select and identify the installed system Node
         if: runner.os == 'Linux'
         run: |
@@ -124,3 +130,6 @@ jobs:
           path: target/acceptance/
           if-no-files-found: warn
           retention-days: 14
+      - name: Restore temporary runner settings
+        if: always() && runner.os == 'Linux'
+        run: bash scripts/ci_user_manager.sh restore

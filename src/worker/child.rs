@@ -189,12 +189,28 @@ pub(crate) async fn run() -> Result<(), String> {
     {
         return Err("invalid worker supervisor identity".into());
     }
-    let group = limits::group_path(
+    let initial = limits::group_path(
         &std::fs::read_to_string("/proc/self/cgroup").map_err(|e| e.to_string())?,
     )?;
+    let group = if initial.file_name().is_some_and(|n| n == "ssmcp-supervisor") {
+        initial
+            .parent()
+            .ok_or("missing delegated worker scope")?
+            .to_owned()
+    } else {
+        initial
+    };
     let expected = format!("ssmcp-worker-{}-{}.scope", init.generation, init.slot);
     if group.file_name().and_then(|name| name.to_str()) != Some(expected.as_str()) {
         return Err("private worker entry requires its own resource-limited scope".into());
+    }
+    // Check the inherited session budget before reporting a usable slot.
+    crate::session_budget::enter().map_err(|e| e.to_string())?;
+    let current = limits::group_path(
+        &std::fs::read_to_string("/proc/self/cgroup").map_err(|e| e.to_string())?,
+    )?;
+    if current != group && current != group.join("ssmcp-supervisor") {
+        return Err("worker moved out of its admitted scope during budget verification".into());
     }
     limits::verify(&group, init.allocation)?;
     let baseline = processes(&group)?;

@@ -130,7 +130,7 @@ fn append_events(response: &Value, hooks: &[Value], budget: usize) -> Option<Val
     // IDs and exact revisions are included for clients that only render text.
     // These are agent-authored reminders, never an approval or a human message.
     let text = format!(
-        "AGENT TIMER PROMPT HOOKS — retained until explicit ACK after processing; not human input or approval.\n{}",
+        "PROMPT HOOKS — retained until acknowledgement after processing; no human input or completion approval.\n{}",
         serde_json::to_string(hooks).ok()?
     );
     root.entry("content")
@@ -194,25 +194,63 @@ pub(super) async fn append(
         if let Ok(Ok(reply)) = reply
             && let Some(events) = events(&reply)
         {
-            observed.push((index, events));
+            let structured = &reply["structuredContent"];
+            let failures = ["memory_limit_hooks", "task_crash_hooks"]
+                .into_iter()
+                .flat_map(|key| {
+                    structured
+                        .get(key)
+                        .and_then(Value::as_array)
+                        .filter(|items| items.len() <= MAX_EVENTS)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(move |item| {
+                            let notice: crate::runtime::time::memory_hook::Notice =
+                                serde_json::from_value(item.clone()).ok()?;
+                            (notice.valid() && notice.page_key() == key).then_some(notice)
+                        })
+                })
+                .take(MAX_EVENTS)
+                .collect::<Vec<_>>();
+            observed.push((index, events, failures));
         }
     }
     let mut hooks = Vec::new();
     let mut appended = None;
     // No await follows these authority checks. Preserve the exact connection;
     // a later Session with the same client ID cannot inherit this read.
-    for (index, events) in observed {
+    for (index, events, failures) in observed {
         let target = &eligible[index];
         if !same_binding(report, target) || response_authorization(report, target).is_none() {
             continue;
         }
         let binding = target.binding.as_ref().expect("same_binding checked");
-        for event in events {
+        let failures = failures.into_iter().map(|notice| {
+            let mut event = json!(notice);
+            event["type"] = json!(notice.event_type());
+            event["completion_permission"] = json!(false);
+            event["body"] = json!(notice.body());
+            let action = if matches!(
+                notice,
+                crate::runtime::time::memory_hook::Notice::Memory { .. }
+            ) {
+                "ack_memory"
+            } else {
+                "ack_task"
+            };
+            event["ack"] =
+                json!({"tool":TOOL,"arguments":{"action":action,"job_id":notice.job_id()}});
+            ("system_hook", event)
+        });
+        let timers = events
+            .into_iter()
+            .map(|event| ("agent_timer", json!(event)));
+        for (provenance, event) in failures.chain(timers) {
             if hooks.len() == MAX_EVENTS {
                 break;
             }
             hooks.push(
-                json!({"schema_version":1,"provenance":"agent_timer","scope":"native_connection",
+                json!({"schema_version":1,"provenance":provenance,"scope":"native_connection",
                 "client_id":target.session.client_id(),"agent_id":binding.agent_id,"event":event}),
             );
             if let Some(candidate) = append_events(&response, &hooks, budget) {

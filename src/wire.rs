@@ -475,6 +475,14 @@ pub(crate) fn retired_tool_error(name: &str) -> Option<&'static str> {
 pub mod peer_port;
 
 impl Operation {
+    /// The private local host authenticates the participant for these native
+    /// task receipts only. This scope cannot authorize any other operation.
+    pub(crate) fn uses_local_task_participant(&self) -> bool {
+        matches!(self, Self::CallTool { name, arguments } if
+            matches!(name.as_str(), "ssmcp.exec.start" | "terminal.open")
+            || (name == "ssmcp.time.prompt" && matches!(arguments["action"].as_str(), Some("read" | "ack_memory" | "ack_task"))))
+    }
+
     /// The relay's own scope negotiation and release of already allocated handles.
     pub(crate) fn is_relay_maintenance(&self) -> bool {
         match self {
@@ -669,6 +677,17 @@ pub enum Frame {
     SteeringReply {
         id: u64,
         result: Result<SteeringSnapshot, String>,
+    },
+    /// Private local gateway only. It shares the native client's binary.
+    /// This participant belongs to one connection and carries no account claim.
+    LocalTaskCall {
+        id: u64,
+        operation: Operation,
+        client_id: String,
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        controller: Option<Controller>,
+        code_context: CodeContext,
     },
     RelayMaintenance {
         id: u64,

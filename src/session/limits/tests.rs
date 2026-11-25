@@ -99,17 +99,22 @@ fn native_systemd_arguments_apply_limits_and_keep_crash_policy() {
     let directory = std::env::temp_dir().join("saved $ path");
     for (watchdog, restart) in [(true, "on-failure"), (false, "no")] {
         manifest.spec.watchdog = watchdog;
-        let args = native_arguments(&directory, &manifest).unwrap();
+        let args = native_arguments(
+            &directory,
+            &manifest,
+            &limits("50", "64M"),
+            "ssmcp-stest.slice",
+        )
+        .unwrap();
         for property in [
             "--service-type=exec",
+            "--slice=ssmcp-stest.slice",
             "--property=CPUQuota=50%",
             "--property=MemoryMax=67108864",
             "--property=RestartSec=7s",
             "--property=StartLimitIntervalSec=0",
             "--property=KillMode=control-group",
             "--property=Delegate=memory",
-            "--property=DelegateSubgroup=ssmcp-supervisor",
-            "--expand-environment=no",
         ] {
             assert!(args.iter().any(|arg| arg == property), "{property}");
         }
@@ -119,11 +124,12 @@ fn native_systemd_arguments_apply_limits_and_keep_crash_policy() {
                 .collect::<Vec<_>>(),
             [&format!("--property=Restart={restart}")]
         );
-        assert_eq!(&args[args.len() - 2..], ["__session-run", "saved $ name"]);
+        assert_eq!(&args[args.len() - 2..], ["__session-run", "saved $$ name"]);
+        assert!(args.iter().any(|arg| arg == "/usr/bin/env"));
         assert!(!args.iter().any(|arg| arg == "--scope"));
     }
     manifest.spec.args.clear();
-    let args = native_arguments(&directory, &manifest).unwrap();
+    let args = native_arguments(&directory, &manifest, &Limits::default(), "ssmcp.slice").unwrap();
     assert!(!args.iter().any(|arg| arg.contains("CPUQuota")
         || arg.contains("MemoryMax")
         || arg == "--expand-environment=no"));
@@ -133,16 +139,15 @@ fn native_systemd_arguments_apply_limits_and_keep_crash_policy() {
 fn managed_scopes_are_unique_synchronous_and_leave_retries_with_the_owner() {
     let manifest = manifest();
     let limits = limits("50", "64M");
-    let first = scope_arguments(&manifest, "generation-a", &limits, 128 * 1024 * 1024);
-    let second = scope_arguments(&manifest, "generation-b", &limits, 32 * 1024 * 1024);
+    let first = scope_arguments(&manifest, "generation-a", &limits, "ssmcp-stest.slice");
+    let second = scope_arguments(&manifest, "generation-b", &limits, "ssmcp-stest.slice");
     assert_ne!(first, second);
     assert!(first.contains(&"--scope".into()));
+    assert!(first.contains(&"--slice=ssmcp-stest.slice".into()));
     assert!(first.contains(&"--unit=ssmcp-session-fixture-generation-a.scope".into()));
     assert!(first.contains(&"--property=CPUQuota=50%".into()));
     assert!(first.contains(&"--property=MemoryMax=67108864".into()));
-    assert!(first.contains(&"--property=MemorySwapMax=0".into()));
-    assert!(second.contains(&"--property=MemoryMax=33554432".into()));
-    assert!(first.contains(&"--expand-environment=no".into()));
+    assert!(first.contains(&"--property=Delegate=memory".into()));
     assert!(
         !first
             .iter()
@@ -155,7 +160,22 @@ fn managed_scopes_are_unique_synchronous_and_leave_retries_with_the_owner() {
 fn manager_wraps_only_limited_runners_and_keeps_literal_argv() {
     let mut manifest = manifest();
     let directory = std::env::temp_dir().join("saved $ path");
-    let command = managed_command(&directory, &manifest, "generation-a").unwrap();
+    let options = scope_arguments(
+        &manifest,
+        "generation-a",
+        &limits("50", "64M"),
+        "ssmcp-stest.slice",
+    );
+    let command = Command::from(
+        scope::configure(
+            std::process::Command::new("systemd-run"),
+            &options,
+            &super::super::executable(&directory),
+            &["__session-run".into(), manifest.spec.name.clone().into()],
+            |_| Ok(false),
+        )
+        .unwrap(),
+    );
     assert_eq!(
         command.as_std().get_program(),
         std::ffi::OsStr::new("systemd-run")
@@ -241,16 +261,17 @@ fn kernel_membership_must_be_the_expected_session_unit() {
         directory,
         Path::new("/sys/fs/cgroup/user.slice/user-1000.slice/app.slice").join(unit)
     );
-    let service = "ssmcp-session-fixture.service";
     assert_eq!(
         cgroup_directory(
-            "0::/user.slice/app.slice/ssmcp-session-fixture.service/ssmcp-supervisor\n",
-            service,
+            &format!("0::/user.slice/user-1000.slice/app.slice/{unit}/ssmcp-supervisor"),
+            unit
         )
         .unwrap(),
-        Path::new("/sys/fs/cgroup/user.slice/app.slice").join(service)
+        directory
     );
     for bad in [
+        "0::/other.scope/ssmcp-supervisor",
+        "0::/ssmcp-session-fixture-generation-a.scope/unknown",
         "2:cpu:/session.scope",
         "0::relative.scope",
         "0::/other.scope",
@@ -329,12 +350,7 @@ async fn systemd_scope_applies_limits_and_shutdown_reaps_descendants() {
     let limits = limits("50%", "256MiB");
     let mut command = Command::new("systemd-run");
     command
-        .args(scope_arguments(
-            &manifest,
-            &suffix,
-            &limits,
-            128 * 1024 * 1024,
-        ))
+        .args(scope_arguments(&manifest, &suffix, &limits, "app.slice"))
         .arg("--")
         .arg(std::env::current_exe().unwrap())
         .args([

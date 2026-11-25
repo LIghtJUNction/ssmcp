@@ -1,5 +1,7 @@
 //! Per-session resource limits. The existing service owns restart/stop policy;
 //! systemd only supplies a cgroup for each limited runner and its descendants.
+#[cfg(target_os = "linux")]
+pub(crate) mod scope;
 use std::path::Path;
 
 use serde::Serialize;
@@ -15,6 +17,11 @@ pub(crate) struct Limits {
 }
 
 impl Limits {
+    #[cfg(target_os = "linux")]
+    pub(super) fn new_slice(&self) -> Result<String> {
+        crate::session_budget::new_session_slice(self.cpu_percent, self.memory_bytes)
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.cpu_percent.is_none() && self.memory_bytes.is_none()
     }
@@ -225,7 +232,7 @@ fn cgroup_directory(membership: &str, unit: &str) -> Result<std::path::PathBuf> 
         .file_name()
         .is_some_and(|name| name == "ssmcp-supervisor")
     {
-        path.parent().ok_or("runner subgroup has no systemd unit")?
+        path.parent().ok_or("missing delegated session unit")?
     } else {
         path
     };
@@ -248,31 +255,27 @@ pub(super) fn unit_name(manifest: &Manifest, generation: Option<&str>) -> String
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn scope_arguments(
-    manifest: &Manifest,
-    generation: &str,
-    limits: &Limits,
-    executor_ceiling: u64,
-) -> Vec<String> {
-    let mut args = vec![
+pub(crate) fn scope_options(slice: &str, unit: &str) -> Vec<String> {
+    vec![
         "--user".into(),
         "--scope".into(),
         "--quiet".into(),
         "--collect".into(),
-        // systemd >=254 supports literal arguments, including '$' in saved paths/names.
-        "--expand-environment=no".into(),
-        format!("--unit={}", unit_name(manifest, Some(generation))),
-    ];
-    let bounded = Limits {
-        cpu_percent: limits.cpu_percent,
-        memory_bytes: Some(
-            limits
-                .memory_bytes
-                .unwrap_or(executor_ceiling)
-                .min(executor_ceiling),
-        ),
-    };
-    args.extend(bounded.properties());
+        "--property=Delegate=memory".into(),
+        format!("--slice={slice}"),
+        format!("--unit={unit}"),
+    ]
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn scope_arguments(
+    manifest: &Manifest,
+    generation: &str,
+    limits: &Limits,
+    slice: &str,
+) -> Vec<String> {
+    let mut args = scope_options(slice, &unit_name(manifest, Some(generation)));
+    args.extend(limits.properties());
     args.push("--property=MemorySwapMax=0".into());
     args
 }
@@ -290,16 +293,24 @@ pub(super) fn managed_command(
     if !limits.is_empty() {
         // A synchronous scope retains parent/child ownership under Managed's
         // guardian. Only the existing supervisor retries failed generations.
-        command = Command::new("systemd-run");
-        command
-            .args(scope_arguments(
-                manifest,
-                generation,
-                &limits,
-                crate::backend::command_memory::default_ceiling()?,
-            ))
-            .arg("--")
-            .arg(executable);
+        // Preserve the previously shipped 8 GiB ceiling for explicitly limited
+        // managed runners. The session slice also enforces its physical-RAM fraction.
+        let limits = Limits {
+            memory_bytes: Some(
+                limits
+                    .memory_bytes
+                    .unwrap_or(u64::MAX)
+                    .min(8 * 1024 * 1024 * 1024),
+            ),
+            ..limits
+        };
+        let slice = limits.new_slice()?;
+        let options = scope_arguments(manifest, generation, &limits, &slice);
+        return Ok(Command::from(scope::launch(
+            &options,
+            &executable,
+            &["__session-run".into(), manifest.spec.name.clone().into()],
+        )?));
     }
     #[cfg(not(target_os = "linux"))]
     let _ = generation;
@@ -308,20 +319,24 @@ pub(super) fn managed_command(
 }
 
 #[cfg(any(target_os = "linux", test))]
-pub(super) fn native_arguments(directory: &Path, manifest: &Manifest) -> Result<Vec<String>> {
-    let limits = crate::client::saved_resource_limits(&manifest.spec)?;
+pub(super) fn native_arguments(
+    directory: &Path,
+    manifest: &Manifest,
+    limits: &Limits,
+    slice: &str,
+) -> Result<Vec<String>> {
     let mut args = vec![
         "--user".into(),
         "--quiet".into(),
         "--collect".into(),
         "--service-type=exec".into(),
+        "--property=Delegate=memory".into(),
+        format!("--slice={slice}"),
         format!("--unit={}", manifest.manager_id),
         format!(
             "--working-directory={}",
             super::path_text(&manifest.spec.cwd)?
         ),
-        "--property=Delegate=memory".into(),
-        "--property=DelegateSubgroup=ssmcp-supervisor".into(),
         "--property=KillMode=control-group".into(),
         "--property=TimeoutStopSec=15s".into(),
         "--property=UMask=0077".into(),
@@ -342,18 +357,22 @@ pub(super) fn native_arguments(directory: &Path, manifest: &Manifest) -> Result<
         ),
         "--property=StartLimitIntervalSec=0".into(),
     ];
-    if !limits.is_empty() {
-        args.push("--expand-environment=no".into());
-        args.extend(limits.properties());
-    }
+    args.extend(limits.properties());
     for (key, value) in &manifest.environment {
         args.push(format!("--setenv={key}={value}"));
     }
+    let executable = super::executable(directory);
+    let path = super::path_text(&executable)?;
+    args.push("--".into());
+    // Service ExecStart performs dollar expansion on every supported systemd.
+    // Keep its executable field literal even when the snapshot path contains '$'.
+    if path.contains('$') {
+        args.extend(["/usr/bin/env".into(), "--".into()]);
+    }
     args.extend([
-        "--".into(),
-        super::path_text(&super::executable(directory))?.into(),
+        path.replace('$', "$$"),
         "__session-run".into(),
-        manifest.spec.name.clone(),
+        manifest.spec.name.replace('$', "$$"),
     ]);
     Ok(args)
 }

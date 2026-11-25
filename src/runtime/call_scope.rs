@@ -25,6 +25,8 @@ pub(crate) struct CallScope {
     connection: u64,
     client_id: Option<String>,
     native_tool: OnceLock<String>,
+    local_task_participant: OnceLock<ThreadScope>,
+    pub(super) clock: OnceLock<std::sync::Weak<super::time::Clock>>,
     request_id: u64,
     run_id: Option<String>,
     attribution: Option<ControlAttribution>,
@@ -120,6 +122,8 @@ impl CallScope {
                 .map(str::to_owned)
                 .or_else(|| thread.as_ref().map(|thread| thread.session_id().to_owned())),
             native_tool: OnceLock::new(),
+            local_task_participant: OnceLock::new(),
+            clock: OnceLock::new(),
             request_id,
             run_id: context.map(|context| context.run_id.clone()),
             attribution: attribution.cloned(),
@@ -157,6 +161,30 @@ impl CallScope {
 
     pub(crate) fn attribution(&self) -> Option<&ControlAttribution> {
         self.attribution.as_ref()
+    }
+
+    /// Called only at private local frame admission, before the provider is run.
+    /// Never turns a local login into an account-backed thread or grants history access.
+    pub(crate) fn bind_local_task_participant(&self, agent_id: String) -> Result<(), String> {
+        let client = self.client_id().ok_or("missing registered local client")?;
+        if self.attribution.is_some()
+            || self.thread.is_some()
+            || !agent_id
+                .strip_prefix("agent_")
+                .is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err("invalid local task participant".into());
+        }
+        self.local_task_participant
+            .set(ThreadScope {
+                session_id: client.into(),
+                thread_id: agent_id,
+            })
+            .map_err(|_| "local task participant is already bound".into())
+    }
+
+    pub(super) fn local_task_participant(&self) -> Option<&ThreadScope> {
+        self.local_task_participant.get()
     }
 
     pub(crate) fn thread(&self) -> Option<&ThreadScope> {
@@ -230,6 +258,18 @@ impl Source {
 
     pub(crate) fn owner(&self) -> Option<&HistoryOwner> {
         self.history.as_ref()?.as_ref().ok()
+    }
+
+    /// Called only by the native pipes/PTY completion paths with their original job.
+    pub(crate) fn report_task_failure(&self, snapshot: &serde_json::Value) {
+        let Some(call) = &self.call else {
+            return;
+        };
+        if let Some(notice) = super::time::memory_hook::Notice::from_snapshot(snapshot)
+            && let Some(clock) = call.clock.get().and_then(std::sync::Weak::upgrade)
+        {
+            clock.record_task_failure(self, notice);
+        }
     }
 
     pub(crate) fn display(&self) -> DisplaySource {

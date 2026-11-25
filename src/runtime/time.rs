@@ -2,6 +2,7 @@
 //! Deadlines use Instant; civil inputs are converted once when a timer starts.
 mod civil;
 mod execution;
+pub(crate) mod memory_hook;
 mod prompts;
 mod relay;
 mod wait_view;
@@ -282,6 +283,7 @@ struct State {
     observations: BTreeMap<String, Observation>,
     finished_observations: VecDeque<Observation>,
     prompts: prompts::State,
+    memory_hooks: memory_hook::Queue,
 }
 
 impl State {
@@ -784,6 +786,7 @@ impl Clock {
         state.observations.clear();
         state.finished_observations.clear();
         state.prompts.disconnect();
+        state.memory_hooks.clear();
         drop(state);
         self.prompt_changed.notify_one();
         changed();

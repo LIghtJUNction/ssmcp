@@ -1334,8 +1334,24 @@ fn launcher(executable: &Path, args: &[OsString]) -> Result<Command, String> {
             format!("@ssmcp-worker-{}-{stamp}", std::process::id()),
         );
     }
+    #[cfg(target_os = "linux")]
+    let arguments = {
+        // A terminal server may reparent the new window. Place the worker process
+        // back under the verified controller budget before it creates its backend.
+        let slice = crate::session_budget::current_session_slice().map_err(|e| e.to_string())?;
+        let mut nonce = [0u8; 16];
+        getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
+        let unit = format!("ssmcp-window-{}.scope", crate::hex::encode(nonce));
+        let options = crate::session::limits::scope_options(&slice, &unit);
+        let scope = crate::session::limits::scope::launch(&options, executable, args)
+            .map_err(|e| e.to_string())?;
+        let words = crate::session::limits::scope::argv(&scope);
+        terminal_args(&terminal, Path::new(&words[0]), &words[1..])
+    };
+    #[cfg(not(target_os = "linux"))]
+    let arguments = terminal_args(&terminal, executable, args);
     command
-        .args(terminal_args(&terminal, executable, args))
+        .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());

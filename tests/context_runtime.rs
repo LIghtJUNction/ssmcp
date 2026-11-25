@@ -25,6 +25,7 @@ async fn bounded_context_documents_remain_inline_and_fresh_in_native_runtime() {
     );
     std::fs::write(root.join("AGENTS.md"), &instructions).unwrap();
     std::fs::write(root.join("skills/large/SKILL.md"), &skill).unwrap();
+    ssmcp::enter_session_budget().expect("admit the native test process before spawning commands");
     let backend = Backend::with_output(
         Path::new("/bin/sh"),
         root.clone(),

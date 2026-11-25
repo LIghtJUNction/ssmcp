@@ -42,18 +42,22 @@ impl Child {
         cwd: &Path,
     ) -> Result<Self, String> {
         let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-        let mut command = tokio::process::Command::new(crate::program::executable("systemd-run")?);
+        let slice = crate::session_budget::current_session_slice().map_err(|e| e.to_string())?;
+        let mut options = crate::session::limits::scope_options(&slice, &unit.name);
+        options.push(format!("--description=SSMCP worker {}", pool.generation));
+        options.extend(
+            registry::properties(unit.allocation)
+                .into_iter()
+                .map(|p| format!("--property={p}")),
+        );
+        let scope = crate::session::limits::scope::launch(
+            &options,
+            &executable,
+            &["--ssmcp-worker-child".into()],
+        )
+        .map_err(|e| e.to_string())?;
+        let mut command = tokio::process::Command::from(scope);
         command
-            .args(["--user", "--scope", "--quiet", "--collect"])
-            .arg(format!("--unit={}", unit.name))
-            .arg(format!("--description=SSMCP worker {}", pool.generation));
-        for property in registry::properties(unit.allocation) {
-            command.arg(format!("--property={property}"));
-        }
-        command
-            .arg("--")
-            .arg(executable)
-            .arg("--ssmcp-worker-child")
             .current_dir(cwd)
             .env_remove("SSMCP_RELAY_TOKEN")
             .stdin(Stdio::piped())

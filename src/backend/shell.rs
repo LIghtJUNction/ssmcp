@@ -218,6 +218,8 @@ struct State {
     running: bool,
     usage: Option<super::process::ResourceUsage>,
     #[cfg(target_os = "linux")]
+    memory: super::command_memory::Receipt,
+    #[cfg(target_os = "linux")]
     tree_reaped: bool,
     exit_code: Option<i32>,
     exit_signal: Option<i32>,
@@ -263,10 +265,20 @@ impl Job {
     }
     fn snapshot_locked(&self, state: &State) -> Value {
         let through = state.finished.unwrap_or_else(Instant::now).into_std();
+        #[cfg(target_os = "linux")]
+        let (exceeded, limit, peak, cleanup) = (
+            state.memory.exceeded,
+            state.memory.limit,
+            state.memory.peak,
+            state.memory.cleanup_error.as_deref(),
+        );
+        #[cfg(not(target_os = "linux"))]
+        let (exceeded, limit, peak, cleanup) = (false, None::<u64>, None::<u64>, None::<&str>);
         json!({"job_id":self.id,"id":self.id,"pid":self.pid,"pid_role":if self.terminal.is_some() {"command"} else {PID_ROLE},"command":self.command,"title":self.title,"cwd":self.cwd,
             "state":if state.running {"running"} else if state.cancelled {"cancelled"} else if state.timed_out {"timed_out"} else if state.error.is_some() {"failed"} else {"completed"},
             "running":state.running,"exit_code":state.exit_code,"exit_signal":state.exit_signal,"cancelled":state.cancelled,
             "timed_out":state.timed_out,"error":state.error,
+            "memory_limit_exceeded":exceeded,"memory_limit_bytes":limit,"memory_peak_bytes":peak,"memory_cleanup_error":cleanup,
             "duration_ms":self.timing.elapsed_ms(through),
             "timeout_ms":self.timing.timeout_ms(),
             "remaining_ms":if state.running {self.timing.remaining_ms(through)} else {None},
@@ -615,6 +627,9 @@ impl Shell {
                 events.push_scoped(event, source.clone());
             }
         });
+        #[cfg(target_os = "linux")]
+        let mut memory = super::command_memory::CommandMemory::for_job()
+            .map_err(|error| format!("could not enforce PTY task memory ceiling: {error}"))?;
         crate::client::terminal::register_session(
             &args.id,
             args.title.as_deref().unwrap_or(&args.id),
@@ -629,7 +644,7 @@ impl Shell {
                 live: args.live,
                 output_event: Some(output_event),
                 #[cfg(target_os = "linux")]
-                enforce_memory: true,
+                memory: memory.as_ref(),
             },
             self.output.clone(),
         ) {
@@ -653,6 +668,10 @@ impl Shell {
             timing,
             state: Mutex::new(State {
                 usage: None,
+                #[cfg(target_os = "linux")]
+                memory: memory
+                    .as_ref()
+                    .map_or_else(Default::default, |m| m.initial_receipt()),
                 running: true,
                 #[cfg(target_os = "linux")]
                 tree_reaped: false,
@@ -691,14 +710,29 @@ impl Shell {
             let Ok(worker_command) = start.await else {
                 return;
             };
-            let outcome =
-                completion::observe(terminal.wait_exit(), cancel_rx, timing.deadline).await;
+            let observe = completion::observe(terminal.wait_exit(), cancel_rx, timing.deadline);
+            #[cfg(target_os = "linux")]
+            let outcome = match memory.as_mut() {
+                Some(m) => m.observe(observe).await,
+                None => observe.await,
+            };
+            #[cfg(not(target_os = "linux"))]
+            let outcome = observe.await;
             worker.stop_input();
+            #[cfg(target_os = "linux")]
+            let memory = match memory {
+                Some(m) => m.finish().await,
+                None => Default::default(),
+            };
             terminal.shutdown().await;
             {
                 let mut state = worker.state();
                 drop(permit);
                 state.running = false;
+                #[cfg(target_os = "linux")]
+                {
+                    state.memory = memory;
+                }
                 state.exit_code = outcome.code;
                 state.cancelled = outcome.cancelled;
                 state.timed_out = outcome.timed_out;
@@ -724,6 +758,7 @@ impl Shell {
             }
             let mut snapshot = worker.snapshot();
             snapshot["type"] = json!("exec.exited");
+            worker.creator.report_task_failure(&snapshot);
             events.push_scoped(snapshot, worker.creator.clone());
             worker.output_changed.notify_waiters();
             worker.completed.notify_waiters();
@@ -1804,7 +1839,7 @@ impl Shell {
                 .env("SSMCP_ARTIFACT_DIR", &artifacts.path);
         }
         #[cfg(target_os = "linux")]
-        let memory = super::command_memory::CommandMemory::prepare()
+        let mut memory = super::command_memory::CommandMemory::for_job()
             .map_err(|error| format!("could not enforce command memory ceiling: {error}"))?;
         #[cfg(target_os = "linux")]
         let process =
@@ -1864,6 +1899,10 @@ impl Shell {
             timing,
             state: Mutex::new(State {
                 usage: None,
+                #[cfg(target_os = "linux")]
+                memory: memory
+                    .as_ref()
+                    .map_or_else(Default::default, |m| m.initial_receipt()),
                 running: true,
                 #[cfg(target_os = "linux")]
                 tree_reaped: false,
@@ -1910,7 +1949,14 @@ impl Shell {
                     .await
                     .map(|status| (status.code(), exit_signal(&status)))
             };
-            let outcome = completion::observe(exit, cancel_rx, worker.timing.deadline).await;
+            let observe = completion::observe(exit, cancel_rx, worker.timing.deadline);
+            #[cfg(target_os = "linux")]
+            let outcome = match memory.as_mut() {
+                Some(m) => m.observe(observe).await,
+                None => observe.await,
+            };
+            #[cfg(not(target_os = "linux"))]
+            let outcome = observe.await;
             // Wake blocked/queued writers before waiting for their pipe lock.
             // Command cancellation and execution deadlines must not wait for
             // a reader that has stopped consuming stdin.
@@ -1918,7 +1964,10 @@ impl Shell {
             worker.stdin.lock().await.take();
             process.shutdown().await;
             #[cfg(target_os = "linux")]
-            drop(memory);
+            let memory = match memory {
+                Some(m) => m.finish().await,
+                None => Default::default(),
+            };
             #[cfg(target_os = "linux")]
             let usage = process.take_usage();
             tokio::join!(drain(out, &worker, "stdout"), drain(err, &worker, "stderr"));
@@ -1935,6 +1984,7 @@ impl Shell {
                 {
                     state.tree_reaped = outcome.code == Some(0);
                     state.usage = usage;
+                    state.memory = memory;
                 }
                 state.exit_code = outcome.code;
                 state.cancelled = outcome.cancelled;
@@ -1994,6 +2044,7 @@ impl Shell {
             }
             let mut snapshot = worker.snapshot();
             snapshot["type"] = json!("exec.exited");
+            worker.creator.report_task_failure(&snapshot);
             events.push_scoped(snapshot, worker.creator.clone());
             let output_changed = worker.output_changed.clone();
             let completed = worker.completed.clone();
@@ -2459,6 +2510,8 @@ mod tests {
             timing: ExecutionTiming::new(Instant::now().into_std(), 0),
             state: Mutex::new(State {
                 usage: None,
+                #[cfg(target_os = "linux")]
+                memory: Default::default(),
                 running: false,
                 #[cfg(target_os = "linux")]
                 tree_reaped: false,

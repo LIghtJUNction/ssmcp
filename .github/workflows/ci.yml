@@ -112,13 +112,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            nodejs bubblewrap util-linux rsync apparmor-profiles shellcheck python3-pil fonts-dejavu-core
+            dbus-user-session nodejs bubblewrap util-linux rsync apparmor-profiles shellcheck python3-pil fonts-dejavu-core
           if test -e /sys/module/apparmor/parameters/enabled && grep -q Y /sys/module/apparmor/parameters/enabled; then
             if test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict; then
               sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
               sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
             fi
           fi
+      - name: Prepare the Linux user manager and verify delegated limits
+        run: bash scripts/ci_user_manager.sh prepare 2>&1 | tee "$RUNNER_TEMP/ssmcp-daemon-manager.log"
+        shell: bash
       - name: Select system Node and the Python screenshot renderer
         run: |
           # Keep Node and Pillow paired with the installed system tools.
@@ -138,7 +141,7 @@ jobs:
       - run: cargo fmt --all -- --check
       - name: Check release tooling and installer
         run: |
-          shellcheck scripts/install.sh
+          shellcheck scripts/install.sh scripts/ci_user_manager.sh
           python3 scripts/test_release.py
           python3 scripts/test_setup_server.py
           python3 scripts/test_installer_download_bounds.py
@@ -239,41 +242,6 @@ jobs:
       - name: Exercise background sessions and watchdog with real user systemd
         timeout-minutes: 8
         run: |
-          ssmcp_ci_uid="$(id -u)"
-          ssmcp_ci_user="$(id -un)"
-          ssmcp_ci_manager_log="$RUNNER_TEMP/ssmcp-daemon-manager.log"
-          ssmcp_ci_restore_linger=0
-          export XDG_RUNTIME_DIR="/run/user/$ssmcp_ci_uid"
-          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-          restore_ci_linger() {
-            if test "$ssmcp_ci_restore_linger" = 1; then
-              timeout 20s sudo -n loginctl disable-linger "$ssmcp_ci_user" >>"$ssmcp_ci_manager_log" 2>&1 ||
-                echo '::warning::Could not restore the hosted runner linger setting; see daemon manager evidence.'
-            fi
-          }
-          trap restore_ci_linger EXIT
-          if ! timeout 5s systemctl --user --no-pager show --property=Version >"$ssmcp_ci_manager_log" 2>&1; then
-            # This prepares the ephemeral CI runner, not the product's startup policy.
-            ssmcp_ci_linger="$(timeout 5s loginctl show-user "$ssmcp_ci_user" --property=Linger --value 2>>"$ssmcp_ci_manager_log" || true)"
-            if test "$ssmcp_ci_linger" != yes; then
-              if timeout 20s sudo -n loginctl enable-linger "$ssmcp_ci_user" >>"$ssmcp_ci_manager_log" 2>&1; then
-                ssmcp_ci_restore_linger=1
-              else
-                echo '::warning::Hosted runner linger setup failed; checking the actual user manager next.'
-              fi
-            fi
-            if ! timeout 20s sudo -n systemctl start "user@$ssmcp_ci_uid.service" >>"$ssmcp_ci_manager_log" 2>&1; then
-              echo '::warning::Hosted runner user manager startup failed; daemon preflight will report the result.'
-            fi
-            for ssmcp_ci_attempt in {1..10}; do
-              echo "User manager readiness attempt $ssmcp_ci_attempt/10" >>"$ssmcp_ci_manager_log"
-              if timeout 3s systemctl --user --no-pager show --property=Version >>"$ssmcp_ci_manager_log" 2>&1; then
-                break
-              fi
-              sleep 1
-            done
-          fi
-          # Missing manager support is exit 2 with a blocked report, never a skipped pass.
           python3 scripts/e2e_daemon.py --bin-dir target/debug --timeout 300 \
             --report "$RUNNER_TEMP/ssmcp-daemon-report.json" --revision "$(git rev-parse HEAD)"
       - name: Save unified acceptance evidence
@@ -340,6 +308,9 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 14
+      - name: Restore temporary runner settings
+        if: always()
+        run: bash scripts/ci_user_manager.sh restore
 
   client:
     name: Client (${{ matrix.runner }})

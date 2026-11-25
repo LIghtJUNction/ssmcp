@@ -435,6 +435,30 @@ impl Session {
         }
     }
 
+    /// A local login can discover peer sessions. Its participant may only own
+    /// task receipts on the very connection that issued its OAuth grant.
+    fn local_task_participant(&self, local_host: bool, call: &Call) -> Option<String> {
+        if !local_host
+            || !call.operation.uses_local_task_participant()
+            || call.code_context.is_none()
+        {
+            return None;
+        }
+        let grant @ Authorization::Legacy { user, anchor } = call.authorization.as_ref()? else {
+            return None;
+        };
+        let binding = call.binding.as_ref()?;
+        let original = anchor.upgrade()?;
+        if !std::ptr::eq(self, Arc::as_ptr(&original))
+            || crate::bridge::owner(user, grant).ok()? != binding.owner
+        {
+            return None;
+        }
+        // validate_binding ran immediately before this frame is constructed
+        // and runs again before a delayed dispatch is written.
+        Some(binding.agent_id.clone())
+    }
+
     /// A captured credential must remain valid across every dispatch/result wait.
     fn validate_binding(
         &self,
@@ -877,6 +901,7 @@ impl Session {
 }
 
 pub struct Broker {
+    private_local_host: bool,
     pub(crate) local_chat_disabled: bool,
     pub public_url: String,
     pub bridges: Arc<crate::bridge::Bridges>,
@@ -935,11 +960,9 @@ impl Broker {
             .origin()
             .ascii_serialization();
         let oauth = crate::oauth::OAuth::for_local_origin(public_url.clone())?;
-        Ok(Self::with_authorization(
-            public_url,
-            oauth,
-            IdentityProviders::disabled(),
-        ))
+        let mut host = Self::with_authorization(public_url, oauth, IdentityProviders::disabled());
+        host.private_local_host = true;
+        Ok(host)
     }
 
     fn with_authorization(
@@ -948,6 +971,7 @@ impl Broker {
         identities: IdentityProviders,
     ) -> Self {
         Self {
+            private_local_host: false,
             local_chat_disabled: false,
             oauth,
             identities,
@@ -1804,6 +1828,11 @@ impl Broker {
                             let run_id = call.code_context.as_ref().map(|context| context.run_id.clone());
                             let frame = if guarded_target.is_some() && call.relay_maintenance {
                                 Frame::RelayMaintenance { id: next_id, operation: call.operation }
+                            } else if let Some(agent_id) = session.local_task_participant(self.private_local_host && !is_device, &call) {
+                                Frame::LocalTaskCall {
+                                    id: next_id, operation: call.operation, client_id: session.client_id().into(), agent_id,
+                                    controller: call.controller, code_context: call.code_context.expect("checked local run"),
+                                }
                             } else {
                                 Frame::Call { id:next_id, operation:call.operation, controller:call.controller, attribution:if control_attribution {call.attribution.map(Box::new)} else {None}, code_context:call.code_context, openai_context:if openai_context_supported {call.openai_context} else {None} }
                             };
@@ -2638,6 +2667,62 @@ mod tests {
             user: user.into(),
             anchor: Arc::downgrade(anchor),
         }
+    }
+
+    #[tokio::test]
+    async fn private_local_task_scope_requires_the_exact_grant_connection_and_bound_owner() {
+        use crate::code_mode::RunBinding;
+        let original = session("original", "unused");
+        let other = session("other", "unused");
+        let grant = legacy("fixture", &original);
+        let owner = crate::bridge::owner("fixture", &grant).unwrap();
+        let joined = original
+            .collaboration
+            .dispatch(&owner, "join", serde_json::json!({"name":"creator"}))
+            .await
+            .unwrap();
+        let binding = RunBinding {
+            owner,
+            agent_id: joined["agent_id"].as_str().unwrap().into(),
+            token: joined["token"].as_str().unwrap().into(),
+        };
+        let (reply, _response) = oneshot::channel();
+        let mut call = Call {
+            relay_maintenance: false,
+            operation: Operation::CallTool {
+                name: "ssmcp.exec.start".into(),
+                arguments: serde_json::json!({}),
+            },
+            controller: None,
+            attribution: None,
+            openai_context: None,
+            code_context: Some(wire::CodeContext {
+                run_id: "a".repeat(32),
+                code: "return 1".into(),
+                timestamp_ms: 1,
+                session_id: None,
+                thread_id: None,
+            }),
+            authorization: Some(grant),
+            binding: Some(binding.clone()),
+            reply,
+            traffic_failure: TrafficFailureState::default(),
+        };
+        assert!(original.validate_binding(call.binding.as_ref()).is_ok());
+        assert_eq!(
+            original.local_task_participant(true, &call),
+            Some(binding.agent_id.clone())
+        );
+        assert!(other.local_task_participant(true, &call).is_none());
+        assert!(original.local_task_participant(false, &call).is_none());
+        call.binding.as_mut().unwrap().owner = "other".into();
+        assert!(original.local_task_participant(true, &call).is_none());
+        call.binding = Some(binding);
+        call.operation = Operation::CallTool {
+            name: "ssmcp.time.prompt".into(),
+            arguments: serde_json::json!({"action":"schedule"}),
+        };
+        assert!(original.local_task_participant(true, &call).is_none());
     }
 
     fn github(subject: &str, login: &str) -> Identity {

@@ -24,6 +24,9 @@ impl Workspace {
         Self(path)
     }
     fn terminals(&self) -> Arc<Terminals> {
+        #[cfg(target_os = "linux")]
+        ssmcp::enter_session_budget()
+            .expect("admit the native test process before spawning commands");
         Terminals::with_terminal(
             Path::new("/bin/sh"),
             self.0.clone(),

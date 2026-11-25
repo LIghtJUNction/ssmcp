@@ -1255,6 +1255,13 @@ async fn manager_command(
     args: &[String],
     allow_failure: bool,
 ) -> Result<std::process::Output> {
+    #[cfg(target_os = "linux")]
+    let mut command = if matches!(program, "systemctl" | "systemd-run") {
+        Command::from(crate::session_budget::manager_command(program)?)
+    } else {
+        Command::new(program)
+    };
+    #[cfg(not(target_os = "linux"))]
     let mut command = Command::new(program);
     command
         .args(args)
@@ -1303,7 +1310,7 @@ async fn native_available() -> Result<()> {
             false,
         )
         .await?;
-        platform::executable("systemd-run").map_err(crate::Error::from)?;
+        crate::session_budget::manager_command("systemd-run")?;
     }
     #[cfg(target_os = "macos")]
     {
@@ -1324,10 +1331,12 @@ async fn native_available() -> Result<()> {
 }
 
 async fn native_start(directory: &Path, manifest: &Manifest) -> Result<()> {
-    crate::client::saved_resource_limits(&manifest.spec)?.require_background(true)?;
+    let resource_limits = crate::client::saved_resource_limits(&manifest.spec)?;
+    resource_limits.require_background(true)?;
     #[cfg(target_os = "linux")]
     {
-        let args = limits::native_arguments(directory, manifest)?;
+        let slice = resource_limits.new_slice()?;
+        let args = limits::native_arguments(directory, manifest, &resource_limits, &slice)?;
         manager_command("systemd-run", &args, false).await?;
     }
     #[cfg(target_os = "macos")]

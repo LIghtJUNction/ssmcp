@@ -108,6 +108,10 @@ enum Request {
         #[serde(default = "read_limit_default")]
         limit: usize,
     },
+    #[serde(alias = "ack_memory")]
+    AckTask {
+        job_id: String,
+    },
     Ack {
         timer_id: String,
         event_id: String,
@@ -731,6 +735,7 @@ impl State {
                 }
                 json!({"schedule":record.summary()})
             }
+            Request::AckTask { .. } => unreachable!("handled by the connection clock"),
             Request::Ack {
                 timer_id,
                 event_id,
@@ -775,6 +780,7 @@ impl Clock {
     pub(super) fn prompt(self: &Arc<Self>, arguments: Value) -> Result<Value, String> {
         let source = Source::capture();
         let owner = Owner::from_source(&source);
+        let hook_owner = Owner::for_task_hook(&source);
         let request: Request = serde_json::from_value(arguments)
             .map_err(|error| format!("invalid prompt request: {error}"))?;
         let read = match &request {
@@ -791,6 +797,12 @@ impl Clock {
                     "prompt_native_connection_closed: schedules cannot move to a new connection"
                         .into(),
                 );
+            }
+            if let Request::AckTask { job_id } = &request {
+                let hook_owner = hook_owner
+                    .as_ref()
+                    .ok_or("unknown task-failure hook for this exact caller and connection")?;
+                return state.memory_hooks.ack(hook_owner, job_id).map(envelope);
             }
             state.prompts.tick(now, wall);
             let result = state
@@ -816,7 +828,24 @@ impl Clock {
             result = state
                 .prompts
                 .read_events(&owner, timer_id.as_deref(), limit, true)
-                .map(envelope);
+                .map(|mut page| {
+                    if timer_id.is_none()
+                        && let Some(hook_owner) = &hook_owner
+                    {
+                        for notice in state.memory_hooks.read(hook_owner, limit) {
+                            let items = page
+                                .as_object_mut()
+                                .expect("prompt page")
+                                .entry(notice.page_key())
+                                .or_insert_with(|| json!([]));
+                            items
+                                .as_array_mut()
+                                .expect("notice list")
+                                .push(json!(notice));
+                        }
+                    }
+                    envelope(page)
+                });
         }
         self.start_prompt_scheduler();
         self.prompt_changed.notify_one();
@@ -957,14 +986,15 @@ impl Drop for Clock {
 
 pub(super) fn tool() -> Value {
     json!({"name":TOOL,
-        "description":"Schedule bounded agent-authored prompt hooks, without executing code or invoking a model. Required action: schedule/list/status/pause/resume/cancel/read/ack. schedule needs request_id, template, and exactly one of after_ms or at_unix_ms; it returns immediately. Same request_id and normalized arguments return the retained schedule; conflicting reuse fails. Optional interval_ms>=1000, max_fires counts logical ticks, lifetime_ms=1..86400000 (default24h). No interval means one shot. Template syntax is literal {{name}} substitution only, never eval, shell or recursive expansion. Scalar JSON variables: <=32, <=4096 bytes total, <=1024 bytes/value. Reserved builtins timer_id, scheduled_at, fired_at, tick, missed; time builtins are decimal Unix milliseconds. Template<=8192 bytes, rendered<=16384. One Clock scheduler queues due events independently of the caller. Late/unacknowledged interval ticks coalesce to one latest event; no catch-up burst. read returns stable event_id+revision, scheduled/actual fire and monotonic delay; acknowledge only after processing with exact timer_id,event_id,revision. Stale ACK leaves newer revisions pending. Pause freezes remaining next delay but not lifetime; cancel only stops future ticks. At most32 active schedules/128 retained records; unacked events are protected; acknowledged terminal metadata/idempotency retained300s. Original native connection+account+bound participant+conversation only, no target argument. HTTP disconnect retains events; native session disconnect/reload destroys this namespace, never remaps IDs. A supporting relay appends due events as prompt_hooks on eligible same-binding responses; older relays require explicit read. Provenance is agent_timer, never human input or approval. Requires negotiated time_observation_v2 and native prompt tool advertisement.",
+        "description":"Schedule bounded agent-authored prompt hooks, without executing code or invoking a model. Read returns confirmed memory-limit kills in memory_limit_hooks and fatal task signals in task_crash_hooks to the exact originating agent. After processing, use action ack_task with its job_id (ack_memory remains supported). Each connection keeps the latest 128 notices; replies and acknowledgements are idempotent. Required action: schedule/list/status/pause/resume/cancel/read/ack/ack_task. schedule needs request_id, template, and exactly one of after_ms or at_unix_ms; it returns immediately. Same request_id and normalized arguments return the retained schedule; conflicting reuse fails. Optional interval_ms>=1000, max_fires counts logical ticks, lifetime_ms=1..86400000 (default24h). No interval means one shot. Template syntax is literal {{name}} substitution only, never eval, shell or recursive expansion. Scalar JSON variables: <=32, <=4096 bytes total, <=1024 bytes/value. Reserved builtins timer_id, scheduled_at, fired_at, tick, missed; time builtins are decimal Unix milliseconds. Template<=8192 bytes, rendered<=16384. One Clock scheduler queues due events independently of the caller. Late/unacknowledged interval ticks coalesce to one latest event; no catch-up burst. read returns stable event_id+revision, scheduled/actual fire and monotonic delay; acknowledge only after processing with exact timer_id,event_id,revision. Stale ACK leaves newer revisions pending. Pause freezes remaining next delay but not lifetime; cancel only stops future ticks. At most32 active schedules/128 retained records; unacked events are protected; acknowledged terminal metadata/idempotency retained300s. Original native connection+account+bound participant+conversation only, no target argument. HTTP disconnect retains events; native session disconnect/reload destroys this namespace, never remaps IDs. A supporting relay appends due events as prompt_hooks on eligible same-binding responses; older relays require explicit read. Provenance is agent_timer, never human input or approval. Requires negotiated time_observation_v2 and native prompt tool advertisement.",
         "inputSchema":{"type":"object","additionalProperties":false,"required":["action"],"properties":{
-            "action":{"enum":["schedule","list","status","pause","resume","cancel","read","ack"]},
+            "action":{"enum":["schedule","list","status","pause","resume","cancel","read","ack","ack_memory","ack_task"]},
             "request_id":{"type":"string","minLength":1,"maxLength":128},"template":{"type":"string","minLength":1,"maxLength":MAX_TEMPLATE_BYTES},
             "variables":{"type":"object","maxProperties":32,"additionalProperties":{"type":["string","number","boolean","null"]}},
             "after_ms":{"type":"integer","minimum":0,"maximum":MAX_LIFETIME_MS},"at_unix_ms":{"type":"integer","minimum":civil::MIN_UNIX_MS,"maximum":civil::MAX_UNIX_MS},
             "interval_ms":{"type":"integer","minimum":1000,"maximum":MAX_LIFETIME_MS},"max_fires":{"type":"integer","minimum":1,"maximum":86401},
             "lifetime_ms":{"type":"integer","minimum":1,"maximum":MAX_LIFETIME_MS,"default":MAX_LIFETIME_MS},
+            "job_id":{"type":"string","minLength":1,"maxLength":96},
             "timer_id":{"type":"string","minLength":1,"maxLength":128},"event_id":{"type":"string","minLength":1,"maxLength":160},
             "revision":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":32,"default":4}},
             "oneOf":[
@@ -972,6 +1002,7 @@ pub(super) fn tool() -> Value {
                 {"properties":{"action":{"const":"list"}}},
                 {"properties":{"action":{"enum":["status","pause","resume","cancel"]}},"required":["timer_id"]},
                 {"properties":{"action":{"const":"read"}}},
+                {"properties":{"action":{"enum":["ack_memory","ack_task"]}},"required":["job_id"]},
                 {"properties":{"action":{"const":"ack"}},"required":["timer_id","event_id","revision"]}]},
         "annotations":{"readOnlyHint":false,"destructiveHint":false}})
 }

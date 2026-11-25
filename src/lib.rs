@@ -47,6 +47,10 @@ pub mod resources;
 pub(crate) mod server_endpoint;
 pub mod session;
 #[cfg(target_os = "linux")]
+pub(crate) mod session_budget;
+#[cfg(target_os = "linux")]
+pub use session_budget::enter as enter_session_budget;
+#[cfg(target_os = "linux")]
 mod steering;
 pub mod terminals;
 pub(crate) mod tool_repository;

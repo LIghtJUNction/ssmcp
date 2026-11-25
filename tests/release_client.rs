@@ -291,6 +291,8 @@ async fn finished(shell: &Shell, job: &Value) -> Value {
 #[tokio::test]
 async fn native_exec_preserves_arguments_environment_cwd_streams_and_exit_code() {
     let scratch = Scratch::new();
+    #[cfg(target_os = "linux")]
+    ssmcp::enter_session_budget().expect("admit the native test process before spawning commands");
     let shell =
         Shell::with_workspace(scratch.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
     let job = shell
@@ -333,6 +335,8 @@ async fn native_exec_preserves_arguments_environment_cwd_streams_and_exit_code()
 
 #[tokio::test]
 async fn native_exec_cancel_stops_a_live_process() {
+    #[cfg(target_os = "linux")]
+    ssmcp::enter_session_budget().expect("admit the native test process before spawning commands");
     let shell = Shell::new();
     let job = shell
         .call(

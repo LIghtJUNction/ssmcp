@@ -108,6 +108,22 @@ impl Process {
             output.set_observer(observer);
         }
         let shell = shell::Shell::with_shell_preference(preference, root, output.clone())?;
+        Self::from_shell(shell, output, observer, harness)
+    }
+
+    /// Schema discovery needs a registry but no interactive shell process.
+    pub(crate) fn for_discovery() -> crate::Result<Arc<Self>> {
+        let output = OutputStore::start_connection()?;
+        let shell = shell::Shell::with_workspace(std::env::current_dir()?, output.clone())?;
+        Self::from_shell(shell, output, None, None)
+    }
+
+    fn from_shell(
+        shell: Arc<shell::Shell>,
+        output: Arc<OutputStore>,
+        observer: Option<Arc<crate::observer::Pool>>,
+        harness: Option<crate::client::agent::Selection>,
+    ) -> crate::Result<Arc<Self>> {
         let registry = Registry::new();
         registry.replace(
             Provider::Terminal,
