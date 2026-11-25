@@ -1,4 +1,5 @@
 //! A worker connection is a read-only monitor, never an alternate composer.
+mod clock;
 mod metrics;
 
 use super::{Frame, Key, PanelTone, State, fit, panel, request_interrupt};
@@ -1283,19 +1284,7 @@ fn event_lines(
 ) -> Vec<LogLine> {
     let width = width.max(1);
     let mut output = Vec::new();
-    let seconds = entry.at_ms / 1000;
-    let time = if width >= 40 {
-        format!(
-            "{:02}:{:02}:{:02}  ",
-            seconds / 3600 % 24,
-            seconds / 60 % 60,
-            seconds % 60
-        )
-    } else if width >= 28 {
-        format!("{:02}:{:02}  ", seconds / 60 % 60, seconds % 60)
-    } else {
-        String::new()
-    };
+    let time = clock::label(entry.at_ms, width);
     let label = if width >= 10 && !tag.is_empty() {
         format!("{tag:<4}  ")
     } else {
