@@ -399,7 +399,7 @@ fn guidance(
     }
     let maintenance = round.map_or_else(String::new, |round| {
         format!(
-            " Maintenance {}: one authorized {} task, {} ms. Use collab.update with the current revision and original round_id to report start and the actual outcome; yield to input and preserve unknown operations.",
+            " Maintenance {}: one authorized {} task, {} ms. Use collab.update with the current revision and original round_id; yield to input and preserve unknown.",
             round.round_id, round.repository, round.budget_ms
         )
     });
@@ -413,7 +413,7 @@ fn guidance(
         "subscription_filter":{"client_ids":clients,"kinds":kinds},
         "await_target_type":"event",
         "message":format!(
-            "Continue authorized work; otherwise await these events for at most {} ms. Resume the same wait_id; acknowledge processed event and result cursors. ui.wait delivers input.{}",
+            "Continue authorized work; otherwise await these events ({} ms, same wait_id). ACK processed cursors. ui.wait delivers input.{}",
             policy.window_ms, maintenance
         )
     })
@@ -465,7 +465,7 @@ fn notice(control_client_id: &str, agent_id: &str, pool: &Pool) -> Value {
         "retiring":pool.counts.retiring,
         "registered_workers":pool.counts.registered,
         "message":format!(
-            "Worker pool {}: {standby} connected external worker(s) are standing by. Delegate suitable independent work with ssmcp.worker.submit and review worker.result. This notice does not start agents.",
+            "Worker pool {}: {standby} connected external worker(s) are standing by. Use ssmcp.worker.submit for independent work.",
             pool.client_id
         )
     })
@@ -510,7 +510,12 @@ fn append_section(
     structured.insert(key.into(), json!(notices));
     let text = notices
         .iter()
-        .filter_map(|notice| notice["message"].as_str())
+        .filter_map(|notice| match notice["standby"].as_u64() {
+            Some(count) => Some(format!(
+                "{count} standby. See structuredContent.worker_reminders."
+            )),
+            None => notice["message"].as_str().map(str::to_owned),
+        })
         .collect::<Vec<_>>()
         .join("\n");
     root.entry("content")

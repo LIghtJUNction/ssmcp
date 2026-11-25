@@ -196,7 +196,7 @@ fn wait_reply(run: &code_mode::AuditRun, client_id: &str, message: Option<&Value
         result["content"] = json!([]);
     }
     result["content"].as_array_mut().expect("message content").push(
-        json!({"type":"text","text":format!("TASK FINISH WAIT\n{receipt}\nOnly the final outer user_wait receipt may authorize ending. Follow completion_instruction if it does not grant may_finish:true.")})
+        json!({"type":"text","text":format!("TASK FINISH WAIT: {}. Check the final outer user_wait receipt.", receipt["status"].as_str().unwrap_or("unknown"))})
     );
     result
 }

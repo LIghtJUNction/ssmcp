@@ -50,6 +50,67 @@ struct VisibleMarker {
     publication: Publication,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum AdvisoryPage {
+    Gap(u64),
+    Routine {
+        cursor: u64,
+        through: u64,
+        has_more: bool,
+    },
+}
+
+impl AdvisoryPage {
+    fn from_notice(notice: &Value) -> Option<Self> {
+        if let Some(cursor) = gap_cursor(notice) {
+            return Some(Self::Gap(cursor));
+        }
+        let events = notice["events"].as_array()?;
+        if events.is_empty()
+            || !events.iter().all(|event| {
+                matches!(
+                    event["kind"].as_str(),
+                    Some("task.submitted" | "worker.started" | "worker.progress" | "worker.idle")
+                )
+            })
+        {
+            return None;
+        }
+        Some(Self::Routine {
+            cursor: notice["cursor"].as_u64()?,
+            through: notice["next_cursor"].as_u64()?,
+            has_more: notice["has_more"].as_bool()?,
+        })
+    }
+}
+
+#[derive(Default)]
+struct ModelReminder {
+    last: Option<(u64, AdvisoryPage, std::time::Instant)>,
+}
+
+impl ModelReminder {
+    // This records an attempted advisory response, never a delivery ACK. An explicit
+    // read always sees the retained journal, even if this HTTP response was lost.
+    fn project(&mut self, revision: u64, notice: Value, now: std::time::Instant) -> Option<Value> {
+        let Some(page) = AdvisoryPage::from_notice(&notice) else {
+            return Some(notice);
+        };
+        if self.last.is_some_and(|(old_revision, old_page, sent)| {
+            old_revision == revision
+                && old_page == page
+                && now.duration_since(sent) < Duration::from_secs(60)
+        }) {
+            return match page {
+                AdvisoryPage::Gap(_) => None,
+                AdvisoryPage::Routine { .. } => Some(read_required(&notice)),
+            };
+        }
+        self.last = Some((revision, page, now));
+        Some(notice)
+    }
+}
+
 #[derive(Clone)]
 struct Entry {
     user: String,
@@ -63,6 +124,7 @@ struct Entry {
     source: Option<Source>,
     pool_hint: Option<String>,
     problem: Option<String>,
+    model_reminder: Arc<Mutex<ModelReminder>>,
     visible: Arc<Mutex<HashMap<String, VisibleMarker>>>,
 }
 impl Entry {
@@ -165,6 +227,7 @@ impl Registry {
             source: None,
             pool_hint: None,
             problem: None,
+            model_reminder: Arc::default(),
             visible: Arc::new(Mutex::new(HashMap::new())),
         };
         entries.insert(key, entry.clone());
@@ -781,10 +844,42 @@ fn without_native_notices(mut response: Value) -> Value {
     response
 }
 
+fn notice_summary(notice: &Value) -> String {
+    let id = notice["subscription_id"].as_str().unwrap_or("subscription");
+    if let Some(error) = notice["error"].as_str() {
+        return format!("{id}: {error}");
+    }
+    if notice["status"] == "read_required" {
+        return format!("{id}: events.read (limit 1) before ACK.");
+    }
+    let mut summary = format!("{id}:");
+    for event in notice["events"].as_array().into_iter().flatten() {
+        use std::fmt::Write;
+        let _ = write!(
+            summary,
+            " {} {}",
+            event["seq"],
+            event["kind"].as_str().unwrap_or("?")
+        );
+        if let Some(status @ ("failed" | "unknown" | "cancelled" | "cancelling")) =
+            event["data"]["task_status"].as_str()
+        {
+            let _ = write!(summary, " ({status})");
+        }
+    }
+    summary.push_str(". See structuredContent.worker_events or events.read before ACK.");
+    summary
+}
+
 fn append_values(response: &Value, notices: &[Value], budget: usize) -> Option<Value> {
     let mut next = response.clone();
     let object = next.as_object_mut()?;
-    let text = format!("{HEADER}{}", serde_json::to_string(notices).ok()?);
+    let summaries = notices
+        .iter()
+        .map(notice_summary)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text = format!("{HEADER}{summaries}");
     object.insert("worker_events".into(), json!(notices));
     object
         .entry("structuredContent")
@@ -802,6 +897,14 @@ fn append_values(response: &Value, notices: &[Value], budget: usize) -> Option<V
         .saturating_sub(response.to_string().len())
         <= budget)
         .then_some(next)
+}
+
+fn read_required(notice: &Value) -> Value {
+    json!({
+        "client_id":notice["client_id"], "subscription_id":notice["subscription_id"],
+        "status":"read_required", "events":[], "read_limit":1,
+        "delivery":"events.read with limit 1 before events.ack",
+    })
 }
 
 /// Prefer a retained event prefix that fits the actual serialized response.
@@ -828,14 +931,7 @@ fn fit_notice(
         notice["next_cursor"] = next_cursor;
         notice["has_more"] = json!(true);
     }
-    let fallback = json!({
-        "client_id":notice["client_id"],
-        "subscription_id":notice["subscription_id"],
-        "status":"read_required",
-        "events":[],
-        "read_limit":1,
-        "delivery":"events.read with limit 1; handle the retained page before events.ack",
-    });
+    let fallback = read_required(&notice);
     let mut candidates = previous.to_vec();
     candidates.push(fallback.clone());
     append_values(response, &candidates, budget).map(|next| (next, fallback))
@@ -1109,7 +1205,27 @@ pub(in crate::http) async fn append(
     }) {
         return response;
     }
-    appended
+    // A wait woken by a subscription must return its complete reason. Compact
+    // only unsolicited repeats after the final authorization checks above.
+    if response["structuredContent"]["wake_reason"] == "subscription_event" || notices.is_empty() {
+        return appended;
+    }
+    let now = std::time::Instant::now();
+    let projected: Vec<_> = proof_contexts
+        .iter()
+        .zip(notices)
+        .filter_map(|((_, entry), notice)| {
+            entry
+                .model_reminder
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .project(entry.revision, notice, now)
+        })
+        .collect();
+    if projected.is_empty() {
+        return response;
+    }
+    append_values(&response, &projected, budget).unwrap_or(appended)
 }
 
 #[cfg(test)]

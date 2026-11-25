@@ -164,22 +164,22 @@ impl Record {
                 arguments["finish_request_id"] = json!(decision.request_id);
             }
             let context = if authority {
-                "The connection or verified asking thread is no longer authorized. Restore the real authorization and bind that thread before waiting again."
+                "Restore authorization and bind the original asking thread."
             } else if input {
-                "New user input keeps the task active. Process the delivered user_messages; ordinary input is not permission to end."
+                "Handle the delivered user_messages first."
             } else if self.outcome == Outcome::DecisionReady {
-                "This is an inner native result awaiting the final outer authorization and input-epoch check. Inspect the final outer user_wait receipt; this inner result is not permission."
+                "Check the final outer receipt for the decision."
             } else if denied {
-                "The user explicitly declined ending this task. Keep it active and continue the requested work; do not treat No as approval."
+                "The user explicitly declined. Continue the requested work."
             } else {
-                "No final Human approval was delivered. The task remains active; timeout, cancellation, errors and reading a decision are not permission to end."
+                "No consumed Human Yes; the task remains active."
             };
             receipt["task_active"] = json!(true);
             receipt["continue_wait"] = json!(!input);
             receipt["next_wait"] = json!({"helper":"ui.wait","client_id":self.client_id,
                 "arguments":arguments,"new_tool_call":true});
             receipt["completion_instruction"] = json!(format!(
-                "{context} Unless the final outer receipt grants may_finish:true, do not end the task. In a new outer tool call, actually await the indicated ui.wait after handling any new request. Do not use a timer, background sleep, repeated status reads, or a same-code_mode loop instead. Only a later explicit Human Yes consumed for this exact thread can authorize ending."
+                "{context} When ready to finish, actually await next_wait in a new outer tool call. Only a verified, consumed Human Yes can grant may_finish:true."
             ));
         }
         receipt
@@ -503,12 +503,22 @@ impl AuditRun {
             // Keep the complete receipt in structuredContent. The text mirror
             // needs only the decision facts and actionable next wait: copying
             // eight full instructions/decision payloads twice would exceed the
-            // existing reserved envelope. Ordinary wait text stays unchanged.
+            // existing reserved envelope. Ordinary waits carry no finish decision.
             let text_receipts: Vec<_> = receipts
                 .iter()
                 .map(|receipt| {
                     if receipt["intent"] != "finish" {
-                        return receipt.clone();
+                        let mut summary = json!({"client_id":receipt["client_id"],
+                            "wait_id":receipt["wait_id"],"status":receipt["status"]});
+                        if let Some(messages) =
+                            receipt["messages"].as_array().filter(|m| !m.is_empty())
+                        {
+                            summary["messages"] = json!(messages);
+                        }
+                        if !receipt["reason"].is_null() {
+                            summary["reason"] = receipt["reason"].clone();
+                        }
+                        return summary;
                     }
                     json!({"client_id":receipt["client_id"],"wait_id":receipt["wait_id"],
                     "recipient":receipt["recipient"],"intent":receipt["intent"],
@@ -522,8 +532,13 @@ impl AuditRun {
                     "next_wait":receipt.get("next_wait")})
                 })
                 .collect();
+            let guidance = if receipts.iter().any(|receipt| receipt["intent"] == "finish") {
+                "End only on the matching consumed Human Yes with may_finish:true. Otherwise follow structuredContent.user_wait."
+            } else {
+                "Match received messages against user_messages."
+            };
             fields.insert("user_wait".into(), json!(receipts));
-            content.push(json!({"type":"text","text":format!("USER WAIT\n{}\nOnly status received with matching user_messages confirms message delivery. End only when this outer receipt has status decided and may_finish true with a consumed Human Yes for the exact thread. Otherwise keep the task active: handle new input or explicit No, then actually await next_wait in a new outer tool call. Reuse only the pending request ID supplied in next_wait, never a terminal decision ID. Timeout, cancellation, reading a decision, timers, background sleep, polling, same-run loops and final answers do not substitute for the blocking wait. Full evidence and completion_instruction are in structuredContent.user_wait.", json!(text_receipts))}));
+            content.push(json!({"type":"text","text":format!("USER WAIT\n{}\n{guidance}", json!(text_receipts))}));
         }
         json!({"structuredContent":fields,"content":content})
     }
@@ -669,6 +684,9 @@ mod tests {
                 let fields = &addition["structuredContent"];
                 assert_eq!(fields.as_object().unwrap().len(), 1);
                 assert!(fields.get("continuation_reminder").is_none());
+                let text = addition["content"][0]["text"].as_str().unwrap();
+                assert!(text.contains(fields["user_wait"][0]["wait_id"].as_str().unwrap()));
+                assert_eq!(text.contains("Human Yes"), intent == Intent::Finish);
                 assert!(fields["user_wait"][0].get("user_consent_to_end").is_none());
                 assert!(!addition.to_string().contains("CONTINUATION REMINDER"));
                 assert_eq!(

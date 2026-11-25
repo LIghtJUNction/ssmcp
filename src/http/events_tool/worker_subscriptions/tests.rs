@@ -845,7 +845,7 @@ fn notice_budget_delivers_a_precise_prefix_or_explicit_read_fallback() {
         "subscription_id":"subscription_fixture","cursor":0,"next_cursor":9,"has_more":false,
         "events":(1..=4).map(|seq| json!({
             "seq":seq,"id":format!("event_{seq}"),"kind":"custom.progress",
-            "data":{"body":"x".repeat(1500)}
+            "data":{"body":"x".repeat(2500)}
         })).collect::<Vec<_>>()
     });
     let (response_with_events, prefix) =
@@ -864,4 +864,75 @@ fn notice_budget_delivers_a_precise_prefix_or_explicit_read_fallback() {
     assert_eq!(fallback["events"], json!([]));
     assert!(fallback.get("next_cursor").is_none());
     assert!(small_response.to_string().len() - response.to_string().len() <= 1400);
+}
+
+#[test]
+fn automatic_repeat_projection_keeps_material_events_and_explicit_recovery_available() {
+    let now = std::time::Instant::now();
+    let mut reminders = ModelReminder::default();
+    let page = json!({"status":"ready","client_id":"control","subscription_id":"sub",
+        "cursor":10,"next_cursor":11,"has_more":false,"events":[
+        {"seq":11,"kind":"worker.progress","data":{"task_status":"working","details":"full details"}}]});
+    let first = reminders.project(0, page.clone(), now).unwrap();
+    assert_eq!(first, page);
+    let repeat = reminders.project(0, page.clone(), now).unwrap();
+    assert_eq!(repeat["status"], "read_required");
+    assert_eq!(repeat["subscription_id"], "sub");
+    assert!(repeat.get("next_cursor").is_none());
+    let gap = json!({"status":"unavailable","subscription_id":"sub",
+        "error":"events_gap: cursor 28 precedes retained cursor 303; latest cursor 1327","events":[]});
+    assert_eq!(reminders.project(0, gap.clone(), now), Some(gap.clone()));
+    let mut moving_gap = gap.clone();
+    moving_gap["error"] =
+        json!("events_gap: cursor 28 precedes retained cursor 450; latest cursor 1474");
+    assert_eq!(reminders.project(0, moving_gap.clone(), now), None);
+    assert_eq!(
+        reminders.project(1, moving_gap.clone(), now),
+        Some(moving_gap.clone())
+    );
+    assert_eq!(
+        reminders.project(1, moving_gap.clone(), now + Duration::from_secs(60)),
+        Some(moving_gap)
+    );
+    for (kind, status) in [
+        ("worker.unknown", "unknown"),
+        ("worker.completed", "failed"),
+        ("user.input_available", ""),
+    ] {
+        let mut important = page.clone();
+        important["events"][0]["kind"] = json!(kind);
+        important["events"][0]["data"]["task_status"] = json!(status);
+        for _ in 0..2 {
+            let delivered = reminders.project(1, important.clone(), now).unwrap();
+            assert_eq!(delivered, important);
+            let summary = notice_summary(&delivered);
+            assert!(summary.contains(kind));
+            assert!(summary.contains(status));
+            assert!(!summary.contains("full details"));
+        }
+    }
+}
+
+#[test]
+fn text_summary_keeps_authoritative_machine_receipts_and_user_content() {
+    let original = json!({"isError":true,"content":[{"type":"text","text":"existing error"}],
+        "structuredContent":{"user_messages":[{"text":"actual user instruction"}]}});
+    let notice = json!({"subscription_id":"sub","status":"ready","cursor":10,"next_cursor":11,
+        "has_more":false,"events":[{"seq":11,"kind":"worker.completed","data":{"task_id":"original",
+        "task_status":"failed","details":"fixture event detail covered by structured access"}}]});
+    let result = append_values(&original, std::slice::from_ref(&notice), MAX_NOTICE_BYTES).unwrap();
+    assert_eq!(result["worker_events"], json!([notice]));
+    assert_eq!(
+        result["structuredContent"]["worker_events"],
+        result["worker_events"]
+    );
+    assert_eq!(
+        result["structuredContent"]["user_messages"],
+        original["structuredContent"]["user_messages"]
+    );
+    assert_eq!(result["content"][0], original["content"][0]);
+    assert_eq!(result["isError"], true);
+    let text = result["content"][1]["text"].as_str().unwrap();
+    assert!(text.contains("11 worker.completed (failed)"));
+    assert!(!text.contains("fixture event detail"));
 }
