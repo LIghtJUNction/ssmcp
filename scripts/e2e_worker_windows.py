@@ -1913,9 +1913,7 @@ class WorkerWindows(Harness):
                                       "desired_total": state["desired_total"]}
         frontend.send(b"\x01\x0b")
 
-    def outstanding_claim_retirement(self, *, force):
-        """Drive a busy station to target zero via a departure or two physical submissions."""
-        label = "forced-member" if force else "departed-member"
+    def retirement_pair(self, label, stations):
         directory = self.directory / label
         directory.mkdir(mode=0o700)
         workspace = directory / "workspace"
@@ -1923,7 +1921,7 @@ class WorkerWindows(Harness):
         environment = self.environment(label, directory)
         environment["HOME"] = str(directory)
         frontend = Frontend(self, label, self.client_command(name=label, extra_args=(
-            "--worker", "1", "--no-watchdog")), environment, workspace)
+            "--worker", str(stations), "--no-watchdog")), environment, workspace)
         parent, worker = self.select_pair(frontend, workspace)
         self.check(parent["id"] != worker["id"] and directory_chat_enabled(parent) is True
                    and directory_chat_enabled(worker) is False, "separate live parent and chat-disabled worker")
@@ -1933,8 +1931,14 @@ class WorkerWindows(Harness):
         self.coordinators[parent["id"]] = self.join(parent["id"], "parent")
         pool_id = worker["id"]
         manager = self.join(pool_id, "manager")
-        executor = self.join(pool_id, "executor", role="worker")
         self.bound(pool_id, manager, "ssmcp.worker.attach")
+        return frontend, directory, parent, pool_id, manager
+
+    def outstanding_claim_retirement(self, *, force):
+        """Drive a busy station to target zero via a departure or two physical submissions."""
+        label = "forced-member" if force else "departed-member"
+        frontend, directory, parent, pool_id, manager = self.retirement_pair(label, 1)
+        executor = self.join(pool_id, "executor", role="worker")
         def submit(key):
             return self.bound(pool_id, manager, "ssmcp.worker.submit", {
                 "request_id": key, "text": "Observe a synthetic assignment"})["task"]["task_id"]
@@ -1979,6 +1983,96 @@ class WorkerWindows(Harness):
                              "queued":1, "unique_tasks":2, "model_starts":0}
         frontend.request_exit()
         self.check(frontend.wait_exit() == 0, "parent exits cleanly after membership retirement")
+        self.assert_children_gone(directory)
+
+    def pending_group_retirement(self):
+        label = "pending-group"
+        frontend, directory, parent, pool_id, manager = self.retirement_pair(label, 5)
+        executors, claims, task_ids = [], [], []
+
+        def submit(key):
+            return self.bound(pool_id, manager, "ssmcp.worker.submit", {
+                "request_id": key, "text": "Observe a synthetic group retirement"})["task"]["task_id"]
+
+        # Sequential assignments keep the first worker's elapsed work strictly longest.
+        for index in range(5):
+            executor = self.join(pool_id, f"executor-{index}", role="worker")
+            executors.append(executor)
+            if index < 2:
+                task_ids.append(submit(f"task-{index}"))
+            receipt = self.bound(pool_id, executor, "ssmcp.worker.wait", {
+                "request_id": f"first-wait-{index}", "wait_ms": 0})
+            if index < 2:
+                self.check(receipt["status"] == "assigned" and receipt["claim"]["task_id"] == task_ids[index],
+                           "the intended worker holds its original claim")
+                claims.append(receipt["claim"])
+            else:
+                self.check(receipt["status"] == "waiting", "idle worker registers without receiving a task")
+        task_ids.append(submit("untouched"))
+        self.pool_projection(frontend, parent, lambda p: p["registered_workers"] == p["total"] == 5
+                             and p["working"] == 2 and p["idle"] == 3, "five registered workers ready")
+        frontend.send(b"\x01\x0b/worker -5\r")
+        group = self.pool_projection(frontend, parent, lambda p: p["desired_total"] == 0
+                                     and p["registered_workers"] == p["total"] == 5
+                                     and p["working"] == 2 and p["retiring"] == 3
+                                     and (p.get("last_resize") or {}).get("accepted") is True,
+                                     "the earlier group resize is acknowledged at Registered 5/0")
+        self.check(group["last_resize"].get("confirm_slot") is None and not group["last_resize"].get("forced"),
+                   "the group resize did not create consent to force any worker")
+        self.cases[label] = {"initial_registered": 5, "desired": 0, "initial_working": 2,
+                             "initial_retiring": 3, "group_created_confirmation": False}
+        frontend.send(b"\x01\x0b/worker -\r")
+        selected = self.pool_projection(
+            frontend, parent, lambda p: p["desired_total"] == 0 and p["registered_workers"] == p["total"] == 5
+            and p["working"] == 2 and (p.get("last_resize") or {}).get("accepted") is True
+            and p["last_resize"]["request_id"] > group["last_resize"]["request_id"]
+            and p["last_resize"].get("confirm_slot") == claims[0]["slot"] + 1,
+            "a fresh bare minus nominates the longest-working station at Registered 5/0")
+        self.check(not selected["last_resize"].get("forced"), "first nomination preserved all five stations")
+        frontend.until(lambda frame: "forcibly retire this same worker" in
+                       " ".join(" ".join(frame["rows"]).split()), "selected worker confirmation shown in parent PTY")
+        frontend.send(b"\x01\x0b/worker -\r")
+        self.pool_projection(frontend, parent, lambda p: p["desired_total"] == 0
+                             and p["registered_workers"] == p["total"] == 4 and p["working"] == 1
+                             and p["retiring"] == 3 and (p.get("last_resize") or {}).get("forced") is True
+                             and p["last_resize"]["request_id"] > selected["last_resize"]["request_id"],
+                             "confirmation removed precisely one of five pending stations")
+        roster = self.public_call("collab", {"action": "list", "client_id": pool_id})
+        self.check(all(any(a["agent_id"] == executor["agent_id"] for a in roster["agents"])
+                       for executor in executors), "all five external members remain connected")
+        late = self.bound(pool_id, executors[0], "ssmcp.worker.complete", {
+            "claim": claims[0], "status": "completed", "output": "synthetic late response"}, allow_error=True,
+            expected_error="remote claim is not current for this exact authenticated participant")
+        self.check(late.get("isError") is True, "late completion from the removed worker is rejected")
+
+        def task(index):
+            return self.bound(pool_id, manager, "ssmcp.worker.result", {"task_id": task_ids[index]})["task"]
+
+        original, other, queued = [task(index) for index in range(3)]
+        page = self.bound(pool_id, manager, "ssmcp.worker.tasks")["page"]
+        self.check(original["status"] == "unknown" and original["replay_safe"] is False
+                   and other["status"] == "cancelling" and queued["status"] == "queued"
+                   and queued["slot"] is None and len(page["tasks"]) == 3
+                   and {entry["task_id"] for entry in page["tasks"]} == set(task_ids),
+                   "only the nominated claim became unknown, and the queued task remains unassigned")
+        self.bound(pool_id, executors[1], "ssmcp.worker.complete", {"claim": claims[1], "status": "cancelled"})
+        for index, executor in enumerate(executors[1:], 1):
+            retirement = self.bound(pool_id, executor, "ssmcp.worker.wait", {
+                "request_id": f"release-wait-{index}", "wait_ms": 0})
+            self.check(retirement["status"] == "retiring", "remaining worker obtained its own retirement receipt")
+            release = self.bound(pool_id, executor, "ssmcp.worker.release", {"retirement": retirement["retirement"]})
+            self.check(release["status"] == "released" and not release["duplicate"],
+                       "remaining worker acknowledged its own retirement")
+        self.pool_projection(frontend, parent, lambda p: p["registered_workers"] == p["total"] ==
+                             p["desired_total"] == p["working"] == p["retiring"] == 0,
+                             "the original zero target converges after four ordinary acknowledgements")
+        self.check(task(0)["status"] == "unknown" and task(1)["status"] == "cancelled"
+                   and task(2)["status"] == "queued", "all original task outcomes persist at zero capacity")
+        self.cases[label].update(registered_after_nomination=5, registered_after_confirmation=4,
+                                 longest_selected=True, late_completion_refused=True, cooperative_releases=4,
+                                 final_registered=0, tasks=["unknown", "cancelled", "queued"], unique_tasks=3)
+        frontend.request_exit()
+        self.check(frontend.wait_exit() == 0, "parent exits cleanly after group retirement")
         self.assert_children_gone(directory)
 
     def default_and_parent_exit(self):
@@ -2103,6 +2197,7 @@ class WorkerWindows(Harness):
         self.prepare()
         self.outstanding_claim_retirement(force=False)
         self.outstanding_claim_retirement(force=True)
+        self.pending_group_retirement()
         self.default_and_parent_exit()
         self.worker_close()
         self.parent_reload()
@@ -2148,7 +2243,7 @@ class WorkerWindows(Harness):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, required=True)
-    parser.add_argument("--case", choices=("all", "departed-member", "forced-member", "retirements"), default="all")
+    parser.add_argument("--case", choices=("all", "departed-member", "forced-member", "pending-group", "retirements"), default="all")
     parser.add_argument("--fixture-binary", type=Path,
                         default=os.environ.get("SSMCP_E2E_FIXTURE_BINARY"))
     parser.add_argument("--decoder", type=Path)
@@ -2210,6 +2305,8 @@ def main():
                         harness.outstanding_claim_retirement(force=False)
                     if args.case in ("forced-member", "retirements"):
                         harness.outstanding_claim_retirement(force=True)
+                    if args.case in ("pending-group", "retirements"):
+                        harness.pending_group_retirement()
                 report["status"] = "passed"
                 exit_code = 0
             finally:

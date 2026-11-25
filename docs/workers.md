@@ -110,6 +110,8 @@ A successful, later roster from the same authenticated connection can establish 
 
 The monitor counts assigned time across tasks within one registration, including the current claim. After two hours it gives one advisory with the latest reported progress for that registration. In the main chat, `/worker -` requests retirement of the station with the longest assigned time, even when all stations are below two hours. A second human `/worker -` for that pending selection forces the same station offline. Its unconfirmed task becomes **unknown**, and delayed completion from the old claim is rejected.
 
+An earlier group resize can leave several workers awaiting release, including five registered workers at a target of zero. The first fresh `/worker -` selects the pending worker with the longest assigned time and displays its station number. The target and registered count stay the same. A second `/worker -` confirms that selection. If the worker has already acknowledged departure, the confirmation removes no further station.
+
 Capacity can range from zero to 128 stations. While a resize is awaiting retirement acknowledgements, only a repeat of the same target is accepted. The parent projection's `last_resize` identifies the actual request, target, acceptance and any error; sending a window-control message alone does not prove that the pool accepted it. A pool with zero stations remains connected and can grow again.
 
 ## Connect the external workers
