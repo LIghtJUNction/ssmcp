@@ -432,6 +432,7 @@ fn member(id: &str, status: &str) -> crate::wire::SteeringAgent {
         role: Some("worker".into()),
         status: status.into(),
         dreaming_active: None,
+        activity: None,
     }
 }
 
