@@ -129,7 +129,7 @@ async fn online_summary_alias_uses_registered_identity_and_authenticated_updates
     assert_eq!(
         public_wire,
         json!({"agent_id":id,"name":"Researcher",
-        "role":"Preparing a review","status":"idle"})
+        "role":"Preparing a review","status":"idle","tool_calls_10m":0})
     );
     let mut unsupported = public_wire.clone();
     unsupported["summary"] = public_wire["role"].clone();
