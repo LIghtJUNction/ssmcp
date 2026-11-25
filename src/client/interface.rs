@@ -533,6 +533,9 @@ pub(crate) async fn call(
     if let Some(error) = crate::wire::retired_tool_error(name) {
         return Err(error.into());
     }
+    if name == super::steering::handoff::TOOL {
+        return super::steering::handoff::call(arguments);
+    }
     if name == tool_summary::TOOL {
         return tool_summary::call(arguments);
     }
@@ -669,6 +672,7 @@ pub(crate) fn tools() -> Vec<Value> {
     });
     vec![
         queue_tool(),
+        super::steering::handoff::tool(),
         listener::tool(),
         tool_summary::tool(),
         reply::tool(),
@@ -1224,6 +1228,7 @@ mod tests {
         }
         let expected = std::collections::BTreeSet::from([
             "ssmcp.ui.action",
+            "ssmcp.ui.handoff",
             "ssmcp.ui.ask",
             "ssmcp.ui.filter",
             "ssmcp.ui.get",

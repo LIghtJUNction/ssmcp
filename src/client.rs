@@ -3833,7 +3833,7 @@ async fn connect_inner(
     ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
     let mut steering_commands = steering::connect_with_chat(&client_id, VERSION, chat_enabled);
-    let mut access_commands = access::connect(access_supported);
+    let mut access_commands = access::connect(&client_id, access_supported);
     let mut message_commands = messaging::connect(messaging_supported);
     let mut chat = if !chat_enabled
         || (options.chat.input == chat_io::Input::Terminal

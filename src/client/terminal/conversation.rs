@@ -299,6 +299,14 @@ fn agent_key(value: &Value) -> String {
 }
 
 impl State {
+    fn chat_target<'a>(&'a self, coordinator: Option<&'a str>) -> Option<&'a str> {
+        // A recalled Next caller request keeps its original recipient while edited.
+        if self.conversation.editing.is_some() {
+            return Some(self.conversation.target.as_deref().unwrap_or("next"));
+        }
+        self.conversation.target.as_deref().or(coordinator)
+    }
+
     fn chat_recipients(&mut self, data: &Value) -> Vec<Value> {
         let observed = self.audit.observed_controllers();
         let mut entries = recipients(data, &self.caller_tracker.groups(&observed, data));
@@ -699,13 +707,15 @@ impl State {
                     .unwrap_or_else(|| format!("native:{id}")),
             );
         } else {
-            let target = self.conversation.target.as_deref().unwrap_or_else(|| {
-                if crate::client::chat_io::terminal_agent_label().is_some() {
-                    "configured"
-                } else {
-                    "next"
-                }
-            });
+            let target = self
+                .chat_target(data["handoff_coordinator"].as_str())
+                .unwrap_or_else(|| {
+                    if crate::client::chat_io::terminal_agent_label().is_some() {
+                        "configured"
+                    } else {
+                        "next"
+                    }
+                });
             self.conversation.selected = entries
                 .iter()
                 .position(|entry| field(entry, "agent_id") == target)
@@ -1257,7 +1267,9 @@ impl State {
             self.notice = Some("Preview only · connect a session to queue a requirement".into());
             return;
         }
-        if self.conversation.editing.is_none() && self.conversation.target.is_none() {
+        let coordinator = steering::handoff::coordinator();
+        let target = self.chat_target(coordinator.as_deref());
+        if self.conversation.editing.is_none() && target.is_none() {
             if self.conversation.agent_pending.is_some() {
                 self.notice = Some(
                     "Chat agent is still handling the previous message · draft retained".into(),
@@ -1286,9 +1298,8 @@ impl State {
         }
         // The native edit API treats omitted target as "keep the previous one".
         // The composer always shows a deliberate choice, including Next caller.
-        let target = Some(self.conversation.target.as_deref().unwrap_or("next"));
         let result = if let Some(id) = self.conversation.editing.clone() {
-            steering::publish_edit(&id, &text, target).map(|()| id)
+            steering::publish_edit(&id, &text, Some(target.unwrap_or("next"))).map(|()| id)
         } else {
             steering::submit(&text, target)
         };
@@ -2963,7 +2974,9 @@ impl State {
                 ("Name and model are display labels".into(), PanelTone::Muted),
             ]);
         } else {
-            let target = self.conversation.target.as_deref().unwrap_or("next");
+            let target = self
+                .chat_target(data["handoff_coordinator"].as_str())
+                .unwrap_or("next");
             let id = field(selected, "agent_id");
             let pending = items(data, "queue")
                 .iter()
@@ -3283,9 +3296,7 @@ impl State {
             self.chat_input_line("", g.left)
         });
         let mut label = self
-            .conversation
-            .target
-            .as_ref()
+            .chat_target(data["handoff_coordinator"].as_str())
             .map(|target| {
                 if target == "next" {
                     return "Next caller".into();
@@ -4992,6 +5003,25 @@ mod tests {
                 "{columns} columns:\n{screen}"
             );
         }
+    }
+
+    #[test]
+    fn handoff_default_recipient_is_visible_and_explicit_next_remains_selectable() {
+        let mut state = preview(28, 120);
+        let mut data = state.chat_data();
+        data["handoff_coordinator"] = json!("example-reviewer");
+        state.conversation.main_roster_fixture = Some(data);
+        state.chat_agents();
+        assert_eq!(
+            field(&state.chat_selected().unwrap(), "agent_id"),
+            "example-reviewer"
+        );
+        state.conversation.editing = Some("prior-request".into());
+        assert_eq!(state.chat_target(Some("example-reviewer")), Some("next"));
+        state.conversation.editing = None;
+        state.conversation.target = Some("next".into());
+        state.chat_agents();
+        assert_eq!(field(&state.chat_selected().unwrap(), "agent_id"), "next");
     }
 
     #[test]

@@ -188,6 +188,7 @@ impl AuditRun {
                     name,
                     "ssmcp.ui.questions"
                         | "ssmcp.ui.get"
+                        | "ssmcp.ui.handoff"
                         | "ssmcp.ui.question_ack"
                         | "ssmcp.ui.question_delivery"
                         | "ssmcp.ui.tool_summary"
@@ -1229,6 +1230,7 @@ mod tests {
 
         for tool in [
             "ssmcp.ui.get",
+            "ssmcp.ui.handoff",
             "ssmcp.ui.questions",
             "ssmcp.ui.tool_summary",
         ] {

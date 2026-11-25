@@ -23,7 +23,14 @@ pub(super) fn current_prompt(arguments: &str) -> Result<String, String> {
             .trim();
         let (recipient, note) = rest
             .split_once(char::is_whitespace)
-            .ok_or("Usage: /invite handoff POOL_PARTICIPANT progress-and-todo")?;
+            .ok_or("Usage: /invite handoff PARTICIPANT progress-and-todo")?;
+        if pool.is_none() {
+            let id = super::steering::handoff::offer(control_id, &cwd, recipient, note.trim())?;
+            let successor = recipient.split_once('>').map_or(recipient, |(_, to)| to);
+            return Ok(format!(
+                "@ssmcp\nOn control {control_id}, bind your own main participant {successor}. Call ssmcp.ui.handoff with {{\"handoff_id\":\"{id}\"}} within 10 minutes. Reuse the same ID for a lost receipt. Read progress, pending work, unknown outcomes and request references before continuing."
+            ));
+        }
         let offer = build_handoff(control_id, &cwd, pool.as_ref(), recipient, note.trim())?;
         super::worker_window::send_handoff(&offer)?;
         return Ok(format!(
@@ -41,7 +48,11 @@ pub(super) fn current_prompt(arguments: &str) -> Result<String, String> {
             snapshot["client_id"].as_str().unwrap_or_default()
         ));
     }
-    render(arguments, control_id, &cwd, pool.as_ref())
+    let mut prompt = render(arguments, control_id, &cwd, pool.as_ref())?;
+    if arguments.trim().is_empty() && pool.is_none() {
+        prompt.push_str("\nFor a main handoff, bind your own main participant on this control and call ssmcp.ui.handoff with {}. Give its public participant ID to the operator for /invite handoff PARTICIPANT progress-and-todo. A bound predecessor identifies itself the same way.");
+    }
+    Ok(prompt)
 }
 
 fn build_handoff(

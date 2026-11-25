@@ -36,6 +36,9 @@ struct Pending {
 #[derive(Default)]
 struct Manager {
     view: Snapshot,
+    control: String,
+    initial_list: Option<u64>,
+    original_subject: Option<String>,
     next_id: u64,
     sender: Option<mpsc::Sender<Request>>,
     pending: Option<Pending>,
@@ -46,8 +49,11 @@ impl Manager {
         self.view.revision = self.view.revision.saturating_add(1);
     }
 
-    fn connect(&mut self, supported: bool) -> mpsc::Receiver<Request> {
+    fn connect(&mut self, control: &str, supported: bool) -> mpsc::Receiver<Request> {
         let (sender, receiver) = mpsc::channel(1);
+        self.control = control.to_owned();
+        self.original_subject = None;
+        self.initial_list = None;
         self.sender = Some(sender);
         self.pending = None;
         self.view = Snapshot {
@@ -58,7 +64,9 @@ impl Manager {
         };
         if supported {
             // A new connection owns a fresh ACL. Never reuse another session's list.
-            let _ = self.request(AccessCommand::List {});
+            if self.request(AccessCommand::List {}).is_ok() {
+                self.initial_list = self.pending.as_ref().map(|p| p.id);
+            }
         }
         receiver
     }
@@ -106,6 +114,15 @@ impl Manager {
             Ok(result)
         }) {
             Ok(result) => {
+                if self.initial_list == Some(id) {
+                    self.initial_list = None;
+                    self.original_subject = result
+                        .entries
+                        .iter()
+                        .find(|e| e.owner)
+                        .or_else(|| (result.entries.len() == 1).then(|| &result.entries[0]))
+                        .map(|entry| entry.subject.clone());
+                }
                 self.view.entries = result.entries;
                 self.view.loaded = true;
                 self.view.last_error = None;
@@ -135,6 +152,16 @@ impl Manager {
         }
     }
 
+    fn original_account(&self, control: &str) -> Option<String> {
+        let original = self.original_subject.as_ref()?;
+        (self.control == control
+            && self.view.connected
+            && self.view.loaded
+            && !self.view.pending
+            && self.view.entries.iter().any(|e| &e.subject == original))
+        .then(|| original.clone())
+    }
+
     fn disconnect(&mut self) {
         let pending = self.pending.take().is_some();
         self.sender = None;
@@ -162,6 +189,10 @@ pub(super) fn snapshot() -> Snapshot {
     state().view.clone()
 }
 
+pub(super) fn original_account(control: &str) -> Option<String> {
+    state().original_account(control)
+}
+
 pub(super) fn refresh() -> Result<(), String> {
     state().request(AccessCommand::List {})
 }
@@ -178,8 +209,8 @@ pub(super) fn remove(user: &str) -> Result<(), String> {
     })
 }
 
-pub(super) fn connect(supported: bool) -> mpsc::Receiver<Request> {
-    state().connect(supported)
+pub(super) fn connect(control: &str, supported: bool) -> mpsc::Receiver<Request> {
+    state().connect(control, supported)
 }
 
 /// Recheck after obtaining the writer, so expired requests never reach the wire.
@@ -223,7 +254,7 @@ mod tests {
     #[test]
     fn access_old_server_never_receives_a_request() {
         let mut manager = Manager::default();
-        let mut receiver = manager.connect(false);
+        let mut receiver = manager.connect("room", false);
         assert!(
             manager
                 .request(AccessCommand::List {})
@@ -238,7 +269,7 @@ mod tests {
     #[test]
     fn access_only_current_server_acknowledgement_changes_entries() {
         let mut manager = Manager::default();
-        let mut receiver = manager.connect(true);
+        let mut receiver = manager.connect("room", true);
         let request = receiver.try_recv().unwrap();
         assert!(manager.view.pending);
         assert!(manager.view.entries.is_empty());
@@ -259,7 +290,7 @@ mod tests {
         assert_eq!(manager.view.entries.len(), 1);
         assert!(manager.view.last_message.is_none());
         manager.disconnect();
-        let mut fresh = manager.connect(true);
+        let mut fresh = manager.connect("room", true);
         let request = fresh.try_recv().unwrap();
         manager.reply(add.id, Ok(owner()));
         assert!(manager.view.entries.is_empty());
@@ -270,7 +301,7 @@ mod tests {
     #[test]
     fn access_timeout_marks_outcome_unknown_and_ignores_late_reply() {
         let mut manager = Manager::default();
-        let mut receiver = manager.connect(true);
+        let mut receiver = manager.connect("room", true);
         let request = receiver.try_recv().unwrap();
         manager.pending.as_mut().unwrap().deadline = Instant::now();
         manager.poll();
@@ -281,6 +312,26 @@ mod tests {
         assert!(manager.view.entries.is_empty());
         manager.disconnect();
         assert!(!manager.view.connected);
+    }
+
+    #[test]
+    fn handoff_account_stays_bound_to_initial_access_and_control() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("original", true);
+        let mut first = owner();
+        first.entries[0].owner = false;
+        manager.reply(receiver.try_recv().unwrap().id, Ok(first));
+        assert_eq!(manager.original_account("original").as_deref(), Some("42"));
+        assert_eq!(manager.original_account("other"), None);
+        manager.request(AccessCommand::List {}).unwrap();
+        assert_eq!(manager.original_account("original"), None);
+        let mut later = owner();
+        later.entries[0].subject = "33".into();
+        later.entries[0].owner = false;
+        manager.reply(receiver.try_recv().unwrap().id, Ok(later));
+        assert_eq!(manager.original_account("original"), None);
+        manager.disconnect();
+        assert_eq!(manager.original_account("original"), None);
     }
 
     #[test]

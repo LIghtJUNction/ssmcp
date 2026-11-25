@@ -1,4 +1,5 @@
 //! Client-owned requests. Broker revisions decide whether an edit won against delivery.
+pub(crate) mod handoff;
 pub(super) mod receipt;
 
 use crate::wire::{
@@ -294,6 +295,7 @@ struct DeliveredMemory {
 
 #[derive(Default)]
 struct Manager {
+    handoffs: handoff::Handoffs,
     outbox: Outbox,
     connected: bool,
     // A connection without chat owns a control channel but no outbox room.
@@ -420,7 +422,7 @@ impl Manager {
             .or(self.outbox.room_id.as_ref());
         json!({
             "schema_version":1,"connected":self.connected,"supported":self.supported,
-            "chat_enabled":self.chat_enabled(),
+            "chat_enabled":self.chat_enabled(),"handoff_coordinator":self.handoffs.coordinator(),
             "room_id":self.outbox.room_id,"session_id":session_id,"revision":self.revision,
             "roster_age_ms":self.roster_received.map(|at| at.elapsed().as_millis().min(u64::MAX as u128) as u64),
             "agents":self.agents.iter().map(|agent| {
@@ -665,7 +667,7 @@ impl Manager {
         self.mutable()?;
         validate_text(text)?;
         validate_reference_warnings(&reference_warnings)?;
-        let target = self.target(target)?;
+        let target = self.target(target.or(self.handoffs.coordinator()))?;
         self.reserve_record(text.len())?;
         let id = random_id()?;
         self.outbox.records.push(Record {
@@ -1069,6 +1071,7 @@ impl Manager {
     }
 
     fn disconnect(&mut self) {
+        self.handoffs = handoff::Handoffs::default();
         self.connected = false;
         self.ready = false;
         self.sender = None;
@@ -1697,8 +1700,12 @@ pub(super) fn request_status(id: &str) -> Option<&'static str> {
     with(|manager| manager.request_status(id))
 }
 pub(super) fn submit(text: &str, target: Option<&str>) -> Result<String, String> {
-    let id = with(|manager| manager.submit(text, target))?;
-    super::interface::questions::user_input(target);
+    let (id, recipient) = with(|manager| {
+        let id = manager.submit(text, target)?;
+        let recipient = target.or(manager.handoffs.coordinator()).map(str::to_owned);
+        Ok::<_, String>((id, recipient))
+    })?;
+    super::interface::questions::user_input(recipient.as_deref());
     Ok(id)
 }
 
