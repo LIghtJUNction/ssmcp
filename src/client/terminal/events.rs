@@ -149,7 +149,7 @@ impl Event {
     }
 
     fn always_open_in_chat(&self) -> bool {
-        self.meta.kind == Kind::Conversation && self.meta.notice_summary.is_none()
+        self.meta.kind == Kind::Conversation && self.meta.notice.is_none()
     }
 
     fn expanded(&self, scope: EventScope) -> bool {
@@ -1302,7 +1302,7 @@ impl EventView {
             let display = crate::audit::event(Value::String(text.to_owned()));
             let text = display.as_str().unwrap_or_default();
             if !meta.user && meta.input {
-                meta.notice_summary = coordinator_notice(event["input_origin"].as_str(), text);
+                meta.notice = coordinator_notice(event["input_origin"].as_str(), text);
             }
             self.ingest_inner(text.as_bytes(), meta);
         } else if meta.command
@@ -2040,7 +2040,7 @@ impl EventView {
         let new_image = self.new_image.take();
         let mut new_images = false;
         let mut image_anchor = None;
-        let mut previous_compact_tool = false;
+        let mut previous_compact_row = false;
         let palette = format!(
             "{}:{}:{}",
             palette_key(ui),
@@ -2090,7 +2090,7 @@ impl EventView {
                     ));
                 }
                 rows.extend(block.rows);
-                previous_compact_tool = false;
+                previous_compact_row = false;
                 visible_events += group.members.len();
                 continue;
             }
@@ -2101,10 +2101,10 @@ impl EventView {
             if let Some(group) = groups.iter().find(|group| group.contains(index)) {
                 if index == group.start {
                     visible_events += 1;
-                    if !rows.is_empty() && !(previous_compact_tool && !group.expanded) {
+                    if !rows.is_empty() && !(previous_compact_row && !group.expanded) {
                         rows.push((group.head, String::new()));
                     }
-                    previous_compact_tool = !group.expanded;
+                    previous_compact_row = !group.expanded;
                     let selected = self.selected == Some(group.head);
                     if selected {
                         selected_row = Some(rows.len());
@@ -2171,26 +2171,29 @@ impl EventView {
             new_images |= new_image == Some(event.id);
             let selected = Some(event.id) == self.selected;
             let chat = self.scope == EventScope::Conversation;
-            let compact_tool = chat
-                && event.meta.kind == Kind::Tool
+            let compact_row = chat
+                && (event.meta.kind == Kind::Tool || event.meta.notice.is_some())
                 && event.image.is_none()
                 && !event.expanded(self.scope)
                 && self.query.is_empty();
-            if chat && !rows.is_empty() && !(previous_compact_tool && compact_tool) {
+            if chat && !rows.is_empty() && !(previous_compact_row && compact_row) {
                 rows.push((event.id, String::new()));
             }
-            previous_compact_tool = compact_tool;
+            previous_compact_row = compact_row;
             if selected {
                 selected_row = Some(rows.len());
             }
             let conversation = chat && event.meta.kind == Kind::Conversation;
             if conversation && event.image.is_none() {
-                if let Some(summary) = &event.meta.notice_summary
+                if let Some(notice) = &event.meta.notice
                     && !event.chat_expanded
                     && self.query.is_empty()
                 {
-                    let heading = clip_plain(&format!("  ▸ {summary}"), width);
-                    rows.push((event.id, paint(&heading, "muted", ui, selected && focused)));
+                    let heading = clip_plain(&format!("  ▸ {}", notice.summary), width);
+                    rows.push((
+                        event.id,
+                        paint(&heading, notice.tone, ui, selected && focused),
+                    ));
                     continue;
                 }
                 let input = event.meta.user || event.meta.input;
@@ -2384,7 +2387,7 @@ impl EventView {
                     rows.push((event.id, format!("{}{gutter}{row}", " ".repeat(indent))));
                 }
                 {
-                    previous_compact_tool = false;
+                    previous_compact_row = false;
                     let range = format!(
                         "{}–{}/{}",
                         offset + 1,
@@ -2647,7 +2650,7 @@ impl EventView {
                     }
                     let preview = &event.cache.as_ref().unwrap().2;
                     if !preview.is_empty() {
-                        previous_compact_tool = false;
+                        previous_compact_row = false;
                     }
                     for (index, line) in preview.iter().enumerate() {
                         let hint = index + 1 == preview.len();
@@ -3033,20 +3036,31 @@ fn unstyled(text: &str) -> String {
     sanitize(text, false)
 }
 
+struct Notice {
+    summary: String,
+    tone: &'static str,
+}
+
 /// Only generated notices get a disclosure row. The original redacted message
 /// stays available through Enter, search and Logs.
-fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<String> {
+fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
     match origin? {
         "system_hook" if text.starts_with("Worker pool ") => {
             let (_, detail) = text.split_once(": ")?;
             let (standby, _) =
                 detail.split_once(" connected external worker(s) are standing by.")?;
-            Some(format!("{} 个工位待命", standby.parse::<u64>().ok()?))
+            Some(Notice {
+                summary: format!("{} 个工位待命", standby.parse::<u64>().ok()?),
+                tone: "muted",
+            })
         }
         "system_hook"
             if text.starts_with("Continue authorized work; otherwise await these events") =>
         {
-            Some("协调者等待策略".into())
+            Some(Notice {
+                summary: "协调者等待策略".into(),
+                tone: "muted",
+            })
         }
         "worker_event" => {
             let body =
@@ -3056,35 +3070,37 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<String> {
                 .as_str()
                 .is_some_and(|error| error.starts_with("events_gap:"))
             {
-                return Some("事件记录有缺口，需核对任务状态".into());
+                return Some(Notice {
+                    summary: "事件记录有缺口，需核对任务状态".into(),
+                    tone: "warning",
+                });
             }
-            let label = match value["kind"].as_str() {
+            let (label, tone) = match value["kind"].as_str() {
                 Some("worker.completed") => match value["data"]["task_status"].as_str() {
-                    Some("failed") => "任务失败",
-                    Some("cancelled") => "任务已取消",
-                    Some("completed") => "任务完成",
-                    _ => "任务已结束",
+                    Some("failed") => ("任务失败", "error"),
+                    Some("cancelled") => ("任务已取消", "warning"),
+                    Some("completed") => ("任务完成", "muted"),
+                    _ => ("任务已结束", "muted"),
                 },
-                Some("task.submitted") => "任务已提交",
-                Some("worker.started") => "开始执行",
-                Some("worker.progress") => "进度更新",
-                Some("worker.idle") => "待命",
-                Some("worker.offline") => "已离线",
-                Some("worker.retiring") => "正在退役",
-                Some("worker.cancelling") => "正在取消",
-                Some("worker.unknown") => "任务结果未知",
-                Some("agent.maintenance_requested") => "维护请求",
-                Some("user.input_available") => "收到新指令",
-                _ if value["status"] == "unavailable" => "事件来源不可用",
-                _ if value["status"] == "read_required" => "有事件待查阅",
-                _ => "工作池事件",
+                Some("task.submitted") => ("任务已提交", "muted"),
+                Some("worker.started") => ("开始执行", "muted"),
+                Some("worker.progress") => ("进度更新", "muted"),
+                Some("worker.idle") => ("待命", "muted"),
+                Some("worker.offline") => ("已离线", "warning"),
+                Some("worker.retiring") => ("正在退役", "muted"),
+                Some("worker.cancelling") => ("正在取消", "warning"),
+                Some("worker.unknown") => ("任务结果未知", "warning"),
+                Some("agent.maintenance_requested") => ("维护请求", "muted"),
+                Some("user.input_available") => ("收到新指令", "muted"),
+                _ if value["status"] == "unavailable" => ("事件来源不可用", "warning"),
+                _ if value["status"] == "read_required" => ("有事件待查阅", "muted"),
+                _ => ("工作池事件", "muted"),
             };
-            Some(
-                match value["data"]["slot"].as_u64().filter(|slot| *slot < 128) {
-                    Some(slot) => format!("工位 {} · {label}", slot + 1),
-                    None => label.into(),
-                },
-            )
+            let summary = match value["data"]["slot"].as_u64().filter(|slot| *slot < 128) {
+                Some(slot) => format!("工位 {} · {label}", slot + 1),
+                None => label.into(),
+            };
+            Some(Notice { summary, tone })
         }
         _ => None,
     }
@@ -3360,18 +3376,56 @@ mod tests {
     }
 
     #[test]
+    fn adjacent_notices_keep_errors_and_unknown_outcomes_on_visible_rows() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        for (kind, status, tone) in [
+            ("worker.unknown", "unknown", "warning"),
+            ("worker.completed", "failed", "error"),
+        ] {
+            let body = json!({"kind":kind,"data":{"slot":1,"task_status":status}});
+            let text = format!("WORKER STATE EVENTS — retained until explicit events.ack\n{body}");
+            view.ingest_event(
+                "message",
+                &json!({"type":"ssmcp.message","role":"tool","format":"plain",
+                "kind":"input","input_origin":"worker_event","text":text}),
+                b"",
+            );
+            assert_eq!(
+                view.events
+                    .back()
+                    .unwrap()
+                    .meta
+                    .notice
+                    .as_ref()
+                    .unwrap()
+                    .tone,
+                tone
+            );
+        }
+        let rows = view.render(36, 8, &plain_ui(), true);
+        let unknown = rows
+            .iter()
+            .position(|row| row.contains("任务结果未知"))
+            .unwrap();
+        assert!(rows[unknown + 1].contains("任务失败"));
+    }
+
+    #[test]
     fn coordinator_notices_distinguish_gaps_and_ordinary_inputs() {
         let text = r#"WORKER STATE EVENTS — retained until explicit events.ack
 {"status":"unavailable","error":"events_gap: cursor 28 precedes retained cursor 303"}"#;
         assert_eq!(
-            coordinator_notice(Some("worker_event"), text).as_deref(),
-            Some("事件记录有缺口，需核对任务状态")
+            coordinator_notice(Some("worker_event"), text).map(|notice| notice.tone),
+            Some("warning")
         );
         assert!(coordinator_notice(Some("system_hook"), text).is_none());
         let standby = "Worker pool abc: 5 connected external worker(s) are standing by. Delegate suitable work.";
         assert_eq!(
-            coordinator_notice(Some("system_hook"), standby).as_deref(),
-            Some("5 个工位待命")
+            coordinator_notice(Some("system_hook"), standby)
+                .unwrap()
+                .summary,
+            "5 个工位待命"
         );
         assert!(
             coordinator_notice(Some("system_hook"), "Keep this custom hook visible.").is_none()
