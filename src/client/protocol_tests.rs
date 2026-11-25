@@ -85,28 +85,15 @@ if scenario == "timeout":
 
 github = bool(hello["metadata"].get("allow"))
 code, ttl = ("", 0) if github else ("a" * 64, 600)
-if scenario.startswith("compat-"):
-    code, ttl = "", 0
-if scenario == "compat-login":
-    code = "a" * 64
-if scenario == "compat-ttl":
-    ttl = 600
 capabilities = []
-if scenario in ("session-access", "compat-delegation"):
+if scenario == "session-access":
     capabilities = [os.environ["SSMCP_PROTOCOL_ACCESS_CAPABILITY"]]
-elif scenario == "compat-attribution":
-    capabilities = ["control_attribution_v1"]
-elif scenario in ("messages", "compat-messages"):
+elif scenario == "messages":
     capabilities = [os.environ["SSMCP_PROTOCOL_MESSAGES_CAPABILITY"]]
 elif scenario == "session-messages":
     capabilities = [os.environ["SSMCP_PROTOCOL_ACCESS_CAPABILITY"],
                     "control_attribution_v1",
                     os.environ["SSMCP_PROTOCOL_MESSAGES_CAPABILITY"]]
-elif scenario == "compat-attribution-messages":
-    capabilities = ["control_attribution_v1",
-                    os.environ["SSMCP_PROTOCOL_MESSAGES_CAPABILITY"]]
-elif scenario == "compat-unknown":
-    capabilities = ["unknown_owner_permission"]
 if scenario == "policy-login":
     code, ttl = "a" * 64, 0
 elif scenario == "policy-ttl":
@@ -187,8 +174,8 @@ impl Fixture {
         let count = Cell::new(0usize);
         let result = register_transport(
             TransportKind::Relay,
+            None,
             metadata,
-            false,
             registered,
             || {
                 count.set(count.get() + 1);
@@ -492,8 +479,8 @@ async fn cancelled_registration_does_not_start_a_transport() {
     let attempts = Cell::new(0usize);
     let result = register_transport(
         TransportKind::Relay,
+        None,
         &metadata,
-        false,
         &mut registered,
         || {
             attempts.set(attempts.get() + 1);
@@ -508,73 +495,6 @@ async fn cancelled_registration_does_not_start_a_transport() {
     assert!(result.is_none());
     assert_eq!(attempts.get(), 0);
     assert!(!registered);
-}
-
-#[tokio::test]
-async fn account_compat_accepts_only_self_owned_ready_and_reaps_rejected_peers() {
-    for (scenario, valid) in [
-        ("compat-self", true),
-        ("compat-attribution", true),
-        ("current", false),
-        ("compat-login", false),
-        ("compat-ttl", false),
-        ("compat-delegation", false),
-        ("compat-messages", false),
-        ("compat-attribution-messages", false),
-        ("compat-unknown", false),
-    ] {
-        let fixture = Fixture::new();
-        let metadata = metadata(false);
-        let mut registered = false;
-        let result = register_transport(
-            TransportKind::Relay,
-            &metadata,
-            true,
-            &mut registered,
-            || fixture.command(scenario),
-            std::future::pending(),
-            READY_LIMIT,
-        )
-        .await;
-        fixture.report_registration(scenario, &result);
-        assert_eq!(fixture.hellos().len(), 1);
-        assert!(fixture.hellos()[0]["metadata"].get("allow").is_none());
-        if valid {
-            let mut registration = result.unwrap().unwrap();
-            assert!(!registration.access_supported);
-            assert!(!registration.messaging_supported);
-            assert!(registration.ready.1.is_empty());
-            assert_eq!(registration.ready.2, 0);
-            registration
-                .require_allow_access(&metadata.allow)
-                .await
-                .unwrap();
-            close(registration).await;
-        } else {
-            let error = registration_error(result);
-            assert!(
-                error
-                    .to_string()
-                    .contains("self-only account compatibility")
-            );
-            assert!(error.downcast_ref::<relay::PermanentFailure>().is_some());
-            // The next peer takes the same exclusive lease, proving the rejected
-            // process was terminated and reaped before another connection starts.
-            let registration = register_transport(
-                TransportKind::Relay,
-                &metadata,
-                true,
-                &mut registered,
-                || fixture.command("compat-self"),
-                std::future::pending(),
-                READY_LIMIT,
-            )
-            .await;
-            fixture.report_registration("compat-self", &registration);
-            let registration = registration.unwrap().unwrap();
-            close(registration).await;
-        }
-    }
 }
 
 #[tokio::test]
@@ -617,8 +537,8 @@ async fn transport_spawn_failure_identifies_the_path_without_retrying() {
         let error = registration_error(
             register_transport(
                 kind,
+                None,
                 &metadata(false),
-                false,
                 &mut registered,
                 || {
                     attempts.set(attempts.get() + 1);

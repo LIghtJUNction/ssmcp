@@ -13,7 +13,6 @@ mod groups;
 mod hints;
 mod history;
 mod listener;
-pub(super) mod logout;
 mod main_status;
 mod messaging;
 mod openai;
@@ -191,8 +190,6 @@ pub(super) struct Conversation {
     paste_recovery: Option<String>,
     retrying_paste: bool,
     access_request: Option<u64>,
-    pub(super) logout_task: Option<logout::Task>,
-    pub(super) exit_message: Option<String>,
     input_stamp: Option<InputStamp>,
     input_command: Option<String>,
     restored: bool,
@@ -524,7 +521,6 @@ impl State {
         }
         self.chat_poll_input();
         self.chat_poll_access();
-        self.chat_poll_logout();
         self.chat_poll_goal();
         self.chat_poll_force_send();
         self.chat_poll_agent();
@@ -869,9 +865,9 @@ impl State {
                     }
                 }
             }
-            "/login" => return Err("Use ssmcp username@server --register for a new account. Authorize the controller using the MCP URL in /logs.".into()),
+            "/login" => return Err("Authorize the controller using the MCP URL in /logs. This device connects to its registered owner without signing in.".into()),
             "/allow" => self.chat_allow(rest)?,
-            "/logout" => self.chat_logout(rest)?,
+            "/logout" => return Err("This device has no account login. Use /exit to close this session.".into()),
             "/handoff" => {
                 if self.preview {
                     return Err("Preview cannot export a live conversation".into());
@@ -1146,10 +1142,6 @@ impl State {
             }
             // Wait controls stay local even while editing or preparing input.
             self.dirty = true;
-            return;
-        }
-        if self.conversation.logout_task.is_some() {
-            self.notice = Some("Signing out · your draft is preserved".into());
             return;
         }
         if self.chat_wait_for_input() {
@@ -3496,9 +3488,9 @@ impl State {
                 } else if let Some(clock) = &clock_label {
                     fit(clock, available.min(usize::from(u16::MAX)) as u16)
                 } else if g.left == g.cols {
-                    let [account, quota] = self.account.compact_rows();
-                    let full = format!("{} · {}", account.trim(), quota.trim());
-                    let short = quota.trim().to_owned();
+                    let [role, owner] = self.account.compact_rows();
+                    let full = format!("{} · {}", role.trim(), owner.trim());
+                    let short = owner.trim().to_owned();
                     if full.width() <= available {
                         full
                     } else if short.width() <= available {

@@ -16,6 +16,17 @@ impl Session {
         owner: Option<&Identity>,
         command: AccessCommand,
     ) -> Result<AccessSnapshot, String> {
+        self.access_with_expected(broker, owner, command, None)
+            .await
+    }
+
+    pub(super) async fn access_with_expected(
+        &self,
+        broker: &Broker,
+        owner: Option<&Identity>,
+        command: AccessCommand,
+        expected: Option<&Identity>,
+    ) -> Result<AccessSnapshot, String> {
         if !self.is_alive() || !self.identity_required {
             return Err("this connection has no explicit account access policy".into());
         }
@@ -31,6 +42,11 @@ impl Session {
                     .into_iter()
                     .next()
                     .ok_or("unknown server username")?;
+                if expected.is_some_and(|expected| !same_identity(expected, &identity)) {
+                    return Err(
+                        "the resolved controller account changed; request access again".into(),
+                    );
+                }
                 if !self.is_alive() {
                     return Err("connection closed; access was not changed".into());
                 }

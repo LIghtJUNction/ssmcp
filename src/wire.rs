@@ -474,6 +474,26 @@ pub(crate) fn retired_tool_error(name: &str) -> Option<&'static str> {
 pub mod peer_port;
 
 impl Operation {
+    /// The relay's own scope negotiation and release of already allocated handles.
+    pub(crate) fn is_relay_maintenance(&self) -> bool {
+        match self {
+            Self::CallTool { name, arguments } if name == "ssmcp.client.capabilities" => {
+                arguments.as_object().is_some_and(|args| args.is_empty())
+            }
+            Self::CallTool { name, arguments }
+                if matches!(name.as_str(), "ssmcp.net.close" | "ssmcp.rsync.close") =>
+            {
+                arguments.as_object().is_some_and(|args| {
+                    args.len() == 1 && args.get("id").and_then(Value::as_str).is_some()
+                })
+            }
+            Self::PeerPort { command } => {
+                matches!(command.as_ref(), peer_port::Command::Close { .. })
+            }
+            _ => false,
+        }
+    }
+
     /// The actual operation, independent of caller-supplied display descriptions.
     pub fn name(&self) -> &str {
         match self {
@@ -586,6 +606,21 @@ impl AccessSnapshot {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Frame {
+    // ID zero is the initial admission handshake before any session metadata.
+    // Positive IDs refer to one local ACL request on the established stream.
+    ResolveController {
+        id: u64,
+        principal: String,
+    },
+    ResolvedController {
+        id: u64,
+        principal: String,
+        provider: String,
+        subject: String,
+    },
+    ApproveResolvedController {
+        id: u64,
+    },
     Hello {
         version: u32,
         mode: Mode,
@@ -630,6 +665,10 @@ pub enum Frame {
     SteeringReply {
         id: u64,
         result: Result<SteeringSnapshot, String>,
+    },
+    RelayMaintenance {
+        id: u64,
+        operation: Operation,
     },
     Call {
         id: u64,

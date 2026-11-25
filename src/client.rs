@@ -12,6 +12,8 @@ mod computer_control;
 mod config;
 mod connection_context;
 pub(crate) mod context_memory;
+mod controller_accounts;
+mod controller_command;
 mod environment;
 #[cfg(target_os = "android")]
 mod magisk;
@@ -77,7 +79,7 @@ use tokio::{
 
 const WORKER_WINDOW_CHILD_FLAG: &str = "--ssmcp-worker-window-child";
 
-const HELP: &str = r#"ssmcp — connect a device; control its tools remotely
+const HELP: &str = r#"ssmcp — make this device available to your MCP controller
 
 Usage: ssmcp [username@server] [options]
 
@@ -85,16 +87,14 @@ Start
   ssmcp                         Reuse your last successful connection
   ssmcp --worker N              Open chat and a worker window with N slots
   ssmcp local                   Start a same-machine MCP session on Linux
-  ssmcp alice@relay.example --register   Register a new account name in your browser
-  ssmcp alice@relay.example     Expose this device to that account (no device login)
-  ssmcp list                    List online processes and registered threads
-  ssmcp -i                      Open an authorized remote terminal
-  ssmcp attach [process|thread] ID|N   Attach to remote chat
-  ssmcp send [process|thread] ID|N TEXT   Submit chat input; print its receipt
-  ssmcp wait [REQUEST_ID ...]   Print actual replies; accepts piped receipts
+  ssmcp alice@relay.example     Make this device available to that account
+  ssmcp list [--json]           List this OS user's saved local sessions
+  ssmcp attach NAME             Reopen a running local session
+  ssmcp attach NAME --read-only Observe a running local session
 
 Manage
-  whoami · config               Read existing account info and manage client settings
+  whoami · config               Read public account info and manage client settings
+  controllers                   Review and approve controller accounts on this device
   context                     Saved local and HTTPS connection targets
   update [--check]              Update the installed client
   cleanup                      Inspect and clean registered workspace files
@@ -111,7 +111,6 @@ Options
   --worker N    Open chat and a separate worker monitor
   --version [--all]    Show the version or the locked dependency tree
   --no-watchdog  --theme NAME   --no-color
-  --no-browser  Print the registration link without opening it
 
 Same machine (Linux)
   1. Run ssmcp local in the directory you want to control.
@@ -130,14 +129,15 @@ Workers use remote agents by default; no local model starts.
 In a connected chat: /help, @file, $skill, !command. From the initial conversation, Left at draft start opens Statistics; /sessions chooses recipients.
 "#;
 
-const HELP_FULL: &str = r#"ssmcp — connect your devices and control authorized sessions
+const HELP_FULL: &str = r#"ssmcp — connect this device and manage its local sessions
 
 Usage: ssmcp username@server [options]
        ssmcp [--server URL] [options]
        ssmcp [connection options] --worker N
-       ssmcp whoami|logout [--server URL] [--json]
-       ssmcp list [--json | -i] [--client ID]
-       ssmcp -i [--server URL] [--client ID]
+       ssmcp whoami [USERNAME@SERVER] [--json]
+       ssmcp list [--json]
+       ssmcp controllers [list] [--json]
+       ssmcp controllers approve|revoke RELAY PROVIDER SUBJECT
        ssmcp config <set|get|unset> server [URL]
        ssmcp config path
        ssmcp paths [NAME ...] [--json | --plain] [--list]
@@ -148,17 +148,12 @@ Usage: ssmcp username@server [options]
        ssmcp --version [--all]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
        ssmcp [options] [--server URL]
-       ssmcp USERNAME@SERVER --register [--no-browser]
        ssmcp overview [--json] [--watch]
        ssmcp overview <show|state|jobs|exec|cancel|command> TARGET [arguments]
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
-       ssmcp attach [process|thread] ID|N [--remote] [--read-only]
-       ssmcp attach --local NAME [--read-only]
-       ssmcp attach process ID|N --terminal TERMINAL_ID [--read-only]
-       ssmcp send [process|thread] ID|N [TEXT|--stdin] [--wait] [--json]
-       ssmcp wait [REQUEST_ID ...] [--stdin] [--any|--all|--count N]
-                  [--timeout SECONDS] [--json] [--server URL]
+       ssmcp attach [list] [--json]
+       ssmcp attach [--local] [--read-only] [--] NAME
        ssmcp computer [version|download [VERSION]|install DOWNLOAD_ID|uninstall INSTALLATION_ID]
                       [--json]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
@@ -180,8 +175,6 @@ Usage: ssmcp username@server [options]
   --agent-exec PATH    Absolute executable for exec; optional --agent-argv-file PATH
   --agent-peer ID      Exact native message recipient for ssmcp; also set --agent-account PROVIDER:SUBJECT
   --username NAME      Named account on the selected server
-  --no-browser         Print the account registration link without opening it
-  -i, --interactive    Select an authorized account session and open its terminal
   --name NAME          Display name (default: hostname-pid)
   --daemon             Start a quiet, user-owned native background service
   --cpu-limit PERCENT  Linux background CPU quota; 100% is one CPU
@@ -220,7 +213,6 @@ Examples:
   ssmcp whoami
   ssmcp --name laptop
   ssmcp list
-  ssmcp -i
   ssmcp --no-watchdog --name one-shot
   ssmcp sessions status workstation
   ssmcp sessions stop workstation
@@ -228,38 +220,23 @@ Examples:
   sudo systemctl enable --now ssmcp
   ssmcp sessions create workstation --watchdog alice@my-server.example
   ssmcp attach --local workstation
-  ssmcp attach thread THREAD_ID
-  ssmcp send process PROCESS_ID 'Review the patch' | ssmcp wait --count 2
+  ssmcp attach --read-only workstation
   ssmcp sessions close workstation
 
 Start a controlled device with ssmcp username@server. The account must already
 exist on the relay. The device connects without an account token. Control apps
 authorize independently through MCP OAuth, using that account. A successful
 foreground connection saves its target for the next bare ssmcp invocation.
-Use ssmcp username@server --register to register a new username in the browser.
-Registration returns account information and creates no client login.
-whoami USERNAME@SERVER reads public account information.
+Create or manage the account on the relay portal. To inspect its public
+information, use ssmcp whoami USERNAME@SERVER.
 
-ssmcp list shows authorized processes and their registered threads. Numbers bind
-the last displayed directory for 5 minutes. Full IDs work directly; exact unique
-process names also work. Display names never identify a thread.
-Remote attach opens chat stdin/stdout. Process input fans out to its selected main
-and registered threads; thread input reaches only that exact recipient. Enter
-submits input. Ctrl-] or Ctrl-C detaches; pending requests remain running.
-Use -i or attach process ID --terminal TERMINAL_ID for a remote shell PTY;
-Ctrl-C reaches that shell. --read-only sends no chat/terminal input or resize.
+ssmcp list, sessions list and bare attach show this OS user's saved sessions.
+Use ssmcp attach NAME to connect through local IPC. Use --read-only to observe
+without taking input ownership, or -- before a literal name such as list.
+Ctrl-] detaches while the session keeps running. For sessions on another
+device, use the authorized MCP controller's list and connection-specific tools.
 ssmcp gui serve --assets PATH starts a paired GUI gateway for existing sessions.
 It prints its loopback URL and private pairing-file path; see gui --help.
-sessions list and bare attach show saved local sessions. Existing local names
-work offline; --local selects them explicitly, and --remote selects online chat.
-send prints a receipt. wait prints actual final replies: --any waits for one,
---all/--gather for all, and --count N for N distinct input results. Progress and
-delivery acknowledgements are not completion. --json prints result JSONL.
-Input is delivered on the recipient's next eligible native call; no model is
-started. Stopping attach or wait never cancels the remaining work.
-Chat I/O requires an upgraded relay and recipient client. Requests and outputs
-have bounded live-server-memory retention of at most 1 hour; a server restart
-loses pending requests and retained replies.
 Redirected stdout (or jsonl mode) emits one connection JSON object. Add its URL to
 an MCP client and authorize as the selected account.
 Live input, output and native tool events appear on stderr as readable blocks.
@@ -276,9 +253,6 @@ Install the persistent session manager with `ssmcp service install`; choose
 --system with an explicit non-root owner for boot startup, or a per-user service.
 New sessions use the running manager. Legacy --daemon also supports per-session
 systemd --user, launchd and Task Scheduler when the manager is not installed.
-Bare `ssmcp attach` lists local saved sessions. Ctrl-] detaches without stopping the session;
-the dashboard provides audit navigation. Use `ssmcp -i` for interactive input,
-or disable the dashboard when attaching to a saved session.
 --session-control explicitly grants this OS user's saved-session management.
 New remote-created sessions inherit connection settings and stay in the current
 workspace; children do not inherit this management grant.
@@ -494,8 +468,6 @@ struct Options {
     destination: Option<String>,
     server: Option<String>,
     username: Option<String>,
-    account_compat: bool,
-    relay: Option<account::Credential>,
     foreground_identity: Option<account::foreground_identity::Identity>,
     temporary: bool,
     name: Option<String>,
@@ -648,7 +620,6 @@ impl Options {
         let mut server = None;
         let mut context = None;
         let mut username = None;
-        let mut account_compat = false;
         let mut ssh = false;
         let mut name = None;
         let mut title = None;
@@ -807,12 +778,12 @@ impl Options {
                     );
                 }
                 Some("--no-browser") => {} // Accepted for previously saved startup commands.
-                Some("--account-compat") if new_connection => {
+                Some("--account-compat") => {
                     return Err(
                         "--account-compat was removed; connect with ssmcp username@server".into(),
                     );
                 }
-                Some("--account-compat") => account_compat = true,
+                Some("--register") => return Err("Register the owner account in the relay web portal, then connect this device with ssmcp username@server".into()),
                 Some("--username") => {
                     let value = args.next().ok_or("--username requires a name")?;
                     username = Some(crate::username::normalize(
@@ -1238,16 +1209,6 @@ impl Options {
                 "--allow requires a relay connection and cannot be used with --list-tools".into(),
             );
         }
-        if account_compat
-            && (allow.len() != 1
-                || username.is_some()
-                || destination.is_some()
-                || ssh
-                || local_mode
-                || list_tools)
-        {
-            return Err("--account-compat requires exactly one --allow USER@SERVER and no username, SSH destination, local mode or --list-tools".into());
-        }
         validate_title(title.as_deref())?;
         if let Some(name) = &name
             && (name.trim().is_empty() || name.len() > 128 || name.chars().any(char::is_control))
@@ -1260,8 +1221,6 @@ impl Options {
             destination,
             server,
             username,
-            account_compat,
-            relay: None,
             foreground_identity: None,
             temporary: false,
             name,
@@ -1333,36 +1292,6 @@ impl Options {
         Ok(metadata)
     }
 
-    /// Only a freshly verified saved account may use the old self-only wire shape.
-    /// The operator's allow policy remains unchanged in saved settings and output.
-    fn registration_metadata(&self) -> crate::Result<ClientMetadata> {
-        let mut metadata = self.metadata()?;
-        if self.account_compat {
-            let credential = self
-                .relay
-                .as_ref()
-                .ok_or("--account-compat requires a verified saved account before connecting")?;
-            let handle = credential
-                .username
-                .as_deref()
-                .ok_or("--account-compat requires the account's registered relay username")?;
-            if credential.subject.is_none()
-                || self.server.as_deref() != Some(credential.server.as_str())
-                || self.allow.as_slice()
-                    != [crate::server_endpoint::allow_principal(
-                        handle,
-                        &credential.server,
-                    )?]
-            {
-                return Err(
-                    "--account-compat account binding does not match the allow policy".into(),
-                );
-            }
-            metadata.allow.clear();
-        }
-        Ok(metadata)
-    }
-
     fn worker_window_arguments(&self, args: &[OsString]) -> Option<Vec<OsString>> {
         if self.worker_window_child
             || self.daemon
@@ -1414,14 +1343,10 @@ impl Options {
         if let Some(title) = &self.title {
             args.extend([OsString::from("--title"), OsString::from(title)]);
         }
-        // A signed-in account re-derives its self-allow from the saved credential.
-        if self.username.is_none() && (self.relay.is_none() || self.account_compat) {
+        if self.username.is_none() {
             for principal in &self.allow {
                 args.extend([OsString::from("--allow"), OsString::from(principal)]);
             }
-        }
-        if self.account_compat {
-            args.push(OsString::from("--account-compat"));
         }
         for path in &self.context_roots {
             args.extend([
@@ -2126,11 +2051,6 @@ async fn apply_account(options: &mut Options) -> crate::Result<()> {
     for principal in &options.allow {
         crate::server_endpoint::allow_handle_for_server(principal, &server)?;
     }
-    if options.account_compat {
-        options.relay = Some(account::compat_credential(&server, &options.allow).await?);
-        options.server = Some(server);
-        return Ok(());
-    }
     if options.allow.is_empty() {
         let username = match options.username.take() {
             Some(name) => name,
@@ -2141,48 +2061,8 @@ async fn apply_account(options: &mut Options) -> crate::Result<()> {
             .push(crate::server_endpoint::allow_principal(&username, &server)?);
         options.username = Some(username);
     }
-    options.relay = None;
     options.server = Some(server);
     Ok(())
-}
-
-/// Bare/named account connections already carry account ownership and quota.
-/// Only their exact pre-Ready legacy-format rejection may retry as verified self.
-/// Explicit anonymous --allow has no credential here and can never enter this path.
-async fn retry_legacy_self_account(
-    options: &mut Options,
-    rejection: &str,
-    registered: bool,
-) -> crate::Result<bool> {
-    if registered
-        || rejection != relay::LEGACY_ACCOUNT_ALLOW
-        || options.account_compat
-        || options.temporary
-        || options.username.is_none()
-    {
-        return Ok(false);
-    }
-    let Some(previous) = options.relay.as_ref() else {
-        return Ok(false);
-    };
-    let verified = account::compat_credential(&previous.server, &options.allow).await?;
-    if verified.subject != previous.subject
-        || verified.principal != previous.principal
-        || verified.token != previous.token
-    {
-        return Err(
-            "saved login changed during legacy account verification; start a new connection".into(),
-        );
-    }
-    options.relay = Some(verified);
-    options.account_compat = true;
-    options.username = None;
-    render::status(
-        "account",
-        "Notice",
-        "Older relay: reconnecting once with the same verified account and self-only access.",
-    );
-    Ok(true)
 }
 
 fn tool_repository_arguments(args: &[OsString]) -> Option<&[OsString]> {
@@ -2296,13 +2176,16 @@ pub async fn run() -> crate::Result<()> {
         #[cfg(not(target_os = "linux"))]
         return Err("007 recovery mode currently requires Linux and systemd".into());
     }
+    if args.first().is_some_and(|arg| arg == "controllers") {
+        return controller_command::run(&args[1..]);
+    }
     connection_context::normalize_args(&mut args)?;
     config::normalize_args(&mut args)?;
     if args.first().is_some_and(|arg| arg == "login")
         || (args.first().is_some_and(|arg| arg == "setup")
             && !args.get(1).is_some_and(|arg| arg == "browser"))
     {
-        return Err("client login was removed; use ssmcp username@server to connect or add --register to register a new username".into());
+        return Err("client login was removed; connect this device with ssmcp username@server and authorize the controller through MCP OAuth".into());
     }
     if computer_control::dispatch(&args).await? {
         return Ok(());
@@ -2318,9 +2201,6 @@ pub async fn run() -> crate::Result<()> {
     if connection_context::dispatch(&args)? || config::dispatch(&args)? || trust::dispatch(&args)? {
         return Ok(());
     }
-    if account::dispatch_registration(&args).await? {
-        return Ok(());
-    }
     if account::dispatch(&args).await? {
         return Ok(());
     }
@@ -2332,9 +2212,6 @@ pub async fn run() -> crate::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "service") {
         return crate::session::install::manage(args.into_iter().skip(1).collect()).await;
-    }
-    if args.first().is_some_and(|arg| arg == "attach") {
-        return crate::session::attach::manage(args.into_iter().skip(1).collect()).await;
     }
     if args.first().is_some_and(|arg| arg == "sessions")
         && args.get(1).is_some_and(|arg| arg == "create")
@@ -2571,45 +2448,6 @@ pub async fn run() -> crate::Result<()> {
             runner.record("stopped", attempt, None, None, None)?;
             return Ok(());
         }
-        if options.account_compat && attempt > 0 {
-            // Re-check the same saved account before every reconnect. This path
-            // never authorizes, claims a username or changes the local allow list.
-            let previous = options
-                .relay
-                .clone()
-                .ok_or("--account-compat lost its verified account; start a new connection")?;
-            apply_account(&mut options).await?;
-            let current = options
-                .relay
-                .as_ref()
-                .ok_or("--account-compat lost its verified account; start a new connection")?;
-            if current.subject != previous.subject
-                || current.principal != previous.principal
-                || current.token != previous.token
-            {
-                return Err(
-                    "--account-compat saved login changed; start a new explicit connection".into(),
-                );
-            }
-        }
-        if options.relay.as_ref().is_some_and(|credential| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                >= credential.expires_at
-        }) {
-            if let Some(runner) = &service {
-                runner.record(
-                    "disconnected",
-                    attempt,
-                    None,
-                    None,
-                    Some(relay::AUTH_EXPIRED),
-                )?;
-            }
-            return Err(relay::failure(relay::AUTH_EXPIRED.into()));
-        }
         attempt = attempt.saturating_add(1);
         if let Some(runner) = &service {
             runner.record("starting", attempt, None, None, None)?;
@@ -2686,11 +2524,6 @@ pub async fn run() -> crate::Result<()> {
         let error = result.as_ref().err().map(ToString::to_string);
         if error.as_deref() == Some(relay::AUTH_EXPIRED) {
             options.forget_foreground()?;
-        }
-        if let Some(message) = error.as_deref()
-            && retry_legacy_self_account(&mut options, message, registered).await?
-        {
-            continue;
         }
         if !watchdog_retries(options.watchdog, result.as_ref().err().map(Box::as_ref)) {
             if let Some(runner) = &service {
@@ -2852,10 +2685,71 @@ async fn stop_registration(
     Ok(())
 }
 
+async fn admit_controller<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    server: &str,
+    allow: &[String],
+) -> crate::Result<()>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let [principal] = allow else {
+        return Err(Box::new(relay::PermanentFailure(
+            "device admission requires one named account; approve additional controllers locally"
+                .into(),
+        )));
+    };
+    write_frame(
+        writer,
+        &Frame::ResolveController {
+            id: 0,
+            principal: principal.clone(),
+        },
+    )
+    .await?;
+    let frame = read_frame(reader).await?;
+    let (provider, subject) = match frame {
+        Some(Frame::ResolvedController {
+            id: 0,
+            principal: resolved,
+            provider,
+            subject,
+        }) if &resolved == principal => (provider, subject),
+        Some(Frame::Reject { message }) => {
+            return Err(Box::new(relay::PermanentFailure(format!(
+                "relay rejected controller admission: {message}"
+            ))));
+        }
+        _ => {
+            return Err(Box::new(relay::PermanentFailure(
+                "the relay must support device controller admission; update ssmcpd".into(),
+            )));
+        }
+    };
+    authorize_proposal(server, principal, &provider, &subject)
+        .map_err(|e| Box::new(relay::PermanentFailure(e.to_string())) as crate::Error)
+}
+
+fn authorize_proposal(
+    server: &str,
+    principal: &str,
+    provider: &str,
+    subject: &str,
+) -> crate::Result<()> {
+    let handle = crate::server_endpoint::allow_handle_for_server(principal, server)?;
+    let decision = controller_accounts::admit_resolved_target(server, provider, subject, &handle)?;
+    if !decision.permits_target() {
+        return Err(format!("controller {provider} {subject} on {server} needs local approval; see ssmcp controllers").into());
+    }
+    Ok(())
+}
+
 async fn register_transport(
     transport_kind: TransportKind,
+    admission_server: Option<&str>,
     metadata: &ClientMetadata,
-    account_compat: bool,
     registered: &mut bool,
     mut command: impl FnMut() -> Command,
     cancelled: impl std::future::Future<Output = ()>,
@@ -2904,6 +2798,21 @@ async fn register_transport(
             .take()
             .ok_or_else(|| format!("{} stdout unavailable", transport_kind.label()))?,
     );
+    if let Some(server) = admission_server {
+        let decision = tokio::select! {
+            result = timeout(deadline, admit_controller(&mut reader, &mut writer, server, &metadata.allow)) => {
+                result.map_err(|_| transport_kind.registration_timeout().into()).and_then(|r| r)
+            }
+            _ = &mut cancelled => {
+                stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
+                return Ok(None);
+            }
+        };
+        if let Err(error) = decision {
+            stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
+            return Err(error);
+        }
+    }
     if let Err(error) = write_frame(
         &mut writer,
         &Frame::Hello {
@@ -2947,14 +2856,6 @@ async fn register_transport(
             capabilities
                 .iter()
                 .any(|capability| capability == crate::wire::SESSION_ACCESS_CAPABILITY),
-            capabilities.iter().all(|capability| {
-                matches!(
-                    capability.as_str(),
-                    crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
-                        | crate::wire::CHAT_DISABLED_CAPABILITY
-                ) || (worker_dreaming_offer
-                    && capability == crate::wire::WORKER_DREAMING_CAPABILITY)
-            }),
             capabilities
                 .iter()
                 .any(|capability| capability == crate::wire::messages::CAPABILITY),
@@ -3018,7 +2919,6 @@ async fn register_transport(
     let (
         ready,
         access_supported,
-        self_only_capabilities,
         messaging_supported,
         version_notice,
         time_observation_supported,
@@ -3029,18 +2929,7 @@ async fn register_transport(
         openai_context_supported,
         chat_disabled_acknowledged,
     ) = ready;
-    if account_compat
-        && (!metadata.allow.is_empty()
-            || !ready.1.is_empty()
-            || ready.2 != 0
-            || !self_only_capabilities)
-    {
-        stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
-        return Err(Box::new(relay::PermanentFailure(
-            "server did not acknowledge self-only account compatibility; no login code or access delegation is permitted".into(),
-        )));
-    }
-    let github_auth = account_compat || !metadata.allow.is_empty();
+    let github_auth = !metadata.allow.is_empty();
     if github_auth && (!ready.1.is_empty() || ready.2 != 0) {
         stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
         return Err("server did not acknowledge the explicit account allow policy; upgrade ssmcpd before connecting".into());
@@ -3167,7 +3056,6 @@ async fn reclaim_steering(
 enum Transport<'a> {
     Account {
         server: &'a str,
-        credential: Option<&'a account::Credential>,
     },
     #[cfg(target_os = "linux")]
     Local(&'a local::Host),
@@ -3198,7 +3086,7 @@ impl Transport<'_> {
 
     fn command(&self, executable: &std::path::Path) -> Command {
         match self {
-            Self::Account { server, credential } => relay::command(executable, server, *credential),
+            Self::Account { server } => relay::command(executable, server),
             #[cfg(target_os = "linux")]
             Self::Local(host) => host.command(executable),
         }
@@ -3298,10 +3186,7 @@ async fn connect(
         attachment,
         attempt,
         registered,
-        Transport::Account {
-            server,
-            credential: options.relay.as_ref(),
-        },
+        Transport::Account { server },
     )
     .await
 }
@@ -3371,7 +3256,6 @@ async fn connect_inner(
     };
     let restart = reload::Restart::capture(options, service.is_some())?;
     let metadata = options.metadata()?;
-    let wire_metadata = options.registration_metadata()?;
     let executable = reload::installed_program()?.to_owned();
     #[cfg(all(test, unix))]
     let executable = output_expiry_fixture::transport_executable(executable)?;
@@ -3385,16 +3269,6 @@ async fn connect_inner(
     } else {
         transport.report_connecting();
     }
-    if options.account_compat {
-        render::status(
-            "account",
-            "Notice",
-            &format!(
-                "Authenticated compatibility: {} owns this connection, including account management and audit visibility; its account quota applies. Access-list editing is disabled.",
-                options.allow[0]
-            ),
-        );
-    }
     let cancelled = async {
         tokio::select! {
             _ = interrupt.recv() => {},
@@ -3402,38 +3276,22 @@ async fn connect_inner(
             _ = worker_parent_stopped(options) => {},
         }
     };
-    let routing_session_key = if !options.account_compat
-        && matches!(
-            &transport,
-            Transport::Account {
-                credential: Some(_),
-                ..
-            }
-        ) {
-        Some(match service {
-            Some(runner) => crate::session::definition_id(runner.directory())?,
-            None => account::device_identity::process_session_key()?,
-        })
-    } else {
-        None
-    };
     let mut metric_channel = None;
     let chat_enabled = options.worker.is_none() && options.chat.input != chat_io::Input::None;
+    let admission_server = match &transport {
+        Transport::Account { server } => Some(*server),
+        #[cfg(target_os = "linux")]
+        Transport::Local(_) => None,
+    };
     let registration = register_transport(
         transport.kind(),
-        &wire_metadata,
-        options.account_compat,
+        admission_server,
+        &metadata,
         registered,
         || {
             let mut command = transport.command(&executable);
-            if options.foreground_identity.is_some() && !options.account_compat {
+            if options.foreground_identity.is_some() {
                 command.env(relay::PROJECT_OFFER_ENV, "1");
-            }
-            if let Some(key) = &routing_session_key {
-                command.env(account::device_identity::SESSION_ENV, key);
-            }
-            if options.account_compat {
-                relay::restrict_to_self(&mut command);
             }
             if !chat_enabled && matches!(&transport, Transport::Account { .. }) {
                 let remote_pool =
@@ -3455,9 +3313,7 @@ async fn connect_inner(
     let Some(mut registration) = registration else {
         return Ok(ConnectionExit::Stopped);
     };
-    registration
-        .require_allow_access(&wire_metadata.allow)
-        .await?;
+    registration.require_allow_access(&metadata.allow).await?;
     if chat_enabled == registration.chat_disabled_acknowledged {
         stop_registration(
             &mut registration.process,
@@ -3473,10 +3329,7 @@ async fn connect_inner(
             "--input none requires a relay that acknowledges disabled human chat".into()
         })));
     }
-    let project_identity = options
-        .foreground_identity
-        .as_ref()
-        .filter(|_| !options.account_compat);
+    let project_identity = options.foreground_identity.as_ref();
     if let Some(identity) = project_identity {
         let client_id = &registration.ready.3;
         if registration.project_continuity {
@@ -3565,14 +3418,9 @@ async fn connect_inner(
     if let Some(notice) = version_notice {
         update::report_connection(notice, options.server.as_deref().unwrap_or(&url));
     }
-    terminal::set_logout_target(if options.temporary || options.is_local() {
-        None
-    } else {
-        options
-            .relay
-            .as_ref()
-            .map(|credential| (credential.server.as_str(), credential.token.as_str()))
-    });
+    if let [owner] = metadata.allow.as_slice() {
+        terminal::set_device_owner(owner);
+    }
     // Explicit --allow uses the same relay transport without an account token.
     // Preserve its final authorization outcome even when the child exits first.
     let mut incoming = Incoming::start(reader, transport_kind);
@@ -3686,16 +3534,6 @@ async fn connect_inner(
     }
     if let Some(title) = &metadata.title {
         output["title"] = json!(title);
-    }
-    if let Some(credential) = &options.relay {
-        output["transport"] = json!("https");
-        output["temporary"] = json!(options.temporary);
-        output["expires_at"] = json!(credential.expires_at);
-        if options.account_compat {
-            output["account_compat"] = json!(true);
-            output["ownership"] = json!("verified_account");
-            output["quota"] = json!("account");
-        }
     }
     if github_auth {
         output["auth"] = json!("github");
@@ -3915,7 +3753,12 @@ async fn connect_inner(
                 let sent = timeout(Duration::from_secs(10), async {
                     let mut writer = writer.lock().await;
                     if access::pending(request.id) {
-                        write_frame(&mut *writer, &Frame::Access { id: request.id, command: request.command }).await?;
+                        let frame = match request.command {
+                            crate::wire::AccessCommand::Add { principal } if admission_server.is_some() =>
+                                Frame::ResolveController { id: request.id, principal },
+                            command => Frame::Access { id: request.id, command },
+                        };
+                        write_frame(&mut *writer, &frame).await?;
                     }
                     Ok::<(), io::Error>(())
                 }).await;
@@ -4003,11 +3846,37 @@ async fn connect_inner(
                 }
                 render::set_git_status(git_status.snapshot());
             },
-            frame = incoming.frames.recv() => match frame {
+            received = incoming.frames.recv() => {
+                let (maintenance, frame) = match received {
+                    Some(Ok(Some(Frame::RelayMaintenance { id, operation }))) if operation.is_relay_maintenance() => (
+                        true,
+                        Some(Ok(Some(Frame::Call { id, operation, controller: None, attribution: None, code_context: None, openai_context: None }))),
+                    ),
+                    other => (false, other),
+                };
+                match frame {
                 Some(Ok(Some(Frame::Call {id,operation,controller,attribution,code_context,openai_context}))) => {
                     if let Some(attribution) = &attribution
                         && let Err(error) = attribution.validate() {
                         break Err(error.into());
+                    }
+                    if let Transport::Account { server } = &transport
+                        && !maintenance
+                    {
+                        let result = attribution.as_ref().ok_or("missing authenticated controller identity").and_then(|source| {
+                            match controller_accounts::observe_verified(server, &source.account, &client_id) {
+                                Ok(decision) if decision.is_allowed() => Ok(()),
+                                Ok(_) => Err("controller requires local approval; inspect ssmcp controllers on the device"),
+                                Err(error) => {
+                                    render::status("account", "Warning", &format!("Could not verify local controller policy: {error}"));
+                                    Err("local controller policy is unavailable")
+                                }
+                            }
+                        });
+                        if let Err(message) = result {
+                            write_frame(&mut *writer.lock().await, &Frame::Reply { id, result: Err(message.into()) }).await?;
+                            continue;
+                        }
                     }
                     while let Some(completed) = requests.try_join_next() {
                         match completed {
@@ -4152,11 +4021,29 @@ async fn connect_inner(
                     if let Err(error) = steering::reply(id, result) { terminal::notice(&error); }
                 }
                 Some(Ok(Some(Frame::MessagesReply { id, result }))) => messaging::reply(id, result),
+                Some(Ok(Some(Frame::ResolvedController { id, principal, provider, subject }))) => {
+                    if let Some(server) = admission_server && access::awaiting_proposal(id, &principal) {
+                        match authorize_proposal(server, &principal, &provider, &subject) {
+                            Ok(()) => {
+                                let mut writer = writer.lock().await;
+                                if access::awaiting_proposal(id, &principal) {
+                                    match timeout(Duration::from_secs(10), write_frame(&mut *writer, &Frame::ApproveResolvedController { id })).await {
+                                        Ok(Ok(())) => {},
+                                        Ok(Err(error)) => break Err(error.into()),
+                                        Err(_) => break Err("controller admission reply timed out".into()),
+                                    }
+                                }
+                            }
+                            Err(error) => access::reply(id, Err(error.to_string())),
+                        }
+                    }
+                }
                 Some(Ok(Some(Frame::AccessReply { id, result }))) => access::reply(id, result),
                 Some(Ok(None)) | None => break Ok(()),
                 Some(Ok(Some(Frame::Reject {message}))) => break Err(relay::failure(message)),
                 Some(Ok(Some(_))) => break Err(format!("{} received an unexpected protocol frame", transport_kind.label()).into()),
                 Some(Err(error)) => break Err(error.into()),
+                }
             },
             response = requests.join_next(), if !requests.is_empty() => match response {
                 Some(Ok(Ok(was_tool))) => {
@@ -4193,8 +4080,7 @@ async fn connect_inner(
     messaging::disconnect();
     requests.abort_all();
     while requests.join_next().await.is_some() {}
-    let pending_logout_message = terminal::finish_pending_logout().await;
-    if pending_logout_message.is_some() || terminal::exit_requested() {
+    if terminal::exit_requested() {
         intentionally_stopped = true;
         reload_requested = false;
         result = Ok(());
@@ -4227,13 +4113,7 @@ async fn connect_inner(
         backend.shutdown().await;
     }
     let _ = process.wait().await;
-    let exit_message = terminal::take_exit_message().or(pending_logout_message);
     drop(display_session);
-    if let Some(message) = exit_message {
-        // Print the complete safe outcome after restoring the terminal.
-        // Status rows clip long messages and can hide revocation failures.
-        eprintln!("{message}");
-    }
     render::status("shell", "Result", "DISCONNECTED");
     if reload_requested {
         return Ok(ConnectionExit::Reload { restart });
@@ -4862,7 +4742,6 @@ mod tests {
         assert!(options.is_local());
         assert!(options.destination.is_none());
         assert!(options.server.is_none());
-        assert!(options.relay.is_none());
         assert_eq!(options.title.as_deref(), Some("--server"));
         assert!(options.session_spec().is_err());
         assert!(
@@ -5655,7 +5534,6 @@ mod tests {
             .unwrap();
         assert_eq!(restored.allow, options.allow);
         assert_eq!(restored.server, options.server);
-        assert!(restored.relay.is_none());
         assert!(restored.destination.is_none());
     }
 
@@ -5843,20 +5721,7 @@ mod named_entry_tests {
 
         let server = options.server.as_deref().unwrap();
         let username = options.username.as_deref().unwrap();
-        let token = "a".repeat(64);
         options.allow = vec![crate::server_endpoint::allow_principal(username, server).unwrap()];
-        options.relay = Some(account::Credential {
-            server: server.into(),
-            token: token.clone(),
-            principal: "octocat@github".into(),
-            subject: Some("123".into()),
-            username: Some(username.into()),
-            expires_at: u64::MAX,
-        });
-        assert_eq!(
-            options.registration_metadata().unwrap().allow,
-            options.allow
-        );
         let spec = options.session_spec().unwrap();
         assert!(
             spec.args
@@ -5864,14 +5729,11 @@ mod named_entry_tests {
                 .any(|args| args == ["--username", "alice"])
         );
         assert!(!spec.args.iter().any(|arg| arg == "--allow"));
-        assert!(!serde_json::to_string(&spec).unwrap().contains(&token));
         let restored = Options::parse_saved(&spec).unwrap().unwrap();
         assert_eq!(restored.username.as_deref(), Some("alice"));
         assert_eq!(restored.server, options.server);
         assert!(restored.destination.is_none());
         assert!(restored.allow.is_empty());
-        assert!(restored.relay.is_none());
-        assert!(!restored.account_compat);
     }
 
     #[test]

@@ -93,10 +93,24 @@ pub(super) struct Entry {
     pub directory: PathBuf,
     pub pid: Option<u32>,
     pub process_start_ticks: Option<u64>,
+    pub metadata: Option<crate::wire::ClientMetadata>,
     pub stopped: bool,
 }
 
 impl Entry {
+    fn foreground(directory: PathBuf, value: Live) -> Self {
+        Self {
+            target: format!("live:{}", value.instance),
+            kind: "foreground",
+            name: value.metadata.name.clone(),
+            directory,
+            pid: Some(value.pid),
+            process_start_ticks: value.process_start_ticks,
+            metadata: Some(value.metadata),
+            stopped: false,
+        }
+    }
+
     pub fn empty(&self, state: &str) -> Value {
         json!({"target":self.target,"kind":self.kind,"name":self.name,
             "state":state,"pid":self.pid,"client_id":null,"generation":null,
@@ -134,8 +148,12 @@ fn valid_instance(value: &str) -> bool {
 }
 
 pub(super) fn scan() -> crate::Result<Inventory> {
+    inventory(true)
+}
+
+fn inventory(include_saved: bool) -> crate::Result<Inventory> {
     match super::super::session_root(false) {
-        Ok(root) => scan_in(&root),
+        Ok(root) => scan_in(&root, include_saved),
         Err(error)
             if error
                 .downcast_ref::<io::Error>()
@@ -151,7 +169,7 @@ pub(super) fn scan() -> crate::Result<Inventory> {
     }
 }
 
-fn scan_in(root: &Path) -> crate::Result<Inventory> {
+fn scan_in(root: &Path, include_saved: bool) -> crate::Result<Inventory> {
     super::super::verify_directory(root)?;
     let mut inventory = Inventory {
         entries: vec![],
@@ -159,43 +177,46 @@ fn scan_in(root: &Path) -> crate::Result<Inventory> {
         truncated: false,
     };
     let mut scanned = 0;
-    for entry in fs::read_dir(root)? {
-        scanned += 1;
-        if scanned > 4096 {
-            inventory.truncated = true;
-            break;
-        }
-        let entry = entry?;
-        if !entry.file_name().to_string_lossy().starts_with("session-") {
-            continue;
-        }
-        let found = (|| -> crate::Result<Entry> {
-            super::super::verify_directory(&entry.path())?;
-            let manifest: super::super::Manifest =
-                super::super::read_json(&entry.path().join("manifest.json"))?;
-            let (directory, manifest) = super::super::load(root, &manifest.spec.name)?;
-            if directory != entry.path() {
-                return Err("saved session entry does not match its manifest".into());
+    if include_saved {
+        for entry in fs::read_dir(root)? {
+            scanned += 1;
+            if scanned > 4096 {
+                inventory.truncated = true;
+                break;
             }
-            let stopped = match fs::symlink_metadata(directory.join("stop.requested")) {
-                Ok(_) => true,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-                Err(_) => true,
-            };
-            Ok(Entry {
-                target: format!("saved:{}", manifest.spec.name),
-                kind: "saved",
-                name: manifest.spec.name,
-                directory,
-                pid: None,
-                process_start_ticks: None,
-                stopped,
-            })
-        })();
-        add(&mut inventory, found);
-        if inventory.entries.len() >= MAX_ENTRIES {
-            inventory.truncated = true;
-            break;
+            let entry = entry?;
+            if !entry.file_name().to_string_lossy().starts_with("session-") {
+                continue;
+            }
+            let found = (|| -> crate::Result<Entry> {
+                super::super::verify_directory(&entry.path())?;
+                let manifest: super::super::Manifest =
+                    super::super::read_json(&entry.path().join("manifest.json"))?;
+                let (directory, manifest) = super::super::load(root, &manifest.spec.name)?;
+                if directory != entry.path() {
+                    return Err("saved session entry does not match its manifest".into());
+                }
+                let stopped = match fs::symlink_metadata(directory.join("stop.requested")) {
+                    Ok(_) => true,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+                    Err(_) => true,
+                };
+                Ok(Entry {
+                    target: format!("saved:{}", manifest.spec.name),
+                    kind: "saved",
+                    name: manifest.spec.name,
+                    directory,
+                    pid: None,
+                    process_start_ticks: None,
+                    metadata: None,
+                    stopped,
+                })
+            })();
+            add(&mut inventory, found);
+            if inventory.entries.len() >= MAX_ENTRIES {
+                inventory.truncated = true;
+                break;
+            }
         }
     }
     let live = root.join(LIVE);
@@ -211,15 +232,8 @@ fn scan_in(root: &Path) -> crate::Result<Inventory> {
                     break;
                 }
                 let entry = entry?;
-                let found = read_live(&entry.path()).map(|value| Entry {
-                    target: format!("live:{}", value.instance),
-                    kind: "foreground",
-                    name: value.metadata.name,
-                    directory: entry.path(),
-                    pid: Some(value.pid),
-                    process_start_ticks: value.process_start_ticks,
-                    stopped: false,
-                });
+                let directory = entry.path();
+                let found = read_live(&directory).map(|value| Entry::foreground(directory, value));
                 add(&mut inventory, found);
             }
         }
@@ -235,6 +249,54 @@ fn add(inventory: &mut Inventory, entry: crate::Result<Entry>) {
     }
 }
 
+pub(in crate::session) fn foreground_rows() -> crate::Result<Vec<Value>> {
+    let inventory = inventory(false)?;
+    if inventory.truncated {
+        eprintln!(
+            "Foreground session list is truncated. An exact live:INSTANCE target can still be attached."
+        );
+    }
+    Ok(inventory
+        .entries
+        .into_iter()
+        .map(|entry| {
+            let state = if entry.process_matches() {
+                "registered"
+            } else {
+                "offline"
+            };
+            json!({"target":entry.target,"kind":"foreground","name":entry.name,
+            "pid":entry.pid,"cwd":entry.metadata.map(|value|value.cwd),"state":state})
+        })
+        .collect())
+}
+
+pub(in crate::session) fn foreground_target(
+    target: &str,
+) -> crate::Result<(PathBuf, crate::wire::ClientMetadata, u32)> {
+    let entry = select(target)?;
+    if !entry.process_matches() {
+        return Err("registered foreground process has ended; list local sessions again".into());
+    }
+    Ok((
+        entry.directory,
+        entry.metadata.ok_or("expected a foreground session")?,
+        entry
+            .pid
+            .ok_or("foreground registration has no process ID")?,
+    ))
+}
+
+impl Entry {
+    pub(super) fn process_matches(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if let (Some(pid), Some(expected)) = (self.pid, self.process_start_ticks) {
+            return metrics::sample(pid).is_some_and(|sample| sample.start_ticks == expected);
+        }
+        true
+    }
+}
+
 pub(super) fn select(target: &str) -> crate::Result<Entry> {
     let root = super::super::session_root(false)?;
     if let Some(name) = target.strip_prefix("saved:") {
@@ -247,6 +309,7 @@ pub(super) fn select(target: &str) -> crate::Result<Entry> {
             directory,
             pid: None,
             process_start_ticks: None,
+            metadata: None,
             stopped,
         });
     }
@@ -258,15 +321,7 @@ pub(super) fn select(target: &str) -> crate::Result<Entry> {
         super::super::verify_directory(&parent)?;
         let directory = parent.join(instance);
         let value = read_live(&directory)?;
-        return Ok(Entry {
-            target: target.into(),
-            kind: "foreground",
-            name: value.metadata.name,
-            directory,
-            pid: Some(value.pid),
-            process_start_ticks: value.process_start_ticks,
-            stopped: false,
-        });
+        return Ok(Entry::foreground(directory, value));
     }
     Err("select an exact saved:NAME or live:INSTANCE target from ssmcp overview".into())
 }

@@ -30,6 +30,7 @@ pub(super) struct Request {
 
 struct Pending {
     id: u64,
+    grant_principal: Option<String>,
     deadline: Instant,
 }
 
@@ -78,6 +79,10 @@ impl Manager {
             .next_id
             .checked_add(1)
             .ok_or("权限请求编号已耗尽，请重新启动客户端")?;
+        let grant_principal = match &command {
+            AccessCommand::Add { principal } => Some(principal.clone()),
+            _ => None,
+        };
         self.sender
             .as_ref()
             .ok_or("权限连接已关闭")?
@@ -86,6 +91,7 @@ impl Manager {
         self.next_id = id;
         self.pending = Some(Pending {
             id,
+            grant_principal,
             deadline: Instant::now() + REQUEST_TIMEOUT,
         });
         self.view.pending = true;
@@ -183,6 +189,14 @@ pub(super) fn connect(supported: bool) -> mpsc::Receiver<Request> {
 }
 
 /// Recheck after obtaining the writer, so expired requests never reach the wire.
+pub(super) fn awaiting_proposal(id: u64, principal: &str) -> bool {
+    let mut state = state();
+    state.poll();
+    state.pending.as_ref().is_some_and(|pending| {
+        pending.id == id && pending.grant_principal.as_deref() == Some(principal)
+    })
+}
+
 pub(super) fn pending(id: u64) -> bool {
     let mut state = state();
     state.poll();

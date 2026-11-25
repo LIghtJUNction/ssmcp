@@ -515,6 +515,7 @@ async fn handle_request(capture: &Capture, request: Value) -> Result<Value> {
         Request::Open { read_only } => {
             let (runtime, backend_generation, live_cursor) = capture.snapshot();
             let active = runtime.is_some();
+            let chat_enabled = runtime.as_ref().map(|runtime| runtime.chat_enabled());
             let terminals = if let Some(runtime) = runtime {
                 runtime.terminals().call("terminal.list", json!({})).await?["terminals"].clone()
             } else {
@@ -523,7 +524,8 @@ async fn handle_request(capture: &Capture, request: Value) -> Result<Value> {
             Ok(
                 json!({"lease":capture.open(read_only)?,"read_only":read_only,
                 "generation":capture.generation,"terminals":terminals,"selected":"main",
-                "backend_active":active,"backend_generation":backend_generation,"live_cursor":live_cursor}),
+                "backend_active":active,"backend_generation":backend_generation,"live_cursor":live_cursor,
+                "chat_enabled":chat_enabled}),
             )
         }
         Request::Read { lease, cursor } => {
@@ -878,95 +880,140 @@ async fn read_live_logs(
     }))
 }
 
-/// Auto attach may fall back only when the saved definition is absent. A
-/// present but unreadable/invalid definition must retain its local error.
-pub(crate) fn saved_session_exists(name: &str) -> Result<bool> {
-    if super::validate_name(name).is_err() {
-        return Ok(false);
-    }
-    let root = match super::session_root(false) {
-        Ok(root) => root,
-        Err(error)
-            if error
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
-        {
-            return Ok(false);
-        }
-        Err(error) => return Err(error),
-    };
-    saved_session_in(&root, name)
+const ATTACH_HELP: &str = "Usage: ssmcp attach [list] [--json]\n       ssmcp attach [--local] [--read-only] TARGET\n       ssmcp attach [--read-only] -- NAME\n\nOpen a local live:INSTANCE or saved:NAME target from ssmcp list. An unqualified name selects a saved session. Use -- for a literal saved name.\nCtrl+] detaches, F7 switches terminals, and --read-only opens an observer.";
+
+#[derive(Debug, PartialEq)]
+enum AttachCommand {
+    Help,
+    List { json: bool },
+    Open { name: String, read_only: bool },
+    Foreground { target: String, read_only: bool },
 }
 
-fn saved_session_in(root: &std::path::Path, name: &str) -> Result<bool> {
-    match std::fs::symlink_metadata(super::session_directory(root, name)) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error.into()),
-        Ok(_) => {
-            super::load(root, name)?;
-            Ok(true)
+impl AttachCommand {
+    fn parse(args: Vec<OsString>) -> Result<Self> {
+        let mut name = None;
+        let mut read_only = false;
+        let mut json = false;
+        let mut help = false;
+        let mut literal = false;
+        let mut listing = false;
+        let mut literal_target = false;
+        for arg in args {
+            let arg = arg
+                .into_string()
+                .map_err(|_| "attach arguments must be UTF-8")?;
+            match arg.as_str() {
+                "--" if !literal => literal = true,
+                "--help" | "-h" if !literal => help = true,
+                "--local" if !literal => {}
+                "--read-only" if !literal => read_only = true,
+                "--json" if !literal => json = true,
+                _ if !literal && arg.starts_with('-') => return Err(ATTACH_HELP.into()),
+                _ if name.is_some() => {
+                    return Err("attach accepts exactly one local session name".into());
+                }
+                _ => {
+                    literal_target = literal;
+                    listing = !literal && arg == "list";
+                    name = Some(arg);
+                }
+            }
+        }
+        if help {
+            return Ok(Self::Help);
+        }
+        match name {
+            None if !literal => Ok(Self::List { json }),
+            Some(_) if listing => Ok(Self::List { json }),
+            Some(name) if !json => {
+                if !literal_target && name.starts_with("live:") {
+                    return Ok(Self::Foreground {
+                        target: name,
+                        read_only,
+                    });
+                }
+                let name = if literal_target {
+                    name
+                } else {
+                    name.strip_prefix("saved:").unwrap_or(&name).to_owned()
+                };
+                super::validate_name(&name)?;
+                Ok(Self::Open { name, read_only })
+            }
+            Some(_) => Err("--json is only available when listing local sessions".into()),
+            None => Err("attach needs a local session name after --".into()),
         }
     }
+}
+
+struct DisplayTarget {
+    name: String,
+    cwd: PathBuf,
+    title: Option<String>,
+    dashboard: Option<bool>,
 }
 
 pub async fn manage(args: Vec<OsString>) -> Result<()> {
-    let args: Vec<String> = args
-        .into_iter()
-        .map(|v| {
-            v.into_string()
-                .map_err(|_| "attach arguments must be UTF-8".into())
-        })
-        .collect::<Result<_>>()?;
-    let listing = args.is_empty()
-        || args.as_slice() == ["list"]
-        || args.as_slice() == ["--json"]
-        || args.as_slice() == ["list", "--json"];
-    if listing {
-        return super::manage(if args.iter().any(|v| v == "--json") {
-            vec!["list".into(), "--json".into()]
-        } else {
-            vec!["list".into()]
-        })
-        .await;
-    }
-    if args.as_slice() == ["--help"] || args.as_slice() == ["-h"] {
-        println!(
-            "Usage: ssmcp attach [list] [--json]\n       ssmcp attach --local NAME [--read-only]\n\nAttach to an existing running local session. Ctrl-] detaches; the session keeps running.\nCtrl-C reaches the inner terminal while input is enabled. F7 cycles session terminals.\n--read-only permits another observer without taking input ownership.\nUse ssmcp attach --remote ID_OR_NAME for an authorized online device."
-        );
-        return Ok(());
-    }
-    let mut read_only = !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal();
-    let mut name = None;
-    let mut literal = false;
-    for argument in args {
-        match argument.as_str() {
-            "--" if !literal => literal = true,
-            "--read-only" if !literal => read_only = true,
-            _ if !literal && argument.starts_with('-') => {
-                return Err("usage: ssmcp attach NAME [--read-only]".into());
-            }
-            _ if name.is_none() => name = Some(argument),
-            _ => return Err("attach accepts exactly one session name".into()),
+    let (target, directory, expected_pid, read_only) = match AttachCommand::parse(args)? {
+        AttachCommand::Help => {
+            println!("{ATTACH_HELP}");
+            return Ok(());
         }
-    }
-    let name = name.ok_or("attach needs a session name")?;
-    super::validate_name(&name)?;
-    let root = super::session_root(false)?;
-    let (directory, manifest) = super::load(&root, &name)?;
-    let open = ipc::request(
+        AttachCommand::List { json } => {
+            let flags: Vec<_> = if json { vec!["--json".into()] } else { vec![] };
+            return super::list_command(&flags).await;
+        }
+        AttachCommand::Open { name, read_only } => {
+            let load = || -> Result<_> { super::load(&super::session_root(false)?, &name) };
+            let (directory, manifest) = load().map_err(|error| format!(
+                "could not open local session {name}: {error}; use ssmcp list to see local sessions"
+            ))?;
+            let spec = manifest.spec;
+            let target = DisplayTarget {
+                dashboard: Some(crate::client::saved_chat_enabled(&spec)),
+                title: crate::client::session_title(&spec)?,
+                name: spec.name,
+                cwd: spec.cwd,
+            };
+            (target, directory, None, read_only)
+        }
+        AttachCommand::Foreground { target, read_only } => {
+            let (directory, metadata, pid) = super::overview::foreground_target(&target)?;
+            (
+                DisplayTarget {
+                    name: metadata.name,
+                    cwd: PathBuf::from(metadata.cwd),
+                    title: metadata.title,
+                    dashboard: None,
+                },
+                directory,
+                Some(pid),
+                read_only,
+            )
+        }
+    };
+    let read_only =
+        read_only || !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal();
+    let open = ipc::request_for_pid(
         &directory,
         ENDPOINT,
         json!({"op":"open","read_only":read_only}),
+        Duration::from_secs(5),
+        expected_pid,
     )
     .await
     .map_err(|error| {
-        format!("could not attach to {name}: {error}; inspect `ssmcp sessions status {name}`")
+        format!(
+            "could not attach to {}: {error}; inspect ssmcp list",
+            target.name
+        )
     })?;
     let lease = open["lease"]
         .as_str()
         .ok_or("attach endpoint returned no lease")?
         .to_owned();
-    let result = attached(&manifest.spec, directory.clone(), &lease, read_only, &open).await;
+    let result = attached(&target, directory.clone(), &lease, read_only, &open).await;
     // Best-effort lease release is independent of service lifetime. No stop,
     // restart or termination operation is ever sent by this frontend.
     let _ = ipc::request_with_timeout(
@@ -980,26 +1027,30 @@ pub async fn manage(args: Vec<OsString>) -> Result<()> {
 }
 
 async fn attached(
-    spec: &super::SessionSpec,
+    target: &DisplayTarget,
     directory: PathBuf,
     lease: &str,
     read_only: bool,
     open: &Value,
 ) -> Result<()> {
     use crate::client::{render, terminal, ui::Ui};
-    let name = &spec.name;
-    let title = crate::client::session_title(spec)?;
+    let name = &target.name;
     let ui = Ui::load(None)?;
     crate::client::interface::initialize_path(None);
     render::configure(ui.clone());
     // Use the attached session's workspace, which may differ from the directory
     // where this frontend was launched. This grants input import only.
-    let display_enabled = crate::client::saved_chat_enabled(spec);
+    let display_enabled = target.dashboard.unwrap_or(open["chat_enabled"] == true);
     let _local_input = display_enabled
-        .then(|| crate::client::attachments::LocalInput::bind(spec.cwd.clone()))
+        .then(|| crate::client::attachments::LocalInput::bind(target.cwd.clone()))
         .transpose()?;
     let display = if display_enabled {
-        terminal::Session::start(&ui, &spec.cwd.to_string_lossy(), title.as_deref(), None)?
+        terminal::Session::start(
+            &ui,
+            &target.cwd.to_string_lossy(),
+            target.title.as_deref(),
+            None,
+        )?
     } else {
         None
     };
@@ -1023,11 +1074,13 @@ async fn attached(
     let mut geometry = None;
     let mut waiting_input_warned = false;
     let mut keyboard = input::Keyboard::open(read_only)?;
+    let mut interrupt = crate::platform::interrupt_signal()?;
+    let mut terminate = crate::platform::terminate_signal()?;
     render::status(
         "attach",
         "Connected",
         &format!(
-            "Attached to {name}{} · Ctrl-] detaches · background session keeps running",
+            "Attached to {name}{} · Ctrl-] detaches · session keeps running",
             if read_only { " (read-only)" } else { "" }
         ),
     );
@@ -1065,8 +1118,6 @@ async fn attached(
         }
     });
     let mut reader = TaskGuard(Some(reader));
-    let mut interrupt = crate::platform::interrupt_signal()?;
-    let mut terminate = crate::platform::terminate_signal()?;
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut refresh = Instant::now();
@@ -1599,25 +1650,62 @@ mod tests {
     }
 
     #[test]
-    fn attach_local_probe_keeps_damaged_definitions_local() {
-        let root = std::env::temp_dir().join(format!(
-            "ssmcp-attach-probe-{}",
-            super::super::random_suffix().unwrap()
-        ));
-        crate::platform::private_directory(&root).unwrap();
-        assert!(!saved_session_in(&root, "missing").unwrap());
-        let directory = super::super::session_directory(&root, "broken");
-        crate::platform::private_directory(&directory).unwrap();
-        assert!(saved_session_in(&root, "broken").is_err());
-        std::fs::write(directory.join("manifest.json"), "invalid").unwrap();
-        assert!(saved_session_in(&root, "broken").is_err());
-        #[cfg(unix)]
-        {
-            let link = super::super::session_directory(&root, "linked");
-            std::os::unix::fs::symlink(&directory, &link).unwrap();
-            assert!(saved_session_in(&root, "linked").is_err());
+    fn attach_accepts_exact_local_names_and_rejects_controller_options() {
+        let parse = |args: &[&str]| AttachCommand::parse(args.iter().map(OsString::from).collect());
+        assert_eq!(
+            parse(&["--json", "list"]).unwrap(),
+            AttachCommand::List { json: true }
+        );
+        for name in [
+            "123",
+            "list",
+            "process",
+            "thread",
+            "with spaces",
+            "live:literal",
+            "saved:literal",
+        ] {
+            assert_eq!(
+                parse(&["--local", "--read-only", "--", name]).unwrap(),
+                AttachCommand::Open {
+                    name: name.into(),
+                    read_only: true
+                }
+            );
         }
-        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            parse(&["123"]).unwrap(),
+            AttachCommand::Open {
+                name: "123".into(),
+                read_only: false
+            }
+        );
+        assert_eq!(
+            parse(&["--read-only", "saved:list"]).unwrap(),
+            AttachCommand::Open {
+                name: "list".into(),
+                read_only: true
+            }
+        );
+        let target = format!("live:{}", "a".repeat(32));
+        assert_eq!(
+            parse(&["--read-only", &target]).unwrap(),
+            AttachCommand::Foreground {
+                target,
+                read_only: true
+            }
+        );
+        for args in [
+            &["--remote"][..],
+            &["--client", "x"],
+            &["--terminal", "x"],
+            &["--server", "https://relay.example"],
+            &["thread", "x"],
+            &["process", "1"],
+            &["x", "--json"],
+        ] {
+            assert!(parse(args).is_err(), "{args:?}");
+        }
     }
 
     #[tokio::test]

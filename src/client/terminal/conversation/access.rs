@@ -58,7 +58,7 @@ fn message(snapshot: &session_access::Snapshot) -> String {
     } else if !snapshot.pending {
         text.push_str("\nThe current list is not confirmed. Use /allow to read it again.\n");
     }
-    text.push_str("\n/allow USER grants access · /allow remove USER revokes access");
+    text.push_str("\n/allow USER adds an approved controller · /allow remove USER revokes access to this session");
     text
 }
 

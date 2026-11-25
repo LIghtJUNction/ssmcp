@@ -196,7 +196,20 @@ pub async fn request_with_timeout(
     request: Value,
     limit: Duration,
 ) -> Result<Value> {
+    request_for_pid(directory, filename, request, limit, None).await
+}
+
+pub(super) async fn request_for_pid(
+    directory: &Path,
+    filename: &str,
+    request: Value,
+    limit: Duration,
+    expected_pid: Option<u32>,
+) -> Result<Value> {
     let endpoint = read_endpoint(&descriptor(directory, filename)?)?;
+    if expected_pid.is_some_and(|pid| pid != endpoint.pid) {
+        return Err("attach endpoint differs from the registered foreground process".into());
+    }
     timeout(limit, async move {
         let mut stream = timeout(
             IO_TIMEOUT,

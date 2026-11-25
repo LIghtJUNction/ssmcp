@@ -3,6 +3,7 @@
 mod discovery;
 mod metrics;
 pub(crate) use discovery::Registration;
+pub(super) use discovery::{foreground_rows, foreground_target};
 
 use super::attach::{self, RemoteFrontend};
 use futures_util::{StreamExt, stream};
@@ -81,10 +82,7 @@ async fn resource(
 }
 
 async fn probe(entry: &discovery::Entry) -> crate::Result<Value> {
-    #[cfg(target_os = "linux")]
-    if let (Some(pid), Some(expected)) = (entry.pid, entry.process_start_ticks)
-        && metrics::sample(pid).is_none_or(|sample| sample.start_ticks != expected)
-    {
+    if !entry.process_matches() {
         return Ok(entry.empty("offline"));
     }
     let mut frontend = RemoteFrontend::connect(entry.directory.clone(), true).await?;

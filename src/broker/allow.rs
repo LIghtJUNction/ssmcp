@@ -8,6 +8,27 @@ use crate::{
 use std::collections::HashSet;
 
 impl Broker {
+    /// Resolve through the relay's existing account registry. No registration,
+    /// account bearer, or grant is created by this lookup.
+    pub(super) async fn resolve_controller(&self, principal: &str) -> Result<Identity, String> {
+        let identity = self
+            .resolve_initial_allow(&[principal.to_owned()])
+            .await?
+            .pop()
+            .ok_or("controller account is unavailable")?;
+        if identity.provider != "github"
+            || !identity
+                .subject
+                .parse::<u64>()
+                .is_ok_and(|subject| subject > 0)
+            || identity.subject.len() > 20
+            || !identity.subject.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err("controller admission requires a verified GitHub subject".into());
+        }
+        Ok(identity)
+    }
+
     pub(super) async fn resolve_account_allow(
         &self,
         registration: &crate::device::Registration,
@@ -596,6 +617,155 @@ mod tests {
                 allow,
             },
         }
+    }
+
+    #[tokio::test]
+    async fn guarded_device_publishes_only_after_admission_and_exact_acl_confirmation() {
+        let fixture = Fixture::new().await;
+        let owner = Authorization::Identity(identity("42", "octocat"));
+        let other = Authorization::Identity(identity("7", "alice"));
+        let owner_target = "alice@ssmcp.test";
+        let other_target = "colleague@ssmcp.test";
+        let open = || tokio_tungstenite::connect_async(fixture.request(None, true));
+
+        // An undecided or abandoned preflight never creates a visible session.
+        let (mut socket, _) = open().await.unwrap();
+        send(
+            &mut socket,
+            Frame::ResolveController {
+                id: 0,
+                principal: owner_target.into(),
+            },
+        )
+        .await;
+        assert!(
+            matches!(receive(&mut socket).await, Frame::ResolvedController { id: 0, ref principal, ref provider, ref subject } if principal == owner_target && provider == "github" && subject == "42")
+        );
+        assert!(
+            fixture
+                .broker
+                .clients(IDENTITY_RESOURCE, &owner)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        send(&mut socket, legacy_self_hello(names(&["colleague"]))).await;
+        assert!(matches!(receive(&mut socket).await, Frame::Reject { .. }));
+        assert!(
+            fixture
+                .broker
+                .clients(IDENTITY_RESOURCE, &other)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let (mut socket, _) = open().await.unwrap();
+        send(
+            &mut socket,
+            Frame::ResolveController {
+                id: 0,
+                principal: owner_target.into(),
+            },
+        )
+        .await;
+        assert!(matches!(
+            receive(&mut socket).await,
+            Frame::ResolvedController { id: 0, .. }
+        ));
+        send(&mut socket, legacy_self_hello(names(&["alice"]))).await;
+        assert!(matches!(receive(&mut socket).await, Frame::Ready { .. }));
+        assert_eq!(
+            fixture
+                .broker
+                .clients(IDENTITY_RESOURCE, &owner)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        send(
+            &mut socket,
+            Frame::Access {
+                id: 1,
+                command: AccessCommand::Add {
+                    principal: other_target.into(),
+                },
+            },
+        )
+        .await;
+        assert!(matches!(
+            receive(&mut socket).await,
+            Frame::AccessReply {
+                id: 1,
+                result: Err(_)
+            }
+        ));
+        send(
+            &mut socket,
+            Frame::ResolveController {
+                id: 2,
+                principal: other_target.into(),
+            },
+        )
+        .await;
+        assert!(
+            matches!(receive(&mut socket).await, Frame::ResolvedController { id:2, ref subject, .. } if subject == "7")
+        );
+        assert!(
+            fixture
+                .broker
+                .clients(IDENTITY_RESOURCE, &other)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        send(&mut socket, Frame::ApproveResolvedController { id: 1 }).await;
+        assert!(matches!(
+            receive(&mut socket).await,
+            Frame::AccessReply {
+                id: 1,
+                result: Err(_)
+            }
+        ));
+        assert!(
+            fixture
+                .broker
+                .clients(IDENTITY_RESOURCE, &other)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        send(
+            &mut socket,
+            Frame::ResolveController {
+                id: 3,
+                principal: other_target.into(),
+            },
+        )
+        .await;
+        assert!(matches!(
+            receive(&mut socket).await,
+            Frame::ResolvedController { id: 3, .. }
+        ));
+        send(&mut socket, Frame::ApproveResolvedController { id: 3 }).await;
+        assert!(matches!(
+            receive(&mut socket).await,
+            Frame::AccessReply {
+                id: 3,
+                result: Ok(_)
+            }
+        ));
+        assert_eq!(
+            fixture
+                .broker
+                .clients(IDENTITY_RESOURCE, &other)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        close(socket).await;
     }
 
     #[tokio::test]

@@ -27,7 +27,6 @@ impl Identity {
         if options.is_local()
             || options.daemon
             || options.list_tools
-            || options.account_compat
             || options.temporary
             || options.allow.is_empty()
         {
@@ -198,7 +197,6 @@ mod tests {
             let mut options = crate::client::Options::parse_new(args).unwrap().unwrap();
             rt.block_on(crate::client::apply_account(&mut options))
                 .unwrap();
-            assert!(options.relay.is_none());
             let id = Identity::for_client(&options, Path::new("."))
                 .unwrap()
                 .unwrap();

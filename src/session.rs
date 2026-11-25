@@ -319,7 +319,63 @@ fn prepare(root: &Path, mut spec: SessionSpec, supervised: bool) -> Result<(Path
     Ok((directory, manifest))
 }
 
+const LIST_HELP: &str = "Usage: ssmcp list [--json]\nList saved and registered foreground sessions on this device. Use ssmcp attach TARGET to reconnect.";
+
+pub(crate) async fn list_command(args: &[OsString]) -> Result<()> {
+    let mut json_output = false;
+    let mut help = false;
+    for arg in args {
+        match arg.to_str() {
+            Some("--json") => json_output = true,
+            Some("-h" | "--help") => help = true,
+            _ => return Err(LIST_HELP.into()),
+        }
+    }
+    if help {
+        println!("{LIST_HELP}");
+        return Ok(());
+    }
+    let mut entries = list().await?;
+    for entry in &mut entries {
+        entry["target"] = json!(format!(
+            "saved:{}",
+            entry["name"].as_str().ok_or("saved session has no name")?
+        ));
+        entry["kind"] = json!("saved");
+    }
+    entries.extend(overview::foreground_rows()?);
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+    } else if entries.is_empty() {
+        println!("No local sessions.");
+    } else {
+        for entry in entries {
+            if entry["kind"] == "foreground" {
+                println!(
+                    "{} · {} · {} · PID {}",
+                    entry["target"].as_str().unwrap_or(""),
+                    entry["name"].as_str().unwrap_or(""),
+                    entry["state"].as_str().unwrap_or("unknown"),
+                    entry["pid"].as_u64().unwrap_or_default()
+                );
+            } else {
+                print_status(&entry);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn manage(mut args: Vec<OsString>) -> Result<()> {
+    // List flags must be validated before touching a session directory or supervisor.
+    if let Some(index) = args.iter().position(|arg| arg != "--json") {
+        if args[index] == "list" {
+            args.remove(index);
+            return list_command(&args).await;
+        }
+    } else {
+        return list_command(&args).await;
+    }
     let json_output = args.iter().any(|arg| arg == "--json");
     args.retain(|arg| arg != "--json");
     let args: Vec<String> = args
@@ -330,22 +386,6 @@ pub async fn manage(mut args: Vec<OsString>) -> Result<()> {
         })
         .collect::<Result<_>>()?;
     let operation = args.first().map(String::as_str).unwrap_or("list");
-    if operation == "list" {
-        if args.len() > 1 {
-            return Err("usage: ssmcp sessions list [--json]".into());
-        }
-        let entries = list().await?;
-        if json_output {
-            println!("{}", serde_json::to_string_pretty(&entries)?);
-        } else if entries.is_empty() {
-            println!("No saved background sessions.");
-        } else {
-            for entry in entries {
-                print_status(&entry);
-            }
-        }
-        return Ok(());
-    }
     let name = args.get(1).ok_or(
         "usage: ssmcp sessions status|start|close|stop|restart|logs|remove|auth NAME [--json]",
     )?;
@@ -1181,7 +1221,10 @@ fn verify_snapshot(directory: &Path, manifest: &Manifest) -> Result<()> {
 fn print_status(value: &Value) {
     println!(
         "{} · {} · connection {}",
-        value["name"].as_str().unwrap_or("session"),
+        value["target"]
+            .as_str()
+            .or_else(|| value["name"].as_str())
+            .unwrap_or("session"),
         value["manager_state"].as_str().unwrap_or("unknown"),
         value["connection_state"].as_str().unwrap_or("unknown")
     );

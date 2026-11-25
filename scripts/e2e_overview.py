@@ -132,7 +132,7 @@ class LostReceipt:
         self.thread.join(timeout=3)
 
 
-def run(binary, report):
+def run(binary, report, attach_only=False):
     checks, processes, handles = [], [], []
     last_overview = {}
     report.update(scope="two actual Linux local clients plus one synthetic lost-receipt endpoint",
@@ -155,12 +155,15 @@ def run(binary, report):
                            XDG_CONFIG_HOME=str(home / "config"), XDG_STATE_HOME=str(home / "state"),
                            ENV="/dev/null", BASH_ENV="/dev/null", NO_COLOR="1", TERM="dumb")
 
-        def command(*args, success=True):
-            result = subprocess.run([str(binary), "overview", *args], cwd=workspace, env=environment,
-                                    capture_output=True, text=True, timeout=20)
+        def cli(*args, success=True):
+            result = subprocess.run([str(binary), *args], cwd=workspace, env=environment,
+                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
             if success and result.returncode:
-                raise AssertionError("overview command failed: " + result.stderr[-500:])
+                raise AssertionError(f"{args[0]} command failed: " + result.stderr[-500:])
             return result
+
+        def command(*args, success=True):
+            return cli("overview", *args, success=success)
 
         def overview():
             value = json.loads(command("--json").stdout)
@@ -168,17 +171,99 @@ def run(binary, report):
             last_overview.update(value)
             return value
 
+        def check_attach(rows):
+            local_rows = json.loads(cli("list", "--json").stdout)
+            check({(row["target"], row["pid"]) for row in local_rows} ==
+                  {(row["target"], row["pid"]) for row in rows}
+                  and all(row["kind"] == "foreground" and row["name"] == "same-label"
+                          and row["cwd"] == str(workspace) and row["state"] == "registered" for row in local_rows),
+                  "list exposes both same-label foreground processes by their exact local targets")
+            live_root = sessions / "live"
+            original = live_root / rows[0]["target"].removeprefix("live:")
+            manifest = json.loads((original / "overview.json").read_text())
+            stale = live_root / secrets.token_hex(16)
+            stale.mkdir(mode=0o700)
+            try:
+                manifest["instance"] = stale.name
+                private_json(stale / "overview.json", manifest)
+                private_json(stale / "attach.json", {"format": 1, "port": 1, "token": secrets.token_hex(32),
+                                                     "pid": rows[1]["pid"]})
+                rejected = cli("attach", "--read-only", "live:" + stale.name, success=False)
+                check(rejected.returncode != 0 and "differs from the registered foreground process" in rejected.stderr,
+                      "attach refuses a private endpoint descriptor from a different process before dialing")
+            finally:
+                for path in stale.iterdir():
+                    path.unlink()
+                stale.rmdir()
+            attach_log = root / "attach.log"
+            with attach_log.open("w") as output:
+                observer = subprocess.Popen([str(binary), "attach", "--read-only", rows[0]["target"]],
+                                            cwd=workspace, env=environment, stdin=subprocess.DEVNULL,
+                                            stdout=output, stderr=output)
+                try:
+                    def attached():
+                        if observer.poll() is not None:
+                            raise AssertionError("observer exited before attach was acknowledged")
+                        return "Attached to same-label (read-only)" in attach_log.read_text()
+                    wait_for(attached)
+                    observer.send_signal(signal.SIGINT)
+                    status = observer.wait(timeout=8)
+                    if status:
+                        raise AssertionError(f"observer exit {status} after SIGINT: " + attach_log.read_text()[-500:])
+                    check(all(p.poll() is None for p in processes),
+                          "attach opens the exact foreground process read-only and detaches without stopping it")
+                finally:
+                    if observer.poll() is None:
+                        observer.kill()
+                        observer.wait(timeout=3)
+            return local_rows
+
+        def check_ended(target, local_rows):
+            selected_pid = next(row["pid"] for row in local_rows if row["target"] == target)
+            selected = next(process for process in processes if process.pid == selected_pid)
+            selected.terminate()
+            selected.wait(timeout=8)
+            check(cli("attach", "--read-only", target, success=False).returncode != 0
+                  and len([process for process in processes if process.poll() is None]) == 1,
+                  "an ended target fails closed while its same-label peer keeps running")
+
         fixture = None
+        peer = None
         try:
             empty = overview()
             check(empty["sessions"] == [] and not (sessions / "live").exists(),
                   "read-only empty overview creates no discovery registry")
+            if attach_only:
+                # A loopback peer holds both transport handshakes. Foreground IPC
+                # is available while the relay is connecting, before any backend starts.
+                peer = socket.socket()
+                peer.bind(("127.0.0.1", 0))
+                peer.listen(4)
+                client_args = [f"owner@http://127.0.0.1:{peer.getsockname()[1]}"]
+                report["scope"] = "two actual foreground clients connecting to an isolated loopback peer"
+            else:
+                client_args = ["local"]
             for index in range(2):
                 log = (root / f"client-{index}.log").open("w")
                 handles.append(log)
-                processes.append(subprocess.Popen([str(binary), "local", "--input", "none",
+                processes.append(subprocess.Popen([str(binary), *client_args, "--input", "none",
                     "--name", "same-label", "--log-format", "jsonl", "--no-watchdog"],
                     cwd=workspace, env=environment, stdout=log, stderr=log, start_new_session=True))
+
+            if attach_only:
+                def registered():
+                    if any(process.poll() is not None for process in processes):
+                        raise AssertionError("foreground client exited before registration")
+                    rows = json.loads(cli("list", "--json").stdout)
+                    return rows if len(rows) == 2 else None
+                rows = wait_for(registered)
+                check({row["pid"] for row in rows} == {process.pid for process in processes}
+                      and len({row["target"] for row in rows}) == 2,
+                      "local list reports distinct exact targets and the actual foreground process IDs")
+                local_rows = check_attach(rows)
+                check_ended(rows[0]["target"], local_rows)
+                report.update(success=True, checks=checks)
+                return
 
             def connected():
                 if any(process.poll() is not None for process in processes):
@@ -191,6 +276,7 @@ def run(binary, report):
                   "two real same-label clients retain distinct exact selectors")
             check({row["pid"] for row in observed["sessions"]} == {process.pid for process in processes},
                   "overview reports actual client PIDs rather than manager or model estimates")
+            local_rows = check_attach(observed["sessions"])
             check(all(row["metrics"]["rss_bytes"] > 0 and row["metrics"]["cpu_percent_one_core"] is None
                       for row in observed["sessions"]), "first CPU sample is unknown while Linux RSS is measured")
             watch = subprocess.Popen([str(binary), "overview", "--watch", "--json"], cwd=workspace,
@@ -251,6 +337,7 @@ def run(binary, report):
             check(fixture.count == 1 and not fixture.errors, "unknown execution is never automatically replayed")
             fixture.close()
             fixture = None
+            check_ended(targets[0], local_rows)
             report["success"] = True
         except Exception as error:
             report["error"] = f"{type(error).__name__}: {error}".replace(str(root), "<fixture>")
@@ -262,6 +349,8 @@ def run(binary, report):
             report["client_log_tails"] = [redact_tail((root / f"client-{i}.log").read_text(errors="replace")[-2000:])
                                            for i in range(len(processes))]
         finally:
+            if peer:
+                peer.close()
             if fixture:
                 fixture.close()
             for process in reversed(processes):
@@ -283,9 +372,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--foreground-attach-only", action="store_true",
+                        help="exercise list and attach during connection without a native tool backend")
     args = parser.parse_args()
     report = {"schema": "ssmcp.overview.e2e.v1"}
-    run(args.binary.resolve(), report)
+    run(args.binary.resolve(), report, args.foreground_attach_only)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2))
     print(json.dumps({"success": report["success"], "checks": len(report["checks"]), "report": str(args.report)}))

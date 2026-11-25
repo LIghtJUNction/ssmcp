@@ -168,8 +168,6 @@ input::placeholder { color: #929499; }
 .setup-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 22px; }
 .setup-actions button { font-size: 14px; }
 .deploy-link { margin-top: 9px; }
-#registration { margin-top: 16px; font-size: 14px; }
-#registration a { font-weight: 600; }
 
 .page-action {
   display: inline-flex;

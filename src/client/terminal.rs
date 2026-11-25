@@ -1,7 +1,7 @@
 //! Compose logs and source audit with a configurable observational sidebar.
 //! Only this module writes the physical terminal while a Session is active.
 use super::{
-    account::status::{self as account_status, Status as AccountStatus},
+    account::status::Status as AccountStatus,
     audit_view::AuditView,
     panel::{self, PanelLayout, PanelSnapshot, PanelTone},
     render::LogFormat,
@@ -64,7 +64,6 @@ pub(crate) struct Session {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
     guide_probe: Option<tokio::task::JoinHandle<()>>,
-    account_probe: Option<tokio::task::JoinHandle<()>>,
     update_probe: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -140,12 +139,6 @@ impl Session {
         let guide = account_endpoint.and_then(guide::Guide::from_endpoint);
         let guide_url = guide.as_ref().map(|guide| guide.url().to_owned());
         state.guide = guide.map(guide::Guide::portal);
-        let account_server = account_endpoint
-            .and_then(account_status::server_from_endpoint)
-            .filter(|_| tokio::runtime::Handle::try_current().is_ok());
-        if account_server.is_some() {
-            state.account = AccountStatus::Loading;
-        }
         if !worker_mode {
             state.graphics = images::Graphics::environment(&options);
         }
@@ -199,34 +192,6 @@ impl Session {
                         }
                     }))
                 });
-                let account_probe = account_server.and_then(|server| {
-                    let handle = tokio::runtime::Handle::try_current().ok()?;
-                    let display = Arc::downgrade(&shared);
-                    Some(handle.spawn(async move {
-                        loop {
-                            // Resolve this session's selected origin again on each refresh.
-                            // Requests and waits never hold the compositor lock.
-                            let status = AccountStatus::refresh(&server).await;
-                            {
-                                let Some(shared) = display.upgrade() else {
-                                    return;
-                                };
-                                if shared.stop.load(Ordering::Acquire)
-                                    || !shared.alive.load(Ordering::Acquire)
-                                {
-                                    return;
-                                }
-                                let mut state =
-                                    shared.state.lock().unwrap_or_else(|e| e.into_inner());
-                                if !state.preview && state.account != status {
-                                    state.account = status;
-                                    state.dirty = true;
-                                }
-                            }
-                            tokio::time::sleep(Duration::from_secs(60)).await;
-                        }
-                    }))
-                });
                 let update_probe = update_notice::spawn(
                     &shared,
                     endpoint.is_some(),
@@ -237,7 +202,6 @@ impl Session {
                     shared,
                     thread: Some(thread),
                     guide_probe,
-                    account_probe,
                     update_probe,
                 }))
             }
@@ -257,9 +221,6 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
         if let Some(probe) = self.guide_probe.take() {
-            probe.abort();
-        }
-        if let Some(probe) = self.account_probe.take() {
             probe.abort();
         }
         if let Some(probe) = self.update_probe.take() {
@@ -366,52 +327,14 @@ pub(super) fn set_connection_versions(versions: super::update::ConnectionVersion
     }
 }
 
-pub(super) fn set_logout_target(target: Option<(&str, &str)>) {
+pub(super) fn set_device_owner(owner: &str) {
     if let Some(shared) = shared() {
-        shared
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .logout_target = target.map(|(server, token)| conversation::logout::Target {
-            server: server.to_owned(),
-            token: token.to_owned(),
-        });
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.account = AccountStatus::Device {
+            owner: Some(panel::safe_text(owner)),
+        };
+        state.dirty = true;
     }
-}
-
-/// A revoked connection may close before its logout HTTP response arrives.
-/// Wait outside the display lock so teardown cannot restart authorization early.
-pub(super) async fn finish_pending_logout() -> Option<String> {
-    let shared = shared()?;
-    let task = shared
-        .state
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .conversation
-        .logout_task
-        .take()?;
-    let result = task.finish().await;
-    let mut state = shared
-        .state
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    state.chat_finish_logout(result);
-    state
-        .conversation
-        .exit_message
-        .clone()
-        .or_else(|| state.notice.clone())
-}
-
-/// Read before Session is dropped, print only after the physical screen is restored.
-pub(super) fn take_exit_message() -> Option<String> {
-    shared()?
-        .state
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .conversation
-        .exit_message
-        .take()
 }
 
 /// Wake the display after asynchronous local discovery without publishing a log.
@@ -923,13 +846,8 @@ fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     state.preview = true;
     state.server_origin = footer::Origin::parse(super::account::DEFAULT_SERVER);
     state.guide = guide::Guide::from_endpoint(super::account::DEFAULT_SERVER);
-    state.account = AccountStatus::Ready {
-        login: "example".into(),
-        username: None,
-        traffic: account_status::Traffic::from_reply(&serde_json::json!({"traffic":{
-            "used_bytes":250_000_000,"limit_bytes":1_000_000_000,
-            "remaining_bytes":750_000_000,"reset_at":1_796_054_400u64,"utc_offset_minutes":480
-        }})),
+    state.account = AccountStatus::Device {
+        owner: Some("example".into()),
     };
     state.log_message("user", "Improve the client experience\nKeep commands, results and the original code easy to inspect.", "\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n".as_bytes());
     state.log_message(
@@ -1612,7 +1530,6 @@ struct State {
     announcements: Vec<String>,
     server_origin: Option<footer::Origin>,
     connection_versions: Option<super::update::ConnectionVersions>,
-    logout_target: Option<conversation::logout::Target>,
     guide: Option<guide::Guide>,
     account: AccountStatus,
     link_metrics: super::link_metrics::View,
@@ -1664,9 +1581,8 @@ impl State {
             announcements: Vec::new(),
             server_origin: None,
             connection_versions: None,
-            logout_target: None,
             guide: None,
-            account: AccountStatus::Unavailable,
+            account: AccountStatus::Device { owner: None },
             link_metrics: super::link_metrics::View::default(),
             graphics: images::Graphics::default(),
             media: Vec::new(),
@@ -2564,9 +2480,8 @@ impl State {
     }
     fn guide_rows(&mut self, width: u16, height: u16, _row: u16, _col: u16) -> Vec<String> {
         let mut rows = Vec::new();
-        // The account, quota and reset share the existing guide footer space.
         if height >= 10 && width >= 20 {
-            for text in self.account.rows(width) {
+            for text in self.account.rows() {
                 let text = fit(&text, width);
                 let padded = format!(
                     "{text}{}",
@@ -3368,7 +3283,7 @@ mod tests {
     }
 
     #[test]
-    fn account_quota_preview_shares_sidebar_with_connection_metrics() {
+    fn device_owner_and_connection_metrics_share_the_sidebar() {
         for layout in [Layout::Chat, Layout::Split, Layout::Logs] {
             let mut ui = Ui {
                 color: false,
@@ -3379,13 +3294,12 @@ mod tests {
             let mut screen = vt100::Parser::new(nonzero(30), nonzero(120), 0);
             screen.process(&preview_bytes(&ui, 30, 120));
             let contents = screen.screen().contents();
-            assert!(contents.contains("Local example"), "{layout:?}: {contents}");
-            assert!(contents.contains("Max 1 GB"), "{layout:?}: {contents}");
+            assert!(contents.contains("Owner example"), "{layout:?}: {contents}");
             assert!(
-                contents.contains("Reset 2026-12-01"),
+                contents.contains("Controlled device"),
                 "{layout:?}: {contents}"
             );
-            assert!(contents.contains('█'), "{layout:?}: {contents}");
+            assert!(!contents.contains("Quota"));
             assert!(contents.contains("App data #"), "{layout:?}: {contents}");
             assert!(
                 contents.contains("Speed unavailable"),
@@ -3397,18 +3311,17 @@ mod tests {
             hidden.process(&preview_bytes(&ui, 30, 120));
             let contents = hidden.screen().contents();
             if layout == Layout::Chat {
-                assert!(contents.contains("Local example"), "{contents}");
-                assert!(contents.contains("Max 1 GB"), "{contents}");
-                assert!(contents.contains("Reset 12-01"), "{contents}");
+                assert!(contents.contains("Owner example"), "{contents}");
+                assert!(contents.contains("Controlled device"), "{contents}");
             } else {
-                assert!(!contents.contains("Local example"));
+                assert!(!contents.contains("Owner example"));
             }
             assert!(!contents.contains("App data #"));
         }
     }
 
     #[test]
-    fn account_quota_narrow_sidebar_keeps_capacity_reset_and_local_identity() {
+    fn narrow_sidebar_keeps_the_controlled_device_and_owner_visible() {
         for width in [20, 24, 30] {
             let ui = Ui {
                 color: false,
@@ -3420,10 +3333,11 @@ mod tests {
             let mut screen = vt100::Parser::new(nonzero(30), nonzero(100), 0);
             screen.process(&preview_bytes(&ui, 30, 100));
             let contents = screen.screen().contents();
-            assert!(contents.contains("Local example"), "{width}: {contents}");
-            assert!(contents.contains("Max 1 GB"), "{width}: {contents}");
-            assert!(contents.contains("Reset 2026-12-01"), "{width}: {contents}");
-            assert!(contents.contains('█'), "{width}: {contents}");
+            assert!(contents.contains("Owner example"), "{width}: {contents}");
+            assert!(
+                contents.contains("Controlled device"),
+                "{width}: {contents}"
+            );
             assert!(!contents.contains("本月剩余") && !contents.contains("无限"));
         }
     }
@@ -4414,7 +4328,6 @@ mod tests {
             shared: shared.clone(),
             thread: Some(thread),
             guide_probe: None,
-            account_probe: None,
             update_probe: None,
         };
         let mut bytes = Vec::new();

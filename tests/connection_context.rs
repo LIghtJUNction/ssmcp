@@ -208,8 +208,6 @@ fn context_cli_unknown_and_conflicting_selectors_fail_before_account_dispatch() 
     for args in [
         vec!["--context", "missing"],
         vec!["--context=missing", "whoami", "--json"],
-        vec!["list", "--context", "missing", "--json"],
-        vec!["--context", "missing", "-i"],
         vec!["trust", "remove", "--context", "missing"],
         vec!["sessions", "create", "saved", "--context", "missing"],
     ] {
@@ -221,7 +219,7 @@ fn context_cli_unknown_and_conflicting_selectors_fail_before_account_dispatch() 
         vec!["local", "--context", "here"],
         vec!["--context", "here", "local"],
         vec![
-            "logout",
+            "whoami",
             "--context",
             "work",
             "--server",
@@ -240,14 +238,14 @@ fn context_cli_unknown_and_conflicting_selectors_fail_before_account_dispatch() 
     }
     home.failure(&["--context", "work", "--context=work"], None, "only once");
     home.failure(
-        &["logout", "--context", "work", "--context=work"],
+        &["whoami", "--context", "work", "--context=work"],
         None,
         "only once",
     );
     home.failure(
         &["--context", "work", "sessions", "restart", "saved"],
         None,
-        "recorded target",
+        "local session management",
     );
     home.failure(
         &["--context", "work", "config", "get", "server"],
@@ -260,23 +258,33 @@ fn context_cli_unknown_and_conflicting_selectors_fail_before_account_dispatch() 
 fn context_local_account_commands_never_fall_back_to_remote() {
     let home = Home::new();
     home.contexts();
-    for args in [
-        vec!["whoami", "--json"],
-        vec!["logout", "--json"],
-        vec!["list", "--json"],
-        vec!["-i"],
-        vec!["sessions", "list", "--remote"],
-        vec!["trust", "remove"],
-    ] {
+    for args in [vec!["whoami", "--json"], vec!["trust", "remove"]] {
         home.failure(&args, Some("here"), "selected context is local");
     }
-    let explicit = home.json(
-        &["logout", "--server", "https://explicit.example", "--json"],
-        Some("missing"),
+    for args in [
+        vec!["list", "--json"],
+        vec!["sessions", "list", "--json"],
+        vec!["attach", "list", "--json"],
+    ] {
+        assert_eq!(home.json(&args, Some("missing")), json!([]));
+    }
+    home.failure(&["list", "--context", "missing"], None, "ssmcp list");
+    home.failure(
+        &["--server", "https://work.example", "attach", "device"],
+        None,
+        "local session management",
     );
-    assert_eq!(explicit["server"], "https://explicit.example");
-    let selected = home.json(&["--context", "work", "logout", "--json"], Some("here"));
-    assert_eq!(selected["server"], "https://work.example");
+    home.failure(
+        &["sessions", "list", "--remote"],
+        Some("here"),
+        "ssmcp list",
+    );
+    home.failure(
+        &["--context", "missing", "-i"],
+        None,
+        "control of remote devices",
+    );
+    home.failure(&["logout", "--json"], Some("here"), "authorized controller");
 }
 
 #[cfg(target_os = "linux")]
@@ -337,7 +345,7 @@ fn context_local_options_keep_loopback_foreground_and_context_root_rules() {
 }
 
 #[test]
-fn context_account_credentials_stay_scoped_to_the_concrete_origin() {
+fn context_cannot_activate_or_revoke_a_legacy_controller_credential() {
     let home = Home::new();
     home.contexts();
     let foreign = "https://other.example:8443";
@@ -355,12 +363,12 @@ fn context_account_credentials_stay_scoped_to_the_concrete_origin() {
     fs::write(&default, foreign).unwrap();
     fs::set_permissions(&default, fs::Permissions::from_mode(0o600)).unwrap();
     let before = fs::read(&file).unwrap();
-    let output = home.success(&["--context", "work", "logout", "--json"], None);
-    assert_eq!(
-        serde_json::from_str::<Value>(&output).unwrap()["server"],
-        "https://work.example"
-    );
-    assert!(!output.contains(&"f".repeat(64)));
+    for args in [
+        vec!["--context", "work", "logout", "--json"],
+        vec!["--context", "other", "logout", "--json"],
+    ] {
+        home.failure(&args, None, "authorized controller");
+    }
     assert_eq!(fs::read(&file).unwrap(), before);
     assert_eq!(fs::read_to_string(&default).unwrap(), foreign);
     let config = fs::read_to_string(home.0.join("config.toml")).unwrap();

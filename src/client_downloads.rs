@@ -162,7 +162,7 @@ impl Publisher {
 }
 
 fn publication_error() -> &'static str {
-    "This gateway has no complete compatible client release. Publish release.json and its matching executables in server.client_download_dir; an already installed compatible client can still connect with --allow username@server."
+    "This gateway has no complete compatible client release. Publish release.json and its matching executables in server.client_download_dir; an already installed compatible client can still connect with ssmcp username@server."
 }
 
 fn valid_version(value: &str) -> bool {
@@ -668,7 +668,8 @@ mod tests {
             assert!(!source.contains("injected.example"));
             assert!(!source.contains("@@ORIGIN@@"));
             if !path.starts_with("client/") {
-                assert!(source.contains("Sign in: ssmcp login --server"));
+                assert!(source.contains("ssmcp --username USERNAME --server"));
+                assert!(!source.contains("ssmcp login"));
                 assert!(!source.contains("'https://ssmcp.lmm.best'"));
             }
         }

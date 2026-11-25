@@ -37,20 +37,16 @@ const MAX_SESSIONS: usize = 16;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(75);
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
-const HELP: &str = "ssmcp 007 — minimal Linux recovery and session control
-Usage:
-  ssmcp 007 install [--server URL] [--name NAME] [--cwd DIR] [--client PATH] [--dry-run]
-  ssmcp 007 upgrade [--dry-run] [--json]
-  ssmcp 007 start|stop|status|uninstall [--json]
-  ssmcp 007 run
-  ssmcp 007 sessions [list|status|start|close|restart|remove] [NAME]
+const DEVICE_AUTH_REQUIRED: &str = "This 007 recovery transport requires a controller account credential. Use ssmcp USERNAME@SERVER for a controlled device connection. Saved recovery definitions can be inspected with ssmcp 007 sessions list; guarded recovery requires relay support for a device-only identity.";
 
-007 keeps one authenticated connection without loading tools or a terminal.
-Remote tools: ssmcp.007.status/list/recover/wake/close/remove.
-wake is idempotent for an existing name. recovery=true starts a new session from
-the preserved recovery executable. Use a new name to start an upgraded client.
-The recovery service and its sessions have independent systemd lifetimes.
-A valid saved account is required. User services need linger for boot/logout.
+const HELP: &str = "ssmcp 007 — legacy recovery service management
+Usage:
+  ssmcp 007 status|stop|uninstall [--json]
+  ssmcp 007 sessions [list|status|close|remove] [NAME]
+
+This client can inspect and stop an existing recovery service. The legacy
+transport uses a controller credential and cannot start on a device-only client.
+Connect an ordinary controlled session with ssmcp USERNAME@SERVER.
 ";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -152,6 +148,21 @@ pub(super) async fn dispatch(args: Vec<OsString>) -> Result<()> {
         .first()
         .and_then(|arg| arg.to_str())
         .unwrap_or("--help");
+    // The v1 service and any preserved v1 executable authenticate as a
+    // controller. Reject activation before reading its state or invoking systemd.
+    if matches!(operation, "run" | "install" | "start" | "upgrade") {
+        return Err(DEVICE_AUTH_REQUIRED.into());
+    }
+    if matches!(operation, "sessions" | "__sessions")
+        && args
+            .iter()
+            .skip(1)
+            .find(|arg| *arg != "--json")
+            .and_then(|arg| arg.to_str())
+            .is_some_and(|operation| matches!(operation, "start" | "restart" | "recover"))
+    {
+        return Err(DEVICE_AUTH_REQUIRED.into());
+    }
     match operation {
         "--help" | "-h" | "help" => {
             println!("{HELP}");
@@ -837,6 +848,24 @@ async fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn legacy_recovery_activation_is_blocked_before_loading_state() {
+        for args in [
+            vec!["run"],
+            vec!["install", "--dry-run"],
+            vec!["start"],
+            vec!["upgrade"],
+            vec!["sessions", "--json", "start", "work"],
+            vec!["sessions", "restart", "work"],
+            vec!["__sessions", "recover", "work", "definition"],
+        ] {
+            let error = dispatch(args.into_iter().map(OsString::from).collect())
+                .await
+                .unwrap_err();
+            assert_eq!(error.to_string(), DEVICE_AUTH_REQUIRED);
+        }
+    }
 
     #[test]
     fn recover_requires_both_previously_observed_exact_identities() {

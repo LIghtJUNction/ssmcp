@@ -209,7 +209,7 @@ fn native_limits(chat_enabled: bool) -> Value {
             "max_per_client":crate::terminals::MAX_TERMINALS,
             "default_id":"main",
             "selection_tool":"terminal.select",
-            "interactive_frontend":"ssmcp -i",
+            "interactive_frontend":"ssmcp attach -- NAME (saved sessions on this device)",
             "dashboard_input":"composer and UI navigation; never forwarded to hidden terminals"
         },
         "client_ui":{
@@ -519,7 +519,7 @@ Cancellation and execution deadlines interrupt blocked input without blocking ot
 Discover registered terminal.* schemas and call exact names, such as call(clientId,'terminal.list',{}), for independent interactive shells. read/write/status/resize \
 accept terminal_id; omitting it always targets main. Up to 16 terminals keep separate cwd, \
 state, output cursors and display buffers. Select a terminal with call(clientId,'terminal.select',{terminal_id}), or use \
-ssmcp -i for direct interactive control. Dashboard keys belong to the composer and UI; Ctrl+O \
+ssmcp attach -- NAME on the device to open a saved session. Dashboard keys belong to the composer and UI; Ctrl+O \
 opens source audit, and wheel/PageUp/PageDown scroll logs directly. Background terminals keep \
 running. Close extra terminals when done.\n\n\
 Use ui.get(clientId,{path}) for a bounded JSON Pointer projection of UI configuration or state; \

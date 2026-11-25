@@ -151,11 +151,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/allow",
-        description: "List session access; /allow USER grants, /allow remove USER revokes",
-    },
-    SlashCommand {
-        name: "/logout",
-        description: "Sign out of this connection\'s saved account and close this session",
+        description: "List session access; /allow USER adds a locally approved controller",
     },
     SlashCommand {
         name: "/logs",

@@ -10,6 +10,8 @@ import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import pty
+import select
 from pathlib import Path
 import queue
 import secrets
@@ -110,18 +112,26 @@ class WebSocket:
             assert opcode in (1, 2), "unexpected websocket opcode"
             return json.loads(payload)
 
-    def request(self, operation):
+    def exchange(self, operation, account):
         with self.state.lock:
             self.sequence += 1
             identifier = self.sequence
             result = queue.Queue(maxsize=1)
             self.pending[identifier] = result
-        self.send({"type": "call", "id": identifier, "operation": operation})
+        call = {"type": "call", "id": identifier, "operation": operation}
+        if account is not None:
+            call["attribution"] = {"account": account}
+        self.send(call)
         try:
             reply = result.get(timeout=10)
         finally:
             with self.state.lock:
                 self.pending.pop(identifier, None)
+        return reply
+
+    def request(self, operation):
+        identity = {key: IDENTITY[key] for key in ("provider", "subject", "login")}
+        reply = self.exchange(operation, identity)
         if "Err" in reply:
             raise AssertionError("Native call failed: " + reply["Err"])
         return reply["Ok"]
@@ -141,6 +151,10 @@ class WebSocket:
 
     def serve(self):
         try:
+            proposal = self.read()
+            assert proposal == {"type": "resolve_controller", "id": 0, "principal": self.state.allow_principal}
+            self.send({"type": "resolved_controller", "id": 0, "principal": self.state.allow_principal,
+                       "provider": IDENTITY["provider"], "subject": self.state.resolved_subject})
             self.hello = self.read()
             assert self.hello["type"] == "hello"
             assert self.hello["version"] in SUPPORTED_WIRE_VERSIONS
@@ -200,6 +214,7 @@ class WebSocket:
 class State:
     def __init__(self, capabilities=None):
         self.capabilities = CAPABILITIES if capabilities is None else tuple(capabilities)
+        self.resolved_subject = IDENTITY["subject"]
         self.capability_offers = []
         self.lock = threading.RLock()
         self.account_token = "cl_" + secrets.token_hex(32)
@@ -440,6 +455,88 @@ class Harness:
             err_file.flush()
             print(f"\n{err.name}: {self.redacted(err.read_text(errors='replace')[-6000:])}")
 
+    def consent(self, action, identity, answer):
+        master, slave = pty.openpty()
+        try:
+            args = ["controllers", action, self.state.origin, identity["provider"], identity["subject"]]
+            process = subprocess.Popen([self.binary, *args], cwd=self.root / "B", env=self.env("B"),
+                                       stdin=slave, stdout=slave, stderr=slave)
+            try:
+                prompt = b""
+                end = time.monotonic() + 8
+                while b"Type yes to confirm" not in prompt:
+                    remaining = end - time.monotonic()
+                    if remaining <= 0 or len(prompt) > 4096 or not select.select([master], [], [], remaining)[0]:
+                        raise AssertionError("controlled-device confirmation prompt was unavailable")
+                    prompt += os.read(master, 4096)
+                text = prompt.decode()
+                self.check(action in text and self.state.origin in text and identity["login"] in text
+                           and f'{identity["provider"]} #{identity["subject"]}' in text,
+                           f"the {action} prompt names the exact relay, provider and subject before {answer}")
+                os.write(master, (answer + "\n").encode())
+                status = process.wait(timeout=8)
+                self.check((status == 0) == (answer == "yes"),
+                           f"the local PTY records the expected outcome for {action} {answer}")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=3)
+        finally:
+            os.close(slave)
+            os.close(master)
+
+    def controller_consent(self, connection):
+        second = {"provider": "github", "subject": "456", "login": IDENTITY["login"]}
+        lookalike = {**second, "subject": "789"}
+        status = {"op": "call_tool", "name": "terminal.status", "arguments": {}}
+
+        def denied(account, reason, explanation):
+            reply = connection.exchange(status, account)
+            self.check(set(reply) == {"Err"} and reason in reply["Err"], explanation)
+
+        def entries():
+            return json.loads(self.cli("B", "controllers", "--json").stdout)
+
+        def journal():
+            return json.loads(self.cli("B", "controllers", "history", "--json").stdout)
+
+        denied(None, "missing authenticated controller identity", "an unattributed native status request is refused")
+        denied(second, "requires local approval", "the second stable subject cannot read native status before approval")
+        self.consent("approve", second, "no")
+        denied(second, "requires local approval", "explicit local No leaves the second controller pending")
+        self.consent("approve", second, "yes")
+        allowed = connection.exchange(status, second)
+        self.check("Ok" in allowed and isinstance(allowed["Ok"], dict) and not allowed["Ok"].get("isError"),
+                   "explicit local Yes permits native status for the approved subject on this relay")
+        denied(lookalike, "requires local approval", "the identical display login of another subject grants no access")
+
+        self.foreign.resolved_subject = second["subject"]
+        foreign = self.spawn("B", self.foreign.allow_principal, "--name", "other relay", "--no-watchdog",
+                             "--no-setup", "--shell", "/bin/sh")
+        foreign.wait(timeout=10)
+        scoped = [e for e in entries() if e["subject"] == second["subject"] and e["provider"] == second["provider"]]
+        self.check(foreign.returncode != 0 and not self.foreign.connections
+                   and {(e["relay"], e["status"]) for e in scoped} ==
+                       {(self.state.origin, "approved"), (self.foreign.origin, "pending")},
+                   "the approved subject remains pending on a different relay before device publication")
+
+        self.consent("revoke", second, "yes")
+        denied(second, "requires local approval", "local revocation immediately denies the previously approved subject")
+        history = journal()
+        events = [e for e in history if e["relay"] == self.state.origin and e["subject"] == second["subject"]]
+        self.check([(e["kind"], e["connection_id"]) for e in events] ==
+                   [("control_denied", connection.id), ("approved", None), ("control_allowed", connection.id),
+                    ("revoked", None), ("control_denied", connection.id)],
+                   "the local journal records denial, approval, permitted control, revocation and renewed denial in order")
+        self.check(any(e["subject"] == lookalike["subject"] and e["kind"] == "control_denied"
+                       and e["connection_id"] == connection.id for e in history),
+                   "denial of the same-label subject is recorded under its own stable identity")
+        public = json.dumps({"entries": entries(), "history": history})
+        self.check(all(value not in public for value in [self.state.account_token, self.foreign.account_token,
+                                                         self.state.device_code, self.foreign.device_code,
+                                                         "terminal.status", "relay-shell-ok"]),
+                   "controller history omits bearer tokens, device codes, native arguments and output")
+
     def run(self):
         retired = self.cli("A", "--ssh", "legacy.example", success=False)
         self.check("SSH device connections have been removed" in retired.stderr,
@@ -477,8 +574,11 @@ class Harness:
                    and connection.hello["version"] in SUPPORTED_WIRE_VERSIONS,
                    "unsigned B uses its named relay target and a supported WebSocket protocol")
         listing = json.loads(self.cli("A", "list", "--json").stdout)
-        self.check(any(item["id"] == connection.id for item in listing["clients"]),
-                   "A lists its currently controllable unsigned B session")
+        self.check(listing == [] and not any(path == "/api/client/sessions" for _, path in self.state.requests),
+                   "A lists its own empty local session registry while B is online")
+        self.cli("A", "attach", "--remote", connection.id, success=False)
+        self.check(not any(path in ("/api/client/sessions", "/api/client/call") for _, path in self.state.requests),
+                   "the device CLI rejects remote attach before using a saved credential")
         terminal = connection.call("terminal.status", {})
         self.check(isinstance(terminal, dict), "B exposes a real terminal through the relay")
         job = connection.call("ssmcp.exec.start", {"command": [
@@ -524,23 +624,34 @@ class Harness:
         self.stop(stopped)
         auth_b = self.root / "B/auth"
         saved = auth_b / "last-connection.json"
-        self.check(list(auth_b.iterdir()) == [saved] and stat.S_IMODE(saved.stat().st_mode) == 0o600
+        self.check(stat.S_IMODE(saved.stat().st_mode) == 0o600
+                   and not (auth_b / credential_file.name).exists()
                    and json.loads(saved.read_text()) == {
                         "mode": "relay", "server": self.state.origin, "username": IDENTITY["username"]},
-                   "the device only saves a private connection target")
+                   "the device saves the target privately without a login credential")
+        records = json.loads(self.cli("B", "controllers", "--json").stdout)
+        self.check(len(records) == 1 and records[0]["relay"] == self.state.origin
+                   and records[0]["subject"] == IDENTITY["subject"] and records[0]["status"] == "default"
+                   and records[0]["first_verified"] is not None and self.state.account_token not in str(records),
+                   "the device remembers the verified default controller without a bearer token")
+        journal = json.loads(self.cli("B", "controllers", "history", "--json").stdout)
+        visits = [e for e in journal if e["kind"] == "control_allowed"]
+        self.check([e["connection_id"] for e in visits] == [connection.id, reconnected.id],
+                   "multiple verified native calls record one control visit per real connection")
         bare = self.spawn("B", "--name", "B resumed", "--no-watchdog", "--no-setup", "--shell", "/bin/sh")
         resumed = self.connection("B resumed")
         self.check(not resumed.token and resumed.hello["metadata"]["allow"] == [self.state.allow_principal],
                    "a new client invocation without a target reconnects without a token")
         resumed.call("terminal.status", {})
+        self.controller_consent(resumed)
         self.stop(bare)
         self.check(not any(path in ("/api/client/invites", "/api/client/enroll",
                                     "/api/client/login/start", "/api/client/login/poll")
                            for _, path in self.state.requests),
                    "device startup never requests login, invitation or enrollment")
-        self.cli("A", "logout", "--json")
-        self.check(not credential_file.exists() and self.state.logged_out,
-                   "the existing controller credential can still be revoked and removed")
+        self.cli("A", "logout", "--json", success=False)
+        self.check(credential_file.read_bytes() == original_credential and not self.state.logged_out,
+                   "the device CLI leaves legacy controller credentials untouched")
         self.check(not self.state.errors and not self.foreign.errors,
                    "gateways observed no malformed client protocol frames")
         return {"status": "passed", "checks": len(self.checks), "passed_checks": self.checks, "transport": "loopback WebSocket",

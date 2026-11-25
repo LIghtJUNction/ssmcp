@@ -1,7 +1,7 @@
 # SSMCP for Magisk · 此文件只读取，不作为 shell 脚本执行。
 # SSMCP for Magisk · This file is parsed as configuration.
 # 填写你的用户名。尚未注册时可选一个新名字，在网页里用 GitHub 注册。
-# Enter your relay username, or choose a new one and register with GitHub.
+# Enter the username of a registered owner on the relay.
 # @ 后为服务器域名。默认 ssmcp.lmm.best，也可使用你自己部署的中继。
 # After @ is the relay hostname. Use ssmcp.lmm.best or your own relay.
 # 官方中继按月计量，每月免费 1 GiB，额外流量可购买。SSMCP 开源，支持自部署。

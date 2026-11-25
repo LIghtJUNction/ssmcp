@@ -1,6 +1,5 @@
 //! The executable's private HTTPS/WebSocket transport. The parent owns the
 //! shell and tool processes; this child only relays bounded protocol frames.
-use super::account::Credential;
 use crate::wire::{Frame, MAX_FRAME, MAX_INFLIGHT, read_frame, write_frame};
 use futures_util::{SinkExt, StreamExt};
 use std::{io, path::Path, process::Stdio, time::Duration};
@@ -62,9 +61,7 @@ pub(super) fn failure(message: String) -> crate::Error {
     }
 }
 
-/// Secrets are passed in this one child's environment, never argv, session
-/// manifests, connection output or inherited native-tool environments.
-pub(super) fn command(executable: &Path, server: &str, credential: Option<&Credential>) -> Command {
+pub(super) fn command(executable: &Path, server: &str) -> Command {
     let mut command = Command::new(executable);
     command
         .arg("__relay")
@@ -97,14 +94,11 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
         let offer = parent_offer(&command).expect("built-in relay capability offer");
         command.env("SSMCP_RELAY_CAPABILITIES", format!("{offer},{capability}"));
     }
-    if let Some(credential) = credential {
-        command.env("SSMCP_RELAY_TOKEN", &credential.token);
-    }
     command
 }
 
-/// Old self-only account connections must not negotiate delegation authority.
-pub(super) fn restrict_to_self(command: &mut Command) {
+#[cfg(test)]
+fn restrict_to_self(command: &mut Command) {
     command.env(
         "SSMCP_RELAY_CAPABILITIES",
         crate::wire::CONTROL_ATTRIBUTION_CAPABILITY,
@@ -279,45 +273,14 @@ pub(super) async fn run() -> crate::Result<()> {
     let mut metrics = super::link_metrics::Recorder::from_environment();
     let server = std::env::var("SSMCP_RELAY_SERVER")
         .map_err(|_| "private relay must be started by ssmcp")?;
-    let token = std::env::var("SSMCP_RELAY_TOKEN").ok();
-    let mut request = websocket_url(&server)?.into_client_request()?;
-    if let Some(token) = &token {
-        let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
-            .map_err(|_| "invalid client credential")?;
-        authorization.set_sensitive(true);
-        request.headers_mut().insert("authorization", authorization);
+    if std::env::var_os("SSMCP_RELAY_TOKEN").is_some() {
+        return Err("device transport does not accept account credentials; reconnect with ssmcp username@server".into());
     }
-    let proof = if let (Some(token), Ok(session_key)) = (
-        &token,
-        std::env::var(super::account::device_identity::SESSION_ENV),
-    ) {
-        match super::account::device_identity::proof_header(&server, token, &session_key).await {
-            Ok(proof) => proof,
-            Err(error) if error.downcast_ref::<PermanentFailure>().is_some() => {
-                write_frame(
-                    &mut tokio::io::stdout(),
-                    &Frame::Reject {
-                        message: error.to_string(),
-                    },
-                )
-                .await?;
-                return Ok(());
-            }
-            Err(error) => return Err(error),
-        }
-    } else {
-        None
-    };
+    let mut request = websocket_url(&server)?.into_client_request()?;
     if std::env::var_os(PROJECT_OFFER_ENV).as_deref() == Some(std::ffi::OsStr::new("1")) {
         request.headers_mut().insert(
             crate::wire::project_continuity::OFFER_HEADER,
             HeaderValue::from_static("1"),
-        );
-    }
-    if let Some(proof) = &proof {
-        request.headers_mut().insert(
-            crate::wire::device_address::PROOF_HEADER,
-            HeaderValue::from_str(proof).map_err(|_| "invalid device proof header")?,
         );
     }
     // The parent, not just this helper, must understand the optional Ready fields.
@@ -367,11 +330,7 @@ pub(super) async fn run() -> crate::Result<()> {
             write_frame(
                 &mut tokio::io::stdout(),
                 &Frame::Reject {
-                    message: if token.is_some() {
-                        AUTH_EXPIRED.into()
-                    } else {
-                        UNSUPPORTED.into()
-                    },
+                    message: UNSUPPORTED.into(),
                 },
             )
             .await?;
@@ -452,10 +411,6 @@ pub(super) async fn run() -> crate::Result<()> {
                         Some(Err(error)) => return Err(format!("relay disconnected: {error}").into()),
                     };
                     if let Some(frame) = frame {
-                        if proof.is_some() && matches!(&frame, Frame::Ready { capabilities, .. }
-                            if !capabilities.iter().any(|c|c==crate::wire::device_address::CAPABILITY)) {
-                            return Err("server did not acknowledge the signed device identity; connection was not accepted".into());
-                        }
                         timeout(Duration::from_secs(15), write_frame(&mut stdout, &frame))
                             .await.map_err(|_| "local relay output timed out")??;
                     }
@@ -523,7 +478,7 @@ mod tests {
 
     #[test]
     fn worker_dreaming_offer_only_appears_for_worker_pools_and_fits_the_header() {
-        let mut command = command(Path::new("ssmcp"), "https://broker.test", None);
+        let mut command = command(Path::new("ssmcp"), "https://broker.test");
         assert!(!offers(&command, crate::wire::WORKER_DREAMING_CAPABILITY));
         let mut no_input = Command::new("ssmcp");
         offer_chat_disabled(&mut no_input, false);
@@ -721,7 +676,7 @@ mod tests {
     #[test]
     fn durable_display_requires_its_own_offer_and_echo_and_preserves_v3_fallback() {
         use crate::wire::wait_display::{CAPABILITY, DURABLE_CAPABILITY, Version};
-        let mut parent = command(Path::new("/fixture/ssmcp"), "https://fixture.test", None);
+        let mut parent = command(Path::new("/fixture/ssmcp"), "https://fixture.test");
         assert!(durable_wait_display_offer(&parent));
         let mut caps: Vec<String> = [
             crate::wire::SESSION_ACCESS_CAPABILITY,
@@ -754,7 +709,7 @@ mod tests {
 
     #[test]
     fn timing_requires_the_real_parent_offer_and_explicit_current_ready_echo() {
-        let mut parent = command(Path::new("/fixture/ssmcp"), "https://fixture.test", None);
+        let mut parent = command(Path::new("/fixture/ssmcp"), "https://fixture.test");
         let offered = timing_offer(&parent);
         assert_eq!(offered, (true, true));
         let capabilities: Vec<String> = [

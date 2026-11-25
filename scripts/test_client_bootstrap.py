@@ -15,7 +15,7 @@ ORIGIN = "https://ssmcp.example"
 
 class Bootstrap(unittest.TestCase):
     def run_fixture(self, os_name="Linux", arch="x86_64", downloader="curl",
-                    fault="", glibc="glibc 2.35", symlink="", rosetta=False):
+                    fault="", glibc="glibc 2.35", symlink="", rosetta=False, args=None, expected_args=None):
         with tempfile.TemporaryDirectory(prefix="ssmcp-bootstrap-test-") as temporary:
             root = Path(temporary)
             programs = root / "bin"
@@ -88,7 +88,9 @@ else:
             fetch.chmod(0o700)
             script = SOURCE.replace("@@ORIGIN@@", "'" + ORIGIN + "'").replace("@@WIRE@@", "7")
             secret = "ci_" + "a" * 64
-            args = ["--allow", "alice@" + ORIGIN.removeprefix("https://"), "--name", "B '$() spaces"]
+            if args is None:
+                args = ["--allow", "alice@" + ORIGIN.removeprefix("https://"), "--name", "B '$() spaces"]
+                expected_args = args[1:]
             env = dict(os.environ, PATH=str(programs), HOME=str(home),
                        XDG_CONFIG_HOME=str(home / "config"), XDG_STATE_HOME=str(home / "state"),
                        XDG_DATA_HOME=str(home / "data"), XDG_CACHE_HOME=str(home / "cache"),
@@ -108,7 +110,7 @@ else:
             self.assertNotIn(secret, result.stdout.decode() + result.stderr.decode())
             self.assertNotIn(secret, json.dumps(requests))
             if result.returncode == 0:
-                self.assertEqual(joined["args"], ["--server", ORIGIN, *args])
+                self.assertEqual(joined["args"], ["--server", ORIGIN, *(expected_args if expected_args is not None else args)])
                 self.assertEqual(joined["path"], str(installed), "connection must use the absolute installed path")
                 self.assertEqual(installed.read_bytes(), executable.read_bytes())
                 self.assertEqual(installed.stat().st_mode & 0o777, 0o700)
@@ -133,6 +135,22 @@ else:
                     self.assertIn("--max-redirs", request)
                     self.assertEqual(request[request.index("--max-redirs") + 1], "0")
                     self.assertIn("--max-filesize", request)
+
+    def test_named_target_legacy_alias_and_multiple_accounts(self):
+        alice = "alice@ssmcp.example"
+        bob = "bob@ssmcp.example"
+        for args, expected in [
+            ([alice, "--name", "case A"], [alice, "--name", "case A"]),
+            (["--name", "--allow", "--allow", alice], ["--name", "--allow", alice]),
+        ]:
+            result, joined, _ = self.run_fixture(args=args, expected_args=expected)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertIsNotNone(joined)
+        for args in [["--allow", alice, "--allow", bob], ["--allow", alice + "," + bob], [alice, bob]]:
+            result, joined, requests = self.run_fixture(args=args)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIsNone(joined)
+            self.assertEqual(requests, [])
 
     def test_rosetta_selects_native_apple_silicon(self):
         result, _, requests = self.run_fixture("Darwin", "x86_64", rosetta=True)

@@ -192,10 +192,18 @@ pub(super) fn normalize_args(args: &mut [OsString]) -> Result<()> {
             break;
         }
     }
+    let command = args.get(end).and_then(|arg| arg.to_str());
+    if end > 0
+        && (matches!(command, Some("list" | "ls" | "attach"))
+            || (command == Some("sessions") && args.get(end + 1).is_none_or(|op| op != "create")))
+    {
+        return Err(
+            "local session management uses saved device state and accepts no relay selector".into(),
+        );
+    }
     if !has_context {
         return Ok(());
     }
-    let command = args.get(end).and_then(|arg| arg.to_str());
     let command_len = match command {
         Some("login" | "logout" | "whoami" | "list" | "ls" | "invite" | "join" | "setup") => 1,
         Some("context" | "trust") => usize::from(args.get(end + 1).is_some()) + 1,
@@ -204,8 +212,6 @@ pub(super) fn normalize_args(args: &mut [OsString]) -> Result<()> {
                 if args.get(end + 2).is_none() { return Err("sessions create requires a name".into()); }
                 3
             }
-            Some("list") if args.iter().skip(end + 2).any(|arg| arg == "--remote" || arg == "-i" || arg == "--interactive") => 2,
-            Some("--remote" | "-i" | "--interactive") => 1,
             _ => return Err("--context selects new connections; saved-session operations use their recorded target".into()),
         },
         Some("config" | "ui" | "update" | "007" | "service" | "attach" | "__session-run") => {

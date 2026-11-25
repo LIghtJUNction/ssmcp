@@ -434,8 +434,8 @@ def run_diff_login(binary, decoder, output, checks):
                 recipient_row = left_rows(typed)[prompt_start(typed)]
                 preview.send(b"\r")
                 rejected = preview.until(
-                    lambda shot: "Use ssmcp username@server --register" in text(shot),
-                    "the registration command hint",
+                    lambda shot: "Authorize the controller using the MCP URL" in text(shot),
+                    "the controller authorization hint",
                 )
                 unchanged = {
                     "draft": command in prompt_text(rejected),

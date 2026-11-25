@@ -454,6 +454,7 @@ mod tests {
             session
                 .sender
                 .try_send(super::super::Call {
+                    relay_maintenance: false,
                     binding: None,
                     traffic_failure: Default::default(),
                     attribution: None,

@@ -57,6 +57,7 @@ fn request_timeout(operation: &Operation) -> Duration {
 type CallResult = std::result::Result<Value, String>;
 
 struct Call {
+    relay_maintenance: bool,
     operation: Operation,
     controller: Option<Controller>,
     attribution: Option<wire::ControlAttribution>,
@@ -427,6 +428,7 @@ impl Session {
                 let (reply, response) = oneshot::channel();
                 self.sender
                     .try_send(Call {
+                        relay_maintenance: true,
                         operation: Operation::CallTool {
                             name: "ssmcp.client.capabilities".into(),
                             arguments: serde_json::json!({}),
@@ -642,6 +644,9 @@ impl Session {
         if self
             .sender
             .try_send(Call {
+                relay_maintenance: !audit_required
+                    && authorization.is_none()
+                    && operation.is_relay_maintenance(),
                 operation,
                 controller,
                 attribution: attribution.clone(),
@@ -1292,9 +1297,34 @@ impl Broker {
         let registration = peer.as_ref().and_then(|peer| peer.account.as_ref());
         let (reader, mut writer) = tokio::io::split(stream);
         let mut reader = BufReader::new(reader);
-        let (mode, mut metadata) = match timeout(IO_TIMEOUT, wire::read_frame(&mut reader))
-            .await??
-        {
+        let first = timeout(IO_TIMEOUT, wire::read_frame(&mut reader)).await??;
+        let (first, guarded_target) = match first {
+            Some(Frame::ResolveController { id: 0, principal })
+                if anonymous
+                    && peer
+                        .as_ref()
+                        .is_some_and(|p| p.session_access && p.control_attribution) =>
+            {
+                let identity = match self.resolve_controller(&principal).await {
+                    Ok(identity) => identity,
+                    Err(message) => {
+                        wire::write_frame(&mut writer, &Frame::Reject { message }).await?;
+                        return Ok(());
+                    }
+                };
+                let proposal = Frame::ResolvedController {
+                    id: 0,
+                    principal: principal.clone(),
+                    provider: identity.provider.clone(),
+                    subject: identity.subject.clone(),
+                };
+                timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &proposal)).await??;
+                let next = timeout(IO_TIMEOUT, wire::read_frame(&mut reader)).await??;
+                (next, Some((principal, identity)))
+            }
+            other => (other, None),
+        };
+        let (mode, mut metadata) = match first {
             Some(Frame::Hello {
                 version,
                 mode,
@@ -1426,6 +1456,19 @@ impl Broker {
                 return Ok(());
             }
         };
+        if let Some((principal, expected)) = &guarded_target
+            && !(matches!(metadata.allow.as_slice(), [target] if target == principal)
+                && matches!(allow.as_slice(), [actual] if actual.provider == expected.provider && actual.subject == expected.subject))
+        {
+            wire::write_frame(
+                &mut writer,
+                &Frame::Reject {
+                    message: "device admission requires the exact resolved controller".into(),
+                },
+            )
+            .await?;
+            return Ok(());
+        }
         let access_owner = registration.map(|registration| registration.identity.clone());
         // A legacy permission panel cannot decode current server-scoped snapshots.
         let access_supported =
@@ -1644,6 +1687,7 @@ impl Broker {
         // Each pending ID retains its authenticated caller, independent of
         // later ACL edits and of other controllers on this device.
         let mut pending: HashMap<u64, PendingCall> = HashMap::new();
+        let mut proposed_controller: Option<(u64, String, Identity)> = None;
         let mut result: crate::Result<()> = tokio::select! {
             biased;
             _ = session.disconnect.notified() => { self.project_continuity.forget(&client_id); Ok(()) },
@@ -1716,7 +1760,11 @@ impl Broker {
                                 _ => None,
                             };
                             let run_id = call.code_context.as_ref().map(|context| context.run_id.clone());
-                            let frame = Frame::Call { id:next_id, operation:call.operation, controller:call.controller, attribution:if control_attribution {call.attribution.map(Box::new)} else {None}, code_context:call.code_context, openai_context:if openai_context_supported {call.openai_context} else {None} };
+                            let frame = if guarded_target.is_some() && call.relay_maintenance {
+                                Frame::RelayMaintenance { id: next_id, operation: call.operation }
+                            } else {
+                                Frame::Call { id:next_id, operation:call.operation, controller:call.controller, attribution:if control_attribution {call.attribution.map(Box::new)} else {None}, code_context:call.code_context, openai_context:if openai_context_supported {call.openai_context} else {None} }
+                            };
                             let bytes = serde_json::to_vec(&frame)?.len() + 1;
                             let mut queued = PendingCall { reply:call.reply, deadline, reload, authorization:call.authorization, subject, binding:call.binding, traffic_failure:call.traffic_failure };
                             let broker = self.clone();
@@ -1830,10 +1878,35 @@ impl Broker {
                         project_deadline = None;
                         self.project_continuity.forget(&client_id);
                     }
+                    Some(Frame::ResolveController { id, principal }) if guarded_target.is_some() && id > 0 => {
+                        proposed_controller = None;
+                        let frame = match self.resolve_controller(&principal).await {
+                            Ok(identity) => {
+                                let frame = Frame::ResolvedController { id, principal: principal.clone(), provider: identity.provider.clone(), subject: identity.subject.clone() };
+                                proposed_controller = Some((id, principal, identity));
+                                frame
+                            }
+                            Err(error) => Frame::AccessReply { id, result: Err(error) },
+                        };
+                        timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
+                    }
+                    Some(Frame::ApproveResolvedController { id }) if guarded_target.is_some() => {
+                        let result = match proposed_controller.take() {
+                            Some((request, principal, expected)) if request == id => {
+                                session.access_with_expected(&self, access_owner.as_ref(), wire::AccessCommand::Add { principal }, Some(&expected)).await
+                            }
+                            _ => Err("no matching controller proposal on this connection".into()),
+                        };
+                        if result.is_ok() { self.refresh_native_connection(&session); }
+                        timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::AccessReply { id, result })).await??;
+                    }
                     Some(Frame::Access { id, command }) => {
                         // Only this credential-bound connection can edit its own session.
                         // Capability negotiation grants no authority by itself.
-                        let result = if access_supported {
+                        proposed_controller = None;
+                        let result = if guarded_target.is_some() && matches!(command, wire::AccessCommand::Add { .. }) {
+                            Err("controller admission requires a verified proposal".into())
+                        } else if access_supported {
                             session.access_command(&self, access_owner.as_ref(), command).await
                         } else if legacy_account_self {
                             Err("update the ssmcp client to manage server-scoped access controls; this legacy connection is restricted to its authenticated account".into())

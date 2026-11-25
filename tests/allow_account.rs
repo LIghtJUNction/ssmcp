@@ -59,6 +59,10 @@ impl Home {
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_ssmcp"));
         command
             .args(args)
+            .env("HOME", &self.0)
+            .env("XDG_CONFIG_HOME", self.0.join("config"))
+            .env("XDG_STATE_HOME", self.0.join("state"))
+            .env("SSMCP_SESSION_HOME", self.0.join("sessions"))
             .env("SSMCP_AUTH_HOME", self.0.join("auth"))
             .env("SSMCP_CLIENT_CONFIG", self.0.join("config.toml"))
             .env_remove("SSMCP_UI_CONFIG")
@@ -108,39 +112,58 @@ async fn connect(
             .any(|v| v == wire::CONTROL_ATTRIBUTION_CAPABILITY)
     );
     upgrade.on_upgrade(move |mut socket| async move {
-        let bytes = tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                match socket.next().await.unwrap().unwrap() {
-                    Message::Text(data) => break data.as_bytes().to_vec(),
-                    Message::Binary(data) => break data.to_vec(),
-                    Message::Ping(_) | Message::Pong(_) => continue,
-                    other => panic!("expected Hello, received {other:?}"),
+        async fn next_frame(socket: &mut axum::extract::ws::WebSocket) -> Frame {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    match socket.next().await.unwrap().unwrap() {
+                        Message::Text(text) => break serde_json::from_str(&text).unwrap(),
+                        Message::Binary(bytes) => break serde_json::from_slice(&bytes).unwrap(),
+                        Message::Ping(_) | Message::Pong(_) => continue,
+                        other => panic!("unexpected registration message: {other:?}"),
+                    }
                 }
-            }
-        })
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap()
+        }
+        let Frame::ResolveController { id: 0, principal } = next_frame(&mut socket).await else {
+            panic!("expected controller resolution before Hello");
+        };
+        if peer.legacy {
+            socket
+                .send(Message::Binary(
+                    serde_json::to_vec(&Frame::Reject {
+                        message: "unsupported admission".into(),
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            return;
+        }
+        let proposal = Frame::ResolvedController {
+            id: 0,
+            principal,
+            provider: "github".into(),
+            subject: "123".into(),
+        };
+        socket
+            .send(Message::Binary(
+                serde_json::to_vec(&proposal).unwrap().into(),
+            ))
+            .await
+            .unwrap();
         let Frame::Hello {
             version, metadata, ..
-        } = serde_json::from_slice(&bytes).unwrap()
+        } = next_frame(&mut socket).await
         else {
             panic!("expected Hello")
         };
         assert_eq!(version, wire::VERSION);
         peer.hellos.lock().unwrap().push(metadata);
-        let response = if peer.legacy {
-            Frame::Ready {
-                url: "https://fixture.invalid/mcp".into(),
-                login_code: String::new(),
-                login_expires_in: 0,
-                client_id: "fixture-client".into(),
-                capabilities: Vec::new(),
-                version_notice: None,
-            }
-        } else {
-            Frame::Reject {
-                message: "allow fixture completed without starting tools".into(),
-            }
+        let response = Frame::Reject {
+            message: "allow fixture completed without starting tools".into(),
         };
         socket
             .send(Message::Binary(
@@ -182,7 +205,7 @@ async fn allow_help_uses_only_server_qualified_accounts() {
 }
 
 #[tokio::test]
-async fn device_cli_connects_without_a_token_with_explicit_or_migrated_username() {
+async fn device_cli_connects_without_a_token_with_explicit_or_remembered_target() {
     for (legacy, explicit, saved) in [
         (false, true, false),
         (true, true, true),
@@ -216,6 +239,11 @@ async fn device_cli_connects_without_a_token_with_explicit_or_migrated_username(
         ];
         if explicit {
             args.push(format!("Alice@{base}"));
+        } else {
+            let path = home.0.join("auth/last-connection.json");
+            let target = json!({"mode":"relay", "username":"saved-target", "server":base});
+            fs::write(&path, serde_json::to_vec(&target).unwrap()).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
         }
         let output = home
             .run(&args.iter().map(String::as_str).collect::<Vec<_>>())
@@ -230,7 +258,7 @@ async fn device_cli_connects_without_a_token_with_explicit_or_migrated_username(
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(
             stderr.contains(if legacy {
-                "account access controls"
+                "unsupported admission"
             } else {
                 "allow fixture completed"
             }),
@@ -239,11 +267,18 @@ async fn device_cli_connects_without_a_token_with_explicit_or_migrated_username(
         assert!(!stderr.contains("Starting native tools"), "{stderr}");
         assert_eq!(whoamis.load(Ordering::SeqCst), 0);
         let captured = hellos.lock().unwrap();
+        if legacy {
+            assert!(
+                captured.is_empty(),
+                "an old relay cannot publish the device metadata"
+            );
+            continue;
+        }
         assert_eq!(captured.len(), 1);
         let expected = if explicit {
             vec![format!("alice@{base}")]
         } else {
-            vec![format!("owner-home@{base}")]
+            vec![format!("saved-target@{base}")]
         };
         assert_eq!(captured[0].allow, expected);
     }
@@ -269,6 +304,8 @@ async fn allow_cli_rejects_wrong_servers_and_retired_syntax_before_network() {
         let error = String::from_utf8_lossy(&output.stderr);
         assert!(error.contains("removed") || error.contains("unrecognized command"));
     }
+    // Old credentials must not select a device owner or cause a login probe.
+    home.account(&base);
     let output = home.run(&["--server", &base, "--no-watchdog"]).await;
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());

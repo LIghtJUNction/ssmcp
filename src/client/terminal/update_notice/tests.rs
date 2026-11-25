@@ -128,7 +128,6 @@ async fn startup_update_probe_session_drop_cancels_its_in_flight_http_request() 
         shared: display,
         thread: None,
         guide_probe: None,
-        account_probe: None,
         update_probe: Some(probe),
     };
     tokio::time::timeout(Duration::from_secs(5), request_started)

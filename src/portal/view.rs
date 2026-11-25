@@ -251,7 +251,7 @@ fn connect_panel(account: Option<&Account>, public_url: &str) -> String {
 <div class="section-content"><div class="terminal" aria-label="本机连接命令"><div class="terminal-bar"><span>terminal</span><span class="terminal-label">~/your-project</span></div><div class="terminal-content"><p class="terminal-comment"># 在本机执行</p><pre class="command"><code id="client-command">{}</code></pre></div></div>
 <div class="connect-actions"><p class="command-hint">{hint}</p><button id="copy-client-command" class="secondary" type="button" hidden>复制命令</button><span id="copy-command-status" role="status"></span></div>
 <script src="{copy_script_url}" defer></script>
-<p class="section-description">设备无需登录。请在此网页登录获取用户名。也可以在命令后添加 <code>--register</code> 注册新用户名。保持这个终端运行，连接成功后继续第三步。</p>
+<p class="section-description">控制者在此门户登录并查看用户名。被控设备使用这个用户名连接并保持终端运行，随后在控制者的 MCP 应用中完成第三步。</p>
 <a class="text-link" href="/guide/zh#help">连接遇到问题？ <span class="arrow" aria-hidden="true">↗</span></a>
 <details><summary>用户名和工具发现</summary><p>用户名为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾。名称不区分大小写，已占名称只允许原绑定 GitHub 账户登录。</p><p>连接后，应用可以调用当前客户端已注册的工具。终端命令和文件操作在你的电脑上执行；额外工具的安装、登录与授权仍由你管理。</p></details></div></section>"#,
         escape(&command)

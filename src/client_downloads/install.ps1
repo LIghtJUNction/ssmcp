@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$Server,
-    [Parameter(Mandatory = $true)][string[]]$Allow,
+    [Parameter(Mandatory = $true)][Alias('Allow')][string[]]$Account,
     [string]$Name,
     [string]$InstallDir,
     # Accepted for older callers; browser dependencies are no longer installed.
@@ -15,6 +15,9 @@ Set-StrictMode -Version Latest
 $downloadOrigin = @@ORIGIN@@
 $requiredWire = @@WIRE@@
 if (-not $Server) { $Server = $downloadOrigin }
+if ($Account.Count -ne 1 -or $Account[0] -cnotmatch '^[A-Za-z][^@,\s]*@[^@,\s]+$') {
+    throw 'Choose one controller account as username@server.'
+}
 if ($Server.TrimEnd('/') -cne $downloadOrigin) { throw 'The connection server must match this gateway.' }
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw 'Use the shell installation command on Linux and macOS.'
@@ -138,8 +141,7 @@ try {
     if ($backupPath -and [IO.File]::Exists($backupPath)) { [IO.File]::Delete($backupPath); $backupPath = $null }
     Write-Host "Installed ssmcp $version at $installedPath"
     Write-Host 'Starting the controlled connection. Keep this terminal open; Ctrl-C stops it.'
-    $connectionArguments = @('--server', $Server)
-    foreach ($targetAccount in $Allow) { $connectionArguments += @('--allow', $targetAccount) }
+    $connectionArguments = @('--server', $Server, $Account[0])
     if ($Name) { $connectionArguments += @('--name', $Name) }
     if ($NoWatchdog) { $connectionArguments += '--no-watchdog' }
     else { $connectionArguments += @('--reconnect-delay', $ReconnectDelay.ToString()) }

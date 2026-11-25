@@ -3,7 +3,6 @@
 use super::*;
 use crate::wire::device_address::{self, Proof};
 use ring::signature::Ed25519KeyPair;
-use std::sync::{Mutex, OnceLock};
 
 pub(crate) const SESSION_ENV: &str = "SSMCP_RELAY_SESSION_KEY";
 
@@ -26,20 +25,6 @@ fn key_at(root: &Path, server: &str) -> Result<Ed25519KeyPair> {
         "invalid saved device identity; do not overwrite it while reconciling existing sessions"
             .into()
     })
-}
-
-pub(crate) fn process_session_key() -> Result<String> {
-    static KEY: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    let mut value = KEY
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if value.is_none() {
-        let mut bytes = [0; 32];
-        platform::random_bytes(&mut bytes)?;
-        *value = Some(device_address::encode(&bytes));
-    }
-    Ok(value.as_ref().unwrap().clone())
 }
 
 pub(crate) async fn proof_header(
@@ -164,11 +149,5 @@ mod tests {
         assert!(key_at(&root, "https://one.example").is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"corrupt");
         std::fs::remove_dir_all(root).unwrap();
-    }
-    #[test]
-    fn foreground_session_key_is_reused_only_by_the_current_process() {
-        let first = process_session_key().unwrap();
-        device_address::decode::<32>(&first).unwrap();
-        assert_eq!(first, process_session_key().unwrap());
     }
 }

@@ -5,7 +5,38 @@ umask 077
 server=@@ORIGIN@@
 required_wire=@@WIRE@@
 fail() { printf 'ssmcp: %s\n' "$*" >&2; exit 1; }
-[ "$#" -gt 0 ] || fail 'Pass connection options, for example --allow username@relay-server.'
+[ "$#" -gt 0 ] || fail 'Pass the controller account as username@relay-server.'
+# Rotate argv once. Values stay literal even when a name contains spaces or shell syntax.
+remaining=$#
+selected=
+while [ "$remaining" -gt 0 ]; do
+    argument=$1; shift; remaining=$((remaining - 1))
+    case "$argument" in
+        --allow)
+            [ "$remaining" -gt 0 ] || fail '--allow requires one username@server.'
+            argument=$1; shift; remaining=$((remaining - 1))
+            case "$argument" in [a-zA-Z]*@?*) ;; *) fail 'Pass one controller as username@server.' ;; esac
+            ;;
+        --name|--title|--server|--username|--reconnect-delay|--ui-config|--theme|--log-format|--cwd|--shell|--input|--tty|--context-root|--cpu-limit|--memory-limit)
+            [ "$remaining" -gt 0 ] || fail 'A connection option is missing its value.'
+            set -- "$@" "$argument" "$1"; shift; remaining=$((remaining - 1))
+            continue ;;
+        --)
+            set -- "$@" --
+            while [ "$remaining" -gt 0 ]; do
+                set -- "$@" "$1"; shift; remaining=$((remaining - 1))
+            done
+            break ;;
+        *) ;;
+    esac
+    case "$argument" in
+        *@*)
+            case "$argument" in *,*|*@*@*) fail 'Choose one controller account for this device.' ;; esac
+            [ -z "$selected" ] || fail 'Choose one controller account for this device.'
+            selected=$argument ;;
+    esac
+    set -- "$@" "$argument"
+done
 case "$(uname -m)" in
     x86_64|amd64) arch=x86_64 ;;
     aarch64|arm64) arch=aarch64 ;;

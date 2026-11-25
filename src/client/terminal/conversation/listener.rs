@@ -116,7 +116,7 @@ impl State {
         if text.trim().is_empty() {
             return Err("用法：/send <正文>；发送给当前选定的收件人".into());
         }
-        if self.conversation.logout_task.is_some() || self.conversation.exit_requested {
+        if self.conversation.exit_requested {
             return Err("发送失败：当前连接正在关闭，草稿已保留".into());
         }
         if self.conversation.editing.is_some()

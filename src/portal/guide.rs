@@ -120,7 +120,8 @@ mod tests {
                 "/worker ls",
                 "/worker +2",
                 "/worker -1",
-                "ssmcp yourname@relay.example:8443 --register",
+                "ssmcp list",
+                "ssmcp attach NAME",
                 "collab.join",
                 "ssmcp computer version --json",
                 "--worker 3",
@@ -153,12 +154,13 @@ mod tests {
             ] {
                 assert!(html.contains(expected), "missing {expected}");
             }
+            assert!(!html.contains("--register"));
             assert!(!html.contains("{{"));
             assert!(!html.contains("<script"));
         }
         for language in [Language::English, Language::Chinese] {
             let html = page(language, "http://127.0.0.1:4123");
-            assert!(html.contains("ssmcp yourname@http://127.0.0.1:4123 --register"));
+            assert!(html.contains("<code>ssmcp yourname@http://127.0.0.1:4123</code>"));
         }
         for origin in [
             "https://user:secret@relay.example",

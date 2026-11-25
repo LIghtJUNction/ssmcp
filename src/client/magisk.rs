@@ -210,7 +210,6 @@ struct Setup {
     root: bool,
     terms: bool,
     privacy: bool,
-    register: bool,
 }
 
 async fn configure(
@@ -247,9 +246,7 @@ async fn configure_inner(state: &Console, input: Setup) -> Result<Value> {
             "A target is active. Edit ssmcp.rc and restart the module to reconfigure.".into(),
         );
     }
-    if let Some(url) = super::account::magisk_onboarding(&server, &name, input.register).await? {
-        return Ok(json!({"registration": url.as_str()}));
-    }
+    super::account::check_magisk_target(&server, &name).await?;
     let target = allow_principal(&name, &server)?;
     let tab = sessions.open(&target, &state.dir)?;
     if let Err(error) = save(&state.dir, &name, &server) {

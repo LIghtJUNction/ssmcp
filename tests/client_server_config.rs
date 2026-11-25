@@ -38,6 +38,7 @@ impl Home {
             .args(args)
             .env("SSMCP_CLIENT_CONFIG", self.0.join("config.toml"))
             .env("SSMCP_AUTH_HOME", self.0.join("auth"))
+            .env("SSMCP_SESSION_HOME", self.0.join("sessions"))
             .env_remove("SSMCP_CONTEXT")
             .env_remove("SSMCP_UI_CONFIG")
             .env_remove("SSMCP_RELAY_TOKEN")
@@ -53,6 +54,13 @@ impl Home {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stdout).unwrap()
+    }
+    fn remember_target(&self, server: &str, username: &str) {
+        write_private(
+            &self.0.join("auth/last-connection.json"),
+            &serde_json::to_vec(&json!({"mode": "relay", "server": server, "username": username}))
+                .unwrap(),
+        );
     }
     fn account(&self, server: &str, token: &str) {
         let expires = SystemTime::now()
@@ -277,29 +285,21 @@ fn server_configuration_is_editable_and_precedence_is_consistent() {
 fn explicit_server_overrides_configuration_for_account_and_device_requests() {
     let home = Home::new();
     home.success(&["config", "set", "server", "https://configured.example"]);
-    let server = Server::once(
-        "200 OK",
-        json!({
-            "identity": {"provider":"github", "subject":"123", "login":"alice",
-                "principal":"alice@github", "username":"alice-home"}
-        }),
-    );
+    let server = Server::once("200 OK", json!({"username":"alice-home"}));
     let token = "c".repeat(64);
     home.account(&server.origin, &token);
+    home.remember_target(&server.origin, "alice-home");
     let output = home.success(&["--server", &server.origin, "whoami", "--json"]);
     let account: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(account["server"], server.origin);
-    assert_eq!(account["identity"]["username"], "alice-home");
+    assert_eq!(account["account"]["username"], "alice-home");
     assert!(!output.contains("ssmcp.lmm.best"));
     assert!(!output.contains("configured.example"));
     assert!(!output.contains(&token));
     let request = server.request();
-    assert!(request.starts_with("GET /api/client/whoami "));
-    assert!(
-        request
-            .to_ascii_lowercase()
-            .contains(&format!("authorization: bearer {token}"))
-    );
+    assert!(request.starts_with("GET /api/client/account/alice-home "));
+    assert!(!request.to_ascii_lowercase().contains("authorization:"));
+    assert!(!request.contains(&token));
 
     // An explicit device target reaches the selected relay anonymously, even when that
     // origin has a saved login. A protocol rejection stops before tools start.
@@ -341,42 +341,29 @@ fn explicit_server_overrides_configuration_for_account_and_device_requests() {
 }
 
 #[test]
-fn configured_default_is_used_by_legacy_account_reads_and_named_connections() {
+fn public_account_lookup_and_named_connections_do_not_use_saved_login() {
     let home = Home::new();
-    let server = Server::once(
-        "200 OK",
-        json!({
-            "identity": {"provider":"github", "subject":"123", "login":"alice",
-                "principal":"alice@github", "username":"alice-home"}
-        }),
-    );
+    let server = Server::once("200 OK", json!({"username":"alice-home"}));
     let selected_token = "d".repeat(64);
     let previous_token = "e".repeat(64);
     home.account(&server.origin, &selected_token);
     home.account("https://last-login.example", &previous_token);
     home.success(&["config", "set", "server", &server.origin]);
+    home.remember_target(&server.origin, "alice-home");
     let output = home.success(&["whoami", "--json"]);
     let account: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(account["server"], server.origin);
     assert!(!output.contains(&selected_token));
     assert!(!output.contains(&previous_token));
     let request = server.request();
-    assert!(request.starts_with("GET /api/client/whoami "));
-    assert!(
-        request
-            .to_ascii_lowercase()
-            .contains(&format!("authorization: bearer {selected_token}"))
-    );
+    assert!(request.starts_with("GET /api/client/account/alice-home "));
+    assert!(!request.to_ascii_lowercase().contains("authorization:"));
+    assert!(!request.contains(&selected_token));
     assert!(!request.contains(&previous_token));
 
-    let registration = Server::once("400 Bad Request", json!({"error": "stop_test"}));
-    let target = format!("Alice@{}", registration.origin);
-    let output = home.command(&[&target, "--register", "--no-browser"]);
+    let output = home.command(&["Alice@relay.example", "--register", "--no-browser"]);
     assert!(!output.status.success());
-    let request = registration.request();
-    assert!(request.starts_with("POST /api/client/registration/start "));
-    assert!(request.contains(r#""username":"alice""#));
-    assert!(!request.to_ascii_lowercase().contains("authorization:"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("relay web portal"));
 
     let named = Server::once("400 Bad Request", json!({"error": "stop_test"}));
     home.success(&["config", "set", "server", &named.origin]);
@@ -433,17 +420,25 @@ fn selected_server_credentials_and_redirects_never_leak_to_another_origin() {
     home.account(&first.origin, &first_token);
     home.account("https://other.example", &second_token);
     home.success(&["config", "set", "server", "https://other.example"]);
+    home.remember_target(&first.origin, "alice");
     home.success(&["whoami", "--server", &first.origin, "--json"]);
     let request = first.request();
-    assert!(request.contains(&first_token));
+    assert!(request.starts_with("GET /api/client/account/alice "));
+    assert!(!request.to_ascii_lowercase().contains("authorization:"));
+    assert!(!request.contains(&first_token));
     assert!(!request.contains(&second_token));
 
     let redirect = Server::once("302 Found", json!({}));
     home.account(&redirect.origin, &first_token);
+    home.remember_target(&redirect.origin, "alice");
     let output = home.command(&["whoami", "--server", &redirect.origin]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("redirected"));
-    assert!(redirect.request().starts_with("GET /api/client/whoami "));
+    assert!(
+        redirect
+            .request()
+            .starts_with("GET /api/client/account/alice ")
+    );
 }
 
 #[test]

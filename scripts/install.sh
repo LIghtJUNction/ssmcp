@@ -218,5 +218,5 @@ case ":$PATH:" in
     *":$install_dir:"*) ;;
     *) printf 'Add this directory to PATH: %s\n' "$install_dir" ;;
 esac
-printf 'Sign in: ssmcp login --server %s\n' 'https://ssmcp.lmm.best'
-printf 'Then enter your project directory and run: ssmcp\n'
+printf 'Use the controller username from the relay account page. In your project directory run:\n'
+printf '  ssmcp --username USERNAME --server %s\n' 'https://ssmcp.lmm.best'
