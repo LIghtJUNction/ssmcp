@@ -1957,6 +1957,7 @@ impl WorkerController {
                 {
                     let ticket = worker_control::Confirmation {
                         request_id: id,
+                        slot,
                         target,
                         generation: generation.into(),
                         client_id: client_id.into(),

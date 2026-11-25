@@ -6,6 +6,7 @@ const MAX_DELTA: i32 = 128;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(super) struct Confirmation {
     pub request_id: u64,
+    pub slot: u64,
     pub target: usize,
     pub generation: String,
     pub client_id: String,
@@ -16,9 +17,12 @@ impl Confirmation {
         snapshot["generation"].as_str() == Some(self.generation.as_str())
             && snapshot["client_id"].as_str() == Some(self.client_id.as_str())
             && snapshot["desired_total"].as_u64() == Some(self.target as u64)
-            && snapshot["retiring"].as_u64() == Some(1)
+            // An in-flight claim keeps the selected station in the working count.
+            && snapshot["total"].as_u64() == (self.target as u64).checked_add(1)
+            && snapshot["last_resize"]["accepted"].as_bool() == Some(true)
+            && snapshot["last_resize"]["target"].as_u64() == Some(self.target as u64)
             && snapshot["last_resize"]["request_id"].as_u64() == Some(self.request_id)
-            && snapshot["last_resize"]["confirm_slot"].is_u64()
+            && snapshot["last_resize"]["confirm_slot"].as_u64() == Some(self.slot)
     }
 }
 
@@ -149,6 +153,7 @@ mod tests {
         let mut ui = Input::default();
         let ticket = Confirmation {
             request_id: 7,
+            slot: 4,
             target: 3,
             generation: "generation".into(),
             client_id: "client".into(),
@@ -182,25 +187,38 @@ mod tests {
     fn confirmation_requires_the_displayed_pool_and_retirement() {
         let ticket = Confirmation {
             request_id: 7,
+            slot: 4,
             target: 3,
             generation: "generation".into(),
             client_id: "client".into(),
         };
-        let state = serde_json::json!({"generation":"generation","client_id":"client","desired_total":3,"retiring":1,
-                                     "last_resize":{"request_id":7,"confirm_slot":4}});
+        let state = serde_json::json!({"generation":"generation","client_id":"client","desired_total":3,"total":4,"working":1,"retiring":0,
+                                     "last_resize":{"request_id":7,"confirm_slot":4,"target":3,"accepted":true}});
         assert!(ticket.matches(&state));
+        let mut idle = state.clone();
+        idle["retiring"] = serde_json::json!(1);
+        assert!(ticket.matches(&idle));
         for (key, value) in [
             ("generation", serde_json::json!("other")),
             ("client_id", serde_json::json!("other")),
             ("desired_total", serde_json::json!(2)),
-            ("retiring", serde_json::json!(0)),
+            ("total", serde_json::json!(3)),
             (
                 "last_resize",
-                serde_json::json!({"request_id":8,"confirm_slot":4}),
+                serde_json::json!({"request_id":8,"confirm_slot":4,"target":3,"accepted":true}),
             ),
         ] {
             let mut changed = state.clone();
             changed[key] = value;
+            assert!(!ticket.matches(&changed));
+        }
+        for (key, value) in [
+            ("confirm_slot", serde_json::json!(2)),
+            ("target", serde_json::json!(1)),
+            ("accepted", serde_json::json!(false)),
+        ] {
+            let mut changed = state.clone();
+            changed["last_resize"][key] = value;
             assert!(!ticket.matches(&changed));
         }
     }
