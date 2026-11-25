@@ -117,6 +117,7 @@ pub(crate) struct CommandLog {
     claim: Claim,
     command_id: String,
     command: String,
+    activity_title: Option<String>,
 }
 
 struct State<T> {
@@ -448,7 +449,7 @@ impl<T: Clone> Remote<T> {
         report: Report,
         now_ms: u64,
     ) -> Result<(bool, bool, bool), String> {
-        self.report_inner(queue, actor, report, now_ms, false)
+        self.report_inner(queue, actor, report, now_ms, false, None)
     }
 
     fn report_inner(
@@ -458,6 +459,7 @@ impl<T: Clone> Remote<T> {
         report: Report,
         now_ms: u64,
         native_end: bool,
+        activity_title: Option<&str>,
     ) -> Result<(bool, bool, bool), String> {
         if report.request_id.is_empty()
             || report.request_id.len() > 128
@@ -469,6 +471,7 @@ impl<T: Clone> Remote<T> {
             );
         }
         let update = ReportUpdate {
+            activity_title: activity_title.map(str::to_owned),
             event: report.event.clone(),
             command: report.command.clone(),
             progress: report.progress.clone(),
@@ -530,6 +533,7 @@ impl<T: Clone> Remote<T> {
         actor: &Actor,
         command_id: &str,
         command: &str,
+        title: Option<&str>,
         now_ms: u64,
     ) -> Result<Option<CommandLog>, String> {
         if command_id.is_empty()
@@ -551,7 +555,8 @@ impl<T: Clone> Remote<T> {
         };
         let Some(claim) = claim else { return Ok(None) };
         let command = super::queue::display_text(command, 4096);
-        self.report(
+        let activity_title = title.and_then(super::queue::activity_title);
+        self.report_inner(
             queue,
             actor,
             Report {
@@ -563,12 +568,15 @@ impl<T: Clone> Remote<T> {
                 detail: None,
             },
             now_ms,
+            false,
+            activity_title.as_deref(),
         )?;
         Ok(Some(CommandLog {
             actor: actor.clone(),
             claim,
             command_id: command_id.into(),
             command,
+            activity_title,
         }))
     }
 
@@ -593,6 +601,7 @@ impl<T: Clone> Remote<T> {
             },
             now_ms,
             true,
+            command.activity_title.as_deref(),
         )
         .map(|_| ())
     }

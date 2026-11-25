@@ -115,6 +115,7 @@ mod tests {
             .report(
                 &claim,
                 &ReportUpdate {
+                    activity_title: None,
                     event: ReportEvent::Progress,
                     command: None,
                     progress: Some("Observed fixture pass".into()),
@@ -127,6 +128,7 @@ mod tests {
             .report(
                 &claim,
                 &ReportUpdate {
+                    activity_title: None,
                     event: ReportEvent::CommandStart,
                     command: Some("cargo test fixture".into()),
                     progress: None,

@@ -12,6 +12,7 @@ pub(crate) enum ReportEvent {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReportUpdate {
+    pub(crate) activity_title: Option<String>,
     pub(crate) event: ReportEvent,
     pub(crate) command: Option<String>,
     pub(crate) progress: Option<String>,
@@ -76,7 +77,14 @@ impl<T: Clone> Queue<T> {
                 format!("Progress: {progress}")
             }
         };
-        log(slot, now_ms, "info", &text, Some(&lease.task_id));
+        log_with_title(
+            slot,
+            now_ms,
+            "info",
+            &text,
+            Some(&lease.task_id),
+            update.activity_title.as_deref(),
+        );
         self.record_task_event(
             &mut state,
             "worker.progress",
@@ -124,7 +132,14 @@ impl<T: Clone> Queue<T> {
             Some(detail) => format!("Command finished: {command}; {detail}"),
             None => format!("Command finished: {command}"),
         };
-        log(slot, now_ms, "info", &text, Some(&claim.task_id));
+        log_with_title(
+            slot,
+            now_ms,
+            "info",
+            &text,
+            Some(&claim.task_id),
+            update.activity_title.as_deref(),
+        );
         self.record_task_event(
             &mut state,
             "worker.progress",
@@ -135,6 +150,17 @@ impl<T: Clone> Queue<T> {
         self.changed(&mut state);
         Ok(())
     }
+}
+
+/// Keep only a bounded single-line display copy. The native job retains its original title.
+pub(in crate::worker) fn activity_title(title: &str) -> Option<String> {
+    let redacted = crate::audit::event(serde_json::Value::String(title.into()));
+    let clean = redacted.as_str()?.replace(
+        |c| matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}'),
+        " ",
+    );
+    let title = display_text(&clean, 256);
+    (!title.is_empty()).then_some(title)
 }
 
 pub(in crate::worker) fn display_text(text: &str, limit: usize) -> String {
@@ -304,6 +330,18 @@ mod tests {
             }
         }
         assert!(queue.snapshot().slots[0].total_work_ms >= 125);
+    }
+
+    #[test]
+    fn native_activity_titles_are_single_line_redacted_and_utf8_bounded() {
+        let bounded =
+            activity_title(&format!("  核验\n本机\u{202e}{}  ", "步骤".repeat(100))).unwrap();
+        assert!(bounded.starts_with("核验 本机 "));
+        assert!(bounded.ends_with('…'));
+        assert!(bounded.len() <= 256);
+        assert!(activity_title(" \r\t\u{202a} ").is_none());
+        let private = activity_title("Check password=fixture-value").unwrap();
+        assert!(!private.contains("fixture-value"));
     }
 
     #[test]

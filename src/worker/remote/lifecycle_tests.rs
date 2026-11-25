@@ -313,7 +313,7 @@ fn native_command_end_keeps_its_original_claim_when_the_next_task_started() {
     let worker = actor("worker");
     assert!(
         remote
-            .command_started(&queue, &worker, "not-working", "pwd", 1)
+            .command_started(&queue, &worker, "not-working", "pwd", Some("unclaimed"), 1)
             .unwrap()
             .is_none()
     );
@@ -322,7 +322,14 @@ fn native_command_end_keeps_its_original_claim_when_the_next_task_started() {
         .unwrap();
     let first_claim = claim(&remote, &queue, &worker, "first");
     let command = remote
-        .command_started(&queue, &worker, "exec-1", "sleep 1", 2)
+        .command_started(
+            &queue,
+            &worker,
+            "exec-1",
+            "sleep 1",
+            Some("Inspect first task"),
+            2,
+        )
         .unwrap()
         .unwrap();
     remote
@@ -331,7 +338,7 @@ fn native_command_end_keeps_its_original_claim_when_the_next_task_started() {
     let second = queue.submit(owner, "two", "second task", (), 4).unwrap();
     claim(&remote, &queue, &worker, "second");
     remote
-        .command_started(&queue, &worker, "exec-2", "pwd", 5)
+        .command_started(&queue, &worker, "exec-2", "pwd", None, 5)
         .unwrap()
         .unwrap();
     remote
@@ -349,6 +356,18 @@ fn native_command_end_keeps_its_original_claim_when_the_next_task_started() {
         .find(|event| event.text.starts_with("Command finished: sleep 1"))
         .unwrap();
     assert_eq!(end.task_id.as_deref(), Some(first.task_id.as_str()));
+    assert_eq!(end.activity_title.as_deref(), Some("Inspect first task"));
+    let second_start = view.slots[0]
+        .logs
+        .iter()
+        .find(|event| event.text == "Command started: pwd")
+        .unwrap();
+    assert!(
+        serde_json::to_value(second_start)
+            .unwrap()
+            .get("activity_title")
+            .is_none()
+    );
     let next_sequence = view.slots[0].next_log_sequence;
     remote
         .command_finished(&queue, &command, "exit 0", 7)
