@@ -1044,6 +1044,9 @@ mod platform {
     }
 }
 
+#[cfg(all(windows, test))]
+pub(super) use platform::physical_enter;
+
 #[cfg(windows)]
 mod platform {
     use super::*;
@@ -1333,6 +1336,19 @@ mod platform {
             }
             text
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn physical_enter() -> String {
+        use windows_sys::Win32::System::Console::KEY_EVENT_RECORD_0;
+        Utf16Input::default().key(KEY_EVENT_RECORD {
+            bKeyDown: 1,
+            wRepeatCount: 1,
+            wVirtualKeyCode: 0x0d,
+            wVirtualScanCode: 0x1c,
+            uChar: KEY_EVENT_RECORD_0 { UnicodeChar: 13 },
+            dwControlKeyState: 0,
+        })
     }
 
     #[cfg(test)]

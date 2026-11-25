@@ -41,13 +41,21 @@ impl Drop for Workspace {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Enter {
+    Packed,
+    Split,
+    AfterEcho,
+}
+
 async fn write_from_terminal(
-    shell: &Shell,
-    id: &str,
+    terminal: std::sync::Arc<crate::pty::Terminal>,
     directory: &Path,
     marker: &str,
     ps: bool,
-) -> Result<(), String> {
+    enter: Enter,
+    sample_modes: bool,
+) -> Result<String, String> {
     let expected = if ps {
         use std::path::{Component, Prefix};
         let root = directory.canonicalize().unwrap();
@@ -64,13 +72,16 @@ async fn write_from_terminal(
     // Both writes are relative and require the unique parent to exist. Keep the
     // interactive line short enough to avoid an unnecessary PSReadLine stress test.
     let relative = format!(r"{marker}\out.txt");
-    let mut command = Some(if ps {
-        format!("Set-Content {relative} $PWD.Drive.Name\r")
+    let command = if ps {
+        format!("Set-Content {relative} $PWD.Drive.Name")
     } else {
-        format!("echo OK>{relative}\r")
-    });
-    let output = directory.join(marker).join("out.txt");
-    let terminal = shell.get(id)?;
+        format!("echo OK>{relative}")
+    };
+    let probe = directory.join(marker);
+    let output = probe.join("out.txt");
+    let key = super::input::physical_enter();
+    assert_eq!(key, "\r");
+    let (mut typed, mut echoed, mut entered, mut sampling) = (false, false, false, false);
     let (rows, cols) = super::terminal::pane_size(24, 80);
     let mut display = vt100::Parser::new_with_callbacks(
         rows.try_into().unwrap(),
@@ -100,10 +111,33 @@ async fn write_from_terminal(
                     })
                     .await?;
             }
-            if display.screen().contents().trim_end().ends_with('>')
-                && let Some(data) = command.take()
-            {
+            let screen = display.screen().contents();
+            if !typed && screen.trim_end().ends_with('>') {
+                let data = if enter == Enter::Packed {
+                    format!("{command}{key}")
+                } else {
+                    command.clone()
+                };
                 terminal.perform(Operation::Write { data }).await?;
+                typed = true;
+                entered = enter == Enter::Packed;
+            }
+            if typed && screen.replace('\n', "").contains(&command) {
+                echoed = true;
+            }
+            if sample_modes && echoed && !sampling {
+                fs::write(probe.join("sample.request"), []).map_err(|e| e.to_string())?;
+                sampling = true;
+            }
+            if typed
+                && !entered
+                && (enter == Enter::Split || echoed)
+                && (!sample_modes || probe.join("modes.txt").is_file())
+            {
+                terminal
+                    .perform(Operation::Write { data: key.clone() })
+                    .await?;
+                entered = true;
             }
             if page["output_eof"] == true {
                 return Err("terminal closed".to_owned());
@@ -111,8 +145,9 @@ async fn write_from_terminal(
         }
     })
     .await;
+    let stages = format!("{enter:?} typed={typed} full_echo={echoed} enter_sent={entered}");
     let reason = match result {
-        Ok(Ok(())) => return Ok(()),
+        Ok(Ok(())) => return Ok(format!("{stages} marker={expected:?}")),
         Ok(Err(reason)) => reason,
         Err(_) => "timed out".into(),
     };
@@ -122,9 +157,8 @@ async fn write_from_terminal(
         Err(error) => error.to_string(),
     };
     Err(format!(
-        "{id} {reason}: {actual} at {}, expected {expected:?}, prompt observed: {}, screen: {:?}",
+        "{reason}: {actual} at {}, expected {expected:?}, {stages}, screen: {:?}",
         output.display(),
-        command.is_none(),
         display.screen().contents(),
     ))
 }
@@ -144,7 +178,15 @@ async fn windows_default_conpty_executes_in_the_canonical_workspace() {
         .unwrap()
         .file_stem()
         .is_some_and(|s| s.eq_ignore_ascii_case("cmd"));
-    let writes_here = write_from_terminal(&shell, "main", &ws.root, &ws.marker, false).await;
+    let writes_here = write_from_terminal(
+        shell.primary(),
+        &ws.root,
+        &ws.marker,
+        false,
+        Enter::Packed,
+        false,
+    )
+    .await;
     shell.shutdown().await;
     assert!(
         is_cmd,
@@ -155,7 +197,14 @@ async fn windows_default_conpty_executes_in_the_canonical_workspace() {
 
 #[tokio::test]
 async fn windows_saved_shell_and_named_terminal_write_in_the_requested_directory() {
-    for choice in ["cmd", "powershell"] {
+    let mut results = Vec::new();
+    for (choice, enter) in [
+        ("cmd", Enter::Packed),
+        ("cmd", Enter::AfterEcho),
+        ("powershell", Enter::Packed),
+        ("powershell", Enter::Split),
+        ("powershell", Enter::AfterEcho),
+    ] {
         let ws = Workspace::new();
         let options =
             Options::parse(["--ssh", "fixture.invalid", "--shell", choice].map(OsString::from))
@@ -179,26 +228,109 @@ async fn windows_saved_shell_and_named_terminal_write_in_the_requested_directory
         )
         .unwrap();
         let ps = choice == "powershell";
-        let main_works = write_from_terminal(&shell, "main", &ws.root, &ws.marker, ps).await;
         let named = shell
             .call("terminal.open", json!({"name":"nested", "cwd":"nested"}))
             .await
             .unwrap();
         let nested = ws.root.join("nested");
         assert_eq!(named["cwd"], json!(nested.canonicalize().unwrap()));
-        let named_works = write_from_terminal(
-            &shell,
-            named["terminal_id"].as_str().unwrap(),
-            &nested,
-            &ws.marker,
-            ps,
-        )
-        .await;
-        shell.shutdown().await;
-        assert!(
-            main_works.is_ok() && named_works.is_ok(),
-            "restored {choice}: {main_works:?}, named {choice}: {named_works:?}"
+        let (main, named) = tokio::join!(
+            write_from_terminal(shell.primary(), &ws.root, &ws.marker, ps, enter, false),
+            write_from_terminal(
+                shell.get(named["terminal_id"].as_str().unwrap()).unwrap(),
+                &nested,
+                &ws.marker,
+                ps,
+                enter,
+                false
+            ),
         );
+        results.push((format!("{choice} {enter:?} main"), main));
+        results.push((format!("{choice} {enter:?} named"), named));
+
+        if ps && enter == Enter::AfterEcho {
+            // A separate interactive process can take measurements even if the
+            // ordinary shells never execute the submitted command.
+            let dir = ws.root.join("instrumented");
+            fs::create_dir(&dir).unwrap();
+            fs::create_dir(dir.join(&ws.marker)).unwrap();
+            results.push((
+                "instrumented PowerShell".into(),
+                measure_editor(&shell, &dir, &ws.marker).await,
+            ));
+        }
+        shell.shutdown().await;
+    }
+    let report = results
+        .iter()
+        .map(|(case, r)| format!("{case}: {r:?}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+        use std::io::Write;
+        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(
+                file,
+                "### Windows ConPTY cwd probes\n\n```text\n{report}\n```"
+            );
+        }
+    }
+    assert!(results.iter().all(|(_, r)| r.is_ok()), "{report}");
+}
+
+async fn measure_editor(shell: &Shell, dir: &Path, marker: &str) -> Result<String, String> {
+    let probe = dir.join(marker);
+    let script: Vec<u8> = include_str!("windows_cwd_probe.ps1")
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let program = shell.shell_path()?;
+    let command = [
+        program.to_string_lossy().into_owned(),
+        "-NoLogo".into(),
+        "-NoExit".into(),
+        "-EncodedCommand".into(),
+        STANDARD.encode(script),
+    ];
+    let mut env = crate::platform::launcher_environment(&program);
+    env.insert(
+        "SSMCP_CWD_PROBE".into(),
+        probe.to_string_lossy().into_owned(),
+    );
+    let terminal = crate::pty::Terminal::spawn_with_capture(
+        crate::pty::JobConfig {
+            command: &command,
+            cwd: dir,
+            env: &env,
+            id: "cwd-diagnostic",
+            size: Some(super::terminal::pane_size(24, 80)),
+            live: false,
+            output_event: None,
+        },
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    let outcome =
+        write_from_terminal(terminal.clone(), dir, marker, true, Enter::AfterEcho, true).await;
+    terminal.shutdown().await;
+    let prompt = fs::read_to_string(probe.join("prompt.json"))
+        .map_err(|e| e.to_string())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).map_err(|e| e.to_string()));
+    let editor = fs::read_to_string(probe.join("editor.txt"));
+    let modes = fs::read_to_string(probe.join("modes.txt"));
+    let flags = modes.as_ref().ok().and_then(|s| {
+        let (input, output) = s.split_once(',')?;
+        Some((input.parse::<u32>().ok()?, output.parse::<u32>().ok()?))
+    });
+    // Native ENABLE_VIRTUAL_TERMINAL_INPUT and ENABLE_VIRTUAL_TERMINAL_PROCESSING.
+    let vt = flags.map(|(i, o)| (i & 0x200 != 0, o & 0x4 != 0));
+    let report = format!(
+        "{outcome:?} prompt={prompt:?} after_echo: console_modes={modes:?} vt_in_out={vt:?} editor_assembly={editor:?}"
+    );
+    if outcome.is_ok() && prompt.is_ok() && editor.is_ok() && flags.is_some() {
+        Ok(report)
+    } else {
+        Err(report)
     }
 }
 
