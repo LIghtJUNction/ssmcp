@@ -175,8 +175,13 @@ fn state(operation: &Value) -> &'static str {
     }
 }
 
+fn immediate_result(operation: &Value) -> bool {
+    operation["kind"] == "result" && operation["wait_ms"].as_u64() == Some(0)
+}
+
 fn tone(operation: &Value) -> PanelTone {
     match operation["state"].as_str() {
+        Some("waiting" | "timed_out") if immediate_result(operation) => PanelTone::Muted,
         Some("waiting" | "timed_out" | "indeterminate" | "unavailable" | "not_accepting") => {
             PanelTone::Warning
         }
@@ -244,6 +249,9 @@ fn target_references(operation: &Value) -> Vec<String> {
 
 fn observation_note(operation: &Value) -> &'static str {
     match operation["state"].as_str() {
+        Some("waiting" | "timed_out" | "satisfied") if immediate_result(operation) => {
+            "This check reads the current task state without waiting for completion."
+        }
         Some("timed_out" | "unchanged") => {
             "Observation window expired or returned unchanged. This does not cancel execution or establish task completion."
         }
@@ -278,6 +286,16 @@ fn title(operation: &Value) -> String {
             } else {
                 format!("Assigned · Task {task} · station unavailable")
             }
+        }
+        _ if immediate_result(operation) => {
+            let id = operation["operation_id"].as_u64().unwrap_or(0);
+            let outcome = match operation["state"].as_str() {
+                Some("waiting") => "Reading",
+                Some("timed_out") => "Pending",
+                Some("satisfied") => "Result available",
+                _ => state(operation),
+            };
+            format!("Result check #{id} · {outcome}")
         }
         kind => {
             let label = match kind {
@@ -460,6 +478,37 @@ mod tests {
             assert!(rows[0].0.contains(label));
             assert_eq!(rows[1].0, "Capacity revision changes after 17");
         }
+    }
+
+    #[test]
+    fn result_checks_distinguish_pending_and_terminal_receipts_from_timed_waits() {
+        let mut pool = pool();
+        pool["manager_operations"][0] = json!({
+            "operation_id":95,"kind":"result","mode":"single","elapsed_ms":0,"wait_ms":0,
+            "targets":[{"kind":"task_result","task_id":"recorded-task"}]
+        });
+        for (state, expected) in [
+            ("waiting", "Reading"),
+            ("timed_out", "Pending"),
+            ("satisfied", "Result available"),
+            ("indeterminate", "Unknown"),
+        ] {
+            pool["manager_operations"][0]["state"] = json!(state);
+            let heading = format!("Result check #95 · {expected}");
+            assert_eq!(compact(&pool, 120, 1)[0].0, heading);
+            let entry = ConversationFeed::default().update(&pool).pop().unwrap();
+            assert_eq!(entry.heading, heading);
+            assert!(entry.detail.contains("Task ID recorded-task"));
+            assert!(!entry.detail.contains("expired"));
+        }
+        let operation = &mut pool["manager_operations"][0];
+        operation["wait_ms"] = json!(1000);
+        operation["elapsed_ms"] = json!(1000);
+        operation["state"] = json!("timed_out");
+        assert_eq!(
+            compact(&pool, 120, 1)[0].0,
+            "Result wait #95 · SINGLE · Window expired · 1.0s / 1.0s"
+        );
     }
 
     #[test]
