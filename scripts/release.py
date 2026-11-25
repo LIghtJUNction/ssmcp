@@ -30,8 +30,6 @@ TARGETS = {
     "aarch64-pc-windows-msvc": ["ssmcp"],
 }
 ZRUN_GIT = "https://github.com/LIghtJUNction/zrun.git"
-ZRUN_RELEASE = "0.1.0-p0.2"
-ZRUN_REVISION = "d5af0458b23e5f581fbd06616aa050f50fc62865"
 TAG = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?")
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_Z_DIRECT = {"zplugin": "zplugin", "zharness": "zharness", "ztuio": "ztuio",
@@ -596,13 +594,26 @@ def write_archive(stage, output, epoch):
                         archive.addfile(info, stream)
 
 
+def locked_zrun(root):
+    with (root / "Cargo.lock").open("rb") as stream:
+        packages = [p for p in tomllib.load(stream)["package"] if p["name"] == "zrun"]
+    if len(packages) != 1:
+        raise ValueError("expected exactly one zrun runtime in Cargo.lock")
+    package = packages[0]
+    source, _, revision = package.get("source", "").partition("#")
+    if source.split("?", 1)[0] != "git+" + ZRUN_GIT or not re.fullmatch("[0-9a-f]{40}", revision):
+        raise ValueError("Cargo.lock must pin the official zrun Git source to a full commit")
+    return package["version"], revision
+
+
 def bundle_zrun(target, root, stage):
+    version, revision = locked_zrun(root)
     source = stage.parent / "zrun-source"
     source.mkdir()
     subprocess.run(["git", "init", "--quiet"], cwd=source, check=True)
-    subprocess.run(["git", "fetch", "--quiet", "--depth=1", ZRUN_GIT, ZRUN_REVISION], cwd=source, check=True)
+    subprocess.run(["git", "fetch", "--quiet", "--depth=1", ZRUN_GIT, revision], cwd=source, check=True)
     subprocess.run(["git", "checkout", "--quiet", "--detach", "FETCH_HEAD"], cwd=source, check=True)
-    if command("git", "rev-parse", "HEAD", cwd=source) != ZRUN_REVISION:
+    if command("git", "rev-parse", "HEAD", cwd=source) != revision:
         raise ValueError("bundled zrun source differs from the pinned revision")
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", root / "target" / "zrun-companion")).resolve()
     subprocess.run([
@@ -610,7 +621,7 @@ def bundle_zrun(target, root, stage):
         "--target", target, "--target-dir", str(target_dir),
     ], cwd=source, check=True)
     binary = target_dir / target / "release" / "zrun"
-    if command(str(binary), "--version", cwd=source) != f"zrun {ZRUN_RELEASE}":
+    if command(str(binary), "--version", cwd=source) != f"zrun {version}":
         raise ValueError("bundled zrun executable differs from the pinned version")
     shutil.copy2(binary, stage / "zrun")
     shutil.copy2(source / "LICENSE", stage / "LICENSE-zrun")

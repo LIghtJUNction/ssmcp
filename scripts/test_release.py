@@ -278,6 +278,22 @@ class PublicationContractTests(unittest.TestCase):
                 self.assertEqual(output, "")
 
 
+class BundledZrunTests(unittest.TestCase):
+    def test_cli_uses_the_runtime_source_and_version_from_the_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            revision = "1a" * 20
+            start = '[[package]]\nname = "zrun"\nversion = "0.1.0-p0.11"\n'
+            def write(source):
+                (root / "Cargo.lock").write_text(start + f'source = "{source}"\n')
+            write(f"git+{release.ZRUN_GIT}?branch=main#{revision}")
+            self.assertEqual(release.locked_zrun(root), ("0.1.0-p0.11", revision))
+            for source in [f"git+{release.ZRUN_GIT}.other#{revision}", f"git+{release.ZRUN_GIT}#main"]:
+                write(source)
+                with self.assertRaises(ValueError):
+                    release.locked_zrun(root)
+
+
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
         # Local fixture repositories must not inherit developer signing, hooks,
