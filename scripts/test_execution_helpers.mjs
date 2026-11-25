@@ -96,6 +96,49 @@ test('execution titles pass through start, run and parallel without changing arg
   assert(states.every(state => JSON.stringify(state.command) === JSON.stringify(command)));
 });
 
+test('start, run and parallel forward reuse and retain each submission receipt for the shared job', async () => {
+  const command = ['git', 'rev-parse', 'HEAD'];
+  const reuse = {input_version:'worktree-1',ttl_ms:1000};
+  const receipts = ['started', 'joined', 'cached'];
+  let starts = 0;
+  let waits = 0;
+  const job_id = 'shared-job';
+  const completed = {job_id,running:false,exit_code:0};
+  const record = await run(`
+    const options = ${JSON.stringify({command,reuse})};
+    const started = await exec.start('one', options);
+    const joined = await exec.run('one', options);
+    const [cached] = await exec.parallel('one', [options], {concurrency:1});
+    return [started, joined, cached];
+  `, ({name,arguments:args}) => {
+    if (name === 'ssmcp.exec.start') {
+      assert.deepEqual(args, {command,reuse});
+      const status = receipts[starts++];
+      return native({job_id,running:status !== 'cached',reuse:{status}});
+    }
+    assert.equal(args.job_id, job_id);
+    if (name === 'ssmcp.exec.wait') {
+      waits++;
+      return native(completed);
+    }
+    assert.equal(name, 'ssmcp.exec.read');
+    return native({snapshot:completed,stdout:'abc\n',stdout_cursor:4});
+  });
+  succeeded(record);
+  assert.equal(starts, 3);
+  assert.equal(waits, 1);
+  const [started, joined, cached] = result(record);
+  assert.equal(cached.status, 'fulfilled');
+  const jobs = [started, joined, cached.value];
+  assert.deepEqual(jobs.map(job => job.reuse.status), receipts);
+  assert(jobs.every(job => job.job_id === job_id));
+  for (const job of jobs.slice(1)) {
+    assert.equal(job.running, false);
+    assert.equal(job.exit_code, 0);
+    assert.equal(job.stdout_cursor, 4);
+  }
+});
+
 test('parallel limits actual running jobs and retains unfinished observations in input order', async () => {
   const jobs = new Map();
   let active = 0;
