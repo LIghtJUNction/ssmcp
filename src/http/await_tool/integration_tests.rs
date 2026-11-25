@@ -1287,7 +1287,7 @@ fn connector_envelope_is_explicit_and_binds_only_the_outer_member() {
 }
 
 #[tokio::test]
-async fn four_connector_waits_wake_on_one_message_and_keep_it_unread() {
+async fn four_connector_waits_wake_on_private_messages_and_keep_them_unread() {
     let fixture = Fixture::new().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
@@ -1298,8 +1298,8 @@ async fn four_connector_waits_wake_on_one_message_and_keep_it_unread() {
         .timeout(Duration::from_secs(15))
         .build()
         .unwrap();
-    let request = |args: Value| {
-        let auth = json!({"client_id":fixture.session.client_id(), "id":fixture.member["agent_id"],"token":fixture.member["token"]});
+    let request = |member: &Value, args: Value| {
+        let auth = json!({"client_id":fixture.session.client_id(), "id":member["agent_id"],"token":member["token"]});
         let outer =
             json!({"code":json!({"await":args}).to_string(),"agent":auth,"timeout_ms":12_000});
         let http = client.post(&endpoint).bearer_auth(&fixture.token)
@@ -1323,8 +1323,24 @@ async fn four_connector_waits_wake_on_one_message_and_keep_it_unread() {
         }
     };
     let mut observers = tokio::task::JoinSet::new();
-    for _ in 0..4 {
+    let mut members = vec![fixture.member.clone()];
+    for index in 1..4 {
+        members.push(
+            fixture
+                .session
+                .collaboration
+                .dispatch(
+                    &fixture.owner,
+                    "join",
+                    json!({"name":format!("observer-{index}")}),
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    for member in &members {
         observers.spawn(request(
+            member,
             json!({"targets":[{"type":"agent_messages"}],"window_ms":10_000}),
         ));
     }
@@ -1347,21 +1363,23 @@ async fn four_connector_waits_wake_on_one_message_and_keep_it_unread() {
     })
     .await
     .expect("four concurrent native observations");
-    let list = request(json!({"op":"list"})).await;
+    let list = request(&fixture.member, json!({"op":"list"})).await;
     assert!(list.get("tool_sources").is_none());
-    fixture
-        .session
-        .collaboration
-        .dispatch(
-            &fixture.owner,
-            "send",
-            json!({
-                "agent_id":fixture.peer["agent_id"],"token":fixture.peer["token"],
-                "to":fixture.member["agent_id"],"payload":{"message":"ready"}
-            }),
-        )
-        .await
-        .unwrap();
+    for member in &members {
+        fixture
+            .session
+            .collaboration
+            .dispatch(
+                &fixture.owner,
+                "send",
+                json!({
+                    "agent_id":fixture.peer["agent_id"],"token":fixture.peer["token"],
+                    "to":member["agent_id"],"payload":{"message":"ready"}
+                }),
+            )
+            .await
+            .unwrap();
+    }
     let mut ids = std::collections::BTreeSet::new();
     while let Some(response) = observers.join_next().await {
         let result = response.unwrap();
@@ -1375,19 +1393,18 @@ async fn four_connector_waits_wake_on_one_message_and_keep_it_unread() {
         assert!(result.get("tool_sources").is_none());
     }
     assert_eq!(ids.len(), 4);
-    let retained = fixture
-        .public(
-            &fixture.member,
-            json!({"targets":[{"type":"agent_messages"}]}),
-        )
-        .await;
-    assert_eq!(
-        retained["results"][0]["data"]["messages"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    assert_eq!(retained["results"][0]["data"]["acked_cursor"], 0);
+    for member in &members {
+        let retained = fixture
+            .public(member, json!({"targets":[{"type":"agent_messages"}]}))
+            .await;
+        assert_eq!(
+            retained["results"][0]["data"]["messages"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(retained["results"][0]["data"]["acked_cursor"], 0);
+    }
     server.abort();
 }
