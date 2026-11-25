@@ -20,9 +20,19 @@ budget is 30,000 ms (configurable from 1,000 to 55,000). Configure these as
 top-level `idle_after_ms` and `maintenance_budget_ms` fields with the current
 `expected_revision`.
 
-An eligible idle deadline may request one bounded maintenance round. This
-request does not execute work or start a model. Perform only already authorized
-work, retain the returned `round_id`, and report
+At an eligible idle deadline the relay enters Dreaming. Its existing deadline
+driver checks the member's inbox once per round. Acknowledging the last message
+removes the message but can leave its queue storage allocated. If the inbox is
+empty, the driver releases that one allocation. A nonempty inbox keeps its
+messages and storage. The round's `maintenance.local_housekeeping` receipt
+reports the actual `released_slots` and `released_slot_bytes` (slot storage
+only). Zero means the check ran and released nothing. A null receipt means
+the local action has not run. The driver then sleeps until an existing
+notification or deadline. Human input and a new worker claim preempt Dreaming.
+
+The same round offers the participant a separate, bounded maintenance action.
+The local receipt leaves the participant's round status and outcome intact.
+For an already authorized action, retain the returned `round_id` and report
 `maintenance: {round_id, action: "start"}` with the current revision. Report the
 actual `complete`, `fail`, `cancel` or `unknown` outcome separately. A lifecycle
 status change and a maintenance outcome must use separate updates. New human

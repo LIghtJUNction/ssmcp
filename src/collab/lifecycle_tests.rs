@@ -740,3 +740,159 @@ async fn visible_generated_input_keeps_requested_maintenance_passive() {
     );
     assert_eq!(after["lifecycle"]["active_claims"], 0);
 }
+
+#[tokio::test]
+async fn deadline_releases_only_the_acked_members_empty_inbox_once() {
+    let hub = Hub::for_session("housekeeping");
+    let (id, token) = member(&hub, "owner", "worker");
+    let (other, other_token) = member(&hub, "owner", "worker");
+    let send = |to: &str, key: &str| {
+        hub.send(
+            "owner",
+            &other,
+            &other_token,
+            Send {
+                to: to.into(),
+                payload: json!("keep until acknowledged"),
+                topic: None,
+                reply_to: None,
+                idempotency_key: Some(key.into()),
+            },
+        )
+        .unwrap()
+    };
+    let seq = send(&id, "first")["seq"].as_u64().unwrap();
+    let pending = send(&other, "other");
+    hub.receive("owner", &id, &token, None, 1, 0).await.unwrap();
+    hub.ack("owner", &id, &token, seq).unwrap();
+    update(&hub, &id, &token, json!({"idle_after_ms":1000}))
+        .await
+        .unwrap();
+    let (mut changed, capacity) = {
+        let state = hub.state.lock().unwrap();
+        let agent = &state.agents[&id];
+        (agent.changed.subscribe(), agent.inbox.capacity())
+    };
+    assert!(capacity > 0);
+    tokio::time::timeout(Duration::from_secs(3), changed.changed())
+        .await
+        .unwrap()
+        .unwrap();
+    let first = snapshot(&hub, &id, &token);
+    let round = &first["lifecycle"]["maintenance"];
+    assert_eq!(round["status"], "requested");
+    assert_eq!(round["local_housekeeping"]["released_slots"], capacity);
+    assert_eq!(
+        round["local_housekeeping"]["released_slot_bytes"],
+        capacity * std::mem::size_of::<Arc<Message>>()
+    );
+    {
+        let state = hub.state.lock().unwrap();
+        assert_eq!(state.agents[&id].inbox.capacity(), 0);
+        assert_eq!(state.agents[&id].acked, seq);
+        assert_eq!(state.agents[&other].inbox.len(), 1);
+    }
+    assert_eq!(send(&id, "first")["duplicate"], true);
+    assert_eq!(
+        hub.receive("owner", &other, &other_token, None, 1, 0)
+            .await
+            .unwrap()["messages"][0]["message_id"],
+        pending["message_id"]
+    );
+
+    // Refill and acknowledge while the same round is open. A duplicate driver
+    // notification must keep this new allocation and the original receipt.
+    let next = send(&id, "second")["seq"].as_u64().unwrap();
+    hub.receive("owner", &id, &token, None, 1, 0).await.unwrap();
+    hub.ack("owner", &id, &token, next).unwrap();
+    {
+        let mut state = hub.state.lock().unwrap();
+        advance(&mut state, None, "housekeeping", true);
+        assert!(state.agents[&id].inbox.capacity() > 0);
+    }
+    assert_eq!(snapshot(&hub, &id, &token), first);
+    for action in ["start", "complete"] {
+        let result = update(
+            &hub,
+            &id,
+            &token,
+            json!({"maintenance":{"round_id":round["round_id"],"action":action}}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result["agent"]["lifecycle"]["maintenance"]["local_housekeeping"],
+            round["local_housekeeping"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn housekeeping_preserves_unacknowledged_input_and_yields_to_work() {
+    let hub = Hub::for_session("housekeeping");
+    let (id, token) = member(&hub, "owner", "worker");
+    let receipt = hub
+        .send(
+            "owner",
+            &id,
+            &token,
+            Send {
+                to: id.clone(),
+                payload: json!("pending"),
+                topic: None,
+                reply_to: None,
+                idempotency_key: None,
+            },
+        )
+        .unwrap();
+    let page = hub.receive("owner", &id, &token, None, 1, 0).await.unwrap();
+    let due = |hub: &Hub| {
+        let mut state = hub.state.lock().unwrap();
+        let life = &mut state.agents.get_mut(&id).unwrap().lifecycle;
+        life.idle_since = Some(Instant::now() - Duration::from_millis(life.idle_after_ms));
+    };
+    due(&hub);
+    {
+        let mut state = hub.state.lock().unwrap();
+        let capacity = state.agents[&id].inbox.capacity();
+        advance(&mut state, None, "housekeeping", true);
+        assert_eq!(state.agents[&id].inbox.capacity(), capacity);
+    }
+    assert_eq!(
+        snapshot(&hub, &id, &token)["lifecycle"]["maintenance"]["local_housekeeping"]["released_slots"],
+        0
+    );
+    assert_eq!(
+        hub.receive("owner", &id, &token, None, 1, 0).await.unwrap()["messages"],
+        page["messages"]
+    );
+    hub.ack("owner", &id, &token, receipt["seq"].as_u64().unwrap())
+        .unwrap();
+    // An already-due round may be noticed while locking to deliver human input
+    // or an assignment. It must not clean the inbox in front of that work.
+    for human in [true, false] {
+        update(&hub, &id, &token, json!({"status":"idle"}))
+            .await
+            .unwrap();
+        due(&hub);
+        if human {
+            hub.user_input_queued("owner", &id, "real-input", 1);
+        } else {
+            assigned(&hub, &id, &token);
+        }
+        let mut state = hub.state.lock().unwrap();
+        advance(&mut state, None, "housekeeping", true);
+        let agent = &state.agents[&id];
+        assert_eq!(agent.lifecycle.status, Status::Working);
+        assert!(agent.inbox.capacity() > 0);
+        assert!(
+            agent
+                .lifecycle
+                .round
+                .as_ref()
+                .unwrap()
+                .released_inbox_slots
+                .is_none()
+        );
+    }
+}

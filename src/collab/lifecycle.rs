@@ -1,5 +1,5 @@
 //! Agent activity is independent of task outcomes and process lifetime.
-//! Deadlines request bounded, already-authorized maintenance; they do not run it.
+//! Idle deadlines release unused inbox storage and offer a bounded participant round.
 use super::*;
 use serde::Serialize;
 use std::sync::atomic::Ordering;
@@ -83,14 +83,20 @@ struct Round {
     started_at_ms: Option<u64>,
     finished_at_ms: Option<u64>,
     deadline: Option<Instant>,
+    from_idle_deadline: bool,
+    released_inbox_slots: Option<usize>,
 }
 
 impl Round {
     fn public(&self) -> Value {
         json!({"round_id":self.id,"status":self.status,"repository":"project",
-            "budget_ms":self.budget_ms,"requested_at_ms":self.requested_at_ms,
-            "started_at_ms":self.started_at_ms,"finished_at_ms":self.finished_at_ms,
-            "source":"agent_lifecycle","execution":"participant_report"})
+        "budget_ms":self.budget_ms,"requested_at_ms":self.requested_at_ms,
+        "started_at_ms":self.started_at_ms,"finished_at_ms":self.finished_at_ms,
+        "source":"agent_lifecycle","execution":"participant_report",
+        "local_housekeeping":self.released_inbox_slots.map(|slots| json!({
+            "action":"release_empty_inbox","released_slots":slots,
+            "released_slot_bytes":slots * std::mem::size_of::<Arc<Message>>()
+        }))})
     }
 
     fn unresolved(&self) -> bool {
@@ -273,7 +279,7 @@ impl Lifecycle {
         self.revision += 1;
         changes.push((kind, json!({"revision":self.revision,"maintenance":self.round.as_ref().map(Round::public),
             "source":"agent_lifecycle","reason":reason,"completion_permission":false,
-            "guidance":"Request only: perform one bounded, already-authorized cleanup, documentation, check or organization task. Report start and actual outcome with this round_id and current expected_revision. Yield to new user input. Preserve unknown operation IDs; never replay unknown work or start a model."})));
+            "guidance":"For participant maintenance, choose one bounded, already-authorized action. Report start and actual outcome with this round_id and current expected_revision. Yield to new user input. Preserve unknown operation IDs; never replay unknown work or start a model."})));
     }
 
     fn preempt_round(&mut self, reason: &str, wall: u64, changes: &mut Vec<Change>) {
@@ -309,8 +315,42 @@ impl Lifecycle {
             started_at_ms: None,
             finished_at_ms: None,
             deadline: Some(now + Duration::from_millis(self.maintenance_budget_ms)),
+            from_idle_deadline: source == "idle_deadline",
+            released_inbox_slots: None,
         });
         self.round_event("agent.maintenance_requested", source, changes);
+    }
+
+    fn release_empty_inbox(
+        &mut self,
+        inbox: &mut VecDeque<Arc<Message>>,
+        changes: &mut Vec<Change>,
+    ) {
+        let Some(round) = &mut self.round else { return };
+        if self.status != Status::Dreaming
+            || !round.from_idle_deadline
+            || round.released_inbox_slots.is_some()
+            || !matches!(round.status, RoundStatus::Requested | RoundStatus::Running)
+        {
+            return;
+        }
+        // Acknowledgement already removed the messages. Reclaim one empty allocation
+        // without moving pending entries or changing cursors or byte accounting.
+        let released = if inbox.is_empty() {
+            std::mem::take(inbox).capacity()
+        } else {
+            0
+        };
+        round.released_inbox_slots = Some(released);
+        if let Some((_, data)) = changes
+            .last_mut()
+            .filter(|(kind, _)| *kind == "agent.maintenance_requested")
+        {
+            data["maintenance"] = round.public();
+        } else {
+            // A synchronous lookup may have already published the due round.
+            self.round_event("agent.maintenance_changed", "local_inbox_cleanup", changes);
+        }
     }
 
     fn settle_retirement(&mut self, now: Instant, wall: u64, changes: &mut Vec<Change>) {
@@ -626,6 +666,7 @@ fn advance(
     state: &mut State,
     events: Option<&crate::events::Hub>,
     session: &str,
+    on_deadline_driver: bool,
 ) -> Option<Instant> {
     let now = Instant::now();
     let wall = now_ms();
@@ -634,7 +675,12 @@ fn advance(
         retain_offline(state, agent, events, session, "lease_expired", now, wall);
     }
     for agent in state.agents.values_mut() {
-        let changes = agent.lifecycle.advance(&agent.id, now, wall);
+        let mut changes = agent.lifecycle.advance(&agent.id, now, wall);
+        if on_deadline_driver {
+            agent
+                .lifecycle
+                .release_empty_inbox(&mut agent.inbox, &mut changes);
+        }
         publish(events, session, agent, changes);
     }
     state
@@ -672,7 +718,7 @@ impl Hub {
                         return;
                     }
                     let events = events.as_ref().and_then(std::sync::Weak::upgrade);
-                    advance(&mut state, events.as_deref(), &session)
+                    advance(&mut state, events.as_deref(), &session, true)
                 };
                 if let Some(deadline) = deadline {
                     tokio::select! {
@@ -687,7 +733,7 @@ impl Hub {
     }
 
     pub(super) fn advance_lifecycle(&self, state: &mut State) {
-        advance(state, self.events.as_deref(), &self.session_id);
+        advance(state, self.events.as_deref(), &self.session_id, false);
     }
 
     pub(super) fn publish_lifecycle(&self, agent: &Agent, changes: Vec<Change>) {
