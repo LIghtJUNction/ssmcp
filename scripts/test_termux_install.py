@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -33,6 +34,9 @@ if tool == 'proot-distro':
         if not rootfs.is_dir(): sys.exit(1)
         os.execv('/bin/sh', ['/bin/sh', *args[4:]])
     else: sys.exit(2)
+elif tool == 'apt-get':
+    if args[:1] == ['install'] and 'git' in args and not (state/'bin/git').exists():
+        (state/'bin/git').symlink_to('dispatch')
 elif tool == 'curl':
     url = next(a for a in args if a.startswith('https://'))
     if url.endswith('/releases/latest'):
@@ -55,7 +59,7 @@ elif tool == 'rustup':
     dest.parent.mkdir(parents=True)
     dest.write_bytes((state/'client').read_bytes())
     dest.chmod(0o755)
-elif tool not in ('apt-get','pkg'): sys.exit(2)
+elif tool != 'pkg': sys.exit(2)
 '''
 CLIENT = b'#!/bin/sh\nprintf "ssmcp 0.10.39\\n"\n'
 STUB = b'''set -eu
@@ -113,6 +117,22 @@ class TermuxInstall(unittest.TestCase):
         cmds = [json.loads(line) for line in self.calls.read_text().splitlines()]
         self.assertEqual(sum(c[:2]==['proot-distro','install'] for c in cmds),1)
         self.assertFalse(any(c[0] in ('git','rustup') for c in cmds))
+
+    def test_binary_install_adds_missing_git_once(self):
+        tools = self.base / 'bin'
+        (tools / 'git').unlink()
+        self.env['PATH'] = str(tools)
+        for name in ('awk', 'cat', 'chmod', 'cp', 'getconf', 'grep', 'gzip', 'mkdir',
+                     'mktemp', 'mv', 'python3', 'rm', 'sh', 'sha256sum', 'tar', 'uname', 'wc'):
+            (tools / name).symlink_to(shutil.which(name))
+        self.assertTrue(Path('/etc/ssl/certs/ca-certificates.crt').stat().st_size)
+        self.install('bin','v0.10.39')
+        self.install('bin','v0.10.39')
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        self.assertEqual([c for c in calls if c[0] == 'apt-get'], [
+            ['apt-get','update'],
+            ['apt-get','install','-y','--no-install-recommends','ca-certificates','curl','git'],
+        ])
 
     def test_legacy_guest_is_migrated_by_login_without_reinstalling(self):
         prefix = self.base / 'custom-termux-prefix'

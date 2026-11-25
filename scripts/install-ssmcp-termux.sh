@@ -38,12 +38,12 @@ mode=$1
 tag=$2
 case "$(getconf GNU_LIBC_VERSION)" in glibc\ *) ;; *) echo 'Expected a GNU libc guest.' >&2; exit 1 ;; esac
 export DEBIAN_FRONTEND=noninteractive
-if [ ! -s /etc/ssl/certs/ca-certificates.crt ] || ! command -v curl >/dev/null || [ "$mode" = source ]; then
+if [ ! -s /etc/ssl/certs/ca-certificates.crt ] || ! command -v curl >/dev/null || ! command -v git >/dev/null || [ "$mode" = source ]; then
     apt-get update
     if [ "$mode" = source ]; then
         apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake
     else
-        apt-get install -y --no-install-recommends ca-certificates curl
+        apt-get install -y --no-install-recommends ca-certificates curl git
     fi
 fi
 fetch() { curl -q --proto '=https' --proto-redir '=https' -fsSL --retry 2 --connect-timeout 15 "$@"; }
