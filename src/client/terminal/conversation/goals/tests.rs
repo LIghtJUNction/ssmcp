@@ -1,23 +1,24 @@
 use super::*;
 use std::{
     path::PathBuf,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
 };
 
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
-            "ssmcp-goal-ui-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        assert!(!path.exists());
-        crate::platform::private_directory(&path).unwrap();
-        Self(path)
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().canonicalize().unwrap();
+        loop {
+            let id = NEXT.fetch_add(1, Ordering::Relaxed);
+            let path = root.join(format!("ssmcp-goal-ui-{}-{id}", std::process::id()));
+            match crate::platform::private_directory(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("could not create goal UI test fixture: {error}"),
+            }
+        }
     }
 }
 impl Drop for Fixture {
