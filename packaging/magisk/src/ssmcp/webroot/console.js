@@ -1,13 +1,10 @@
-import { el, hasCredential, terminal as localTerminal, usesOfficialRelay } from './device-api.js';
+import { el, hasCredential, terminal as localTerminal } from './device-api.js';
 import { hasManagerTransport, managerTerminal, openManagerSetup } from './module-entry.js';
 
-const field = el('input');
 const screen = el('screen');
 const direct = el('direct-input');
 const cursor = el('terminal-cursor');
-const plugin = el('plugin');
 const ctrl = el('keys').querySelector('[data-key=Ctrl]');
-const defaultPlaceholder = field.placeholder;
 const inManager = !hasCredential && hasManagerTransport();
 const terminal = (action, tab, args = {}) => inManager
   ? managerTerminal({ action, tab, ...args })
@@ -38,9 +35,11 @@ function setView(view) {
   setupControl.hidden = true;
 }
 let statusSource = '';
-function status(message, source = 'action') {
+function status(message, source = 'action', detail = '') {
   statusSource = message ? source : '';
-  el('status').textContent = message;
+  const output = el('status');
+  if (output.textContent !== message) output.textContent = message;
+  output.title = detail;
 }
 
 let selected = null;
@@ -48,40 +47,25 @@ let generation = 0;
 let tabs = [];
 let changingTabs = false;
 let listRequest = 0;
-const drafts = new Map();
 const writes = new Map();
-const submitting = new Set();
 const isCurrent = version => version === generation && document.body.dataset.view === 'console';
-function setConnection(state, message, detail = '') {
-  const indicator = el('connection');
-  indicator.dataset.state = state;
-  indicator.title = detail;
-  if (indicator.textContent !== message) indicator.textContent = message;
-}
 function setCtrl(armed) {
   ctrl.setAttribute('aria-pressed', String(armed));
-  field.placeholder = armed ? '输入一个英文字母，再发送' : defaultPlaceholder;
-}
-function updateSend() {
-  el('send').disabled = !field.value || submitting.has(selected);
 }
 function selectTab(id) {
   if (selected === id) return;
   direct.blur();
-  directMode = false;
   screenCursor = null;
   cursor.hidden = true;
   selected = id;
   generation++;
-  if (!drafts.has(id)) drafts.set(id, { text: '', edits: 0 });
-  field.value = drafts.get(id).text;
   setCtrl(false);
-  updateSend();
   status('');
   screen.textContent = '';
   screen.scrollTop = screen.scrollLeft = 0;
-  setConnection('reading', '读取会话…');
   idleReads = 0;
+  readFailures = 0;
+  sizeFailures = 0;
   readAgain = false;
   scheduleResize();
   poll();
@@ -98,31 +82,34 @@ function renderTabs() {
   const buttons = tabs.map(id => {
     const button = tabButton(id === 0 ? '启动会话' : `会话 ${id + 1}`, () => {
       if (id === selected) return;
+      listRequest++;
       selectTab(id);
-      const version = generation;
-      for (const tab of el('tabs').querySelectorAll('[data-tab]')) {
-        tab.setAttribute('aria-pressed', String(Number(tab.dataset.tab) === id));
-      }
-      const close = el('tabs').querySelector('[data-action=close]');
-      if (close) close.disabled = id === 0;
-      refreshTabs(id).catch(error => { if (isCurrent(version)) status(error.message); });
+      renderTabs();
     });
     button.dataset.tab = String(id);
     button.setAttribute('aria-pressed', String(id === selected));
     return button;
   });
-  const open = tabButton('新建', () => changeTabs('open'));
+  const open = tabButton('+', () => changeTabs('open'));
   open.dataset.action = 'open';
+  open.setAttribute('aria-label', '新建会话');
+  open.title = '新建会话';
   open.disabled = open.disabled || tabs.length >= 8;
   buttons.push(open);
-  if (selected !== 0 || tabs.length > 1) {
-    const close = tabButton('关闭', () => changeTabs('close'));
+  if (selected !== 0) {
+    const close = tabButton('×', () => changeTabs('close'));
     close.dataset.action = 'close';
-    close.disabled = close.disabled || selected === 0;
+    close.setAttribute('aria-label', '关闭当前会话');
+    close.title = '关闭当前会话';
     buttons.push(close);
   }
-  el('tabs').textContent = '';
-  el('tabs').append(...buttons);
+  const nav = el('tabs');
+  const hadFocus = nav.contains(document.activeElement);
+  nav.textContent = '';
+  nav.append(...buttons);
+  const current = nav.querySelector('[aria-pressed="true"]');
+  current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  if (hadFocus && current && !current.disabled) current.focus({ preventScroll: true });
 }
 async function refreshTabs(preferred = selected) {
   const request = ++listRequest;
@@ -131,20 +118,14 @@ async function refreshTabs(preferred = selected) {
   if (!result.target) {
     selected = null;
     generation++;
-    drafts.clear();
     tabs = [];
     setView('notice');
     setupControl.hidden = false;
     status('此设备尚未完成首次配置。');
     return;
   }
-  el('target').textContent = result.target;
-  el('mcp').textContent = result.mcp;
-  el('traffic').hidden = !usesOfficialRelay(result.mcp);
   const changed = tabs.length !== result.tabs.length || tabs.some((id, index) => result.tabs[index] !== id);
   tabs = result.tabs;
-  for (const id of drafts.keys()) if (!tabs.includes(id)) drafts.delete(id);
-  if (document.body.dataset.view !== 'console') plugin.open = false;
   setView('console');
   selectTab(tabs.includes(preferred) ? preferred : tabs[0]);
   if (changed) renderTabs();
@@ -158,8 +139,9 @@ async function changeTabs(action) {
     if (action === 'close' && writes.has(selected)) await writes.get(selected);
     const result = await terminal(action, selected);
     await refreshTabs(action === 'open' ? result.tab : selected);
+    if (statusSource === 'tabs') status('');
   } catch (error) {
-    status(error.message);
+    status('会话操作未确认，请检查当前标签。', 'tabs', error.message);
   } finally {
     changingTabs = false;
     renderTabs();
@@ -216,13 +198,14 @@ let sizeTimer;
 let resizing = false;
 let resizeAgain = false;
 let lastSize = '';
+let sizeFailures = 0;
 function scheduleResize() {
   clearTimeout(sizeTimer);
   sizeTimer = setTimeout(resize, 40);
 }
 async function resize() {
   const version = generation;
-  if (!isCurrent(version) || selected === null) return;
+  if (!isCurrent(version) || selected === null || document.hidden) return;
   if (resizing) { resizeAgain = true; return; }
   const size = dimensions();
   if (!size) return;
@@ -232,8 +215,17 @@ async function resize() {
   try {
     await terminal('resize', selected, size);
     lastSize = key;
+    if (isCurrent(version)) {
+      sizeFailures = 0;
+      if (statusSource === 'resize') status('');
+    }
   } catch (error) {
-    if (isCurrent(version)) status(error.message);
+    if (isCurrent(version) && !document.hidden) {
+      sizeFailures++;
+      if (sizeFailures >= 3 && !statusSource) status('暂时无法调整终端尺寸，正在重试。', 'resize', error.message);
+      clearTimeout(sizeTimer);
+      sizeTimer = setTimeout(resize, 2000);
+    }
   } finally {
     resizing = false;
     if (resizeAgain) { resizeAgain = false; scheduleResize(); }
@@ -256,12 +248,12 @@ viewportChanged();
 let pollTimer;
 let polling = -1;
 let idleReads = 0;
+let readFailures = 0;
 let readAgain = false;
 let lastRead = 0;
-function inputActivity(submitted = false) {
-  const wasIdle = inManager && idleReads > 2;
+function inputActivity() {
   idleReads = 0;
-  if ((!submitted && !wasIdle) || document.hidden || !isCurrent(generation)) return;
+  if (document.hidden || !isCurrent(generation)) return;
   if (polling === generation) { readAgain = true; return; }
   clearTimeout(pollTimer);
   pollTimer = setTimeout(poll, Math.max(30, 180 - (performance.now() - lastRead)));
@@ -281,15 +273,19 @@ async function poll() {
     else { screen.textContent = snapshot.screen; idleReads = 0; }
     screenCursor = next;
     positionCursor();
-    if (snapshot.exited) setConnection('exited', '会话已退出');
-    else if (snapshot.connected_once) setConnection('first', '已完成首次连接', '模块记录了首次中继连接。当前连接状态未知。');
-    else setConnection('waiting', '等待首次连接');
+    readFailures = 0;
     if (statusSource === 'poll') status('');
   } catch (error) {
     if (isCurrent(version)) {
       idleReads++;
-      setConnection('error', '读取失败', error.message);
-      if (!statusSource || statusSource === 'poll') status(error.message, 'poll');
+      readFailures++;
+      if (readFailures >= 3 && (!statusSource || statusSource === 'poll' || statusSource === 'resize')) {
+        status('暂时无法读取终端，正在重试。', 'poll', error.message);
+      }
+      if (readFailures === 3) {
+        // Another manager window may have closed this tab. Reconcile the session list once.
+        refreshTabs().catch(() => {});
+      }
     }
   } finally {
     if (polling === version) polling = -1;
@@ -301,29 +297,34 @@ async function poll() {
   }
 }
 let checkingEntry = false;
+let entryTimer;
+let entryFailures = 0;
 async function recheckEntry() {
-  if (checkingEntry || document.hidden || setupControl.hidden) return;
+  if (checkingEntry || document.hidden || document.body.dataset.view === 'console' || (!hasCredential && !inManager)) return;
+  clearTimeout(entryTimer);
   checkingEntry = true;
-  try { await refreshTabs(); } catch (error) { status(error.message); }
-  finally { checkingEntry = false; }
+  try {
+    await refreshTabs();
+    entryFailures = 0;
+    if (statusSource === 'entry') status('');
+  } catch (error) {
+    if (error.status === 401 || error.status === 403) {
+      status('请返回模块管理器，重新打开 SSMCP 的 WebUI。', 'entry', error.message);
+      return;
+    }
+    entryFailures++;
+    if (entryFailures >= 3) status('暂时无法打开终端，正在重试。', 'entry', error.message);
+    if (!document.hidden) entryTimer = setTimeout(recheckEntry, Math.min(2400, 600 * 2 ** (entryFailures - 1)));
+  } finally {
+    checkingEntry = false;
+  }
 }
 window.addEventListener('focus', recheckEntry);
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) clearTimeout(pollTimer);
-  else if (!setupControl.hidden) recheckEntry();
+  if (document.hidden) { clearTimeout(pollTimer); clearTimeout(entryTimer); }
+  else if (document.body.dataset.view !== 'console') recheckEntry();
   else { idleReads = 0; viewportChanged(); poll(); }
 });
-document.addEventListener('click', event => {
-  if (plugin.open && !plugin.contains(event.target)) plugin.open = false;
-});
-document.addEventListener('keydown', event => {
-  if (event.key !== 'Escape' || !plugin.open) return;
-  const returnFocus = plugin.contains(document.activeElement);
-  event.preventDefault();
-  event.stopPropagation();
-  plugin.open = false;
-  if (returnFocus) plugin.querySelector('summary').focus();
-}, true);
 
 const sequences = {
   Enter: '\r', Escape: '\x1b', Tab: '\t', Backspace: '\x7f',
@@ -341,7 +342,7 @@ async function write(tab, text) {
     () => { throw Error('上一条输入失败，后续排队的输入均未发送。'); },
   );
   writes.set(tab, pending);
-  try { await pending; if (tab === selected) inputActivity(true); }
+  try { await pending; if (tab === selected) inputActivity(); }
   finally { if (writes.get(tab) === pending) writes.delete(tab); }
 }
 function shortcut(text) {
@@ -355,7 +356,6 @@ function shortcut(text) {
 // A sentinel makes a backspace observable on mobile keyboards even with no draft.
 const sentinel = '\u200b';
 let directVersion = -1;
-let directMode = false;
 let preedit = false;
 let preeditEnded = -Infinity;
 let commitTimer;
@@ -391,7 +391,6 @@ function commitDirect() {
   directText(text);
 }
 direct.addEventListener('focus', () => {
-  directMode = true;
   directVersion = generation;
   resetDirect();
 });
@@ -436,89 +435,20 @@ function directKey(event) {
 }
 direct.addEventListener('keydown', directKey);
 screen.addEventListener('keydown', directKey);
-field.addEventListener('focus', () => { directMode = false; });
-
-async function submit(allowEmpty = false) {
-  const tab = selected;
-  const draft = drafts.get(tab);
-  if (!draft || changingTabs || submitting.has(tab) || (!allowEmpty && !field.value)) return;
-  const text = field.value;
-  const edits = draft.edits;
-  const armed = ctrl.getAttribute('aria-pressed') === 'true';
-  if (armed && !/^[a-z]$/i.test(text)) return status('Ctrl 组合键需要一个英文字母。');
-  const bytes = armed ? String.fromCharCode(text.toUpperCase().charCodeAt(0) & 31) : text + '\r';
-  if (new TextEncoder().encode(bytes).length > 4096) return status('单次输入最多 4096 字节，请缩短后再发送。');
-  submitting.add(tab);
-  updateSend();
-  try {
-    await write(tab, bytes);
-    if (draft.edits === edits) {
-      draft.text = '';
-      if (tab === selected) field.value = '';
-    }
-    if (tab === selected) { setCtrl(false); status(''); }
-  } catch (error) {
-    if (tab === selected) status(`发送失败：${error.message}`);
-  } finally {
-    submitting.delete(tab);
-    updateSend();
-  }
-}
 ctrl.onclick = () => {
   setCtrl(ctrl.getAttribute('aria-pressed') !== 'true');
-  (directMode ? direct : field).focus({ preventScroll: true });
+  direct.focus({ preventScroll: true });
 };
-for (const control of [el('keys'), el('send')]) {
-  control.addEventListener('mousedown', event => {
-    if (document.activeElement === field || document.activeElement === direct) event.preventDefault();
-  });
-}
+el('keys').addEventListener('mousedown', event => {
+  if (document.activeElement === direct) event.preventDefault();
+});
 for (const key of el('keys').querySelectorAll('button:not([data-key=Ctrl])')) {
-  key.onclick = event => {
-    if (key.dataset.key === 'Enter' && !directMode) { if (event.detail < 2) submit(true); }
-    else shortcut(sequences[key.dataset.key]);
-  };
+  key.onclick = () => shortcut(sequences[key.dataset.key]);
 }
-el('send').onclick = () => submit();
-field.addEventListener('input', () => {
-  const draft = drafts.get(selected);
-  if (draft) { draft.text = field.value; draft.edits++; }
-  updateSend();
-  inputActivity();
-});
-let composing = false;
-let compositionEnded = -Infinity;
-let enterPressed = -Infinity;
-field.addEventListener('compositionstart', () => { composing = true; });
-field.addEventListener('compositionend', () => { composing = false; compositionEnded = performance.now(); });
-field.addEventListener('keydown', event => {
-  if (composing || event.isComposing || event.keyCode === 229 || event.metaKey || event.altKey) return;
-  if (event.key === 'Enter') {
-    event.preventDefault();
-    enterPressed = performance.now();
-    if (!event.repeat && performance.now() - compositionEnded > 50) submit(true);
-  } else if (event.ctrlKey && /^[a-z]$/i.test(event.key)) {
-    const letter = event.key.toLowerCase();
-    const selection = field.selectionStart !== field.selectionEnd;
-    if (letter === 'v' || ('cx'.includes(letter) && selection) || ('azy'.includes(letter) && field.value)) return;
-    event.preventDefault();
-    shortcut(String.fromCharCode(letter.toUpperCase().charCodeAt(0) & 31));
-  } else if (!event.shiftKey && !event.ctrlKey && event.key in sequences) {
-    if (field.value && ['ArrowLeft', 'ArrowRight', 'Backspace'].includes(event.key)) return;
-    event.preventDefault();
-    shortcut(sequences[event.key]);
-  }
-});
-field.addEventListener('beforeinput', event => {
-  if (composing || event.isComposing || !['insertParagraph', 'insertLineBreak'].includes(event.inputType)) return;
-  event.preventDefault();
-  if (performance.now() - Math.max(compositionEnded, enterPressed) > 50) submit(true);
-});
 
 if (hasCredential || inManager) {
-  status('正在读取设备配置…');
-  refreshTabs().catch(error => status(error.message));
+  recheckEntry();
 } else {
   setView('notice');
-  status('请从模块管理器打开 ssmcp 终端。使用 Magisk 时，请点击模块的「操作」。');
+  status('请在支持 WebUI 的模块管理器中找到 SSMCP，打开 WebUI 进入设备终端。');
 }

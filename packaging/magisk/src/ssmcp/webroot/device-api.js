@@ -28,7 +28,7 @@ export function usesOfficialRelay(server) {
 }
 
 export async function api(path, body) {
-  if (!hasCredential) throw Error('请从模块管理器重新打开页面。');
+  if (!hasCredential) throw Error('请返回模块管理器，重新打开 SSMCP 的 WebUI。');
   let response;
   try {
     response = await fetch(path, {
@@ -44,7 +44,7 @@ export async function api(path, body) {
   }
   const result = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = response.status === 401 ? '页面授权已失效，请从模块管理器重新打开。' : result?.error;
+    const message = response.status === 401 ? '页面授权已失效，请返回模块管理器，重新打开 SSMCP 的 WebUI。' : result?.error;
     const error = Error(message || `模块服务返回错误（${response.status}）。`);
     error.status = response.status;
     throw error;

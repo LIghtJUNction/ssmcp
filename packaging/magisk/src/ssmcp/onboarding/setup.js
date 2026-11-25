@@ -107,5 +107,5 @@ if (hasCredential) {
   readConfiguration().catch(error => status(error.message));
 } else {
   setView('notice');
-  status('请从 Magisk 的模块操作打开首次配置页面。');
+  status('请返回模块管理器，打开 SSMCP 的 WebUI，再点「打开安装引导」。');
 }
