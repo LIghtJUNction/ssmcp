@@ -580,11 +580,18 @@ jobs:
           & cargo test --locked --lib --bin ssmcp --test release_client --target-dir $env:CLI_TARGET_DIR 2>&1 |
             Tee-Object -FilePath (Join-Path $evidence 'cli-tests.log')
           $clientTestExit = $LASTEXITCODE
-          & cargo build --locked --bin ssmcp --example native_plugin_fixture --target-dir $env:CLI_TARGET_DIR 2>&1 |
+          & cargo build --locked --bin ssmcp --target-dir $env:CLI_TARGET_DIR 2>&1 |
             Tee-Object -FilePath (Join-Path $evidence 'cli-build.log')
           $clientBuildExit = $LASTEXITCODE
+          $cliExecutable = Join-Path $env:CLI_TARGET_DIR 'debug/ssmcp.exe'
+          $cliReady = ($clientBuildExit -eq 0) -and (Test-Path -LiteralPath $cliExecutable -PathType Leaf)
+          "cli_ready=$($cliReady.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          & cargo build --locked --example native_plugin_fixture --target-dir $env:CLI_TARGET_DIR 2>&1 |
+            Tee-Object -FilePath (Join-Path $evidence 'native-plugin-build.log')
+          $pluginBuildExit = $LASTEXITCODE
+          $pluginFixture = Join-Path $env:CLI_TARGET_DIR 'debug/examples/native_plugin_fixture.dll'
           $pluginExit = $null
-          if ($clientBuildExit -eq 0) {
+          if (($pluginBuildExit -eq 0) -and (Test-Path -LiteralPath $pluginFixture -PathType Leaf)) {
             & cargo test --lib --locked --target-dir $env:CLI_TARGET_DIR runtime::plugins::tests::native_plugin_runtime_contract -- --ignored --exact 2>&1 |
               Tee-Object -FilePath (Join-Path $evidence 'native-plugin.log')
             $pluginExit = $LASTEXITCODE
@@ -596,6 +603,9 @@ jobs:
           & cargo build --manifest-path apps/ssmcp-desktop/Cargo.toml --locked --target x86_64-pc-windows-msvc 2>&1 |
             Tee-Object -FilePath (Join-Path $evidence 'build.log')
           $buildExit = $LASTEXITCODE
+          $executable = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/debug/ssmcp-desktop.exe'
+          $desktopReady = ($buildExit -eq 0) -and (Test-Path -LiteralPath $executable -PathType Leaf)
+          "desktop_ready=$($desktopReady.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           [ordered]@{
             source_commit = $env:SOURCE_COMMIT
             target = 'x86_64-pc-windows-msvc'
@@ -606,36 +616,30 @@ jobs:
             test_exit = $testExit
             build_exit = $buildExit
           } | ConvertTo-Json | Set-Content -Path (Join-Path $evidence 'result.json')
-          if ($clientTestExit -ne 0 -or $clientBuildExit -ne 0 -or $pluginExit -ne 0 -or $testExit -ne 0 -or $buildExit -ne 0) {
-            throw "Windows checks failed: CLI tests=$clientTestExit, CLI build=$clientBuildExit, native plugin=$pluginExit, desktop tests=$testExit, desktop build=$buildExit."
+          if ($cliReady) {
+            [ordered]@{
+              file = 'ssmcp.exe'
+              source_commit = $env:SOURCE_COMMIT
+              target = 'x86_64-pc-windows-msvc'
+              profile = 'debug'
+              bytes = (Get-Item $cliExecutable).Length
+              sha256 = (Get-FileHash -Algorithm SHA256 -Path $cliExecutable).Hash.ToLowerInvariant()
+            } | ConvertTo-Json | Set-Content -Path (Join-Path $evidence 'cli-executable.json')
           }
-          $cliExecutable = Join-Path $env:CLI_TARGET_DIR 'debug/ssmcp.exe'
-          [ordered]@{
-            file = 'ssmcp.exe'
-            source_commit = $env:SOURCE_COMMIT
-            target = 'x86_64-pc-windows-msvc'
-            profile = 'debug'
-            bytes = (Get-Item $cliExecutable).Length
-            sha256 = (Get-FileHash -Algorithm SHA256 -Path $cliExecutable).Hash.ToLowerInvariant()
-          } | ConvertTo-Json | Set-Content -Path (Join-Path $evidence 'cli-executable.json')
-          $executable = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/debug/ssmcp-desktop.exe'
-          if (-not (Test-Path $executable -PathType Leaf)) {
-            throw 'Cargo reported success without the expected desktop executable.'
+          if ($desktopReady) {
+            [ordered]@{
+              file = 'ssmcp-desktop.exe'
+              bytes = (Get-Item $executable).Length
+              sha256 = (Get-FileHash -Algorithm SHA256 -Path $executable).Hash.ToLowerInvariant()
+            } | ConvertTo-Json | Set-Content -Path (Join-Path $evidence 'executable.json')
           }
-          # Stage the CLI built above next to the desktop before the real-window check.
-          $siblingCli = Join-Path (Split-Path -Parent $executable) 'ssmcp.exe'
-          Copy-Item -LiteralPath $cliExecutable -Destination $siblingCli -Force
-          if ((Get-FileHash $siblingCli).Hash -ne (Get-FileHash $cliExecutable).Hash) {
-            throw 'The staged CLI differs from the same-source debug executable.'
+          if ($clientTestExit -ne 0 -or -not $cliReady -or $pluginExit -ne 0 -or $testExit -ne 0 -or -not $desktopReady) {
+            throw "Windows checks failed: CLI tests=$clientTestExit, CLI build=$clientBuildExit (binary ready=$cliReady), native plugin build=$pluginBuildExit, plugin test=$pluginExit, desktop tests=$testExit, desktop build=$buildExit (binary ready=$desktopReady)."
           }
-          [ordered]@{
-            file = 'ssmcp-desktop.exe'
-            bytes = (Get-Item $executable).Length
-            sha256 = (Get-FileHash -Algorithm SHA256 -Path $executable).Hash.ToLowerInvariant()
-          } | ConvertTo-Json | Set-Content -Path (Join-Path $evidence 'executable.json')
 
       - name: Exercise the Windows CLI and private process/IPC lifecycle
         id: cli_runtime
+        if: ${{ !cancelled() && steps.native.outputs.cli_ready == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
@@ -654,7 +658,7 @@ jobs:
 
       - name: Verify an empty overview without creating a session registry
         id: overview_runtime
-        if: ${{ !cancelled() && steps.native.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.native.outputs.cli_ready == 'true' }}
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
@@ -726,10 +730,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Empty Windows overview acceptance failed; inspect overview-result.json.' }
       - name: Launch and capture the actual Windows desktop executable
         id: desktop_runtime
-        if: ${{ !cancelled() && steps.native.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.native.outputs.cli_ready == 'true' && steps.native.outputs.desktop_ready == 'true' }}
         run: |
+          $ErrorActionPreference = 'Stop'
+          $cliExecutable = Join-Path $env:CLI_TARGET_DIR 'debug/ssmcp.exe'
           $evidence = Join-Path $env:RUNNER_TEMP 'ssmcp-gui-ci-windows'
           $executable = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/debug/ssmcp-desktop.exe'
+          # Stage the CLI built above next to the desktop before the real-window check.
+          $siblingCli = Join-Path (Split-Path -Parent $executable) 'ssmcp.exe'
+          Copy-Item -LiteralPath $cliExecutable -Destination $siblingCli -Force
+          if ((Get-FileHash $siblingCli).Hash -ne (Get-FileHash $cliExecutable).Hash) {
+            throw 'The staged CLI differs from the same-source debug executable.'
+          }
           & pwsh -NoLogo -NoProfile -File scripts/e2e_windows_desktop.ps1 -Binary $executable -EvidenceDirectory (Join-Path $evidence 'desktop-runtime') -SourceCommit $env:SOURCE_COMMIT
           if ($LASTEXITCODE -ne 0) { throw 'Desktop runtime acceptance failed or was blocked; inspect desktop-runtime/result.json.' }
 

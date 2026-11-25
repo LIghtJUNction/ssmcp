@@ -47,6 +47,37 @@ class GuiWorkflowTests(unittest.TestCase):
                 self.assertEqual(selected["udid"], identifier)
 
 
+    def test_windows_runtime_checks_use_their_built_executables_after_a_test_failure(self):
+        path = Path(__file__).resolve().parents[1] / ".github/workflows/gui-clients.yml"
+        windows = path.read_text(encoding="utf-8").split("\n  windows:\n", 1)[1].split("\n  android:\n", 1)[0]
+        steps = windows.split("      - name: ")
+        native = next(step for step in steps if "\n        id: native\n" in step)
+        for output, ready, exit_code, binary in (
+            ("cli_ready", "cliReady", "clientBuildExit", "cliExecutable"),
+            ("desktop_ready", "desktopReady", "buildExit", "executable"),
+        ):
+            with self.subTest(output=output):
+                check = f"${ready} = (${exit_code} -eq 0) -and (Test-Path -LiteralPath ${binary} -PathType Leaf)"
+                emit = f'"{output}=$(${ready}.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT'
+                self.assertLess(native.index(f"${exit_code} = $LASTEXITCODE"), native.index(check))
+                self.assertLess(native.index(check), native.index(emit))
+                self.assertLess(native.index(emit), native.index('throw "Windows checks failed:'))
+        self.assertIn("if ($clientTestExit -ne 0 -or -not $cliReady -or $pluginExit -ne 0 "
+                      "-or $testExit -ne 0 -or -not $desktopReady)", native)
+        cli = "!cancelled() && steps.native.outputs.cli_ready == 'true'"
+        for step_id, condition in (
+            ("cli_runtime", cli), ("overview_runtime", cli),
+            ("desktop_runtime", cli + " && steps.native.outputs.desktop_ready == 'true'"),
+        ):
+            with self.subTest(step_id=step_id):
+                step = next(step for step in steps if f"\n        id: {step_id}\n" in step)
+                self.assertIn("        if: ${{ " + condition + " }}\n", step)
+        self.assertNotIn("continue-on-error:", windows)
+        for name in ("Package the tested Windows", "Retain the downloadable Windows"):
+            step = next(step for step in steps if step.startswith(name))
+            self.assertNotIn("\n        if:", step)  # keep the runner's default success() gate
+
+
 class EventTests(unittest.TestCase):
     def test_only_version_tag_push_or_explicit_main_dispatch_can_publish(self):
         self.assertEqual(release.event_mode("push", "refs/tags/v0.5.0", {}), ("v0.5.0", False))
