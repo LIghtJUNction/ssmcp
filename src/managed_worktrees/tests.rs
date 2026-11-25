@@ -12,7 +12,8 @@ impl Fixture {
             crate::hex::encode(nonce)
         ));
         DirBuilder::new().mode(0o700).create(&root).unwrap();
-        let this = Self(root);
+        // Git records physical checkout paths, including when TMPDIR has a symlinked ancestor.
+        let this = Self(root.canonicalize().unwrap());
         this.git(&this.0, &["init", "--quiet"]);
         fs::write(this.0.join("tracked"), "seed\n").unwrap();
         fs::write(this.0.join(".gitignore"), "/.ssmcp/\n*.ignored\n").unwrap();
@@ -207,6 +208,24 @@ fn registered_but_uninitialized_gitlinks_must_be_empty_before_removal() {
     );
     assert_eq!(f.cleanup(false)["eligible"], 0);
     assert!(path.join("vendor/dep/.git").is_file());
+}
+
+#[test]
+fn a_project_alias_reports_the_registered_path_even_when_the_checkout_is_missing() {
+    let f = Fixture::new();
+    let alias = f.0.join("project-alias");
+    symlink(&f.0, &alias).unwrap();
+    let receipt: Value =
+        serde_json::from_str(&command(&alias, &["create".into()]).unwrap()).unwrap();
+    let registered = f.0.join(receipt["path"].as_str().unwrap());
+    let moved = registered.with_file_name("moved-aside");
+    fs::rename(&registered, &moved).unwrap();
+
+    let paths = registered_paths(&alias, Instant::now() + CLEANUP_BUDGET).unwrap();
+    assert!(paths.contains(&registered));
+    assert!(!registered.exists());
+    assert_eq!(f.cleanup(false)["removed"], 0);
+    assert!(moved.join("tracked").is_file());
 }
 
 #[test]
