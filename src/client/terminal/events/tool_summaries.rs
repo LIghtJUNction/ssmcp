@@ -339,6 +339,15 @@ impl EventView {
         source: &Source,
         name: &str,
     ) {
+        self.summary_call_labeled(source, name, name);
+    }
+
+    pub(in crate::client::terminal) fn summary_call_labeled(
+        &mut self,
+        source: &Source,
+        name: &str,
+        label: &str,
+    ) {
         if !counted(name) {
             if observer(name)
                 && let Some(call) = source.call.as_ref()
@@ -397,7 +406,7 @@ impl EventView {
             ..Meta::default()
         };
         meta.set_source(source.display());
-        self.ingest_inner(format!("[RUN] {name}\n").as_bytes(), meta);
+        self.ingest_inner(format!("[RUN] {label}\n").as_bytes(), meta);
         if let Some(event) = self.events.back_mut() {
             event.tool_group_id = Some(group_id);
             self.summary_calls.push_back(Call {
@@ -413,9 +422,9 @@ impl EventView {
         &mut self,
         source: &Source,
         success: bool,
-    ) {
+    ) -> bool {
         let Some(call) = source.call.as_ref() else {
-            return;
+            return false;
         };
         let Some(id) = self
             .summary_calls
@@ -425,7 +434,7 @@ impl EventView {
             })
             .map(|item| item.event_id)
         else {
-            return;
+            return false;
         };
         if let Some(event) = self.events.iter_mut().find(|event| event.id == id) {
             // A completed dispatch can leave an independent command running.
@@ -442,8 +451,10 @@ impl EventView {
                     Status::Failed
                 });
                 event.cache = None;
+                return true;
             }
         }
+        false
     }
 
     pub(in crate::client::terminal) fn summary_exec_read_result(

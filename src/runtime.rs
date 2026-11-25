@@ -973,7 +973,12 @@ impl Runtime {
         }
         let mut history_call =
             crate::session::attach::thread_history::ToolCall::start(&source, &name);
-        crate::client::terminal::tool_summary_call_started(&source, &name);
+        let prompt_activity = (tool.provider == Provider::Time
+            && tool.native_name == "ssmcp.time.prompt")
+            .then(|| crate::client::terminal::prompt_activity::PromptActivity::new(&arguments));
+        if prompt_activity.is_none() {
+            crate::client::terminal::tool_summary_call_started(&source, &name, None);
+        }
         let caller = source.call.clone();
         let control = matches!(tool.provider, Provider::Computer | Provider::Sessions);
         if control {
@@ -1056,6 +1061,9 @@ impl Runtime {
             waiting.finish(&outcome, observation_stopped);
         }
         drop(observation);
+        if let Some(label) = prompt_activity.and_then(|activity| activity.label(&outcome)) {
+            crate::client::terminal::tool_summary_call_started(&source, &name, Some(&label));
+        }
         if control {
             self.audit
                 .push(json!({"type":"ssmcp.control.completed","call_id":call_id,

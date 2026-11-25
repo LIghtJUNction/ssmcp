@@ -28,6 +28,7 @@ mod guide;
 mod images;
 pub(super) mod locale;
 pub(crate) mod markdown;
+pub(crate) mod prompt_activity;
 mod retired_keys;
 mod sleep;
 mod update_notice;
@@ -681,7 +682,11 @@ pub(crate) fn audit(value: &serde_json::Value) {
 }
 
 /// Track the accepted native dispatch in the same store that renders tool windows.
-pub(crate) fn tool_summary_call_started(source: &crate::runtime::call_scope::Source, name: &str) {
+pub(crate) fn tool_summary_call_started(
+    source: &crate::runtime::call_scope::Source,
+    name: &str,
+    label: Option<&str>,
+) {
     let Some(shared) = shared().filter(|shared| shared.alive.load(Ordering::Acquire)) else {
         return;
     };
@@ -689,7 +694,11 @@ pub(crate) fn tool_summary_call_started(source: &crate::runtime::call_scope::Sou
         .state
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    state.events.summary_call_started(source, name);
+    if let Some(label) = label {
+        state.events.summary_call_labeled(source, name, label);
+    } else {
+        state.events.summary_call_started(source, name);
+    }
     state.dirty = true;
 }
 
@@ -704,8 +713,9 @@ pub(crate) fn tool_summary_call_finished(
         .state
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    state.events.summary_call_finished(source, success);
-    state.dirty = true;
+    if state.events.summary_call_finished(source, success) {
+        state.dirty = true;
+    }
 }
 
 /// A display-only copy from the host's verified native Exec read route.

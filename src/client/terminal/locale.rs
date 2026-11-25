@@ -3,6 +3,17 @@ use std::sync::OnceLock;
 use zi18n::{Catalog, Catalogs, Locale, Message};
 
 const EN: &[Message<'static>] = &[
+    Message::text("reminder.schedule", "Schedule reminder"),
+    Message::text("reminder.pause", "Pause reminder"),
+    Message::text("reminder.resume", "Resume reminder"),
+    Message::text("reminder.cancel", "Cancel reminder"),
+    Message::text("reminder.ack", "Mark reminder as processed"),
+    Message::text("reminder.read", "Check for due reminders"),
+    Message::text("reminder.list", "View scheduled reminders"),
+    Message::text("reminder.status", "View reminder status"),
+    Message::text("reminder.unknown", "Reminder operation"),
+    Message::text("reminder.after", "after"),
+    Message::text("reminder.every", "every"),
     Message::text("connection.preview", "preview · sample data"),
     Message::text("connection.offline", "disconnected"),
     Message::text(
@@ -28,6 +39,17 @@ const EN: &[Message<'static>] = &[
     ),
 ];
 const ZH: &[Message<'static>] = &[
+    Message::text("reminder.schedule", "安排定时提醒"),
+    Message::text("reminder.pause", "暂停定时提醒"),
+    Message::text("reminder.resume", "恢复定时提醒"),
+    Message::text("reminder.cancel", "取消定时提醒"),
+    Message::text("reminder.ack", "确认提醒已处理"),
+    Message::text("reminder.read", "检查到期提醒"),
+    Message::text("reminder.list", "查看定时提醒列表"),
+    Message::text("reminder.status", "查看定时提醒状态"),
+    Message::text("reminder.unknown", "定时提醒操作"),
+    Message::text("reminder.after", "延后"),
+    Message::text("reminder.every", "每隔"),
     Message::text("connection.preview", "预览 · 示例数据"),
     Message::text("connection.offline", "未连接"),
     Message::text("connection.queue_update", "队列需要更新服务端"),
