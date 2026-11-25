@@ -239,7 +239,8 @@ struct Job {
     cwd: PathBuf,
     timing: ExecutionTiming,
     state: Mutex<State>,
-    changed: Arc<Notify>,
+    output_changed: Arc<Notify>,
+    completed: Arc<Notify>,
     cancel: watch::Sender<bool>,
     input_mode: InputMode,
     stdin: AsyncMutex<Option<ChildStdin>>,
@@ -317,7 +318,7 @@ impl Job {
     fn stop_input(&self) {
         self.state().stdin_open = false;
         self.input_stopped.send_replace(true);
-        self.changed.notify_waiters();
+        self.output_changed.notify_waiters();
     }
     fn write_result(
         &self,
@@ -663,7 +664,8 @@ impl Shell {
                 stdout: Output::new(&self.output, format!("job:{}:unused", args.id)),
                 stderr,
             }),
-            changed: terminal.changed(),
+            output_changed: terminal.changed(),
+            completed: Arc::new(Notify::new()),
             cancel,
             input_mode: InputMode::Null,
             stdin: AsyncMutex::new(None),
@@ -733,7 +735,8 @@ impl Shell {
             let mut snapshot = worker.snapshot();
             snapshot["type"] = json!("exec.exited");
             events.push_scoped(snapshot, worker.creator.clone());
-            worker.changed.notify_waiters();
+            worker.output_changed.notify_waiters();
+            worker.completed.notify_waiters();
         };
         #[cfg(target_os = "linux")]
         if let Err(error) = command_task(supervise) {
@@ -1886,7 +1889,8 @@ impl Shell {
                 stdout: Output::new(store, format!("job:{id}:stdout")),
                 stderr: Output::new(store, format!("job:{id}:stderr")),
             }),
-            changed: Arc::new(Notify::new()),
+            output_changed: Arc::new(Notify::new()),
+            completed: Arc::new(Notify::new()),
             cancel,
             input_mode: stdin,
             stdin: AsyncMutex::new(stdin_pipe),
@@ -2007,9 +2011,11 @@ impl Shell {
             let mut snapshot = worker.snapshot();
             snapshot["type"] = json!("exec.exited");
             events.push_scoped(snapshot, worker.creator.clone());
-            let changed = worker.changed.clone();
+            let output_changed = worker.output_changed.clone();
+            let completed = worker.completed.clone();
             drop(worker);
-            changed.notify_waiters();
+            output_changed.notify_waiters();
+            completed.notify_waiters();
         })
         .map_err(|error| format!("could not supervise command: {error}"))?;
         if job.creator.call.is_none() {
@@ -2197,27 +2203,25 @@ fn wait_deadline(ms: u64) -> Result<Instant, String> {
 }
 
 async fn wait_finished(job: &Job, deadline: Option<Instant>) {
-    loop {
-        let notified = job.changed.notified();
-        tokio::pin!(notified);
-        notified.as_mut().enable();
-        if !job.state().running {
-            return;
+    // Register before checking state so an exit between the check and await is observed.
+    let notified = job.completed.notified();
+    tokio::pin!(notified);
+    notified.as_mut().enable();
+    if !job.state().running {
+        return;
+    }
+    match deadline {
+        Some(deadline) if deadline > Instant::now() => {
+            let _ = timeout_at(deadline, notified).await;
         }
-        match deadline {
-            Some(deadline) => {
-                if deadline <= Instant::now() || timeout_at(deadline, notified).await.is_err() {
-                    return;
-                }
-            }
-            None => notified.await,
-        }
+        Some(_) => {}
+        None => notified.await,
     }
 }
 async fn wait_output(job: &Job, out: u64, err: u64, wait_ms: u64) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_millis(wait_ms);
     loop {
-        let notified = job.changed.notified();
+        let notified = job.output_changed.notified();
         tokio::pin!(notified);
         notified.as_mut().enable();
         {
@@ -2299,7 +2303,7 @@ async fn capture(
                 if let Some(artifact) = notice {
                     events.push_scoped(json!({"type":"ssmcp.output_archived","job_id":job.id,"stream":stream,"artifact":artifact}), job.creator.clone());
                 }
-                job.changed.notify_waiters();
+                job.output_changed.notify_waiters();
                 #[cfg(unix)]
                 zrun::yield_now().await;
             }
@@ -2315,7 +2319,7 @@ fn finish_output(job: &Job, stream: &str, error: Option<String>) {
     };
     output.finish(error);
     drop(state);
-    job.changed.notify_waiters();
+    job.output_changed.notify_waiters();
 }
 async fn drain(handle: std::io::Result<JoinHandle<()>>, job: &Job, stream: &str) {
     let mut handle = match handle {
@@ -2485,7 +2489,8 @@ mod tests {
                 stdout,
                 stderr,
             }),
-            changed: Arc::new(Notify::new()),
+            output_changed: Arc::new(Notify::new()),
+            completed: Arc::new(Notify::new()),
             cancel,
             input_mode: InputMode::Null,
             stdin: AsyncMutex::new(None),
@@ -3560,6 +3565,75 @@ mod tests {
         let jobs = shell.call("ssmcp.exec.list", json!({})).await.unwrap();
         assert_eq!(jobs["jobs"].as_array().unwrap().len(), 2);
         shell.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn completion_waiters_sleep_through_output_until_the_job_exits() {
+        use std::future::Future;
+        use std::sync::atomic::AtomicUsize;
+        use std::task::{Context, Wake, Waker};
+
+        #[derive(Default)]
+        struct WakeCount(AtomicUsize);
+        impl Wake for WakeCount {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let shell = Shell::new();
+        let id = start_fixture_with_input(&shell, "stdin", 30_000, "pipe").await;
+        let counter = Arc::new(WakeCount::default());
+        let waker = Waker::from(counter.clone());
+        let mut waiters: Vec<_> = (0..16)
+            .map(|_| Box::pin(shell.call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":30_000}))))
+            .collect();
+        let mut cursor = 0;
+        for _ in 0..8 {
+            for wait in &mut waiters {
+                assert!(
+                    wait.as_mut()
+                        .poll(&mut Context::from_waker(&waker))
+                        .is_pending()
+                );
+            }
+            shell
+                .call("ssmcp.exec.write", json!({"job_id":id,"data":"!"}))
+                .await
+                .unwrap();
+            // Acknowledge this echo before writing the next. Startup output can
+            // arrive first when the fixture runs under the test harness.
+            loop {
+                let page = shell
+                    .call(
+                        "ssmcp.exec.read",
+                        json!({
+                            "job_id":id, "stdout_cursor":cursor, "wait_ms":5000
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                let next = page["stdout_cursor"].as_u64().unwrap();
+                assert!(next > cursor, "echo fixture stopped making progress");
+                cursor = next;
+                if page["stdout"].as_str().unwrap().ends_with('!') {
+                    break;
+                }
+            }
+        }
+        let output_wakes = counter.0.load(Ordering::Relaxed);
+        shell
+            .call("ssmcp.exec.write", json!({"job_id":id,"close_stdin":true}))
+            .await
+            .unwrap();
+        for wait in waiters {
+            let done = wait.await.unwrap();
+            assert_eq!(done["exit_code"], 0, "{done}");
+        }
+        assert_eq!(output_wakes, 0, "output woke completion-only waiters");
     }
 
     #[tokio::test]
