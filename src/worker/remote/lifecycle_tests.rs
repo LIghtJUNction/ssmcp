@@ -424,3 +424,43 @@ fn queued_tasks_survive_zero_capacity_and_resume_only_on_explicit_growth() {
     );
     counts(&queue, (1, 0, 1, 0, 0));
 }
+
+#[test]
+fn tool_activity_matches_the_registered_participant_and_preserves_the_claim() {
+    let (queue, remote) = service(3);
+    let quiet = actor("quiet");
+    let busy = actor("busy");
+    remote.claim(&queue, &quiet, "q", 1).unwrap();
+    remote.claim(&queue, &busy, "b", 1).unwrap();
+    queue
+        .submit(actor("main"), "work", "task", "prepared", 2)
+        .unwrap();
+    let work = claim(&remote, &queue, &quiet, "q");
+    queue.set_member_activity(std::sync::Arc::new(
+        [
+            ("busy".into(), (7, false)),
+            ("quiet".into(), (0, true)),
+            ("unregistered".into(), (11, false)),
+        ]
+        .into(),
+    ));
+    let view = queue.snapshot();
+    assert_eq!(view.slots[0].activity_status, Some("offline"));
+    assert_eq!(view.slots[0].tool_calls_10m, Some(0));
+    assert_eq!(view.slots[0].state, "working");
+    assert_eq!(
+        view.slots[0].task_id.as_deref(),
+        Some(work.task_id.as_str())
+    );
+    assert_eq!(view.slots[1].tool_calls_10m, Some(7));
+    assert_eq!(view.slots[1].activity_status, None);
+    assert_eq!(view.slots[2].tool_calls_10m, None);
+    queue.set_member_activity(Default::default());
+    assert!(
+        queue
+            .snapshot()
+            .slots
+            .iter()
+            .all(|slot| slot.tool_calls_10m.is_none())
+    );
+}

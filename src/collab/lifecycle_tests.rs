@@ -1134,3 +1134,46 @@ async fn dreaming_episode_outlives_bounded_chores_and_input_resets_its_clock() {
     assert_eq!(life.status, Status::Working);
     assert!(life.public()["dreaming_elapsed_ms"].is_null());
 }
+
+#[tokio::test(start_paused = true)]
+async fn member_tool_window_grace_then_quiet_offline_keeps_claim_and_isolates_members() {
+    let hub = Hub::for_session("activity-window");
+    let (worker, token) = member(&hub, "owner", "worker");
+    let (peer, peer_token) = member(&hub, "owner", "worker");
+    assigned(&hub, &worker, &token);
+    let before = snapshot(&hub, &worker, &token);
+    let view = |id: &str| {
+        hub.worker_activity()
+            .unwrap()
+            .into_iter()
+            .find(|m| m.agent_id == id)
+            .unwrap()
+    };
+    assert!(!view(&worker).offline);
+    tokio::time::advance(Duration::from_millis(599_999)).await;
+    hub.record_member_tool("owner", &worker, &peer_token);
+    hub.record_member_tool("wrong-account", &worker, &token);
+    hub.record_member_tool("owner", &peer, &peer_token);
+    assert_eq!(view(&worker).tool_calls_10m, 0);
+    assert!(!view(&worker).offline);
+    tokio::time::advance(Duration::from_millis(1)).await;
+    assert!(view(&worker).offline);
+    assert!(!view(&peer).offline);
+    assert_eq!(view(&peer).tool_calls_10m, 1);
+    assert_eq!(
+        snapshot(&hub, &worker, &token)["lifecycle"],
+        before["lifecycle"]
+    );
+    let presence = hub
+        .presence()
+        .unwrap()
+        .into_iter()
+        .find(|a| a.agent_id == worker)
+        .unwrap();
+    assert_eq!(presence.status, "working");
+    assert_eq!(presence.activity_status.as_deref(), Some("offline"));
+    assert_eq!(presence.tool_calls_10m, Some(0));
+    hub.record_member_tool("owner", &worker, &token);
+    assert!(!view(&worker).offline);
+    assert_eq!(view(&worker).tool_calls_10m, 1);
+}

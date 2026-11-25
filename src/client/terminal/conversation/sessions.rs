@@ -246,6 +246,9 @@ impl State {
         ];
         if let Some(status) = member_lifecycle(entry) {
             rows.push((format!("Status · {status}"), PanelTone::Normal));
+            if let Some(calls) = entry["tool_calls_10m"].as_u64() {
+                rows.push((format!("Tool calls in 10 min · {calls}"), PanelTone::Normal));
+            }
         }
         rows.push(("".into(), PanelTone::Normal));
         identity_rows(
@@ -463,6 +466,14 @@ impl State {
                     entry["calls"],
                     field(entry, "status")
                 )
+            } else if member_lifecycle(entry).is_some()
+                && let Some(calls) = entry["tool_calls_10m"].as_u64()
+            {
+                if list_width < 35 {
+                    format!("     {indent}{calls}/10m · {identity}")
+                } else {
+                    format!("     {indent}{calls} calls/10m · {identity}")
+                }
             } else if !process && let Some(summary) = session_summary(entry) {
                 let prefix = format!("     {indent}{identity} · ");
                 let available = usize::from(list_width).saturating_sub(prefix.width());

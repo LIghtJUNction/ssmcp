@@ -1071,9 +1071,19 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
         } else {
             ""
         };
+        let calls = slot
+            .tool_calls_10m
+            .map(|count| {
+                if width < 28 {
+                    format!(" {count}/10m")
+                } else {
+                    format!(" · {count} calls/10m")
+                }
+            })
+            .unwrap_or_default();
         rows.push((
             tone,
-            clipped(&format!("{state}{elapsed}{retiring}{reason}"), width),
+            clipped(&format!("{state}{calls}{elapsed}{retiring}{reason}"), width),
         ));
     }
     rows
@@ -1634,6 +1644,9 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
 }
 
 fn slot_state(slot: &SlotView) -> (PanelTone, &'static str, &'static str) {
+    if slot.activity_status == Some("offline") {
+        return (PanelTone::Error, "×", "offline");
+    }
     match slot.state {
         "idle" if slot.dreaming => (PanelTone::Accent, "☾", "Dreaming"),
         "idle" => (PanelTone::Success, "○", "idle"),
@@ -2174,6 +2187,8 @@ mod tests {
                     logs: Vec::new(),
                     next_log_sequence: 0,
                     dreaming: false,
+                    activity_status: None,
+                    tool_calls_10m: None,
                 },
                 SlotView {
                     slot: 1,
@@ -2194,6 +2209,8 @@ mod tests {
                     logs: Vec::new(),
                     next_log_sequence: 0,
                     dreaming: false,
+                    activity_status: None,
+                    tool_calls_10m: None,
                 },
                 SlotView {
                     slot: 2,
@@ -2214,6 +2231,8 @@ mod tests {
                     logs: Vec::new(),
                     next_log_sequence: 0,
                     dreaming: false,
+                    activity_status: None,
+                    tool_calls_10m: None,
                 },
             ],
         }
@@ -2271,6 +2290,29 @@ mod tests {
             let text = screen(&frame).screen().contents();
             assert!(!text.contains('☾') && !text.contains("Dreaming"), "{text}");
         }
+    }
+
+    #[test]
+    fn worker_progress_shows_the_registered_members_tool_window() {
+        let mut snapshot = snapshot();
+        snapshot.slots[0].tool_calls_10m = Some(0);
+        snapshot.slots[0].activity_status = Some("offline");
+        let mut view = state(20, 100, false);
+        let offline = view.worker_frame(Some(&snapshot));
+        let text = screen(&offline).screen().contents();
+        assert!(text.contains("offline · 0 calls/10m"), "{text}");
+        assert!(text.contains("Idle 1"), "{text}");
+
+        snapshot.slots[0].tool_calls_10m = Some(4);
+        snapshot.slots[0].activity_status = None;
+        let active = view.worker_frame(Some(&snapshot));
+        let text = screen(&active).screen().contents();
+        assert!(text.contains("idle · 4 calls/10m"), "{text}");
+        let compact = progress_summary(&snapshot.slots[0], 14, 3);
+        assert!(
+            compact.iter().any(|(_, line)| line.contains("4/10m")),
+            "{compact:?}"
+        );
     }
 
     #[test]
@@ -2421,6 +2463,8 @@ mod tests {
             logs: Vec::new(),
             next_log_sequence: 0,
             dreaming: false,
+            activity_status: None,
+            tool_calls_10m: None,
         }));
         assert!(
             !screen(&state.worker_frame(Some(&snapshot)))

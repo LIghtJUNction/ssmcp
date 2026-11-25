@@ -108,6 +108,41 @@ fn recipient_list_tracks_member_lifecycle_across_updates() {
 }
 
 #[test]
+fn recipients_show_measured_tool_calls_and_the_activity_offline_projection() {
+    let mut state = preview_state(
+        26,
+        120,
+        &Ui {
+            layout: Layout::Chat,
+            sidebar: false,
+            ..Ui::default()
+        },
+    );
+    state.chat_change_view(View::Agents);
+    state.conversation.selected_agent = Some("member:quiet".into());
+    let data = json!({"agents":[
+        {"name":"Quiet","agent_id":"quiet","status":"working",
+         "tool_calls_10m":0,"activity_status":"offline"},
+        {"name":"Busy","agent_id":"busy","status":"working","tool_calls_10m":7},
+        {"name":"New","agent_id":"new","status":"idle","tool_calls_10m":0},
+        {"name":"Legacy","agent_id":"legacy","status":"idle"}
+    ]});
+    let rows = state.chat_session_rows(&data, 24).join("\n");
+    for label in [
+        "Offline · Quiet",
+        "Working · Busy",
+        "Idle · New",
+        "Idle · Legacy",
+        "0 calls/10m · #quiet",
+        "7 calls/10m · #busy",
+        "Tool calls in 10 min · 0",
+    ] {
+        assert!(rows.contains(label), "{rows}");
+    }
+    assert!(!rows.contains("0 calls/10m · #legacy"), "{rows}");
+}
+
+#[test]
 fn process_header_without_an_advertised_inbox_is_not_a_wildcard_recipient() {
     let id = "3".repeat(64);
     let thread = format!("agent_{}", "a".repeat(32));

@@ -129,6 +129,7 @@ impl Pool {
             .unwrap_or_else(|error| error.into_inner());
         pool.queue
             .set_dreaming_members(std::mem::take(&mut view.pending_dreaming_members));
+        pool.queue.set_member_activity(view.member_activity.clone());
         view.pool = Some(Arc::downgrade(&pool));
         Ok(pool)
     }

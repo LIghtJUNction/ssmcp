@@ -391,6 +391,7 @@ pub(crate) struct DevicePeer {
     pub main_lifecycle: bool,
     pub worker_dreaming: bool,
     pub repository_events: bool,
+    pub worker_activity: bool,
     pub project_continuity: bool,
     pub peer_ports: bool,
     pub peer_ports_auto: bool,
@@ -410,6 +411,7 @@ impl From<Registration> for DevicePeer {
             main_lifecycle: false,
             worker_dreaming: false,
             repository_events: false,
+            worker_activity: false,
             project_continuity: false,
             peer_ports: false,
             peer_ports_auto: false,
@@ -863,6 +865,7 @@ async fn connect(
         },
         worker_dreaming: capability_requested(&headers, wire::WORKER_DREAMING_CAPABILITY),
         repository_events: capability_requested(&headers, wire::repository_events::CAPABILITY),
+        worker_activity: capability_requested(&headers, wire::WORKER_ACTIVITY_CAPABILITY),
     };
     let transport = broker
         .admit_transport()

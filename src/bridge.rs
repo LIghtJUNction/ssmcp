@@ -769,11 +769,34 @@ pub async fn dispatch(
                     session
                         .collaboration
                         .bind(&owner, &binding.agent_id, &binding.token)?;
+                session
+                    .collaboration
+                    .record_member_tool(&owner, &binding.agent_id, &binding.token);
                 let mut result = json!({"client_id":client_id,"agent":agent,"bound":true});
                 if !subscriptions.is_empty() {
                     result["worker_subscriptions"] = json!(subscriptions);
                 }
                 return Ok(result);
+            }
+            // Explicit credentials identify this caller even when one account hosts
+            // several agents. An unbound roster read carries no participant identity.
+            if let (Some(id), Some(token)) = (
+                args.get("agent_id")
+                    .or(args.get("thread_id"))
+                    .and_then(Value::as_str),
+                args.get("token").and_then(Value::as_str),
+            ) {
+                session.collaboration.record_member_tool(&owner, id, token);
+            } else if name == "collab.list"
+                && let Some(binding) = access
+                    .audit_run
+                    .as_ref()
+                    .and_then(|run| run.binding(&client_id))
+                && binding.owner == owner
+            {
+                session
+                    .collaboration
+                    .record_member_tool(&owner, &binding.agent_id, &binding.token);
             }
             let result = session
                 .collaboration

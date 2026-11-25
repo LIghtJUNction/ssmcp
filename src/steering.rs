@@ -536,6 +536,8 @@ mod tests {
             role: None,
             status: "idle".into(),
             dreaming_active: None,
+            tool_calls_10m: None,
+            activity_status: None,
         }];
         let first = publish("one", "a", 0, "private", "agent_a");
         queue
@@ -629,6 +631,8 @@ mod tests {
                 role: None,
                 status: "idle".into(),
                 dreaming_active: None,
+                tool_calls_10m: None,
+                activity_status: None,
             })
             .collect()
     }

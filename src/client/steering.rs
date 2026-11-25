@@ -1263,6 +1263,10 @@ impl Manager {
             if !valid_id(&agent.agent_id)
                 || agent.name.len() > 128
                 || agent.role.as_ref().is_some_and(|role| role.len() > 128)
+                || agent
+                    .activity_status
+                    .as_deref()
+                    .is_some_and(|status| status != "offline" || agent.tool_calls_10m != Some(0))
             {
                 return Err("invalid agent roster".into());
             }
@@ -1954,6 +1958,8 @@ mod tests {
                 name: "Actual member".into(),
                 status: "working".into(),
                 dreaming_active: None,
+                tool_calls_10m: None,
+                activity_status: None,
                 role: None,
             }],
             messages,

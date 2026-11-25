@@ -1591,6 +1591,11 @@ fn code_host(
                 _ => None,
             };
             confirmed.ensure_open()?;
+            if let Some(binding) = &answer_binding
+                && crate::bridge::owner(&user, &authorization).as_deref() == Ok(binding.owner.as_str())
+            {
+                session.collaboration.record_member_tool(&binding.owner, &binding.agent_id, &binding.token);
+            }
             let mut result = crate::observability::REQUEST_ID
                 .scope(
                     request_id,

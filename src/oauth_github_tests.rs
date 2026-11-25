@@ -255,6 +255,7 @@ impl Fixture {
                 main_lifecycle: false,
                 worker_dreaming: false,
                 repository_events: false,
+                worker_activity: false,
                 project_continuity: false,
                 peer_ports: false,
                 peer_ports_auto: false,

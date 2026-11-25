@@ -33,6 +33,9 @@ pub(super) fn from_roster(data: &Value, current_session: &str, disconnected: boo
 }
 
 pub(super) fn member_lifecycle(member: &Value) -> (u8, &'static str) {
+    if member["activity_status"] == "offline" {
+        return (0, "Offline");
+    }
     match (
         member["status"].as_str(),
         member["dreaming_active"].as_bool(),

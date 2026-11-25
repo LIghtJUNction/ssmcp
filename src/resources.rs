@@ -627,6 +627,18 @@ pub async fn read(
             .client(user, authorization, id)
             .await
             .map_err(|_| ResourceError::NotFound)?;
+        if let Some(binding) = crate::code_mode::AUDIT_RUN
+            .try_with(|run| run.binding(id))
+            .ok()
+            .flatten()
+            && crate::bridge::owner(user, authorization).as_deref() == Ok(binding.owner.as_str())
+        {
+            session.collaboration.record_member_tool(
+                &binding.owner,
+                &binding.agent_id,
+                &binding.token,
+            );
+        }
         return match kind {
             "capabilities" | "resources" | "resource-templates" | "resource" => {
                 client::read(

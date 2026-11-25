@@ -1377,6 +1377,13 @@ pub(super) async fn wait(
             ));
         }
     };
+    // Count the authenticated public request once. Background observers, target
+    // fan-out, internal native calls and the final authorization check are passive.
+    scope.session.collaboration.record_member_tool(
+        &scope.binding.owner,
+        &scope.binding.agent_id,
+        &scope.binding.token,
+    );
     if args.op == Op::List {
         return durable::list(&scope).await;
     }

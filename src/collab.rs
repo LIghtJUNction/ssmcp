@@ -4,6 +4,7 @@
 //! Participant credentials bind a mailbox to that authenticated identity.
 //! Messages stay in memory until acknowledged or the membership/session ends.
 pub(crate) mod lifecycle;
+mod tool_window;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -81,6 +82,7 @@ struct Agent {
     name: String,
     role: Option<String>,
     lifecycle: lifecycle::Lifecycle,
+    tool_window: tool_window::ToolWindow,
     capabilities: Vec<String>,
     joined_at_ms: u64,
     last_seen_ms: u64,
@@ -173,6 +175,7 @@ fn receive_limit() -> usize {
 
 impl Agent {
     fn public(&self) -> Value {
+        let (calls, offline) = self.tool_window.measure(Instant::now());
         json!({
             "agent_id": self.id,
             "thread_id": self.id,
@@ -184,6 +187,8 @@ impl Agent {
             "summary": self.role,
             "status": self.lifecycle.status,
             "membership_active": true,
+            "tool_calls_10m": calls,
+            "activity_status": offline.then_some("offline"),
             "lifecycle": self.lifecycle.public(),
             "capabilities": self.capabilities,
             "joined_at_ms": self.joined_at_ms,
@@ -326,17 +331,47 @@ impl Hub {
         Ok(state
             .agents
             .values()
-            .map(|agent| crate::wire::SteeringAgent {
-                agent_id: agent.id.clone(),
-                name: agent.name.clone(),
-                role: agent.role.clone(),
-                status: agent.lifecycle.status.as_str().into(),
-                dreaming_active: {
-                    let active = agent.lifecycle.dreaming_since_ms().is_some();
-                    (active || agent.lifecycle.status.as_str() == "dreaming").then_some(active)
-                },
+            .map(|agent| {
+                let (calls, offline) = agent.tool_window.measure(Instant::now());
+                crate::wire::SteeringAgent {
+                    agent_id: agent.id.clone(),
+                    name: agent.name.clone(),
+                    role: agent.role.clone(),
+                    status: agent.lifecycle.status.as_str().into(),
+                    tool_calls_10m: Some(calls),
+                    activity_status: offline.then(|| "offline".to_owned()),
+                    dreaming_active: {
+                        let active = agent.lifecycle.dreaming_since_ms().is_some();
+                        (active || agent.lifecycle.status.as_str() == "dreaming").then_some(active)
+                    },
+                }
             })
             .collect())
+    }
+
+    pub(crate) fn worker_activity(&self) -> Result<Vec<crate::wire::WorkerMemberActivity>, String> {
+        let state = self.locked()?;
+        let now = Instant::now();
+        Ok(state
+            .agents
+            .values()
+            .map(|agent| {
+                let (tool_calls_10m, offline) = agent.tool_window.measure(now);
+                crate::wire::WorkerMemberActivity {
+                    agent_id: agent.id.clone(),
+                    tool_calls_10m,
+                    offline,
+                }
+            })
+            .collect())
+    }
+
+    pub(crate) fn record_member_tool(&self, owner: &str, id: &str, token: &str) {
+        if let Ok(mut state) = self.locked()
+            && let Ok(agent) = state.authenticated(owner, id, token)
+        {
+            agent.tool_window.record(Instant::now());
+        }
     }
 
     /// Stable order permits sending only changes. Worker registration and capacity
@@ -373,6 +408,8 @@ impl Hub {
                         role: agent.role.clone(),
                         status: agent.lifecycle.status.as_str().into(),
                         dreaming_active: None,
+                        tool_calls_10m: None,
+                        activity_status: None,
                     },
                 )
             })
@@ -394,6 +431,8 @@ impl Hub {
             role: agent.role.clone(),
             status: agent.lifecycle.status.as_str().into(),
             dreaming_active: None,
+            tool_calls_10m: None,
+            activity_status: None,
         })
     }
 
@@ -592,6 +631,7 @@ impl Hub {
             name,
             role: role.filter(|value| !value.is_empty()),
             lifecycle: lifecycle::Lifecycle::new(Instant::now(), now),
+            tool_window: tool_window::ToolWindow::new(Instant::now()),
             capabilities,
             joined_at_ms: now,
             last_seen_ms: now,

@@ -1247,3 +1247,67 @@ async fn activation_rechecks_completion_after_an_older_lease_is_released() {
     assert_eq!(error, (Status::Unavailable, "await_already_resolved"));
     assert!(!record.active.load(Ordering::Acquire));
 }
+
+#[tokio::test]
+async fn public_member_tool_window_counts_direct_inbox_and_multi_target_await_once() {
+    let fixture = Fixture::new().await;
+    let id = fixture.session.client_id();
+    let send = json!({"client_id":id, "action":"send", "agent_id":fixture.peer["agent_id"],
+        "token":fixture.peer["token"], "to":fixture.member["agent_id"], "payload":"for observer"});
+    let result = crate::http::execute_server_tool(
+        fixture.broker.clone(),
+        "mcp".into(),
+        fixture.token.clone(),
+        "collab",
+        send,
+    )
+    .await
+    .unwrap();
+    assert_ne!(result["isError"], true, "{result}");
+
+    let result = fixture
+        .public(
+            &fixture.member,
+            json!({"mode":"all","timeout_ms":1000,
+        "targets":[{"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["idle"]},
+                   {"type":"agent_messages"}]}),
+        )
+        .await;
+    assert_eq!(result["status"], "ready", "{result}");
+    let receive = json!({"client_id":id,"action":"receive","agent_id":fixture.member["agent_id"],
+        "token":fixture.member["token"],"wait_ms":0});
+    let result = crate::http::execute_server_tool(
+        fixture.broker.clone(),
+        "mcp".into(),
+        fixture.token.clone(),
+        "collab",
+        receive.clone(),
+    )
+    .await
+    .unwrap();
+    assert_ne!(result["isError"], true, "{result}");
+
+    let mut invalid = receive;
+    invalid["token"] = fixture.peer["token"].clone();
+    assert!(
+        crate::http::execute_server_tool(
+            fixture.broker.clone(),
+            "mcp".into(),
+            fixture.token.clone(),
+            "collab",
+            invalid
+        )
+        .await
+        .is_err()
+    );
+    let members = fixture.session.collaboration.worker_activity().unwrap();
+    let count = |who: &Value| {
+        members
+            .iter()
+            .find(|m| Some(m.agent_id.as_str()) == who["agent_id"].as_str())
+            .unwrap()
+            .tool_calls_10m
+    };
+    assert_eq!(count(&fixture.peer), 1);
+    assert_eq!(count(&fixture.member), 2);
+}

@@ -24,7 +24,12 @@ pub(crate) use remote::CommandLog;
 pub(crate) const MAX_OBSERVATION_WAIT_MS: u64 = crate::wire::MAX_OBSERVATION_WAIT_MS;
 
 use serde::Serialize;
-use std::sync::{Mutex, OnceLock};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// Verified participant ID -> (native tool calls in the past ten minutes,
+/// relay observed offline). Shared by the display and its current queue.
+type MemberActivity = BTreeMap<String, (u64, bool)>;
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct SlotLog {
@@ -42,6 +47,10 @@ pub(crate) struct SlotView {
     pub(crate) state: &'static str,
     /// Display-only relay observation. An idle station stays available for work.
     pub(crate) dreaming: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tool_calls_10m: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) activity_status: Option<&'static str>,
     pub(crate) task_id: Option<String>,
     pub(crate) reason: Option<String>,
     pub(crate) logs: Vec<SlotLog>,
@@ -136,6 +145,7 @@ pub(crate) struct Snapshot {
 #[derive(Default)]
 struct Display {
     pending_dreaming_members: Vec<String>,
+    member_activity: Arc<MemberActivity>,
     pending: Option<Snapshot>,
     pool: Option<std::sync::Weak<Pool>>,
 }
@@ -170,6 +180,8 @@ pub(crate) fn prepare_display(config: Config) {
                 epoch: 0,
                 state: "offline",
                 dreaming: false,
+                activity_status: None,
+                tool_calls_10m: None,
                 task_id: None,
                 reason: Some("waiting for the authenticated worker connection".into()),
                 logs: Vec::new(),
@@ -189,6 +201,7 @@ pub(crate) fn prepare_display(config: Config) {
     });
     view.pool = None;
     view.pending_dreaming_members.clear();
+    view.member_activity = Arc::default();
 }
 
 pub(crate) fn set_dreaming_members(members: Vec<String>) {
@@ -201,6 +214,17 @@ pub(crate) fn set_dreaming_members(members: Vec<String>) {
             view.pending_dreaming_members = members;
         }
     }
+    crate::client::terminal::invalidate();
+}
+
+pub(crate) fn set_member_activity(members: MemberActivity) {
+    let mut display = view().lock().unwrap_or_else(|error| error.into_inner());
+    display.member_activity = Arc::new(members);
+    if let Some(pool) = display.pool.as_ref().and_then(std::sync::Weak::upgrade) {
+        pool.queue
+            .set_member_activity(display.member_activity.clone());
+    }
+    drop(display);
     crate::client::terminal::invalidate();
 }
 

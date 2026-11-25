@@ -306,6 +306,14 @@ for version in base candidate candidate base; do
 done
 ```
 
+## Member tool activity
+
+The Sessions recipient row and the selected worker display the number of attributable tool requests admitted for that member during the past ten minutes. The relay uses a monotonic clock and groups requests by millisecond. A newly joined member may show zero while the observation window fills. One full quiet interval enables an Offline activity label. A subsequent call clears it. A client that has no measured value leaves the count blank.
+
+One user-issued bound native tool or catalog call, client-scoped resource read, explicit collaboration action, authenticated event or messaging request, or typed await counts once on its connection. Explicit UI waits count once as well. An await covering several targets counts once, including when the relay repeats a native observation in the background. An explicit new read of a retained wait counts as a new call. Automatic probes produce no count. Server-wide discoveries, account-owned jobs, and multi-connection transfers do not select one verified member on one connection. A member's signed-in account and display name cannot establish attribution.
+
+This display concerns tool use. A registered member can work outside the relay for ten minutes and keep a valid task claim. Native station counts, cancellation, retirement acknowledgement, Dreaming approval and retained results follow their existing protocols.
+
 ## Share work between occupied and idle stations
 
 A registered worker making a blocking `worker.wait` first tries to claim ordinary

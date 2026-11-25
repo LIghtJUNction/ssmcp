@@ -676,3 +676,23 @@ async fn transport_spawn_failure_identifies_the_path_without_retrying() {
         assert!(!registered);
     }
 }
+
+#[test]
+fn worker_activity_frame_rejects_duplicate_and_malformed_members() {
+    let member = crate::wire::WorkerMemberActivity {
+        agent_id: format!("agent_{}", "a".repeat(32)),
+        tool_calls_10m: 4,
+        offline: false,
+    };
+    assert!(apply_worker_activity(vec![member.clone(), member.clone()]).is_err());
+    assert!(
+        apply_worker_activity(vec![member.clone(); crate::wire::MAX_COLLAB_MEMBERS + 1]).is_err()
+    );
+    assert!(
+        apply_worker_activity(vec![crate::wire::WorkerMemberActivity {
+            agent_id: "station-0".into(),
+            ..member
+        }])
+        .is_err()
+    );
+}

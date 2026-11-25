@@ -1139,6 +1139,11 @@ pub(crate) async fn dispatch(
             .map(|(id, token)| (id.as_str(), token.as_str())),
     )
     .await?;
+    context.session.collaboration.record_member_tool(
+        &context.binding.owner,
+        &context.binding.agent_id,
+        &context.binding.token,
+    );
     let mut mutation = false;
     let mut result = match args.request {
         Request::Subscribe {

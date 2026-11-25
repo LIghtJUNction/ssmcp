@@ -288,6 +288,7 @@ struct State<T> {
     stopping: bool,
     unknown_keys: BTreeSet<(Actor, String)>,
     unknown_guard_full: bool,
+    member_activity: std::sync::Arc<super::MemberActivity>,
 }
 
 pub(crate) struct Queue<T> {
@@ -330,6 +331,7 @@ impl<T: Clone> Queue<T> {
                 stopping: false,
                 unknown_keys: BTreeSet::new(),
                 unknown_guard_full: false,
+                member_activity: Default::default(),
             }),
             changed,
             capacity_changed: watch::Sender::new(()),
@@ -1210,6 +1212,13 @@ impl<T: Clone> Queue<T> {
             .dreaming_members = members;
     }
 
+    pub(super) fn set_member_activity(&self, members: std::sync::Arc<super::MemberActivity>) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .member_activity = members;
+    }
+
     pub(crate) fn snapshot(&self) -> Snapshot {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         self.snapshot_locked(&state)
@@ -1241,7 +1250,14 @@ impl<T: Clone> Queue<T> {
                     ),
                 };
                 let elapsed = telemetry::elapsed_ms(slot);
+                let activity = slot
+                    .registered
+                    .as_ref()
+                    .and_then(|actor| actor.participant.as_ref())
+                    .and_then(|id| state.member_activity.get(id));
                 SlotView {
+                    tool_calls_10m: activity.map(|(calls, _)| *calls),
+                    activity_status: activity.and_then(|(_, offline)| offline.then_some("offline")),
                     slot: index,
                     epoch: slot.epoch,
                     state: name,

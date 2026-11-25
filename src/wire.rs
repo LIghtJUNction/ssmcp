@@ -31,6 +31,7 @@ pub const SESSION_ACCESS_CAPABILITY: &str = "session_access_v1";
 /// Relay-derived account/agent attribution, separately negotiated for strict v7 peers.
 pub const CONTROL_ATTRIBUTION_CAPABILITY: &str = "control_attribution_v1";
 pub(crate) const MAIN_LIFECYCLE_CAPABILITY: &str = "main_lifecycle_v1";
+pub(crate) const WORKER_ACTIVITY_CAPABILITY: &str = "worker_calls_v1";
 pub(crate) const WORKER_DREAMING_CAPABILITY: &str = "worker_dreaming_v1";
 pub(crate) const MAX_COLLAB_MEMBERS: usize = 64;
 pub(crate) const CHAT_DISABLED_CAPABILITY: &str = "human_chat_disabled_v1";
@@ -92,6 +93,10 @@ pub struct SteeringAgent {
     /// Present only for an opted-in local roster when a Dreaming episode matters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dreaming_active: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls_10m: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -611,6 +616,14 @@ impl AccessSnapshot {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerMemberActivity {
+    pub agent_id: String,
+    pub tool_calls_10m: u64,
+    pub offline: bool,
+}
+
 // Do not derive Debug: Ready carries a one-time OAuth login code.
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -722,6 +735,10 @@ pub enum Frame {
     /// Authenticated, connection-local member IDs for the opted-in pool display.
     WorkerDreaming {
         members: Vec<String>,
+    },
+    /// Full connection-local observation for worker clients offering worker_calls_v1.
+    WorkerActivity {
+        members: Vec<WorkerMemberActivity>,
     },
     Reply {
         id: u64,

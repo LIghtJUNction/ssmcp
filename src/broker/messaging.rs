@@ -403,6 +403,9 @@ impl Broker {
             let member = source
                 .collaboration
                 .bind(&owner, &binding.agent_id, &binding.token)?;
+            source
+                .collaboration
+                .record_member_tool(&owner, &binding.agent_id, &binding.token);
             Some(ControlAgent {
                 id: member.agent_id,
                 name: member.name,

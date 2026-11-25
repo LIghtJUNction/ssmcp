@@ -237,6 +237,13 @@ async fn coordinate_wait(
         return Err("finish requires a verified collab thread binding; bind the asking agent before waiting for an end decision".into());
     }
     let wait_id = run.begin_user_wait(&client_id, recipient.clone(), arguments.intent)?;
+    if admitted.is_none()
+        && let Some(binding) = &recipient.binding
+    {
+        session
+            .collaboration
+            .record_member_tool(&binding.owner, &binding.agent_id, &binding.token);
+    }
     if let Some(admitted) = admitted {
         admitted.store(true, std::sync::atomic::Ordering::Release);
     }

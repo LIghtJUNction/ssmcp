@@ -1558,6 +1558,9 @@ impl Broker {
         let worker_dreaming = chat_disabled
             && control_attribution
             && peer.as_ref().is_some_and(|peer| peer.worker_dreaming);
+        let member_activity =
+            control_attribution && peer.as_ref().is_some_and(|peer| peer.worker_activity);
+        let worker_activity = worker_dreaming && member_activity;
         let peer_ports = access_supported
             && control_attribution
             && peer
@@ -1596,6 +1599,9 @@ impl Broker {
         }
         if worker_dreaming {
             capabilities.push(wire::WORKER_DREAMING_CAPABILITY.into());
+        }
+        if member_activity {
+            capabilities.push(wire::WORKER_ACTIVITY_CAPABILITY.into());
         }
         if access_supported {
             capabilities.push(wire::SESSION_ACCESS_CAPABILITY.into());
@@ -1787,6 +1793,7 @@ impl Broker {
             let mut wait_updates = session.wait_display.subscribe();
             let mut wait_revision = 0;
             let mut last_dreaming_members = Vec::new();
+            let mut last_worker_activity = Vec::new();
             loop {
                 // Keep the same read future across requests/ticks: partial JSON frames
                 // must not be discarded when another select branch becomes ready.
@@ -1930,6 +1937,14 @@ impl Broker {
                                     last_dreaming_members = members;
                                 }
                             }
+                            if worker_activity {
+                                let members = session.collaboration.worker_activity()?;
+                                if members != last_worker_activity {
+                                    let frame = Frame::WorkerActivity { members: members.clone() };
+                                    timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
+                                    last_worker_activity = members;
+                                }
+                            }
                             let expired: Vec<_> = pending.iter().filter(|(_, call)| Instant::now() >= call.deadline).map(|(id, _)| *id).collect();
                             for id in expired {
                                 if let Some(call) = pending.remove(&id) {
@@ -2004,9 +2019,11 @@ impl Broker {
                     Some(Frame::Steering { id, command }) => {
                         let result = session.steering_command(command).map(|mut snapshot| {
                             // Older v7 clients reject unfamiliar roster fields.
-                            if !main_lifecycle {
-                                for member in &mut snapshot.agents {
-                                    member.dreaming_active = None;
+                            for member in &mut snapshot.agents {
+                                if !main_lifecycle { member.dreaming_active = None; }
+                                if !member_activity {
+                                    member.tool_calls_10m = None;
+                                    member.activity_status = None;
                                 }
                             }
                             snapshot

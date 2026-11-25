@@ -1487,9 +1487,10 @@ class WorkerWindows(Harness):
         self.check(wait(donor, "peer-first-claim")["share_requests"] == requests
                    and not wait(second, "peer-second-claim")["share_requests"],
                    "repeated empty waits retain a single private request")
-        self.bound(pool, second, "ssmcp.worker.share", {
+        unauthorized = self.bound(pool, second, "ssmcp.worker.share", {
             "action": "accept", "share_id": first_share, "text": "unauthorized scope",
         }, allow_error=True, expected_error="original authenticated claimant")
+        self.check(unauthorized.get("isError") is True, "a different bound worker cannot answer for the claimant")
         denied = native(donor, "share", action="decline", share_id=first_share)
         self.check(denied == native(donor, "share", action="decline", share_id=first_share),
                    "a donor with no independent work declines once")
@@ -1527,9 +1528,10 @@ class WorkerWindows(Harness):
         immediate = wait(helper, "peer-late-helper")["claim"]
         self.check(parent_claim["task_id"] == old_parent and immediate["task_id"] == priority,
                    "queued ordinary work preempts an unanswered peer request")
-        self.bound(pool, donor, "ssmcp.worker.share", {
+        late = self.bound(pool, donor, "ssmcp.worker.share", {
             "action": "accept", "share_id": stale["share_id"], "text": "late scope",
         }, allow_error=True, expected_error="expired")
+        self.check(late.get("isError") is True, "the original donor cannot accept an expired request")
         self.check(any(r["share_id"] == stale["share_id"] and r["status"] == "expired"
                        for r in wait(helper, "peer-late-helper")["share_replies"]),
                    "the helper sees its expired request and a late answer cannot admit new work")
