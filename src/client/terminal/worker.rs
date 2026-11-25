@@ -1127,8 +1127,7 @@ fn task_lines(slot: &SlotView, snapshot: &Snapshot, width: usize) -> Vec<LogLine
     output
 }
 
-fn command_summary(command: &str) -> String {
-    let text = panel::safe_text(command);
+fn command_arguments(text: &str) -> Vec<String> {
     let mut input = text.trim().strip_prefix('[').unwrap_or("");
     let mut args = Vec::new();
     for _ in 0..5 {
@@ -1163,6 +1162,12 @@ fn command_summary(command: &str) -> String {
         };
         input = rest;
     }
+    args
+}
+
+fn command_summary(command: &str) -> String {
+    let text = panel::safe_text(command);
+    let args = command_arguments(&text);
     if args.is_empty() {
         clipped(&text, 88)
     } else {
@@ -1344,6 +1349,67 @@ fn log_lines(slot: &SlotView, width: usize, expanded: bool) -> Vec<LogLine> {
     output
 }
 
+/// Show only tool names and well-known actions on the progress page. Arguments
+/// and inline scripts belong in the operator-selected diagnostic view.
+fn activity_name(command: &str) -> Option<String> {
+    let args = command_arguments(command);
+    let mut words = args.iter().map(String::as_str);
+    let mut tool = std::path::Path::new(words.next()?).file_name()?.to_str()?;
+    if matches!(tool, "zrun" | "rtk") {
+        tool = std::path::Path::new(words.next()?).file_name()?.to_str()?;
+    }
+    match (tool, words.next()) {
+        ("cargo", Some(action @ ("test" | "check" | "build" | "fmt" | "clippy")))
+        | (
+            "git",
+            Some(
+                action @ ("diff" | "status" | "show" | "commit" | "log" | "fetch" | "push"
+                | "rev-parse"),
+            ),
+        ) => Some(format!("{tool} {action}")),
+        (
+            "cargo" | "git" | "rg" | "python" | "python3" | "node" | "bash" | "sh" | "rustc"
+            | "make",
+            _,
+        ) => Some(tool.to_owned()),
+        _ => None,
+    }
+}
+
+/// Summarize retained events from this assignment. A busy command is evidence
+/// of activity, while only the worker can describe what it accomplished.
+fn current_activity(slot: &SlotView) -> Option<String> {
+    let task = slot.task_id.as_deref()?;
+    let mut started = 0;
+    let mut finished = 0;
+    let mut latest = None;
+    for entry in &slot.logs {
+        if entry.task_id.as_deref() != Some(task) || entry.level != "info" {
+            continue;
+        }
+        if let Some(command) = entry.text.strip_prefix("Command started: ") {
+            started += 1;
+            latest = Some(command);
+        } else if let Some(command) = entry.text.strip_prefix("Command finished: ") {
+            finished += 1;
+            latest = Some(command);
+        }
+    }
+    if let Some(command) = latest {
+        let mut line = format!("Observed commands · {started} started · {finished} finished");
+        if let Some(tool) = activity_name(command) {
+            line.push_str(&format!(" · Latest: {tool}"));
+        }
+        return Some(line);
+    }
+    slot.task_started_at_ms.map(|at| {
+        format!(
+            "Task claimed at {} · No command activity recorded yet",
+            clock::label(at, 40).trim()
+        )
+    })
+}
+
 fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
     // These prefixes are written by queue::telemetry only after the exact task
     // claim is validated. Command text is always nested under a distinct
@@ -1387,6 +1453,17 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
             output.push((LogAnchor { sequence: 0, part }, vec![(tone, text)]));
         }
     }
+    if let Some(activity) = current_activity(slot) {
+        for text in wrap_log_body(&activity, width) {
+            output.push((
+                LogAnchor {
+                    sequence: 0,
+                    part: output.len(),
+                },
+                vec![(PanelTone::Muted, text)],
+            ));
+        }
+    }
     for entry in &slot.logs {
         let event = if reported(&entry) {
             Some((
@@ -1413,14 +1490,20 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
                                 .or_else(|| result.strip_prefix("signal "))
                                 .is_some_and(|code| code.parse::<i32>().is_ok())
                     });
-                Some((
-                    tag,
-                    tone,
-                    result.map_or_else(
-                        || "Command alert · F2 Logs".into(),
-                        |result| format!("Command {result} · F2 Logs"),
-                    ),
-                ))
+                Some((tag, tone, {
+                    let status = result.map_or_else(
+                        || "Command alert".into(),
+                        |value| format!("Command {value}"),
+                    );
+                    let tool = entry
+                        .text
+                        .strip_prefix("Command finished: ")
+                        .and_then(activity_name);
+                    match tool {
+                        Some(tool) => format!("{status} · {tool} · F2 Logs"),
+                        None => format!("{status} · F2 Logs"),
+                    }
+                }))
             } else {
                 Some((tag, tone, body))
             }
@@ -2616,6 +2699,47 @@ mod tests {
             log_body(&progress_lines(slot, 46)),
             "Waiting for agent progress updates"
         );
+    }
+
+    #[test]
+    fn worker_progress_shows_observed_activity_before_the_first_report() {
+        let mut snapshot = snapshot();
+        let slot = &mut snapshot.slots[1];
+        slot.task_started_at_ms = Some(1_700_000_000_000);
+        assert!(log_body(&progress_lines(slot, 80)).contains("Task claimed at"));
+        let entries = [
+            ("task-previous", r#"Command started: ["git","push"]"#),
+            (
+                "task-actual",
+                r#"Command started: ["zrun","cargo","test","PRIVATE_ARGUMENT"]"#,
+            ),
+            (
+                "task-actual",
+                r#"Command finished: ["zrun","cargo","test","PRIVATE_ARGUMENT"]; exit 2"#,
+            ),
+        ];
+        slot.logs = entries
+            .into_iter()
+            .enumerate()
+            .map(|(i, (task, text))| SlotLog {
+                task_id: Some(task.into()),
+                text: text.into(),
+                ..log(i as u64 + 1)
+            })
+            .collect();
+        let text = log_body(&progress_lines(slot, 100));
+        for fact in [
+            "1 started",
+            "1 finished",
+            "Latest: cargo test",
+            "Command exit 2 · cargo test",
+        ] {
+            assert!(text.contains(fact), "{text}");
+        }
+        assert!(!text.contains("git push") && !text.contains("PRIVATE_ARGUMENT"));
+        assert!(slot.progress.is_none());
+        slot.task_id = Some("fresh-task".into());
+        assert!(!log_body(&progress_lines(slot, 100)).contains("Latest: cargo test"));
     }
 
     #[test]
