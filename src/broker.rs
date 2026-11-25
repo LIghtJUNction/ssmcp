@@ -319,7 +319,7 @@ impl Session {
                 schema_version: 1,
                 client_id: self.client_id().into(),
                 revision: 0,
-                agents: self.collaboration.presence()?,
+                agents: self.collaboration.display_presence(false)?,
                 messages: Vec::new(),
             });
         }
