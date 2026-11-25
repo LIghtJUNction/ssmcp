@@ -3463,7 +3463,7 @@ impl State {
                 )
             } else if (1..top).contains(&index) {
                 self.chat_line(
-                    &format!("  {}", self.announcements[usize::from(index - 1)]),
+                    &self.announcement_rows[usize::from(index - 1)],
                     PanelTone::Muted,
                     g.left,
                 )
@@ -4685,6 +4685,55 @@ mod tests {
         state.announcements.clear();
         state.resize(24, 100);
         assert_eq!(state.geometry.chat_body_top(), 1);
+    }
+
+    #[test]
+    fn announcements_wrap_at_pane_width_and_long_notices_are_readable_in_help() {
+        let ui = Ui {
+            sidebar: false,
+            color: false,
+            ..Ui::default()
+        };
+        let mut state = super::super::preview_state(24, 20, &ui);
+        state.announcements = vec![
+            "Server notice".into(),
+            "这是用户公共，登录服务器更改".into(),
+        ];
+        for width in [20, 40, 100] {
+            state.resize(24, width);
+            let screen = display(&mut state).screen().contents();
+            let banner: String = screen
+                .lines()
+                .skip(1)
+                .take(usize::from(state.geometry.banner_rows))
+                .map(str::trim)
+                .collect();
+            assert_eq!(
+                banner, "Server notice这是用户公共，登录服务器更改",
+                "{width} columns"
+            );
+        }
+
+        let custom = format!("{}[个人公告末尾]", "长文abc".repeat(40));
+        state.announcements[1] = custom.clone();
+        state.resize(12, 20);
+        let first = display(&mut state).screen().contents();
+        assert!(first.contains("Server notice"));
+        assert!(first.contains("… F1"));
+        state.chat_key(Key::Help);
+        let start = usize::from(state.geometry.chat_body_top());
+        let mut seen = String::new();
+        for _ in 0..30 {
+            let frame = display(&mut state).screen().contents();
+            seen.push_str(frame.lines().nth(start).unwrap().trim_end());
+            if seen.contains(&custom) {
+                break;
+            }
+            state.chat_key(Key::AuditDown);
+        }
+        assert!(seen.contains(&custom), "{seen}");
+        state.chat_key(Key::Escape);
+        assert!(!state.help);
     }
 
     #[test]

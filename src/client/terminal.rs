@@ -1615,6 +1615,7 @@ struct State {
     worker: Option<worker::Monitor>,
     context_label: String,
     announcements: Vec<String>,
+    announcement_rows: Vec<String>,
     server_origin: Option<footer::Origin>,
     connection_versions: Option<super::update::ConnectionVersions>,
     logout_target: Option<conversation::logout::Target>,
@@ -1667,6 +1668,7 @@ impl State {
             attached_history: None,
             context_label: String::new(),
             announcements: Vec::new(),
+            announcement_rows: Vec::new(),
             server_origin: None,
             connection_versions: None,
             logout_target: None,
@@ -1896,8 +1898,12 @@ impl State {
         let mut geometry =
             Geometry::new(rows, cols, &self.ui, self.conversation.preferred_input_rows);
         if self.ui.layout == Layout::Chat && rows >= 6 {
-            geometry.banner_rows =
-                (self.announcements.len().min(2) as u16).min(geometry.log_rows.saturating_sub(1));
+            let budget = (geometry.log_rows / 3)
+                .max(2)
+                .min(geometry.log_rows.saturating_sub(1));
+            self.announcement_rows =
+                announcement_banner(&self.announcements, geometry.left, budget);
+            geometry.banner_rows = self.announcement_rows.len() as u16;
             geometry.log_rows -= geometry.banner_rows;
             geometry.pty_rows = geometry.log_rows;
         }
@@ -2617,6 +2623,41 @@ impl State {
             self.ui.color(semantic)
         )
     }
+}
+
+fn announcement_banner(notices: &[String], width: u16, max_rows: u16) -> Vec<String> {
+    let indent = if width >= 8 { "  " } else { "" };
+    let content_width = width.saturating_sub(indent.len() as u16);
+    let notices = &notices[..notices.len().min(2)];
+    let full: Vec<_> = notices
+        .iter()
+        .flat_map(|notice| {
+            super::presentation::wrap(notice, usize::from(content_width))
+                .into_iter()
+                .map(|line| format!("{indent}{line}"))
+        })
+        .collect();
+    if full.len() <= usize::from(max_rows) {
+        return full;
+    }
+
+    // Keep both notices represented when the conversation needs the space.
+    let count = usize::from(max_rows).min(notices.len());
+    notices
+        .iter()
+        .take(count)
+        .enumerate()
+        .map(|(i, notice)| {
+            if notice.width() <= usize::from(content_width)
+                && (i + 1 < count || count == notices.len())
+            {
+                return format!("{indent}{notice}");
+            }
+            let hint = "… F1";
+            let prefix = fit(notice, content_width.saturating_sub(hint.width() as u16));
+            format!("{indent}{prefix}{hint}")
+        })
+        .collect()
 }
 
 fn fit(text: &str, columns: u16) -> String {

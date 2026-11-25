@@ -548,7 +548,7 @@ fn pad(text: &str, width: usize) -> String {
     let text = clip(text, width);
     format!("{text}{}", " ".repeat(width.saturating_sub(text.width())))
 }
-fn wrap(text: &str, width: usize) -> Vec<String> {
+pub(super) fn wrap(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let normalized = text
         .replace("\r\n", "\n")

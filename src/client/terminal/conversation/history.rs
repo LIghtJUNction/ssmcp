@@ -310,7 +310,17 @@ impl State {
         }
         text.push_str("\n## Conversation goal\n/goal: show the current conversation goal.\n/goal set <text> (or /goal <text>): set a single-line goal, up to 256 characters / 1024 UTF-8 bytes.\n/goal clear: remove the goal and continue the conversation.\nThe goal stays in this process and is readable in ui.get; exit or reload clears it.\nSetting a goal does not send a request or approve task completion.\n");
         text.push_str("\nHelp: Up/Down, PgUp/PgDn, Home/End scroll; Esc returns.\n");
-        let lines = markdown::rows(&text, self.geometry.left, &self.ui);
+        let width = self.geometry.left;
+        let mut lines = Vec::new();
+        if !self.announcements.is_empty() {
+            lines.push(self.chat_line("Announcements", PanelTone::Heading, width));
+            for notice in &self.announcements {
+                for line in crate::client::presentation::wrap(notice, usize::from(width)) {
+                    lines.push(self.chat_line(&line, PanelTone::Normal, width));
+                }
+            }
+        }
+        lines.extend(markdown::rows(&text, width, &self.ui));
         self.chat_help_page(lines, height)
     }
 

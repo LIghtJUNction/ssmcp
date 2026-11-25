@@ -133,7 +133,7 @@ fn announcement_form(csrf: &str, text: &str, global: bool) -> String {
         (
             "account",
             "个人公告",
-            "可用 {username} 和 {time}（UTC）。留空会恢复默认问候。公告会显示在连接到此账号的客户端。",
+            "可用 {username} 和 {time}（UTC）。留空会恢复默认用户公告。公告会显示在连接到此账号的客户端。",
         )
     };
     format!(

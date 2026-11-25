@@ -1126,7 +1126,7 @@ async fn client_account(
                 time.push('Z');
             }
             let greeting = if account.announcement.is_empty() {
-                "{username} · {time} · 你好"
+                "这是用户公共，登录服务器更改"
             } else {
                 &account.announcement
             };

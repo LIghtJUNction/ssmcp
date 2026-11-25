@@ -1145,7 +1145,7 @@ pub(super) async fn monitor_announcements(server: &str, username: &str) {
             let lines = ["server_announcement", "announcement"]
                 .into_iter()
                 .filter_map(|key| info[key].as_str())
-                .filter(|text| !text.is_empty() && text.len() <= 1024)
+                .filter(|text| !text.is_empty() && text.len() <= 4096)
                 .collect::<Vec<_>>();
             super::terminal::set_announcements(&lines);
         }

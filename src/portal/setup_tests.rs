@@ -786,18 +786,7 @@ async fn public_account_shows_default_and_updates_own_announcement() {
         .json()
         .await
         .unwrap();
-    assert!(
-        default["announcement"]
-            .as_str()
-            .unwrap()
-            .starts_with("alice-notices · ")
-    );
-    assert!(
-        default["announcement"]
-            .as_str()
-            .unwrap()
-            .ends_with("Z · 你好")
-    );
+    assert_eq!(default["announcement"], "这是用户公共，登录服务器更改");
     assert_eq!(default["server_announcement"], "System message");
     assert!(default.get("subject").is_none());
     let (cookie, csrf) = fixture.session("123");
