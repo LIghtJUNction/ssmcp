@@ -20,7 +20,6 @@ import subprocess
 import tempfile
 import time
 
-from e2e_account_relay import wait_for
 from e2e_composer import Composer, DELETE, ENTER, ESC, LEFT
 from e2e_client_ui import column, empty_composer_ready, view
 from e2e_dashboard import sha256, text
@@ -164,27 +163,7 @@ class Questions(Composer):
 
         # Choose an exact recipient before drafting. The registered member is
         # fixture data, not a spawned model or an external coding harness.
-        self.agents(front)
-        front.until(lambda shot: "Question fixture agent" in text(shot),
-                    "the actual fixture collaboration member")
-        # Sessions also displays native recipients, which can arrive before
-        # the independent local steering roster. A name on screen does not
-        # prove that the exact local recipient is ready for selection.
-        def matching_member():
-            matches = [item for item in self.queue()["agents"]
-                       if item["agent_id"] == member["agent_id"]]
-            return matches[0] if len(matches) == 1 else None
-
-        wait_for(matching_member, "the exact question member in the local steering roster")
-        self.highlight_recipient(front, member)
-        front.send(ENTER)
-        front.until(lambda shot: view(shot, "conversation")
-                    and "To Question fixture agent" in text(shot),
-                    "Enter selecting an exact member recipient")
-        selected = self.ui("/display/conversation")
-        self.check(selected["target"] == member["agent_id"]
-                   and selected["native_recipient"] is None,
-                   "question setup selects the exact local member rather than a native namesake")
+        self.choose_local_recipient(front, member)
         ordinary = "QUESTIONS_ORDINARY_DRAFT 保留文字界"
         front.send(ordinary.encode("utf-8") + LEFT)
         original = self.wait_conversation(

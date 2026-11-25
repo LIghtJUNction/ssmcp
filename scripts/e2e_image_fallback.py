@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 import time
 
-from e2e_composer import DOWN, HOME, LEFT, RIGHT
+from e2e_composer import LEFT
 from e2e_dashboard import sha256, text
 from e2e_input_history import InputHistory, png_fixture
 
@@ -125,14 +125,7 @@ class ImageFallback(InputHistory):
         member = self.public_call("collab", {"action": "join", "client_id": self.client_id,
                                            "name": "Image fixture", "role": "local fallback test"})
         self.sensitive.append(member["token"])
-        self.agents(front)
-        front.until(lambda shot: "Image fixture" in text(shot), "the real fixture member in Agents")
-        roster = self.queue()["agents"]
-        selected = 1 + next(index for index, row in enumerate(roster)
-                            if row["agent_id"] == member["agent_id"])
-        front.send(HOME + DOWN * selected + RIGHT)
-        self.wait_state(front, lambda state: state["target"] == member["agent_id"],
-                        "the exact registered recipient was not selected")
+        self.choose_local_recipient(front, member)
         draft = "FALLBACK 草稿界"
         front.send(draft)
         self.wait_state(front, lambda state: state["draft"]["text"] == draft, "the ordinary UTF-8 draft")

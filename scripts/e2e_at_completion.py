@@ -9,8 +9,7 @@ import subprocess
 import tempfile
 import time
 
-from e2e_input_history import InputHistory, ENTER, HOME, DOWN, text
-from e2e_client_ui import view
+from e2e_input_history import InputHistory, ENTER
 
 
 class AtCompletion(InputHistory):
@@ -40,14 +39,7 @@ class AtCompletion(InputHistory):
             "name": "Reference fixture member", "role": "file-only reference regression",
         })
         self.sensitive.append(member["token"])
-        self.agents(front)
-        front.until(lambda shot: "Reference fixture member" in text(shot), "fixture recipient roster")
-        roster = self.queue()["agents"]
-        selected = 1 + next(index for index, item in enumerate(roster)
-                            if item["agent_id"] == member["agent_id"])
-        front.send(HOME + DOWN * selected + ENTER)
-        front.until(lambda shot: "To Reference fixture member" in text(shot)
-                    and view(shot, "conversation"), "exact fixture recipient")
+        self.choose_local_recipient(front, member)
 
         for typed, path, expected in [
             ("@not", "notes.txt", "@notes.txt "),

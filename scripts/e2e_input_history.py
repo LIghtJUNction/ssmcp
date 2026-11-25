@@ -25,7 +25,6 @@ import tempfile
 import time
 import zlib
 
-from e2e_account_relay import wait_for
 from e2e_composer import (
     Composer, DOWN, ENTER, ESC, HOME, RIGHT, conversation_question_banner, journal_value,
 )
@@ -744,26 +743,7 @@ class InputHistory(Composer):
             "name": "Input fixture member", "role": "local input/live-event test",
         })
         self.sensitive.append(member["token"])
-        self.agents(front)
-        front.until(lambda shot: "Input fixture member" in text(shot),
-                    "the registered fixture member arriving in the live roster")
-        # The Sessions native-recipient snapshot may precede the independent
-        # steering roster used for this test's exact local delivery target.
-        def matching_member():
-            matches = [item for item in self.queue()["agents"]
-                       if item["agent_id"] == member["agent_id"]]
-            return matches[0] if len(matches) == 1 else None
-
-        wait_for(matching_member, "the exact input member in the local steering roster")
-        self.highlight_recipient(front, member)
-        front.send(ENTER)
-        front.until(lambda shot: "To Input fixture member" in text(shot)
-                    and view(shot, "conversation"),
-                    "Enter selecting the exact registered fixture recipient")
-        selected = self.ui("/display/conversation")
-        self.check(selected["target"] == member["agent_id"]
-                   and selected["native_recipient"] is None,
-                   "input setup selects the exact local member rather than a native namesake")
+        self.choose_local_recipient(front, member)
         first_reference, first_source = self.reference_scenarios(front, member)
         retained = self.record(self.queue(), message_id=first_reference["id"])
         original, separator, encoded = retained["text"].partition(REFERENCE_BEGIN)

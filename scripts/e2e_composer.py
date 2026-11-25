@@ -304,15 +304,18 @@ class Composer(Dashboard):
         # Local steering recipients precede observed/native process threads.
         # Verify the full highlighted key before Enter or horizontal navigation;
         # a matching display name or stale flat-row index cannot choose a peer.
-        roster = self.queue()["agents"]
         if member is None:
             index = 0
             label = "This process · Next caller"
             selected_key = "member:next"
         else:
-            index = 1 + next(index for index, agent in enumerate(roster)
-                             if agent["agent_id"] == member["agent_id"])
-            label = roster[index - 1]["name"]
+            def local_row():
+                matches = [(index, agent["name"])
+                           for index, agent in enumerate(self.queue()["agents"], start=1)
+                           if agent["agent_id"] == member["agent_id"]]
+                return matches[0] if len(matches) == 1 else None
+
+            index, label = wait_for(local_row, "the exact joined member in the local steering roster")
             selected_key = "member:" + member["agent_id"]
         front.send(HOME + DOWN * index)
         front.until(
@@ -322,9 +325,11 @@ class Composer(Dashboard):
         )
         return label
 
-    def recipient(self, front, member=None):
+    def choose_local_recipient(self, front, member=None):
         self.agents(front)
         label = self.highlight_recipient(front, member)
+        front.until(lambda shot: view(shot, "recipients") and label in text(shot),
+                    "the highlighted recipient's name in the list or selected details")
         front.send(ENTER)
         # The process row names the ordinary Next caller queue; exact members
         # retain their explicit recipient label above the input.
@@ -336,6 +341,9 @@ class Composer(Dashboard):
         self.check(selected["target"] == ("next" if member is None else member["agent_id"])
                    and selected["native_recipient"] is None,
                    "Enter selects the exact steering recipient and closes Sessions")
+
+    def recipient(self, front, member=None):
+        self.choose_local_recipient(front, member)
         self.command(front, "/queue")
 
     def expect_delivery(self, response, record, request_text=None, agent_id=None):
