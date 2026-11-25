@@ -161,3 +161,59 @@ fn local_skill_discovery_keeps_security_audit_without_emitting_chat_activity() {
         );
     });
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn skill_overview_audits_prefix_reads_and_keeps_explicit_reads_visible() {
+    let fixture = Fixture::new();
+    let path = ".agents/skills/long/SKILL.md";
+    fixture.skill("long", "long");
+    let document = format!(
+        "---\nname: long\ndescription: {}\n---\nPrivate body\n",
+        "x".repeat(600)
+    );
+    fs::write(fixture.0.join(path), &document).unwrap();
+    let context = Context::with_output(
+        fixture.0.clone(),
+        vec![],
+        crate::output::OutputStore::new_connection().unwrap(),
+    )
+    .unwrap();
+    let workspace = context.root("workspace").unwrap().workspace().unwrap();
+    let transcript = workspace.observe_projection();
+
+    let overview = context
+        .perform("ssmcp.skills.view", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(overview["shown"], 1);
+    assert!(overview["markdown"].as_str().unwrap().contains("long"));
+    assert!(
+        !overview["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("Private body")
+    );
+    let audit = workspace
+        .perform("ssmcp.fs.events", json!({}))
+        .await
+        .unwrap();
+    let reads = audit["events"].as_array().unwrap();
+    assert_eq!(reads.len(), 2);
+    assert!(reads.iter().all(|read| read["event"]["path"] == path));
+    assert_eq!(reads[0]["event"]["bytes"], 512);
+    assert_eq!(reads[1]["event"]["bytes"], document.len());
+    assert!(
+        transcript.try_recv().is_err(),
+        "overview prefix reads leaked into the transcript"
+    );
+
+    let selected = context
+        .perform("ssmcp.skills.read", json!({"path":path}))
+        .await
+        .unwrap();
+    assert_eq!(selected["content"], document);
+    let (event, _) = transcript.try_recv().unwrap();
+    assert_eq!(event["type"], "ssmcp.file.read");
+    assert_eq!(event["path"], path);
+}

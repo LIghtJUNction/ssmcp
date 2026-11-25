@@ -196,6 +196,9 @@ impl Context {
         view: bool,
         local_discovery: bool,
     ) -> Result<Value, String> {
+        // The overview has its own discovery summary. Keep its underlying
+        // prefix reads in the file audit alongside those of the local picker.
+        let audit_only = local_discovery || view;
         let (all, result) = if args.scope == SkillScope::Effective {
             if args.root != "workspace" {
                 return Err("effective skills use workspace as the project root; omit root or select scope: root".into());
@@ -204,11 +207,11 @@ impl Context {
                 &self.all_roots(),
                 args,
                 self.skill_sources.get(),
-                local_discovery,
+                audit_only,
             )
             .await?
         } else {
-            scan_skills(self.root(&args.root)?, args, local_discovery).await?
+            scan_skills(self.root(&args.root)?, args, audit_only).await?
         };
         skill_page(all, result, args, view)
     }
