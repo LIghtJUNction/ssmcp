@@ -69,7 +69,7 @@ impl CleanupConfig {
                     .is_some_and(|age| elapsed_seconds >= age))
     }
 
-    pub(super) fn age_for(&self, path: &str, category: Category) -> Option<u64> {
+    pub(crate) fn age_for(&self, path: &str, category: Category) -> Option<u64> {
         if self.rules.is_empty() {
             return Some(self.max_age_seconds);
         }

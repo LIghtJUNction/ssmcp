@@ -134,3 +134,13 @@ flowchart TD
 | 身份核对及无覆盖恢复 | [managed_files.rs](../src/managed_files.rs)、[storage.rs](../src/managed_files/storage.rs) | [tests.rs](../src/managed_files/tests.rs)：捕获替换对象后恢复；原位置被新对象占用时保留两者 |
 | 有界整理已完成记录 | [retention.rs](../src/managed_files/retention.rs) | 较旧完成记录整理，活动、坏记录和未知文件保留，预览不变及稳定排序 |
 | 自动调度与 reload | [client.rs](../src/client.rs)、[reload.rs](../src/client/reload.rs) | 需与对应候选版本的连接、退出和真实 reload 验收结果一起核对 |
+
+## 项目内的临时 Git 工作树（Unix）
+
+在项目 Git 根目录运行 `ssmcp worktree create`，可从当前提交创建一个分离 HEAD 的工作树。`ssmcp worktree create REV` 可选择另一个本地可解析的提交。返回的 JSON 包含工作树的 `id`、基准提交及项目相对路径 `.ssmcp/workspace/worktrees/<id>`。后续命令可以在这个目录中运行。
+
+所有使用者完成工作后，在原项目根目录运行 `ssmcp worktree release ID`。释放会结束持久租约并记录释放时间。客户端退出或机器重启后，未释放的工作树仍保持活动。Git 登记之外的普通目录也会保留。
+
+`ssmcp worktree cleanup --dry-run` 可预览，`ssmcp worktree cleanup` 执行相同规则并输出每项结果。工作树默认从释放时算起保留 24 小时，可通过项目已有的 `.ssmcp/cleanup.json` 为 `.ssmcp/workspace/worktrees` 指定 `temporary` 规则和保留时间。配置关闭清理时会保留全部工作树。
+
+清理会核对创建记录、目录身份、Git 登记和锁。只有分离 HEAD 的干净工作树才会交给 Git 移除。已修改文件、未跟踪或被忽略的文件、已初始化的子模块，以及该工作树 HEAD 历史中尚未合入原项目当前 HEAD 的提交，都会使工作树保留。可以先保存改动或将要保留的提交合入项目，再次预览。

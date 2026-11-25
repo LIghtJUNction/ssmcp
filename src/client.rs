@@ -141,6 +141,7 @@ Usage: ssmcp username@server [options]
        ssmcp paths [NAME ...] [--json | --plain] [--list]
        ssmcp context <create|list|show|inspect|use|rm> [options]
        ssmcp update [--check]
+       ssmcp worktree create [REV] | release ID | cleanup [--dry-run] (Unix)
        ssmcp cleanup [--dry-run|--list|--config|--set-config FILE]
        ssmcp tools [status|check|update]
        ssmcp --version [--all]
@@ -2243,6 +2244,18 @@ pub async fn run() -> crate::Result<()> {
     }
     if agent::dispatch(&args)? {
         return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "worktree") {
+        #[cfg(unix)]
+        {
+            println!(
+                "{}",
+                crate::managed_worktrees::command(std::path::Path::new("."), &args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(unix))]
+        return Err("managed Git worktrees currently require Unix".into());
     }
     if args.first().is_some_and(|arg| arg == "cleanup") {
         let arguments = args
