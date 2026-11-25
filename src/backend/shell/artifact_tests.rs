@@ -116,7 +116,7 @@ impl Drop for Fixture {
     }
 }
 
-fn source(agent: char, subject: &str, connection: u64, request: u64) -> Source {
+pub(super) fn source(agent: char, subject: &str, connection: u64, request: u64) -> Source {
     let client = "fixture-client";
     let agent_id = format!("agent_{}", agent.to_string().repeat(32));
     let mut source = Source::default();
@@ -626,4 +626,141 @@ async fn local_tracked_command_projects_net_bytes_without_exposing_paths() {
     })
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn exec_reuse_joins_live_pipes_and_caches_only_the_verified_input_revision() {
+    let fixture = Fixture::new();
+    let shell =
+        Shell::with_workspace(fixture.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
+    let owner = source('a', "42", 81, 1);
+    let mut args = json!({
+        "mode":"pipes",
+        "command":["/bin/sh","-c","echo run >> count; while [ ! -e release ]; do sleep 0.02; done; printf out; printf err >&2"],
+        "timeout_ms":10000,"reuse":{"input_version":"tree-a","ttl_ms":30000}
+    });
+    let first = shell
+        .call_scoped("ssmcp.exec.start", args.clone(), owner.clone())
+        .await
+        .unwrap();
+    let starters = (0..64).map(|n| {
+        shell.call_scoped(
+            "ssmcp.exec.start",
+            args.clone(),
+            source('a', "42", 81, n + 2),
+        )
+    });
+    let joined = futures_util::future::join_all(starters).await;
+    fs::write(fixture.0.join("release"), "").unwrap();
+    assert_eq!(first["reuse"]["status"], "started");
+    for result in joined {
+        let result = result.unwrap();
+        assert_eq!(result["reuse"]["status"], "joined");
+        assert_eq!(result["job_id"], first["job_id"]);
+    }
+    let job = json!({"job_id":first["job_id"]});
+    assert_eq!(
+        shell.call("ssmcp.exec.wait", job.clone()).await.unwrap()["exit_code"],
+        0
+    );
+    let cached = shell
+        .call_scoped("ssmcp.exec.start", args.clone(), owner.clone())
+        .await
+        .unwrap();
+    assert_eq!(cached["reuse"]["status"], "cached");
+    assert_eq!(cached["job_id"], first["job_id"]);
+    let page = shell.call("ssmcp.exec.read", job).await.unwrap();
+    assert_eq!(
+        (page["stdout"].as_str(), page["stderr"].as_str()),
+        (Some("out"), Some("err"))
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("count")).unwrap(),
+        "run\n"
+    );
+
+    for caller in [source('b', "42", 81, 1), source('a', "42", 82, 1)] {
+        let other = shell
+            .call_scoped("ssmcp.exec.start", args.clone(), caller)
+            .await
+            .unwrap();
+        assert_eq!(other["reuse"]["status"], "started");
+        assert_ne!(other["job_id"], first["job_id"]);
+        shell
+            .call("ssmcp.exec.wait", json!({"job_id":other["job_id"]}))
+            .await
+            .unwrap();
+    }
+    args["reuse"]["input_version"] = json!("tree-b");
+    let changed = shell
+        .call_scoped("ssmcp.exec.start", args, owner)
+        .await
+        .unwrap();
+    assert_eq!(changed["reuse"]["status"], "started");
+    shell
+        .call("ssmcp.exec.wait", json!({"job_id":changed["job_id"]}))
+        .await
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("count"))
+            .unwrap()
+            .lines()
+            .count(),
+        4
+    );
+}
+
+#[tokio::test]
+async fn exec_reuse_preserves_independent_starts_and_rejects_incompatible_requests() {
+    let fixture = Fixture::new();
+    let shell =
+        Shell::with_workspace(fixture.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
+    let owner = source('a', "42", 81, 1);
+    let independent = json!({"command":["/bin/sh","-c","echo run >> count"]});
+    for _ in 0..2 {
+        let job = shell
+            .call_scoped("ssmcp.exec.start", independent.clone(), owner.clone())
+            .await
+            .unwrap();
+        assert!(job.get("reuse").is_none());
+        shell
+            .call("ssmcp.exec.wait", json!({"job_id":job["job_id"]}))
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("count")).unwrap(),
+        "run\nrun\n"
+    );
+    let reusable = json!({"command":["/bin/false"],"reuse":{"input_version":"v1","ttl_ms":30000}});
+    for _ in 0..2 {
+        let job = shell
+            .call_scoped("ssmcp.exec.start", reusable.clone(), owner.clone())
+            .await
+            .unwrap();
+        assert_eq!(job["reuse"]["status"], "started");
+        let result = shell
+            .call("ssmcp.exec.wait", json!({"job_id":job["job_id"]}))
+            .await
+            .unwrap();
+        assert_ne!(result["exit_code"], 0);
+    }
+    for (key, value) in [
+        ("mode", json!("pty")),
+        ("stdin", json!("pipe")),
+        ("track_artifacts", json!(true)),
+        ("reuse", json!({"input_version":" "})),
+        ("reuse", json!({"input_version":"v","ttl_ms":300001})),
+    ] {
+        let mut invalid = reusable.clone();
+        invalid[key] = value;
+        assert!(
+            shell
+                .call_scoped("ssmcp.exec.start", invalid, owner.clone())
+                .await
+                .is_err(),
+            "{key}"
+        );
+    }
+    assert!(shell.call("ssmcp.exec.start", reusable).await.is_err());
 }

@@ -235,6 +235,22 @@ return await exec.parallel(clientId, [
 
 `parallel` 默认每个流只读取 2048 字节，控制汇总大小；单项可用 `max_bytes` 覆盖。长输出按需分页，避免把多份完整构建日志放进一次响应。
 
+## 合并重复的只读命令
+
+普通调用每次都会创建独立任务。若同一已认证 Agent 线程会多次读取同一份已知输入，可以在 `exec.start`、`exec.run` 或 `exec.parallel` 的命令参数中显式传入 `reuse`。以下示例中的 `commit` 是调用方已知的完整 Git 提交 ID。
+
+~~~js
+return await exec.run(clientId, {
+  command: ["git", "show", "-s", "--format=%s", commit],
+  mode: "pipes",
+  reuse: {input_version: commit, ttl_ms: 30000},
+});
+~~~
+
+`reuse.status` 为 `started` 时已启动命令，`joined` 表示共享同一个在途启动或任务，`cached` 表示命中了成功且输出完整的已完成任务。三种回执都含真实的 `job_id`，可以继续用 `exec.wait` 和 `exec.read` 查询。对共享 ID 执行 `exec.cancel` 会取消同一个任务。
+
+`ttl_ms` 默认为零，仅合并在途请求。正值从命令结束时计时，最长五分钟。调用方负责在外部输入变化时更新 `input_version`，例如使用文件内容摘要或不可变提交 ID。任务被遗忘、输出被回收或连接更替后，后续请求会重新执行。交互 stdin、PTY 和产物跟踪使用独立任务。写文件、发布和其他有副作用的命令应省略 `reuse`。
+
 ## RTK 的异步错误处理
 
 通过通用 `exec.start/run` 执行 RTK，并把 `"rtk"` 写入 argv。它们返回 Promise，本地参数错误可由 `.catch(...)` 或 `Promise.allSettled(...)` 处理。下面第二项用 `null` 演示本地对象校验错误；原生命令校验仍由客户端负责：

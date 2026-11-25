@@ -4,7 +4,10 @@ mod artifact_tests;
 #[cfg(target_os = "linux")]
 mod artifacts;
 #[cfg(all(test, target_os = "linux"))]
+mod native_exec_bench;
+#[cfg(all(test, target_os = "linux"))]
 mod pty_tests;
+mod reuse;
 
 use super::{events::EventLog, process::ExecManaged};
 #[cfg(unix)]
@@ -329,6 +332,12 @@ impl Job {
             "closed":!state.stdin_open,"stdin":self.input_snapshot(&state)})
     }
 }
+fn reuse_receipt(job: &Job, status: &str) -> Value {
+    let mut result = job.snapshot();
+    result["reuse"] = json!({"status":status});
+    result
+}
+
 #[cfg(target_os = "linux")]
 fn same_artifact_owner(
     owner: &crate::runtime::call_scope::Source,
@@ -414,6 +423,7 @@ pub struct Shell {
     namespace: String,
     registry: Mutex<Registry>,
     slots: Arc<Semaphore>,
+    reuse: reuse::Cache,
     events: Arc<EventLog>,
     observer: Option<Arc<crate::observer::Pool>>,
     interactive_shell: Mutex<Option<InteractiveShell>>,
@@ -446,6 +456,7 @@ impl Shell {
             namespace,
             registry: Mutex::new(Registry::default()),
             slots: Arc::new(Semaphore::new(MAX_JOBS)),
+            reuse: reuse::Cache::default(),
             events,
         }))
     }
@@ -1055,6 +1066,10 @@ impl Shell {
                     "title":{"type":"string","minLength":1,"maxLength":MAX_TITLE_CHARS,"description":"Optional display-only purpose, such as Check deployment status. At most 160 Unicode characters; surrounding whitespace is trimmed, blank titles and control or line-separator characters are rejected. Does not change argv, cwd, permissions or job identity."},
                     "cwd":{"type":"string","description":"Existing directory inside the authorized workspace; relative paths and the default resolve from that workspace."},
                     "env":{"type":"object","additionalProperties":{"type":"string"}},
+                    "reuse":{"type":"object","additionalProperties":false,"required":["input_version"],
+                        "description":"Opt in only for a repeatable, read-only pipe command. The verified thread may receive the same job_id for matching argv, directory, environment and input version; cancellation affects that shared job. Change input_version whenever inputs change. Defaults to independent execution when omitted.",
+                        "properties":{"input_version":{"type":"string","minLength":1,"maxLength":128,"description":"Caller version of all external inputs, at most 128 UTF-8 bytes."},
+                            "ttl_ms":{"type":"integer","minimum":0,"maximum":reuse::MAX_TTL.as_millis() as u64,"default":0,"description":"Maximum age of a successful complete result after exit; zero shares only in-flight execution."}}},
                     "track_artifacts":{"type":"boolean","default":false,"description":format!("Enable Linux task artifact tracking for a verified Agent. Sets the job's TMPDIR and SSMCP_ARTIFACT_DIR. Default soft limit when enabled: {DEFAULT_ARTIFACT_BUDGET_BYTES} logical bytes.")},
                     "artifact_budget_bytes":{"type":"integer","minimum":1,"description":"Custom logical-byte soft limit. Providing a positive value also enables tracking for compatibility."},
                     "temporary_artifacts":{"type":"boolean","default":false,"description":"Enable tracking for disposable, task-exclusive artifacts eligible for bounded shutdown cleanup. Omit to keep artifacts after close or reload."},
@@ -1549,8 +1564,16 @@ impl Shell {
     ) -> Result<Value, String> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
+        struct ReuseOptions {
+            input_version: String,
+            #[serde(default)]
+            ttl_ms: u64,
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct Start {
             command: Vec<String>,
+            reuse: Option<ReuseOptions>,
             title: Option<String>,
             cwd: Option<PathBuf>,
             env: Option<HashMap<String, String>>,
@@ -1646,6 +1669,39 @@ impl Shell {
         if !cwd.is_dir() || !cwd.starts_with(&self.root) {
             return Err("cwd must be an existing directory inside the authorized workspace".into());
         }
+        // Resolve the execution semantics and caller identity before sharing a job.
+        let reservation = if let Some(options) = &args.reuse {
+            if args.mode == Some(Mode::Pty)
+                || (args.mode.is_none() && self.observer.is_some())
+                || stdin != InputMode::Null
+                || artifact_budget.is_some()
+            {
+                return Err("exec reuse requires untracked pipes with null stdin; use mode:'pipes' when terminal observation is enabled".into());
+            }
+            if options.input_version.trim().is_empty() || options.input_version.len() > 128 {
+                return Err(
+                    "reuse.input_version must be nonblank and at most 128 UTF-8 bytes".into(),
+                );
+            }
+            let key = reuse::Key::new(
+                &creator,
+                &cwd,
+                &args.command,
+                args.env.as_ref(),
+                args.timeout_ms,
+                title.as_deref(),
+                &options.input_version,
+            )?;
+            let ttl = Duration::from_millis(options.ttl_ms);
+            let decision = self.reuse.acquire(key, ttl, |id| self.job(id).ok()).await?;
+            match decision {
+                reuse::Decision::Start(reservation) => Some(reservation),
+                reuse::Decision::Joined(job) => return Ok(reuse_receipt(&job, "joined")),
+                reuse::Decision::Cached(job) => return Ok(reuse_receipt(&job, "cached")),
+            }
+        } else {
+            None
+        };
         if args.mode == Some(Mode::Pty) {
             let id = self.next_job_id();
             if let Some(pool) = &self.observer {
@@ -1981,6 +2037,10 @@ impl Shell {
                 .description();
         }
         result["evicted_job_id"] = json!(evicted);
+        if let Some(reservation) = reservation {
+            reservation.publish(&job.id);
+            result["reuse"] = json!({"status":"started"});
+        }
         Ok(result)
     }
     pub async fn shutdown(&self) {
