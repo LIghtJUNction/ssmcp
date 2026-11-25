@@ -21,6 +21,7 @@ use std::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+mod announcements;
 mod conversation;
 mod events;
 mod footer;
@@ -294,22 +295,13 @@ pub(super) fn update_link_metrics(generation: u64, status: super::link_metrics::
     }
 }
 
-pub(super) fn set_announcements(lines: &[&str]) {
+pub(super) fn set_announcements(lines: [Option<&str>; 2], seconds: u64) {
     if let Some(shared) = shared() {
         let mut state = shared
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let announcements = lines
-            .iter()
-            .map(|line| panel::safe_text(line))
-            .collect::<Vec<_>>();
-        if state.announcements != announcements {
-            state.announcements = announcements;
-            let (rows, cols) = (state.geometry.rows, state.geometry.cols);
-            state.resize(rows, cols);
-            state.dirty = true;
-        }
+        state.update_announcements(lines, seconds);
     }
 }
 
@@ -1527,7 +1519,7 @@ impl vt100::Callbacks for Replies {
 struct State {
     worker: Option<worker::Monitor>,
     context_label: String,
-    announcements: Vec<String>,
+    announcements: announcements::Announcements,
     server_origin: Option<footer::Origin>,
     connection_versions: Option<super::update::ConnectionVersions>,
     guide: Option<guide::Guide>,
@@ -1578,7 +1570,7 @@ impl State {
             events: events::EventView::new(),
             attached_history: None,
             context_label: String::new(),
-            announcements: Vec::new(),
+            announcements: Default::default(),
             server_origin: None,
             connection_versions: None,
             guide: None,
@@ -1804,8 +1796,8 @@ impl State {
         let mut geometry =
             Geometry::new(rows, cols, &self.ui, self.conversation.preferred_input_rows);
         if self.ui.layout == Layout::Chat && rows >= 6 {
-            geometry.banner_rows =
-                (self.announcements.len().min(2) as u16).min(geometry.log_rows.saturating_sub(1));
+            geometry.banner_rows = (self.announcements.visible().count() as u16)
+                .min(geometry.log_rows.saturating_sub(1));
             geometry.log_rows -= geometry.banner_rows;
             geometry.pty_rows = geometry.log_rows;
         }
@@ -2259,6 +2251,7 @@ impl State {
                 self.worker.is_none()
                     && self.ui.layout == Layout::Chat
                     && self.conversation.view == conversation::View::Agents
+                    && !self.announcements.is_reading()
                     && !self.help
                     && !self.sleep.visible,
             );
@@ -2275,7 +2268,8 @@ impl State {
             .image_cells(self.graphics.cell().filter(|_| self.ui.color));
         if self.ui.layout == Layout::Chat {
             let frame = self.chat_frame(now);
-            if !self.help
+            if !self.announcements.is_reading()
+                && !self.help
                 && self.conversation.view == conversation::View::Activity
                 && !self.raw_logs
             {

@@ -726,6 +726,12 @@ impl State {
                 self.conversation.exit_requested = true;
                 self.notice = Some("Closing this client · restoring the terminal".into());
             }
+            "/announcements" => {
+                if !rest.is_empty() {
+                    return Err("Use /announcements without arguments".into());
+                }
+                self.open_announcements()?;
+            }
             "/goal" => self.chat_goal(rest)?,
             "/chsh" => {
                 if self.preview {
@@ -1663,6 +1669,9 @@ impl State {
     fn chat_key(&mut self, key: Key) {
         self.chat_cancel_native_lookup();
         if self.sleep_key(key) {
+            return;
+        }
+        if self.announcement_key(key) {
             return;
         }
         self.events.set_scope(events::EventScope::Conversation);
@@ -2678,7 +2687,7 @@ impl State {
     }
 
     fn chat_output(&mut self, output: &[u8]) {
-        if output.is_empty() {
+        if output.is_empty() || self.announcement_text(output) {
             return;
         }
         if output == b"\x1b[200~" && self.conversation.paste.is_none() {
@@ -2825,7 +2834,7 @@ impl State {
         }
     }
 
-    fn chat_line(&self, text: &str, tone: PanelTone, width: u16) -> String {
+    pub(super) fn chat_line(&self, text: &str, tone: PanelTone, width: u16) -> String {
         let plain = fit(text, width);
         let row = ztuio::Row::measured(&plain, |text| text.width());
         let mut padded =
@@ -3149,6 +3158,9 @@ impl State {
             self.notice = Some(error);
         }
         self.chat_refresh_completions();
+        if let Some(frame) = self.announcement_frame() {
+            return frame;
+        }
         let g = self.geometry;
         let data = self.chat_data();
         let agents = items(&data, "agents");
@@ -3442,11 +3454,7 @@ impl State {
                 );
                 main_status::header(self, &label, status, g.left)
             } else if (1..top).contains(&index) {
-                self.chat_line(
-                    &format!("  {}", self.announcements[usize::from(index - 1)]),
-                    PanelTone::Muted,
-                    g.left,
-                )
+                self.announcement_banner(index - 1, g.left)
             } else if index >= top && index < top + height {
                 body[usize::from(index - top)].clone()
             } else if index == prompt_top(g) && g.input_rows > 0 {
@@ -4688,8 +4696,7 @@ mod tests {
     fn announcements_reserve_rows_under_the_header_without_moving_the_composer() {
         let mut state = preview(24, 100);
         let prompt = prompt_top(state.geometry);
-        state.announcements = vec!["Deployment Friday".into(), "你好，alice".into()];
-        state.resize(24, 100);
+        state.update_announcements([Some("Deployment Friday"), Some("你好，alice")], 0);
         let screen = display(&mut state).screen().contents();
         let lines = screen.lines().collect::<Vec<_>>();
         assert!(lines[0].contains("SSMCP main"));
@@ -4697,9 +4704,86 @@ mod tests {
         assert!(lines[2].contains("你好，alice"));
         assert_eq!(state.geometry.chat_body_top(), 3);
         assert_eq!(prompt_top(state.geometry), prompt);
-        state.announcements.clear();
-        state.resize(24, 100);
+        state.update_announcements([None, None], 0);
         assert_eq!(state.geometry.chat_body_top(), 1);
+    }
+
+    #[test]
+    fn announcement_reader_uses_the_whole_terminal_and_preserves_input() {
+        let mut state = preview(9, 36);
+        let notice = (0..60).map(|n| format!("界{n:02}例 ")).collect::<String>() + "✓";
+        state.update_announcements([Some(&notice), Some("Personal news")], 0);
+        input(&mut state, b"saved draft");
+        input(&mut state, b"\x1b[<0;3;2M");
+        let first = display(&mut state).screen().contents();
+        assert!(first.contains("Server announcement"));
+        assert!(!first.contains("✓") && !first.contains("saved draft"));
+        input(&mut state, b"\x1b[6~");
+        let after_page = display(&mut state).screen().contents();
+        assert_ne!(first, after_page);
+        input(&mut state, b"\x1b[F");
+        assert!(display(&mut state).screen().contents().contains("✓"));
+        input(&mut state, b"\x1b[C");
+        assert!(
+            display(&mut state)
+                .screen()
+                .contents()
+                .contains("Personal news")
+        );
+        input(&mut state, b"\x1b[200~dismiss\x1b[201~");
+        assert_eq!(state.geometry.banner_rows, 2);
+        assert_eq!(state.conversation.composer.text(), "saved draft");
+        input(&mut state, b"\x1b");
+        state.chat_keyboard(&[], Instant::now() + Duration::from_millis(150), true);
+        assert!(
+            display(&mut state)
+                .screen()
+                .contents()
+                .contains("saved draft")
+        );
+        assert_eq!(state.geometry.banner_rows, 2);
+    }
+
+    #[test]
+    fn announcement_reader_replaces_sidebar_and_restores_it_on_close() {
+        let ui = Ui {
+            sidebar: true,
+            ..Ui::default()
+        };
+        let mut state = super::super::preview_state(24, 140, &ui);
+        assert!(state.geometry.left < state.geometry.cols);
+        state.update_announcements([Some("Live notice"), None], 0);
+        input(&mut state, b"/announcements\r");
+        let frame = state.frame(Instant::now());
+        assert!(frame.hidden && frame.mouse_capture);
+        let mut parser = vt100::Parser::new(nonzero(24), nonzero(140), 0);
+        parser.process(&frame.diff(None));
+        let screen = parser.screen().contents();
+        assert!(screen.contains("Live notice") && !screen.contains('│'));
+        input(&mut state, b"\x1b[<0;140;1M");
+        assert!(display(&mut state).screen().contents().contains('│'));
+    }
+
+    #[test]
+    fn announcement_dismissal_survives_clock_updates_and_new_content_returns() {
+        let mut state = preview(12, 64);
+        let clock = |second| format!("A · 1970-01-01T00:00:{second:02}Z · 你好");
+        state.update_announcements([Some("Server news"), Some(&clock(10))], 10);
+        input(&mut state, b"\x1b[<0;3;3Md");
+        assert_eq!(state.geometry.banner_rows, 1);
+        state.update_announcements([Some("Server news"), Some(&clock(40))], 41);
+        assert_eq!(state.geometry.banner_rows, 1);
+        assert!(state.chat_command("/announcements").unwrap());
+        input(&mut state, b"\x1b[C");
+        assert!(display(&mut state).screen().contents().contains(&clock(40)));
+        input(&mut state, b"q");
+        state.update_announcements([Some("Server news"), Some("Published replacement")], 45);
+        assert_eq!(state.geometry.banner_rows, 2);
+        let col = state.geometry.left;
+        input(&mut state, format!("\x1b[<0;{col};2M").as_bytes());
+        assert_eq!(state.geometry.banner_rows, 1);
+        let screen = display(&mut state).screen().contents();
+        assert!(screen.contains("Published replacement") && !screen.contains("Server news"));
     }
 
     #[test]

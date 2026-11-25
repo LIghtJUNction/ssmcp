@@ -216,6 +216,7 @@ zip = { version = "9.8.2", default-features = false, features = ["deflate-flate2
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 png = "0.18"
 getrandom = { version = "0.4.3", default-features = false }
+httpdate = "1"
 libc = "0.2"
 miniz_oxide = "0.9.1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

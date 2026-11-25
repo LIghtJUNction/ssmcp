@@ -374,6 +374,7 @@ struct Api {
 }
 struct Reply {
     status: StatusCode,
+    date: Option<std::time::SystemTime>,
     value: Value,
 }
 
@@ -417,6 +418,10 @@ impl Api {
         if status.is_redirection() {
             return Err("server API redirected the request; credentials were not forwarded".into());
         }
+        let date = response
+            .headers()
+            .get(reqwest::header::DATE)
+            .and_then(|value| httpdate::parse_http_date(value.to_str().ok()?).ok());
         if response
             .content_length()
             .is_some_and(|n| n > RESPONSE_LIMIT as u64)
@@ -445,7 +450,11 @@ impl Api {
                 }
             })?
         };
-        Ok(Reply { status, value })
+        Ok(Reply {
+            status,
+            date,
+            value,
+        })
     }
     fn checked(reply: Reply) -> Result<Value> {
         if !reply.status.is_success() {
@@ -702,17 +711,21 @@ fn same_subject(credential: &Credential, identity: &Value) -> Result<()> {
     Ok(())
 }
 
-async fn account_info(api: &Api, username: &str) -> Result<Value> {
+async fn account_info(api: &Api, username: &str) -> Result<(Value, u64)> {
     let username = crate::username::normalize(username)?;
-    Api::checked(
-        api.request(
+    let reply = api
+        .request(
             Method::GET,
             &format!("/api/client/account/{username}"),
             None,
             None,
         )
-        .await?,
-    )
+        .await?;
+    let seconds = reply
+        .date
+        .and_then(|date| date.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or_else(crate::management::now, |duration| duration.as_secs());
+    Ok((Api::checked(reply)?, seconds))
 }
 
 pub(super) async fn monitor_announcements(server: &str, username: &str) {
@@ -721,15 +734,15 @@ pub(super) async fn monitor_announcements(server: &str, username: &str) {
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         interval.tick().await;
-        if let Ok(Ok(info)) =
+        if let Ok(Ok((info, seconds))) =
             tokio::time::timeout(Duration::from_secs(3), account_info(&api, username)).await
         {
-            let lines = ["server_announcement", "announcement"]
-                .into_iter()
-                .filter_map(|key| info[key].as_str())
-                .filter(|text| !text.is_empty() && text.len() <= 1024)
-                .collect::<Vec<_>>();
-            super::terminal::set_announcements(&lines);
+            let lines = ["server_announcement", "announcement"].map(|key| {
+                info[key]
+                    .as_str()
+                    .filter(|text| !text.is_empty() && text.len() <= 1024)
+            });
+            super::terminal::set_announcements(lines, seconds);
         }
     }
 }
@@ -747,7 +760,7 @@ async fn public_whoami(args: &Arguments, target: Option<&str>) -> Result<()> {
             }
         },
     };
-    let info = account_info(&Api::new(&server)?, &username).await?;
+    let (info, _) = account_info(&Api::new(&server)?, &username).await?;
     if args.json {
         println!("{}", json!({"server": server, "account": info}));
     } else {

@@ -92,6 +92,7 @@ fn local_command(text: &str) -> bool {
             "/message"
                 | "/recipients"
                 | "/help"
+                | "/announcements"
                 | "/version"
                 | "/update"
                 | "/about"

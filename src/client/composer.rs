@@ -62,6 +62,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Show keyboard shortcuts and commands",
     },
     SlashCommand {
+        name: "/announcements",
+        description: "Read announcements full screen or dismiss a banner",
+    },
+    SlashCommand {
         name: "/version",
         description: "Show this client's version",
     },
