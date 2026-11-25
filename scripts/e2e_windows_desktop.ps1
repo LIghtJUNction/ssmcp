@@ -525,6 +525,8 @@ public static class SsmcpWindowProbe {
         if (-not $nonblank) { throw 'The application client area remained blank after its first-present receipt.' }
 
         Assert-LauncherText 'ssmcp '
+        $process.Refresh()
+        $report.launcher_memory = @{ working_set_bytes = $process.WorkingSet64; private_bytes = $process.PrivateMemorySize64 }
         $report.launcher = [ordered]@{ prefilled_command = 'ssmcp '; default_server_clicked = $false }
         Send-LauncherKeys '{END}'
         Send-LauncherKeys 'e2eprobe'
@@ -600,6 +602,12 @@ public static class SsmcpWindowProbe {
             sha256 = (Get-FileHash -LiteralPath $cliPath -Algorithm SHA256).Hash.ToLowerInvariant()
             destination = $argv[1]; argument_count = $argv.Length - 1; start_events = $starts.Count }
         if ($cliHandle.HasExited) { throw 'The verified CLI exited before the window-close test.' }
+        $process.Refresh()
+        $cliHandle.Refresh()
+        $report.cli_started_memory = @{
+            desktop = @{ working_set_bytes = $process.WorkingSet64; private_bytes = $process.PrivateMemorySize64 }
+            cli = @{ working_set_bytes = $cliHandle.WorkingSet64; private_bytes = $cliHandle.PrivateMemorySize64 }
+        }
         if (-not $process.CloseMainWindow()) { throw 'The owned desktop did not accept a normal window close.' }
     }
     if (-not $process.WaitForExit(25000)) { throw 'The bounded desktop process did not exit normally.' }
@@ -610,6 +618,8 @@ public static class SsmcpWindowProbe {
         if (@(Get-OwnedCliStarts).Count -ne 1) { throw 'Unexpected CLI launch count after window closure.' }
         $report.launcher.cli.exited_after_window_close = $true
         $report.launcher.cli.exit_code = $cliHandle.ExitCode
+        . (Join-Path $PSScriptRoot 'windows_desktop_conpty.ps1')
+        $report.conpty = Test-DesktopConPty -Binary $binaryPath -Root $testRoot -Evidence $evidence
         $report.status = 'passed'
     }
 } catch {
