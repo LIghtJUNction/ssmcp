@@ -46,6 +46,112 @@ fn assigned(hub: &Hub, id: &str, token: &str) {
     call.finish(&receipt(json!({"status":"assigned","claim":claim()})));
 }
 
+#[tokio::test(start_paused = true)]
+async fn progress_reminders_follow_fresh_reports_on_the_exact_active_claim() {
+    let hub = Hub::for_session("progress-pool");
+    let (id, token) = member(&hub, "owner", "worker");
+    let (other, other_token) = member(&hub, "owner", "worker");
+    let take = || hub.take_progress_reminder("owner", &id, &token);
+    let record = |operation, result| {
+        let mut call = hub
+            .prepare_native_activity("owner", &id, &token, &operation)
+            .unwrap();
+        call.dispatched();
+        call.finish(&result);
+    };
+    let report = |event: &str, duplicate: bool, reported_claim: Value| {
+        record(
+            native(
+                "worker.report",
+                json!({"claim":reported_claim,"event":event}),
+            ),
+            receipt(json!({"status":"recorded","duplicate":duplicate})),
+        );
+    };
+
+    assert!(take().is_none());
+    assigned(&hub, &id, &token);
+    assert!(
+        hub.take_progress_reminder("owner", &other, &other_token)
+            .is_none()
+    );
+    assert!(
+        hub.take_progress_reminder("owner", &id, &other_token)
+            .is_none()
+    );
+    assert_eq!(
+        take().unwrap(),
+        json!({"client_id":"progress-pool","task_id":"original_task",
+        "slot":0,"epoch":7})
+    );
+    assigned(&hub, &id, &token);
+    assert!(
+        take().is_none(),
+        "wait retry must not repeat the first prompt"
+    );
+
+    let minute = Duration::from_secs(60);
+    tokio::time::advance(minute).await;
+    report("progress", false, claim());
+    tokio::time::advance(minute).await;
+    assert!(
+        take().is_none(),
+        "a fresh real progress receipt resets the timer"
+    );
+    tokio::time::advance(minute - Duration::from_secs(1)).await;
+    report("progress", true, claim());
+    report("command_start", false, claim());
+    let mut wrong = claim();
+    wrong["epoch"] = json!(99);
+    report("progress", false, wrong);
+    record(
+        native("worker.report", json!({"claim":claim(),"event":"progress"})),
+        Err("failed to record".into()),
+    );
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(
+        take().is_some(),
+        "duplicates, commands and failed or unrelated reports cannot reset a claim"
+    );
+    assert!(take().is_none());
+    record(
+        native("worker.complete", json!({"claim":claim()})),
+        receipt(json!({"status":"recorded","claim":claim(),"task":{"status":"completed"}})),
+    );
+    tokio::time::advance(PROGRESS_REMINDER_INTERVAL).await;
+    assert!(take().is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelled_or_uncertain_claims_do_not_request_routine_progress() {
+    for cause in ["cancelled", "retiring", "unknown"] {
+        let hub = Hub::for_session("closing-pool");
+        let (id, token) = member(&hub, "owner", "worker");
+        assigned(&hub, &id, &token);
+        if cause == "unknown" {
+            let op = native("worker.complete", json!({"claim":claim()}));
+            let mut call = hub
+                .prepare_native_activity("owner", &id, &token, &op)
+                .unwrap();
+            call.dispatched();
+            assert!(hub.take_progress_reminder("owner", &id, &token).is_none());
+            call.finish(&Err("connection lost".into()));
+        } else {
+            let op = native("worker.wait", json!({"request_id":"original-wait"}));
+            let mut call = hub
+                .prepare_native_activity("owner", &id, &token, &op)
+                .unwrap();
+            call.dispatched();
+            call.finish(&receipt(json!({"status":"assigned","claim":claim(),
+                "cancel_requested":cause=="cancelled","retire_requested":cause=="retiring"})));
+        }
+        assert!(
+            hub.take_progress_reminder("owner", &id, &token).is_none(),
+            "{cause}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn idle_deadline_notifies_without_any_roster_or_timer_poll() {
     let hub = Hub::for_session("deadline-room");

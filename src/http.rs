@@ -1985,6 +1985,7 @@ fn commit_user_response_inner(
     let mut answers_deferred = Vec::new();
     let mut native_candidates = Vec::new();
     let mut tool_summary_notices = Vec::new();
+    let mut progress_reminders = Vec::new();
     let mut bytes = 0usize;
     let reserve = report.run.user_wait_reserve_bytes();
     let budget = if reserve == 0 {
@@ -2021,6 +2022,18 @@ fn commit_user_response_inner(
         } = target;
         let agent_id = binding.as_ref().map(|binding| binding.agent_id.as_str());
         if !report.run.time_observation_only(session.client_id()) {
+            if progress_reminders.len() < 4
+                && budget.saturating_sub(bytes) >= 2048
+                && let Some(binding) = &binding
+                && let Some(reminder) = session.collaboration.take_progress_reminder(
+                    &owner,
+                    &binding.agent_id,
+                    &binding.token,
+                )
+            {
+                bytes += reminder.to_string().len() + 512;
+                progress_reminders.push(reminder);
+            }
             native_candidates.push((session.clone(), owner.clone(), binding.clone()));
         }
         if !session.chat_enabled() {
@@ -2085,6 +2098,13 @@ fn commit_user_response_inner(
                 answer_acknowledgements.push((session.clone(), revisions));
             }
         }
+    }
+    if !progress_reminders.is_empty() {
+        response["structuredContent"]["worker_progress_reminders"] = json!(progress_reminders);
+        response["content"].as_array_mut().expect("validated content array").push(json!({
+            "type":"text",
+            "text":"WORKER PROGRESS — After a concrete step on your active task, use ssmcp.worker.report with your original claim, event:'progress', and a brief factual update on completed work, current checks, or a real blocker. Use one new request_id per distinct update and reuse it for retries. Report at meaningful milestones during longer tasks."
+        }));
     }
     let response = append_user_messages(response, messages);
     let response = code_mode::tool_summaries::append(response, tool_summary_notices);

@@ -10,6 +10,7 @@ pub(crate) const DEFAULT_MAINTENANCE_BUDGET_MS: u64 = 30_000;
 const OFFLINE_RETENTION: Duration = Duration::from_secs(300);
 const MAX_TRACKED_WORK: usize = 32;
 const MAX_WAKE_KEYS: usize = 128;
+const PROGRESS_REMINDER_INTERVAL: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -139,6 +140,8 @@ impl Claim {
 struct ClaimRecord {
     claim: Claim,
     unknown: bool,
+    stopping: bool,
+    next_progress_reminder: Instant,
 }
 
 #[derive(Clone)]
@@ -796,6 +799,35 @@ impl Hub {
         }
     }
 
+    /// Admit at most one reminder per interval for an authenticated, active claim.
+    /// This is delivery bookkeeping; it never creates a progress event.
+    pub(crate) fn take_progress_reminder(
+        &self,
+        owner: &str,
+        id: &str,
+        token: &str,
+    ) -> Option<Value> {
+        let mut state = self.locked().ok()?;
+        let life = &mut state.authenticated(owner, id, token).ok()?.lifecycle;
+        if life.status != Status::Working
+            || life
+                .operations
+                .values()
+                .any(|op| matches!(op.work, NativeWork::Complete(_)))
+        {
+            return None;
+        }
+        let now = Instant::now();
+        let record = life.claims.values_mut().find(|record| {
+            !record.unknown && !record.stopping && now >= record.next_progress_reminder
+        })?;
+        record.next_progress_reminder = now + PROGRESS_REMINDER_INTERVAL;
+        Some(
+            json!({"client_id":self.session_id,"task_id":record.claim.task_id,
+            "slot":record.claim.slot,"epoch":record.claim.epoch}),
+        )
+    }
+
     pub(crate) fn lifecycle_snapshot(
         &self,
         owner: &str,
@@ -912,6 +944,7 @@ pub(crate) struct NativeActivity<'a> {
     id: String,
     token: String,
     key: Option<String>,
+    progress_claim: Option<Claim>,
     previous: Option<OperationRecord>,
     business: bool,
     answer: bool,
@@ -929,6 +962,7 @@ impl Hub {
         operation: &crate::wire::Operation,
     ) -> Result<NativeActivity<'_>, String> {
         let mut work = None;
+        let mut progress_claim = None;
         let mut business = false;
         let mut answer = false;
         if let crate::wire::Operation::CallTool { name, arguments } = operation {
@@ -944,6 +978,9 @@ impl Hub {
                         format!("wait:{}", fingerprint(request_id.as_bytes())),
                         NativeWork::Wait,
                     ));
+                }
+                "ssmcp.worker.report" if arguments["event"] == "progress" => {
+                    progress_claim = Claim::parse(&arguments["claim"]);
                 }
                 "ssmcp.worker.complete" => {
                     let claim = Claim::parse(&arguments["claim"])
@@ -1024,6 +1061,7 @@ impl Hub {
             id: id.into(),
             token: token.into(),
             key,
+            progress_claim,
             previous,
             business,
             answer,
@@ -1102,6 +1140,22 @@ impl NativeActivity<'_> {
         let life = &mut agent.lifecycle;
         let may_settle_idle = life.revision == self.dispatch_revision;
         let mut changes = Vec::new();
+        if let Some(claim) = &self.progress_claim
+            && self.dispatched
+            && let Some(record) = life.claims.get_mut(&claim.key())
+            && record.claim == *claim
+            && let Some(receipt) = result
+                .and_then(|r| r.as_ref().ok())
+                .filter(|value| value["isError"] != true)
+                .and_then(native_receipt)
+            && receipt["status"] == "recorded"
+        {
+            record.stopping |=
+                receipt["cancel_requested"] == true || receipt["retire_requested"] == true;
+            if receipt["duplicate"] == false {
+                record.next_progress_reminder = now + PROGRESS_REMINDER_INTERVAL;
+            }
+        }
         if let Some(key) = &self.key {
             let Some(mut op) = life.operations.remove(key) else {
                 return;
@@ -1125,13 +1179,16 @@ impl NativeActivity<'_> {
                             if let Some(claim) = Claim::parse(&receipt["claim"]) {
                                 let claim_key = claim.key();
                                 if !life.completed_claims.contains(&claim_key) {
-                                    life.claims.insert(
-                                        claim_key,
-                                        ClaimRecord {
+                                    let record =
+                                        life.claims.entry(claim_key).or_insert(ClaimRecord {
                                             claim,
                                             unknown: false,
-                                        },
-                                    );
+                                            stopping: false,
+                                            next_progress_reminder: now,
+                                        });
+                                    record.unknown = false;
+                                    record.stopping |= receipt["cancel_requested"] == true
+                                        || receipt["retire_requested"] == true;
                                     life.preempt_round(
                                         "native_worker_assigned",
                                         wall,
@@ -1232,6 +1289,8 @@ impl NativeActivity<'_> {
                         .or_insert_with(|| ClaimRecord {
                             claim: claim.clone(),
                             unknown: true,
+                            stopping: false,
+                            next_progress_reminder: now,
                         });
                 }
                 life.operations.insert(key.clone(), op);
