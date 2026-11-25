@@ -3,7 +3,7 @@ use std::{io::Read, path::Path};
 
 const HELP: &str = "Usage: ssmcp cleanup [OPTION]\n\
 \n\
-  (no option)        Clean registered temporary files using the workspace rules\n\
+  (no option)        Clean registered temporary files and eligible managed worktrees\n\
   --dry-run          Report the cleanup without removing files\n\
   --list             List registered managed files\n\
   --config           Show the effective cleanup configuration\n\

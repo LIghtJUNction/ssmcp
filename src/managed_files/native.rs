@@ -42,7 +42,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "ssmcp.files.cleanup",
-            "Preview cleanup by default. Set dry_run=false to remove only registered, eligible temporary files under the current configuration. Protected, changed, unknown and active files are retained. Return the actual cleanup summary, including any errors.",
+            "Preview cleanup by default. Set dry_run=false to clean eligible registered temporary files and released managed Git worktrees under the project rules. Protected, changed, unknown and active files are retained. Return the actual cleanup summary, including any errors.",
             json!({"dry_run":{"type":"boolean","default":true}}),
             &[],
             false,

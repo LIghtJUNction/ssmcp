@@ -543,7 +543,7 @@ test('live UI events preserve selectors and failures without retrying native rea
 
 test('exec.run passes the artifact budget through start and returns the scoped read notice', async () => {
   const artifacts = {
-    directory: '.ssmcp/task-artifacts/0123456789abcdef',
+    directory: '.ssmcp/workspace/jobs/0123456789abcdef',
     logical_bytes: 12,
     soft_limit_bytes: 10,
     incomplete: false,
@@ -554,11 +554,11 @@ test('exec.run passes the artifact budget through start and returns the scoped r
     },
   };
   const record = await run(`
-    return await exec.run('one', {command:['true'],track_artifacts:true,artifact_budget_bytes:10});
+    return await exec.run('one', {command:['true'],track_artifacts:true,artifact_budget_bytes:10,managed_workspace:true});
   `, ({name, arguments: args}) => {
     const snapshot = {job_id:'job',running:false,exit_code:0};
     if (name === 'ssmcp.exec.start') {
-      assert.deepEqual(args, {command:['true'],track_artifacts:true,artifact_budget_bytes:10});
+      assert.deepEqual(args, {command:['true'],track_artifacts:true,artifact_budget_bytes:10,managed_workspace:true});
       return native({job_id:'job',running:true});
     }
     assert.equal(args.job_id, 'job');

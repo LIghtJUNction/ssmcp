@@ -204,6 +204,9 @@ pub struct CleanupSummary {
     pub recoveries: Vec<CleanupRecovery>,
     /// Completed registry metadata maintenance, separate from workspace deletion.
     pub retention: RetentionSummary,
+    /// Git worktrees are registered and released independently from individual files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktrees: Option<serde_json::Value>,
 }
 
 impl CleanupSummary {
@@ -1027,10 +1030,33 @@ pub fn record_created(
 
 pub fn cleanup(root: &Path, dry_run: bool, trigger: &str) -> io::Result<CleanupSummary> {
     label(trigger)?;
-    match ManagedFiles::open_impl(root, false)? {
-        Some(store) => store.cleanup(dry_run, trigger),
-        None => Ok(CleanupSummary::new(dry_run, trigger, false)),
+    let summary = match ManagedFiles::open_impl(root, false)? {
+        Some(store) => store.cleanup(dry_run, trigger)?,
+        None => CleanupSummary::new(dry_run, trigger, false),
+    };
+    #[cfg(unix)]
+    let summary = cleanup_project_worktrees(root, summary);
+    Ok(summary)
+}
+
+#[cfg(unix)]
+fn cleanup_project_worktrees(root: &Path, mut summary: CleanupSummary) -> CleanupSummary {
+    const AREA: &str = ".ssmcp/workspace/worktrees";
+    if summary.busy {
+        return summary;
     }
+    let result = (|| -> io::Result<()> {
+        if root.join(AREA).try_exists()? {
+            let rules = config(root)?;
+            summary.enabled = rules.enabled;
+            summary.worktrees = Some(crate::managed_worktrees::cleanup(root, summary.dry_run, &rules)?);
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        summary.issue(AREA, error);
+    }
+    summary
 }
 
 pub fn list(root: &Path) -> io::Result<Vec<Record>> {
@@ -1211,6 +1237,7 @@ fn protected_path(path: &str) -> bool {
         REGISTRY,
         CONFIG,
         "inputs",
+        "recovery",
         "webhooks.json",
         "skills",
         "config",
