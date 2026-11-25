@@ -342,15 +342,25 @@ fn history_safe(project: &Project, id: &str, base: &str, deadline: Instant) -> i
     )?;
     let mut args = vec!["rev-list", "--max-count=1"];
     args.extend(commits);
+    let positives = args.len();
     args.extend(["--not", "HEAD", "--"]);
     ensure(
         git::run(&project.root, &args, deadline)?.is_empty(),
         "worktree contains commits outside project HEAD",
+    )?;
+    // A detached project HEAD can temporarily visit an otherwise unanchored
+    // commit. Preserve new worktree history until a branch or tag also covers it.
+    args.truncate(positives);
+    args.extend(["--not", base, "--branches", "--tags", "--"]);
+    ensure(
+        git::run(&project.root, &args, deadline)?.is_empty(),
+        "new worktree commits have no local branch or tag",
     )
 }
 
 struct GitLock {
     path: PathBuf,
+    _file: File,
     id: Identity,
 }
 impl GitLock {
@@ -359,6 +369,7 @@ impl GitLock {
         Ok(Self {
             path,
             id: identity(&file.metadata()?),
+            _file: file,
         })
     }
     fn matches(&self, path: &Path) -> bool {

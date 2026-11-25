@@ -153,6 +153,14 @@ fn detached_commits_survive_reset_until_merged_into_the_project() {
     assert_eq!(f.cleanup(false)["eligible"], 0);
     f.git(&path, &["reset", "--hard", "HEAD^"]);
     assert_eq!(f.cleanup(false)["eligible"], 0);
+    let branch = f.git(&f.0, &["symbolic-ref", "--short", "HEAD"]);
+    f.git(&f.0, &["checkout", "--detach", &tip]);
+    assert_eq!(
+        f.cleanup(false)["eligible"],
+        0,
+        "a detached project HEAD is not a durable ref"
+    );
+    f.git(&f.0, &["checkout", &branch]);
     f.git(&f.0, &["merge", "--ff-only", &tip]);
     assert_eq!(f.cleanup(false)["removed"], 1);
 }
