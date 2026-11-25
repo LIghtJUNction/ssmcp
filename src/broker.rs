@@ -848,6 +848,7 @@ pub struct Broker {
     pub identities: IdentityProviders,
     pub portal: crate::portal::Portal,
     pub(crate) relay_access: Option<RelayAccess>,
+    pub(crate) relay_accounting: Option<crate::portal::relay_accounting::Accounting>,
     pub client_downloads: Option<crate::client_downloads::Publisher>,
     /// The foreground local host owns a private runner from the same binary.
     /// Remote servers keep their installed runner and existing runtime checks.
@@ -917,6 +918,7 @@ impl Broker {
             session_io: session_io::Hub::default(),
             portal: crate::portal::Portal::default(),
             relay_access: None,
+            relay_accounting: None,
             client_downloads: None,
             code_mode_runner: None,
             management: None,
@@ -936,9 +938,13 @@ impl Broker {
     }
 
     /// Provision a headless relay. Serve it with `http::relay_router`.
-    pub fn headless(public_url: String, access: RelayAccess) -> crate::Result<Self> {
+    pub fn headless(public_url: String, mut access: RelayAccess) -> crate::Result<Self> {
         access.validate()?;
         let mut broker = Self::with_oauth_config(public_url, crate::oauth::OAuthConfig::default())?;
+        if let Some(config) = access.accounting.take() {
+            broker.relay_accounting =
+                Some(crate::portal::relay_accounting::Accounting::open(config)?);
+        }
         broker.relay_access = Some(access);
         Ok(broker)
     }

@@ -11,6 +11,8 @@ use subtle::ConstantTimeEq;
 pub struct RelayAccess {
     device_ingress_sha256: String,
     principals: BTreeMap<String, String>,
+    #[serde(default)]
+    pub(super) accounting: Option<crate::portal::relay_accounting::Config>,
 }
 
 impl RelayAccess {
@@ -34,6 +36,9 @@ impl RelayAccess {
             return Err(
                 "relay requires canonical principal names and distinct SHA-256 digests".into(),
             );
+        }
+        if let Some(config) = &self.accounting {
+            config.validate(&self.principals, &self.device_ingress_sha256)?;
         }
         Ok(())
     }

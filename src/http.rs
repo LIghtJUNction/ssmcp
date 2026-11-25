@@ -72,6 +72,9 @@ pub fn relay_router(broker: Arc<Broker>) -> Router {
     );
     Router::new()
         .merge(crate::device::relay_routes())
+        .merge(crate::portal::relay_accounting::routes(
+            broker.relay_accounting.is_some(),
+        ))
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/mcp", any(relay_endpoint))
         .with_state(broker)

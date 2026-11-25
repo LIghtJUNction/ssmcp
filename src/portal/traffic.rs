@@ -272,16 +272,24 @@ pub(super) struct TrafficLedger {
 }
 
 impl TrafficLedger {
+    #[cfg(test)]
     pub(super) fn open(directory: &File) -> crate::Result<Self> {
+        Self::open_for_store(directory, false)
+    }
+
+    pub(super) fn open_for_store(directory: &File, established: bool) -> crate::Result<Self> {
         let dir = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
         let mut file = OpenOptions::new()
             .read(true)
             .append(true)
-            .create(true)
+            .create(!established)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(dir.join(FILE_NAME))?;
         private_file(&file)?;
+        if established && file.metadata()?.len() == 0 {
+            return Err("established external accounting journal is empty".into());
+        }
         if file.metadata()?.len() > MAX_JOURNAL {
             return Err("traffic journal exceeds its bounded storage limit".into());
         }
@@ -367,6 +375,50 @@ impl TrafficLedger {
             failed: false,
             version,
         })
+    }
+
+    pub(super) fn external_subjects(&self) -> impl Iterator<Item = &String> {
+        self.state.periods.values().flat_map(BTreeMap::keys)
+    }
+
+    pub(super) fn has_grant(&self, order: &str) -> bool {
+        self.state.orders.contains_key(order)
+    }
+
+    pub(super) fn check_external_limits(&self, free: u64) -> Result<(), Problem> {
+        if self
+            .state
+            .periods
+            .values()
+            .flat_map(BTreeMap::values)
+            .any(|usage| usage.paid_bytes.checked_add(free).is_none())
+        {
+            return Err(Problem::Limit);
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_external_grant(
+        &self,
+        subject: &str,
+        period: &str,
+        order: &str,
+        bytes: u64,
+        free: u64,
+    ) -> Result<(), Problem> {
+        if !self.state.orders.contains_key(order) {
+            self.state
+                .usage(subject, period)
+                .paid_bytes
+                .checked_add(bytes)
+                .and_then(|amount| amount.checked_add(free))
+                .ok_or(Problem::Limit)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn paid_subjects(&self) -> impl Iterator<Item = &String> {
+        self.state.orders.values().map(|grant| &grant.subject)
     }
 
     pub(super) fn snapshot(

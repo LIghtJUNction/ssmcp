@@ -77,9 +77,51 @@ curl --fail-with-body https://relay.example.com/mcp \
 
 继续使用 MCP 的 `code_mode`、`await` 等能力。由设备发布的工具 schema 为准，执行结果保留原始任务与错误语义。HTTP 401 表示凭据缺失或无效，跨身份不可见的设备不会出现在目录中。配置在启动时加载，变更身份或轮换凭据需要重启中继，设备会重新连接。 [Code Mode](code-mode.md) · [设备路由](device-control-plane.md)
 
-## 可选商业功能
+## 外部账户和月流量账单
 
-接入现有网站时，可以在站点后端根据订阅、付款回执或自己的配额决定是否发送 MCP 请求。支付回调和账本由网站实现，命令中继无需支付密钥。如果希望使用 SSMCP 自带的门户、账户流量和购买流程，选择标准网关配置，并显式启用 `[commerce]`。中继模式下没有内置支付或账户配额管理 API。 [标准配置](../packaging/ssmcpd.toml.example)
+网站负责登录、确认买家、收款和持久保存订单。中继按实际控制身份分别累计上下行字节，以两者中的较大值加旧格式历史用量计入当月账单。网站后端可读取该月余额，并为已核验的订单发放流量包。
+
+可在现有 `[relay]` 配置中增加下表。网站运营方从身份数据库核对每个账户的固定数字 ID，将其绑定到同名的已配置 external principal。CLI 沿用 `ssmcp alice@api.lmm.best`。更改显示名不会自动改变到账账户。每个中继最多保留 4096 个绑定；删除活跃配置后，原名称及数字 ID 仍保留给原绑定。新增用户按相同规则登记，重启中继加载配置。
+
+```toml
+[relay.accounting]
+issuer = "https://api.lmm.best"
+state_dir = "/var/lib/ssmcpd/lmm-accounting"
+service_token_sha256 = "<专用账务凭据原文的 SHA-256>"
+utc_offset_minutes = 480
+free_monthly_bytes = 1000000000
+paid_monthly_bytes = 1000000000
+
+[relay.accounting.users]
+alice = "123"
+bob = "456"
+```
+
+`users` 必须覆盖此中继的全部 principals，一个名称对应一个数字 ID。专用账务凭据为随机的 64 位小写十六进制字符串，与控制、设备凭据分别生成。状态目录专供本套账务使用，属主为服务用户，权限为 0700；已建立的目录固定绑定 issuer 和月界 UTC 偏移。标准网关的本地收款沿用独立的 `[commerce]` 配置。
+
+### 后端接口
+
+两个内部 POST 路由使用中继的 HTTP 监听器，接收 `Content-Type: application/json` 和 `Authorization: Bearer <账务凭据>`。同机服务可通过 loopback 直接访问，跨主机服务使用受限的私有 HTTPS 入口。公网反代仅开放客户端实际需要的路径，账务凭据留在网站后端。
+
+| 路径 | 请求 | 成功响应 |
+| --- | --- | --- |
+| `/internal/v1/ssmcp/quota` | `{"user_id":"123"}` | 返回该固定账户的月用量、当月可用额度和下次恢复时间 |
+| `/internal/v1/ssmcp/entitlements` | `{"user_id":"123","order_id":"purchase-26","period":"2026-11","bytes":"1000000000"}` | 返回原四个字段及 `status`。首次持久到账为 `granted`，相同订单的重放为 `replayed` |
+
+月用量响应示例：
+
+```json
+{
+  "user_id":"123","username":"alice","period":"2026-11","utc_offset_minutes":480,
+  "reset_at":1796054400,"free_bytes":"1000000000","paid_bytes":"1000000000",
+  "used_bytes":"30","uploaded_bytes":"8","downloaded_bytes":"30","legacy_used_bytes":"0",
+  "limit_bytes":"2000000000","remaining_bytes":"1999999970"
+}
+```
+
+字节数量和用户 ID 均为规范十进制字符串，`reset_at` 是下月开始时的 Unix 秒。服务端按自身时钟取自然月，已到账流量包随该月结束。首次有效购买进入持久的付费档位，之后的月份按 `paid_monthly_bytes` 发放赠送额。
+
+网站后端将受信订单的固定用户 ID、月、流量和唯一订单号一起持久保存，再请求到账。订单号长 1–128 个字符，允许 ASCII 字母、数字、连字符、下划线和点。超时或返回 503 时保留原订单并用原数据重试。相同订单跨月重放仍可核对原回执；首次跨月发放返回 409 `period_mismatch`，交由网站按该订单处理退款或人工核对。订单号相同而字段不同返回 409 `order_conflict`。字节数和订单数达到存储边界返回 409 `ledger_limit`。401 表示服务凭据无效，404 表示账户未绑定或接口未启用，400 表示请求格式无效。此协议负责发放已确认的当月权益；退款与扣回需要网站单独处理。
 
 ## Rust 嵌入
 
