@@ -160,8 +160,8 @@ fn shortcuts(hint_kind: Hint, width: u16, status: &str) -> String {
         ],
         Hint::Conversation => [
             "↑↓ select · Enter expand · f full-screen tool · PgUp/PgDn scroll · Alt+C select/copy · Tab input",
-            "Enter expand · f full-screen tool · Alt+C select/copy · Tab input",
-            "f full-screen tool · Tab input",
+            "Enter expand · f full-screen tool · Tab input",
+            "Enter expand · f tool · Tab",
         ],
         Hint::Audit => [
             "Alt+C select/copy · ↑↓ browse · Enter details · PgUp/PgDn scroll · ←/→ panels · Tab input",
@@ -283,6 +283,9 @@ mod tests {
         let empty = shortcuts(Hint::EmptyInput, 100, "connected");
         assert!(empty.contains("@ files") && empty.contains("$ skills"));
         assert!(empty.contains("Alt+↑/↓ input height") && empty.contains("Alt+C select/copy"));
+        assert!(shortcuts(Hint::Conversation, 32, "").contains("Enter expand"));
+        let narrow = shortcuts(Hint::Conversation, 48, "");
+        assert!(narrow.contains("Enter expand") && narrow.contains("f full-screen tool"));
         let queue = shortcuts(Hint::Queue, 100, "connected");
         assert!(queue.contains("i inspect") && queue.contains("Delete cancel"));
         let delivered = shortcuts(Hint::QueueInspect, 100, "connected");
