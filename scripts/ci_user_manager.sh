@@ -47,7 +47,7 @@ release_smoke() (
     account="ssmcp-ci-${BASHPID}-${RANDOM}"
     local added=false configured=false new_dir=false linger=false
     # Invoked on both success and failure by the EXIT trap below.
-    # shellcheck disable=SC2329
+    # shellcheck disable=SC2317,SC2329
     cleanup() {
         local status=$?
         trap - EXIT
