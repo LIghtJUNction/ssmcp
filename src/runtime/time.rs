@@ -15,6 +15,8 @@ use crate::{
     wire::ControlAttribution,
 };
 pub(crate) use execution::ExecutionTiming;
+#[cfg(target_os = "linux")]
+pub(crate) use prompts::UNKNOWN_PROMPT_TIMER;
 pub(crate) use prompts::{PromptStatus, PromptSummary};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

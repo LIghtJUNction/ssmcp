@@ -64,6 +64,7 @@ struct Call {
     authorization: Option<Authorization>,
     binding: Option<crate::code_mode::RunBinding>,
     traffic_failure: TrafficFailureState,
+    native_prompt_lookup_error: Option<Arc<AtomicBool>>,
     reply: oneshot::Sender<CallResult>,
 }
 
@@ -75,6 +76,7 @@ struct PendingCall {
     subject: Option<String>,
     binding: Option<crate::code_mode::RunBinding>,
     traffic_failure: TrafficFailureState,
+    native_prompt_lookup_error: Option<Arc<AtomicBool>>,
 }
 
 // Rate-limit waits belong to a request, never to the shared device read loop.
@@ -473,6 +475,7 @@ impl Session {
                         openai_context: None,
                         authorization: None,
                         binding: None,
+                        native_prompt_lookup_error: None,
                         traffic_failure: TrafficFailureState::default(),
                         reply,
                     })
@@ -680,6 +683,12 @@ impl Session {
         if let Some(member) = prompt_mutation {
             self.prompt_interests.dispatched(member);
         }
+        let native_prompt_lookup_error = prompt_mutation.and_then(|_| match &operation {
+            Operation::CallTool { arguments, .. } if arguments["action"] != "schedule" => {
+                Some(Arc::new(AtomicBool::new(false)))
+            }
+            _ => None,
+        });
         let (reply, response) = oneshot::channel();
         if self
             .sender
@@ -692,6 +701,7 @@ impl Session {
                 authorization: authorization.cloned(),
                 binding: binding.clone(),
                 traffic_failure: call_traffic.clone(),
+                native_prompt_lookup_error: native_prompt_lookup_error.clone(),
                 reply,
             })
             .is_err()
@@ -747,9 +757,15 @@ impl Session {
         };
         // A dropped future or unconfirmed outcome leaves its generation in flight.
         if let Some(member) = prompt_mutation
-            && result
+            && (result
                 .as_ref()
                 .is_ok_and(crate::http::prompt_hooks::valid_native_receipt)
+                || (result
+                    .as_ref()
+                    .is_err_and(|err| err == crate::runtime::time::UNKNOWN_PROMPT_TIMER)
+                    && native_prompt_lookup_error
+                        .as_ref()
+                        .is_some_and(|proof| proof.load(Ordering::Relaxed))))
         {
             self.prompt_interests.confirmed(member);
         }
@@ -1753,7 +1769,7 @@ impl Broker {
                             let run_id = call.code_context.as_ref().map(|context| context.run_id.clone());
                             let frame = Frame::Call { id:next_id, operation:call.operation, controller:call.controller, attribution:if control_attribution {call.attribution.map(Box::new)} else {None}, code_context:call.code_context, openai_context:if openai_context_supported {call.openai_context} else {None} };
                             let bytes = serde_json::to_vec(&frame)?.len() + 1;
-                            let mut queued = PendingCall { reply:call.reply, deadline, reload, authorization:call.authorization, subject, binding:call.binding, traffic_failure:call.traffic_failure };
+                            let mut queued = PendingCall { reply:call.reply, deadline, reload, native_prompt_lookup_error:call.native_prompt_lookup_error, authorization:call.authorization, subject, binding:call.binding, traffic_failure:call.traffic_failure };
                             let broker = self.clone();
                             let target = session.clone();
                             let id = next_id;
@@ -1802,6 +1818,13 @@ impl Broker {
                             }
                             if call.reload && result.as_ref().is_ok_and(crate::client::reload::accepted) {
                                 timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::ReloadCommit { id })).await??;
+                            }
+                            // This sidecar proves the rejection came from the matched native
+                            // frame. Local timeouts, billing failures and disconnects bypass it.
+                            if let Some(proof) = &call.native_prompt_lookup_error
+                                && result.is_err()
+                            {
+                                proof.store(true, Ordering::Relaxed);
                             }
                             let _ = call.reply.send(result);
                         }

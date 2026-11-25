@@ -8,6 +8,8 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use tokio::time::Instant;
 
 pub(crate) const TOOL: &str = "ssmcp.time.prompt";
+pub(crate) const UNKNOWN_PROMPT_TIMER: &str =
+    "unknown prompt timer for this exact caller and native connection";
 const MAX_SCHEDULES: usize = 32;
 const MAX_RECORDS: usize = 128;
 const MAX_TEMPLATE_BYTES: usize = 8192;
@@ -576,9 +578,7 @@ impl State {
         self.records
             .get_mut(id)
             .filter(|record| &record.owner == owner)
-            .ok_or_else(|| {
-                "unknown prompt timer for this exact caller and native connection".into()
-            })
+            .ok_or_else(|| UNKNOWN_PROMPT_TIMER.into())
     }
 
     fn request(

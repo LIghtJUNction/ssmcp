@@ -410,6 +410,7 @@ impl Fixture {
                                         json!({"schedule":{"id":"prompt_fixture","status":"completed"}}),
                                     )
                                 }
+                                Some("cancel") => Value::Null,
                                 Some("ack") => {
                                     assert_eq!(arguments["timer_id"], "prompt_fixture");
                                     assert_eq!(arguments["event_id"], "prompt_fixture_event_1");
@@ -550,6 +551,14 @@ impl Fixture {
                                 "time timer is unknown, expired, or belongs to another caller"
                                     .into(),
                             )
+                        } else if name == "ssmcp.time.prompt" && arguments["action"] == "cancel" {
+                            match arguments["timer_id"].as_str().unwrap() {
+                                "missing" => Err(crate::runtime::time::UNKNOWN_PROMPT_TIMER.into()),
+                                "unknown_outcome" => {
+                                    Err("prompt worker stopped; outcome unknown".into())
+                                }
+                                _ => panic!("unexpected fixture timer"),
+                            }
                         } else if name == "fixture.error" {
                             Err("synthetic native failure".into())
                         } else {

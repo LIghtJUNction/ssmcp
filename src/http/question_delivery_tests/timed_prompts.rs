@@ -245,3 +245,60 @@ async fn confirmed_schedule_and_ack_return_member_to_quiet_delivery() {
     }
     assert_eq!(fixture.native.lock().unwrap().prompt_reads, 5);
 }
+
+#[tokio::test]
+async fn a_rejected_clock_lookup_settles_only_its_own_pending_mutation() {
+    let fixture = Fixture::with_timing(true).await;
+    fixture.native.lock().unwrap().prompt_reply = Some(read_reply(json!([]), true));
+    fixture
+        .native_call(fixture.run(), prompt_hooks::TOOL)
+        .await
+        .unwrap();
+    let observe =
+        || fixture.public_await(json!({"targets":[{"type":"job","id":"lookup_failure_case"}]}));
+    observe().await;
+    let host = code_host(
+        fixture.broker.clone(),
+        "mcp".into(),
+        fixture.token.clone(),
+        fixture.run(),
+        None,
+        "rejected prompt lookup".into(),
+        Default::default(),
+    );
+    let cancel = |id: &str| {
+        host(HostRequest::Call {
+            client_id: fixture.session.client_id().into(),
+            name: prompt_hooks::TOOL.into(),
+            arguments: json!({"action":"cancel","timer_id":id}),
+        })
+    };
+    let missing = cancel("missing").await.unwrap_err();
+    assert_eq!(missing, crate::runtime::time::UNKNOWN_PROMPT_TIMER);
+    let error = code_mode::tool_result(Err(missing));
+    assert_eq!(error["isError"], true);
+    assert_eq!(
+        error["content"][0]["text"],
+        crate::runtime::time::UNKNOWN_PROMPT_TIMER
+    );
+    for _ in 0..8 {
+        observe().await;
+    }
+    // Bootstrap and initial reconciliation (2), one reconciliation after the
+    // rejection, and no empty reads on the following seven outer responses.
+    assert_eq!(fixture.native.lock().unwrap().prompt_reads, 3);
+
+    assert_eq!(
+        cancel("unknown_outcome").await.unwrap_err(),
+        "prompt worker stopped; outcome unknown"
+    );
+    assert_eq!(
+        cancel("missing").await.unwrap_err(),
+        crate::runtime::time::UNKNOWN_PROMPT_TIMER
+    );
+    for _ in 0..3 {
+        observe().await;
+    }
+    // A second definitive rejection cannot settle a different unknown dispatch.
+    assert_eq!(fixture.native.lock().unwrap().prompt_reads, 6);
+}
