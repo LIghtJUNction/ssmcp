@@ -927,6 +927,7 @@ fn two_hour_advice_is_strict_and_once_per_epoch_and_human_shrink_ranks_all_durat
     let notices = q.overwork_notices(edge + std::time::Duration::from_millis(1), 4);
     assert_eq!(notices.len(), 1);
     assert!(notices[0].contains("waiting for build") && notices[0].contains("over 2h"));
+    assert!(notices[0].find("/worker -").unwrap() < notices[0].find("waiting for build").unwrap());
     assert!(
         q.overwork_notices(edge + std::time::Duration::from_secs(2), 5)
             .is_empty()
@@ -948,6 +949,32 @@ fn two_hour_advice_is_strict_and_once_per_epoch_and_human_shrink_ranks_all_durat
         0,
         "longest wins even below two hours"
     );
+}
+
+#[test]
+fn simultaneous_two_hour_advisories_share_one_banner_and_retain_each_station_report() {
+    let q = queue(2);
+    q.remote_ready().unwrap();
+    for i in 0..2 {
+        q.claim_remote(&actor(&format!("w{i}")), 1).unwrap();
+        let mut state = q.state.lock().unwrap();
+        state.slots[i].total_work_ms = telemetry::TWO_HOURS_MS + 1;
+        state.slots[i].progress = Some(format!("progress-{i}"));
+    }
+    let now = Instant::now();
+    let batch = q.overwork_notices(now, 2);
+    assert_eq!(batch.len(), 1);
+    assert!(batch[0].contains("2 workers") && batch[0].contains("#01, #02"));
+    assert!(q.overwork_notices(now, 3).is_empty());
+    for (i, s) in q.snapshot().slots.iter().enumerate() {
+        assert_eq!(
+            s.logs
+                .iter()
+                .filter(|log| log.text.contains(&format!("progress-{i}")))
+                .count(),
+            1
+        );
+    }
 }
 
 #[test]

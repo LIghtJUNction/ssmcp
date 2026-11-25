@@ -168,7 +168,8 @@ pub(super) fn total_at(slot: &Slot, now: Instant) -> u64 {
 impl<T: Clone> Queue<T> {
     pub(crate) fn overwork_notices(&self, now: Instant, wall_ms: u64) -> Vec<String> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let mut notices = Vec::new();
+        let mut banner = None;
+        let mut slots = Vec::new();
         for (index, slot) in state.slots.iter_mut().enumerate() {
             if !slot.enabled
                 || slot.registered.is_none()
@@ -184,17 +185,35 @@ impl<T: Clone> Queue<T> {
                 .or(slot.last_command.as_deref())
                 .unwrap_or("no progress report");
             let notice = format!(
-                "Worker #{:02} has over 2h of assigned work. Latest: {}. Consider /worker - to request retirement; repeat to remove the same pending station. Unconfirmed work becomes unknown.",
+                "Worker #{:02} has over 2h assigned. Consider /worker - to retire. Latest report · {}. A second /worker - can force the pending station offline and leave unfinished work unknown.",
                 index + 1,
                 display_text(latest, 100)
             );
             log(slot, wall_ms, "warning", &notice, None);
-            notices.push(notice);
+            if banner.is_none() {
+                banner = Some(notice);
+            }
+            slots.push(index + 1);
         }
-        if !notices.is_empty() {
+        if slots.len() > 1 {
+            // The dashboard has one banner. Keep each progress report in the
+            // station log and show the whole new count in a single banner.
+            let labels = slots
+                .iter()
+                .take(4)
+                .map(|n| format!("#{n:02}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = if slots.len() > 4 { ", …" } else { "" };
+            banner = Some(format!(
+                "{} workers have over 2h assigned. Consider /worker - to retire the longest. See {labels}{more} in the 2h+ tabs for their latest reports.",
+                slots.len()
+            ));
+        }
+        if banner.is_some() {
             self.changed(&mut state);
         }
-        notices
+        banner.into_iter().collect()
     }
 }
 
