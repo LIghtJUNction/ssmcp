@@ -901,10 +901,23 @@ impl Runtime {
                 .push(json!({"type":"ssmcp.control.started","call_id":call_id,
                 "provider":tool.provider.label(),"tool":name,"generation":tool.generation}));
         }
-        let skill_path = arguments
+        let requested_path = arguments
             .get("path")
             .and_then(Value::as_str)
             .map(str::to_owned);
+        let station_read = if tool.provider == Provider::Workspace
+            && matches!(
+                tool.native_name.as_str(),
+                "ssmcp.fs.read" | "ssmcp.fs.read_text" | "ssmcp.fs.read_image"
+            ) {
+            self.workers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+                .and_then(|pool| pool.file_read_ticket(&source).map(|ticket| (pool, ticket)))
+        } else {
+            None
+        };
         let mut observation = self.time.observe(&name, &arguments, &source);
         let dispatched = async {
             match tool.provider {
@@ -976,6 +989,13 @@ impl Runtime {
             waiting.finish(&outcome, observation_stopped);
         }
         drop(observation);
+        if let Some((pool, ticket)) = station_read
+            && outcome.as_ref().is_ok_and(|value| value["isError"] != true)
+            && let Some(path) = requested_path.as_deref()
+        {
+            pool.queue
+                .finish_file_read(ticket, path, crate::worker::now_ms());
+        }
         if control {
             self.audit
                 .push(json!({"type":"ssmcp.control.completed","call_id":call_id,
@@ -1004,7 +1024,7 @@ impl Runtime {
             } else if name == "ssmcp.skills.read" {
                 self.audit.push(
                     json!({"type":"ssmcp.skill.read","tool":name,"root":native["root"],
-                    "path":native.get("path").cloned().unwrap_or_else(||json!(skill_path)),
+                    "path":native.get("path").cloned().unwrap_or_else(||json!(requested_path)),
                     "scope":"ssmcp context operation","invoked":false}),
                 );
             }
@@ -1178,6 +1198,107 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[tokio::test]
+    async fn station_notes_only_successful_native_file_reads_on_the_claimant_runtime() {
+        use crate::wire::{CodeContext, ControlAccount, ControlAgent, ControlAttribution};
+        let root = ManagedCleanupRoot::new();
+        crate::client::interface::history::with_test_history(root.0.join("history"), async {
+            let runtime = root.runtime().await;
+            runtime
+                .configure_workers(
+                    crate::worker::Config {
+                        count: 1,
+                        factor: 1.0,
+                    },
+                    &crate::client::chat_io::Agent::Remote,
+                )
+                .unwrap();
+            runtime.start_workers();
+            let client = "b".repeat(64);
+            let scope = |id: &str| {
+                let agent = format!("agent_{}", id.repeat(32));
+                call_scope::CallScope::from_relay_for_client(
+                    82,
+                    Some(&client),
+                    1,
+                    Some(&ControlAttribution {
+                        account: ControlAccount {
+                            provider: "github".into(),
+                            subject: "1".into(),
+                            login: "fixture".into(),
+                        },
+                        agent: Some(ControlAgent {
+                            id: agent.clone(),
+                            name: "fixture".into(),
+                        }),
+                        owner: None,
+                    }),
+                    Some(&CodeContext {
+                        run_id: "a".repeat(32),
+                        code: "fixture".into(),
+                        timestamp_ms: 1,
+                        session_id: Some(client.clone()),
+                        thread_id: Some(agent),
+                    }),
+                )
+                .unwrap()
+            };
+            let manager = scope("1");
+            let worker = scope("2");
+            let call = |name: &str, arguments| {
+                runtime.perform(Operation::CallTool {
+                    name: name.into(),
+                    arguments,
+                })
+            };
+            manager
+                .scope(call(
+                    "ssmcp.worker.submit",
+                    json!({"request_id":"native-read","text":"Read the test file"}),
+                ))
+                .await
+                .unwrap();
+            let claim = worker
+                .scope(call(
+                    "ssmcp.worker.wait",
+                    json!({"request_id":"take","wait_ms":0}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(claim["structuredContent"]["status"], "assigned");
+            std::fs::write(root.0.join("file.txt"), "private test content").unwrap();
+            worker
+                .scope(call("ssmcp.fs.read_text", json!({"path":"file.txt"})))
+                .await
+                .unwrap();
+            let failed = worker
+                .scope(call("ssmcp.fs.read_text", json!({"path":"missing.txt"})))
+                .await;
+            assert!(failed.is_err() || failed.unwrap()["isError"] == true);
+            manager
+                .scope(call("ssmcp.fs.read_text", json!({"path":"file.txt"})))
+                .await
+                .unwrap();
+            let response = manager
+                .scope(call("ssmcp.worker.station_state", json!({"slot":0})))
+                .await
+                .unwrap();
+            let reads = response["structuredContent"]["read_paths"]
+                .as_array()
+                .unwrap();
+            assert_eq!(reads.len(), 1);
+            assert_eq!(reads[0]["path"], "file.txt");
+            assert_eq!(reads[0]["source"], "native");
+            assert_eq!(
+                reads[0]["task_id"],
+                claim["structuredContent"]["claim"]["task_id"]
+            );
+            assert!(!response.to_string().contains("private test content"));
+            runtime.shutdown().await;
+        })
+        .await;
     }
 
     #[tokio::test]

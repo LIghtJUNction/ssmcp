@@ -5,6 +5,7 @@ use super::*;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ReportEvent {
+    FileRead,
     CommandStart,
     CommandEnd,
     Progress,
@@ -30,10 +31,11 @@ impl ReportUpdate {
             return Err("worker activity fields must be nonempty, bounded text without NUL".into());
         }
         match self.event {
+            ReportEvent::FileRead if self.command.is_none() && self.progress.is_none() && self.detail.as_deref().is_some_and(station::valid_path) => Ok(()),
             ReportEvent::CommandStart if self.command.is_some() && self.progress.is_none() && self.detail.is_none() => Ok(()),
             ReportEvent::CommandEnd if self.command.is_some() && self.progress.is_none() => Ok(()),
             ReportEvent::Progress if self.progress.is_some() && self.command.is_none() && self.detail.is_none() => Ok(()),
-            _ => Err("command_start requires command; command_end requires command and optional detail; progress requires progress only".into()),
+            _ => Err("file_read requires a relative workspace path in detail; command_start requires command; command_end requires command and optional detail; progress requires progress only".into()),
         }
     }
 }
@@ -52,6 +54,15 @@ impl<T: Clone> Queue<T> {
         }
         let slot = &mut state.slots[lease.slot];
         let text = match update.event {
+            ReportEvent::FileRead => {
+                slot.notebook.read(
+                    update.detail.as_deref().expect("validated path"),
+                    "self_reported",
+                    &lease.task_id,
+                    now_ms,
+                );
+                "Worker reported a file read".into()
+            }
             ReportEvent::CommandStart => {
                 let command = display_text(update.command.as_deref().unwrap_or_default(), 768);
                 slot.last_command = Some(command.clone());
@@ -81,7 +92,12 @@ impl<T: Clone> Queue<T> {
             &mut state,
             "worker.progress",
             &lease.task_id,
-            Some(update.event.clone()),
+            // Older relays accept only these established journal activity kinds.
+            // The station notebook retains the specific read path and provenance.
+            Some(match update.event {
+                ReportEvent::FileRead => ReportEvent::Progress,
+                _ => update.event.clone(),
+            }),
             now_ms,
         );
         self.changed(&mut state);

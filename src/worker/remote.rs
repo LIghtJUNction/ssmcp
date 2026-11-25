@@ -9,7 +9,7 @@ use std::{
 };
 
 const MAX_RECEIPTS: usize = 128;
-pub(super) const WAIT_HINT: &str = "An active claim stays working during dependencies. After genuine idle wait for the configured deadline. In Dreaming, only after 30 continuous minutes may you ask the coordinator once for human approval to go offline; reuse pending requests. A refusal starts a fresh 30-minute wait. A new claim requires working immediately. Without a claim, propose a chore for the coordinator queue before starting effects. Otherwise use worker notifications or ssmcp.worker.wait with a blocking wait up to 55000 ms. Reuse the original request_id while pending; use a new ID after confirmed completion. Timeout does not finish a task. Inspect unknown outcomes without replay.";
+pub(super) const WAIT_HINT: &str = "An active claim stays working during dependencies. After genuine idle wait for the configured deadline. In Dreaming, only after 30 continuous minutes may you ask the coordinator once for human approval to go offline; reuse pending requests. A refusal starts a fresh 30-minute wait. A new claim requires working immediately. An idle worker can request an independent split from a share_candidates task with worker.share; wait for a separate manager-submitted claim. Without a claim, propose a chore for the coordinator queue before starting effects. Otherwise use worker notifications or ssmcp.worker.wait with a blocking wait up to 55000 ms. Reuse the original request_id while pending; use a new ID after confirmed completion. Timeout does not finish a task. Inspect unknown outcomes without replay.";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

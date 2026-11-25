@@ -306,6 +306,48 @@ for version in base candidate candidate base; do
 done
 ```
 
+## Share work between occupied and idle stations
+
+An idle registered worker can request a piece of a running task. Its
+`worker.wait` receipt lists `share_candidates` from the same pool. A request
+goes to the worker holding the selected parent task. The two workers and the
+pool manager can inspect the request with `ssmcp.worker.share`.
+
+| Participant | Native call | Result |
+| --- | --- | --- |
+| Idle worker | `worker.share({action:"request",request_id,task_id})` | Returns a `share_id` for this helper, claimant and parent task. Use the same request ID on retry. |
+| Current claimant | `worker.share({action:"accept",share_id,text})` or `{action:"decline",share_id}` | Accept with the scope of an independent child task or decline the request. Pending requests appear in the claimant's wait/report responses. |
+| Pool manager | `worker.share({action:"list"})`, then `worker.submit({request_id,share_id,text})` | Submit the accepted text verbatim. The child receives its own task ID and is reserved for the helper's station and epoch. |
+| Helper | `worker.wait`, then `worker.complete` | Perform the child under its own claim and return its result. The original worker continues to own and complete the parent. |
+
+The manager can wait for either task through the usual `worker.wait_for` and
+read each result by ID. A changed station or parent can invalidate a pending
+split. If a reserved station is confirmed offline or removed before it claims
+the child, the queue records the child as cancelled with zero attempts. A
+manager can inspect the cancellation reason through the original child task
+ID. Inspect the returned share status before submitting a child.
+
+### Inspect or reset a station's work history
+
+Read `ssmcp.worker.station_state({slot})` on the authenticated pool to see the
+occupant, generation, epoch, current task and progress, recent task outcomes,
+and workspace-relative file paths. The queue fills in current work when the
+worker claims a task and records its outcome when the claim is completed.
+Workers can describe their current step with the existing
+`worker.report({claim,request_id,event:"progress",progress})`.
+
+A successful native file read on the pool connection records its path under
+the active claim. For a file read using a shell, editor or another connection,
+the worker can report `{claim,request_id,event:"file_read",detail:"src/lib.rs"}`
+through `worker.report`. The history distinguishes observed and reported
+reads. It retains up to 24 path entries and 12 recent completed-task records.
+
+A new occupant starts with fresh history. To clear its own station again,
+read `station_state`, then call `ssmcp.worker.station_reset` with the returned
+`generation`, `slot`, `epoch` and `expected_reset_revision` set to the observed
+`reset_revision`. Reset clears the display history. The current claim and
+the manager's retained task results keep their original identities.
+
 ## Wait across call windows
 
 Each worker wait observes one request for at most 55,000 milliseconds. A caller can choose a shorter window to leave time for transport and response handling within its own outer deadline. The default remains 5,000 milliseconds for `wait`, `wait_available` and `wait_for`; `result` reads immediately when `wait_ms` is omitted.

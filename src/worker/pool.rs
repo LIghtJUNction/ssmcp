@@ -58,6 +58,8 @@ pub(crate) struct Pool {
 struct Submit {
     request_id: String,
     text: String,
+    #[serde(default)]
+    share_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -210,6 +212,12 @@ impl Pool {
         remote.command_started(&self.queue, &actor, command_id, command, now_ms())
     }
 
+    pub(crate) fn file_read_ticket(&self, source: &Source) -> Option<super::queue::ReadTicket> {
+        let actor = actor(source).ok()?;
+        self.queue
+            .file_read_ticket(&actor, source.call.as_ref()?.client_id()?)
+    }
+
     pub(crate) fn command_finished(
         &self,
         command: &CommandLog,
@@ -299,6 +307,20 @@ impl Pool {
                 true,
             ),
             tool(
+                "station_state",
+                "Read one authenticated pool station occupant's current task, recent outcomes and bounded relative file-read paths, with native and self-reported provenance.",
+                json!({"slot":{"type":"integer","minimum":0,"maximum":127}}),
+                json!(["slot"]),
+                true,
+            ),
+            tool(
+                "station_reset",
+                "Reset only your own current station notebook. Use its exact generation, epoch and reset_revision from station_state. A retry with the original expected_reset_revision does not erase new activity. Assigned tasks and retained results are preserved.",
+                json!({"generation":{"type":"string","minLength":1,"maxLength":128},"slot":{"type":"integer","minimum":0,"maximum":127},"epoch":{"type":"integer","minimum":1},"expected_reset_revision":{"type":"integer","minimum":0}}),
+                json!(["generation", "slot", "epoch", "expected_reset_revision"]),
+                false,
+            ),
+            tool(
                 "attach",
                 "Attach this exact verified participant thread as the pool manager. The first explicit attach or successful submit fixes ownership for this native connection. Identical owner retries are idempotent; other agents cannot take over. No model is started and caller-supplied owner IDs are not accepted.",
                 json!({}),
@@ -350,7 +372,7 @@ impl Pool {
             tool(
                 "submit",
                 "Submit one task as this pool's verified manager; the first successful submission attaches its caller atomically. A bounded FIFO assigns exactly one idle slot; busy workers never fan out a task. Remote mode delegates text to a same-account authenticated agent that calls worker.wait; it never interprets text as a shell command. request_id deduplicates identical retries for the last 128 terminal tasks in this connection; reconnect is not replay permission.",
-                json!({"request_id":{"type":"string","minLength":1,"maxLength":128},"text":{"type":"string","minLength":1,"maxLength":16384}}),
+                json!({"request_id":{"type":"string","minLength":1,"maxLength":128},"text":{"type":"string","minLength":1,"maxLength":16384},"share_id":{"type":"string","maxLength":256,"description":"Dispatch this accepted work-sharing request to its original idle station. text must match the accepted scope exactly."}}),
                 json!(["request_id", "text"]),
                 false,
             ),
@@ -369,9 +391,10 @@ impl Pool {
                 false,
             ),
         ];
+        tools.push(super::queue::sharing::tool());
         tools.extend([
             tool("wait",
-                "Register this authenticated external worker in one stable station and block up to 55 seconds for one same-account task. A timeout does not complete a task. Retry the same request_id after a lost response to recover its exact claim; use a new ID after completion. A retiring response requires stopping owned activity and acknowledging worker.release; a released response means stop waiting. No model is started. Receipts are retained for the last 128 reports.",
+                "Register this authenticated external worker in one stable station and block up to 55 seconds for one same-account task. A timeout does not complete a task. Retry the same request_id after a lost response to recover its exact claim; use a new ID after completion. A retiring response requires stopping owned activity and acknowledging worker.release; a released response means stop waiting. No model is started. After registration inspect worker.station_state for your slot; the occupant can clear its notebook with worker.station_reset using the observed generation, epoch and reset_revision. Receipts are retained for the last 128 reports.",
                 json!({"request_id":{"type":"string","minLength":1,"maxLength":128},"wait_ms":{"type":"integer","minimum":0,"maximum":MAX_OBSERVATION_WAIT_MS,"default":5000}}), json!(["request_id"]), false),
             tool("claim", "Nonblocking worker.wait. Only a verified remote participant can claim one same-account task; assigning a slot does not execute the text.",
                 json!({"request_id":{"type":"string","minLength":1,"maxLength":128}}), json!(["request_id"]), false),
@@ -381,9 +404,9 @@ impl Pool {
                     "status":{"type":"string","enum":["completed","failed","cancelled"]},
                     "output":{"type":"string","maxLength":65536},"error":{"type":"string","maxLength":4096}
                 }), json!(["claim","status"]), false),
-            tool("report", "Report real command start/end or progress for your exact active claim. The same request_id and content are idempotent while retained; changed content, another caller or stale claims are rejected. Text is bounded and sanitized for the shared worker monitor. Report progress only after it happened; this never completes a task. The response also exposes pending cancellation and retirement.",
+            tool("report", "Report real command start/end, progress, or file_read with a workspace-relative path in detail for your exact active claim. The same request_id and content are idempotent while retained; changed content, another caller or stale claims are rejected. Text is bounded and sanitized for the shared worker monitor. Report progress only after it happened; this never completes a task. The response also exposes pending cancellation and retirement.",
                 json!({"claim":claim_schema,"request_id":{"type":"string","minLength":1,"maxLength":128},
-                    "event":{"type":"string","enum":["command_start","command_end","progress"]},
+                    "event":{"type":"string","enum":["command_start","command_end","progress","file_read"]},
                     "command":{"type":"string","minLength":1,"maxLength":4096},
                     "progress":{"type":"string","minLength":1,"maxLength":1024},
                     "detail":{"type":"string","minLength":1,"maxLength":1024}}),
@@ -670,6 +693,7 @@ impl Pool {
             match remote.claim(&self.queue, actor, request_id, now_ms())? {
                 Claimed::Assigned { claim, lease } => {
                     return Ok(json!({"status":"assigned","claim":claim,
+                        "share_requests":self.queue.share_inbox(actor),
                         "original_text":lease.text,
                         "text":lease.context.prepared,
                         "cancel_requested":self.queue.cancellation_requested(&lease),
@@ -702,7 +726,8 @@ impl Pool {
                 }
                 Claimed::Waiting if wait_ms == 0 || tokio::time::Instant::now() >= deadline => {
                     return Ok(
-                        json!({"status":"waiting","execution":"remote","worker":self.queue.compact_snapshot(),"wait_hint":remote::WAIT_HINT}),
+                        json!({"status":"waiting","execution":"remote","station":self.queue.station_registration(actor),"worker":self.queue.compact_snapshot(),
+                            "share_candidates":self.queue.share_candidates(actor),"wait_hint":remote::WAIT_HINT}),
                     );
                 }
                 Claimed::Waiting => {
@@ -756,6 +781,16 @@ impl Pool {
                     "caller_is_manager":self.queue.is_manager(&actor, &client_id),
                     "cleanup_error":self.cleanup_error.lock().unwrap_or_else(|error| error.into_inner()).clone()}),
                 )
+            }
+            "ssmcp.worker.station_state" => {
+                let req: super::queue::station::ReadState = serde_json::from_value(arguments)
+                    .map_err(|e| format!("invalid station query: {e}"))?;
+                self.queue.station_state(&actor, &client_id, req.slot)
+            }
+            "ssmcp.worker.station_reset" => {
+                let req = serde_json::from_value(arguments)
+                    .map_err(|e| format!("invalid station reset: {e}"))?;
+                self.queue.station_reset(&actor, &client_id, req)
             }
             "ssmcp.worker.attach" => {
                 empty_arguments(&arguments, "attach")?;
@@ -825,6 +860,10 @@ impl Pool {
                     "wait_hint":"Inspect retained task results. A running remote task remains occupied until its original claimant reports completion; cancellation is not proof that external effects stopped."}),
                 )
             }
+            "ssmcp.worker.share" => {
+                self.remote()?;
+                self.queue.share(&actor, &client_id, arguments)
+            }
             "ssmcp.worker.submit" => {
                 let request: Submit = serde_json::from_value(arguments)
                     .map_err(|e| format!("invalid worker task: {e}"))?;
@@ -836,9 +875,8 @@ impl Pool {
                 }
                 #[cfg(target_os = "linux")]
                 let actor_key = actor_context_key(&actor)?;
-                let task = self.queue.submit_managed(
+                let task = self.queue.submit_inner(
                     actor.clone(),
-                    &client_id,
                     &request.request_id,
                     &request.text,
                     TaskContext {
@@ -849,6 +887,7 @@ impl Pool {
                         prepared: prepared.text,
                     },
                     now_ms(),
+                    Some((&client_id, request.share_id.as_deref())),
                 )?;
                 Ok(
                     json!({"task":task,"warnings":prepared.warnings,"worker":self.queue.compact_snapshot(),
@@ -919,7 +958,7 @@ impl Pool {
                         .report(&self.queue, &actor, report, now_ms())?;
                 Ok(json!({"status":"recorded","duplicate":duplicate,
                     "cancel_requested":cancel_requested,"retire_requested":retire_requested,
-                    "worker":self.queue.compact_snapshot()}))
+                    "share_requests":self.queue.share_inbox(&actor),"worker":self.queue.compact_snapshot()}))
             }
             "ssmcp.worker.release" => {
                 #[derive(Deserialize)]
@@ -1688,9 +1727,12 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names.len(), 16);
+        assert_eq!(names.len(), 19);
         for name in [
             "status",
+            "share",
+            "station_state",
+            "station_reset",
             "attach",
             "events",
             "tasks",

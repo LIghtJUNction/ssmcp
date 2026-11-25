@@ -142,6 +142,7 @@ impl<T: Clone> Queue<T> {
                 self.record_slot_event(&mut state, "worker.retiring", index, now_ms);
             }
         }
+        self.cancel_unavailable_shares(&mut state, now_ms);
         state.desired_total = total;
         self.changed(&mut state);
         Ok(())

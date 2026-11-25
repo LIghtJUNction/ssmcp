@@ -12,9 +12,12 @@ mod events;
 mod lifecycle;
 mod operations;
 mod projection;
+pub(super) mod sharing;
+pub(super) mod station;
 mod telemetry;
 pub(super) use events::EventRequest;
 pub(super) use operations::{WaitRequest, WaitSpec};
+pub(crate) use station::ReadTicket;
 pub(super) use telemetry::{ReportEvent, ReportUpdate, display_text};
 
 const MAX_QUEUED: usize = 128;
@@ -193,6 +196,7 @@ pub(crate) enum Outcome {
 
 struct Task<T> {
     actor: Actor,
+    share: Option<sharing::Destination>,
     // Public identity captured from the verified station registration at claim
     // time. A later occupant or manager must never be credited with this work.
     claimed_by: Option<String>,
@@ -221,6 +225,7 @@ pub(super) struct Retirement {
 }
 
 struct Slot {
+    notebook: station::Notebook,
     enabled: bool,
     epoch: u64,
     state: SlotState,
@@ -247,6 +252,7 @@ impl Slot {
             registered: None,
             retirement: None,
             logs: VecDeque::new(),
+            notebook: station::Notebook::default(),
             next_log_sequence: 1,
             task_summary: None,
             task_text: None,
@@ -263,6 +269,7 @@ impl Slot {
 struct State<T> {
     manager: Option<Manager>,
     operations: operations::Operations,
+    shares: sharing::Requests,
     events: events::Journal,
     tasks: BTreeMap<String, Task<T>>,
     fifo: VecDeque<String>,
@@ -299,6 +306,7 @@ impl<T: Clone> Queue<T> {
             state: Mutex::new(State {
                 manager: None,
                 operations: operations::Operations::default(),
+                shares: sharing::Requests::default(),
                 events: events::Journal::default(),
                 tasks: BTreeMap::new(),
                 fifo: VecDeque::new(),
@@ -335,6 +343,7 @@ impl<T: Clone> Queue<T> {
     }
 
     fn changed(&self, state: &mut State<T>) {
+        sharing::expire_requests(state);
         // Keep one bounded projection, not an event history. A transient change
         // followed by restoration still advances the cursor, while log-only
         // writes continue to wake existing pool observers without advancing it.
@@ -571,7 +580,9 @@ impl<T: Clone> Queue<T> {
             None,
         );
         if !already_offline {
-            self.record_slot_event(&mut state, "worker.offline", slot, super::now_ms());
+            let now_ms = super::now_ms();
+            self.cancel_unavailable_shares(&mut state, now_ms);
+            self.record_slot_event(&mut state, "worker.offline", slot, now_ms);
         }
         self.changed(&mut state);
         Ok(())
@@ -589,6 +600,7 @@ impl<T: Clone> Queue<T> {
         self.submit_inner(actor, key, text, context, now_ms, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn submit_managed(
         &self,
         actor: Actor,
@@ -598,20 +610,21 @@ impl<T: Clone> Queue<T> {
         context: T,
         now_ms: u64,
     ) -> Result<TaskView, String> {
-        self.submit_inner(actor, key, text, context, now_ms, Some(client_id))
+        self.submit_inner(actor, key, text, context, now_ms, Some((client_id, None)))
     }
 
-    fn submit_inner(
+    pub(super) fn submit_inner(
         &self,
         actor: Actor,
         key: &str,
         text: &str,
         context: T,
         now_ms: u64,
-        client_id: Option<&str>,
+        management: Option<(&str, Option<&str>)>,
     ) -> Result<TaskView, String> {
-        let manager = client_id
-            .map(|client_id| Manager::new(&actor, client_id, now_ms))
+        let share_id = management.and_then(|(_, share)| share);
+        let manager = management
+            .map(|(client_id, _)| Manager::new(&actor, client_id, now_ms))
             .transpose()?;
         if key.is_empty() || key.len() > 128 || key.chars().any(char::is_control) {
             return Err(
@@ -635,10 +648,12 @@ impl<T: Clone> Queue<T> {
             .values()
             .find(|task| task.actor == actor && task.key == key)
         {
-            return if task.text == text {
+            return if task.text == text
+                && task.share.as_ref().map(|s| s.share_id.as_str()) == share_id
+            {
                 Ok(task.view.clone())
             } else {
-                Err("worker request_id was already used with different text".into())
+                Err("worker request_id was already used with different text or share".into())
             };
         }
         if state
@@ -659,6 +674,9 @@ impl<T: Clone> Queue<T> {
         if state.fifo.len() >= MAX_QUEUED {
             return Err("worker FIFO is full; no task was admitted".into());
         }
+        let destination = share_id
+            .map(|id| state.shares.destination(id, text))
+            .transpose()?;
         let sequence = state
             .sequence
             .checked_add(1)
@@ -681,10 +699,14 @@ impl<T: Clone> Queue<T> {
             error: None,
             replay_safe: true,
         };
+        if let Some(target) = &destination {
+            state.shares.dispatched(&target.share_id, &id);
+        }
         state.tasks.insert(
             id.clone(),
             Task {
                 actor,
+                share: destination,
                 claimed_by: None,
                 claim_epoch: None,
                 key: key.into(),
@@ -776,6 +798,7 @@ impl<T: Clone> Queue<T> {
                 .epoch
                 .checked_add(1)
                 .ok_or("worker epoch exhausted")?;
+            worker.notebook = station::Notebook::default();
             worker.registered = Some(actor.clone());
             worker.state = SlotState::Idle;
             log(
@@ -799,6 +822,10 @@ impl<T: Clone> Queue<T> {
                 task.actor.provider == actor.provider
                     && task.actor.subject == actor.subject
                     && task.actor.connection == actor.connection
+                    && task
+                        .share
+                        .as_ref()
+                        .is_none_or(|d| d.slot == slot && d.epoch == epoch)
             })
         }) else {
             return Ok(None);
@@ -1018,6 +1045,9 @@ impl<T: Clone> Queue<T> {
         task.view.replay_safe = false;
         let view = task.view.clone();
         let worker = &mut state.slots[lease.slot];
+        if worker.registered.is_some() {
+            worker.notebook.finish(&view, &lease.text);
+        }
         telemetry::settle_time(worker, status != TaskStatus::Unknown);
         worker.state = if worker.retirement.is_some() && !closed {
             SlotState::Retiring
@@ -1069,6 +1099,9 @@ impl<T: Clone> Queue<T> {
             SlotState::Working(_) => None,
         };
         if let Some(kind) = slot_kind {
+            if kind != "worker.idle" {
+                self.cancel_unavailable_shares(state, now_ms);
+            }
             self.record_slot_event(state, kind, lease.slot, now_ms);
         }
         trim(state);
