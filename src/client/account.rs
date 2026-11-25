@@ -724,7 +724,7 @@ async fn account_info(api: &Api, username: &str) -> Result<(Value, u64)> {
     let seconds = reply
         .date
         .and_then(|date| date.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or_else(crate::management::now, |duration| duration.as_secs());
+        .map_or_else(now, |duration| duration.as_secs());
     Ok((Api::checked(reply)?, seconds))
 }
 

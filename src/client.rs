@@ -2303,13 +2303,11 @@ pub async fn run() -> crate::Result<()> {
         && options.tty.is_none()
         && options.shell.is_none();
     #[cfg(target_os = "linux")]
-    if !metadata_only {
-        if let Err(error) = crate::session_budget::enter() {
-            if let Some(runner) = &service {
-                runner.record("disconnected", 0, None, None, Some(&error.to_string()))?;
-            }
-            return Err(error);
+    if !metadata_only && let Err(error) = crate::session_budget::enter() {
+        if let Some(runner) = &service {
+            runner.record("disconnected", 0, None, None, Some(&error.to_string()))?;
         }
+        return Err(error);
     }
     // Remember the launch entry before the first connection or later updates.
     reload::installed_program()?;
