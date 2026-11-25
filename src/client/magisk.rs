@@ -476,13 +476,17 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
         .route("/", get(|| async { Html(INDEX) }))
         .route("/{file}", get(asset))
         .route("/setup", get(|| async { Html(ONBOARDING) }).post(configure))
+         .route("/zuse", get(|| async {
+            ([(header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'self'; frame-src http://127.0.0.1:43497; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")],
+                Html(include_str!("../../packaging/magisk/src/ssmcp/webroot/workbench.html")))
+        }))
         .route("/terminal", post(terminal))
         .layer(DefaultBodyLimit::max(24 * 1024))
         .layer(axum::middleware::map_response(|mut response: Response| async {
             let headers = response.headers_mut();
             headers.insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
             headers.insert(header::REFERRER_POLICY, "no-referrer".parse().unwrap());
-            headers.insert(header::CONTENT_SECURITY_POLICY, "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'".parse().unwrap());
+            headers.entry(header::CONTENT_SECURITY_POLICY).or_insert( "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'".parse().unwrap());
             response
         }))
         .with_state(state);

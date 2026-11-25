@@ -1,5 +1,5 @@
-import { el, hasCredential, terminal as localTerminal } from './device-api.js';
-import { hasManagerTransport, managerTerminal, openManagerSetup } from './module-entry.js';
+import { el, hasCredential, terminal as localTerminal, TerminalWriter } from './device-api.js';
+import { hasManagerTransport, managerTerminal, openManagerSetup, openManagerWorkbench } from './module-entry.js';
 
 import { drawFrame } from './terminal-frame.js';
 
@@ -50,6 +50,7 @@ let tabs = [];
 let changingTabs = false;
 let listRequest = 0;
 const writes = new Map();
+const drafts = new Map();
 const isCurrent = version => version === generation && document.body.dataset.view === 'console';
 function setCtrl(armed) {
   ctrl.setAttribute('aria-pressed', String(armed));
@@ -61,6 +62,7 @@ function selectTab(id) {
   screenCursor = null;
   cursor.hidden = true;
   selected = id;
+  renderDraft();
   generation++;
   setCtrl(false);
   status('');
@@ -106,6 +108,13 @@ function renderTabs() {
     close.title = '关闭当前会话';
     buttons.push(close);
   }
+  const workbench = tabButton('Zuse', async () => {
+    if (!inManager) { location.assign('/zuse'); return; }
+    try { await openManagerWorkbench(); }
+    catch (error) { status('无法打开 Zuse 工作台，请检查手机上的 zuse web 服务。', 'workbench', error.message); }
+  });
+  workbench.setAttribute('aria-label', '打开 Zuse 工作台');
+  buttons.push(workbench);
   const nav = el('tabs');
   const hadFocus = nav.contains(document.activeElement);
   nav.textContent = '';
@@ -131,7 +140,7 @@ async function refreshTabs(preferred = selected) {
   tabs = result.tabs;
   setView('console');
   selectTab(tabs.includes(preferred) ? preferred : tabs[0]);
-  if (changed) renderTabs();
+  if (changed) { renderTabs(); renderDraft(); }
 }
 async function changeTabs(action) {
   if (changingTabs || (action === 'close' && selected === 0)) return;
@@ -139,7 +148,10 @@ async function changeTabs(action) {
   listRequest++;
   renderTabs();
   try {
-    if (action === 'close' && writes.has(selected)) await writes.get(selected);
+    if (action === 'close') {
+      await writes.get(selected)?.done;
+      if (drafts.has(selected)) return;
+    }
     const result = await terminal(action, selected);
     await refreshTabs(action === 'open' ? result.tab : selected);
     if (statusSource === 'tabs') status('');
@@ -476,37 +488,48 @@ const directSequences = {
   ...sequences, Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~',
   Insert: '\x1b[2~', PageUp: '\x1b[5~', PageDown: '\x1b[6~',
 };
-const buffered = new Map();
-const utf8 = new TextEncoder();
-function write(tab, text) {
-  // Combine waiting keystrokes without delaying the first write or crossing tabs.
-  const bytes = utf8.encode(text).length;
-  const tail = buffered.get(tab);
-  if (tail && tail.bytes + bytes <= 4096) {
-    tail.text += text;
-    tail.bytes += bytes;
-    return tail.done;
-  }
-  const batch = { text, bytes };
-  const previous = writes.get(tab) || Promise.resolve();
-  batch.done = previous.then(async () => {
-    if (buffered.get(tab) === batch) buffered.delete(tab);
-    await terminal('input', tab, { text: batch.text });
-    if (tab === selected) inputActivity();
-  }, () => { throw Error('上一条输入失败，后续排队的输入均未发送。'); }).finally(() => {
-    if (buffered.get(tab) === batch) buffered.delete(tab);
-    if (writes.get(tab) === batch.done) writes.delete(tab);
-  });
-  buffered.set(tab, batch);
-  writes.set(tab, batch.done);
-  return batch.done;
+const draftPanel = el('input-recovery');
+const uncertainField = el('uncertain-input');
+const unsentField = el('unsent-input');
+let shownDraft = null;
+let finishingComposition = null;
+
+function renderDraft() {
+  // Another manager can close a tab. Keep its draft reachable from the current tab.
+  shownDraft = drafts.has(selected) ? selected : [...drafts.keys()].find(id => !tabs.includes(id));
+  const draft = drafts.get(shownDraft);
+  draftPanel.hidden = !draft;
+  direct.readOnly = drafts.has(selected) && !preedit;
+  uncertainField.value = draft?.uncertain || '';
+  uncertainField.parentElement.hidden = !uncertainField.value;
+  unsentField.value = draft?.unsent || '';
+  unsentField.parentElement.hidden = !unsentField.value;
+  if (draft) el('draft-tab').textContent = shownDraft === 0 ? '启动会话' : '会话 ' + (shownDraft + 1);
 }
+function saveDraft(tab, uncertain, unsent) {
+  // A later transport failure precedes any input already parked by backpressure.
+  if (tab === selected && preedit) finishingComposition = tab;
+  const previous = drafts.get(tab);
+  drafts.set(tab, { uncertain, unsent: unsent + (previous?.unsent || '') });
+  renderDraft();
+}
+el('dismiss-draft').onclick = () => {
+  if (finishingComposition === shownDraft) finishingComposition = null;
+  drafts.delete(shownDraft);
+  renderDraft();
+};
 function shortcut(text) {
-  const version = generation;
-  if (!isCurrent(version) || changingTabs) return;
-  write(selected, text).then(() => {
-    if (isCurrent(version) && statusSource === 'write') status('');
-  }).catch(error => { if (isCurrent(version)) status(error.message, 'write'); });
+  if (!isCurrent(generation) || changingTabs || drafts.has(selected) || !text) return;
+  const tab = selected;
+  let writer = writes.get(tab);
+  if (!writer) {
+    writer = new TerminalWriter(async part => {
+      await terminal('input', tab, { text: part });
+      if (tab === selected) inputActivity();
+    }, (uncertain, unsent) => saveDraft(tab, uncertain, unsent), () => writes.delete(tab));
+    writes.set(tab, writer);
+  }
+  if (!writer.append(text)) saveDraft(tab, '', text);
 }
 
 // A sentinel makes a backspace observable on mobile keyboards even with no draft.
@@ -527,18 +550,16 @@ function directText(text) {
     shortcut(String.fromCharCode(text.toUpperCase().charCodeAt(0) & 31));
     return;
   }
-  const bytes = text.replace(/\r\n|\n/g, '\r');
-  const encoder = new TextEncoder();
-  if (encoder.encode(bytes).length <= 4096) { shortcut(bytes); return; }
-  let chunk = '';
-  let length = 0;
-  for (const character of bytes) {
-    const size = encoder.encode(character).length;
-    if (length + size > 4096) { shortcut(chunk); chunk = ''; length = 0; }
-    chunk += character;
-    length += size;
+  const normalized = text.replace(/\r\n|\n/g, '\r');
+  if (drafts.has(selected)) {
+    // An IME may finish a composition after a write has failed.
+    if (finishingComposition !== selected) return;
+    finishingComposition = null;
+    drafts.get(selected).unsent += normalized;
+    renderDraft();
+  } else {
+    shortcut(normalized);
   }
-  if (chunk) shortcut(chunk);
 }
 function commitDirect() {
   if (directVersion !== generation || preedit) return;
@@ -569,7 +590,10 @@ direct.addEventListener('compositionend', () => {
   preedit = false;
   preeditEnded = performance.now();
   // Some IMEs dispatch the final input before this event and others dispatch it after.
-  commitTimer = setTimeout(commitDirect, 0);
+  commitTimer = setTimeout(() => {
+    commitDirect();
+    if (drafts.has(selected)) { finishingComposition = null; renderDraft(); }
+  }, 0);
 });
 direct.addEventListener('input', event => {
   if (preedit || event.isComposing || directVersion !== generation) return;

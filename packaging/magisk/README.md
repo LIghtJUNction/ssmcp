@@ -8,6 +8,8 @@
 
 完成配置后，设备启动主会话 `ssmcp username@server`，并在每次开机后自动启动。Action 打开音量键菜单。按音量＋切换「查看状态」「启动服务」「退出」，按音量−确认，20 秒无按键会自动退出。日常从模块管理器的 WebUI 操作终端，点击终端中的卡片可展开，点击光标所在行或底栏的 ⌨ 打开键盘，按 Tab 补全。中文和组合字符按终端实际列宽排列，前景色与背景色沿用终端输出。单指上下滑动会滚动手指所在的终端面板。在黑色终端内双指捏合可调节字号，重新打开后会记住。标签栏可新建和切换会话。关闭页面后会话继续运行。
 
+用手机上的 `zuse web` 启动 Zuse 工作台之后，点击会话栏的「Zuse」即可打开。工作台监听 `http://127.0.0.1:43497/`。普通浏览器的 `/zuse` 页面可嵌入工作台，模块管理器入口会在系统浏览器中打开它。
+
 模块会话从 `/data/adb/ssmcp/workspace` 启动。可把已安装的 Android 可执行文件放在 `/data/adb/ssmcp/home/.local/bin`，新启动的模块会话会在这里查找工具。终端内的 `/update --check` 会检查已发布的 Magisk ZIP。
 
 配置位于 `/data/adb/ssmcp/ssmcp.rc`。可以手工修改唯一一行 `ssmcp username@server`，重启后重新确认目标。刷入更新时会保留目录里的配置和本地状态。更新时，从项目 Releases 下载新版 `ssmcp-magisk-arm64.zip`，在模块管理器中刷入。Termux 可用 `sh scripts/install-ssmcp-termux.sh update [--check]` 在现有 Debian proot 安装中更新。

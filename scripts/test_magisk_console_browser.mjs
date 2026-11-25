@@ -43,16 +43,28 @@ try {
           }
           return {};
         };
+        window.replyToTerminal = async body => {
+          const json = window.handleTerminal(body);
+          if (body.action === 'input' && window.blockInput) {
+            window.blockInput = false;
+            const status = await new Promise(resolve => { window.releaseInput = resolve; });
+            return { status, json: status === 200 ? json : { error: 'No receipt' } };
+          }
+          return { status: 200, json };
+        };
         if (transport === 'manager') window.ksu = { exec(command, options, callback) {
-          const body = JSON.parse(atob(command.split(' ').at(-1)));
-          setTimeout(() => window[callback](0, '200\n' + JSON.stringify(window.handleTerminal(body))), 0);
+          const bytes = Uint8Array.from(atob(command.split(' ').at(-1)), char => char.charCodeAt(0));
+          const body = JSON.parse(new TextDecoder().decode(bytes));
+          window.replyToTerminal(body).then(({ status, json }) => {
+            setTimeout(() => window[callback](0, status + '\n' + JSON.stringify(json)), 0);
+          });
         } };
       }, { transport });
       const page = await context.newPage();
       if (transport === 'loopback') await page.route('**/terminal', async route => {
         const body = route.request().postDataJSON();
-        const reply = await page.evaluate(body => window.handleTerminal(body), body);
-        await route.fulfill({ json: reply });
+        const reply = await page.evaluate(body => window.replyToTerminal(body), body);
+        await route.fulfill(reply);
       });
       const hostname = transport === 'manager' ? 'localhost' : '127.0.0.1';
       await page.goto(`http://${hostname}:${server.address().port}/index.html${transport === 'loopback' ? '#' + 'a'.repeat(64) : ''}`);
@@ -112,6 +124,36 @@ try {
       assert.equal(await page.evaluate(() => window.calls.some(call => call.action === 'input')), false);
       await page.locator('[data-tab="1"]').tap();
       await page.waitForFunction(() => window.calls.some(call => call.action === 'screen' && call.tab === 1));
+      await page.locator('#open-keyboard').tap();
+      await page.evaluate(() => {
+        window.calls.length = 0;
+        const input = document.getElementById('direct-input');
+        input.dispatchEvent(new CompositionEvent('compositionstart'));
+        input.value = '\u200b中';
+        input.dispatchEvent(new InputEvent('input', { isComposing: true }));
+        input.dispatchEvent(new CompositionEvent('compositionend', { data: '中' }));
+        input.dispatchEvent(new InputEvent('input', { data: '中' }));
+      });
+      await page.waitForFunction(() => window.calls.some(call => call.text === '中'));
+      assert.equal(await page.evaluate(() => window.calls.filter(call => call.action === 'input').length), 1);
+      await page.evaluate(() => {
+        const input = document.getElementById('direct-input');
+        window.blockInput = true;
+        input.value = '\u200b' + 'a'.repeat(4095) + '🟠尾';
+        input.dispatchEvent(new InputEvent('input', { inputType: 'insertFromPaste' }));
+        input.value = '\u200b追加';
+        input.dispatchEvent(new InputEvent('input'));
+      });
+      await page.waitForFunction(() => typeof window.releaseInput === 'function');
+      await page.locator('[data-tab="0"]').tap();
+      await page.evaluate(() => window.releaseInput(503));
+      await page.locator('[data-tab="1"]').tap();
+      await page.locator('#input-recovery').waitFor();
+      assert.equal(await page.locator('#uncertain-input').inputValue(), 'a'.repeat(4095));
+      assert.equal(await page.locator('#unsent-input').inputValue(), '🟠尾追加');
+      assert.equal(await page.evaluate(() => window.calls.filter(call => call.text?.startsWith('a'.repeat(100))).length), 1);
+      await page.locator('#dismiss-draft').tap();
+      assert.equal(await page.locator('#direct-input').evaluate(node => node.readOnly), false);
       console.log(`PASS ${transport} ${width}px: tap coordinates, expansion fixture, native touch swipe, pinch, tab switching`);
       await context.close();
     }

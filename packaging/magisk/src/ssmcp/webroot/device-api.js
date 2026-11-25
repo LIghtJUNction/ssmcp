@@ -54,3 +54,71 @@ export async function api(path, body) {
 }
 
 export const terminal = (action, tab, args = {}) => api('/terminal', { action, tab, ...args });
+
+// Keep one source string for a paste. Only the chunk being sent is measured;
+// keyboard input arriving behind it shares one bounded buffer.
+const inputBytes = 4096;
+const waitingUnits = 64 * 1024;
+const encoder = new TextEncoder();
+
+export class TerminalWriter {
+  constructor(send, interrupted, idle) {
+    this.send = send;
+    this.interrupted = interrupted;
+    this.idle = idle;
+    this.queue = [];
+    this.queuedUnits = 0;
+    this.hasPaste = false;
+    this.done = null;
+  }
+
+  append(text) {
+    const large = text.length > waitingUnits;
+    if (!this.done) {
+      this.hasPaste = large;
+      this.done = this.drain(text);
+      return true;
+    }
+    if (large ? this.hasPaste : text.length > waitingUnits - this.queuedUnits) return false;
+    // At most three strings wait: typing before a large paste, the paste, and typing after.
+    const last = this.queue.length - 1;
+    if (large || last < 0 || this.queue[last].length > waitingUnits) this.queue.push(text);
+    else this.queue[last] += text;
+    if (large) this.hasPaste = true;
+    else this.queuedUnits += text.length;
+    return true;
+  }
+
+  async drain(source) {
+    let scratch;
+    let offset = 0, end = 0;
+    try {
+      while (source) {
+        // One UTF-16 unit needs at most three UTF-8 bytes. Most keystrokes fit directly.
+        if (source.length - offset <= Math.floor(inputBytes / 3)) end = source.length;
+        else {
+          scratch ??= new Uint8Array(inputBytes);
+          // Include the low surrogate if a pair crosses the slice boundary.
+          const window = source.slice(offset, offset + inputBytes + 1);
+          end = offset + encoder.encodeInto(window, scratch).read;
+        }
+        await this.send(source.slice(offset, end));
+        offset = end;
+        if (offset === source.length) {
+          if (source.length > waitingUnits) this.hasPaste = false;
+          source = this.queue.shift() || '';
+          if (source.length <= waitingUnits) this.queuedUnits -= source.length;
+          offset = 0;
+        }
+      }
+    } catch (error) {
+      this.interrupted(source.slice(offset, end), source.slice(end) + this.queue.join(''), error);
+    } finally {
+      this.queue.length = 0;
+      this.queuedUnits = 0;
+      this.hasPaste = false;
+      this.done = null;
+      this.idle();
+    }
+  }
+}

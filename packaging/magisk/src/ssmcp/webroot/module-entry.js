@@ -63,3 +63,8 @@ export async function managerTerminal(body) {
 export async function openManagerSetup() {
   await managerExec(setupLauncher, 25000);
 }
+
+export async function openManagerWorkbench() {
+  // Open the localhost application in the system browser, outside the manager's root bridge.
+  await managerExec('/system/bin/am start -a android.intent.action.VIEW -d http://127.0.0.1:43497/', 8000);
+}

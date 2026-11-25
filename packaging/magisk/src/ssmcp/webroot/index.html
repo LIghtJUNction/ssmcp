@@ -19,6 +19,12 @@
         <span id="terminal-cursor" aria-hidden="true" hidden></span>
         <textarea id="direct-input" rows="1" aria-label="终端输入" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
       </div>
+      <section id="input-recovery" aria-label="终端输入草稿" hidden>
+        <strong id="draft-tab"></strong>
+        <label>回执未确认，请核对终端<textarea id="uncertain-input" readonly rows="2"></textarea></label>
+        <label>尚未发送，可选中复制<textarea id="unsent-input" readonly rows="2"></textarea></label>
+        <button id="dismiss-draft" type="button">清除草稿并继续</button>
+      </section>
       <div id="keys" role="group" aria-label="终端按键">
         <button type="button" id="open-keyboard" aria-label="打开键盘">⌨</button>
         <button type="button" data-key="Tab" aria-label="Tab 补全">Tab 补全</button>

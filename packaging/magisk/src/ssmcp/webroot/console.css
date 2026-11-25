@@ -302,3 +302,12 @@ body[data-view="console"] #status {
 .terminal-row { height: var(--cell-height); line-height: var(--cell-height); white-space: pre; }
 .terminal-row > span { display: inline-block; height: 100%; vertical-align: top; }
 #screen { -webkit-text-size-adjust: none; text-size-adjust: none; }
+
+.workbench { height: 100vh; height: 100dvh; display: flex; flex-direction: column; background: #101112; }
+.workbench nav { display: flex; justify-content: space-between; align-items: center; padding-inline: var(--left) var(--right); }
+.workbench nav a { padding-block: 12px; font-size: 14px; }
+.workbench iframe { border: 0; width: 100%; flex: 1; min-height: 0; }
+#input-recovery { max-height: 40%; overflow: auto; padding: 6px 10px; font-size: 13px; }
+#input-recovery label { display: block; }
+#input-recovery textarea { width: 100%; color: inherit; background: var(--field); font: 13px var(--mono); }
+#input-recovery button { min-height: 36px; }
