@@ -1913,6 +1913,63 @@ class WorkerWindows(Harness):
                                       "desired_total": state["desired_total"]}
         frontend.send(b"\x01\x0b")
 
+    def departed_member_retirement(self):
+        """A worker that has actually left cannot acknowledge a pending retirement."""
+        label = "departed-member"
+        directory = self.directory / label
+        directory.mkdir(mode=0o700)
+        workspace = directory / "workspace"
+        workspace.mkdir(mode=0o700)
+        environment = self.environment(label, directory)
+        environment["HOME"] = str(directory)
+        frontend = Frontend(self, label, self.client_command(name=label, extra_args=(
+            "--worker", "1", "--no-watchdog")), environment, workspace)
+        parent, worker = self.select_pair(frontend, workspace)
+        self.check(parent["id"] != worker["id"] and directory_chat_enabled(parent) is True
+                   and directory_chat_enabled(worker) is False, "separate live parent and chat-disabled worker")
+        if not self.secret:
+            self.oauth_login({"client_id": parent["id"]})
+        frontend.until(empty_composer_ready, "live parent composer")
+        self.coordinators[parent["id"]] = self.join(parent["id"], "parent")
+        pool_id = worker["id"]
+        manager = self.join(pool_id, "manager")
+        executor = self.join(pool_id, "executor", role="worker")
+        self.bound(pool_id, manager, "ssmcp.worker.attach")
+        def submit(key):
+            return self.bound(pool_id, manager, "ssmcp.worker.submit", {
+                "request_id": key, "text": "Observe a synthetic assignment"})["task"]["task_id"]
+        first = submit("first")
+        claim = self.bound(pool_id, executor, "ssmcp.worker.wait", {
+            "request_id": "specific-claim", "wait_ms": 0})
+        self.check(claim.get("status") == "assigned" and claim["claim"]["task_id"] == first,
+                   "registered executor has the single accepted claim")
+        second = submit("second")
+        # Issue the ordinary human operator command, without force confirmation.
+        frontend.send(b"\x01\x0b/worker -\r")
+        self.pool_projection(frontend, parent, lambda p: p["desired_total"] == 0
+                             and p["registered_workers"] == p["total"] == p["working"] == 1,
+                             "the live claimant initially retains its station while retiring")
+        left = self.public_call("collab", {"action":"leave", "client_id":pool_id,
+                                "agent_id":executor["agent_id"], "token":executor["token"]})
+        self.check(left.get("left") is True, "original membership left without a worker release or completion")
+        self.pool_projection(frontend, parent, lambda p: p["desired_total"] == p["registered_workers"]
+                             == p["total"] == p["working"] == p["retiring"] == 0,
+                             "both parent and child converge on zero registered, working and retiring stations")
+        result = self.bound(pool_id, manager, "ssmcp.worker.result", {"task_id":first})["task"]
+        queued = self.bound(pool_id, manager, "ssmcp.worker.result", {"task_id":second})["task"]
+        page = self.bound(pool_id, manager, "ssmcp.worker.tasks")["page"]
+        self.check(result["status"] == "unknown" and result["replay_safe"] is False,
+                   "accepted task retains an unknown outcome and cannot be replayed")
+        self.check(queued["status"] == "queued" and queued["slot"] is None and len(page["tasks"]) == 2
+                   and {t["task_id"] for t in page["tasks"]} == {first, second},
+                   "unclaimed work remains queued and the departed claim is never duplicated")
+        self.cases[label] = {"clients":2, "desired":0, "registered":0, "working":0, "retiring":0,
+                             "accepted_outcome":result["status"], "replay_safe":result["replay_safe"],
+                             "queued":1, "unique_tasks":2, "model_starts":0}
+        frontend.request_exit()
+        self.check(frontend.wait_exit() == 0, "parent exits cleanly after membership retirement")
+        self.assert_children_gone(directory)
+
     def default_and_parent_exit(self):
         frontend, directory, workspace, parent, worker, manager = self.launch("parent-exit")
         self.protocol(frontend, directory, parent, worker, manager)
@@ -2033,6 +2090,7 @@ class WorkerWindows(Harness):
 
     def run(self):
         self.prepare()
+        self.departed_member_retirement()
         self.default_and_parent_exit()
         self.worker_close()
         self.parent_reload()
@@ -2078,6 +2136,7 @@ class WorkerWindows(Harness):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, required=True)
+    parser.add_argument("--case", choices=("all", "departed-member"), default="all")
     parser.add_argument("--fixture-binary", type=Path,
                         default=os.environ.get("SSMCP_E2E_FIXTURE_BINARY"))
     parser.add_argument("--decoder", type=Path)
@@ -2131,7 +2190,11 @@ def main():
                                     evidence_directory, font_arguments)
             report["status"] = "failed"
             try:
-                harness.run()
+                if args.case == "departed-member":
+                    harness.prepare()
+                    harness.departed_member_retirement()
+                else:
+                    harness.run()
                 report["status"] = "passed"
                 exit_code = 0
             finally:
