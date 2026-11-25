@@ -671,14 +671,21 @@ fn prepare(
         let image = if dimensions == original {
             &original_image
         } else {
+            // A triangle filter keeps thin screenshot text legible without the
+            // wide Lanczos kernel on every PNG sizing attempt.
             resized = original_image.resize_exact(
                 dimensions.0,
                 dimensions.1,
-                image::imageops::FilterType::Lanczos3,
+                if jpeg {
+                    image::imageops::FilterType::Lanczos3
+                } else {
+                    image::imageops::FilterType::Triangle
+                },
             );
             &resized
         };
-        if let Some(encoded) = encode(image, jpeg, limit)? {
+        let encoded = encode(image, jpeg, limit)?;
+        if encoded.written <= limit {
             let mut label = display_name(name, dimensions, original, true);
             if matches!(format, ImageFormat::Gif | ImageFormat::WebP) {
                 label.push_str(" · static first frame");
@@ -686,54 +693,70 @@ fn prepare(
             return Ok(PreparedImage {
                 label,
                 mime_type: output_mime,
-                bytes: encoded,
+                bytes: encoded.bytes,
             });
         }
         if dimensions == (1, 1) {
             break;
         }
-        dimensions = ((dimensions.0 * 4 / 5).max(1), (dimensions.1 * 4 / 5).max(1));
+        // PNG byte size depends on content. Estimate the next pixel area from
+        // the measured encoding, leaving room for a changed compression ratio.
+        let scale = if jpeg {
+            0.8
+        } else {
+            ((limit as f64 / encoded.written as f64).sqrt() * 0.92).clamp(0.4, 0.9)
+        };
+        dimensions = (
+            ((dimensions.0 as f64 * scale) as u32).max(1),
+            ((dimensions.1 as f64 * scale) as u32).max(1),
+        );
     }
     Err("Cannot fit this image within 400 KiB; crop it before importing".into())
 }
 struct LimitedBuffer {
     bytes: Vec<u8>,
     limit: usize,
-    exceeded: bool,
+    // Count bytes beyond the storage budget to guide the next resize.
+    written: usize,
+    measure_until: usize,
 }
 impl Write for LimitedBuffer {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
-            self.exceeded = true;
+        self.written += bytes.len();
+        if self.written > self.measure_until {
             return Err(std::io::Error::other("encoded image exceeds its budget"));
         }
-        self.bytes.extend_from_slice(bytes);
+        if self.written <= self.limit {
+            self.bytes.extend_from_slice(bytes);
+        }
         Ok(bytes.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
-fn encode(image: &DynamicImage, jpeg: bool, limit: usize) -> Result<Option<Vec<u8>>, String> {
+fn encode(image: &DynamicImage, jpeg: bool, limit: usize) -> Result<LimitedBuffer, String> {
     let mut output = LimitedBuffer {
         bytes: Vec::new(),
         limit,
-        exceeded: false,
+        written: 0,
+        // Six budgets already select the minimum PNG scale. JPEG keeps
+        // its existing early exit and fixed resize step.
+        measure_until: if jpeg { limit } else { limit * 6 },
     };
     let result = if jpeg {
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, 90).encode_image(image)
     } else {
         image.write_with_encoder(image::codecs::png::PngEncoder::new_with_quality(
             &mut output,
-            image::codecs::png::CompressionType::Best,
-            image::codecs::png::FilterType::Adaptive,
+            image::codecs::png::CompressionType::Level(3),
+            image::codecs::png::FilterType::Paeth,
         ))
     };
-    if output.exceeded {
-        return Ok(None);
+    if output.written <= output.measure_until {
+        result.map_err(|error| format!("Cannot encode image: {error}"))?;
     }
-    result.map_err(|error| format!("Cannot encode image: {error}"))?;
-    Ok(Some(output.bytes))
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -1092,6 +1115,54 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn validates_small_pixel_data_before_returning_original_bytes() {
+        let mut corrupt = png(16, 16);
+        let idat = corrupt
+            .windows(4)
+            .position(|bytes| bytes == b"IDAT")
+            .unwrap();
+        corrupt.truncate(idat + 6);
+        assert!(prepare("broken.png", "image/png", corrupt, MAX_IMAGE_BYTES).is_err());
+    }
+
+    #[test]
+    fn rejects_an_oversized_gif_canvas_before_decoding_pixels() {
+        // A valid one-pixel frame can live inside a much larger logical screen.
+        let mut bytes = Cursor::new(Vec::new());
+        DynamicImage::new_rgba8(1, 1)
+            .write_to(&mut bytes, ImageFormat::Gif)
+            .unwrap();
+        let mut bytes = bytes.into_inner();
+        bytes[6..8].copy_from_slice(&8192u16.to_le_bytes());
+        bytes[8..10].copy_from_slice(&8192u16.to_le_bytes());
+        let error = prepare("large.gif", "image/gif", bytes, MAX_IMAGE_BYTES).unwrap_err();
+        assert!(error.contains("32 megapixels"), "{error}");
+    }
+
+    #[test]
+    fn a_large_uncompressed_png_can_keep_its_full_resolution() {
+        let mut bytes = Vec::new();
+        let pixels = [42, 64, 80, 128].repeat(512 * 256);
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 512, 256);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_compression(png::Compression::NoCompression);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&pixels)
+                .unwrap();
+        }
+        assert!(bytes.len() > MAX_IMAGE_BYTES);
+        let image = prepare("flat.png", "image/png", bytes, MAX_IMAGE_BYTES).unwrap();
+        let decoded = reader(&image.bytes).unwrap().decode().unwrap().into_rgba8();
+        assert_eq!(decoded.dimensions(), (512, 256));
+        assert_eq!(decoded.as_raw(), &pixels);
+        assert!(image.bytes.len() <= MAX_IMAGE_BYTES);
+    }
+
     #[test]
     fn oversize_png_preserves_alpha_and_discloses_resize_within_raw_budget() {
         let image = prepare("screenshot.png", "image/png", png(320, 240), 9 * 1024).unwrap();
