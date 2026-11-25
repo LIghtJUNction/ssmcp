@@ -1730,6 +1730,11 @@ impl Shell {
             let job = started?;
             return Ok(job.snapshot());
         }
+        #[cfg(windows)]
+        let launch_cwd = crate::platform::child_cwd(Path::new(&args.command[0]), &cwd)
+            .map_err(|error| error.to_string())?;
+        #[cfg(not(windows))]
+        let launch_cwd = &cwd;
         let store = &self.output;
         // Reserve capacity before spawning: rejected requests must never run commands.
         let permit = self.slots.clone().try_acquire_owned().map_err(|_| {
@@ -1777,7 +1782,7 @@ impl Shell {
         let mut command = Command::new(&args.command[0]);
         command
             .args(&args.command[1..])
-            .current_dir(&cwd)
+            .current_dir(launch_cwd)
             .stdin(if stdin == InputMode::Pipe {
                 Stdio::piped()
             } else {

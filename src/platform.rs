@@ -4,6 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(any(windows, test))]
+mod cmd_cwd;
+#[cfg(windows)]
+pub(crate) use cmd_cwd::child_cwd;
 mod shell;
 pub(crate) use shell::{ShellPreference, launcher_environment};
 

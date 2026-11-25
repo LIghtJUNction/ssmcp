@@ -200,6 +200,10 @@ impl Terminal {
             pixel_width: 0,
             pixel_height: 0,
         };
+        #[cfg(windows)]
+        let launch_cwd = crate::platform::child_cwd(Path::new(&argv[0]), cwd)?;
+        #[cfg(not(windows))]
+        let launch_cwd = cwd;
         let pair = native_pty_system()
             .openpty(initial_size)
             .map_err(io::Error::other)?;
@@ -211,7 +215,7 @@ impl Terminal {
         for (key, value) in env {
             command.env(key, value);
         }
-        command.cwd(cwd);
+        command.cwd(launch_cwd.as_os_str());
         #[allow(unused_mut)]
         let mut child = pair
             .slave

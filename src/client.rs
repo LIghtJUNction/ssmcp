@@ -49,6 +49,8 @@ pub(crate) mod ui;
 mod ui_command;
 mod update;
 mod version;
+#[cfg(all(test, windows))]
+mod windows_cwd_tests;
 mod worker_control;
 mod worker_roster;
 mod worker_window;
