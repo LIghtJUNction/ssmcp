@@ -55,7 +55,7 @@ enum AdvisoryPage {
     Gap(u64),
     Routine {
         cursor: u64,
-        through: u64,
+        last_event_seq: u64,
         has_more: bool,
     },
 }
@@ -81,7 +81,8 @@ impl AdvisoryPage {
         }
         Some(Self::Routine {
             cursor: notice["cursor"].as_u64()?,
-            through: notice["next_cursor"].as_u64()?,
+            // The journal also scans past filtered-out observations.
+            last_event_seq: events.last()?["seq"].as_u64()?,
             has_more: notice["has_more"].as_bool()?,
         })
     }
@@ -92,7 +93,7 @@ struct SentAdvisory {
     page: AdvisoryPage,
     // A narrow outer response may have carried only a read_required receipt.
     // If more of the same page fits later, publish it immediately.
-    through: Option<u64>,
+    visible_events: Option<usize>,
     at: std::time::Instant,
 }
 
@@ -116,12 +117,12 @@ impl ModelReminder {
         let Some(page) = page else {
             return Some(notice);
         };
-        let through = (notice["status"] != "read_required")
-            .then(|| notice["next_cursor"].as_u64().unwrap_or(0));
+        let visible_events = (notice["status"] != "read_required")
+            .then(|| notice["events"].as_array().map_or(0, Vec::len));
         if self.last.as_ref().is_some_and(|last| {
             last.revision == revision
                 && last.page == page
-                && last.through >= through
+                && last.visible_events >= visible_events
                 && now.duration_since(last.at) < Self::RETRY
         }) {
             return None;
@@ -129,7 +130,7 @@ impl ModelReminder {
         self.last = Some(SentAdvisory {
             revision,
             page,
-            through,
+            visible_events,
             at: now,
         });
         Some(notice)

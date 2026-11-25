@@ -388,14 +388,23 @@ async fn quiet_outer_responses_leave_progress_replayable_until_ack() {
     for _ in 0..10 {
         assert_eq!(automatic().await, original);
     }
+    let original_end = page["next_cursor"].as_u64().unwrap();
+    let mut scanned = original_end;
     for request in [
         json!({"action":"read","subscription_id":id}),
         json!({"action":"wait","subscription_id":id,"wait_ms":1}),
     ] {
         let replay = fixture.control(request).await.unwrap();
         assert_eq!(replay["events"], page["events"]);
-        assert_eq!(replay["next_cursor"], page["next_cursor"]);
+        assert_eq!(replay["cursor"], page["cursor"]);
+        let end = replay["next_cursor"].as_u64().unwrap();
+        assert!(end >= scanned);
+        scanned = end;
     }
+    // events.wait records wait.started on the same journal. Its sequence can be
+    // scanned without matching this worker subscription or acknowledging progress.
+    assert!(scanned > original_end);
+    assert_eq!(automatic().await, original);
     fixture
         .control(json!({"action":"ack","subscription_id":id,"through":page["next_cursor"]}))
         .await
@@ -405,6 +414,7 @@ async fn quiet_outer_responses_leave_progress_replayable_until_ack() {
         .await
         .unwrap();
     assert_eq!(acked["events"], json!([]));
+    assert_eq!(acked["cursor"], original_end);
 }
 
 #[tokio::test]
@@ -965,6 +975,9 @@ fn automatic_repeat_projection_keeps_material_events_and_explicit_recovery_avail
     for offset in 1..=100 {
         assert_eq!(project(0, &page, now + Duration::from_secs(offset)), None);
     }
+    let mut scanned = page.clone();
+    scanned["next_cursor"] = json!(27);
+    assert_eq!(project(0, &scanned, now), None);
     let mut next = page.clone();
     next["next_cursor"] = json!(12);
     next["events"][0]["seq"] = json!(12);
