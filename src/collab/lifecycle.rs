@@ -784,6 +784,24 @@ impl Hub {
         }
     }
 
+    pub(crate) fn has_confirmed_claim(
+        &self,
+        owner: &str,
+        id: &str,
+        token: &str,
+        claim: &str,
+    ) -> bool {
+        self.locked().is_ok_and(|mut state| {
+            state.authenticated(owner, id, token).is_ok_and(|agent| {
+                agent
+                    .lifecycle
+                    .claims
+                    .values()
+                    .any(|known| !known.unknown && known.claim.id == claim)
+            })
+        })
+    }
+
     pub(crate) fn lifecycle_snapshot(
         &self,
         owner: &str,

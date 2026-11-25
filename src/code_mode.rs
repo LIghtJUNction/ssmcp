@@ -62,6 +62,7 @@ pub(crate) struct AuditRun {
     question_delivery_activity: Arc<Mutex<HashMap<String, bool>>>,
     question_answers: Arc<Mutex<question_answers::Capture>>,
     tool_summaries: Arc<Mutex<tool_summaries::Capture>>,
+    progress_reminders: Arc<Mutex<HashMap<(String, String), String>>>,
     waits: Arc<Mutex<user_wait::State>>,
     started: Instant,
 }
@@ -116,6 +117,7 @@ impl AuditRun {
             question_delivery_activity: Arc::new(Mutex::new(HashMap::new())),
             question_answers: Arc::new(Mutex::new(question_answers::Capture::default())),
             tool_summaries: Arc::new(Mutex::new(tool_summaries::Capture::default())),
+            progress_reminders: Default::default(),
             waits: Arc::new(Mutex::new(user_wait::State::default())),
             started: Instant::now(),
         })
@@ -282,6 +284,52 @@ impl AuditRun {
         PASSIVE_PROMPT_PROBE
             .scope((self.context.clone(), client_id.into()), operation)
             .await
+    }
+
+    pub(crate) fn observe_worker_progress(
+        &self,
+        client: &str,
+        member: Option<&str>,
+        tool: Option<&str>,
+        result: &Result<Value, String>,
+    ) {
+        let (Some(member), Some(tool), Ok(value)) = (member, tool, result) else {
+            return;
+        };
+        if value["isError"] == true {
+            return;
+        }
+        let marker = &value["_meta"][crate::worker::PROGRESS_META];
+        let reset = tool == "ssmcp.worker.report";
+        let id = if reset {
+            marker["reported"].as_str()
+        } else {
+            marker["due"].as_str()
+        };
+        let Some(id) = id.filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        else {
+            return;
+        };
+        let mut reminders = self
+            .progress_reminders
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let key = (client.to_owned(), member.to_owned());
+        if reset {
+            if reminders.get(&key).is_some_and(|known| known == id) {
+                reminders.remove(&key);
+            }
+        } else if crate::worker::progress_opportunity(tool) && reminders.len() < 32 {
+            reminders.insert(key, id.to_owned());
+        }
+    }
+
+    pub(crate) fn worker_progress_claim(&self, client: &str, member: &str) -> Option<String> {
+        self.progress_reminders
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(client.to_owned(), member.to_owned()))
+            .cloned()
     }
 
     /// Observe only the broker's actual native reply under its frozen binding.
@@ -1190,6 +1238,24 @@ mod tests {
     use tokio::sync::Notify;
 
     static TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[test]
+    fn progress_advice_captures_only_a_bound_native_marker_and_a_report_clears_it() {
+        let run = AuditRun::new("return 1", None).unwrap();
+        let id = "a".repeat(32);
+        let note = Ok(serde_json::json!({"_meta":{crate::worker::PROGRESS_META:{"due":id}}}));
+        run.observe_worker_progress("pool", None, Some("ssmcp.exec.read"), &note);
+        run.observe_worker_progress("pool", Some("w"), Some("ssmcp.time.now"), &note);
+        assert!(run.worker_progress_claim("pool", "w").is_none());
+        run.observe_worker_progress("pool", Some("w"), Some("ssmcp.exec.read"), &note);
+        assert_eq!(run.worker_progress_claim("pool", "w"), Some(id.clone()));
+        assert!(run.worker_progress_claim("another", "w").is_none());
+        assert!(run.worker_progress_claim("pool", "main").is_none());
+        let report =
+            Ok(serde_json::json!({"_meta":{crate::worker::PROGRESS_META:{"reported":id}}}));
+        run.observe_worker_progress("pool", Some("w"), Some("ssmcp.worker.report"), &report);
+        assert!(run.worker_progress_claim("pool", "w").is_none());
+    }
 
     #[test]
     fn native_argument_size_has_an_explicit_error_at_the_unchanged_boundary() {

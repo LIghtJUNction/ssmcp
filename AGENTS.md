@@ -6,7 +6,7 @@ For a chat-enabled SSMCP session, deliver every user-facing progress update and 
 
 After delivering an answer, call the current authenticated `ui.wait` helper and wait for a real user response. Preserve the returned wait/request identity across observation windows. A timeout means no reply was received; it is not confirmation. Only the final outer receipt with the matching user messages establishes ordinary input delivery. If ending the task, follow the currently advertised finish-decision contract and its exact consumed human decision. Do not invent a response or start a model to supply one.
 
-Worker-to-coordinator reports use collaboration messages and the exact worker claim; after reporting, return to `worker.wait` rather than opening a human-input wait.
+During an assignment, use `ssmcp.worker.report` with the exact claim to tell the user your first check, then report milestones and blockers as they occur. During longer work, give a verified observation within 60 seconds when able. Use collaboration messages for questions the coordinator needs to answer. After completing the claim, return to `worker.wait`.
 
 ## Returning to work and requesting voluntary offline
 

@@ -53,11 +53,18 @@ async fn task_claim_and_completion_survive_gaps_between_wait_windows() {
     assert_eq!(assigned["status"], "assigned");
     assert_eq!(assigned["claim"]["task_id"], first.task_id);
     assert_eq!(assigned["claim"]["attempt"], 1);
+    assert!(
+        assigned["progress_hint"]
+            .as_str()
+            .unwrap()
+            .contains("ssmcp.worker.report")
+    );
     let second = submit_observed(&pool, &owner, "second-stays-queued");
 
     // Recover a lost assignment reply without taking the next queued task.
     let recovered = pool.wait_remote(&worker, "resume-one", 0).await.unwrap();
     assert_eq!(recovered["claim"], assigned["claim"]);
+    assert!(recovered.get("progress_hint").is_none());
     assert_eq!(recovered["text"], assigned["text"]);
     assert_eq!(pool.queue.snapshot().working, 1);
     assert_eq!(pool.queue.snapshot().queued, 1);

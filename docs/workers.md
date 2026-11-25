@@ -436,18 +436,24 @@ Use one completion form after performing the work:
 
 A matching repeat of a retained completion is idempotent; changing its payload is rejected. Completion is identified as `authenticated_remote_agent`: it records what the remote agent reported, not an independent OS observation that an external process succeeded or stopped. Cancellation requests do not forcibly terminate an external agent or release an occupied slot before its report.
 
-Native command starts and finishes are attached to their real task and authenticated caller. For progress observed by the external worker, call `ssmcp.worker.report` with `event: "progress"` after the work happened:
+On assignment, send one short note in the user's language **before the first substantive action**. Name the next check. Send the next report when a stage finishes, a dependency starts, a check fails, or a blocker changes. Use a concrete observation that helps the coordinator decide what to do next. For example, “3 of 5 packages passed. The fourth is waiting for the signing service.”
+
+During an active claim with no stage change, aim for **at most 60 seconds between user updates** while you have a real observation to share. A still-running job or a pending dependency can be the observation. Say what you checked and what will unblock it. Keep a sleeping worker on its existing wait until it has evidence. Idle workers need no progress reports. A request for an update is not itself progress and starts no model.
+
+Use the pool connection, the unchanged assignment claim and a new request ID for each observation. Retry a lost receipt with the same ID and identical fields. Read the cancellation and retirement flags in the response.
 
 ```js
 return await call(id, "ssmcp.worker.report", {
   claim: assignment.claim,
-  request_id: "task-step-1",
+  request_id: "check-start",
   event: "progress",
-  progress: "The requested check completed; its actual result is available."
+  progress: "已领取。第一步核对安装包清单里的 8 个资源。"
 });
 ```
 
-The tool also accepts `command_start` and `command_end` events for commands an external worker actually observes. Command text is limited to 4096 bytes; progress and detail are limited to 1024 bytes. Use the event's fields from the discovered schema. Repeating a retained request ID with identical content is idempotent; changed content, another caller or a stale claim is rejected. A progress report does not complete the task.
+The first assignment receipt contains a bilingual `progress_hint`. During longer work, a subsequent authenticated filesystem or execution response can remind the current claimant to report. Receiving the reminder leaves the task, its reported progress and the worker's execution unchanged. A fresh accepted progress report starts a new 60-second interval. Confirmed completion ends the claim.
+
+Native command starts and finishes already appear in the task log. Use `command_start` and `command_end` for external commands the claimant actually observes. Command text is limited to 4096 bytes. Progress and detail are each limited to 1024 bytes.
 
 When a station is selected for removal, its original worker receives a retirement receipt through `worker.wait`. Keep that object unchanged. `worker.release` refuses an active claim and only removes the station after the owning worker acknowledges retirement. Repeating an already accepted release is safe while its receipt is retained. The worker can then leave its collaboration membership and stop waiting; no external model or operating-system process is forcibly terminated by this acknowledgement.
 

@@ -27,6 +27,7 @@ struct NativeAnswers {
     calls: Vec<String>,
     acknowledgements: Vec<Value>,
     summary_calls: u64,
+    worker_progress_due: Option<String>,
     prompt_reply: Option<Value>,
     prompt_reads: u64,
     summary_reminded: bool,
@@ -232,6 +233,7 @@ impl Fixture {
             calls: vec![],
             acknowledgements: vec![],
             summary_calls: 0,
+            worker_progress_due: None,
             prompt_reply: None,
             prompt_reads: 0,
             summary_reminded: false,
@@ -535,6 +537,11 @@ impl Fixture {
                                 "answers":if state.pending {vec![state.view.clone()]} else {vec![]}
                             }});
                         }
+                        if name == "ssmcp.fs.stat"
+                            && let Some(id) = state.worker_progress_due.take()
+                        {
+                            output["_meta"][crate::worker::PROGRESS_META] = json!({"due":id});
+                        }
                         if name == "ssmcp.fs.stat" || summary_exec {
                             state.summary_calls += 1;
                             if state.summary_calls > 10 && !state.summary_reminded {
@@ -684,6 +691,64 @@ impl Fixture {
             .unwrap();
         response["receipts"][0]["status"].clone()
     }
+}
+
+#[tokio::test]
+async fn filtered_worker_read_delivers_one_due_notice_only_while_the_claim_is_current() {
+    let f = Fixture::new().await;
+    let id = "a".repeat(32);
+    let claim = json!({"id":id,"generation":"pool_generation","slot":0,
+        "epoch":1,"task_id":"compile","attempt":1});
+    let record = |name: &str, args: Value, receipt: Value| {
+        let op = wire::Operation::CallTool {
+            name: name.to_owned(),
+            arguments: args,
+        };
+        let mut activity = f
+            .session
+            .collaboration
+            .prepare_native_activity(&f.owner, &f.agent_id, &f.agent_token, &op)
+            .unwrap();
+        activity.dispatched();
+        activity.finish(&Ok(json!({"isError":false,"structuredContent":receipt})));
+    };
+    record(
+        "ssmcp.worker.wait",
+        json!({"request_id":"one-wait"}),
+        json!({"status":"assigned","claim":claim}),
+    );
+    f.native.lock().unwrap().worker_progress_due = Some(id);
+    let run = f.run();
+    f.native_call(run.clone(), "ssmcp.fs.stat").await.unwrap();
+    let report = f.report(run);
+    let notice_count = |response: &Value| {
+        response["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["text"] == crate::worker::PROGRESS_REMINDER)
+            .count()
+    };
+    let response = finish_user_response(&report, original()).await;
+    assert_eq!(response["content"][0], original()["content"][0]);
+    assert_eq!(response["structuredContent"]["result"], Value::Null);
+    assert_eq!(notice_count(&response), 1);
+    record(
+        "ssmcp.worker.complete",
+        json!({"claim":claim}),
+        json!({"status":"recorded","claim":claim,"task":{"status":"completed"}}),
+    );
+    let response = finish_user_response(&report, original()).await;
+    assert_eq!(notice_count(&response), 0);
+    let calls = &f.native.lock().unwrap().calls;
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|name| name.as_str() == "ssmcp.fs.stat")
+            .count(),
+        1
+    );
+    assert!(!calls.iter().any(|name| name.starts_with("ssmcp.worker.")));
 }
 
 #[tokio::test]

@@ -1017,3 +1017,26 @@ async fn main_activity_tracks_dispatch_receipts_and_membership_time_without_leas
         .unwrap();
     assert_eq!((second.connected_ms, second.phase), (0, MainPhase::Quiet));
 }
+
+#[tokio::test]
+async fn progress_advice_requires_its_original_authenticated_known_claim() {
+    let hub = Hub::for_session("progress-test");
+    let (id, token) = member(&hub, "owner", "worker");
+    let (other, key) = member(&hub, "owner", "worker");
+    let known = claim();
+    let claim_id = known["id"].as_str().unwrap();
+    assert!(!hub.has_confirmed_claim("owner", &id, &token, claim_id));
+    assigned(&hub, &id, &token);
+    assert!(hub.has_confirmed_claim("owner", &id, &token, claim_id));
+    assert!(!hub.has_confirmed_claim("owner", &other, &key, claim_id));
+    assert!(!hub.has_confirmed_claim("owner", &id, "bad", claim_id));
+    let op = native("worker.complete", json!({"claim":known}));
+    let mut call = hub
+        .prepare_native_activity("owner", &id, &token, &op)
+        .unwrap();
+    call.dispatched();
+    call.finish(&receipt(
+        json!({"status":"recorded","claim":known,"task":{"status":"completed"}}),
+    ));
+    assert!(!hub.has_confirmed_claim("owner", &id, &token, claim_id));
+}

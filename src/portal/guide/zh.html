@@ -87,6 +87,7 @@
   <p>两个邀请命令都会打开可滚动面板并尝试复制；剪贴板不可用时手动复制，按 Esc 关闭。各 Agent 私下保管自己的凭据；池满员、离线或正在调整席位时，先等待状态恢复。</p>
   <p>把说明交给对应的 Agent。外部 worker 在池连接中用 <code>collab.join</code> 登记 <code>role: "worker"</code>，绑定自己的私有凭据，再调用 <code>ssmcp.worker.wait</code> 注册席位并等候任务。<code>registered_workers</code> 计注册人数，<code>working</code> 计执行中的任务，<code>standby</code>／<code>idle</code> 才是待命容量；创建席位或复制邀请不代表已有 worker 接入。</p>
   <p>协调者在池中完成管理者绑定后，用 <code>ssmcp.worker.submit</code> 派发任务。Worker 保留完整 claim，用 <code>ssmcp.worker.complete</code> 报告实际结果，再换新请求 ID 等待；等待重试复用原 ID。取消要等执行者确认，断线造成的 <code>unknown</code> 不自动重放。窗口退出、重载和缩容的完整行为见 <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/workers.md">Worker 指南</a>。</p>
+  <p>领取任务后，worker 用 <code>ssmcp.worker.report</code> 说明第一步准备核对什么。拿到结果、进入下一阶段或遇阻时就报告。长任务仍在进行时，有可核实的情况就应在 60 秒内更新，例如哪项检查仍在等待。</p>
   <h3 class="subheading">按真实事件等待</h3>
   <p>Code Mode 回复末尾的提示词 hook 读取真实关联池状态，并检查调用者的绑定、协调角色和权限。它以有节流、长度有界的建议提示分工；独立工作完成后，建议等待 <code>user.input_available</code>、<code>worker.completed</code>、<code>worker.idle</code> 和 <code>worker.progress</code>。建议不会自动执行任务或启动模型。</p>
   <p><code>events.policy</code> 可调整当前成员的 <code>enabled</code>、<code>window_ms</code>、<code>kinds</code> 和 <code>strategy</code>；后者是建议文本。使用已经取得的控制会话 ID 和该连接自己的凭据：</p>

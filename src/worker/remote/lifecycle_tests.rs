@@ -169,6 +169,7 @@ fn shrink_selects_offline_then_idle_and_never_discards_working_results() {
     let Claimed::Assigned {
         claim: retry,
         lease,
+        ..
     } = remote.claim(&queue, &working, "work", 5).unwrap()
     else {
         panic!("resize lost active claim")
@@ -635,4 +636,74 @@ fn human_force_only_revokes_the_confirmed_epoch_and_never_replays_the_claim() {
     remote.claim(&queue, &fresh, "fresh worker", 8).unwrap();
     assert!(remote.force_retirements(&queue, &tickets, 9).is_err());
     assert_eq!(queue.snapshot().registered_workers, 1);
+}
+
+#[test]
+fn progress_reminder_uses_only_the_bound_current_claim_and_observed_reports() {
+    use std::time::Duration;
+    let interval = crate::worker::PROGRESS_INTERVAL;
+    let (q, r) = service(2);
+    let owner = actor("main");
+    let w = actor("worker");
+    q.submit(owner.clone(), "task", "compile", (), 1).unwrap();
+    let active = claim(&r, &q, &w, "wait");
+    let stamp = || r.state.lock().unwrap().active[&active.id].last_progress_or_reminder;
+    let initial = stamp();
+    assert!(
+        r.progress_reminder(&q, &w, initial + interval - Duration::from_nanos(1))
+            .is_none()
+    );
+    assert!(
+        r.progress_reminder(&q, &owner, initial + interval)
+            .is_none()
+    );
+    let mut other = w.clone();
+    other.connection += 1;
+    assert!(
+        r.progress_reminder(&q, &other, initial + interval)
+            .is_none()
+    );
+    let logs = q.snapshot().slots[active.slot].next_log_sequence;
+    assert_eq!(
+        r.progress_reminder(&q, &w, initial + interval),
+        Some(active.id.clone())
+    );
+    assert!(r.progress_reminder(&q, &w, initial + interval).is_none());
+    assert_eq!(q.snapshot().slots[active.slot].next_log_sequence, logs);
+    let note = Report {
+        claim: active.clone(),
+        request_id: "progress".into(),
+        event: ReportEvent::Progress,
+        command: None,
+        progress: Some("3 of 5 complete".into()),
+        detail: None,
+    };
+    let before_report = std::time::Instant::now();
+    assert!(!r.report(&q, &w, note.clone(), 2).unwrap().0);
+    let reported = stamp();
+    assert!((before_report..=std::time::Instant::now()).contains(&reported));
+    assert!(r.report(&q, &w, note, 3).unwrap().0);
+    assert_eq!(stamp(), reported);
+    assert!(
+        r.progress_reminder(&q, &w, reported + interval - Duration::from_nanos(1))
+            .is_none()
+    );
+    assert_eq!(
+        r.progress_reminder(&q, &w, reported + interval),
+        Some(active.id.clone())
+    );
+    q.resize(0).unwrap();
+    assert!(
+        r.progress_reminder(&q, &w, reported + interval * 2)
+            .is_none()
+    );
+    r.close(&q, 4).unwrap();
+    assert!(
+        r.progress_reminder(&q, &w, reported + interval * 3)
+            .is_none()
+    );
+    assert_eq!(
+        q.result(&owner, &active.task_id).unwrap().status,
+        TaskStatus::Unknown
+    );
 }

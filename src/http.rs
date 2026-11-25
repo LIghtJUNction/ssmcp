@@ -1842,6 +1842,7 @@ fn commit_user_response_inner(
     let mut answers = Vec::new();
     let mut answer_acknowledgements = Vec::new();
     let mut answers_deferred = Vec::new();
+    let mut worker_progress_due = false;
     let mut native_candidates = Vec::new();
     let mut tool_summary_notices = Vec::new();
     let mut bytes = 0usize;
@@ -1859,6 +1860,19 @@ fn commit_user_response_inner(
         let Some(authorization) = response_authorization(report, &target) else {
             continue;
         };
+        if let Some(binding) = &target.binding
+            && let Some(claim) = report
+                .run
+                .worker_progress_claim(target.session.client_id(), &binding.agent_id)
+            && target.session.collaboration.has_confirmed_claim(
+                &binding.owner,
+                &binding.agent_id,
+                &binding.token,
+                &claim,
+            )
+        {
+            worker_progress_due = true;
+        }
         let finish_episode = target.session.steering.episode(
             target.session.client_id(),
             &target.owner,
@@ -1995,7 +2009,15 @@ fn commit_user_response_inner(
         native_messages.extend(included);
     }
     let response = crate::messaging::append(response, native_messages);
-    let response = session_io::include(report, response, native_candidates);
+    let mut response = session_io::include(report, response, native_candidates);
+    if worker_progress_due
+        && delivery_budget(&response) >= crate::worker::PROGRESS_REMINDER.len() + 128
+    {
+        response["content"]
+            .as_array_mut()
+            .expect("validated content")
+            .push(json!({"type":"text","text":crate::worker::PROGRESS_REMINDER}));
+    }
     acknowledge_question_answers(report, answer_acknowledgements);
     response
 }

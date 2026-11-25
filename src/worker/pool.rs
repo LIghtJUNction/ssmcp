@@ -176,6 +176,14 @@ impl Pool {
         }
     }
 
+    pub(crate) fn progress_reminder(&self, source: &Source) -> Option<String> {
+        self.remote().ok()?.progress_reminder(
+            &self.queue,
+            &actor(source).ok()?,
+            std::time::Instant::now(),
+        )
+    }
+
     pub(crate) fn reconcile_roster(
         &self,
         connection: u64,
@@ -436,7 +444,7 @@ impl Pool {
                     "status":{"type":"string","enum":["completed","failed","cancelled"]},
                     "output":{"type":"string","maxLength":65536},"error":{"type":"string","maxLength":4096}
                 }), json!(["claim","status"]), false),
-            tool("report", "Report real command start/end or progress for your exact active claim. The same request_id and content are idempotent while retained; changed content, another caller or stale claims are rejected. Text is bounded and sanitized for the shared worker monitor. Report progress only after it happened; this never completes a task. The response also exposes pending cancellation and retirement.",
+            tool("report", "Report real command start/end or progress for your exact active claim. The same request_id and content are idempotent while retained; changed content, another caller or stale claims are rejected. Text is bounded and sanitized for the shared worker monitor. Before starting, state the accepted task and your next check. Report a measured result, phase change or blocker promptly; as a long task continues use a verified observation within 60 seconds when able. The response also exposes pending cancellation and retirement.",
                 json!({"claim":claim_schema,"request_id":{"type":"string","minLength":1,"maxLength":128},
                     "event":{"type":"string","enum":["command_start","command_end","progress"]},
                     "command":{"type":"string","minLength":1,"maxLength":4096},
@@ -724,14 +732,24 @@ impl Pool {
         let request_started = std::time::Instant::now();
         loop {
             match remote.claim_since(&self.queue, actor, request_id, now_ms(), request_started)? {
-                Claimed::Assigned { claim, lease } => {
-                    return Ok(json!({"status":"assigned","claim":claim,
+                Claimed::Assigned {
+                    claim,
+                    lease,
+                    first,
+                } => {
+                    let mut assigned = json!({"status":"assigned","claim":claim,
                         "original_text":lease.text,
                         "text":lease.context.prepared,
                         "cancel_requested":self.queue.cancellation_requested(&lease),
                         "retire_requested":self.queue.retire_requested(&lease),
                         "execution":"remote","worker":self.queue.compact_snapshot(),
-                        "wait_hint":"Resume working immediately; this claim resets any Dreaming time and invalidates its exit request. Use your own tools to perform this task, then call worker.complete with this exact claim. Reuse this wait request_id to observe cancellation; delivery alone never completes it."}));
+                        "wait_hint":"Resume working immediately; this claim resets any Dreaming time and invalidates its exit request. Use your own tools to perform this task, then call worker.complete with this exact claim. Reuse this wait request_id to observe cancellation; delivery alone never completes it."});
+                    if first {
+                        assigned["progress_hint"] = json!(
+                            "Before the first action, say what you will check via ssmcp.worker.report (event: progress). Report a result, phase change or blocker immediately. During longer work, share a verified observation every 60s when able. 先报第一步，阶段变化或遇阻就报；长任务报告实际观测。"
+                        );
+                    }
+                    return Ok(assigned);
                 }
                 Claimed::Completed { claim, task } => {
                     return Ok(

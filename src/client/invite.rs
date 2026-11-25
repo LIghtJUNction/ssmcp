@@ -250,10 +250,10 @@ fn render(role: &str, control_id: &str, cwd: &str, pool: Option<&Value>) -> Resu
     prompt.push_str("Read `ssmcp://guide`, `AGENTS.md`, `docs/workers.md`; discover schemas. First bind/reconnect: `await skills.view(clientId,{})` (native `ssmcp.skills.view`).\n");
     prompt.push_str(match role {
         Role::Coordinator => {
-            "Coordinator: privately `collab.join` as main and `collab.bind` control. For a linked pool, bind separately; `ssmcp.worker.attach`. Delegate to standby workers via `ssmcp.worker.submit`. Prefer native `await` (worker_result, any; connector JSON in docs/workers.md). Native alternatives: `ssmcp.worker.wait_for`, `ssmcp.worker.result`, `ssmcp.worker.wait_available` with cursor. Reconcile `ssmcp.worker.events`. Verify finish receipts and worker-specific human decisions."
+            "Coordinator: privately `collab.join` as main and `collab.bind` control. For a linked pool, bind separately; `ssmcp.worker.attach`. Delegate to standby workers via `ssmcp.worker.submit`. Prefer native `await` (worker_result, any; connector JSON in docs/workers.md). Native alternatives: `ssmcp.worker.wait_for`, `ssmcp.worker.result`, `ssmcp.worker.wait_available` with cursor. Reconcile `ssmcp.worker.events`. Tell the user when a result or blocker changes their next step. Verify finish receipts and worker-specific human decisions."
         }
         Role::Worker => {
-            "Worker: privately `collab.join` as worker; `collab.bind` pool. Prefer native `await` worker_assignment (connector JSON in docs/workers.md) or `ssmcp.worker.wait`; preserve each claim unchanged; reuse pending request_id. `ssmcp.worker.complete`, then wait again using a new request ID. For operator-ordered retirement, complete any current claim; acknowledge via `ssmcp.worker.release`. Verify human approval for voluntary exit. Never manage the queue or consume control-session input."
+            "Worker: privately `collab.join` (role=worker); `collab.bind` pool. `await` worker_assignment or `ssmcp.worker.wait`; preserve each claim unchanged; reuse pending request_id. `ssmcp.worker.report`: first check before action, then milestones/blockers immediately; verified updates within 60s when able. `ssmcp.worker.complete`, then wait again using a new request ID. For operator-ordered retirement, complete any current claim; acknowledge via `ssmcp.worker.release`. Verify voluntary-exit approval. Never manage the queue or consume control-session input."
         }
     });
     prompt.push('\n');
@@ -440,6 +440,9 @@ mod tests {
     #[test]
     fn worker_prompt_preserves_claims_and_returns_to_waiting() {
         let prompt = render("worker", CONTROL_ID, "/project", Some(&pool())).unwrap();
+        assert!(prompt.contains("ssmcp.worker.report"));
+        assert!(prompt.contains("first check before action"));
+        assert!(prompt.contains("verified updates within 60s"));
         assert!(prompt.contains("preserve each claim unchanged"));
         assert!(prompt.contains("ssmcp.worker.wait"));
         assert!(prompt.contains("ssmcp.worker.complete"));

@@ -870,6 +870,12 @@ impl Session {
             self.prompt_hooks_advertised.store(true, Ordering::Release);
         }
         if let Some(run) = audit_run.as_ref() {
+            run.observe_worker_progress(
+                self.client_id(),
+                reply_agent.as_deref(),
+                audit_tool.as_deref(),
+                &result,
+            );
             run.native_tool_summary_reply(
                 self.client_id(),
                 reply_agent.as_deref(),

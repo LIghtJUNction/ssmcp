@@ -65,10 +65,21 @@ impl Completion {
 
 pub(super) enum Claimed<T> {
     Waiting,
-    Retiring { retirement: Retirement },
-    Released { retirement: Retirement },
-    Assigned { claim: Claim, lease: Lease<T> },
-    Completed { claim: Claim, task: TaskView },
+    Retiring {
+        retirement: Retirement,
+    },
+    Released {
+        retirement: Retirement,
+    },
+    Assigned {
+        claim: Claim,
+        lease: Lease<T>,
+        first: bool,
+    },
+    Completed {
+        claim: Claim,
+        task: TaskView,
+    },
 }
 
 struct Assignment<T> {
@@ -76,6 +87,7 @@ struct Assignment<T> {
     request_id: String,
     claim: Claim,
     lease: Lease<T>,
+    last_progress_or_reminder: Instant,
 }
 
 struct Receipt {
@@ -323,6 +335,7 @@ impl<T: Clone> Remote<T> {
             return Ok(Claimed::Assigned {
                 claim: active.claim.clone(),
                 lease: active.lease.clone(),
+                first: false,
             });
         }
         if let Some(retirement) = queue.retirement(actor) {
@@ -358,9 +371,36 @@ impl<T: Clone> Remote<T> {
                 request_id: request_id.into(),
                 claim: claim.clone(),
                 lease: lease.clone(),
+                last_progress_or_reminder: Instant::now(),
             },
         );
-        Ok(Claimed::Assigned { claim, lease })
+        Ok(Claimed::Assigned {
+            claim,
+            lease,
+            first: true,
+        })
+    }
+
+    /// An opportunity on the claimant's existing call, never a wakeup or a progress event.
+    pub(super) fn progress_reminder(
+        &self,
+        queue: &Queue<T>,
+        actor: &Actor,
+        now: Instant,
+    ) -> Option<String> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let active = state
+            .active
+            .values_mut()
+            .find(|active| &active.actor == actor)?;
+        if now.saturating_duration_since(active.last_progress_or_reminder)
+            < super::PROGRESS_INTERVAL
+            || queue.cancellation_requested(&active.lease)
+        {
+            return None;
+        }
+        active.last_progress_or_reminder = now;
+        Some(active.claim.id.clone())
     }
 
     pub(super) fn complete(
@@ -498,10 +538,13 @@ impl<T: Clone> Remote<T> {
         }
         let active = state
             .active
-            .get(&report.claim.id)
+            .get_mut(&report.claim.id)
             .filter(|active| &active.actor == actor && active.claim == report.claim);
         let (cancel, retiring) = if let Some(active) = active {
             queue.report(&active.lease, &update, now_ms)?;
+            if update.event == ReportEvent::Progress {
+                active.last_progress_or_reminder = Instant::now();
+            }
             (
                 queue.cancellation_requested(&active.lease),
                 queue.retire_requested(&active.lease),
@@ -844,6 +887,7 @@ mod tests {
         let Claimed::Assigned {
             claim: retry,
             lease,
+            ..
         } = remote.claim(&queue, &executor, "take-first", 5).unwrap()
         else {
             panic!("active claim was lost after stop")

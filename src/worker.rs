@@ -12,6 +12,16 @@ mod executor;
 mod limits;
 mod pool;
 mod queue;
+pub(crate) const PROGRESS_META: &str = "ssmcp.worker_progress";
+pub(crate) const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+pub(crate) const PROGRESS_REMINDER: &str = "Worker update · Use ssmcp.worker.report with your current claim to tell the user what you observed or are waiting for. 用一句话报告已核实的进展或仍在等待什么。";
+
+pub(crate) fn progress_opportunity(name: &str) -> bool {
+    name.starts_with("ssmcp.exec.")
+        || name.starts_with("ssmcp.fs.")
+        || matches!(name, "ssmcp.worker.wait" | "ssmcp.worker.claim")
+}
+
 pub(crate) use queue::Retirement;
 #[cfg(target_os = "linux")]
 mod registry;
