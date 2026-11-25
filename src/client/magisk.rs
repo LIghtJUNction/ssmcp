@@ -29,6 +29,7 @@ const STATUS_ENV: &str = "SSMCP_MAGISK_CONNECTED";
 const CONSENT: &str = "root-consent-v1";
 const RC: &str = include_str!("../../packaging/magisk/src/ssmcp/ssmcp.rc");
 const INDEX: &str = include_str!("../../packaging/magisk/src/ssmcp/webroot/index.html");
+const ONBOARDING: &str = include_str!("../../packaging/magisk/src/ssmcp/onboarding/index.html");
 const SCRIPT: &str = include_str!("../../packaging/magisk/src/ssmcp/webroot/console.js");
 const STYLE: &str = include_str!("../../packaging/magisk/src/ssmcp/webroot/console.css");
 
@@ -333,10 +334,15 @@ fn terminal_action(state: &Console, action: Action) -> Result<Value> {
     match action {
         Action::Screen { .. } => {
             let exited = terminal.child.try_wait()?.is_some();
-            let screen = terminal.screen.lock().unwrap();
-            Ok(
-                json!({"screen": screen.screen().contents(), "exited": exited, "connected_once": terminal.connected.is_file()}),
-            )
+            let parser = terminal.screen.lock().unwrap();
+            let screen = parser.screen();
+            let (row, col) = screen.cursor_position();
+            Ok(json!({
+                "screen": screen.rows(0, screen.size().1.get()).collect::<Vec<_>>().join("\n"),
+                "cursor": { "row": row, "col": col, "visible": !exited && !screen.hide_cursor() },
+                "exited": exited,
+                "connected_once": terminal.connected.is_file(),
+            }))
         }
         Action::Input { text, .. } if text.len() <= 4096 => {
             terminal.writer.write_all(text.as_bytes())?;
@@ -358,16 +364,29 @@ pub(super) fn signal_connected() {
 
 async fn asset(Param(file): Param<String>) -> Response {
     match file.as_str() {
-        "console.js" => (
-            [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-            SCRIPT,
-        )
-            .into_response(),
+        "console.js" => javascript(SCRIPT),
+        "setup.js" => javascript(include_str!(
+            "../../packaging/magisk/src/ssmcp/onboarding/setup.js"
+        )),
+        "device-api.js" => javascript(include_str!(
+            "../../packaging/magisk/src/ssmcp/webroot/device-api.js"
+        )),
+        "module-entry.js" => javascript(include_str!(
+            "../../packaging/magisk/src/ssmcp/webroot/module-entry.js"
+        )),
         "console.css" => {
             ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STYLE).into_response()
         }
         _ => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+fn javascript(source: &'static str) -> Response {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        source,
+    )
+        .into_response()
 }
 
 pub(super) async fn run(args: &[OsString]) -> Result<()> {
@@ -412,7 +431,7 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
     let app = Router::new()
         .route("/", get(|| async { Html(INDEX) }))
         .route("/{file}", get(asset))
-        .route("/setup", post(configure))
+        .route("/setup", get(|| async { Html(ONBOARDING) }).post(configure))
         .route("/terminal", post(terminal))
         .layer(DefaultBodyLimit::max(24 * 1024))
         .layer(axum::middleware::map_response(|mut response: Response| async {
