@@ -432,9 +432,7 @@ fn tool_activity_matches_the_registered_participant_and_preserves_the_claim() {
     let busy = actor("busy");
     remote.claim(&queue, &quiet, "q", 1).unwrap();
     remote.claim(&queue, &busy, "b", 1).unwrap();
-    queue
-        .submit(actor("main"), "work", "task", "prepared", 2)
-        .unwrap();
+    queue.submit(actor("main"), "work", "task", (), 2).unwrap();
     let work = claim(&remote, &queue, &quiet, "q");
     queue.set_member_activity(std::sync::Arc::new(
         [
