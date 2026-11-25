@@ -1,3 +1,4 @@
+mod discovery;
 use super::*;
 use crate::wire::project_continuity::{CAPABILITY, OFFER_HEADER, Proof};
 use ring::signature::Ed25519KeyPair;
