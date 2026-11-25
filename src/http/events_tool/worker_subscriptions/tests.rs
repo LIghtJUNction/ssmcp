@@ -341,6 +341,73 @@ async fn configured_worker_selection_and_explicit_ack_control_real_wake_and_repl
 }
 
 #[tokio::test]
+async fn quiet_outer_responses_leave_progress_replayable_until_ack() {
+    let mut fixture = Fixture::new(true).await;
+    let bound = fixture.bind_main().await;
+    let id = &bound["worker_subscriptions"][0]["subscription_id"];
+    fixture
+        .native
+        .broker
+        .events
+        .publish_system(
+            &fixture.owner,
+            fixture.pool.client_id(),
+            fixture.pool_member["agent_id"].as_str(),
+            "worker.progress",
+            json!({"task_status":"working"}),
+            (None, None),
+        )
+        .unwrap();
+    let context = fixture.context().await;
+    let report = CodeRunReport {
+        broker: fixture.native.broker.clone(),
+        user: IDENTITY_RESOURCE.into(),
+        access_token: fixture.native.access_token.clone(),
+        run: fixture.run.clone(),
+        delivered: true,
+    };
+    let target = EligibleUserResponse {
+        session: context.session.clone(),
+        owner: fixture.owner.clone(),
+        binding: Some(context.binding),
+        may_claim: false,
+        waiting: false,
+    };
+    let original = json!({"isError":false,"content":[{"type":"text","text":"original output"}],"structuredContent":{}});
+    let automatic = || append(&report, original.clone(), std::slice::from_ref(&target));
+    let first = automatic();
+    tokio::pin!(first);
+    let delivered = loop {
+        tokio::select! {
+            response = &mut first => break response,
+            _ = fixture.native.native_reply_with(TestFixture::input_receipt) => {}
+        }
+    };
+    let page = &delivered["structuredContent"]["worker_events"][0];
+    assert_eq!(page["events"][0]["kind"], "worker.progress");
+    for _ in 0..10 {
+        assert_eq!(automatic().await, original);
+    }
+    for request in [
+        json!({"action":"read","subscription_id":id}),
+        json!({"action":"wait","subscription_id":id,"wait_ms":1}),
+    ] {
+        let replay = fixture.control(request).await.unwrap();
+        assert_eq!(replay["events"], page["events"]);
+        assert_eq!(replay["next_cursor"], page["next_cursor"]);
+    }
+    fixture
+        .control(json!({"action":"ack","subscription_id":id,"through":page["next_cursor"]}))
+        .await
+        .unwrap();
+    let acked = fixture
+        .control(json!({"action":"read","subscription_id":id}))
+        .await
+        .unwrap();
+    assert_eq!(acked["events"], json!([]));
+}
+
+#[tokio::test]
 async fn advancing_retention_boundary_keeps_one_visible_gap_and_the_latest_receipt() {
     let mut fixture = Fixture::new(true).await;
     fixture.bind_main().await;
@@ -873,37 +940,64 @@ fn automatic_repeat_projection_keeps_material_events_and_explicit_recovery_avail
     let page = json!({"status":"ready","client_id":"control","subscription_id":"sub",
         "cursor":10,"next_cursor":11,"has_more":false,"events":[
         {"seq":11,"kind":"worker.progress","data":{"task_status":"working","details":"full details"}}]});
-    let first = reminders.project(0, page.clone(), now).unwrap();
-    assert_eq!(first, page);
-    let repeat = reminders.project(0, page.clone(), now).unwrap();
-    assert_eq!(repeat["status"], "read_required");
-    assert_eq!(repeat["subscription_id"], "sub");
-    assert!(repeat.get("next_cursor").is_none());
+    let raw = AdvisoryPage::from_notice(&page);
+    let fallback = read_required(&page);
+    assert_eq!(
+        reminders.project(0, raw, fallback.clone(), now),
+        Some(fallback.clone())
+    );
+    for _ in 0..100 {
+        assert_eq!(reminders.project(0, raw, fallback.clone(), now), None);
+    }
+    // Room for the complete notice re-arms delivery even with the same raw cursor.
+    assert_eq!(
+        reminders.project(0, raw, page.clone(), now),
+        Some(page.clone())
+    );
+    let mut project = |revision, receipt: &Value, at| {
+        reminders.project(
+            revision,
+            AdvisoryPage::from_notice(receipt),
+            receipt.clone(),
+            at,
+        )
+    };
+    for offset in 1..=100 {
+        assert_eq!(project(0, &page, now + Duration::from_secs(offset)), None);
+    }
+    let mut next = page.clone();
+    next["next_cursor"] = json!(12);
+    next["events"][0]["seq"] = json!(12);
+    assert_eq!(project(0, &next, now), Some(next.clone()));
     let gap = json!({"status":"unavailable","subscription_id":"sub",
         "error":"events_gap: cursor 28 precedes retained cursor 303; latest cursor 1327","events":[]});
-    assert_eq!(reminders.project(0, gap.clone(), now), Some(gap.clone()));
+    assert_eq!(project(0, &gap, now), Some(gap.clone()));
     let mut moving_gap = gap.clone();
     moving_gap["error"] =
         json!("events_gap: cursor 28 precedes retained cursor 450; latest cursor 1474");
-    assert_eq!(reminders.project(0, moving_gap.clone(), now), None);
+    for offset in 0..100 {
+        assert_eq!(
+            project(0, &moving_gap, now + Duration::from_secs(offset)),
+            None
+        );
+    }
+    assert_eq!(project(1, &moving_gap, now), Some(moving_gap.clone()));
     assert_eq!(
-        reminders.project(1, moving_gap.clone(), now),
-        Some(moving_gap.clone())
-    );
-    assert_eq!(
-        reminders.project(1, moving_gap.clone(), now + Duration::from_secs(60)),
+        project(1, &moving_gap, now + ModelReminder::RETRY),
         Some(moving_gap)
     );
     for (kind, status) in [
         ("worker.unknown", "unknown"),
         ("worker.completed", "failed"),
+        ("worker.progress", "unknown"),
+        ("worker.progress", "failed"),
         ("user.input_available", ""),
     ] {
         let mut important = page.clone();
         important["events"][0]["kind"] = json!(kind);
         important["events"][0]["data"]["task_status"] = json!(status);
         for _ in 0..2 {
-            let delivered = reminders.project(1, important.clone(), now).unwrap();
+            let delivered = project(1, &important, now).unwrap();
             assert_eq!(delivered, important);
             let summary = notice_summary(&delivered);
             assert!(summary.contains(kind));

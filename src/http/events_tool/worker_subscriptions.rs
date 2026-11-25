@@ -71,6 +71,9 @@ impl AdvisoryPage {
                 matches!(
                     event["kind"].as_str(),
                     Some("task.submitted" | "worker.started" | "worker.progress" | "worker.idle")
+                ) && matches!(
+                    event["data"]["task_status"].as_str(),
+                    None | Some("queued" | "working")
                 )
             })
         {
@@ -84,29 +87,51 @@ impl AdvisoryPage {
     }
 }
 
+struct SentAdvisory {
+    revision: u64,
+    page: AdvisoryPage,
+    // A narrow outer response may have carried only a read_required receipt.
+    // If more of the same page fits later, publish it immediately.
+    through: Option<u64>,
+    at: std::time::Instant,
+}
+
 #[derive(Default)]
 struct ModelReminder {
-    last: Option<(u64, AdvisoryPage, std::time::Instant)>,
+    last: Option<SentAdvisory>,
 }
 
 impl ModelReminder {
-    // This records an attempted advisory response, never a delivery ACK. An explicit
-    // read always sees the retained journal, even if this HTTP response was lost.
-    fn project(&mut self, revision: u64, notice: Value, now: std::time::Instant) -> Option<Value> {
-        let Some(page) = AdvisoryPage::from_notice(&notice) else {
+    // Suppression is local to unsolicited outer responses. A lost first response
+    // remains recoverable by explicit read/wait. Only events.ack advances the cursor.
+    const RETRY: Duration = Duration::from_secs(5 * 60);
+
+    fn project(
+        &mut self,
+        revision: u64,
+        page: Option<AdvisoryPage>,
+        notice: Value,
+        now: std::time::Instant,
+    ) -> Option<Value> {
+        let Some(page) = page else {
             return Some(notice);
         };
-        if self.last.is_some_and(|(old_revision, old_page, sent)| {
-            old_revision == revision
-                && old_page == page
-                && now.duration_since(sent) < Duration::from_secs(60)
+        let through = (notice["status"] != "read_required")
+            .then(|| notice["next_cursor"].as_u64().unwrap_or(0));
+        if self.last.as_ref().is_some_and(|last| {
+            last.revision == revision
+                && last.page == page
+                && last.through >= through
+                && now.duration_since(last.at) < Self::RETRY
         }) {
-            return match page {
-                AdvisoryPage::Gap(_) => None,
-                AdvisoryPage::Routine { .. } => Some(read_required(&notice)),
-            };
+            return None;
         }
-        self.last = Some((revision, page, now));
+        self.last = Some(SentAdvisory {
+            revision,
+            page,
+            through,
+            at: now,
+        });
         Some(notice)
     }
 }
@@ -1147,6 +1172,9 @@ pub(in crate::http) async fn append(
         {
             continue;
         }
+        // Classify the retained page before byte limits or UI publication can
+        // reduce it to a prefix or a cursorless read_required receipt.
+        let advisory = AdvisoryPage::from_notice(&notice);
         let Some((_, fitted)) = fit_notice(&response, &notices, notice, budget) else {
             continue;
         };
@@ -1167,10 +1195,10 @@ pub(in crate::http) async fn append(
             continue;
         };
         notices.push(fitted);
-        proof_contexts.push((context, entry));
+        proof_contexts.push((context, entry, advisory));
         appended = next;
     }
-    for (context, entry) in &proof_contexts {
+    for (context, entry, _) in &proof_contexts {
         if !publication_authorized(report, context, entry, deadline).await {
             return response;
         }
@@ -1192,7 +1220,7 @@ pub(in crate::http) async fn append(
     ) {
         return response;
     }
-    if proof_contexts.iter().any(|(context, entry)| {
+    if proof_contexts.iter().any(|(context, entry, _)| {
         context
             .final_authorization(&report.broker, &report.access_token)
             .is_err()
@@ -1214,12 +1242,12 @@ pub(in crate::http) async fn append(
     let projected: Vec<_> = proof_contexts
         .iter()
         .zip(notices)
-        .filter_map(|((_, entry), notice)| {
+        .filter_map(|((_, entry, advisory), notice)| {
             entry
                 .model_reminder
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
-                .project(entry.revision, notice, now)
+                .project(entry.revision, *advisory, notice, now)
         })
         .collect();
     if projected.is_empty() {
