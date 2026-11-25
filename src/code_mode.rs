@@ -848,15 +848,25 @@ async fn admit_runner<'a>(
     waiters: &Semaphore,
     deadline: tokio::time::Instant,
 ) -> Result<tokio::sync::SemaphorePermit<'a>, String> {
+    let start = tokio::time::Instant::now();
+    if start >= deadline {
+        return Err(BUSY_BEFORE_START.into());
+    }
     if let Ok(permit) = slots.try_acquire() {
         return Ok(permit);
     }
     let _waiting = waiters.try_acquire().map_err(|_| BUSY_BEFORE_START)?;
-    let until = deadline.min(tokio::time::Instant::now() + ADMISSION_WINDOW);
-    tokio::time::timeout_at(until, slots.acquire())
+    let until = deadline.min(start + ADMISSION_WINDOW);
+    let permit = tokio::time::timeout_at(until, slots.acquire())
         .await
         .map_err(|_| BUSY_BEFORE_START)?
-        .map_err(|_| BUSY_BEFORE_START.to_owned())
+        .map_err(|_| BUSY_BEFORE_START)?;
+    // Tokio polls the acquisition first when both it and its timeout are
+    // ready. A delayed wake must not admit a script after the earlier deadline.
+    if tokio::time::Instant::now() >= until {
+        return Err(BUSY_BEFORE_START.into());
+    }
+    Ok(permit)
 }
 
 async fn execute_process_sources(
@@ -1668,6 +1678,58 @@ mod tests {
         assert_eq!(slots.available_permits(), 0);
         assert_eq!(waiting.available_permits(), 1);
         drop(permit);
+        assert_eq!(slots.available_permits(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn runner_admission_checks_the_clock_when_a_permit_and_timeout_are_both_ready() {
+        use tokio::time::{Instant, advance};
+        let slots = Semaphore::new(1);
+        let waiters = Semaphore::new(1);
+        for (budget_ms, release_ms, accepted) in [
+            (2_000, 149, true),
+            (2_000, 150, false),
+            (2_000, 151, false),
+            (20, 20, false),
+            (20, 21, false),
+        ] {
+            let held = slots.acquire().await.unwrap();
+            let admission = admit_runner(
+                &slots,
+                &waiters,
+                Instant::now() + Duration::from_millis(budget_ms),
+            );
+            tokio::pin!(admission);
+            tokio::select! {
+                biased;
+                _ = &mut admission => panic!("busy slot must queue"),
+                _ = tokio::task::yield_now() => {}
+            }
+            assert_eq!(waiters.available_permits(), 0);
+            // The queued future is not polled until after release. At the
+            // boundary both the semaphore and the timeout are ready.
+            advance(Duration::from_millis(release_ms)).await;
+            drop(held);
+            let result = admission.await;
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "budget={budget_ms}, release={release_ms}"
+            );
+            if let Err(message) = &result {
+                assert_eq!(message, BUSY_BEFORE_START);
+            }
+            drop(result);
+            assert_eq!(slots.available_permits(), 1);
+            assert_eq!(waiters.available_permits(), 1);
+        }
+        // An already expired caller cannot start even on the uncontended path.
+        assert_eq!(
+            admit_runner(&slots, &waiters, Instant::now())
+                .await
+                .unwrap_err(),
+            BUSY_BEFORE_START
+        );
         assert_eq!(slots.available_permits(), 1);
     }
 
