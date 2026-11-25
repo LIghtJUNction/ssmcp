@@ -37,6 +37,9 @@ pub const MAX_NATIVE_INFLIGHT: usize = 16;
 pub const MAX_CONCURRENT: usize = 4;
 const MAX_ERROR_BYTES: usize = 4096;
 static SLOTS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
+static ADMISSION_WAITERS: Semaphore = Semaphore::const_new(MAX_CONCURRENT * 2);
+const ADMISSION_WINDOW: Duration = Duration::from_millis(150);
+const BUSY_BEFORE_START: &str = "code_mode is busy; retry later. This script did not start. For an existing job, read or wait on its original job ID.";
 static PREPARATIONS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
 
 /// Scoped around each host callback, including built-in workspace bridges. A
@@ -838,6 +841,24 @@ async fn execute_process(
     execute_process_sources(command, code, timeout_ms, clients, host, sources).await
 }
 
+/// Let a short-lived runner release a slot without forcing another client
+/// round trip. The waiter and its deadline stay outside the process sandbox.
+async fn admit_runner<'a>(
+    slots: &'a Semaphore,
+    waiters: &Semaphore,
+    deadline: tokio::time::Instant,
+) -> Result<tokio::sync::SemaphorePermit<'a>, String> {
+    if let Ok(permit) = slots.try_acquire() {
+        return Ok(permit);
+    }
+    let _waiting = waiters.try_acquire().map_err(|_| BUSY_BEFORE_START)?;
+    let until = deadline.min(tokio::time::Instant::now() + ADMISSION_WINDOW);
+    tokio::time::timeout_at(until, slots.acquire())
+        .await
+        .map_err(|_| BUSY_BEFORE_START)?
+        .map_err(|_| BUSY_BEFORE_START.to_owned())
+}
+
 async fn execute_process_sources(
     mut command: Command,
     code: String,
@@ -858,9 +879,11 @@ async fn execute_process_sources(
     if !clients.is_array() || clients.to_string().len() > MAX_RESULT_BYTES {
         return Err("clients must be an array within the code_mode metadata limit".into());
     }
-    let _permit = SLOTS
-        .try_acquire()
-        .map_err(|_| "code_mode is busy; retry later")?;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let _permit = admit_runner(&SLOTS, &ADMISSION_WAITERS, deadline).await?;
+    if tokio::time::Instant::now() >= deadline {
+        return Err(BUSY_BEFORE_START.into());
+    }
     limit_process(&mut command);
     let mut process = Managed::spawn(&mut command)
         .map_err(|e| format!("cannot start isolated code_mode runtime: {e}"))?;
@@ -894,7 +917,7 @@ async fn execute_process_sources(
     };
     let mut logs = Vec::new();
     let mut images = Vec::new();
-    let result = tokio::time::timeout(Duration::from_millis(timeout_ms), async {
+    let result = tokio::time::timeout_at(deadline, async {
         send_frame(&mut worker.stdin, &json!({"type":"run", "code":code, "clients":clients, "tool_sources":sources.sources})).await?;
         bridge(&mut worker.stdout, &mut worker.stdin, host, &mut logs, &mut images).await
     }).await.unwrap_or_else(|_| Err("code_mode timed out; an already submitted native operation may continue and its outcome may be unknown. Inspect the client before retrying a mutating call.".into()));
@@ -1603,6 +1626,49 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn runner_admission_is_bounded_and_cancellation_releases_its_place() {
+        use tokio::time::{Instant, advance};
+        let slots = Semaphore::new(1);
+        let waiting = Semaphore::new(1);
+        let held = slots.acquire().await.unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        {
+            let first = admit_runner(&slots, &waiting, deadline);
+            tokio::pin!(first);
+            tokio::select! { biased; _ = &mut first => panic!("slot still held"), _ = tokio::task::yield_now() => {} }
+            // A second caller cannot queue, and cannot enter the runner.
+            assert_eq!(
+                admit_runner(&slots, &waiting, deadline).await.unwrap_err(),
+                BUSY_BEFORE_START
+            );
+        }
+        assert_eq!(waiting.available_permits(), 1);
+        let start = Instant::now();
+        assert_eq!(
+            admit_runner(&slots, &waiting, start + Duration::from_millis(20))
+                .await
+                .unwrap_err(),
+            BUSY_BEFORE_START
+        );
+        assert!(Instant::now() - start <= Duration::from_millis(21));
+        assert_eq!(
+            admit_runner(&slots, &waiting, deadline).await.unwrap_err(),
+            BUSY_BEFORE_START
+        );
+        assert!(Instant::now() - start < Duration::from_millis(180));
+        let ready = admit_runner(&slots, &waiting, deadline);
+        tokio::pin!(ready);
+        tokio::select! { biased; _ = &mut ready => panic!("slot still held"), _ = tokio::task::yield_now() => {} }
+        advance(Duration::from_millis(5)).await;
+        drop(held);
+        let permit = ready.await.unwrap();
+        assert_eq!(slots.available_permits(), 0);
+        assert_eq!(waiting.available_permits(), 1);
+        drop(permit);
+        assert_eq!(slots.available_permits(), 1);
     }
 
     fn host() -> Host {
