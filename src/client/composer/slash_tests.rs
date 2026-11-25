@@ -76,6 +76,8 @@ fn free_form_arguments_and_noncommands_do_not_offer_secondary_verbs() {
 #[test]
 fn subcommand_hints_cover_literal_parser_branches_without_invented_values() {
     for (prefix, name) in [
+        ("/upd", "/update"),
+        ("/update --c", "/update --check"),
         ("/tasks ca", "/tasks cancel"),
         ("/goal se", "/goal set"),
         ("/chatgpt co", "/chatgpt copy"),

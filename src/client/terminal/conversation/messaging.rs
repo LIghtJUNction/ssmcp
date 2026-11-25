@@ -93,6 +93,7 @@ fn local_command(text: &str) -> bool {
                 | "/recipients"
                 | "/help"
                 | "/version"
+                | "/update"
                 | "/about"
                 | "/plugin"
                 | "/questions"
@@ -942,6 +943,29 @@ mod tests {
         assert!(!state.chat_native_is_command("/versioned"));
         assert!(!state.chat_native_is_command("/about-face"));
         assert!(!state.chat_native_is_command("/unknown path"));
+    }
+
+    #[test]
+    fn client_update_stays_local_and_preview_preserves_the_draft() {
+        let mut state = state(120);
+        state.preview = true;
+        let id = "client:1111111111111111111111111111111111111111111111111111111111111111";
+        let recipient = state.native_descriptor(id).unwrap();
+        state.chat_native_select(&recipient);
+        for (command, expected) in [
+            ("/update", "Preview cannot check"),
+            ("/update --check", "Preview cannot check"),
+            ("/update --force", "Use /update [--check]"),
+        ] {
+            state.conversation.composer.set_text(command);
+            state.chat_submit();
+            assert!(state.notice.as_deref().unwrap().contains(expected));
+            assert_eq!(state.conversation.composer.text(), command);
+            assert_eq!(state.conversation.native_recipient.as_deref(), Some(id));
+            assert!(state.conversation.native_pending.is_none());
+            assert!(state.actions.is_empty());
+        }
+        assert!(!state.chat_native_is_command("/updated"));
     }
 
     #[test]

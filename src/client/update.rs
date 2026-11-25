@@ -1,6 +1,7 @@
 //! Observational startup checks and explicit, checksum-verified self-update.
 mod notice;
 mod startup;
+pub(super) mod terminal;
 pub(super) use notice::{ConnectionVersions, report_connection};
 pub(super) use startup::available_notice;
 use std::{
@@ -386,7 +387,7 @@ mod tests {
     fn v(s: &str) -> Version {
         Version::parse(s).unwrap()
     }
-    fn temporary() -> PathBuf {
+    pub(super) fn temporary() -> PathBuf {
         let mut nonce = [0; 16];
         getrandom::fill(&mut nonce).unwrap();
         let path = std::env::temp_dir().join(format!(

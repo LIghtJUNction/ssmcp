@@ -66,6 +66,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Show this client's version",
     },
     SlashCommand {
+        name: "/update",
+        description: "Update the installed client; /update --check checks for updates",
+    },
+    SlashCommand {
         name: "/about",
         description: "Show application information, license and project links",
     },

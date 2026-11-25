@@ -762,6 +762,18 @@ impl State {
                     self.notice = Some("Plugin command started · results appear here".into());
                 }
             }
+            "/update" => {
+                let check = match rest {
+                    "" => false,
+                    "--check" => true,
+                    _ => return Err("Use /update [--check]".into()),
+                };
+                if self.preview {
+                    return Err("Preview cannot check or install client updates".into());
+                }
+                crate::client::update::terminal::submit(check)?;
+                self.notice = Some("Checking for client updates…".into());
+            }
             "/version" => {
                 if !rest.is_empty() {
                     return Err("Use /version without arguments".into());
@@ -1199,7 +1211,12 @@ impl State {
             && matches!(
                 text.split_whitespace().next(),
                 Some(
-                    "/openai" | "/openai-session" | "/openai-subject" | "/chatgpt" | "/plugin-docs"
+                    "/update"
+                        | "/openai"
+                        | "/openai-session"
+                        | "/openai-subject"
+                        | "/chatgpt"
+                        | "/plugin-docs"
                 )
             )
         {

@@ -140,6 +140,9 @@ pub(super) fn subcommands(command: &str) -> &'static [SlashCommand] {
         };
     }
     match command {
+        "/update" => commands! {
+            "/update --check" => "Check for updates without installing the client",
+        },
         "/tasks" => commands! {
             "/tasks cancel" => "ID · cancel one exact local job",
         },
