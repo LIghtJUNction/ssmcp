@@ -798,6 +798,10 @@ mod tests {
         assert!(!display.slots[0].dreaming);
         assert!(display.slots[1].dreaming);
         assert!(!display.slots[2].dreaming);
+        let slots = serde_json::to_value(&display.slots).unwrap();
+        assert_eq!(slots[0]["dreaming"].as_bool(), Some(false));
+        assert_eq!(slots[1]["dreaming"].as_bool(), Some(true));
+        assert_eq!(slots[2]["dreaming"].as_bool(), Some(false));
         assert!(queue.snapshot_with_activity().0.slots[1].dreaming);
         queue.set_dreaming_members(Vec::new());
         assert!(!queue.snapshot().slots[1].dreaming);

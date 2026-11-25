@@ -797,3 +797,85 @@ fn only_exact_native_capacity_errors_keep_observation_retryable() {
         }
     }
 }
+
+#[test]
+fn shortest_worker_assignment_window_leaves_time_for_the_native_receipt() {
+    let args = Arguments::parse(json!({
+        "client_id": "pool",
+        "window_ms": 1000,
+        "targets": [{"type": "worker_assignment", "request_id": "original-wait"}]
+    }))
+    .unwrap();
+    let target = &args.targets.unwrap()[0];
+    assert_eq!(target_wait_ms(target, 1000, true), 900);
+    assert_eq!(target_wait_ms(target, 55000, true), 54900);
+}
+
+#[test]
+fn retry_assignment_only_after_a_known_empty_wait_or_native_capacity_refusal() {
+    assert!(result(Status::TimedOut).can_repeat_assignment());
+    let target = Target::WorkerAssignment {
+        request_id: "original".into(),
+    };
+    for (message, expected) in [
+        ("client busy; retry later", true),
+        ("client busy; retry later (outcome unknown)", false),
+        ("already has a waiting receive", false),
+    ] {
+        let result = TargetResult::failed(
+            &target,
+            target_error_status(&target, message),
+            "await_target_error",
+            message,
+        );
+        assert_eq!(result.can_repeat_assignment(), expected);
+    }
+    assert!(!result(Status::Ready).can_repeat_assignment());
+}
+
+#[test]
+fn cancellation_cannot_evict_a_worker_request_still_in_flight() {
+    let registry = Registry::default();
+    let args = Arguments::parse(json!({
+        "client_id":"fixture_client","window_ms":1000,
+        "targets":[{"type":"worker_assignment","request_id":"original"}]
+    }))
+    .unwrap();
+    let pending = registry.record(actor(), &args).unwrap();
+    let (response, receiver) = watch::channel(None);
+    *pending.assignment.lock().unwrap() = Some(receiver);
+    registry.cancel(&pending);
+    for _ in 1..MAX_ACTOR_RECORDS {
+        registry.record(actor(), &args).unwrap();
+    }
+    assert_eq!(
+        registry.record(actor(), &args).err().unwrap(),
+        (Status::Busy, "await_registry_full")
+    );
+    response.send_replace(Some(result(Status::TimedOut)));
+    assert!(registry.record(actor(), &args).is_ok());
+}
+
+#[test]
+fn acknowledging_an_assignment_releases_all_retained_bodies() {
+    let registry = Registry::default();
+    let args = Arguments::parse(json!({
+        "client_id":"fixture_client","window_ms":1000,
+        "targets":[{"type":"worker_assignment","request_id":"original"}]
+    }))
+    .unwrap();
+    let record = registry.record(actor(), &args).unwrap();
+    let mut assigned = TargetResult::pending(&record.targets[0]);
+    assigned.status = Status::Ready;
+    assigned.data = Some(json!({"status":"assigned","claim":{"id":"fixture-claim"}}));
+    *record.snapshot.lock().unwrap() = Some(vec![assigned.clone()]);
+    *record.assignment.lock().unwrap() = Some(watch::channel(Some(assigned)).1);
+    record.terminal.store(true, Ordering::Release);
+    assert!(read_window_snapshot(&record, Some(0)).unwrap().is_some());
+    assert_eq!(
+        read_window_snapshot(&record, Some(1)).unwrap().unwrap()["acknowledged"],
+        true
+    );
+    assert!(record.snapshot.lock().unwrap().is_none());
+    assert!(record.assignment.lock().unwrap().is_none());
+}

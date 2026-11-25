@@ -41,7 +41,6 @@ pub(crate) struct SlotView {
     pub(crate) epoch: u64,
     pub(crate) state: &'static str,
     /// Display-only relay observation. An idle station stays available for work.
-    #[serde(skip)]
     pub(crate) dreaming: bool,
     pub(crate) task_id: Option<String>,
     pub(crate) reason: Option<String>,

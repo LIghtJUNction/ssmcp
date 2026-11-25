@@ -289,6 +289,15 @@ struct TargetResult {
 }
 
 impl TargetResult {
+    fn can_repeat_assignment(&self) -> bool {
+        self.status == Status::TimedOut
+            || (self.status == Status::Busy
+                && self
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.message == "client busy; retry later"))
+    }
+
     fn pending(target: &Target) -> Self {
         Self {
             target: target.clone(),
@@ -356,6 +365,7 @@ struct Record {
     delivery_run: Mutex<Option<String>>,
     windowed: bool,
     snapshot: Mutex<Option<Vec<TargetResult>>>,
+    assignment: Mutex<Option<watch::Receiver<Option<TargetResult>>>>,
     acknowledged: AtomicBool,
     snapshot_overflow: AtomicBool,
     observation_state: Mutex<ObservationState>,
@@ -363,8 +373,16 @@ struct Record {
 }
 
 impl Record {
+    fn assignment_in_flight(&self) -> bool {
+        self.assignment
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|result| result.borrow().is_none() && result.has_changed().is_ok())
+    }
+
     fn retained(&self, now: Instant) -> bool {
-        if self.active.load(Ordering::Acquire) {
+        if self.active.load(Ordering::Acquire) || self.assignment_in_flight() {
             return true;
         }
         if let Some(durable) = &self.durable {
@@ -524,6 +542,7 @@ impl Registry {
                 .values()
                 .filter(|record| {
                     !record.active.load(Ordering::Acquire)
+                        && !record.assignment_in_flight()
                         && record.durable.is_none()
                         && !record.awaiting_delivery()
                         && !record.has_unacknowledged_result()
@@ -560,6 +579,7 @@ impl Registry {
             delivery_run: Mutex::new(None),
             windowed: args.window_ms.is_some(),
             snapshot: Mutex::new(None),
+            assignment: Mutex::new(None),
             acknowledged: AtomicBool::new(false),
             snapshot_overflow: AtomicBool::new(false),
             observation_state: Mutex::new(ObservationState::Created),
@@ -574,9 +594,10 @@ impl Registry {
         if record.active.load(Ordering::Acquire) {
             return Err((Status::Busy, "await_already_waiting"));
         }
-        let active = records
-            .values()
-            .filter(|other| other.active.load(Ordering::Acquire));
+        let active = records.values().filter(|other| {
+            !Arc::ptr_eq(other, record)
+                && (other.active.load(Ordering::Acquire) || other.assignment_in_flight())
+        });
         let member = active
             .clone()
             .filter(|other| other.actor.same(&record.actor))
@@ -837,6 +858,91 @@ fn target_error_status(target: &Target, error: &str) -> Status {
         Status::Busy
     } else {
         Status::Unavailable
+    }
+}
+
+// An HTTP read can expire while a real assignment is travelling back from the
+// native pool. Keep exactly that authenticated request alive across read windows.
+async fn observe_assignment(
+    scope: &Arc<Scope>,
+    record: &Record,
+    target: &Target,
+    timeout_ms: u64,
+    controller: Option<Controller>,
+) -> TargetResult {
+    let mut receiver = {
+        let mut saved = record.assignment.lock().unwrap_or_else(|e| e.into_inner());
+        if saved.as_ref().is_some_and(|r| {
+            r.borrow()
+                .as_ref()
+                .is_some_and(TargetResult::can_repeat_assignment)
+        }) {
+            // The pool confirmed an empty wait or rejected dispatch for capacity.
+            *saved = None;
+        }
+        saved
+            .get_or_insert_with(|| {
+                let (sender, receiver) = watch::channel(None);
+                let scope = Arc::clone(scope);
+                let target = target.clone();
+                let id = record.id.clone();
+                let cancelled = record.cancelled.subscribe();
+                tokio::spawn(code_mode::AUDIT_RUN.scope(scope.run.clone(), async move {
+                    let result = if *cancelled.borrow() {
+                        TargetResult::failed(
+                            &target,
+                            Status::Cancelled,
+                            "await_cancelled",
+                            "wait cancelled",
+                        )
+                    } else {
+                        observe(&scope, &target, timeout_ms, controller, true, &id).await
+                    };
+                    let result = if serde_json::to_vec(&result)
+                        .is_ok_and(|bytes| bytes.len() <= MAX_SNAPSHOT_BYTES)
+                    {
+                        result
+                    } else {
+                        TargetResult::failed(
+                            &target,
+                            Status::Unavailable,
+                            "await_snapshot_overflow",
+                            "bounded wait snapshot exceeded its byte limit",
+                        )
+                    };
+                    // Cancellation stops delivery, not a claim the pool already accepted.
+                    // The native request_id remains the claimant's recovery identity.
+                    if !*cancelled.borrow() {
+                        sender.send_replace(Some(result));
+                    }
+                }));
+                receiver
+            })
+            .clone()
+    };
+    loop {
+        if let Some(result) = receiver.borrow_and_update().clone() {
+            return result;
+        }
+        if receiver.changed().await.is_err() {
+            return TargetResult::failed(
+                target,
+                Status::Unavailable,
+                "await_worker_outcome_unknown",
+                "original assignment result unavailable",
+            );
+        }
+    }
+}
+
+fn target_wait_ms(target: &Target, window_ms: u64, windowed: bool) -> u64 {
+    // Worker waits accept a sub-second native budget. Keep transport time even
+    // in the shortest outer window so an empty assignment returns its receipt.
+    let with_margin = window_ms.saturating_sub(100);
+    match target {
+        Target::WorkerAssignment { .. } => with_margin,
+        Target::UserInput { notify: false, .. } if windowed => window_ms,
+        _ => with_margin.max(1000),
     }
 }
 
@@ -1114,6 +1220,11 @@ fn read_window_snapshot(record: &Record, after: Option<u64>) -> Result<Option<Va
     }
     if after == Some(1) {
         snapshot.take();
+        record
+            .assignment
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
         record.acknowledged.store(true, Ordering::Release);
         let mut receipt = window_envelope(record, Status::Ready, Vec::new(), 1);
         receipt["acknowledged"] = json!(true);
@@ -1295,6 +1406,7 @@ pub(super) async fn wait(
     if args.op == Op::Status {
         return Err("await status metadata is available for durable waits only".into());
     }
+    let scope = Arc::new(scope);
     let mut results: Vec<_> = record.targets.iter().map(TargetResult::pending).collect();
     if args.op == Op::Cancel {
         broker.awaiting.cancel(&record);
@@ -1418,9 +1530,6 @@ pub(super) async fn wait(
     );
     let mut cancelled = record.cancelled.subscribe();
     let mut pending = FuturesUnordered::new();
-    // Leave a small transport margin so native bounded waits can return their
-    // actual final state before the outer deadline closes the observation.
-    let target_timeout = window_ms.saturating_sub(100).max(1_000);
     if passive_window
         && let Some(previous) = record
             .snapshot
@@ -1439,17 +1548,15 @@ pub(super) async fn wait(
         let controller = args.controller.clone();
         let windowed = record.windowed;
         let wait_id = record.id.as_str();
-        let target_timeout =
-            if windowed && matches!(target, Target::UserInput { notify: false, .. }) {
-                window_ms
-            } else {
-                target_timeout
-            };
+        let target_timeout = target_wait_ms(target, window_ms, windowed);
+        let record = &record;
         pending.push(async move {
-            (
-                index,
-                observe(scope, target, target_timeout, controller, windowed, wait_id).await,
-            )
+            let result = if matches!(target, Target::WorkerAssignment { .. }) {
+                observe_assignment(scope, record, target, target_timeout, controller).await
+            } else {
+                observe(scope, target, target_timeout, controller, windowed, wait_id).await
+            };
+            (index, result)
         });
     }
     let workers = super::events_tool::worker_subscriptions::wait_for_notice(
@@ -1558,6 +1665,14 @@ pub(super) async fn wait(
         }
         if serde_json::to_vec(&retained).is_ok_and(|bytes| bytes.len() <= MAX_SNAPSHOT_BYTES) {
             *record.snapshot.lock().unwrap_or_else(|e| e.into_inner()) = Some(retained);
+            if status == Status::Ready {
+                // The frozen, cursor-addressable snapshot now owns the receipt.
+                record
+                    .assignment
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take();
+            }
         } else {
             record.terminal.store(true, Ordering::Release);
             record.snapshot_overflow.store(true, Ordering::Release);

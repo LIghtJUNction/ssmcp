@@ -1271,14 +1271,37 @@ class WorkerWindows(Harness):
                             expected_error="worker pool belongs to a different authenticated manager")
         self.check(denied.get("isError") is True, "an executor cannot take over the pool manager")
         client_id = worker["id"]
-        assignment_window = self.public_call("await", {
-            "client_id": client_id,
-            "agent": {"id": executor["agent_id"], "token": executor["token"]},
-            "window_ms": 1000,
-            "targets": [{"type": "worker_assignment", "request_id": executor["wait_request_id"]}],
-        })
-        self.check(assignment_window["status"] == "pending" and assignment_window["cursor"] == 0,
-                   "the authenticated worker's first observation ends before submission")
+        def current_executor():
+            members = self.public_call("collab", {"action": "list", "client_id": client_id})
+            return next(member for member in members["agents"]
+                        if member["agent_id"] == executor["agent_id"])
+
+        # Delay this test-owned CLI's reply beyond the real HTTP observation window.
+        # This keeps the relay and authenticated participant available for inspection.
+        worker_process = next(entry["identity"] for entry in events(directory)
+                              if entry["kind"] == "worker")
+        signal_owned(worker_process, signal.SIGSTOP)
+        try:
+            assignment_window = self.public_call("await", {
+                "client_id": client_id,
+                "agent": {"id": executor["agent_id"], "token": executor["token"]},
+                "window_ms": 1000,
+                "targets": [{"type": "worker_assignment", "request_id": executor["wait_request_id"]}],
+            })
+            self.check(assignment_window["status"] == "pending" and assignment_window["cursor"] == 0,
+                       "the authenticated worker's first observation ends before submission")
+            lifecycle = current_executor()["lifecycle"]
+            self.check(lifecycle["in_flight"] == 1 and lifecycle["unknown_outcomes"] == 0,
+                       "window expiry leaves the original native wait pending")
+        finally:
+            signal_owned(worker_process, signal.SIGCONT)
+
+        def empty_receipt():
+            member = current_executor()
+            life = member["lifecycle"]
+            return member["status"] == "idle" and life["in_flight"] == 0 and life["unknown_outcomes"] == 0
+
+        wait_for(empty_receipt, timeout=10, description="real empty wait settles after its read window")
         task_text = long_task_text()
         submitted = self.bound(worker["id"], manager, "ssmcp.worker.submit", {
             "request_id": "worker-windows-task-one", "text": task_text,
