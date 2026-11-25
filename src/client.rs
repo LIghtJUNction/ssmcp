@@ -496,6 +496,7 @@ struct Options {
     username: Option<String>,
     account_compat: bool,
     relay: Option<account::Credential>,
+    foreground_identity: Option<account::foreground_identity::Identity>,
     temporary: bool,
     name: Option<String>,
     title: Option<String>,
@@ -526,6 +527,13 @@ struct Options {
 }
 
 impl Options {
+    fn forget_foreground(&self) -> crate::Result<()> {
+        if let Some(identity) = &self.foreground_identity {
+            identity.replace_previous(None)?;
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Self>, String> {
         Self::parse_with_default(args, None)
@@ -1254,6 +1262,7 @@ impl Options {
             username,
             account_compat,
             relay: None,
+            foreground_identity: None,
             temporary: false,
             name,
             title,
@@ -2536,10 +2545,24 @@ pub async fn run() -> crate::Result<()> {
         println!("{}", json!({"type":"shell","tools":tools?}));
         return Ok(());
     }
+    if service.is_none() {
+        match account::foreground_identity::Identity::for_client(
+            &options,
+            &std::env::current_dir()?,
+        ) {
+            Ok(identity) => options.foreground_identity = identity,
+            Err(error) => render::status(
+                "identity",
+                "Warning",
+                &format!("Project continuity unavailable: {error}"),
+            ),
+        }
+    }
     let mut attempt = 0u64;
     let mut reconnect_failures = 0u32;
     loop {
         if options.worker_window_child && worker_window::child_stop_requested() {
+            options.forget_foreground()?;
             return Ok(());
         }
         if let Some(runner) = &service
@@ -2616,6 +2639,7 @@ pub async fn run() -> crate::Result<()> {
                         || (options.worker_window_child && worker_window::child_stop_requested()),
                 };
                 if stopped {
+                    options.forget_foreground()?;
                     if let Some(runner) = &service {
                         runner.record("stopped", attempt, None, None, None)?;
                     }
@@ -2647,17 +2671,22 @@ pub async fn run() -> crate::Result<()> {
                 // exec does not run Rust destructors; stop this controller's child first.
                 drop(options.worker_window.take());
                 drop(worker_session.take());
+                drop(options.foreground_identity.take());
                 return restart.execute();
             }
             other => other,
         };
         if matches!(result, Ok(ConnectionExit::Stopped)) {
+            options.forget_foreground()?;
             if let Some(runner) = &service {
                 runner.record("stopped", attempt, None, None, None)?;
             }
             return Ok(());
         }
         let error = result.as_ref().err().map(ToString::to_string);
+        if error.as_deref() == Some(relay::AUTH_EXPIRED) {
+            options.forget_foreground()?;
+        }
         if let Some(message) = error.as_deref()
             && retry_legacy_self_account(&mut options, message, registered).await?
         {
@@ -2705,14 +2734,14 @@ pub async fn run() -> crate::Result<()> {
         );
         tokio::select! {
             _ = tokio::time::sleep(retry_delay) => {},
-            _ = worker_parent_stopped(&options) => return Ok(()),
+            _ = worker_parent_stopped(&options) => return options.forget_foreground(),
             _ = interrupt.recv() => {
                 if let Some(runner) = &service { runner.record("stopped", attempt, None, None, None)?; }
-                return Ok(());
+                return options.forget_foreground();
             },
             _ = terminate.recv() => {
                 if let Some(runner) = &service { runner.record("stopped", attempt, None, None, None)?; }
-                return Ok(());
+                return options.forget_foreground();
             },
         }
     }
@@ -2779,6 +2808,7 @@ struct RegisteredTransport {
     time_observation_supported: bool,
     wait_display_version: Option<crate::wire::wait_display::Version>,
     openai_context_supported: bool,
+    project_continuity: bool,
     peer_ports: Option<&'static str>,
     version_notice: Option<crate::wire::versions::Notice>,
 }
@@ -2944,6 +2974,9 @@ async fn register_transport(
                 && capabilities
                     .iter()
                     .any(|capability| capability == crate::wire::CHAT_DISABLED_CAPABILITY),
+            capabilities
+                .iter()
+                .any(|cap| cap == crate::wire::project_continuity::CAPABILITY),
             openai_context_offer
                 && capabilities
                     .iter()
@@ -2992,6 +3025,7 @@ async fn register_transport(
         wait_display_version,
         peer_ports,
         worker_dreaming,
+        project_continuity,
         openai_context_supported,
         chat_disabled_acknowledged,
     ) = ready;
@@ -3029,6 +3063,7 @@ async fn register_transport(
         time_observation_supported,
         wait_display_version,
         peer_ports,
+        project_continuity,
         openai_context_supported,
         version_notice,
     }))
@@ -3391,6 +3426,9 @@ async fn connect_inner(
         registered,
         || {
             let mut command = transport.command(&executable);
+            if options.foreground_identity.is_some() && !options.account_compat {
+                command.env(relay::PROJECT_OFFER_ENV, "1");
+            }
             if let Some(key) = &routing_session_key {
                 command.env(account::device_identity::SESSION_ENV, key);
             }
@@ -3435,6 +3473,29 @@ async fn connect_inner(
             "--input none requires a relay that acknowledges disabled human chat".into()
         })));
     }
+    let project_identity = options
+        .foreground_identity
+        .as_ref()
+        .filter(|_| !options.account_compat);
+    if let Some(identity) = project_identity {
+        let client_id = &registration.ready.3;
+        if registration.project_continuity {
+            let origin = options
+                .server
+                .as_deref()
+                .ok_or("missing project proof origin")?;
+            let previous = identity.replace_previous(Some(client_id))?;
+            let proof = crate::wire::project_continuity::Proof::sign(
+                &identity.signing_key,
+                origin,
+                client_id,
+                previous.as_deref(),
+            )?;
+            write_frame(&mut registration.writer, &Frame::ProjectProof { proof }).await?;
+        } else {
+            identity.replace_previous(None)?;
+        }
+    }
     let RegisteredTransport {
         mut process,
         transport_kind,
@@ -3449,6 +3510,7 @@ async fn connect_inner(
         time_observation_supported,
         wait_display_version,
         peer_ports,
+        project_continuity,
         openai_context_supported,
         version_notice,
     } = registration;
@@ -4136,6 +4198,14 @@ async fn connect_inner(
         intentionally_stopped = true;
         reload_requested = false;
         result = Ok(());
+    }
+    if intentionally_stopped && project_continuity && project_identity.is_some() {
+        // Receipt delivery is best effort on disconnect. The local stop path
+        // independently forgets the predecessor before returning to the caller.
+        let _ = timeout(Duration::from_secs(1), async {
+            write_frame(&mut *writer.lock().await, &Frame::ProjectForget {}).await
+        })
+        .await;
     }
     join_managed_file_cleanup(&mut managed_cleanup).await;
     git_status.shutdown().await;

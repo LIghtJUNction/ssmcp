@@ -57,7 +57,7 @@ pub struct ObjectIdentity {
 }
 
 impl ObjectIdentity {
-    fn from_file(file: &File) -> io::Result<Self> {
+    pub(crate) fn from_file(file: &File) -> io::Result<Self> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;

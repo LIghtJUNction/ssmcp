@@ -19,6 +19,7 @@ mod attach;
 mod chat;
 pub(crate) mod device_identity;
 mod directory;
+pub(crate) mod foreground_identity;
 mod send;
 pub(super) mod status;
 mod wait;

@@ -15,6 +15,7 @@ use tokio_tungstenite::{
     },
 };
 
+pub(super) const PROJECT_OFFER_ENV: &str = "SSMCP_RELAY_PROJECT_CONTINUITY";
 pub(super) const AUTH_EXPIRED: &str = "ssmcp authorization expired or revoked";
 pub(super) const LEGACY_ACCOUNT_ALLOW: &str =
     "allow entries must use username@github; only GitHub is supported";
@@ -69,6 +70,7 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
         .arg("__relay")
         .env("SSMCP_RELAY_SERVER", server)
         .env_remove("SSMCP_RELAY_TOKEN")
+        .env_remove(PROJECT_OFFER_ENV)
         .env_remove(super::account::device_identity::SESSION_ENV)
         .env_remove(super::link_metrics::ENV)
         .env_remove(super::link_metrics::ID_ENV)
@@ -306,6 +308,12 @@ pub(super) async fn run() -> crate::Result<()> {
     } else {
         None
     };
+    if std::env::var_os(PROJECT_OFFER_ENV).as_deref() == Some(std::ffi::OsStr::new("1")) {
+        request.headers_mut().insert(
+            crate::wire::project_continuity::OFFER_HEADER,
+            HeaderValue::from_static("1"),
+        );
+    }
     if let Some(proof) = &proof {
         request.headers_mut().insert(
             crate::wire::device_address::PROOF_HEADER,

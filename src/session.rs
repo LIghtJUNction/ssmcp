@@ -1040,8 +1040,12 @@ fn private_open(path: &Path, write: bool, create: bool, append: bool) -> Result<
     Ok(file)
 }
 
+pub(crate) fn lease_file(path: &Path) -> Result<File> {
+    private_open(path, true, true, false)
+}
+
 pub(crate) fn lock(path: &Path, nonblocking: bool) -> Result<File> {
-    let file = private_open(path, true, true, false)?;
+    let file = lease_file(path)?;
     platform::lock_file(&file, nonblocking).map_err(|error| {
         if error.kind() == io::ErrorKind::WouldBlock {
             "another session operation or runner is already active".into()
