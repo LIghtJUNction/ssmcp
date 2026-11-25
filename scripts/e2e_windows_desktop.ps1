@@ -101,7 +101,8 @@ function Assert-LauncherText([string]$Expected) {
     # The app copies its selection through its own window. Require fresh content
     # so an old copy cannot pass when the field is unfocused or unresponsive.
     Set-Clipboard -Value ([guid]::NewGuid().ToString('N'))
-    Send-LauncherKeys '^a^c'
+    Send-LauncherKeys '^a'
+    Send-LauncherKeys '^c'
     $deadline = [Diagnostics.Stopwatch]::StartNew()
     do {
         if ([SsmcpWindowProbe]::GetClipboardOwner() -eq $window -and
