@@ -1353,6 +1353,19 @@ fn log_lines(slot: &SlotView, width: usize, expanded: bool) -> Vec<LogLine> {
 /// and inline scripts belong in the operator-selected diagnostic view.
 fn activity_name(command: &str) -> Option<String> {
     let args = command_arguments(command);
+    if args.is_empty() {
+        // Manual reports may contain a plain executable name. Free-form text and shell
+        // pipelines are not argv, so never infer which nested command produced an exit.
+        let name = command.trim();
+        if name.is_empty() || name.chars().any(char::is_whitespace) {
+            return None;
+        }
+        return known_activity(&[name.to_owned()]);
+    }
+    known_activity(&args)
+}
+
+fn known_activity(args: &[String]) -> Option<String> {
     let mut words = args.iter().map(String::as_str);
     let mut tool = std::path::Path::new(words.next()?).file_name()?.to_str()?;
     if matches!(tool, "zrun" | "rtk") {
@@ -1374,6 +1387,46 @@ fn activity_name(command: &str) -> Option<String> {
         ) => Some(tool.to_owned()),
         _ => None,
     }
+}
+
+/// Add only meanings established by the command invocation. The status alone
+/// provides no stderr or task outcome. Interpreter and wrapper exits are opaque.
+fn command_outcome(command: &str, result: &str) -> (PanelTone, String) {
+    let label = activity_name(command);
+    let argv = serde_json::from_str::<Vec<String>>(command).unwrap_or_default();
+    let program = argv
+        .first()
+        .and_then(|name| std::path::Path::new(name).file_name())
+        .and_then(|name| name.to_str());
+    let args = argv.get(1..).unwrap_or_default();
+    let meaning = match (program, result) {
+        (Some("rg"), "exit 1") => Some("no results"),
+        (Some("rg"), "exit 2") => Some("search error"),
+        (Some("git"), "exit 1")
+            if matches!(args, [diff, option, rest @ ..] if diff == "diff"
+                && matches!(option.as_str(), "--exit-code" | "--quiet" | "--no-index")
+                && (rest.first().is_some_and(|arg| arg == "--")
+                    || rest.iter().all(|arg| !arg.starts_with('-')))) =>
+        {
+            Some("differences found")
+        }
+        _ => None,
+    };
+    let mut message = format!("Command {result}");
+    if let Some(tool) = label {
+        message.push_str(" · ");
+        message.push_str(&tool);
+    }
+    if let Some(detail) = meaning {
+        message.push_str(" · ");
+        message.push_str(detail);
+    }
+    let tone = if matches!(meaning, Some("no results" | "differences found")) {
+        PanelTone::Muted
+    } else {
+        PanelTone::Warning
+    };
+    (tone, message)
 }
 
 /// Summarize retained events from this assignment. A busy command is evidence
@@ -1410,6 +1463,25 @@ fn current_activity(slot: &SlotView) -> Option<String> {
     })
 }
 
+fn reported_task_outcome(entry: &crate::worker::SlotLog) -> Option<(PanelTone, String)> {
+    entry.task_id.as_ref()?;
+    let (source, result) = entry.text.split_once(": ")?;
+    let verb = match source {
+        "Remote agent report" => "Worker reported task",
+        "Owned executor" => "Task",
+        _ => return None,
+    };
+    let (status, bytes) = result.split_once("; output ")?;
+    bytes.strip_suffix(" bytes")?.parse::<usize>().ok()?;
+    let tone = match status {
+        "completed" => PanelTone::Success,
+        "failed" => PanelTone::Error,
+        "cancelled" | "unknown" => PanelTone::Warning,
+        _ => return None,
+    };
+    Some((tone, format!("{verb} {status}")))
+}
+
 fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
     // These prefixes are written by queue::telemetry only after the exact task
     // claim is validated. Command text is always nested under a distinct
@@ -1440,9 +1512,15 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
     } else {
         None
     };
-    let intro = fallback
-        .as_deref()
-        .or_else(|| (!has_progress).then_some("Waiting for agent progress updates"));
+    let has_outcome = slot.logs.iter().rev().any(|entry| {
+        slot.task_id
+            .as_ref()
+            .is_none_or(|task| entry.task_id.as_ref() == Some(task))
+            && reported_task_outcome(entry).is_some()
+    });
+    let intro = fallback.as_deref().or_else(|| {
+        (!has_progress && !has_outcome).then_some("Waiting for agent progress updates")
+    });
     if let Some(intro) = intro {
         let tone = if fallback.is_some() {
             PanelTone::Normal
@@ -1464,55 +1542,76 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
             ));
         }
     }
+    let mut events: Vec<(&crate::worker::SlotLog, &str, PanelTone, String, usize)> = Vec::new();
+    let mut last_was_command = false;
     for entry in &slot.logs {
-        let event = if reported(&entry) {
-            Some((
+        let (tag, tone, mut body, mergeable) = if reported(&entry) {
+            (
                 "",
                 PanelTone::Normal,
                 panel::safe_text(entry.text.strip_prefix("Progress: ").unwrap_or_default()),
-            ))
+                false,
+            )
+        } else if let Some((tone, text)) = reported_task_outcome(entry) {
+            ("TASK", tone, text, false)
+        } else if let Some((command, result)) = entry
+            .text
+            .strip_prefix("Command finished: ")
+            .and_then(|text| text.rsplit_once("; "))
+            .filter(|(_, result)| {
+                matches!(*result, "cancelled" | "timed out")
+                    || result
+                        .strip_prefix("exit ")
+                        .or_else(|| result.strip_prefix("signal "))
+                        .is_some_and(|code| code.parse::<i32>().is_ok())
+            })
+        {
+            if result == "exit 0" && entry.level == "info" {
+                last_was_command = false;
+                continue;
+            }
+            let (tone, text) = command_outcome(command, result);
+            ("CMD", tone, text, true)
         } else {
             let (tag, tone, body) = log_event(entry, false);
             if !matches!(tone, PanelTone::Warning | PanelTone::Error) {
-                None
-            } else if entry.text.starts_with("Command started: ")
+                // Routine starts may alternate with repeated command outcomes. Every
+                // lifecycle, task switch, or other observation ends a group.
+                last_was_command &= entry.text.starts_with("Command started: ")
+                    && events
+                        .last()
+                        .is_some_and(|(prev, ..)| prev.task_id == entry.task_id);
+                continue;
+            }
+            let body = if entry.text.starts_with("Command started: ")
                 || entry.text.starts_with("Command finished: ")
             {
-                let result = entry
-                    .text
-                    .strip_prefix("Command finished: ")
-                    .and_then(|text| text.rsplit_once("; "))
-                    .map(|(_, result)| result)
-                    .filter(|result| {
-                        matches!(*result, "cancelled" | "timed out")
-                            || result
-                                .strip_prefix("exit ")
-                                .or_else(|| result.strip_prefix("signal "))
-                                .is_some_and(|code| code.parse::<i32>().is_ok())
-                    });
-                Some((tag, tone, {
-                    let status = result.map_or_else(
-                        || "Command alert".into(),
-                        |value| format!("Command {value}"),
-                    );
-                    let tool = entry
-                        .text
-                        .strip_prefix("Command finished: ")
-                        .and_then(activity_name);
-                    match tool {
-                        Some(tool) => format!("{status} · {tool} · F2 Logs"),
-                        None => format!("{status} · F2 Logs"),
-                    }
-                }))
+                "Command alert · F2 Logs".into()
             } else {
-                Some((tag, tone, body))
-            }
-        };
-        let Some((tag, tone, mut body)) = event else {
-            continue;
+                body
+            };
+            (tag, tone, body, false)
         };
         if slot.task_id.is_some() && entry.task_id.is_some() && entry.task_id != slot.task_id {
             body = format!("Earlier task · {body}");
+        }
+        if mergeable
+            && last_was_command
+            && entry.task_id.is_some()
+            && let Some((previous, _, previous_tone, previous_body, count)) = events.last_mut()
+            && previous.task_id == entry.task_id
+            && *previous_tone == tone
+            && *previous_body == body
+        {
+            *count += 1;
+            continue;
+        }
+        events.push((entry, tag, tone, body, 1));
+        last_was_command = mergeable;
+    }
+    for (entry, tag, tone, mut body, count) in events {
+        if count > 1 {
+            body = format!("×{count}  {body}");
         }
         let lines = event_lines(entry, width, tag, tone, &body);
         let count = lines.len();
@@ -2614,6 +2713,86 @@ mod tests {
             .filter_map(|(_, parts)| parts.last())
             .map(|(_, text)| text.as_str())
             .collect()
+    }
+
+    #[test]
+    fn wallet_command_exits_group_in_progress_and_keep_log_sequences() {
+        let mut view = snapshot();
+        let slot = &mut view.slots[1];
+        let run = r#"Command started: ["/usr/bin/rg","PRIVATE"]"#;
+        let none = r#"Command finished: ["/usr/bin/rg","PRIVATE"]; exit 1"#;
+        let error = r#"Command finished: ["/usr/bin/rg","PRIVATE"]; exit 2"#;
+        let events = [run, none, run, none, run, none, error];
+        slot.logs = events
+            .iter()
+            .enumerate()
+            .map(|(i, &event)| SlotLog {
+                task_id: slot.task_id.clone(),
+                text: event.into(),
+                ..log(i as u64 + 1)
+            })
+            .collect();
+        assert!(slot.task_id.is_some());
+        for width in [18, 30, 80] {
+            let lines = progress_lines(slot, width);
+            let text = log_body(&lines);
+            assert!(
+                text.contains("×3  Command exit 1 · rg · no results"),
+                "{width}: {text}"
+            );
+            assert!(
+                text.contains("Command exit 2 · rg · search error"),
+                "{width}: {text}"
+            );
+            assert!(!text.contains("PRIVATE"));
+            assert_eq!(text.matches("Command exit 1").count(), 1);
+            assert!(
+                lines
+                    .iter()
+                    .all(|(_, parts)| parts.iter().all(|(_, text)| text.trim() != "FAIL"))
+            );
+            let raw = log_lines(slot, width, true);
+            for id in 1..=7 {
+                assert!(raw.iter().any(|(anchor, _)| anchor.sequence == id));
+            }
+        }
+        slot.logs.push(SlotLog {
+            task_id: slot.task_id.clone(),
+            text: "Remote agent report: completed; output 4 bytes".into(),
+            ..log(8)
+        });
+        let final_page = progress_lines(slot, 80);
+        assert!(log_body(&final_page).contains("Worker reported task completed"));
+        assert!(!log_body(&final_page).contains("Waiting for agent progress updates"));
+        assert!(final_page.iter().any(|(anchor, _)| anchor.sequence == 8));
+        slot.logs[3].task_id = Some("previous-wallet-task".into());
+        assert!(!log_body(&progress_lines(slot, 80)).contains("×3"));
+        slot.logs[3].task_id = slot.task_id.clone();
+        slot.logs[4].text = "Task claimed".into();
+        assert!(log_body(&progress_lines(slot, 80)).contains("×2"));
+        assert!(!log_body(&progress_lines(slot, 80)).contains("×3"));
+    }
+
+    #[test]
+    fn progress_only_explains_known_exit_conventions() {
+        let detail = |command| command_outcome(command, "exit 1").1;
+        assert!(
+            detail(r#"["git","diff","--exit-code","--","PRIVATE"]"#).contains("differences found")
+        );
+        for unknown in [
+            r#"["git","diff","--check"]"#,
+            r#"["git","diff","--","--exit-code"]"#,
+            r#"["git","diff","--exit-code","--no-exit-code"]"#,
+            r#"["sh","-c","rg PRIVATE"]"#,
+            "arbitrary command; echo PRIVATE",
+        ] {
+            let note = detail(unknown);
+            assert!(
+                !note.contains("no results")
+                    && !note.contains("differences")
+                    && !note.contains("PRIVATE")
+            );
+        }
     }
 
     #[test]

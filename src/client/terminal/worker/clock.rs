@@ -38,6 +38,12 @@ mod tests {
         const MARKER: &str = "SSMCP_TEST_WORKER_CLOCK_ZONE";
         if let Some(zone) = std::env::var_os(MARKER) {
             match zone.to_str().unwrap() {
+                "Asia/Taipei" => {
+                    let stamp = 1_700_000_000_000; // 22:13:20 UTC, next local day.
+                    assert_eq!(label(stamp, 27), "");
+                    assert_eq!(label(stamp, 28), "06:13  ");
+                    assert_eq!(label(stamp, 80), "06:13:20  ");
+                }
                 "NPT-5:45" => {
                     let stamp = 1_700_000_000_000;
                     assert_eq!(label(stamp, 27), "");
@@ -54,7 +60,7 @@ mod tests {
             }
             return;
         }
-        for zone in ["NPT-5:45", "EST5EDT,M3.2.0/2,M11.1.0/2"] {
+        for zone in ["Asia/Taipei", "NPT-5:45", "EST5EDT,M3.2.0/2,M11.1.0/2"] {
             let result = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
