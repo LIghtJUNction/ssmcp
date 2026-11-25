@@ -772,6 +772,12 @@ impl State {
             rows[1] = line(self, &[(PanelTone::Warning, notice.clone())]);
         }
         if let Some(snapshot) = snapshot {
+            let capacity = line(self, &[(PanelTone::Heading, "Station capacity".into())]);
+            if self.notice.is_some() {
+                rows.push(capacity);
+            } else {
+                rows[1] = capacity;
+            }
             let counts = [
                 (PanelTone::Success, format!("○ Idle {}", snapshot.idle)),
                 (
@@ -825,6 +831,10 @@ impl State {
                     .collect();
                 rows.push(line(self, &parts));
             }
+            rows.push(line(
+                self,
+                &[(PanelTone::Normal, member_activity_summary(snapshot, g.cols))],
+            ));
             let stopping = snapshot.stopping || snapshot.closed;
             let status = if stopping && snapshot.working > 0 {
                 "Stopping · waiting for worker confirmation"
@@ -848,7 +858,7 @@ impl State {
                     super::worker_operations::compact(
                         &pool,
                         g.cols,
-                        height.saturating_sub(rows.len() + 10).min(1),
+                        height.saturating_sub(rows.len() + 9).min(1),
                     )
                 })
                 .unwrap_or_default();
@@ -874,7 +884,7 @@ impl State {
             } else {
                 Vec::new()
             };
-            let space = height.saturating_sub(rows.len() + 2);
+            let space = height.saturating_sub(rows.len() + 1);
             let panel_reserve = if g.cols >= 96 { 14 } else { 8 };
             let identity: Vec<_> = identity
                 .into_iter()
@@ -885,7 +895,6 @@ impl State {
                     .into_iter()
                     .map(|text| line(self, &[(PanelTone::Muted, text)])),
             );
-            rows.push(String::new());
             let available = height.saturating_sub(rows.len() + 1);
             let panel_rows = self
                 .worker
@@ -1057,6 +1066,11 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
     );
     if rows.len() < budget {
         let (tone, _, state) = slot_state(slot);
+        let moon = if slot.dreaming && slot.activity_status == Some("offline") {
+            "☾"
+        } else {
+            ""
+        };
         let elapsed = slot
             .current_task_elapsed_ms
             .map(|ms| format!(" · {}", duration(ms)))
@@ -1083,7 +1097,10 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
             .unwrap_or_default();
         rows.push((
             tone,
-            clipped(&format!("{state}{calls}{elapsed}{retiring}{reason}"), width),
+            clipped(
+                &format!("{state}{moon}{calls}{elapsed}{retiring}{reason}"),
+                width,
+            ),
         ));
     }
     rows
@@ -1643,9 +1660,29 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
     output
 }
 
+fn member_activity_summary(snapshot: &Snapshot, cols: u16) -> String {
+    let observed = snapshot
+        .slots
+        .iter()
+        .filter(|slot| slot.tool_calls_10m.is_some())
+        .count();
+    let offline = snapshot
+        .slots
+        .iter()
+        .filter(|slot| slot.activity_status == Some("offline"))
+        .count();
+    match (observed, cols) {
+        (0, _) => "Members unknown".into(),
+        (_, 0..=28) => format!("Members offline {offline}"),
+        (_, 29..=49) => format!("Members offline {offline}/{observed} · 10m"),
+        _ => format!("Member activity · Offline {offline} of {observed} observed (10m)"),
+    }
+}
+
 fn slot_state(slot: &SlotView) -> (PanelTone, &'static str, &'static str) {
     if slot.activity_status == Some("offline") {
-        return (PanelTone::Error, "×", "offline");
+        let symbol = if slot.dreaming { "×☾" } else { "×" };
+        return (PanelTone::Error, symbol, "offline");
     }
     match slot.state {
         "idle" if slot.dreaming => (PanelTone::Accent, "☾", "Dreaming"),
@@ -2312,6 +2349,47 @@ mod tests {
         assert!(
             compact.iter().any(|(_, line)| line.contains("4/10m")),
             "{compact:?}"
+        );
+    }
+
+    #[test]
+    fn quiet_dreaming_member_keeps_a_moon_and_capacity_totals() {
+        let mut snapshot = snapshot();
+        snapshot.slots[0].tool_calls_10m = Some(0);
+        snapshot.slots[0].activity_status = Some("offline");
+        snapshot.slots[0].dreaming = true;
+        snapshot.slots[1].tool_calls_10m = Some(5);
+        for (cols, count) in [
+            (18, "Members offline 1"),
+            (32, "Members offline 1/2 · 10m"),
+            (100, "Member activity · Offline 1 of 2 observed (10m)"),
+        ] {
+            let mut view = state(24, cols, false);
+            let frame = view.worker_frame(Some(&snapshot));
+            let text = screen(&frame).screen().contents();
+            for part in [
+                "Station capacity",
+                "Idle 1",
+                "Working 1",
+                "Offline 1",
+                count,
+                "×☾",
+            ] {
+                assert!(text.contains(part), "{cols} columns: {text}");
+            }
+        }
+        let compact = progress_summary(&snapshot.slots[0], 14, 3);
+        assert!(
+            compact.iter().any(|(_, line)| line == "offline☾ 0/10m"),
+            "{compact:?}"
+        );
+        snapshot.slots[0].dreaming = false;
+        let mut view = state(24, 100, false);
+        let frame = view.worker_frame(Some(&snapshot));
+        assert!(!screen(&frame).screen().contents().contains('☾'));
+        assert_eq!(
+            member_activity_summary(&self::snapshot(), 18),
+            "Members unknown"
         );
     }
 

@@ -55,7 +55,7 @@ Worker 面板和 Sessions 的 Recipients 按当前连接上已认证的成员 ID
 | --- | --- | --- | --- |
 | Working | 显示 Working 和已观察次数 | 成员活动显示 Offline，原任务仍可等待 | 原领取人继续持有 claim |
 | Idle | 显示 Idle 和已观察次数 | 成员活动显示 Offline | 注册与空闲工位计数保留 |
-| Dreaming | 已确认维护回合时显示 Dreaming | 成员活动显示 Offline | 维护计时与退出审批继续按原规则运行 |
+| Dreaming | 已确认维护回合时显示 Dreaming | 成员活动显示 Offline，并保留已确认的 ☾ 标记 | 维护计时与退出审批继续按原规则运行 |
 | Retiring | 显示 Retiring | 成员活动显示 Offline | 工位继续等待原领取人确认释放 |
 | Offline | 已确认离线的成员或工位显示 Offline | 工位按已确认的原因显示 Offline | 分配与回收由原生队列决定 |
 

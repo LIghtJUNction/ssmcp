@@ -34,7 +34,9 @@ pub(super) fn from_roster(data: &Value, current_session: &str, disconnected: boo
 
 pub(super) fn member_lifecycle(member: &Value) -> (u8, &'static str) {
     if member["activity_status"] == "offline" {
-        return (0, "Offline");
+        let dreaming = matches!(member["status"].as_str(), Some("dreaming" | "idle"))
+            && member["dreaming_active"] == true;
+        return (0, if dreaming { "Offline ☾" } else { "Offline" });
     }
     match (
         member["status"].as_str(),
@@ -90,7 +92,7 @@ pub(super) fn header(state: &State, view: &str, status: &str, width: u16) -> Str
         "Idle" => PanelTone::Normal,
         "Dreaming" => PanelTone::Accent,
         "Retiring" => PanelTone::Warning,
-        "Offline" => PanelTone::Error,
+        "Offline" | "Offline ☾" => PanelTone::Error,
         _ => PanelTone::Muted,
     };
     let left_gap = left_width.saturating_sub(margin + title.width());
@@ -126,6 +128,11 @@ mod tests {
         assert_eq!(from_roster(&data, "this-room", false), "Unknown");
         data["agents"][2]["status"] = json!("working");
         assert_eq!(from_roster(&data, "this-room", false), "Working");
+        data["agents"][1] = json!({"role":"main","status":"idle","dreaming_active":true,"activity_status":"offline"});
+        data["agents"][2] = json!({"role":"lead","status":"working","activity_status":"offline"});
+        assert_eq!(from_roster(&data, "this-room", false), "Offline ☾");
+        data["agents"][1]["dreaming_active"] = json!(false);
+        assert_eq!(from_roster(&data, "this-room", false), "Offline");
         data["reloading"] = json!(true);
         assert_eq!(from_roster(&data, "this-room", false), "Unknown");
         assert_eq!(from_roster(&data, "this-room", true), "Offline");

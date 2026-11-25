@@ -140,6 +140,15 @@ fn recipients_show_measured_tool_calls_and_the_activity_offline_projection() {
         assert!(rows.contains(label), "{rows}");
     }
     assert!(!rows.contains("0 calls/10m · #legacy"), "{rows}");
+    let mut data = data;
+    data["agents"][0]["status"] = json!("dreaming");
+    for (dreaming, label) in [(false, "Offline"), (true, "Offline ☾")] {
+        data["agents"][0]["dreaming_active"] = json!(dreaming);
+        let rows = state.chat_session_rows(&data, 24).join("\n");
+        assert!(rows.contains(&format!("{label} · Quiet")), "{rows}");
+        assert!(rows.contains(&format!("Status · {label}")), "{rows}");
+        assert_eq!(rows.contains('☾'), dreaming, "{rows}");
+    }
 }
 
 #[test]
