@@ -2206,7 +2206,7 @@ pub fn valid_username(user: &str) -> bool {
     crate::username::valid_resource_name(user)
 }
 
-fn username(uid: u32) -> io::Result<String> {
+pub(crate) fn username(uid: u32) -> io::Result<String> {
     let mut buf = vec![0u8; 16 * 1024];
     loop {
         let mut entry = std::mem::MaybeUninit::<libc::passwd>::uninit();

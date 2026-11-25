@@ -1,5 +1,6 @@
 //! Linux foreground MCP host using the same broker, wire and native runtime as
 //! account connections. The Unix transport is private to this effective UID.
+pub(super) mod install;
 mod socket;
 
 use crate::broker::Broker;

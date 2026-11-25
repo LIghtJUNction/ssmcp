@@ -87,6 +87,7 @@ Start
   ssmcp                         Reuse your last successful connection
   ssmcp --worker N              Open chat and a worker window with N slots
   ssmcp local                   Start a same-machine MCP session on Linux
+  ssmcp mcp install             Register the local control endpoint in Codex (Linux)
   ssmcp alice@relay.example     Make this device available to that account
   ssmcp list [--json]           List this OS user's saved local sessions
   ssmcp attach NAME             Reopen a running local session
@@ -134,6 +135,7 @@ const HELP_FULL: &str = r#"ssmcp — connect this device and manage its local se
 Usage: ssmcp username@server [options]
        ssmcp [--server URL] [options]
        ssmcp [connection options] --worker N
+       ssmcp mcp install [--harness codex] [--listen IP:PORT]  (Linux)
        ssmcp whoami [USERNAME@SERVER] [--json]
        ssmcp list [--json]
        ssmcp controllers [list] [--json]
@@ -2088,6 +2090,12 @@ pub async fn run() -> crate::Result<()> {
     if let Some(request) = version::request(&args)? {
         print!("{}", version::render(request)?);
         return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "mcp") {
+        #[cfg(target_os = "linux")]
+        return local::install::run(&args[1..]);
+        #[cfg(not(target_os = "linux"))]
+        return Err("ssmcp mcp install requires the Linux local MCP host".into());
     }
     if args.first().and_then(|arg| arg.to_str()) == Some("safety") {
         return crate::workspace::safety::run(&args[1..]).await;

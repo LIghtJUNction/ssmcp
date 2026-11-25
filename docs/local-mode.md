@@ -4,6 +4,19 @@
 
 本页描述仓库中的 Linux 首版实现。安装包是否包含此命令，以 `ssmcp local --help` 为准；源码合入、正式发布和已经安装的程序是不同状态。macOS、Windows 本地宿主、后台本地会话与 MCP stdio 桥接尚不在此入口的支持范围内。
 
+## 在 Codex 安装本机控制入口
+
+先运行一次注册命令，再在要控制的工作目录启动会话。
+
+```sh
+ssmcp mcp install --harness codex
+ssmcp local --listen 127.0.0.1:8765
+```
+
+注册命令将名称 `ssmcp-local` 和当前系统用户的回环 MCP 地址写入 Codex。重复安装会复用相同的入口，已有同名条目指向其他地址时会提示检查。首次授权时，在另一个终端运行 `codex mcp login ssmcp-local`，输入本机会话 `/logs` 显示的一次性登录码。授权后，可通过 `list` 选择该会话，并通过 `code_mode` 使用其原生工具。
+
+要使用其他端口，在两个命令中都指定同一个 `--listen IP:PORT`。本地会话退出后，工作区工具随之下线。重新启动后，Codex 保留服务器地址，授权使用新会话的一次性登录码。
+
 ## 运行前提
 
 本地模式同时承担客户端与 MCP 宿主的工作。除了 `ssmcp` 可执行文件，执行 `code_mode` 还需要已安装的原生 Node.js、Bubblewrap 的 `bwrap` 和 util-linux 的 `prlimit`。这些系统运行依赖不会被打包进客户端。
