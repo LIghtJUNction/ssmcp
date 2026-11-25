@@ -684,7 +684,8 @@ impl Session {
         let started = std::time::Instant::now();
         let result = match timeout(duration, response).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(self.connection_error(true, "client disconnected")),
+            Ok(Err(_)) => Err(self.connection_error(true,
+                "client disconnected after dispatch; outcome unknown. Preserve the original request. Refresh list using the saved device_id/session_id, or obtain a fresh /invite after a manual restart.")) ,
             Err(_) => Err("client request timed out; its outcome may be unknown".into()),
         };
         let mut result = if authorization
@@ -1153,7 +1154,7 @@ impl Broker {
         accessible_sessions(&sessions, user, authorization)
             .find(|session| session.client_id() == id)
             .cloned()
-            .ok_or_else(|| "client is unavailable; call list to refresh connected clients".into())
+            .ok_or_else(|| "client is unavailable; call list to refresh connected clients. Look up the previously verified device_id/session_id, or obtain a fresh /invite from the new control window after a manual restart. Preserve unknown outcomes; never replay work.".into())
     }
 
     /// Test fixtures may close one existing wire connection without revoking

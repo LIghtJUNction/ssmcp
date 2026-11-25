@@ -298,6 +298,11 @@ impl SimulatedDevice {
                         Operation::ListTools { .. } => Ok(
                             json!({"tools":[{"name":"fixture.echo","description":"Isolated routing acceptance echo","inputSchema":{"type":"object"}}]}),
                         ),
+                        Operation::CallTool { name, .. } if name == "fixture.lose_receipt" => {
+                            observed.calls.fetch_add(1, Ordering::SeqCst);
+                            let _ = socket.close(None).await;
+                            break;
+                        }
                         Operation::CallTool { name, arguments } if name == "fixture.echo" => {
                             observed.calls.fetch_add(1, Ordering::SeqCst);
                             Ok(json!({"structuredContent":{"device_index":index,"echo":arguments}}))
@@ -542,6 +547,149 @@ async fn ten_verified_devices_route_through_one_mcp_without_cross_account_or_rec
         device.disconnect().await;
     }
     fixture.broker.disconnect_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_restart_handoff_discovers_candidates_without_transferring_work() {
+    let fixture = AddressFixture::new().await;
+    let http = crate::http_client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap();
+    let mut identity = SimulatedIdentity::new(1);
+    let original = SimulatedDevice::connect(
+        &http,
+        &fixture.base,
+        &fixture.owner,
+        &identity,
+        1,
+        "same-host",
+    )
+    .await;
+    let route = identity.identity(&fixture.base, "123");
+    let lookup = json!({"device_id":route.device_id,"session_id":route.session_id});
+    let discover = |token, args| mcp_request(&http, &fixture.base, token, "list", args);
+    let found = discover(&fixture.owner_mcp, lookup.clone()).await;
+    assert_eq!(
+        mcp_value(&found)["handoff"]["client_id"],
+        original.client_id
+    );
+    let joined = mcp_request(&http, &fixture.base, &fixture.owner_mcp, "collab",
+        json!({"action":"join","client_id":original.client_id,"name":"fixture-worker","role":"worker"})).await;
+    let member = mcp_value(&joined);
+
+    // The fixture records one effect and closes its socket before sending a
+    // receipt. Looking up a successor must never dispatch that work again.
+    let lost = http
+        .post(format!("{}/api/client/call", fixture.base))
+        .bearer_auth(&fixture.owner)
+        .json(&json!({"client_id":original.client_id,"name":"fixture.lose_receipt","arguments":{}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(lost.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(original.counters.calls.load(Ordering::SeqCst), 1);
+    let unrelated = SimulatedDevice::connect(
+        &http,
+        &fixture.base,
+        &fixture.owner,
+        &SimulatedIdentity::new(1),
+        0,
+        "same-host",
+    )
+    .await;
+    let old_catalog = discover(&fixture.owner_mcp, json!({"client_id":original.client_id})).await;
+    assert_eq!(old_catalog["result"]["isError"], true);
+    assert!(
+        old_catalog["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("/invite")
+    );
+    let before = discover(&fixture.owner_mcp, lookup.clone()).await;
+    assert_eq!(mcp_value(&before)["handoff"]["status"], "unavailable");
+
+    // A foreground restart has the same installation signing key and cwd but
+    // deliberately generates a fresh process session key.
+    identity.session = format!("{:064x}", 2);
+    let replacement = SimulatedDevice::connect(
+        &http,
+        &fixture.base,
+        &fixture.owner,
+        &identity,
+        2,
+        "renamed-host",
+    )
+    .await;
+    let one = discover(&fixture.owner_mcp, lookup.clone()).await;
+    let handoff = &mcp_value(&one)["handoff"];
+    assert_eq!(handoff["status"], "confirmation_required");
+    assert_eq!(
+        handoff["candidate_client_ids"],
+        json!([replacement.client_id])
+    );
+    assert!(handoff.get("client_id").is_none());
+    assert_eq!(mcp_value(&one)["clients"], json!([]));
+    let stale = mcp_request(
+        &http,
+        &fixture.base,
+        &fixture.owner_mcp,
+        "collab",
+        json!({"action":"receive","client_id":replacement.client_id,
+        "agent_id":member["agent_id"],"token":member["token"]}),
+    )
+    .await;
+    assert!(stale["result"]["isError"] == true || stale.get("error").is_some());
+    let fresh = mcp_request(&http, &fixture.base, &fixture.owner_mcp, "collab",
+        json!({"action":"join","client_id":replacement.client_id,"name":"fixture-worker","role":"worker"})).await;
+    assert_ne!(mcp_value(&fresh)["agent_id"], member["agent_id"]);
+
+    identity.session = format!("{:064x}", 3);
+    let parallel = SimulatedDevice::connect(
+        &http,
+        &fixture.base,
+        &fixture.owner,
+        &identity,
+        3,
+        "same-host",
+    )
+    .await;
+    let ambiguous = discover(&fixture.owner_mcp, lookup.clone()).await;
+    let handoff = &mcp_value(&ambiguous)["handoff"];
+    assert_eq!(handoff["status"], "ambiguous");
+    assert_eq!(handoff["candidate_count"], 2);
+    assert!(handoff.get("client_id").is_none());
+    let foreign = discover(&fixture.stranger_mcp, lookup.clone()).await;
+    assert_eq!(mcp_value(&foreign)["handoff"]["candidate_count"], 0);
+    assert_eq!(mcp_value(&foreign)["device_sessions"], json!([]));
+    assert_eq!(replacement.counters.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(parallel.counters.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(unrelated.counters.calls.load(Ordering::SeqCst), 0);
+
+    http.post(format!("{}/api/client/logout", fixture.base))
+        .bearer_auth(&fixture.owner)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let revoked = http
+        .post(format!(
+            "{}{}",
+            fixture.base,
+            wire::device_address::CHALLENGE_PATH
+        ))
+        .bearer_auth(&fixture.owner)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), StatusCode::UNAUTHORIZED);
+    fixture.broker.oauth.revoke_subject("123").unwrap();
+    let denied = http.post(format!("{}/mcp",fixture.base)).bearer_auth(&fixture.owner_mcp)
+        .header("accept","application/json")
+        .json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list","arguments":lookup}}))
+        .send().await.unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 }
 
 // Separate process: CPU/RSS below belong to the relay fixture, never to the

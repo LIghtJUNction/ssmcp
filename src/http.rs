@@ -933,7 +933,7 @@ fn client_info(session: &Session) -> Value {
 fn usage() -> Value {
     json!({
         "language": "javascript",
-        "clients": "Select an authorized live client from list by task and workspace.",
+        "clients": "Record the verified device_id/session_id and workspace at bind. On disconnect, list with both saved IDs for read-only handoff guidance. If only the old client ID is known, match device_sessions.last_connection_id in the owner inventory. For an unverified or fresh process, obtain a new /invite, /invite worker, or explicit operator selection and verify the control/pool link.",
         "tools": "Discover only needed schemas with tools.search(id,{query,name_prefix,include_schemas:true}).",
         "call": "call(id,name,args) invokes the exact discovered native tool. Read structuredContent and isError.",
         "exec": "exec.run starts and reads one command; exec.parallel batches independent commands; exec.start returns a job for long work. Preserve job IDs and stream cursors.",
@@ -1001,7 +1001,48 @@ async fn list(
                     .is_none_or(|id| entry["routing"]["session_id"].as_str() == Some(id))
         })
         .collect();
-    Ok(json!({"clients":clients,"device_sessions":inventory,"code_mode":usage()}))
+    let mut result = json!({"clients":clients,"device_sessions":inventory,"code_mode":usage()});
+    if let (Some(device_id), Some(session_id)) = (&arguments.device_id, &arguments.session_id) {
+        result["handoff"] = session_handoff(&sessions, device_id, session_id, inventory.first());
+    }
+    Ok(result)
+}
+
+/// Descriptive only. The input sessions have already passed the caller's live
+/// resource ACL. Only owner-visible retained history supplies the previous cwd.
+fn session_handoff(
+    sessions: &[Arc<Session>],
+    device_id: &str,
+    session_id: &str,
+    previous: Option<&Value>,
+) -> Value {
+    let mut candidates = Vec::new();
+    let mut count = 0;
+    let previous_cwd = previous
+        .and_then(|entry| entry["cwd"].as_str())
+        .filter(|cwd| !cwd.is_empty());
+    for session in sessions.iter().filter(|session| session.is_alive()) {
+        let info = session.info();
+        let Some(route) = &info.routing else { continue };
+        if route.device_id != device_id {
+            continue;
+        }
+        if route.session_id == session_id {
+            return json!({"status":"same_session","client_id":info.id,
+                "next":"Verify the original workspace and current control/pool link. On a new connection, refresh schemas and join and bind separately with fresh member credentials. Reconcile original claims; preserve unknown outcomes."});
+        }
+        if previous_cwd == Some(info.cwd.as_str()) {
+            count += 1;
+            if candidates.len() < 8 {
+                candidates.push(info.id);
+            }
+        }
+    }
+    json!({
+        "status":match count { 0 => "unavailable", 1 => "confirmation_required", _ => "ambiguous" },
+        "candidate_count":count, "candidate_client_ids":candidates,
+        "next":"Discovery only. Obtain a fresh /invite or /invite worker, or have the operator identify the new control session and its pool. Verify the workspace and current pool link before binding. Preserve unknown outcomes. Never restart stopped sessions, reuse old member credentials, or replay tasks."
+    })
 }
 
 struct CodeRunReport {
@@ -2104,7 +2145,7 @@ pub(crate) fn tool_definitions() -> Value {
         temporary_links::tool_definition(),
         {
             "name":"list",
-            "description":"List live clients authorized for this identity and endpoint, with signed device/session addresses when supported. Display aliases are not DNS names or authority. Filter exact device_id/session_id, then dispatch by the returned current client id. Retained offline owner inventory is descriptive and cannot execute. client_id returns that client's full native schemas; follow nextCursor. Prefer tools.search in code_mode for targeted discovery.",
+            "description":"List live clients authorized for this identity and endpoint, with signed device/session addresses when supported. Exact device_id/session_id lookup includes a read-only handoff after disconnect. A fresh process needs a new invitation or explicit operator selection. Display aliases are not authority. Retained offline owner inventory is descriptive and cannot execute. client_id returns that client's full native schemas; follow nextCursor. Prefer tools.search in code_mode for targeted discovery.",
             "inputSchema":{"type":"object","properties":{
                 "client_id":{"type":"string","minLength":1,"maxLength":64},
                 "device_id":{"type":"string","pattern":"^dev_[0-9a-f]{64}$","description":"Exact verified device ID from list; filters discovery and never executes or broadcasts."},
