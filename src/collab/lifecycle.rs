@@ -162,6 +162,7 @@ pub(super) struct Lifecycle {
     idle_after_ms: u64,
     maintenance_budget_ms: u64,
     idle_since: Option<Instant>,
+    dreaming_since: Option<(Instant, u64)>,
     round: Option<Round>,
     claims: BTreeMap<String, ClaimRecord>,
     operations: BTreeMap<String, OperationRecord>,
@@ -180,6 +181,7 @@ impl Lifecycle {
             idle_after_ms: DEFAULT_IDLE_AFTER_MS,
             maintenance_budget_ms: DEFAULT_MAINTENANCE_BUDGET_MS,
             idle_since: Some(now),
+            dreaming_since: None,
             round: None,
             claims: BTreeMap::new(),
             operations: BTreeMap::new(),
@@ -220,9 +222,15 @@ impl Lifecycle {
         }
     }
 
+    pub(super) fn dreaming_since_ms(&self) -> Option<u64> {
+        self.dreaming_since.map(|(_, wall)| wall)
+    }
+
     pub(super) fn public(&self) -> Value {
         json!({"revision":self.revision,"status_since_ms":self.status_since_ms,
             "idle_after_ms":self.idle_after_ms,"maintenance_budget_ms":self.maintenance_budget_ms,
+            "dreaming_since_ms":self.dreaming_since_ms(),
+            "dreaming_elapsed_ms":self.dreaming_since.map(|(start, _)| start.elapsed().as_millis().min(u64::MAX as u128) as u64),
             "active_claims":self.claims.len(),"in_flight":self.operations.values().filter(|op|op.active).count(),
             "unknown_outcomes":self.unknown_count(),"maintenance":self.round.as_ref().map(Round::public)})
     }
@@ -265,6 +273,9 @@ impl Lifecycle {
         }
         let previous = self.status;
         self.status = status;
+        if status != Status::Dreaming {
+            self.dreaming_since = None;
+        }
         self.revision += 1;
         self.status_since_ms = wall;
         self.idle_since = (status == Status::Idle).then_some(now);
@@ -324,6 +335,8 @@ impl Lifecycle {
     fn release_empty_inbox(
         &mut self,
         inbox: &mut VecDeque<Arc<Message>>,
+        now: Instant,
+        wall: u64,
         changes: &mut Vec<Change>,
     ) {
         let Some(round) = &mut self.round else { return };
@@ -342,6 +355,7 @@ impl Lifecycle {
             0
         };
         round.released_inbox_slots = Some(released);
+        self.dreaming_since.get_or_insert((now, wall));
         if let Some((_, data)) = changes
             .last_mut()
             .filter(|(kind, _)| *kind == "agent.maintenance_requested")
@@ -350,6 +364,16 @@ impl Lifecycle {
         } else {
             // A synchronous lookup may have already published the due round.
             self.round_event("agent.maintenance_changed", "local_inbox_cleanup", changes);
+        }
+    }
+
+    fn after_round(&self) -> Status {
+        if self.maintenance_blocked() {
+            Status::Working
+        } else if self.dreaming_since.is_some() {
+            Status::Dreaming
+        } else {
+            Status::Idle
         }
     }
 
@@ -381,11 +405,8 @@ impl Lifecycle {
         {
             self.preempt_round("maintenance_budget_elapsed", wall, &mut changes);
             if self.status == Status::Dreaming {
-                let status = if self.maintenance_blocked() {
-                    Status::Working
-                } else {
-                    Status::Idle
-                };
+                let status = self.after_round();
+
                 self.transition(
                     status,
                     "maintenance_budget_elapsed",
@@ -480,7 +501,14 @@ impl Lifecycle {
                 return Err("agent_lifecycle_unresolved_work: drain or reconcile original work before this transition".into());
             }
             if status == Status::Dreaming {
-                if next.status != Status::Dreaming {
+                if next.status != Status::Dreaming
+                    || next.round.as_ref().is_some_and(|round| {
+                        matches!(
+                            round.status,
+                            RoundStatus::Completed | RoundStatus::Failed | RoundStatus::Cancelled
+                        )
+                    })
+                {
                     next.request_round(id, "participant", now, wall, &mut changes);
                 }
             } else {
@@ -510,6 +538,7 @@ impl Lifecycle {
                         if round.status == RoundStatus::Requested
                             && next.status == Status::Dreaming =>
                     {
+                        next.dreaming_since.get_or_insert((now, wall));
                         round.started_at_ms = Some(wall);
                         round.deadline = Some(now + Duration::from_millis(round.budget_ms));
                         RoundStatus::Running
@@ -545,11 +574,7 @@ impl Lifecycle {
                 &mut changes,
             );
             if next.status == Status::Dreaming && status != RoundStatus::Running {
-                let phase = if next.maintenance_blocked() {
-                    Status::Working
-                } else {
-                    Status::Idle
-                };
+                let phase = next.after_round();
                 next.transition(phase, "maintenance_report", now, wall, &mut changes);
             }
         }
@@ -679,7 +704,7 @@ fn advance(
         if on_deadline_driver {
             agent
                 .lifecycle
-                .release_empty_inbox(&mut agent.inbox, &mut changes);
+                .release_empty_inbox(&mut agent.inbox, now, wall, &mut changes);
         }
         publish(events, session, agent, changes);
     }

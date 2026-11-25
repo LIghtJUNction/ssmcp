@@ -810,7 +810,19 @@ async fn deadline_releases_only_the_acked_members_empty_inbox_once() {
         advance(&mut state, None, "housekeeping", true);
         assert!(state.agents[&id].inbox.capacity() > 0);
     }
-    assert_eq!(snapshot(&hub, &id, &token), first);
+    let again = snapshot(&hub, &id, &token);
+    assert_eq!(
+        again["lifecycle"]["revision"],
+        first["lifecycle"]["revision"]
+    );
+    assert_eq!(
+        again["lifecycle"]["maintenance"],
+        first["lifecycle"]["maintenance"]
+    );
+    assert_eq!(
+        again["lifecycle"]["dreaming_since_ms"],
+        first["lifecycle"]["dreaming_since_ms"]
+    );
     for action in ["start", "complete"] {
         let result = update(
             &hub,
@@ -895,4 +907,37 @@ async fn housekeeping_preserves_unacknowledged_input_and_yields_to_work() {
                 .is_none()
         );
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn dreaming_episode_outlives_bounded_chores_and_input_resets_its_clock() {
+    let now = Instant::now();
+    let mut life = Lifecycle::new(now, 1_000);
+    let mut inbox = VecDeque::new();
+    let idle = Duration::from_millis(DEFAULT_IDLE_AFTER_MS);
+    assert!(
+        life.advance("member", now + idle - Duration::from_millis(1), 99)
+            .is_empty()
+    );
+    assert!(life.dreaming_since_ms().is_none());
+    tokio::time::advance(idle).await;
+    let mut changes = life.advance("member", Instant::now(), 301_000);
+    assert!(life.dreaming_since_ms().is_none());
+    life.release_empty_inbox(&mut inbox, Instant::now(), 301_000, &mut changes);
+    assert_eq!(life.dreaming_since_ms(), Some(301_000));
+    tokio::time::advance(Duration::from_millis(DEFAULT_MAINTENANCE_BUDGET_MS)).await;
+    life.advance("member", Instant::now(), 331_000);
+    assert_eq!(life.public()["maintenance"]["status"], "cancelled");
+    assert_eq!(life.status, Status::Dreaming);
+    assert!(life.next_deadline().is_none());
+    tokio::time::advance(Duration::from_secs(1770)).await;
+    assert_eq!(life.public()["dreaming_elapsed_ms"], 1_800_000);
+    life.wake(
+        "human-input".into(),
+        "user_input",
+        Instant::now(),
+        2_101_000,
+    );
+    assert_eq!(life.status, Status::Working);
+    assert!(life.public()["dreaming_elapsed_ms"].is_null());
 }
