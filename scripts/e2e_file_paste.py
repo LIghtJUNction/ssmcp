@@ -385,6 +385,23 @@ class FilePaste(InputHistory):
         self.unchanged_queue(self.target)
         return paths
 
+    def desktop_text(self, front):
+        target = 'text/plain; charset="UTF-8"'
+        payload = "中文 👩‍💻\r\n下一行\n"
+        for types, expected_reads in [
+            ({target: payload.encode()}, [target]),
+            ({"text/uri-list": b"https://example.invalid/link\r\n",
+              target: payload.encode()}, ["text/uri-list", target]),
+        ]:
+            before = len(self.reads())
+            self.select(types)
+            front.send(b"\x16")
+            self.wait_state(front, lambda state: state["draft"]["text"] == payload.replace("\r\n", "\n"),
+                            "Ctrl+V did not deliver the desktop plain-text offer")
+            self.check(self.reads()[before:] == expected_reads, "requested the owner's exact clipboard targets")
+            self.unchanged_queue(self.target)
+            self.clear_draft(front)
+
     def direct_image(self, front):
         self.clear_draft(front)
         source = large_png_fixture()
@@ -702,6 +719,7 @@ class FilePaste(InputHistory):
         self.target = self.ui("/display/conversation")["target"]
         self.check(not self.queue()["queue"], "the owned frontend begins with no queued requests")
 
+        self.desktop_text(front)
         paths = self.paste_success(
             front, "text/uri-list",
             ("# file manager selection\r\n" + note.as_uri() + "\r\n" + png.as_uri() + "\r\n").encode(),

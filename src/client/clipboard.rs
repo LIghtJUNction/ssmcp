@@ -55,6 +55,67 @@ pub(super) async fn read() -> Result<Content, String> {
     })
 }
 #[cfg(all(not(target_os = "macos"), not(windows)))]
+fn plain_target(types: &str) -> Option<&str> {
+    // Match media types semantically, but ask the owner for its exact offer.
+    types
+        .lines()
+        .map(str::trim)
+        .filter_map(|offered| {
+            let priority = match offered {
+                "UTF8_STRING" => 1,
+                "STRING" => 3,
+                _ => {
+                    let mime: mime::Mime = offered.parse().ok()?;
+                    if mime.essence_str() != "text/plain" {
+                        return None;
+                    }
+                    match mime.get_param(mime::CHARSET) {
+                        Some(charset) if charset == mime::UTF_8 => 0,
+                        None => 2,
+                        _ => return None,
+                    }
+                }
+            };
+            Some((priority, offered))
+        })
+        .min_by_key(|(priority, _)| *priority)
+        .map(|(_, offered)| offered)
+}
+
+#[cfg(all(not(target_os = "macos"), not(windows)))]
+async fn read_target(
+    program: &str,
+    wayland: bool,
+    target: &str,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
+    if wayland {
+        helper(program, &["--no-newline", "--type", target], limit).await
+    } else {
+        helper(
+            program,
+            &["-selection", "clipboard", "-o", "-t", target],
+            limit,
+        )
+        .await
+    }
+}
+
+#[cfg(all(not(target_os = "macos"), not(windows)))]
+fn web_links(uris: &str) -> bool {
+    let mut entries = uris
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .peekable();
+    entries.peek().is_some()
+        && entries.all(|entry| {
+            reqwest::Url::parse(entry)
+                .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.has_host())
+        })
+}
+
+#[cfg(all(not(target_os = "macos"), not(windows)))]
 async fn read_unix(program: &str, wayland: bool) -> Result<Content, String> {
     let listing = if wayland {
         vec!["--list-types"]
@@ -63,22 +124,33 @@ async fn read_unix(program: &str, wayland: bool) -> Result<Content, String> {
     };
     let types = helper(program, &listing, 16 * 1024).await?;
     let types = String::from_utf8(types).map_err(|_| "Clipboard type list is not UTF-8")?;
-    // A desktop file selection is explicit even if a thumbnail MIME is offered.
+    let plain = plain_target(&types);
+    // File selections retain priority over thumbnail or display-name offers.
     for target in ["x-special/gnome-copied-files", "text/uri-list"] {
         if types.lines().any(|line| line.trim() == target) {
-            let args = if wayland {
-                vec!["--no-newline", "--type", target]
-            } else {
-                vec!["-selection", "clipboard", "-o", "-t", target]
-            };
-            let bytes = helper(
+            let bytes = read_target(
                 program,
-                &args,
+                wayland,
+                target,
                 super::references::files::MAX_PATH_LIST_BYTES,
             )
             .await?;
-            let text = String::from_utf8(bytes).map_err(|_| "Clipboard file list is not UTF-8")?;
-            return super::references::files::clipboard_paths(target, &text).map(Content::Files);
+            let uris = String::from_utf8(bytes).map_err(|_| "Clipboard file list is not UTF-8")?;
+            if target == "text/uri-list"
+                && let Some(target) = plain
+                && web_links(&uris)
+            {
+                return text(
+                    read_target(
+                        program,
+                        wayland,
+                        target,
+                        super::references::paste::MAX_PASTE_BYTES,
+                    )
+                    .await?,
+                );
+            }
+            return super::references::files::clipboard_paths(target, &uris).map(Content::Files);
         }
     }
     for (mime, extension) in [
@@ -88,12 +160,8 @@ async fn read_unix(program: &str, wayland: bool) -> Result<Content, String> {
         ("image/gif", "gif"),
     ] {
         if types.lines().any(|line| line.trim() == mime) {
-            let args = if wayland {
-                vec!["--no-newline", "--type", mime]
-            } else {
-                vec!["-selection", "clipboard", "-o", "-t", mime]
-            };
-            let bytes = helper(program, &args, super::attachments::MAX_SOURCE_BYTES).await?;
+            let bytes =
+                read_target(program, wayland, mime, super::attachments::MAX_SOURCE_BYTES).await?;
             return Ok(Content::Image {
                 name: format!("clipboard.{extension}"),
                 mime_type: mime.into(),
@@ -104,21 +172,16 @@ async fn read_unix(program: &str, wayland: bool) -> Result<Content, String> {
     if types.lines().any(|line| line.trim().starts_with("image/")) {
         return Err("Clipboard image format is unsupported; use a PNG/JPEG/GIF/WebP file".into());
     }
-    let target = [
-        "text/plain;charset=utf-8",
-        "UTF8_STRING",
-        "text/plain",
-        "STRING",
-    ]
-    .into_iter()
-    .find(|kind| types.lines().any(|line| line.trim() == *kind))
-    .ok_or("Clipboard does not contain an image, local files or plain text")?;
-    let args = if wayland {
-        vec!["--no-newline", "--type", target]
-    } else {
-        vec!["-selection", "clipboard", "-o", "-t", target]
-    };
-    text(helper(program, &args, super::references::paste::MAX_PASTE_BYTES).await?)
+    let target = plain.ok_or("Clipboard does not contain an image, local files or plain text")?;
+    text(
+        read_target(
+            program,
+            wayland,
+            target,
+            super::references::paste::MAX_PASTE_BYTES,
+        )
+        .await?,
+    )
 }
 #[cfg(target_os = "macos")]
 pub(super) async fn read() -> Result<Content, String> {
@@ -315,6 +378,54 @@ async fn write_platform(value: &str) -> Result<(), String> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    #[cfg(not(target_os = "macos"))]
+    #[tokio::test]
+    async fn desktop_text_offers_keep_their_spelling_and_web_links_paste_as_text() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("ssmcp-text-offer-{}", getrandom::u64().unwrap()));
+        std::fs::create_dir(&root).unwrap();
+        let program = root.join("reader");
+        std::fs::write(
+            &program,
+            r#"#!/bin/sh
+dir=${0%/*}
+for target do :; done
+case "$target" in
+    --list-types|TARGETS) cat "$dir/types";;
+    text/uri-list) cat "$dir/uris";;
+    *) test "$target" = "$(cat "$dir/offer")" && cat "$dir/text";;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let offer = "text/plain; charset=\"UTF-8\"";
+        let body = "中文 👩‍💻\r\n第二行\n".repeat(1000);
+        std::fs::write(root.join("offer"), offer).unwrap();
+        std::fs::write(root.join("text"), &body).unwrap();
+        for wayland in [true, false] {
+            for listing in [offer.to_owned(), format!("text/uri-list\n{offer}")] {
+                std::fs::write(root.join("types"), listing).unwrap();
+                std::fs::write(
+                    root.join("uris"),
+                    "# link\r\nhttps://example.invalid/文档\r\n",
+                )
+                .unwrap();
+                let result = read_unix(program.to_str().unwrap(), wayland).await.unwrap();
+                assert!(matches!(result, Content::Text(text) if text == body));
+            }
+            // A mixed file selection must still fail as a whole.
+            std::fs::write(
+                root.join("uris"),
+                "file:///tmp/example\nhttps://example.invalid/\n",
+            )
+            .unwrap();
+            assert!(read_unix(program.to_str().unwrap(), wayland).await.is_err());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn copy_writer_preserves_exact_text_and_leaves_the_owner_alive() {
         // Isolated fake owner: never reads or modifies the user's clipboard.

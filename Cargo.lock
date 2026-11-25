@@ -1772,6 +1772,7 @@ dependencies = [
  "getrandom 0.4.3",
  "image",
  "libc",
+ "mime",
  "miniz_oxide 0.9.1",
  "png",
  "portable-pty",
