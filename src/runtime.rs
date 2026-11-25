@@ -617,6 +617,16 @@ impl Runtime {
         pool.human_resize(total)
     }
 
+    pub(crate) fn human_select_pending_retirement(&self, target: usize) -> Result<Value, String> {
+        let pool = self
+            .workers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or("this connection has no worker pool")?;
+        pool.human_select_pending_retirement(target, self.call_connection)
+    }
+
     pub(crate) fn force_worker_retirements(
         &self,
         targets: &[crate::worker::Retirement],

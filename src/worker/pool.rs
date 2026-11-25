@@ -214,6 +214,18 @@ impl Pool {
         Ok(receipt)
     }
 
+    pub(crate) fn human_select_pending_retirement(
+        &self,
+        target: usize,
+        connection: u64,
+    ) -> Result<Value, String> {
+        self.remote()?;
+        let retirement = self.queue.select_pending_retirement(target, connection)?;
+        let mut receipt = self.resize_result();
+        receipt["retirement_targets"] = json!([retirement]);
+        Ok(receipt)
+    }
+
     pub(crate) fn force_worker_retirements(&self, targets: &[Retirement]) -> Result<Value, String> {
         let count = self
             .remote()?

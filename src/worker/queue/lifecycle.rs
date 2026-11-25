@@ -31,6 +31,49 @@ impl<T: Clone> Queue<T> {
         self.resize_inner(total, None, true)
     }
 
+    /// A fresh human submission can nominate one already retiring station.
+    /// The earlier resize is never a force confirmation, and selection does
+    /// not change capacity or consume the original worker's release receipt.
+    pub(in crate::worker) fn select_pending_retirement(
+        &self,
+        target: usize,
+        connection: u64,
+    ) -> Result<Retirement, String> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !state.remote_ready || state.closed || state.stopping || target != state.desired_total {
+            return Err("Worker pool or pending target changed. Inspect the current pool.".into());
+        }
+        let now = Instant::now();
+        let mut selected = None;
+        for (index, slot) in state
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.enabled)
+        {
+            let Some(receipt) = slot.retirement.as_ref() else {
+                continue;
+            };
+            if receipt.generation != self.generation
+                || receipt.slot != index
+                || receipt.epoch != slot.epoch
+                || !slot.registered.as_ref().is_some_and(|actor| {
+                    actor.connection == connection
+                        && actor.participant.as_ref().is_some_and(|id| !id.is_empty())
+                })
+            {
+                return Err("Could not verify the pending worker identity and station epoch. Inspect the current pool.".into());
+            }
+            let rank = (telemetry::total_at(slot, now), index);
+            if selected.as_ref().is_none_or(|(best, _)| rank > *best) {
+                selected = Some((rank, receipt));
+            }
+        }
+        selected.map(|(_, receipt)| receipt.clone()).ok_or_else(|| {
+            "No registered worker is awaiting retirement. Inspect the current pool.".into()
+        })
+    }
+
     fn resize_inner(
         &self,
         total: usize,

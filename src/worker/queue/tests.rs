@@ -978,6 +978,43 @@ fn simultaneous_two_hour_advisories_share_one_banner_and_retain_each_station_rep
 }
 
 #[test]
+fn selecting_one_of_five_pending_retirements_keeps_the_target_and_exact_epoch() {
+    let q = queue(5);
+    let m = actor("main");
+    let members: Vec<_> = (0..5).map(|i| actor(&format!("worker-{i}"))).collect();
+    q.remote_ready().unwrap();
+    assert!(q.select_pending_retirement(0, m.connection).is_err());
+    for (i, member) in members.iter().enumerate() {
+        q.claim_remote(member, 1).unwrap();
+        q.state.lock().unwrap().slots[i].total_work_ms = [150, 4, 1100, 30, 1][i];
+    }
+    q.resize(0).unwrap();
+    // A prior group resize neither removes the registered workers nor supplies human consent.
+    assert!(q.human_resize(0).is_err());
+    assert!(q.select_pending_retirement(1, m.connection).is_err());
+    assert!(q.select_pending_retirement(0, m.connection + 1).is_err());
+    let selected = q.select_pending_retirement(0, m.connection).unwrap();
+    assert_eq!(selected.slot, 2);
+    assert_eq!(q.snapshot().registered_workers, 5);
+    assert_eq!(q.snapshot().desired_total, 0);
+    // If the old claimant acknowledges before confirmation, the captured ticket
+    // cannot transfer to the next longest station.
+    q.release_remote(&members[2], &selected, 2).unwrap();
+    assert!(
+        q.force_retirement(&selected, |_| None, 3)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(q.snapshot().registered_workers, 4);
+    let next = q.select_pending_retirement(0, m.connection).unwrap();
+    assert_eq!(next.slot, 0);
+    assert_ne!(next.id, selected.id);
+    q.force_retirement(&next, |_| None, 4).unwrap().unwrap();
+    assert_eq!(q.snapshot().registered_workers, 3);
+    assert_eq!(q.snapshot().desired_total, 0);
+}
+
+#[test]
 fn an_available_station_starts_a_new_work_clock_after_authenticated_membership_ends() {
     let q = queue(1);
     q.remote_ready().unwrap();
