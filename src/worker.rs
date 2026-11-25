@@ -12,6 +12,7 @@ mod executor;
 mod limits;
 mod pool;
 mod queue;
+pub(crate) use queue::Retirement;
 #[cfg(target_os = "linux")]
 mod registry;
 mod remote;
@@ -20,6 +21,8 @@ pub(crate) use pool::Pool;
 pub(crate) use pool::TaskContext;
 pub(crate) use remote::CommandLog;
 
+/// Human-facing advisory threshold for assigned time in a single registration.
+pub(crate) const TWO_HOURS_MS: u64 = 2 * 60 * 60 * 1000;
 /// Maximum time spent observing one worker request; queued work outlives the call.
 pub(crate) const MAX_OBSERVATION_WAIT_MS: u64 = crate::wire::MAX_OBSERVATION_WAIT_MS;
 
@@ -46,6 +49,8 @@ pub(crate) struct SlotView {
     pub(crate) next_log_sequence: u64,
     #[serde(default)]
     pub(crate) registered: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) contact: Option<&'static str>,
     #[serde(default)]
     pub(crate) retire_requested: bool,
     #[serde(default)]
@@ -171,6 +176,7 @@ pub(crate) fn prepare_display(config: Config) {
                 logs: Vec::new(),
                 next_log_sequence: 1,
                 registered: false,
+                contact: None,
                 retire_requested: false,
                 task_summary: None,
                 task_text: None,

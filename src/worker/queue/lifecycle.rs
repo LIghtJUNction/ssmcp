@@ -14,7 +14,7 @@ impl<T: Clone> Queue<T> {
     }
 
     pub(crate) fn resize(&self, total: usize) -> Result<(), String> {
-        self.resize_inner(total, None)
+        self.resize_inner(total, None, false).map(|_| ())
     }
 
     pub(in crate::worker) fn resize_managed(
@@ -23,10 +23,20 @@ impl<T: Clone> Queue<T> {
         client_id: &str,
         total: usize,
     ) -> Result<(), String> {
-        self.resize_inner(total, Some((actor, client_id)))
+        self.resize_inner(total, Some((actor, client_id)), false)
+            .map(|_| ())
     }
 
-    fn resize_inner(&self, total: usize, manager: Option<(&Actor, &str)>) -> Result<(), String> {
+    pub(in crate::worker) fn human_resize(&self, total: usize) -> Result<Vec<Retirement>, String> {
+        self.resize_inner(total, None, true)
+    }
+
+    fn resize_inner(
+        &self,
+        total: usize,
+        manager: Option<(&Actor, &str)>,
+        human: bool,
+    ) -> Result<Vec<Retirement>, String> {
         if total > super::super::config::MAX_WORKERS {
             return Err("worker total must be an integer from 0 through 128".into());
         }
@@ -37,21 +47,28 @@ impl<T: Clone> Queue<T> {
         if !state.remote_ready || state.closed || state.stopping {
             return Err("only an active remote worker pool can be resized".into());
         }
-        if state
+        let current = state.slots.iter().filter(|s| s.enabled).count();
+        let pending = state
             .slots
             .iter()
-            .any(|slot| slot.enabled && slot.retirement.is_some())
-        {
+            .any(|s| s.enabled && s.retirement.is_some());
+        if human && (pending || total.checked_add(1) != Some(current)) {
+            return Err("station count or pending retirements changed; no new human retirement was authorized".into());
+        }
+        if pending {
             return if total == state.desired_total {
-                Ok(())
+                Ok(state
+                    .slots
+                    .iter()
+                    .filter_map(|s| s.retirement.clone())
+                    .collect())
             } else {
                 Err("a worker resize is awaiting external release acknowledgements; retry after it completes".into())
             };
         }
-        let current = state.slots.iter().filter(|slot| slot.enabled).count();
         if total == current {
             state.desired_total = total;
-            return Ok(());
+            return Ok(Vec::new());
         }
         if total > current {
             let mut remaining = total - current;
@@ -68,7 +85,7 @@ impl<T: Clone> Queue<T> {
             state.slots.extend((0..remaining).map(|_| Slot::new()));
             state.desired_total = total;
             self.changed(&mut state);
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         // No mutation until all candidates and all acknowledgement nonces exist.
@@ -89,7 +106,18 @@ impl<T: Clone> Queue<T> {
                 (priority, index)
             })
             .collect();
-        candidates.sort_by_key(|(priority, index)| (*priority, std::cmp::Reverse(*index)));
+        let now = Instant::now();
+        candidates.sort_by_key(|(priority, index)| {
+            let slot = &state.slots[*index];
+            let total = telemetry::total_at(slot, now);
+            let ranked = human && slot.registered.is_some() && total > 0;
+            (
+                !ranked,
+                std::cmp::Reverse(if ranked { total } else { 0 }),
+                *priority,
+                std::cmp::Reverse(*index),
+            )
+        });
         let mut selected = Vec::with_capacity(current - total);
         for (priority, index) in candidates.into_iter().take(current - total) {
             if priority == 3 {
@@ -144,7 +172,11 @@ impl<T: Clone> Queue<T> {
         }
         state.desired_total = total;
         self.changed(&mut state);
-        Ok(())
+        Ok(state
+            .slots
+            .iter()
+            .filter_map(|s| s.retirement.clone())
+            .collect())
     }
 
     pub(in crate::worker) fn retirement(&self, actor: &Actor) -> Option<Retirement> {
@@ -202,7 +234,7 @@ impl<T: Clone> Queue<T> {
         self.record_slot_event(&mut state, "worker.offline", retirement.slot, now_ms);
         let worker = &mut state.slots[retirement.slot];
         worker.registered = None;
-        worker.retirement = None;
+        worker.last_retirement = worker.retirement.take();
         worker.enabled = false;
         self.changed(&mut state);
         Ok(())

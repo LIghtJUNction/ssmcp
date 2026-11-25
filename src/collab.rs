@@ -19,7 +19,7 @@ use tokio::{
     time::Instant,
 };
 
-const LEASE_MS: u64 = 15 * 60 * 1000;
+const LEASE_MS: u64 = crate::wire::COLLAB_LEASE_MS;
 const MAX_AGENTS: usize = 64;
 const MAX_PAYLOAD: usize = 16 * 1024;
 const MAX_INBOX_MESSAGES: usize = 128;

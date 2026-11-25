@@ -899,3 +899,75 @@ fn full_unknown_retry_guard_refuses_new_admission_instead_of_forgetting_effects(
     );
     assert_eq!(pool.snapshot().queued, 0);
 }
+
+#[test]
+fn two_hour_advice_is_strict_and_once_per_epoch_and_human_shrink_ranks_all_durations() {
+    let q = queue(3);
+    q.remote_ready().unwrap();
+    let owner = actor("m");
+    for i in 0..3 {
+        q.submit(owner.clone(), &format!("key{i}"), "task", "context", 1)
+            .unwrap();
+        q.claim_remote(&actor(&format!("w{i}")), 2)
+            .unwrap()
+            .unwrap();
+    }
+    let t = Instant::now();
+    let h = telemetry::TWO_HOURS_MS;
+    {
+        let mut state = q.state.lock().unwrap();
+        for (i, s) in state.slots.iter_mut().enumerate() {
+            s.total_work_ms = [h - 100, 2_000, 100][i];
+            s.started = Some(t);
+        }
+        state.slots[0].progress = Some("waiting for build".into());
+    }
+    let edge = t + std::time::Duration::from_millis(100);
+    assert!(q.overwork_notices(edge, 3).is_empty());
+    let notices = q.overwork_notices(edge + std::time::Duration::from_millis(1), 4);
+    assert_eq!(notices.len(), 1);
+    assert!(notices[0].contains("waiting for build") && notices[0].contains("over 2h"));
+    assert!(
+        q.overwork_notices(edge + std::time::Duration::from_secs(2), 5)
+            .is_empty()
+    );
+    assert!(
+        q.human_resize(1).is_err(),
+        "one human command cannot retire two stations"
+    );
+    let tickets = q.human_resize(2).unwrap();
+    assert_eq!(tickets[0].slot, 0);
+    let q = queue(2);
+    q.remote_ready().unwrap();
+    for i in 0..2 {
+        q.claim_remote(&actor(&format!("member-{i}")), 1).unwrap();
+    }
+    q.state.lock().unwrap().slots[0].total_work_ms = 2000;
+    assert_eq!(
+        q.human_resize(1).unwrap()[0].slot,
+        0,
+        "longest wins even below two hours"
+    );
+}
+
+#[test]
+fn an_available_station_starts_a_new_work_clock_after_authenticated_membership_ends() {
+    let q = queue(1);
+    q.remote_ready().unwrap();
+    let old = actor("old");
+    q.claim_remote(&old, 1).unwrap();
+    q.state.lock().unwrap().slots[0].total_work_ms = telemetry::TWO_HOURS_MS + 1;
+    let now = Instant::now() + std::time::Duration::from_secs(2);
+    assert_eq!(q.overwork_notices(now, 2).len(), 1);
+    assert_eq!(
+        q.reconcile_roster(old.connection, now, &BTreeMap::new(), |_| None, 3),
+        vec![old]
+    );
+    assert_eq!(q.snapshot().offline, 1);
+    q.claim_remote(&actor("next"), 4).unwrap();
+    let slot = &q.snapshot().slots[0];
+    assert_eq!(slot.total_work_ms, 0);
+    assert!(q.overwork_notices(now, 5).is_empty());
+    q.state.lock().unwrap().slots[0].total_work_ms = telemetry::TWO_HOURS_MS + 1;
+    assert_eq!(q.overwork_notices(now, 6).len(), 1);
+}

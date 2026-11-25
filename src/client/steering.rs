@@ -1390,6 +1390,30 @@ impl Manager {
         Ok(())
     }
 
+    fn worker_reply(
+        &mut self,
+        id: u64,
+        result: Result<SteeringSnapshot, String>,
+        client: Option<&str>,
+    ) -> Result<Option<(Instant, Vec<SteeringAgent>)>, String> {
+        // queued_at becomes the monotonic send time before the transport write.
+        // Unsolicited, obsolete, cross-room, and failed replies are never evidence.
+        let sent = self
+            .requests
+            .get(&id)
+            .filter(|r| r.sent && matches!(r.command, SteeringCommand::Snapshot {}))
+            .filter(|_| {
+                result.as_ref().is_ok_and(|s| {
+                    Some(s.client_id.as_str()) == client && s.revision >= self.revision
+                })
+            })
+            .map(|r| r.queued_at);
+        self.reply(id, result)?;
+        Ok(sent
+            .filter(|_| self.ready && self.error.is_none())
+            .map(|sent| (sent, self.agents.clone())))
+    }
+
     fn reply(&mut self, id: u64, result: Result<SteeringSnapshot, String>) -> Result<(), String> {
         if id == 0 {
             return self.merge(&result?);
@@ -1801,8 +1825,20 @@ pub(super) fn fail_unsent(id: u64, error: &str) {
 pub(super) fn sent(id: u64) -> bool {
     with(|manager| manager.sent(id))
 }
-pub(super) fn reply(id: u64, result: Result<SteeringSnapshot, String>) -> Result<(), String> {
-    with_history(|manager| manager.reply(id, result))
+pub(super) fn reply(
+    id: u64,
+    result: Result<SteeringSnapshot, String>,
+    runtime: &crate::runtime::Runtime,
+) -> Result<(), String> {
+    if !runtime.frontend_has_workers() {
+        return with_history(|manager| manager.reply(id, result));
+    }
+    let roster =
+        with_history(|manager| manager.worker_reply(id, result, runtime.frontend_client_id()))?;
+    if let Some((sent, agents)) = roster {
+        runtime.reconcile_worker_roster(sent, &agents);
+    }
+    Ok(())
 }
 
 fn with_history<T>(operation: impl FnOnce(&mut Manager) -> T) -> T {
@@ -1972,6 +2008,50 @@ mod tests {
             }
             Transport::Reload => panic!("unexpected reload"),
         }
+    }
+
+    #[test]
+    fn worker_liveness_consumes_only_valid_current_requested_rosters() {
+        let mut manager = Manager::default();
+        let mut rx = manager.connect("room", 7);
+        let (id, _) = command(&mut manager, &mut rx);
+        let sent = manager.requests[&id].queued_at;
+        let (cutoff, agents) = manager
+            .worker_reply(id, Ok(snapshot_for("room", 5, vec![])), Some("room"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(cutoff, sent);
+        assert_eq!(agents.len(), 1);
+        assert!(
+            manager
+                .worker_reply(id, Ok(snapshot_for("room", 5, vec![])), Some("room"))
+                .unwrap()
+                .is_none()
+        );
+        for (room, revision, client) in [
+            ("other", 6, "room"),
+            ("room", 1, "room"),
+            ("room", 6, "other"),
+        ] {
+            manager.request_snapshot().unwrap();
+            let (id, _) = command(&mut manager, &mut rx);
+            assert!(
+                manager
+                    .worker_reply(id, Ok(snapshot_for(room, revision, vec![])), Some(client))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        manager.request_snapshot().unwrap();
+        let (id, _) = command(&mut manager, &mut rx);
+        let mut malformed = snapshot_for("room", 7, vec![]);
+        malformed.agents[0].agent_id = String::new();
+        assert!(
+            manager
+                .worker_reply(id, Ok(malformed), Some("room"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     fn ready(manager: &mut Manager, receiver: &mut mpsc::Receiver<Transport>, room: &str) {

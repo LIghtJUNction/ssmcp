@@ -424,3 +424,179 @@ fn queued_tasks_survive_zero_capacity_and_resume_only_on_explicit_growth() {
     );
     counts(&queue, (1, 0, 1, 0, 0));
 }
+
+fn member(id: &str, status: &str) -> crate::wire::SteeringAgent {
+    crate::wire::SteeringAgent {
+        agent_id: id.into(),
+        name: "fixture".into(),
+        role: Some("worker".into()),
+        status: status.into(),
+        dreaming_active: None,
+    }
+}
+
+#[test]
+fn only_a_later_complete_roster_closes_lost_claims_and_resolves_pending_shrink() {
+    let (queue, remote) = service(3);
+    let owner = actor("manager");
+    let quiet = actor("quiet");
+    let lost = actor("lost");
+    let standby = actor("standby");
+    let old_request = Instant::now() - std::time::Duration::from_secs(1);
+    let a = queue
+        .submit(owner.clone(), "a", "quiet task", (), 1)
+        .unwrap();
+    let b = queue
+        .submit(owner.clone(), "b", "uncertain effects", (), 2)
+        .unwrap();
+    let ca = claim(&remote, &queue, &quiet, "qa");
+    let cb = claim(&remote, &queue, &lost, "qb");
+    remote.claim(&queue, &standby, "standby", 2).unwrap();
+    let queued = queue
+        .submit(owner.clone(), "c", "queued task", (), 3)
+        .unwrap();
+    queue.resize(0).unwrap();
+    remote.reconcile_roster(&queue, 7, old_request, &[], 4);
+    assert_eq!(queue.snapshot().registered_workers, 3);
+    let t = Instant::now() + std::time::Duration::from_secs(1);
+    queue.authenticated_contact(&quiet, t);
+    remote.reconcile_roster(&queue, 7, t, &[], 5);
+    let state = queue.snapshot();
+    assert_eq!(
+        (state.total, state.working, state.registered_workers),
+        (1, 1, 1)
+    );
+    assert_eq!(
+        queue.result(&owner, &b.task_id).unwrap().status,
+        TaskStatus::Unknown
+    );
+    assert!(!queue.result(&owner, &b.task_id).unwrap().replay_safe);
+    assert_eq!(
+        queue.result(&owner, &a.task_id).unwrap().status,
+        TaskStatus::Cancelling
+    );
+    assert_eq!(
+        queue.result(&owner, &queued.task_id).unwrap().status,
+        TaskStatus::Queued
+    );
+    assert!(remote.complete(&queue, &lost, complete(cb), 6).is_err());
+    assert!(
+        remote
+            .claim_since(&queue, &lost, "old long wait", 7, old_request)
+            .is_err()
+    );
+    let next = t + std::time::Duration::from_secs(2);
+    remote.reconcile_roster(&queue, 7, next, &[member("quiet", "working")], 8);
+    assert_eq!(queue.snapshot().slots[0].contact, Some("confirmed"));
+    remote.complete(&queue, &quiet, complete(ca), 9).unwrap();
+    let ack = retirement(&remote, &queue, &quiet);
+    remote.release(&queue, &quiet, ack, 10).unwrap();
+    let state = queue.snapshot();
+    assert_eq!(
+        (
+            state.desired_total,
+            state.total,
+            state.registered_workers,
+            state.queued
+        ),
+        (0, 0, 0, 1)
+    );
+    assert_eq!(
+        queue.result(&owner, &a.task_id).unwrap().status,
+        TaskStatus::Completed
+    );
+    assert_eq!(
+        queue
+            .submit(owner.clone(), "b", "uncertain effects", (), 11)
+            .unwrap()
+            .status,
+        TaskStatus::Unknown
+    );
+    remote.reconcile_roster(&queue, 7, next, &[], 12);
+    assert_eq!(queue.snapshot().total, 0);
+}
+
+#[test]
+fn silence_preserves_a_claim_and_new_authenticated_contact_recovers_the_display() {
+    let (queue, remote) = service(1);
+    let owner = actor("main");
+    let actor = actor("worker");
+    let task = queue
+        .submit(owner.clone(), "a", "silent job", (), 1)
+        .unwrap();
+    let claim = claim(&remote, &queue, &actor, "worker-wait");
+    let t = Instant::now() + std::time::Duration::from_secs(1);
+    let later = t + std::time::Duration::from_millis(crate::wire::COLLAB_LEASE_MS);
+    queue.authenticated_contact(&actor, t);
+    assert_eq!(
+        queue.snapshot_at(later).slots[0].contact,
+        Some("unverified")
+    );
+    remote.reconcile_roster(&queue, 99, t + std::time::Duration::from_secs(1), &[], 2);
+    assert_eq!(
+        queue.result(&owner, &task.task_id).unwrap().status,
+        TaskStatus::Working
+    );
+    let near = later - std::time::Duration::from_secs(1);
+    remote.reconcile_roster(&queue, 7, near, &[member("worker", "working")], 3);
+    assert_eq!(
+        queue.snapshot_at(near).slots[0].contact,
+        Some("membership_only")
+    );
+    remote.reconcile_roster(&queue, 7, later, &[member("worker", "offline")], 3);
+    assert_eq!(
+        queue.snapshot_at(later).slots[0].contact,
+        Some("declared_offline")
+    );
+    queue.authenticated_contact(&actor, later + std::time::Duration::from_secs(1));
+    assert_eq!(
+        queue
+            .snapshot_at(later + std::time::Duration::from_secs(2))
+            .slots[0]
+            .contact,
+        Some("confirmed")
+    );
+    assert_eq!(
+        remote
+            .complete(&queue, &actor, complete(claim), 4)
+            .unwrap()
+            .0
+            .status,
+        TaskStatus::Completed
+    );
+}
+
+#[test]
+fn human_force_only_revokes_the_confirmed_epoch_and_never_replays_the_claim() {
+    let (queue, remote) = service(1);
+    let owner = actor("manager");
+    let a = actor("alpha");
+    let task = queue
+        .submit(owner.clone(), "a", "possibly effectful", (), 1)
+        .unwrap();
+    let claim = claim(&remote, &queue, &a, "wa");
+    let tickets = queue.human_resize(0).unwrap();
+    let mut wrong = tickets.clone();
+    wrong[0].epoch += 1;
+    assert!(remote.force_retirements(&queue, &wrong, 2).is_err());
+    assert_eq!(queue.snapshot().registered_workers, 1);
+    assert!(
+        queue.human_resize(0).is_err(),
+        "a previous request cannot mint a second human ticket"
+    );
+    assert_eq!(remote.force_retirements(&queue, &tickets, 4).unwrap(), 1);
+    assert_eq!(remote.force_retirements(&queue, &tickets, 5).unwrap(), 0);
+    assert_eq!(queue.snapshot().total, 0);
+    assert_eq!(
+        queue.result(&owner, &task.task_id).unwrap().status,
+        TaskStatus::Unknown
+    );
+    assert!(!queue.result(&owner, &task.task_id).unwrap().replay_safe);
+    assert!(remote.complete(&queue, &a, complete(claim), 6).is_err());
+    queue.resize(1).unwrap();
+    assert!(remote.claim(&queue, &a, "old worker", 7).is_err());
+    let fresh = actor("new");
+    remote.claim(&queue, &fresh, "fresh worker", 8).unwrap();
+    assert!(remote.force_retirements(&queue, &tickets, 9).is_err());
+    assert_eq!(queue.snapshot().registered_workers, 1);
+}

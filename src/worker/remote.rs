@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::Mutex,
+    time::Instant,
 };
 
 const MAX_RECEIPTS: usize = 128;
@@ -120,6 +121,8 @@ pub(crate) struct CommandLog {
 
 struct State<T> {
     ready: bool,
+    forced: BTreeMap<Actor, Instant>,
+    roster: Option<(u64, Instant, BTreeMap<String, bool>)>,
     active: BTreeMap<String, Assignment<T>>,
     completed: VecDeque<Receipt>,
     reported: VecDeque<ReportReceipt>,
@@ -135,6 +138,8 @@ impl<T: Clone> Remote<T> {
         Self {
             state: Mutex::new(State {
                 ready: false,
+                forced: BTreeMap::new(),
+                roster: None,
                 active: BTreeMap::new(),
                 completed: VecDeque::new(),
                 reported: VecDeque::new(),
@@ -156,12 +161,114 @@ impl<T: Clone> Remote<T> {
         Ok(())
     }
 
+    // This is a passive observation issued by the registered client to its
+    // broker. It never renews membership, acknowledges retirement, or starts work.
+    pub(super) fn reconcile_roster(
+        &self,
+        queue: &Queue<T>,
+        connection: u64,
+        sent: Instant,
+        agents: &[crate::wire::SteeringAgent],
+        now_ms: u64,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if !state.ready
+            || state
+                .roster
+                .as_ref()
+                .is_some_and(|(_, prior, _)| *prior >= sent)
+        {
+            return;
+        }
+        let members: BTreeMap<_, _> = agents
+            .iter()
+            .map(|a| (a.agent_id.clone(), a.status == "offline"))
+            .collect();
+        if members.len() != agents.len() {
+            return;
+        }
+        let lost = queue.reconcile_roster(
+            connection,
+            sent,
+            &members,
+            |actor| {
+                state
+                    .active
+                    .values()
+                    .find(|a| &a.actor == actor)
+                    .map(|a| a.lease.clone())
+            },
+            now_ms,
+        );
+        if !lost.is_empty() {
+            state.active.retain(|_, a| !lost.contains(&a.actor));
+        }
+        state.forced.retain(|actor, forced_at| {
+            actor.connection != connection
+                || *forced_at >= sent
+                || actor
+                    .participant
+                    .as_ref()
+                    .is_some_and(|id| members.contains_key(id))
+        });
+        state.roster = Some((connection, sent, members));
+    }
+
+    pub(super) fn force_retirements(
+        &self,
+        queue: &Queue<T>,
+        targets: &[Retirement],
+        now_ms: u64,
+    ) -> Result<usize, String> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !state.ready {
+            return Err("remote pool is closed".into());
+        }
+        // Live membership is bounded to 64 per room. Keep a conservative upper
+        // bound even when a legacy connection cannot confirm departed members.
+        let [target] = targets else {
+            return Err("expected exactly one previously requested human retirement".into());
+        };
+        if state.forced.len() >= MAX_RECEIPTS * 2 {
+            return Err("previous force retirements are still unverified".into());
+        }
+        let Some(actor) = queue.force_retirement(
+            target,
+            |actor| {
+                state
+                    .active
+                    .values()
+                    .find(|a| &a.actor == actor)
+                    .map(|a| a.lease.clone())
+            },
+            now_ms,
+        )?
+        else {
+            return Ok(0);
+        };
+        state.active.retain(|_, a| a.actor != actor);
+        state.forced.insert(actor, Instant::now());
+        Ok(1)
+    }
+
+    #[cfg(test)]
     pub(super) fn claim(
         &self,
         queue: &Queue<T>,
         actor: &Actor,
         request_id: &str,
         now_ms: u64,
+    ) -> Result<Claimed<T>, String> {
+        self.claim_since(queue, actor, request_id, now_ms, Instant::now())
+    }
+
+    pub(super) fn claim_since(
+        &self,
+        queue: &Queue<T>,
+        actor: &Actor,
+        request_id: &str,
+        now_ms: u64,
+        request_started: Instant,
     ) -> Result<Claimed<T>, String> {
         if request_id.is_empty()
             || request_id.len() > 128
@@ -185,6 +292,27 @@ impl<T: Clone> Remote<T> {
         }
         if !state.ready || queue.closed() {
             return Err("remote worker connection is not ready or has closed".into());
+        }
+        if state.forced.contains_key(actor) {
+            return Err(
+                "this participant was force-retired by a human; its station is offline".into(),
+            );
+        }
+        // A wake on a long-lived wait is not a new authenticated admission.
+        // A roster sampled after that request can invalidate it before new work.
+        if state
+            .roster
+            .as_ref()
+            .is_some_and(|(connection, sent, members)| {
+                *connection == actor.connection
+                    && *sent > request_started
+                    && actor
+                        .participant
+                        .as_ref()
+                        .is_some_and(|id| !members.contains_key(id))
+            })
+        {
+            return Err("worker participant membership ended during this wait; rejoin and bind before claiming new work".into());
         }
         if let Some(active) = state
             .active

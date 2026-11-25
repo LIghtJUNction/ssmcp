@@ -167,6 +167,26 @@ impl Pool {
         }
     }
 
+    pub(crate) fn authenticated_contact(&self, source: &Source) {
+        if self.remote().is_ok()
+            && let Ok(actor) = actor(source)
+        {
+            self.queue
+                .authenticated_contact(&actor, std::time::Instant::now());
+        }
+    }
+
+    pub(crate) fn reconcile_roster(
+        &self,
+        connection: u64,
+        sent: std::time::Instant,
+        agents: &[crate::wire::SteeringAgent],
+    ) {
+        if let Ok(remote) = self.remote() {
+            remote.reconcile_roster(&self.queue, connection, sent, agents, now_ms());
+        }
+    }
+
     fn remote(&self) -> Result<&Remote<TaskContext>, String> {
         match &self.execution {
             Execution::Remote(remote) => Ok(remote),
@@ -184,6 +204,23 @@ impl Pool {
         self.remote()?;
         self.queue.resize(total)?;
         Ok(self.resize_result())
+    }
+
+    pub(crate) fn human_resize(&self, total: usize) -> Result<Value, String> {
+        self.remote()?;
+        let targets = self.queue.human_resize(total)?;
+        let mut receipt = self.resize_result();
+        receipt["retirement_targets"] = json!(targets);
+        Ok(receipt)
+    }
+
+    pub(crate) fn force_worker_retirements(&self, targets: &[Retirement]) -> Result<Value, String> {
+        let count = self
+            .remote()?
+            .force_retirements(&self.queue, targets, now_ms())?;
+        let mut receipt = self.resize_result();
+        receipt["forced_stations"] = json!(count);
+        Ok(receipt)
     }
 
     fn resize_result(&self) -> Value {
@@ -386,7 +423,7 @@ impl Pool {
                     "progress":{"type":"string","minLength":1,"maxLength":1024},
                     "detail":{"type":"string","minLength":1,"maxLength":1024}}),
                 json!(["claim","request_id","event"]), false),
-            tool("release", "Acknowledge the exact pool-ordered retirement receipt returned by worker.wait, using the same authenticated worker. First finish the active claim and stop starting work; release is refused while a task remains active. Only this acknowledgement removes the station. Identical retained retries are idempotent. This records your shutdown acknowledgement; it does not kill an external model or process. After success, leave your collaboration session if needed and stop waiting.",
+            tool("release", "Acknowledge the exact pool-ordered retirement receipt returned by worker.wait, using the same authenticated worker. First finish the active claim and stop starting work; release is refused while a task remains active. This is the cooperative release path. The local human can force a pending retirement, and a fresh broker roster can establish that membership ended. Unconfirmed work then becomes unknown. Identical retained retries are idempotent. This records your shutdown acknowledgement; it does not kill an external model or process. After success, leave your collaboration session if needed and stop waiting.",
                 json!({"retirement":retirement_schema}), json!(["retirement"]), false),
         ]);
         tools
@@ -664,8 +701,9 @@ impl Pool {
         let remote = self.remote()?;
         let mut wake = self.queue.subscribe_capacity();
         let deadline = tokio::time::Instant::now() + Duration::from_millis(wait_ms);
+        let request_started = std::time::Instant::now();
         loop {
-            match remote.claim(&self.queue, actor, request_id, now_ms())? {
+            match remote.claim_since(&self.queue, actor, request_id, now_ms(), request_started)? {
                 Claimed::Assigned { claim, lease } => {
                     return Ok(json!({"status":"assigned","claim":claim,
                         "original_text":lease.text,

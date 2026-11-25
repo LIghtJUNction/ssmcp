@@ -3087,7 +3087,7 @@ async fn reclaim_steering(
                     None => return Err("client control channel ended while preparing reload".into()),
                 },
                 frame = incoming.frames.recv() => match frame {
-                    Some(Ok(Some(Frame::SteeringReply { id, result }))) => steering::reply(id, result)?,
+                    Some(Ok(Some(Frame::SteeringReply { id, result }))) => steering::reply(id, result, &backend)?,
                     Some(Ok(Some(Frame::MessagesReply { id, result }))) => messaging::reply(id, result),
                     Some(Ok(Some(Frame::AccessReply { id, result }))) => access::reply(id, result),
                     Some(Ok(Some(Frame::CodeModeFinished { completion }))) => backend.code_mode_finished(completion)?,
@@ -3802,6 +3802,7 @@ async fn connect_inner(
                 Err(error) => break Err(Box::new(relay::PermanentFailure(error)) as crate::Error),
             },
             _ = steering_updates.tick() => {
+                for notice in backend.worker_duration_notices() { terminal::notice(&notice); }
                 if chat_enabled && let Err(error) = steering::poll() { terminal::notice(&error); }
                 access::poll();
                 messaging::poll();
@@ -3972,7 +3973,7 @@ async fn connect_inner(
                                         Some(Ok(Some(Frame::ReloadCommit { id: acknowledged }))) if acknowledged == id => return Ok::<(), crate::Error>(()),
                                         Some(Ok(Some(Frame::CodeModeFinished { completion }))) => { backend.code_mode_finished(completion)?; }
                                         Some(Ok(Some(Frame::WaitDisplay { snapshot }))) => { backend.wait_display(snapshot)?; }
-                                        Some(Ok(Some(Frame::SteeringReply { id, result }))) => { steering::reply(id, result)?; }
+                                        Some(Ok(Some(Frame::SteeringReply { id, result }))) => { steering::reply(id, result, &backend)?; }
                                         Some(Ok(Some(Frame::MessagesReply { id, result }))) => { messaging::reply(id, result); }
                                         Some(Ok(Some(Frame::AccessReply { id, result }))) => { access::reply(id, result); }
                                         Some(Ok(Some(Frame::Call { id: next_id, .. }))) => {
@@ -4054,7 +4055,7 @@ async fn connect_inner(
                     if let Err(error) = backend.wait_display(snapshot) { break Err(error.into()); }
                 }
                 Some(Ok(Some(Frame::SteeringReply { id, result }))) => {
-                    if let Err(error) = steering::reply(id, result) { terminal::notice(&error); }
+                    if let Err(error) = steering::reply(id, result, &backend) { terminal::notice(&error); }
                 }
                 Some(Ok(Some(Frame::MessagesReply { id, result }))) => messaging::reply(id, result),
                 Some(Ok(Some(Frame::AccessReply { id, result }))) => access::reply(id, result),

@@ -607,6 +607,41 @@ impl Runtime {
         pool.resize(total)
     }
 
+    pub(crate) fn human_resize_workers(&self, total: usize) -> Result<Value, String> {
+        let pool = self
+            .workers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or("this connection has no worker pool")?;
+        pool.human_resize(total)
+    }
+
+    pub(crate) fn force_worker_retirements(
+        &self,
+        targets: &[crate::worker::Retirement],
+    ) -> Result<Value, String> {
+        let pool = self
+            .workers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or("this connection has no worker pool")?;
+        pool.force_worker_retirements(targets)
+    }
+
+    pub(crate) fn worker_duration_notices(&self) -> Vec<String> {
+        self.workers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|p| {
+                p.queue
+                    .overwork_notices(std::time::Instant::now(), crate::worker::now_ms())
+            })
+            .unwrap_or_default()
+    }
+
     /// Exact-runtime projection for a protected local frontend. This never uses
     /// the process-wide display cache or binds a remote worker manager.
     pub(crate) fn frontend_has_workers(&self) -> bool {
@@ -614,6 +649,21 @@ impl Runtime {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .is_some()
+    }
+
+    pub(crate) fn reconcile_worker_roster(
+        &self,
+        sent: std::time::Instant,
+        agents: &[crate::wire::SteeringAgent],
+    ) {
+        if let Some(pool) = self
+            .workers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            pool.reconcile_roster(self.call_connection, sent, agents);
+        }
     }
 
     pub(crate) fn frontend_workers(&self) -> Option<crate::worker::Snapshot> {
@@ -771,6 +821,14 @@ impl Runtime {
 
     pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
         let source = call_scope::Source::capture();
+        if let Some(pool) = self
+            .workers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            pool.authenticated_contact(&source);
+        }
         let mut result = self.perform_inner(operation).await;
         crate::client::terminal::tool_summary_call_finished(
             &source,

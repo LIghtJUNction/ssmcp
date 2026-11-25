@@ -11,6 +11,7 @@ use tokio::sync::watch;
 mod events;
 mod lifecycle;
 mod operations;
+mod presence;
 mod projection;
 mod telemetry;
 pub(super) use events::EventRequest;
@@ -213,11 +214,11 @@ enum SlotState {
 /// A shutdown acknowledgement is authority over exactly one station epoch.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Retirement {
-    pub(super) id: String,
-    pub(super) generation: String,
-    pub(super) slot: usize,
-    pub(super) epoch: u64,
+pub(crate) struct Retirement {
+    pub(crate) id: String,
+    pub(crate) generation: String,
+    pub(crate) slot: usize,
+    pub(crate) epoch: u64,
 }
 
 struct Slot {
@@ -225,7 +226,10 @@ struct Slot {
     epoch: u64,
     state: SlotState,
     registered: Option<Actor>,
+    contact: Option<presence::Contact>,
     retirement: Option<Retirement>,
+    last_retirement: Option<Retirement>,
+    overwork_warned: bool,
     logs: VecDeque<SlotLog>,
     next_log_sequence: u64,
     task_summary: Option<String>,
@@ -245,7 +249,10 @@ impl Slot {
             epoch: 0,
             state: SlotState::Offline("executor not connected".into()),
             registered: None,
+            contact: None,
             retirement: None,
+            last_retirement: None,
+            overwork_warned: false,
             logs: VecDeque::new(),
             next_log_sequence: 1,
             task_summary: None,
@@ -774,7 +781,15 @@ impl<T: Clone> Queue<T> {
                 .epoch
                 .checked_add(1)
                 .ok_or("worker epoch exhausted")?;
+            worker.total_work_ms = 0;
+            worker.recent_task_durations_ms.clear();
+            worker.overwork_warned = false;
+            worker.progress = None;
+            worker.last_command = None;
+            worker.task_summary = None;
+            worker.task_text = None;
             worker.registered = Some(actor.clone());
+            worker.contact = Some(presence::Contact::authenticated(Instant::now()));
             worker.state = SlotState::Idle;
             log(
                 worker,
@@ -1017,7 +1032,9 @@ impl<T: Clone> Queue<T> {
         let view = task.view.clone();
         let worker = &mut state.slots[lease.slot];
         telemetry::settle_time(worker, status != TaskStatus::Unknown);
-        worker.state = if worker.retirement.is_some() && !closed {
+        worker.state = if matches!(source, presence::MEMBERSHIP_ENDED | presence::HUMAN_FORCE) {
+            SlotState::Offline(presence::reason(source).into())
+        } else if worker.retirement.is_some() && !closed {
             SlotState::Retiring
         } else if reusable && !closed && !stopping {
             SlotState::Idle
@@ -1068,6 +1085,9 @@ impl<T: Clone> Queue<T> {
         };
         if let Some(kind) = slot_kind {
             self.record_slot_event(state, kind, lease.slot, now_ms);
+        }
+        if matches!(source, presence::MEMBERSHIP_ENDED | presence::HUMAN_FORCE) {
+            state.slots[lease.slot].vacate_departed();
         }
         trim(state);
         self.changed(state);
@@ -1153,19 +1173,23 @@ impl<T: Clone> Queue<T> {
     }
 
     pub(crate) fn snapshot(&self) -> Snapshot {
+        self.snapshot_at(Instant::now())
+    }
+
+    pub(in crate::worker) fn snapshot_at(&self, now: Instant) -> Snapshot {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        self.snapshot_locked(&state)
+        self.snapshot_locked(&state, now)
     }
 
     pub(crate) fn snapshot_with_activity(&self) -> (Snapshot, super::Activity) {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         (
-            self.snapshot_locked(&state),
+            self.snapshot_locked(&state, Instant::now()),
             projection::activity(&state, &self.generation),
         )
     }
 
-    fn snapshot_locked(&self, state: &State<T>) -> Snapshot {
+    fn snapshot_locked(&self, state: &State<T>, now: Instant) -> Snapshot {
         let slots: Vec<_> = state
             .slots
             .iter()
@@ -1183,6 +1207,13 @@ impl<T: Clone> Queue<T> {
                     ),
                 };
                 let elapsed = telemetry::elapsed_ms(slot);
+                let contact = slot.registered.as_ref().and(slot.contact).map(|c| c.label(now));
+                let reason = match contact {
+                    Some("unverified") => Some("No recent authenticated membership or worker contact; claim outcome unconfirmed".into()),
+                    Some("membership_only") => Some("Membership verified; no recent worker native call".into()),
+                    Some("declared_offline") => Some("Participant reports offline; membership still valid".into()),
+                    _ => reason,
+                };
                 SlotView {
                     slot: index,
                     epoch: slot.epoch,
@@ -1192,6 +1223,7 @@ impl<T: Clone> Queue<T> {
                     logs: slot.logs.iter().cloned().collect(),
                     next_log_sequence: slot.next_log_sequence,
                     registered: slot.registered.is_some(),
+                    contact,
                     retire_requested: slot.retirement.is_some(),
                     task_summary: slot.task_summary.clone(),
                     task_text: slot.task_text.clone(),

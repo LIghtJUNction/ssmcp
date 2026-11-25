@@ -154,6 +154,50 @@ pub(in crate::worker) fn display_text(text: &str, limit: usize) -> String {
     bounded(display.trim(), limit)
 }
 
+pub(in crate::worker) use crate::worker::TWO_HOURS_MS;
+
+pub(super) fn total_at(slot: &Slot, now: Instant) -> u64 {
+    slot.total_work_ms
+        .saturating_add(slot.started.map_or(0, |t| {
+            now.saturating_duration_since(t)
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64
+        }))
+}
+
+impl<T: Clone> Queue<T> {
+    pub(crate) fn overwork_notices(&self, now: Instant, wall_ms: u64) -> Vec<String> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut notices = Vec::new();
+        for (index, slot) in state.slots.iter_mut().enumerate() {
+            if !slot.enabled
+                || slot.registered.is_none()
+                || slot.overwork_warned
+                || total_at(slot, now) <= TWO_HOURS_MS
+            {
+                continue;
+            }
+            slot.overwork_warned = true;
+            let latest = slot
+                .progress
+                .as_deref()
+                .or(slot.last_command.as_deref())
+                .unwrap_or("no progress report");
+            let notice = format!(
+                "Worker #{:02} has over 2h of assigned work. Latest: {}. Consider /worker - to request retirement; repeat to remove the same pending station. Unconfirmed work becomes unknown.",
+                index + 1,
+                display_text(latest, 100)
+            );
+            log(slot, wall_ms, "warning", &notice, None);
+            notices.push(notice);
+        }
+        if !notices.is_empty() {
+            self.changed(&mut state);
+        }
+        notices
+    }
+}
+
 pub(super) fn elapsed_ms(slot: &Slot) -> Option<u64> {
     slot.started
         .map(|started| started.elapsed().as_millis().min(u64::MAX as u128) as u64)

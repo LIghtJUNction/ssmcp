@@ -319,7 +319,12 @@ impl Monitor {
         let mut navigation = Vec::new();
         let mut col = 0;
         for slot in snapshot.slots.iter().skip(self.first).take(count) {
-            let (tone, symbol, label) = slot_state(slot.state);
+            let (tone, symbol, label) = slot_state(slot);
+            let age = if slot.registered && slot.total_work_ms > crate::worker::TWO_HOURS_MS {
+                " 2h+"
+            } else {
+                ""
+            };
             let text = if width < 24 {
                 format!(
                     "{}#{:02} {symbol} ",
@@ -332,7 +337,7 @@ impl Monitor {
                 )
             } else {
                 format!(
-                    "{}#{:02} {symbol} {label}  ",
+                    "{}#{:02} {symbol} {label}{age}  ",
                     if self.selected_slot() == Some(slot.slot) {
                         "› "
                     } else {
@@ -1055,7 +1060,7 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
         budget.saturating_sub(1).max(1),
     );
     if rows.len() < budget {
-        let (tone, _, state) = slot_state(slot.state);
+        let (tone, _, state) = slot_state(slot);
         let elapsed = slot
             .current_task_elapsed_ms
             .map(|ms| format!(" · {}", duration(ms)))
@@ -1462,8 +1467,17 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
     output
 }
 
-fn slot_state(state: &str) -> (PanelTone, &'static str, &'static str) {
-    match state {
+fn slot_state(slot: &SlotView) -> (PanelTone, &'static str, &'static str) {
+    match slot.contact {
+        Some("unverified") => return (PanelTone::Warning, "?", "unverified"),
+        Some("declared_offline") => return (PanelTone::Muted, "◌", "off duty"),
+        Some("membership_only") if slot.state == "working" => {
+            return (PanelTone::Muted, "◌", "quiet claim");
+        }
+        Some(_) if slot.state == "working" => return (PanelTone::Warning, "●", "claimed"),
+        _ => {}
+    }
+    match slot.state {
         "idle" => (PanelTone::Success, "○", "idle"),
         "working" => (PanelTone::Warning, "●", "working"),
         "offline" => (PanelTone::Error, "×", "offline"),
@@ -1966,6 +1980,24 @@ mod tests {
         state
     }
 
+    #[test]
+    fn remote_tabs_distinguish_a_claim_from_contact_and_confirmed_departure() {
+        let mut slot = snapshot().slots.remove(1);
+        slot.state = "working";
+        for (contact, expected) in [
+            ("confirmed", "claimed"),
+            ("membership_only", "quiet claim"),
+            ("unverified", "unverified"),
+            ("declared_offline", "off duty"),
+        ] {
+            slot.contact = Some(contact);
+            assert_eq!(slot_state(&slot).2, expected);
+        }
+        slot.contact = None;
+        slot.state = "offline";
+        assert_eq!(slot_state(&slot).2, "offline");
+    }
+
     fn snapshot() -> Snapshot {
         Snapshot {
             process_id: std::process::id(),
@@ -1988,6 +2020,7 @@ mod tests {
                     epoch: 1,
                     state: "idle",
                     registered: true,
+                    contact: None,
                     retire_requested: false,
                     task_id: None,
                     task_summary: None,
@@ -2007,6 +2040,7 @@ mod tests {
                     epoch: 1,
                     state: "working",
                     registered: true,
+                    contact: None,
                     retire_requested: false,
                     task_id: Some("task-actual".into()),
                     task_summary: None,
@@ -2026,6 +2060,7 @@ mod tests {
                     epoch: 0,
                     state: "offline",
                     registered: false,
+                    contact: None,
                     retire_requested: false,
                     task_id: None,
                     task_summary: None,
@@ -2211,6 +2246,7 @@ mod tests {
             epoch: 0,
             state: "offline",
             registered: false,
+            contact: None,
             retire_requested: false,
             task_id: None,
             task_summary: None,
