@@ -1174,71 +1174,67 @@ fn command_summary(command: &str) -> String {
     }
 }
 
+fn command_outcome(command: &str) -> Option<(&str, &str)> {
+    command.rsplit_once("; ").filter(|(_, outcome)| {
+        matches!(*outcome, "cancelled" | "timed out")
+            || outcome
+                .strip_prefix("exit ")
+                .or_else(|| outcome.strip_prefix("signal "))
+                .is_some_and(|code| code.parse::<i32>().is_ok())
+    })
+}
+
 fn command_log_summary(text: &str) -> String {
     for prefix in ["Command started: ", "Command finished: "] {
         if let Some(command) = text.strip_prefix(prefix) {
-            let (command, outcome) = (prefix == "Command finished: ")
-                .then(|| command.rsplit_once("; "))
-                .flatten()
-                .filter(|(_, outcome)| {
-                    outcome
-                        .strip_prefix("exit ")
-                        .or_else(|| outcome.strip_prefix("signal "))
-                        .is_some_and(|code| code.parse::<i32>().is_ok())
-                        || matches!(*outcome, "cancelled" | "timed out")
-                })
-                .map_or((command, None), |(command, outcome)| {
-                    (command, Some(outcome))
-                });
-            return format!(
-                "{prefix}{}{}",
-                command_summary(command),
-                outcome.map_or_else(String::new, |outcome| format!("; {outcome}"))
-            );
+            if prefix == "Command finished: "
+                && let Some((body, outcome)) = command_outcome(command)
+            {
+                return format!("{prefix}{}; {outcome}", command_summary(body));
+            }
+            return format!("{prefix}{}", command_summary(command));
         }
     }
     text.to_owned()
 }
 
+fn log_style(entry: &crate::worker::SlotLog) -> (&'static str, PanelTone) {
+    match entry.level.as_str() {
+        "error" => return ("FAIL", PanelTone::Error),
+        "warning" | "warn" => return ("WARN", PanelTone::Warning),
+        _ => {}
+    }
+    let text = &entry.text;
+    if text.starts_with("Command started: ") {
+        ("RUN", PanelTone::Accent)
+    } else if let Some(command) = text.strip_prefix("Command finished: ") {
+        match command_outcome(command).map(|(_, outcome)| outcome) {
+            Some("exit 0") => ("DONE", PanelTone::Success),
+            Some("cancelled") => ("STOP", PanelTone::Warning),
+            Some(_) => ("FAIL", PanelTone::Error),
+            None => ("END", PanelTone::Muted),
+        }
+    } else if text.starts_with("Progress: ") {
+        ("NOTE", PanelTone::Accent)
+    } else if text.starts_with("Task ") {
+        ("TASK", PanelTone::Accent)
+    } else {
+        ("INFO", PanelTone::Muted)
+    }
+}
+
 fn log_event(entry: &crate::worker::SlotLog, expanded: bool) -> (&'static str, PanelTone, String) {
+    let (tag, tone) = log_style(entry);
     let text = if expanded {
         entry.text.clone()
     } else {
         command_log_summary(&entry.text)
     };
-    let (tag, tone, body) = if let Some(command) = text.strip_prefix("Command started: ") {
-        ("RUN", PanelTone::Accent, command)
-    } else if let Some(command) = text.strip_prefix("Command finished: ") {
-        // Only an explicit result suffix is evidence of success. An inline
-        // script containing "exit 0" or a missing outcome never becomes DONE.
-        let outcome = command.rsplit_once("; ").map(|(_, outcome)| outcome);
-        let (tag, tone) = match outcome {
-            Some("exit 0") => ("DONE", PanelTone::Success),
-            Some("cancelled") => ("STOP", PanelTone::Warning),
-            Some("timed out") => ("FAIL", PanelTone::Error),
-            Some(outcome)
-                if outcome
-                    .strip_prefix("exit ")
-                    .or_else(|| outcome.strip_prefix("signal "))
-                    .is_some_and(|code| code.parse::<i32>().is_ok()) =>
-            {
-                ("FAIL", PanelTone::Error)
-            }
-            _ => ("END", PanelTone::Muted),
-        };
-        (tag, tone, command)
-    } else if let Some(progress) = text.strip_prefix("Progress: ") {
-        ("NOTE", PanelTone::Accent, progress)
-    } else if text.starts_with("Task ") {
-        ("TASK", PanelTone::Accent, text.as_str())
-    } else {
-        ("INFO", PanelTone::Muted, text.as_str())
-    };
-    let (tag, tone) = match entry.level.as_str() {
-        "error" => ("FAIL", PanelTone::Error),
-        "warning" | "warn" => ("WARN", PanelTone::Warning),
-        _ => (tag, tone),
-    };
+    let body = text
+        .strip_prefix("Command started: ")
+        .or_else(|| text.strip_prefix("Command finished: "))
+        .or_else(|| text.strip_prefix("Progress: "))
+        .unwrap_or(&text);
     (tag, tone, panel::safe_text(body))
 }
 
@@ -1360,6 +1356,20 @@ fn log_lines(slot: &SlotView, width: usize, expanded: bool) -> Vec<LogLine> {
     output
 }
 
+// The snapshot already carries a monotonic duration. Relate native event times
+// to the claim start and omit an age when the two clocks cannot be reconciled.
+fn update_age(slot: &SlotView, at_ms: u64) -> Option<String> {
+    let since_start = at_ms.checked_sub(slot.task_started_at_ms?)?;
+    let seconds = slot.current_task_elapsed_ms?.checked_sub(since_start)? / 1000;
+    Some(if seconds < 10 {
+        "刚刚".into()
+    } else if seconds < 60 {
+        format!("{} 秒前", seconds / 10 * 10)
+    } else {
+        format!("{} 分钟前", seconds / 60)
+    })
+}
+
 fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
     // These prefixes are written by queue::telemetry only after the exact task
     // claim is validated. Command text is always nested under a distinct
@@ -1373,6 +1383,16 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
                 .is_none_or(|task| entry.task_id.as_ref() == Some(task))
             && entry.text.starts_with("Progress: ")
     };
+    // Show only the latest operational step. Command bodies stay in the log
+    // view, and older steps never push an agent's narrative off screen.
+    let latest = slot.task_id.as_ref().and_then(|task| {
+        slot.logs.iter().rev().find(|entry| {
+            entry.task_id.as_ref() == Some(task)
+                && (entry.text.starts_with("Progress: ")
+                    || entry.text.starts_with("Command started: ")
+                    || entry.text.starts_with("Command finished: "))
+        })
+    });
     let has_progress = slot.logs.iter().any(|entry| reported(&entry));
     let latest_retained = slot.progress.as_deref().is_some_and(|latest| {
         slot.logs
@@ -1390,60 +1410,74 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
     } else {
         None
     };
-    let intro = fallback
-        .as_deref()
-        .or_else(|| (!has_progress).then_some("Waiting for agent progress updates"));
+    let intro = fallback.as_deref().or_else(|| {
+        (!has_progress && latest.is_none()).then_some(if slot.task_id.is_some() {
+            "已领取任务，等待首条进度说明"
+        } else {
+            "Waiting for agent progress updates"
+        })
+    });
     if let Some(intro) = intro {
         let tone = if fallback.is_some() {
             PanelTone::Normal
         } else {
             PanelTone::Muted
         };
-        for (part, text) in wrap_log_body(intro, width).into_iter().enumerate() {
+        let acquired = slot
+            .task_started_at_ms
+            .filter(|_| fallback.is_none() && slot.task_id.is_some())
+            .and_then(|start| update_age(slot, start));
+        let status = acquired.map(|age| format!("{intro} · 领取于{age}"));
+        for (part, text) in wrap_log_body(status.as_deref().unwrap_or(intro), width)
+            .into_iter()
+            .enumerate()
+        {
             output.push((LogAnchor { sequence: 0, part }, vec![(tone, text)]));
         }
     }
     for entry in &slot.logs {
-        let event = if reported(&entry) {
-            Some((
+        let newest = latest.is_some_and(|last| last.sequence == entry.sequence);
+        let (tag, tone, mut body) = if reported(&entry) {
+            (
                 "",
                 PanelTone::Normal,
                 panel::safe_text(entry.text.strip_prefix("Progress: ").unwrap_or_default()),
-            ))
+            )
         } else {
-            let (tag, tone, body) = log_event(entry, false);
-            if !matches!(tone, PanelTone::Warning | PanelTone::Error) {
-                None
-            } else if entry.text.starts_with("Command started: ")
-                || entry.text.starts_with("Command finished: ")
-            {
-                let result = entry
-                    .text
-                    .strip_prefix("Command finished: ")
-                    .and_then(|text| text.rsplit_once("; "))
-                    .map(|(_, result)| result)
-                    .filter(|result| {
-                        matches!(*result, "cancelled" | "timed out")
-                            || result
-                                .strip_prefix("exit ")
-                                .or_else(|| result.strip_prefix("signal "))
-                                .is_some_and(|code| code.parse::<i32>().is_ok())
-                    });
-                Some((
-                    tag,
-                    tone,
-                    result.map_or_else(
+            let (tag, tone) = log_style(entry);
+            let finished = entry.text.strip_prefix("Command finished: ");
+            let command = finished.is_some() || entry.text.starts_with("Command started: ");
+            if matches!(tone, PanelTone::Warning | PanelTone::Error) {
+                let body = if command {
+                    finished.and_then(command_outcome).map_or_else(
                         || "Command alert · F2 Logs".into(),
-                        |result| format!("Command {result} · F2 Logs"),
-                    ),
-                ))
+                        |(_, outcome)| format!("Command {outcome} · F2 Logs"),
+                    )
+                } else {
+                    panel::safe_text(&entry.text)
+                };
+                (tag, tone, body)
+            } else if newest && command {
+                let step = if finished.is_some() {
+                    "命令已结束"
+                } else {
+                    "命令已启动"
+                };
+                ("", PanelTone::Muted, step.to_owned())
             } else {
-                Some((tag, tone, body))
+                continue;
             }
         };
-        let Some((tag, tone, mut body)) = event else {
-            continue;
-        };
+        if newest {
+            if let Some(title) = &entry.activity_title {
+                body.push_str(" · ");
+                body.push_str(&panel::safe_text(title));
+            }
+            if let Some(age) = update_age(slot, entry.at_ms) {
+                body.push_str(" · ");
+                body.push_str(&age);
+            }
+        }
         if slot.task_id.is_some() && entry.task_id.is_some() && entry.task_id != slot.task_id {
             body = format!("Earlier task · {body}");
         }
@@ -2087,6 +2121,7 @@ mod tests {
             at_ms: 1_700_000_000_000 + sequence * 1000,
             level: "info".into(),
             text: format!("event-{sequence}"),
+            activity_title: None,
             task_id: None,
         }
     }
@@ -2637,8 +2672,55 @@ mod tests {
         });
         assert_eq!(
             log_body(&progress_lines(slot, 46)),
-            "Waiting for agent progress updates"
+            "已领取任务，等待首条进度说明"
         );
+    }
+
+    #[test]
+    fn verified_command_steps_refresh_the_current_claim_without_creating_a_report() {
+        let mut slot = snapshot().slots.remove(1);
+        let claimed = 1_700_000_000_000;
+        slot.task_started_at_ms = Some(claimed);
+        slot.current_task_elapsed_ms = Some(33_000);
+        slot.logs.clear();
+        assert!(log_body(&progress_lines(&slot, 64)).contains("领取于30 秒前"));
+
+        let event = |sequence, text: &str, title: Option<&str>| SlotLog {
+            text: text.to_owned(),
+            activity_title: title.map(str::to_owned),
+            task_id: Some("task-actual".into()),
+            ..log(sequence)
+        };
+        slot.logs.push(event(1, "Progress: 已核对发行版本", None));
+        slot.logs
+            .push(event(2, "Command started: RAW_A", Some("核验安装包")));
+        let body = log_body(&progress_lines(&slot, 64));
+        assert!(
+            body.contains("已核对发行版本") && body.contains("命令已启动 · 核验安装包 · 30 秒前")
+        );
+        assert!(!body.contains("RAW_A"));
+        slot.current_task_elapsed_ms = Some(75_000);
+        assert!(log_body(&progress_lines(&slot, 64)).contains("1 分钟前"));
+        assert_eq!(slot.logs.len(), 2);
+
+        slot.logs.push(event(
+            76,
+            "Command finished: RAW_A; exit 0",
+            Some("核验安装包"),
+        ));
+        slot.current_task_elapsed_ms = Some(77_000);
+        let body = log_body(&progress_lines(&slot, 64));
+        assert!(body.contains("命令已结束 · 核验安装包 · 刚刚"));
+        assert!(!body.contains("命令已启动") && !body.contains("RAW_A"));
+
+        slot.logs
+            .push(event(77, "Progress: 安装包校验和一致", None));
+        let body = log_body(&progress_lines(&slot, 64));
+        assert!(body.contains("安装包校验和一致") && !body.contains("命令已结束"));
+        slot.task_id = Some("next-task".into());
+        assert!(!log_body(&progress_lines(&slot, 64)).contains("安装包"));
+        assert_eq!(update_age(&slot, claimed - 1), None);
+        assert_eq!(update_age(&slot, claimed + 80_000), None);
     }
 
     #[test]
@@ -2750,7 +2832,7 @@ mod tests {
         let text = screen(&state.worker_frame(Some(&snapshot)))
             .screen()
             .contents();
-        assert!(text.contains("Waiting for agent progress updates"));
+        assert!(text.contains("已领取任务，等待首条进度说明"));
         assert!(!text.contains("update-"));
         assert!(state.worker.as_ref().unwrap().panels[0].following);
     }
