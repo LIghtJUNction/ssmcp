@@ -249,7 +249,7 @@ enum Request {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
 enum Response {
-    Snapshot { snapshot: DashboardSnapshot },
+    Snapshot { snapshot: Box<DashboardSnapshot> },
     Audit { page: AuditPage },
     TrafficBalances { balances: TrafficBalances },
     Done,
@@ -301,7 +301,7 @@ impl ManagementClient {
             })
             .await?
         {
-            Response::Snapshot { snapshot } => Ok(snapshot),
+            Response::Snapshot { snapshot } => Ok(*snapshot),
             _ => Err(ManagementError::Unavailable),
         }
     }
@@ -574,7 +574,9 @@ async fn serve_one(mut stream: UnixStream, broker: Arc<Broker>) -> io::Result<()
         Request::Snapshot { actor, scope } => broker
             .management_snapshot(&actor.into(), scope)
             .await
-            .map(|snapshot| Response::Snapshot { snapshot }),
+            .map(|snapshot| Response::Snapshot {
+                snapshot: Box::new(snapshot),
+            }),
         Request::Disconnect { actor, session_id } => broker
             .management_disconnect(&actor.into(), &session_id)
             .await
