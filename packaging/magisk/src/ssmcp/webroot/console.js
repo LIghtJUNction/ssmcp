@@ -150,6 +150,13 @@ async function changeTabs(action) {
 
 let grid;
 let screenCursor;
+const scaleKey = 'ssmcp-terminal-font-scale';
+let fontScale = 1;
+try {
+  const saved = Number(localStorage.getItem(scaleKey));
+  if (saved >= 0.25 && saved <= 3) fontScale = saved;
+} catch { /* Zoom still works when the WebView disables local storage. */ }
+
 function positionCursor() {
   const point = screenCursor;
   if (!grid || !point?.visible || !Number.isInteger(point.col) || !Number.isInteger(point.row)) {
@@ -177,14 +184,29 @@ function dimensions() {
   });
   probe.textContent = '0'.repeat(64) + '\n0';
   screen.append(probe);
-  const cell = probe.getBoundingClientRect();
-  probe.remove();
   const style = getComputedStyle(screen);
   const left = parseFloat(style.paddingLeft);
   const top = parseFloat(style.paddingTop);
   const width = screen.clientWidth - left - parseFloat(style.paddingRight);
   const height = screen.clientHeight - top - parseFloat(style.paddingBottom);
-  if (Math.min(width, height, cell.width, cell.height) <= 0) return null;
+  let cell = probe.getBoundingClientRect();
+  if (Math.min(width, height, cell.width, cell.height) <= 0) { probe.remove(); return null; }
+  const base = parseFloat(style.getPropertyValue('--terminal-base-size'));
+  const current = parseFloat(style.fontSize);
+  // The PTY has a 32-column minimum. Use the actual glyph advance, including WebView font rounding.
+  const max = Math.min(24, current * width / (32 * cell.width / 64));
+  const requested = Math.round(4 * Math.max(9, base * fontScale)) / 4;
+  let px = Math.max(0.25, Math.min(requested, Math.floor(4 * max) / 4));
+  if (px !== current) {
+    screen.style.fontSize = px + 'px';
+    cell = probe.getBoundingClientRect();
+  }
+  while (32 * cell.width / 64 > width && px > 0.25) {
+    px -= 0.25;
+    screen.style.fontSize = px + 'px';
+    cell = probe.getBoundingClientRect();
+  }
+  probe.remove();
   grid = { left, top, width: cell.width / 64, height: cell.height / 2 };
   screen.parentElement.style.setProperty('--cell-width', grid.width + 'px');
   screen.parentElement.style.setProperty('--cell-height', grid.height + 'px');
@@ -194,6 +216,56 @@ function dimensions() {
     rows: Math.max(10, Math.min(80, Math.floor(height / grid.height))),
   };
 }
+let pinch = null;
+let zoomFrame = 0;
+let ignoreClickUntil = 0;
+function fontRatio() {
+  const style = getComputedStyle(screen);
+  return parseFloat(style.fontSize) / parseFloat(style.getPropertyValue('--terminal-base-size'));
+}
+function fingerDistance(event) {
+  if (event.touches.length !== 2) return 0;
+  const [a, b] = event.touches;
+  if (!screen.contains(a.target) || !screen.contains(b.target)) return 0;
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+function finishPinch() {
+  if (!pinch) return;
+  ignoreClickUntil = performance.now() + 350;
+  if (pinch.moved) {
+    cancelAnimationFrame(zoomFrame);
+    zoomFrame = 0;
+    dimensions();
+    fontScale = fontRatio();
+    try { localStorage.setItem(scaleKey, String(fontScale)); } catch { /* Keep the in-memory scale. */ }
+    scheduleResize();
+  }
+  pinch = null;
+}
+screen.addEventListener('touchstart', event => {
+  if (event.touches.length === 1) { ignoreClickUntil = 0; return; }
+  const distance = fingerDistance(event);
+  if (!distance) { finishPinch(); return; }
+  if (event.cancelable) event.preventDefault();
+  pinch = { distance, scale: fontRatio(), moved: false };
+}, { passive: false });
+screen.addEventListener('touchmove', event => {
+  if (!pinch) return;
+  const distance = fingerDistance(event);
+  if (!distance) { finishPinch(); return; }
+  if (event.cancelable) event.preventDefault();
+  if (!pinch.moved && Math.abs(distance - pinch.distance) < 4) return;
+  pinch.moved = true;
+  fontScale = pinch.scale * distance / pinch.distance;
+  if (!zoomFrame) zoomFrame = requestAnimationFrame(() => {
+    zoomFrame = 0;
+    dimensions();
+    if (!sizeTimer) sizeTimer = setTimeout(resize, 120);
+  });
+}, { passive: false });
+screen.addEventListener('touchend', finishPinch);
+screen.addEventListener('touchcancel', finishPinch);
+
 let sizeTimer;
 let resizing = false;
 let resizeAgain = false;
@@ -204,6 +276,7 @@ function scheduleResize() {
   sizeTimer = setTimeout(resize, 40);
 }
 async function resize() {
+  sizeTimer = null;
   const version = generation;
   if (!isCurrent(version) || selected === null || document.hidden) return;
   if (resizing) { resizeAgain = true; return; }
@@ -401,6 +474,7 @@ direct.addEventListener('blur', () => {
   resetDirect();
 });
 screen.addEventListener('click', () => {
+  if (performance.now() < ignoreClickUntil) return;
   if (window.getSelection()?.isCollapsed !== false) direct.focus({ preventScroll: true });
 });
 direct.addEventListener('compositionstart', () => { preedit = true; clearTimeout(commitTimer); });

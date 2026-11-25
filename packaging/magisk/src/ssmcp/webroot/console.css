@@ -267,18 +267,26 @@ body[data-view="console"] #status {
 
 .terminal-workspace { position: relative; overflow: hidden; display: flex; flex: 1 1 0; min-height: 0; min-width: 0; }
 #screen {
+  --terminal-base-size: 14px;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   padding: 4px max(6px, env(safe-area-inset-right)) 4px max(6px, env(safe-area-inset-left));
   overflow: auto;
   overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
   scrollbar-color: #333 #000;
   color: #e3e3e3;
   background: #000;
-  font: 14px/1.35 var(--mono);
+  font: var(--terminal-base-size)/1.35 var(--mono);
   font-variant-ligatures: none;
   white-space: pre;
+}
+@media (max-width: 480px) {
+  #screen { --terminal-base-size: 13px; }
+}
+@media (max-width: 374px) {
+  #screen { --terminal-base-size: 12px; }
 }
 #terminal-cursor, #direct-input {
   position: absolute;
