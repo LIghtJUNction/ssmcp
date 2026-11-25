@@ -282,6 +282,52 @@ pub(super) async fn run(args: Vec<OsString>) -> crate::Result<()> {
         print!("{HELP}");
         return Ok(());
     }
+    if cfg!(target_os = "android") {
+        return android_update(mode).await;
+    }
+    desktop_update(mode).await
+}
+
+async fn android_update(mode: Mode) -> crate::Result<()> {
+    const MAGISK_ZIP: &str = "ssmcp-magisk-arm64.zip";
+    let executable = std::env::current_exe()?;
+    if !(executable.starts_with("/data/adb/modules/ssmcp")
+        || executable.starts_with("/data/adb/modules_update/ssmcp"))
+    {
+        return Err("For the supported Termux installation, run ssmcp update from the ssmcp-debian proot guest.".into());
+    }
+    let client = crate::http_client::builder()
+        .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION")))
+        .timeout(Duration::from_secs(20))
+        .build()?;
+    let bytes = release_metadata(&client, API).await?;
+    let latest = release_version(&bytes)?;
+    let metadata: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let published = metadata["assets"].as_array().is_some_and(|assets| {
+        assets
+            .iter()
+            .any(|asset| asset["name"] == MAGISK_ZIP && asset["state"] == "uploaded")
+    });
+    if !published {
+        return Err(format!("{} has no published Magisk ZIP.", latest.tag()).into());
+    }
+    let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
+    if latest <= current {
+        println!("Installed {} is current for Magisk.", current.tag());
+        return Ok(());
+    }
+    println!(
+        "Magisk update {} available: https://github.com/LIghtJUNction/ssmcp/releases/download/{}/{MAGISK_ZIP}",
+        latest.tag(),
+        latest.tag()
+    );
+    if mode == Mode::Install {
+        println!("Flash the ZIP in Magisk and reboot. Your ssmcp.rc remains in /data/adb/ssmcp.");
+    }
+    Ok(())
+}
+
+async fn desktop_update(mode: Mode) -> crate::Result<()> {
     println!("Checking the official SSMCP tool repository…");
     let tool_update =
         crate::tool_repository::update(&std::env::current_dir()?, mode == Mode::Install).await;

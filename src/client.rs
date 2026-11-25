@@ -13,6 +13,8 @@ mod config;
 mod connection_context;
 pub(crate) mod context_memory;
 mod environment;
+#[cfg(target_os = "android")]
+mod magisk;
 
 #[cfg(test)]
 mod account_compat_tests;
@@ -2190,6 +2192,10 @@ pub async fn run() -> crate::Result<()> {
         return result;
     }
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    #[cfg(target_os = "android")]
+    if args.first().is_some_and(|arg| arg == "__magisk") {
+        return magisk::run(&args[1..]).await;
+    }
     if let Some(request) = version::request(&args)? {
         print!("{}", version::render(request)?);
         return Ok(());
@@ -3622,6 +3628,8 @@ async fn connect_inner(
         let _ = process.wait().await;
         return Err(error);
     }
+    #[cfg(target_os = "android")]
+    magisk::signal_connected();
     if service.is_none() && !options.worker_window_child {
         let target =
             options

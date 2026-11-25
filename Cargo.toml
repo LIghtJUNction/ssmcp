@@ -14,6 +14,8 @@ include = [
     "/Makefile",
     "/rust-toolchain.toml",
     "/src/**",
+    "/packaging/magisk/src/ssmcp/ssmcp.rc",
+    "/packaging/magisk/src/ssmcp/webroot/**",
     "/skills/**",
     "/docs/workspaces.md",
     "/docs/context.md",
