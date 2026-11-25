@@ -483,7 +483,7 @@ class RelayComposer(Composer):
 
         editable = self.submit(front, "RELAY_COMPOSER_EDIT_ORIGINAL")
         front.send(UP)
-        front.until(lambda shot: editing_queue(shot, "next caller")
+        front.until(lambda shot: editing_queue(shot, "Next caller")
                                  and editable["text"] in input_text(shot),
                     "server-confirmed relay takeback before editing")
         self.check(self.record(self.queue(), message_id=editable["id"])["status"] == "editing",

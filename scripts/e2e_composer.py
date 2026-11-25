@@ -452,7 +452,7 @@ class Composer(Dashboard):
 
         second = self.submit(front, "COMPOSER_UP_EDIT_ORIGINAL")
         front.send(UP)
-        front.until(lambda shot: editing_queue(shot, "next caller")
+        front.until(lambda shot: editing_queue(shot, "Next caller")
                                  and second["text"] in input_text(shot),
                     "Up reclaiming the pending request before editing")
         self.check(self.record(self.queue(), message_id=second["id"])["status"] == "editing",
@@ -477,7 +477,7 @@ class Composer(Dashboard):
         front.send(parked)
         self.select_request(front, third["id"])
         front.send(ENTER)
-        front.until(lambda shot: editing_queue(shot, "next caller")
+        front.until(lambda shot: editing_queue(shot, "Next caller")
                                  and third["text"] in input_text(shot),
                     "queue Enter reclaiming the selected request")
         revised_third = "COMPOSER_ENTER_EDIT_REVISED"
