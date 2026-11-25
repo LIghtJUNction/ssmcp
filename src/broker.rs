@@ -674,13 +674,11 @@ impl Session {
                 )
             })
             .transpose()?;
-        if let Some(member) = &binding
-            && matches!(&operation, Operation::CallTool { name, arguments }
-                if name == crate::http::prompt_hooks::TOOL && arguments["action"] == "schedule")
-        {
-            // Invalidate before the native dispatch can commit, including when its
-            // receipt is lost. A queue rejection here only causes extra reads.
-            self.prompt_interests.observe(member, false);
+        let prompt_mutation = binding.as_ref().filter(|_| matches!(&operation,
+            Operation::CallTool { name, arguments } if name == crate::http::prompt_hooks::TOOL
+                && matches!(arguments["action"].as_str(), Some("schedule" | "pause" | "resume" | "cancel" | "ack"))));
+        if let Some(member) = prompt_mutation {
+            self.prompt_interests.dispatched(member);
         }
         let (reply, response) = oneshot::channel();
         if self
@@ -698,6 +696,9 @@ impl Session {
             })
             .is_err()
         {
+            if let Some(member) = prompt_mutation {
+                self.prompt_interests.confirmed(member); // try_send rejected the call before dispatch.
+            }
             if audit_tool.is_some() {
                 let _ = self
                     .audit_call(
@@ -744,6 +745,14 @@ impl Session {
         } else {
             result
         };
+        // A dropped future or unconfirmed outcome leaves its generation in flight.
+        if let Some(member) = prompt_mutation
+            && result
+                .as_ref()
+                .is_ok_and(crate::http::prompt_hooks::valid_native_receipt)
+        {
+            self.prompt_interests.confirmed(member);
+        }
         // Capture only the actual authorized native receipt. Cancellation before
         // this boundary drops the guard and retains uncertain worker outcomes.
         if let Some(activity) = lifecycle_activity.take() {

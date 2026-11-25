@@ -541,12 +541,17 @@ impl State {
                 .attribution
                 .as_ref()
                 .is_some_and(|a| a.agent.is_some())
-            && !self
+        {
+            let mut own = self
                 .records
                 .values()
-                .any(|r| r.owner.same_controller(owner))
-        {
-            reply["member_has_no_prompt_timers"] = json!(true);
+                .filter(|r| r.owner.same_controller(owner))
+                .peekable();
+            if own.peek().is_none() {
+                reply["member_has_no_prompt_timers"] = json!(true);
+            } else if own.all(|r| !r.status.active() && r.pending.is_none()) {
+                reply["member_prompt_delivery_idle"] = json!(true);
+            }
         }
         Ok(reply)
     }
@@ -1081,6 +1086,33 @@ mod tests {
                 .unwrap()
                 .get("member_has_no_prompt_timers")
                 .is_none()
+        );
+        let later = now + Duration::from_secs(61);
+        state.tick(later, 1_061_000);
+        let pending = state.records[&id].pending.clone().unwrap();
+        let check = state.read_events(&b, None, 4, true).unwrap();
+        assert_eq!(check["visibility_deferred"], 1);
+        assert!(check.get("member_prompt_delivery_idle").is_none());
+        state
+            .request(
+                b.clone(),
+                "test",
+                Request::Ack {
+                    timer_id: id.clone(),
+                    event_id: pending.event_id,
+                    revision: pending.revision,
+                },
+                later,
+                1_061_000,
+            )
+            .unwrap();
+        assert!(
+            state.records.contains_key(&id),
+            "retained ACK remains addressable"
+        );
+        assert_eq!(
+            state.read_events(&b, None, 4, true).unwrap()["member_prompt_delivery_idle"],
+            true
         );
     }
 

@@ -384,27 +384,44 @@ impl Fixture {
                             );
                         }
                         let mut output = match name.as_str() {
-                            "ssmcp.time.prompt" => {
-                                match arguments["action"].as_str() {
-                                    Some("read") => {
-                                        assert_eq!(arguments, json!({"action":"read","limit":4}));
-                                        state.prompt_reads += 1;
-                                    }
-                                    Some("schedule") => {
-                                        assert_eq!(arguments["request_id"], "late");
-                                        state.held_replies.push(Frame::Reply {
-                                            id,
-                                            result: Ok(json!({"isError":false,"content":[]})),
-                                        });
-                                        continue;
-                                    }
-                                    other => panic!("unexpected prompt fixture action: {other:?}"),
+                            "ssmcp.time.prompt" => match arguments["action"].as_str() {
+                                Some("read") => {
+                                    assert_eq!(arguments, json!({"action":"read","limit":4}));
+                                    state.prompt_reads += 1;
+                                    state
+                                        .prompt_reply
+                                        .clone()
+                                        .expect("an advertised prompt fixture")
                                 }
-                                state
-                                    .prompt_reply
-                                    .clone()
-                                    .expect("an advertised prompt fixture")
-                            }
+                                Some("schedule") if arguments["request_id"] == "late" => {
+                                    state.held_replies.push(Frame::Reply {
+                                        id,
+                                        result: Ok(json!({"isError":false,"content":[]})),
+                                    });
+                                    continue;
+                                }
+                                Some("schedule") => {
+                                    assert_eq!(arguments["request_id"], "cycle");
+                                    state.prompt_reply = Some(timed_prompts::read_reply(
+                                        json!([timed_prompts::timer_event()]),
+                                        false,
+                                    ));
+                                    timed_prompts::clock_reply(
+                                        json!({"schedule":{"id":"prompt_fixture","status":"completed"}}),
+                                    )
+                                }
+                                Some("ack") => {
+                                    assert_eq!(arguments["timer_id"], "prompt_fixture");
+                                    assert_eq!(arguments["event_id"], "prompt_fixture_event_1");
+                                    assert_eq!(arguments["revision"], 1);
+                                    state.prompt_reply =
+                                        Some(timed_prompts::read_reply(json!([]), true));
+                                    timed_prompts::clock_reply(
+                                        json!({"acknowledged":true,"revision":1,"duplicate":false}),
+                                    )
+                                }
+                                other => panic!("unexpected prompt fixture action: {other:?}"),
+                            },
                             "fixture.hold" => {
                                 assert!(
                                     arguments["slot"]

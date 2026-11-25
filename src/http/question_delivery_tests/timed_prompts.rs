@@ -60,7 +60,7 @@ async fn passive_await_delivers_retained_timer_hooks_without_ack_or_user_consump
     fixture.assert_summary_observation_did_not_consume_questions();
 }
 
-fn timer_event() -> Value {
+pub(super) fn timer_event() -> Value {
     json!({
         "event_id":"prompt_fixture_event_1","revision":1,"timer_id":"prompt_fixture",
         "provenance":"agent_timer","completion_permission":false,
@@ -176,4 +176,72 @@ async fn unhinted_legacy_empty_reads_are_reconciled_on_each_response() {
         finish_user_response(&fixture.report(run), original()).await;
     }
     assert_eq!(fixture.native.lock().unwrap().prompt_reads, 34);
+}
+
+pub(super) fn clock_reply(mut payload: Value) -> Value {
+    let obj = payload.as_object_mut().unwrap();
+    obj.insert("schema_version".into(), json!(1));
+    obj.insert("scope".into(), json!("native_connection"));
+    obj.insert("provenance".into(), json!("agent_timer"));
+    obj.insert("completion_permission".into(), json!(false));
+    json!({"isError":false,"structuredContent":payload})
+}
+
+pub(super) fn read_reply(events: Value, idle: bool) -> Value {
+    let mut payload =
+        json!({"events":events,"more":false,"ack_required":true,"visibility_deferred":0});
+    if idle {
+        payload["member_prompt_delivery_idle"] = json!(true);
+    }
+    clock_reply(payload)
+}
+
+#[tokio::test]
+async fn confirmed_schedule_and_ack_return_member_to_quiet_delivery() {
+    let fixture = Fixture::with_timing(true).await;
+    fixture.native.lock().unwrap().prompt_reply = Some(read_reply(json!([]), true));
+    fixture
+        .native_call(fixture.run(), prompt_hooks::TOOL)
+        .await
+        .unwrap();
+    let observe =
+        || fixture.public_await(json!({"targets":[{"type":"job","id":"missing_cycle_job"}]}));
+    observe().await;
+    let host = code_host(
+        fixture.broker.clone(),
+        "mcp".into(),
+        fixture.token.clone(),
+        fixture.run(),
+        None,
+        "confirmed schedule cycle".into(),
+        Default::default(),
+    );
+    let action = |arguments| {
+        host(HostRequest::Call {
+            client_id: fixture.session.client_id().into(),
+            name: prompt_hooks::TOOL.into(),
+            arguments,
+        })
+    };
+    action(json!({"action":"schedule","request_id":"cycle","after_ms":0,"template":"inspect"}))
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            observe().await["structuredContent"]["prompt_hooks"][0]["event"],
+            timer_event()
+        );
+    }
+    action(json!({"action":"ack","timer_id":"prompt_fixture","event_id":"prompt_fixture_event_1","revision":1})).await.unwrap();
+    observe().await;
+    assert_eq!(fixture.native.lock().unwrap().prompt_reads, 5);
+    for _ in 0..32 {
+        let run = fixture.run();
+        fixture
+            .native_call(run.clone(), "ssmcp.fs.stat")
+            .await
+            .unwrap();
+        finish_user_response(&fixture.report(run), original()).await;
+    }
+    assert_eq!(fixture.native.lock().unwrap().prompt_reads, 5);
 }
