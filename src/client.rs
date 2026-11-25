@@ -3165,7 +3165,7 @@ async fn reclaim_steering(
                     None => return Err("client control channel ended while preparing reload".into()),
                 },
                 frame = incoming.frames.recv() => match frame {
-                    Some(Ok(Some(Frame::SteeringReply { id, result }))) => steering::runtime_reply(id, result, &backend)?,
+                    Some(Ok(Some(Frame::SteeringReply { id, result }))) => steering::runtime_reply(id, result, backend)?,
                     Some(Ok(Some(Frame::MessagesReply { id, result }))) => messaging::reply(id, result),
                     Some(Ok(Some(Frame::AccessReply { id, result }))) => access::reply(id, result),
                     Some(Ok(Some(Frame::CodeModeFinished { completion }))) => backend.code_mode_finished(completion)?,

@@ -1049,7 +1049,11 @@ fn cleanup_project_worktrees(root: &Path, mut summary: CleanupSummary) -> Cleanu
         if root.join(AREA).try_exists()? {
             let rules = config(root)?;
             summary.enabled = rules.enabled;
-            summary.worktrees = Some(crate::managed_worktrees::cleanup(root, summary.dry_run, &rules)?);
+            summary.worktrees = Some(crate::managed_worktrees::cleanup(
+                root,
+                summary.dry_run,
+                &rules,
+            )?);
         }
         Ok(())
     })();
