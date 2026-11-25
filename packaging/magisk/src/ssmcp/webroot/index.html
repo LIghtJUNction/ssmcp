@@ -1,57 +1,66 @@
 <!doctype html>
 <html lang="zh-CN">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,interactive-widget=resizes-content">
-<title>ssmcp · android</title>
-<link rel="stylesheet" href="/console.css">
-<script type="module" src="/console.js"></script>
-<header><strong>ssmcp</strong><span id="target"></span><a href="https://ssmcp.lmm.best" target="_blank" rel="noopener">教程 ↗</a></header>
-<main>
-  <p id="status" role="status"></p>
-  <section id="setup" hidden>
-    <h1>连接中继</h1>
-    <label>用户名<input id="name" placeholder="your-name" autocomplete="off" spellcheck="false" maxlength="32"></label>
-    <p>填写已有的 SSMCP 用户名，或选一个新名字，用 GitHub 注册。</p>
-    <label>服务器域名<input id="server" value="ssmcp.lmm.best" autocomplete="off" spellcheck="false"></label>
-    <p>服务器负责转发连接。可使用官方中继，也可自己部署。</p>
-    <fieldset>
-      <legend>启用前确认</legend>
-      <label><input type="checkbox" id="root">我了解此会话以 Android root 运行。获授权的控制端可以运行 root 命令、读取设备数据并修改系统。</label>
-      <div id="hosted">
-        <p>官方中继每月免费 1 GiB，可按月购买额外流量。</p>
-        <label><input type="checkbox" id="terms">我已阅读并同意<a href="https://ssmcp.lmm.best/legal/terms" target="_blank" rel="noopener">用户协议</a></label>
-        <label><input type="checkbox" id="privacy">我已阅读并同意<a href="https://ssmcp.lmm.best/legal/privacy" target="_blank" rel="noopener">隐私政策</a></label>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
+  <meta name="theme-color" content="#141516">
+  <title>ssmcp · 设备终端</title>
+  <link rel="stylesheet" href="console.css">
+  <script type="module" src="console.js"></script>
+</head>
+<body data-page="terminal" data-view="notice">
+  <header class="setup-header">
+    <div class="brand"><span class="prompt-mark" aria-hidden="true"></span><strong>ssmcp</strong></div>
+    <a class="text-link" href="https://ssmcp.lmm.best" target="_blank" rel="noopener">使用教程 <span aria-hidden="true">↗</span></a>
+  </header>
+  <main>
+    <div class="notice-heading"><h1>设备终端</h1></div>
+    <p id="status" role="status" aria-live="polite">正在读取终端状态…</p>
+    <a id="open-setup" class="page-action" href="/setup" hidden>打开安装引导</a>
+    <section id="console" aria-labelledby="terminal-title" hidden>
+      <header class="terminal-header">
+        <span class="prompt-mark" aria-hidden="true"></span>
+        <div class="terminal-identity">
+          <h1 id="terminal-title">设备终端</h1>
+          <span id="target"></span>
+        </div>
+        <p id="connection" role="status"></p>
+        <details id="plugin">
+          <summary>资料<span class="chevron" aria-hidden="true"></span></summary>
+          <div class="plugin-panel">
+            <h2>连接信息</h2>
+            <dl>
+              <dt>MCP 地址</dt><dd><code id="mcp"></code></dd>
+            </dl>
+            <a class="panel-link" id="traffic" href="https://ssmcp.lmm.best/account/traffic" target="_blank" rel="noopener">查看额度或购买流量 <span aria-hidden="true">↗</span></a>
+            <a class="panel-link" href="https://ssmcp.lmm.best" target="_blank" rel="noopener">查看使用教程 <span aria-hidden="true">↗</span></a>
+          </div>
+        </details>
+      </header>
+      <nav id="tabs" aria-label="终端会话"></nav>
+      <div class="terminal-workspace">
+        <pre id="screen" tabindex="0" aria-label="终端输出，点击可直接输入" title="点击终端以直接输入"></pre>
+        <span id="terminal-cursor" aria-hidden="true" hidden></span>
+        <textarea id="direct-input" rows="1" aria-label="直接输入到当前终端" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
       </div>
-    </fieldset>
-    <div class="actions">
-      <button id="connect">我接受风险，连接官方中继</button>
-      <button id="register">用 GitHub 注册</button>
-      <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/deployment.md" target="_blank" rel="noopener">我明白风险，查看自部署教程 ↗</a>
-    </div>
-    <p id="registration" hidden><a id="registration-link" target="_blank" rel="noopener">在 GitHub 完成注册 ↗</a>，然后回到本页连接。</p>
-  </section>
-  <section id="console" hidden>
-    <p id="connection" aria-live="polite"></p>
-    <nav id="tabs" aria-label="会话分页"></nav>
-    <pre id="screen" tabindex="0" aria-label="终端输出"></pre>
-    <div id="keys" aria-label="终端快捷键">
-      <button data-key="Ctrl" aria-pressed="false">Ctrl</button>
-      <button data-key="Escape">Esc</button><button data-key="Tab">Tab</button>
-      <button data-key="ArrowLeft">←</button><button data-key="ArrowUp">↑</button>
-      <button data-key="ArrowDown">↓</button><button data-key="ArrowRight">→</button>
-      <button data-key="Enter">Enter</button>
-    </div>
-    <div id="input-row">
-      <input id="input" aria-label="终端输入" placeholder="输入…" autocomplete="off" autocapitalize="off" spellcheck="false">
-      <button id="send">发送</button>
-    </div>
-    <details id="plugin">
-      <summary>在 ChatGPT 建立自定义插件</summary>
-      <p>在支持自定义 MCP 的 ChatGPT 工作区网页中打开「插件」并添加自定义 MCP 服务器。</p>
-      <dl><dt>名称</dt><dd><code>SSMCP</code></dd><dt>MCP 地址</dt><dd><code id="mcp"></code></dd><dt>验证方式</dt><dd>OAuth，使用绑定此 SSMCP 用户名的 GitHub 账号。</dd></dl>
-      <a href="https://chatgpt.com/plugins" target="_blank" rel="noopener">打开 ChatGPT 插件设置 ↗</a>
-      <a id="traffic" href="https://ssmcp.lmm.best/account/traffic" target="_blank" rel="noopener">查看额度或购买流量 ↗</a>
-    </details>
-  </section>
-</main>
+      <div class="terminal-dock">
+        <div id="keys" role="group" aria-label="终端快捷键">
+          <button type="button" data-key="Ctrl" aria-pressed="false">Ctrl</button>
+          <button type="button" data-key="Escape">Esc</button>
+          <button type="button" data-key="Tab">Tab</button>
+          <button type="button" data-key="ArrowLeft" aria-label="向左">←</button>
+          <button type="button" data-key="ArrowUp" aria-label="向上">↑</button>
+          <button type="button" data-key="ArrowDown" aria-label="向下">↓</button>
+          <button type="button" data-key="ArrowRight" aria-label="向右">→</button>
+          <button type="button" data-key="Enter">Enter</button>
+        </div>
+        <div id="input-row">
+          <span class="input-prompt" aria-hidden="true">›</span>
+          <input id="input" aria-label="命令草稿，点击发送后执行" placeholder="编辑命令，再发送…" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="send">
+          <button type="button" id="send" class="primary">发送</button>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
 </html>
