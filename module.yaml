@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/KernelSU-Modules/tools/main/schemas/module.schema.json
+schemaVersion: 1
+id: ssmcp
+name: SSMCP
+summary: 在 Android 上运行 SSMCP 客户端，从 KernelSU WebUI 操作终端、切换会话并调整字号。首次连接中继前需要在设备上确认 root 授权。
+description: packaging/magisk/README.md
+license: MIT
+homepage: https://github.com/LIghtJUNction/ssmcp
+support: https://github.com/LIghtJUNction/ssmcp/issues
+tags: [terminal, tools]
+compatibility:
+  androidMinApi: 26
+  architectures: [arm64-v8a]
+release:
+  assetPattern: ssmcp-magisk-arm64.zip
