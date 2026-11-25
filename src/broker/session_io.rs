@@ -600,6 +600,25 @@ impl Hub {
         Ok(json!({"schema_version":1,"accepted":true,"duplicate":false,"output":output}))
     }
 
+    /// Keep enqueue and this idle decision ordered for the exact recipient.
+    pub(crate) fn if_thread_drained(
+        &self,
+        session: &Arc<Session>,
+        actor: &Identity,
+        thread: &str,
+        settle: impl FnOnce(),
+    ) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !state
+            .requests
+            .iter()
+            .flat_map(|r| &r.inputs)
+            .any(|i| !i.terminal() && i.matches(session, actor, Some(thread)))
+        {
+            settle();
+        }
+    }
+
     pub(crate) fn poll(
         &self,
         broker: &Broker,

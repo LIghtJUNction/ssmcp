@@ -1444,6 +1444,12 @@ fn code_host(
             let is_thread_reply = matches!(&operation, Operation::CallTool { name, .. }
                 if name == crate::client::interface::reply::TOOL);
             let answer_binding = code_mode::AUDIT_RUN.try_with(|run|run.binding(&client_id)).ok().flatten();
+            let reply_revision = match (&operation, answer_binding.as_ref()) {
+                (Operation::CallTool { arguments, .. }, Some(binding))
+                    if is_thread_reply && arguments["kind"] == "result" =>
+                        Some(session.collaboration.reply_revision(binding)?),
+                _ => None,
+            };
             confirmed.ensure_open()?;
             let mut result = crate::observability::REQUEST_ID
                 .scope(
@@ -1476,7 +1482,7 @@ fn code_host(
             if !Arc::ptr_eq(&current, &session) { return Err("client connection changed before native answer delivery".into()); }
             if is_thread_reply {
                 result = session_io::commit_reply(&broker, &session, &user, &authorization,
-                    answer_binding.as_ref(), result)?;
+                    answer_binding.as_ref(), reply_revision, result)?;
             }
             if capture_answers {
                 let _ = code_mode::AUDIT_RUN.try_with(|run| run.capture_question_answers(&session,

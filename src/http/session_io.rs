@@ -22,6 +22,7 @@ pub(super) fn commit_reply(
     user: &str,
     authorization: &Authorization,
     binding: Option<&RunBinding>,
+    reply_revision: Option<u64>,
     native: Value,
 ) -> Result<Value, String> {
     if native["isError"] == true {
@@ -60,6 +61,18 @@ pub(super) fn commit_reply(
         binding.map(|binding| binding.agent_id.as_str()),
         proposal.value(),
     )?;
+    if let Some((binding, revision)) = binding.zip(reply_revision)
+        && receipt["accepted"] == true
+        && receipt["duplicate"] == false
+        && receipt["output"]["kind"] == "result"
+        && matches!(receipt["output"]["state"].as_str(), Some("done" | "error"))
+    {
+        broker
+            .session_io
+            .if_thread_drained(session, actor, &binding.agent_id, || {
+                session.collaboration.reply_delivered(binding, revision);
+            });
+    }
     let mut result = crate::backend::result(receipt);
     if let Some(meta) = native.get("_meta") {
         result["_meta"] = meta.clone();
@@ -419,6 +432,135 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn only_a_fresh_accepted_final_reply_can_settle_the_bound_thread() {
+        let mut fixture = TestFixture::new().await;
+        fixture.advertise().await;
+        let fixture = &fixture;
+        let joined = fixture.join("reply target").await;
+        let id = joined["agent_id"].as_str().unwrap();
+        let token = joined["token"].as_str().unwrap();
+        let owner = crate::bridge::owner(
+            crate::broker::IDENTITY_RESOURCE,
+            &Authorization::Identity(fixture.actor.clone()),
+        )
+        .unwrap();
+        let owner = owner.as_str();
+        let session = &fixture.session;
+        let run = crate::code_mode::AuditRun::new("return await call(client, tool, args);", None)
+            .unwrap();
+        run.bind(session.client_id(), owner, id, token).unwrap();
+        let host = super::super::code_host(
+            fixture.broker.clone(),
+            crate::broker::IDENTITY_RESOURCE.into(),
+            fixture.access_token.clone(),
+            run,
+            None,
+            "io-lifecycle".into(),
+            Default::default(),
+        );
+        let host = &host;
+        let snapshot = || {
+            session
+                .collaboration
+                .lifecycle_snapshot(owner, id, token)
+                .unwrap()
+        };
+        let input = |key| {
+            fixture.enqueue(key, &[Some(id)]);
+            fixture
+                .broker
+                .session_io
+                .receive(&fixture.broker, session, &fixture.actor, Some(id), 1, 65536)
+                .remove(0)
+        };
+        let deliver = |args: Value, concurrent_input: bool| async move {
+            let request = host(crate::code_mode::HostRequest::Call {
+                client_id: session.client_id().into(),
+                name: crate::client::interface::reply::TOOL.into(),
+                arguments: args,
+            });
+            let respond = async {
+                loop {
+                    let op = fixture
+                        .native_reply_with(|op| {
+                            if op["name"] == "ssmcp.client.capabilities" {
+                                return json!({"thread_scope":1});
+                            }
+                            assert_eq!(op["name"], crate::client::interface::reply::TOOL);
+                            if concurrent_input {
+                                session.collaboration.user_input_queued(
+                                    owner,
+                                    id,
+                                    "during-dispatch",
+                                    1,
+                                );
+                            }
+                            crate::backend::result(
+                                json!({"schema_version":1,"proposal":op["arguments"]}),
+                            )
+                        })
+                        .await;
+                    if op["name"] == crate::client::interface::reply::TOOL {
+                        break;
+                    }
+                }
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let (response, _) = tokio::join!(request, respond);
+                response
+            })
+            .await
+            .unwrap()
+        };
+
+        let first = input("io_lifecycle_first");
+        let mut progress = proposal(&first, 1);
+        progress["kind"] = json!("progress");
+        progress["state"] = json!("running");
+        assert_eq!(
+            deliver(progress, false).await.unwrap()["structuredContent"]["accepted"],
+            true
+        );
+        assert_eq!(snapshot()["status"], "working");
+
+        let done = proposal(&first, 2);
+        let mut invalid = done.clone();
+        invalid["request_id"] = json!("io_missing");
+        assert!(deliver(invalid, false).await.is_err());
+        assert_eq!(snapshot()["status"], "working");
+        assert_eq!(
+            deliver(done.clone(), false).await.unwrap()["structuredContent"]["duplicate"],
+            false
+        );
+        assert_eq!(snapshot()["status"], "idle");
+
+        session
+            .collaboration
+            .user_input_queued(owner, id, "next-instruction", 1);
+        let current = snapshot();
+        assert_eq!(
+            deliver(done, false).await.unwrap()["structuredContent"]["duplicate"],
+            true
+        );
+        assert_eq!(snapshot(), current);
+
+        let second = input("io_lifecycle_second");
+        let third = input("io_lifecycle_third");
+        deliver(proposal(&second, 3), false).await.unwrap();
+        assert_eq!(snapshot()["status"], "working");
+        deliver(proposal(&third, 4), true).await.unwrap();
+        assert_eq!(snapshot()["status"], "working");
+
+        let mut failed = proposal(&input("io_lifecycle_last"), 5);
+        failed["state"] = json!("error");
+        assert_eq!(
+            deliver(failed, false).await.unwrap()["structuredContent"]["accepted"],
+            true
+        );
+        assert_eq!(snapshot()["status"], "idle");
     }
 
     #[test]

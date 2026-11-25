@@ -251,6 +251,18 @@ impl Lifecycle {
             || self.round.as_ref().is_some_and(Round::unresolved)
     }
 
+    fn answer_delivered(
+        &mut self,
+        revision: u64,
+        now: Instant,
+        wall: u64,
+        changes: &mut Vec<Change>,
+    ) {
+        if self.revision == revision && self.status == Status::Working && !self.work_pending() {
+            self.transition(Status::Idle, "answer_delivered", now, wall, changes);
+        }
+    }
+
     fn maintenance_blocked(&self) -> bool {
         !self.claims.is_empty()
             || self
@@ -795,6 +807,30 @@ impl Hub {
         Ok(json!({"status":agent.lifecycle.status,"lifecycle":agent.lifecycle.public()}))
     }
 
+    pub(crate) fn reply_revision(
+        &self,
+        binding: &crate::code_mode::RunBinding,
+    ) -> Result<u64, String> {
+        let mut state = self.locked()?;
+        Ok(state
+            .authenticated(&binding.owner, &binding.agent_id, &binding.token)?
+            .lifecycle
+            .revision)
+    }
+
+    pub(crate) fn reply_delivered(&self, binding: &crate::code_mode::RunBinding, revision: u64) {
+        let Ok(mut state) = self.locked() else { return };
+        let Ok(agent) = state.authenticated(&binding.owner, &binding.agent_id, &binding.token)
+        else {
+            return;
+        };
+        let mut changes = Vec::new();
+        agent
+            .lifecycle
+            .answer_delivered(revision, Instant::now(), now_ms(), &mut changes);
+        self.publish_lifecycle(agent, changes);
+    }
+
     /// Caller supplies a verified real worker event and the frozen main binding.
     pub(crate) fn wake_for_worker_event(
         &self,
@@ -921,7 +957,12 @@ impl Hub {
                     answer = name == "ssmcp.ui.message" && arguments["kind"] == "answer";
                     let generated_input =
                         name == "ssmcp.ui.message" && arguments["kind"] == "input";
-                    business = !generated_input
+                    // A native final reply is only a proposal, including on retries.
+                    // Only the relay ledger can confirm a new terminal output.
+                    let reply_proposal = name == crate::client::interface::reply::TOOL
+                        && arguments["kind"] == "result";
+                    business = !reply_proposal
+                        && !generated_input
                         && !(name.starts_with("ssmcp.time.")
                             || name.starts_with("ssmcp.events.")
                             || name == crate::code_mode::tool_summaries::TOOL
@@ -1219,11 +1260,8 @@ impl NativeActivity<'_> {
         } else if self.dispatched
             && self.answer
             && result.is_some_and(|r| r.as_ref().is_ok_and(|v| v["isError"] != true))
-            && life.revision == self.dispatch_revision
-            && life.status == Status::Working
-            && !life.work_pending()
         {
-            life.transition(Status::Idle, "answer_delivered", now, wall, &mut changes);
+            life.answer_delivered(self.dispatch_revision, now, wall, &mut changes);
         } else if self.dispatched && self.business && result.is_none_or(|r| r.is_err()) {
             life.preempt_round("native_outcome_unknown", wall, &mut changes);
             if life.status == Status::Dreaming {
