@@ -34,15 +34,15 @@ impl Contact {
     }
 
     pub(super) fn label(self, now: Instant) -> &'static str {
-        if now.saturating_duration_since(self.at)
-            >= Duration::from_millis(crate::wire::COLLAB_LEASE_MS)
-        {
+        let contact_age = now.saturating_duration_since(self.at);
+        let quiet = Duration::from_millis(2 * crate::worker::MAX_OBSERVATION_WAIT_MS);
+        if contact_age >= Duration::from_millis(crate::wire::COLLAB_LEASE_MS) {
             "unverified"
+        } else if contact_age >= quiet {
+            "stale_contact"
         } else if self.offline {
             "declared_offline"
-        } else if now.saturating_duration_since(self.direct)
-            >= Duration::from_millis(2 * crate::worker::MAX_OBSERVATION_WAIT_MS)
-        {
+        } else if now.saturating_duration_since(self.direct) >= quiet {
             "membership_only"
         } else {
             "confirmed"

@@ -1469,6 +1469,7 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
 
 fn slot_state(slot: &SlotView) -> (PanelTone, &'static str, &'static str) {
     match slot.contact {
+        Some("stale_contact") => return (PanelTone::Warning, "?", "stale contact"),
         Some("unverified") => return (PanelTone::Warning, "?", "unverified"),
         Some("declared_offline") => return (PanelTone::Muted, "◌", "off duty"),
         Some("membership_only") if slot.state == "working" => {
@@ -1987,6 +1988,7 @@ mod tests {
         for (contact, expected) in [
             ("confirmed", "claimed"),
             ("membership_only", "quiet claim"),
+            ("stale_contact", "stale contact"),
             ("unverified", "unverified"),
             ("declared_offline", "off duty"),
         ] {

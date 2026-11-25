@@ -529,6 +529,22 @@ fn silence_preserves_a_claim_and_new_authenticated_contact_recovers_the_display(
     let t = Instant::now() + std::time::Duration::from_secs(1);
     let later = t + std::time::Duration::from_millis(crate::wire::COLLAB_LEASE_MS);
     queue.authenticated_contact(&actor, t);
+    let quiet = std::time::Duration::from_millis(2 * crate::worker::MAX_OBSERVATION_WAIT_MS);
+    assert_eq!(
+        queue
+            .snapshot_at(t + quiet - std::time::Duration::from_millis(1))
+            .slots[0]
+            .contact,
+        Some("confirmed")
+    );
+    assert_eq!(
+        queue.snapshot_at(t + quiet).slots[0].contact,
+        Some("stale_contact")
+    );
+    assert_eq!(
+        queue.result(&owner, &task.task_id).unwrap().status,
+        TaskStatus::Working
+    );
     assert_eq!(
         queue.snapshot_at(later).slots[0].contact,
         Some("unverified")

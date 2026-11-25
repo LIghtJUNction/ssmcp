@@ -1210,7 +1210,8 @@ impl<T: Clone> Queue<T> {
                 let contact = slot.registered.as_ref().and(slot.contact).map(|c| c.label(now));
                 let reason = match contact {
                     Some("unverified") => Some("No recent authenticated membership or worker contact; claim outcome unconfirmed".into()),
-                    Some("membership_only") => Some("Membership verified; no recent worker native call".into()),
+                    Some("stale_contact") => Some("Last worker contact and roster observation are stale".into()),
+                    Some("membership_only") => Some("Recent roster confirms membership. Last worker call is stale".into()),
                     Some("declared_offline") => Some("Participant reports offline; membership still valid".into()),
                     _ => reason,
                 };
