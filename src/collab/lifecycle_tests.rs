@@ -473,6 +473,47 @@ async fn old_worker_wait_and_answer_receipts_cannot_erase_new_user_instruction()
     assert_eq!(snapshot(&hub, &id, &token)["status"], "idle");
 }
 
+#[tokio::test(start_paused = true)]
+async fn reading_worker_events_and_questions_preserves_both_dreaming_episodes() {
+    let client_id = "a".repeat(64);
+    let hub = Hub::for_session(&client_id);
+    let (observer, observer_token) = member(&hub, "owner", "worker");
+    let (peer, peer_token) = member(&hub, "owner", "worker");
+    let mut deadline = hub.state.lock().unwrap().agents[&observer]
+        .changed
+        .subscribe();
+    tokio::time::timeout(
+        Duration::from_millis(DEFAULT_IDLE_AFTER_MS + 1),
+        deadline.changed(),
+    )
+    .await
+    .expect("the relay must reach the idle deadline")
+    .unwrap();
+
+    let before_observer = snapshot(&hub, &observer, &observer_token);
+    let before_peer = snapshot(&hub, &peer, &peer_token);
+    for before in [&before_observer, &before_peer] {
+        assert_eq!(before["status"], "dreaming");
+        assert!(before["lifecycle"]["dreaming_since_ms"].is_u64());
+    }
+
+    for operation in [
+        native(
+            "ui.events",
+            json!({"action":"thread","client_id":client_id,"agent_id":peer}),
+        ),
+        native("ui.questions", json!({"state":"pending","limit":1})),
+    ] {
+        let mut call = hub
+            .prepare_native_activity("owner", &observer, &observer_token, &operation)
+            .unwrap();
+        call.dispatched();
+        call.finish(&receipt(json!({})));
+        assert_eq!(snapshot(&hub, &observer, &observer_token), before_observer);
+        assert_eq!(snapshot(&hub, &peer, &peer_token), before_peer);
+    }
+}
+
 #[tokio::test]
 async fn passive_observations_do_not_reset_idle_or_execute_requested_maintenance() {
     let hub = Hub::default();

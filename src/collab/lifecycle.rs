@@ -1007,6 +1007,8 @@ impl Hub {
                             || matches!(
                                 name.as_str(),
                                 "ssmcp.ui.get"
+                                    | "ssmcp.ui.events"
+                                    | "ssmcp.ui.questions"
                                     | "ssmcp.ui.wait"
                                     | "ssmcp.ui.question_delivery"
                                     | "ssmcp.client.capabilities"
