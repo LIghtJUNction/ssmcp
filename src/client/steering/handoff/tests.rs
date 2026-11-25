@@ -1,16 +1,20 @@
 use super::*;
 use crate::{
-    collab::Hub,
     runtime::call_scope::CallScope,
     wire::{CodeContext, ControlAccount, ControlAgent, ControlAttribution},
 };
 
+#[cfg(target_os = "linux")]
+use crate::collab::Hub;
+
+#[cfg(target_os = "linux")]
 struct Identity {
     id: String,
     token: String,
     subject: String,
 }
 
+#[cfg(target_os = "linux")]
 impl Identity {
     async fn join(hub: &Hub, subject: &str, role: &str) -> Self {
         let joined = hub
@@ -33,33 +37,53 @@ impl Identity {
         now: Instant,
     ) -> Result<Value, String> {
         let bound = hub.bind(&self.subject, &self.id, &self.token)?;
-        let attribution = ControlAttribution {
-            account: ControlAccount {
-                provider: "github".into(),
-                subject: self.subject.clone(),
-                login: "fixture".into(),
-            },
-            owner: None,
-            agent: Some(ControlAgent {
+        call_from_wire(
+            m,
+            room,
+            &self.subject,
+            ControlAgent {
                 id: bound.agent_id,
                 name: bound.name,
-            }),
-        };
-        let ctx = CodeContext {
-            run_id: "a".repeat(32),
-            code: "fixture".into(),
-            timestamp_ms: 1,
-            session_id: Some(room.into()),
-            thread_id: Some(self.id.clone()),
-        };
-        let scope =
-            CallScope::from_relay_for_client(7, Some(room), 1, Some(&attribution), Some(&ctx))?;
-        scope
-            .scope(async { m.handoff_member(&Source::capture(), request, now) })
-            .await
+            },
+            request,
+            now,
+        )
+        .await
     }
 }
 
+async fn call_from_wire(
+    manager: &mut Manager,
+    room: &str,
+    subject: &str,
+    agent: ControlAgent,
+    request: Value,
+    now: Instant,
+) -> Result<Value, String> {
+    let context = CodeContext {
+        run_id: "a".repeat(32),
+        code: "fixture".into(),
+        timestamp_ms: 1,
+        session_id: Some(room.into()),
+        thread_id: Some(agent.id.clone()),
+    };
+    let attribution = ControlAttribution {
+        account: ControlAccount {
+            provider: "github".into(),
+            subject: subject.into(),
+            login: "fixture".into(),
+        },
+        owner: None,
+        agent: Some(agent),
+    };
+    let scope =
+        CallScope::from_relay_for_client(7, Some(room), 1, Some(&attribution), Some(&context))?;
+    scope
+        .scope(async { manager.handoff_member(&Source::capture(), request, now) })
+        .await
+}
+
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn authenticated_solo_handoff_rejects_other_accounts_rooms_expiry_and_replay() {
     let room = "b".repeat(64);
@@ -198,22 +222,23 @@ async fn authenticated_solo_handoff_rejects_other_accounts_rooms_expiry_and_repl
 #[tokio::test]
 async fn first_solo_handoff_from_unbound_main_requires_the_original_account() {
     let room = "d".repeat(64);
-    let hub = Hub::for_session(&room);
-    let next = Identity::join(&hub, "123", "main").await;
+    let next = ControlAgent {
+        id: format!("agent_{}", "a".repeat(32)),
+        name: "main fixture".into(),
+    };
     let mut m = Manager::default();
     let _transport = m.connect_with_chat(&room, 7, true);
-    m.merge(&SteeringSnapshot {
-        schema_version: 1,
-        client_id: room.clone(),
-        revision: 1,
-        agents: hub.presence().unwrap(),
-        messages: vec![],
-    })
+    let roster: SteeringSnapshot = serde_json::from_value(json!({
+        "schema_version": 1, "client_id": room, "revision": 1, "messages": [],
+        "agents": [{"agent_id": next.id, "name": next.name, "role":"main", "status":"idle"}]
+    }))
     .unwrap();
+    m.merge(&roster).unwrap();
     let now = Instant::now();
-    next.call(&hub, &mut m, &room, json!({}), now)
+    call_from_wire(&mut m, &room, "123", next.clone(), json!({}), now)
         .await
         .unwrap();
+    m.submit("before the handoff", None).unwrap();
     for subject in [None, Some("456")] {
         assert!(
             m.offer_control_handoff(&room, "/fixture", &next.id, "unknown job ref", subject, now)
@@ -230,10 +255,43 @@ async fn first_solo_handoff_from_unbound_main_requires_the_original_account() {
             now,
         )
         .unwrap();
-    let ack = next
-        .call(&hub, &mut m, &room, json!({"handoff_id":key}), now)
+    let request = json!({"handoff_id":key});
+    assert!(
+        m.handoff_member(&Source::default(), request.clone(), now)
+            .is_err()
+    );
+    assert!(
+        call_from_wire(
+            &mut m,
+            &"c".repeat(64),
+            "123",
+            next.clone(),
+            request.clone(),
+            now
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        call_from_wire(&mut m, &room, "456", next.clone(), request.clone(), now)
+            .await
+            .is_err()
+    );
+    assert!(m.handoffs.coordinator().is_none());
+    let ack = call_from_wire(&mut m, &room, "123", next.clone(), request.clone(), now)
         .await
         .unwrap();
+    assert_eq!(ack["duplicate"], false);
     assert_eq!(ack["handoff"]["predecessor"], "main");
+    assert_eq!(ack["handoff"]["successor"], next.id);
     assert_eq!(ack["handoff"]["note"], "previous job unknown #42");
+    let retry = call_from_wire(&mut m, &room, "123", next.clone(), request, now)
+        .await
+        .unwrap();
+    assert_eq!(retry["duplicate"], true);
+    assert_eq!(retry["handoff"], ack["handoff"]);
+    m.submit("after the handoff", None).unwrap();
+    assert_eq!(m.outbox.records.len(), 2);
+    assert_eq!(m.outbox.records[0].message.target, "next");
+    assert_eq!(m.outbox.records[1].message.target, next.id);
 }
