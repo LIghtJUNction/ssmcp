@@ -153,15 +153,24 @@ pub(super) fn outcome(name: &str, cursors: (u64, u64), result: &Result<Value, St
             }
         }
         "ssmcp.exec.read" => {
-            let changed = value["stdout"]["next_cursor"]
-                .as_u64()
-                .is_some_and(|cursor| cursor > cursors.0)
-                || value["stderr"]["next_cursor"]
-                    .as_u64()
-                    .is_some_and(|cursor| cursor > cursors.1);
-            if changed || value["running"] == false || value["snapshot"]["running"] == false {
+            // Native read returns the end of each delivered page. The job snapshot
+            // may already include later output which this read did not return.
+            let page_cursor = |flat: &str, stream: &str| match value.get(flat) {
+                Some(cursor) => cursor.as_u64(),
+                None => value[stream]["next_cursor"].as_u64(),
+            };
+            let out = page_cursor("stdout_cursor", "stdout");
+            let err = page_cursor("stderr_cursor", "stderr");
+            if out.is_some_and(|cursor| cursor > cursors.0)
+                || err.is_some_and(|cursor| cursor > cursors.1)
+                || value["running"] == false
+                || value["snapshot"]["running"] == false
+            {
                 Outcome::Triggered
-            } else if value["running"] == true || value["snapshot"]["running"] == true {
+            } else if out == Some(cursors.0)
+                && err == Some(cursors.1)
+                && (value["running"] == true || value["snapshot"]["running"] == true)
+            {
                 Outcome::WindowExpired
             } else {
                 Outcome::Unknown
@@ -324,6 +333,89 @@ mod tests {
         assert_eq!(
             outcome("ssmcp.exec.wait", (0, 0), &Err("transport lost".into())),
             Outcome::Unknown
+        );
+    }
+
+    #[test]
+    fn read_outcome_uses_only_returned_page_cursors() {
+        let classify = |page| outcome("ssmcp.exec.read", (4, 2), &Ok(page));
+        let snapshot =
+            json!({"running":true,"stdout":{"next_cursor":20},"stderr":{"next_cursor":8}});
+        assert_eq!(
+            classify(
+                json!({"structuredContent":{"stdout_cursor":4,"stderr_cursor":2,"snapshot":snapshot}})
+            ),
+            Outcome::WindowExpired
+        );
+        assert_eq!(
+            classify(
+                json!({"running":true, "stdout":{"next_cursor":4}, "stderr":{"next_cursor":3}})
+            ),
+            Outcome::Triggered
+        );
+        for malformed in [
+            json!({"running":true,"stdout_cursor":1,"stderr_cursor":2}),
+            json!({"running":true,"stdout_cursor":4}),
+            json!({"running":true,"stdout_cursor":null,"stdout":{"next_cursor":99},"stderr_cursor":2}),
+            json!({"snapshot":snapshot}),
+        ] {
+            assert_eq!(classify(malformed), Outcome::Unknown);
+        }
+        assert_eq!(classify(json!({"running":false})), Outcome::Triggered);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_pipe_read_outcome_tracks_each_page_while_the_command_is_running() {
+        use crate::backend::shell::Shell;
+        let shell = Shell::new();
+        let job = shell.call("ssmcp.exec.start", json!({
+            "command":["/bin/sh","-c","read -r x && printf abcdef; read -r x && printf err >&2; read -r x; exit 0"],
+            "stdin":"pipe","timeout_ms":30_000
+        })).await.unwrap();
+        let id = job["job_id"].as_str().unwrap();
+        let read = |out, err, max_bytes, wait_ms| {
+            shell.call("ssmcp.exec.read",
+            json!({"job_id":id,"stdout_cursor":out,"stderr_cursor":err,"max_bytes":max_bytes,"wait_ms":wait_ms}))
+        };
+        let advance = || shell.call("ssmcp.exec.write", json!({"job_id":id,"data":"go\n"}));
+        let classify = |out, err, page| outcome("ssmcp.exec.read", (out, err), &Ok(page));
+        let untouched = read(0, 0, 2, 5).await.unwrap();
+        assert_eq!(classify(0, 0, untouched), Outcome::WindowExpired);
+        advance().await.unwrap();
+        let page = read(0, 0, 2, 5000).await.unwrap();
+        assert_eq!(page["running"], true);
+        assert_eq!(page["stdout"], "ab");
+        assert_eq!(page["stdout_cursor"], 2);
+        assert_eq!(page["stderr_cursor"], 0);
+        assert_eq!(classify(0, 0, page.clone()), Outcome::Triggered);
+        let replay = read(0, 0, 2, 0).await.unwrap();
+        assert_eq!(replay["stdout_base64"], page["stdout_base64"]);
+        assert_eq!(classify(0, 0, replay), Outcome::Triggered);
+        let tail = read(2, 0, 16, 5000).await.unwrap();
+        assert_eq!(tail["stdout"], "cdef");
+        assert_eq!(classify(2, 0, tail), Outcome::Triggered);
+        let unchanged = read(6, 0, 16, 5).await.unwrap();
+        assert_eq!(classify(6, 0, unchanged), Outcome::WindowExpired);
+        advance().await.unwrap();
+        let err = read(6, 0, 16, 5000).await.unwrap();
+        assert_eq!(err["running"], true);
+        assert_eq!(err["stdout_cursor"], 6);
+        assert_eq!(err["stderr_cursor"], 3);
+        assert_eq!(err["stderr"], "err");
+        assert_eq!(classify(6, 0, err), Outcome::Triggered);
+        shell
+            .call("ssmcp.exec.write", json!({"job_id":id,"close_stdin":true}))
+            .await
+            .unwrap();
+        let ended = shell
+            .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":5000}))
+            .await
+            .unwrap();
+        assert_eq!(ended["exit_code"], 0);
+        assert_eq!(
+            classify(6, 3, read(6, 3, 16, 0).await.unwrap()),
+            Outcome::Triggered
         );
     }
 
