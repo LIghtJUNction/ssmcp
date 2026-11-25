@@ -1255,10 +1255,17 @@ class WorkerWindows(Harness):
             "expected": sorted(WORKER_TOOLS), "observed": [tool["name"] for tool in tools],
             "schemas": {tool["name"]: isinstance(tool.get("inputSchema"), dict) for tool in tools},
         }
-        self.check({tool["name"] for tool in tools} == WORKER_TOOLS
-                   and len(tools) == len(WORKER_TOOLS)
-                   and all(isinstance(tool.get("inputSchema"), dict) for tool in tools),
-                   "the configured worker pool advertises the exact worker tool catalog and schemas")
+        names = {tool["name"] for tool in tools}
+        invalid = [tool["name"] for tool in tools if not isinstance(tool.get("inputSchema"), dict)]
+        self.check(names == WORKER_TOOLS and len(tools) == len(names) and not invalid,
+                   "the configured worker pool advertises the exact worker tool catalog and schemas: "
+                   f"missing={sorted(WORKER_TOOLS - names)}, extra={sorted(names - WORKER_TOOLS)}, "
+                   f"duplicates={len(tools) - len(names)}, invalid_schemas={invalid}")
+        handoff = next(tool for tool in tools if tool["name"] == "ssmcp.worker.accept_handoff")
+        self.check(handoff["inputSchema"] == {
+            "type": "object", "additionalProperties": False, "required": ["handoff_id"],
+            "properties": {"handoff_id": {"type": "string", "minLength": 32, "maxLength": 32}},
+        }, "pool handoff requires exactly the invitation ID under the caller's own binding")
         attached = self.bound(worker["id"], manager, "ssmcp.worker.attach")
         self.check(attached["caller_is_manager"], "the main participant attaches to the discovered worker pool")
         executor = self.invitations_and_resize(frontend, directory, parent, worker, manager)

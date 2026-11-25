@@ -62,7 +62,7 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.exec.forget", "ssmcp.exec.events",
     "ssmcp.harnesses.list", "ssmcp.harnesses.load", "ssmcp.audit.events",
     "ssmcp.plugins.list", "ssmcp.plugins.load", "ssmcp.plugins.unload",
-    "ssmcp.ui.listener",
+    "ssmcp.ui.handoff", "ssmcp.ui.listener",
     "ssmcp.ui.reply",
     "ssmcp.ui.wait",
     "ssmcp.ui.tool_summary",
@@ -73,7 +73,7 @@ BUILTIN_TOOLS = frozenset({
 
 WORKER_TOOLS = frozenset({
     "ssmcp.worker.status", "ssmcp.worker.attach", "ssmcp.worker.tasks",
-    "ssmcp.worker.events",
+    "ssmcp.worker.events", "ssmcp.worker.accept_handoff",
     "ssmcp.worker.stop", "ssmcp.worker.resize", "ssmcp.worker.submit", "ssmcp.worker.result",
     "ssmcp.worker.cancel", "ssmcp.worker.wait", "ssmcp.worker.wait_available", "ssmcp.worker.wait_for", "ssmcp.worker.claim", "ssmcp.worker.complete",
     "ssmcp.worker.report", "ssmcp.worker.release",
