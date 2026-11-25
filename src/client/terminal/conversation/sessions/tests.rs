@@ -178,10 +178,66 @@ fn same_name_members_keep_their_id_summary_and_measured_calls_together() {
         ] {
             assert!(
                 rows.windows(2)
-                    .any(|pair| pair[0].contains(count) && pair[1].contains(identity)),
+                    .any(|pair| (pair[0].contains(count) || pair[1].contains(count))
+                        && pair[1].contains(identity)),
                 "{columns} columns: {rows:?}"
             );
         }
+    }
+}
+
+#[test]
+fn measured_activity_preserves_recipient_names_and_summaries_at_each_width() {
+    let id = "agent_0123456789abcdef0123456789abcdef";
+    let data = json!({"agents":[{"agent_id":id,"name":"Question fixture agent",
+        "role":"question input test","status":"idle"}]});
+    for columns in [104, 32, 48, 120] {
+        let mut state = preview_state(
+            28,
+            columns,
+            &Ui {
+                layout: Layout::Chat,
+                sidebar: false,
+                color: false,
+                ..Ui::default()
+            },
+        );
+        state.chat_change_view(View::Agents);
+        state.conversation.selected_agent = Some(format!("member:{id}"));
+        let width = usize::from(state.chat_agent_list_width());
+        let left = |line: &String| {
+            line.chars()
+                .take(width)
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        };
+        let original = state.chat_session_rows(&data, 24);
+        let mut measured = data.clone();
+        measured["agents"][0]["tool_calls_10m"] = json!(0);
+        let rows = state.chat_session_rows(&measured, 24);
+        // Row zero is the heading, followed by two rows for the process and each member.
+        for index in [3, 4] {
+            assert!(
+                left(&rows[index]).starts_with(&left(&original[index])),
+                "{columns}: {rows:?}"
+            );
+        }
+        if columns >= 48 {
+            assert!(
+                left(&rows[3]).contains("Question fixture agent"),
+                "{columns}: {rows:?}"
+            );
+        }
+        state.conversation.main_roster_fixture = Some(measured);
+        state.chat_session_info();
+        let details: String = screen_contents(&state.chat_frame(Instant::now()))
+            .split_whitespace()
+            .collect();
+        assert!(
+            details.contains("Toolcallsin10min:0"),
+            "{columns}: {details}"
+        );
     }
 }
 

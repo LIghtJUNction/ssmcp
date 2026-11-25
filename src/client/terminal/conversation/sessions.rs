@@ -347,6 +347,11 @@ impl State {
             if let Some(summary) = session_summary(&entry) {
                 let _ = write!(text, "\nSummary: {}", panel::safe_text(summary));
             }
+            if member_lifecycle(&entry).is_some()
+                && let Some(calls) = entry["tool_calls_10m"].as_u64()
+            {
+                let _ = write!(text, "\nTool calls in 10 min: {calls}");
+            }
         }
         if let Some(id) = group_id(&entry) {
             let _ = write!(text, "\nExact recipient: {}", panel::safe_text(id));
@@ -461,32 +466,37 @@ impl State {
             } else {
                 short_id(id)
             };
-            let calls = lifecycle.and_then(|_| entry["tool_calls_10m"].as_u64());
-            let subtitle = if observed {
+            let summary = session_summary(entry);
+            let mut subtitle = if observed {
                 format!(
                     "     {indent}{identity} · {} calls · {}",
                     entry["calls"],
                     field(entry, "status")
                 )
-            } else if !process && let Some(summary) = session_summary(entry) {
-                if let Some(calls) = calls {
-                    // The second line identifies same-name threads by ID and summary.
-                    let count = format!(" · {calls}/10m");
-                    let available = usize::from(list_width).saturating_sub(count.width());
-                    title = format!("{}{count}", panel::fit(&title, available));
-                }
-                let prefix = format!("     {indent}{identity} · ");
-                let available = usize::from(list_width).saturating_sub(prefix.width());
-                format!("{prefix}{}", panel::fit(summary, available))
-            } else if let Some(calls) = calls {
-                if list_width < 35 {
-                    format!("     {indent}{calls}/10m · {identity}")
-                } else {
-                    format!("     {indent}{calls} calls/10m · {identity}")
-                }
+            } else if !process && let Some(summary) = summary {
+                format!("     {indent}{identity} · {}", panel::safe_text(summary))
             } else {
                 format!("     {indent}{identity} · {role}")
             };
+            if let Some(calls) = lifecycle.and_then(|_| entry["tool_calls_10m"].as_u64()) {
+                let width = usize::from(list_width);
+                let count = format!("{calls}/10m");
+                let counted_id = if list_width < 35 {
+                    format!("     {indent}{count} · {identity}")
+                } else {
+                    format!("     {indent}{calls} calls/10m · {identity}")
+                };
+                if summary.is_none() && counted_id.width() <= width {
+                    subtitle = counted_id;
+                } else if let Some(line) = [&mut title, &mut subtitle]
+                    .into_iter()
+                    .find(|line| line.width() + 1 + count.len() <= width)
+                {
+                    // If neither line has space the selected thread's details show the count.
+                    line.push(' ');
+                    line.push_str(&count);
+                }
+            }
             rows.push(self.chat_line(
                 &title,
                 if selected {
