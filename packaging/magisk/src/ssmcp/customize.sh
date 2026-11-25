@@ -9,4 +9,4 @@ if [ "$BOOTMODE" = true ] && [ ! -s /data/adb/ssmcp/root-consent-v1 ]; then
         start_console && open_console setup
     ) || ui_print "- Open SSMCP from the module manager after reboot to finish setup."
 fi
-ui_print "- 在安装引导中完成配置。日常使用请打开模块的 WebUI 或操作按钮。"
+ui_print "- 在安装引导中完成配置。日常使用请打开模块的 WebUI。"

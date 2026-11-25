@@ -1,5 +1,5 @@
 const terminalHelper = '/system/bin/sh /data/adb/modules/ssmcp/webui-transport.sh';
-const setupAction = '/system/bin/sh /data/adb/modules/ssmcp/action.sh setup';
+const setupLauncher = '/system/bin/sh /data/adb/modules/ssmcp/onboarding/open.sh';
 const maxBodyBytes = 24 * 1024;
 let nextCallback = 0;
 
@@ -10,7 +10,7 @@ export function hasManagerTransport() {
 function managerExec(command, timeoutMs) {
   return new Promise((resolve, reject) => {
     if (!hasManagerTransport()) {
-      reject(Error('请在模块管理器中打开设备终端。'));
+      reject(Error('请在模块管理器中打开 SSMCP 的 WebUI。'));
       return;
     }
     const callback = '__ssmcpManager' + (++nextCallback);
@@ -61,5 +61,5 @@ export async function managerTerminal(body) {
 }
 
 export async function openManagerSetup() {
-  await managerExec(setupAction, 25000);
+  await managerExec(setupLauncher, 25000);
 }
