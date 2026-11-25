@@ -143,7 +143,8 @@ else:
         companion = install_dir / "zrun"
         if not windows:
             actual = subprocess.check_output([str(companion), "--version"], text=True).strip()
-            if actual != "zrun " + release.ZRUN_RELEASE:
+            version, _ = release.locked_zrun(release.ROOT)
+            if actual != "zrun " + version:
                 raise AssertionError(actual)
             companion.write_bytes(b"existing user zrun")
         installed.write_bytes(b"previous installed version")
