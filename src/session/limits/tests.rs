@@ -107,6 +107,8 @@ fn native_systemd_arguments_apply_limits_and_keep_crash_policy() {
             "--property=RestartSec=7s",
             "--property=StartLimitIntervalSec=0",
             "--property=KillMode=control-group",
+            "--property=Delegate=memory",
+            "--property=DelegateSubgroup=ssmcp-supervisor",
             "--expand-environment=no",
         ] {
             assert!(args.iter().any(|arg| arg == property), "{property}");
@@ -131,13 +133,15 @@ fn native_systemd_arguments_apply_limits_and_keep_crash_policy() {
 fn managed_scopes_are_unique_synchronous_and_leave_retries_with_the_owner() {
     let manifest = manifest();
     let limits = limits("50", "64M");
-    let first = scope_arguments(&manifest, "generation-a", &limits);
-    let second = scope_arguments(&manifest, "generation-b", &limits);
+    let first = scope_arguments(&manifest, "generation-a", &limits, 128 * 1024 * 1024);
+    let second = scope_arguments(&manifest, "generation-b", &limits, 32 * 1024 * 1024);
     assert_ne!(first, second);
     assert!(first.contains(&"--scope".into()));
     assert!(first.contains(&"--unit=ssmcp-session-fixture-generation-a.scope".into()));
     assert!(first.contains(&"--property=CPUQuota=50%".into()));
     assert!(first.contains(&"--property=MemoryMax=67108864".into()));
+    assert!(first.contains(&"--property=MemorySwapMax=0".into()));
+    assert!(second.contains(&"--property=MemoryMax=33554432".into()));
     assert!(first.contains(&"--expand-environment=no".into()));
     assert!(
         !first
@@ -237,6 +241,15 @@ fn kernel_membership_must_be_the_expected_session_unit() {
         directory,
         Path::new("/sys/fs/cgroup/user.slice/user-1000.slice/app.slice").join(unit)
     );
+    let service = "ssmcp-session-fixture.service";
+    assert_eq!(
+        cgroup_directory(
+            "0::/user.slice/app.slice/ssmcp-session-fixture.service/ssmcp-supervisor\n",
+            service,
+        )
+        .unwrap(),
+        Path::new("/sys/fs/cgroup/user.slice/app.slice").join(service)
+    );
     for bad in [
         "2:cpu:/session.scope",
         "0::relative.scope",
@@ -316,7 +329,12 @@ async fn systemd_scope_applies_limits_and_shutdown_reaps_descendants() {
     let limits = limits("50%", "256MiB");
     let mut command = Command::new("systemd-run");
     command
-        .args(scope_arguments(&manifest, &suffix, &limits))
+        .args(scope_arguments(
+            &manifest,
+            &suffix,
+            &limits,
+            128 * 1024 * 1024,
+        ))
         .arg("--")
         .arg(std::env::current_exe().unwrap())
         .args([

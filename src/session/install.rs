@@ -376,7 +376,7 @@ fn systemd_definition(
         String::new()
     };
     Ok(format!(
-        "# {MARKER}\n[Unit]\nDescription=ssmcp client session manager\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=exec\n{owner}WorkingDirectory=~\nExecStart={} service run\nEnvironment={}\nEnvironment={}\nEnvironment={}\nRestart=on-failure\nRestartSec=5s\nKillMode=control-group\nTimeoutStopSec=20s\nUMask=0077\nStandardInput=null\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy={}\n",
+        "# {MARKER}\n[Unit]\nDescription=ssmcp client session manager\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=exec\n{owner}WorkingDirectory=~\nExecStart={} service run\nEnvironment={}\nEnvironment={}\nEnvironment={}\nRestart=on-failure\nRestartSec=5s\nDelegate=memory\nDelegateSubgroup=ssmcp-supervisor\nKillMode=control-group\nTimeoutStopSec=20s\nUMask=0077\nStandardInput=null\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy={}\n",
         systemd_quote(executable, true)?,
         systemd_quote(&format!("HOME={home}"), false)?,
         systemd_quote(&format!("SSMCP_SESSION_HOME={state}"), false)?,

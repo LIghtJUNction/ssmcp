@@ -628,6 +628,8 @@ impl Shell {
                 size: args.size,
                 live: args.live,
                 output_event: Some(output_event),
+                #[cfg(target_os = "linux")]
+                enforce_memory: true,
             },
             self.output.clone(),
         ) {
@@ -1802,15 +1804,14 @@ impl Shell {
                 .env("SSMCP_ARTIFACT_DIR", &artifacts.path);
         }
         #[cfg(target_os = "linux")]
-        let spawn = if creator.call.is_none() {
-            ExecManaged::spawn_accounted
-        } else {
-            ExecManaged::spawn
-        };
+        let memory = super::command_memory::CommandMemory::prepare()
+            .map_err(|error| format!("could not enforce command memory ceiling: {error}"))?;
+        #[cfg(target_os = "linux")]
+        let process =
+            ExecManaged::spawn_limited(&mut command, creator.call.is_none(), memory.as_ref());
         #[cfg(not(target_os = "linux"))]
-        let spawn = ExecManaged::spawn;
-        let mut process =
-            spawn(&mut command).map_err(|e| format!("could not start command: {e}"))?;
+        let process = ExecManaged::spawn(&mut command);
+        let mut process = process.map_err(|e| format!("could not start command: {e}"))?;
         #[cfg(target_os = "linux")]
         if let Some(artifacts) = &mut artifacts {
             artifacts.mark_started();
@@ -1916,6 +1917,8 @@ impl Shell {
             worker.stop_input();
             worker.stdin.lock().await.take();
             process.shutdown().await;
+            #[cfg(target_os = "linux")]
+            drop(memory);
             #[cfg(target_os = "linux")]
             let usage = process.take_usage();
             tokio::join!(drain(out, &worker, "stdout"), drain(err, &worker, "stderr"));

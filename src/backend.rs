@@ -1,4 +1,6 @@
 //! Native tools are always available; optional external harnesses load only on request.
+#[cfg(target_os = "linux")]
+pub(crate) mod command_memory;
 pub mod events;
 pub(crate) mod peer;
 pub mod process;

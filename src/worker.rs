@@ -9,7 +9,7 @@ mod child;
 #[cfg(target_os = "linux")]
 mod executor;
 #[cfg(any(target_os = "linux", test))]
-mod limits;
+pub(crate) mod limits;
 mod pool;
 mod queue;
 #[cfg(target_os = "linux")]

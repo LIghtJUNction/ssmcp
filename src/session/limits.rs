@@ -221,15 +221,23 @@ fn cgroup_directory(membership: &str, unit: &str) -> Result<std::path::PathBuf> 
         return Err("runner has ambiguous unified cgroup membership".into());
     }
     let path = Path::new(path);
+    let unit_path = if path
+        .file_name()
+        .is_some_and(|name| name == "ssmcp-supervisor")
+    {
+        path.parent().ok_or("runner subgroup has no systemd unit")?
+    } else {
+        path
+    };
     if !path.is_absolute()
         || path
             .components()
             .any(|part| !matches!(part, Component::RootDir | Component::Normal(_)))
-        || path.file_name().is_none_or(|name| name != unit)
+        || unit_path.file_name().is_none_or(|name| name != unit)
     {
         return Err("runner is not in its expected per-session systemd unit".into());
     }
-    Ok(Path::new("/sys/fs/cgroup").join(path.strip_prefix("/")?))
+    Ok(Path::new("/sys/fs/cgroup").join(unit_path.strip_prefix("/")?))
 }
 
 pub(super) fn unit_name(manifest: &Manifest, generation: Option<&str>) -> String {
@@ -240,7 +248,12 @@ pub(super) fn unit_name(manifest: &Manifest, generation: Option<&str>) -> String
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn scope_arguments(manifest: &Manifest, generation: &str, limits: &Limits) -> Vec<String> {
+fn scope_arguments(
+    manifest: &Manifest,
+    generation: &str,
+    limits: &Limits,
+    executor_ceiling: u64,
+) -> Vec<String> {
     let mut args = vec![
         "--user".into(),
         "--scope".into(),
@@ -250,7 +263,17 @@ fn scope_arguments(manifest: &Manifest, generation: &str, limits: &Limits) -> Ve
         "--expand-environment=no".into(),
         format!("--unit={}", unit_name(manifest, Some(generation))),
     ];
-    args.extend(limits.properties());
+    let bounded = Limits {
+        cpu_percent: limits.cpu_percent,
+        memory_bytes: Some(
+            limits
+                .memory_bytes
+                .unwrap_or(executor_ceiling)
+                .min(executor_ceiling),
+        ),
+    };
+    args.extend(bounded.properties());
+    args.push("--property=MemorySwapMax=0".into());
     args
 }
 
@@ -269,7 +292,12 @@ pub(super) fn managed_command(
         // guardian. Only the existing supervisor retries failed generations.
         command = Command::new("systemd-run");
         command
-            .args(scope_arguments(manifest, generation, &limits))
+            .args(scope_arguments(
+                manifest,
+                generation,
+                &limits,
+                crate::backend::command_memory::default_ceiling()?,
+            ))
             .arg("--")
             .arg(executable);
     }
@@ -292,6 +320,8 @@ pub(super) fn native_arguments(directory: &Path, manifest: &Manifest) -> Result<
             "--working-directory={}",
             super::path_text(&manifest.spec.cwd)?
         ),
+        "--property=Delegate=memory".into(),
+        "--property=DelegateSubgroup=ssmcp-supervisor".into(),
         "--property=KillMode=control-group".into(),
         "--property=TimeoutStopSec=15s".into(),
         "--property=UMask=0077".into(),

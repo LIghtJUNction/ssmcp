@@ -96,17 +96,29 @@ impl ManagedProcess<TokioChild> {
 
 #[cfg(target_os = "linux")]
 impl ManagedProcess<ZrunChild> {
+    #[cfg(test)]
     pub fn spawn(command: &mut Command) -> io::Result<Self> {
-        Self::spawn_inner(command, false)
+        Self::spawn_inner(command, false, None)
     }
 
-    pub(crate) fn spawn_accounted(command: &mut Command) -> io::Result<Self> {
-        Self::spawn_inner(command, true)
+    pub(crate) fn spawn_limited(
+        command: &mut Command,
+        account: bool,
+        memory: Option<&super::command_memory::CommandMemory>,
+    ) -> io::Result<Self> {
+        Self::spawn_inner(command, account, memory)
     }
 
-    fn spawn_inner(command: &mut Command, account: bool) -> io::Result<Self> {
+    fn spawn_inner(
+        command: &mut Command,
+        account: bool,
+        memory: Option<&super::command_memory::CommandMemory>,
+    ) -> io::Result<Self> {
         let driver = Driver::get()?;
         let accounting = prepare_command(command, account)?;
+        if let Some(memory) = memory {
+            memory.attach(command)?;
+        }
         let child = zrun::process::spawn(command, &driver.io)?;
         let pid = child.id() as libc::pid_t;
         Self::from_child(child, pid, accounting.map(|(read, _)| read))
