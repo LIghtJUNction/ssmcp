@@ -3431,13 +3431,7 @@ impl State {
                     &self.conversation.process_id,
                     self.link_metrics.disconnected(),
                 );
-                let (title, detail) =
-                    main_status::header(&self.context_label, &label, status, g.left);
-                format!(
-                    "{}{}",
-                    self.tone(PanelTone::Heading, &title),
-                    self.tone(PanelTone::Muted, &detail)
-                )
+                main_status::header(self, &label, status, g.left)
             } else if (1..top).contains(&index) {
                 self.chat_line(
                     &format!("  {}", self.announcements[usize::from(index - 1)]),
@@ -4521,7 +4515,7 @@ mod tests {
             sidebar: false,
             ..Ui::default()
         };
-        let mut state = super::super::preview_state(24, 100, &ui);
+        let mut state = super::super::preview_state(24, 128, &ui);
         for (cwd, title, expected) in [
             (
                 "/workspace/alpha-project/",
@@ -4548,6 +4542,69 @@ mod tests {
         let header = screen.lines().next().unwrap().trim();
         assert!(header.starts_with("SSMCP main  /  alpha-project  /  Review uploads"));
         assert!(header.ends_with("queue  4/7"));
+    }
+
+    #[test]
+    fn centered_header_uses_terminal_cells_and_distinct_status_colors() {
+        for (cols, sidebar) in [
+            (20, false),
+            (37, false),
+            (80, false),
+            (81, false),
+            (120, true),
+        ] {
+            for color in [true, false] {
+                let ui = Ui {
+                    sidebar,
+                    color,
+                    ..Ui::default()
+                };
+                let mut state = super::super::preview_state(24, cols, &ui);
+                state.set_context("/workspace/终端项目", Some(&"Café 调度".repeat(20)));
+                state.conversation.process_id = "room".into();
+                let width = state.geometry.left;
+                let mut colors = Vec::new();
+                for (label, status) in [
+                    ("Working", "working"),
+                    ("Idle", "idle"),
+                    ("Dreaming", "dreaming"),
+                    ("Retiring", "retiring"),
+                    ("Offline", "offline"),
+                    ("Unknown", "unrecognized"),
+                ] {
+                    state.conversation.main_roster_fixture = Some(json!({
+                        "connected":true, "supported":true, "session_id":"room",
+                        "agents":[{"role":"main", "status":status, "dreaming_active":status == "dreaming"}],
+                        "queue":[],
+                    }));
+                    let parser = display(&mut state);
+                    let screen = parser.screen();
+                    let start = (width - label.len() as u16) / 2;
+                    let cell = |col| screen.cell(0, col).unwrap();
+                    for (i, ch) in label.chars().enumerate() {
+                        assert_eq!(
+                            cell(start + i as u16).contents(),
+                            ch.to_string(),
+                            "{cols} {label}"
+                        );
+                        assert_eq!(cell(start + i as u16).fgcolor(), cell(start).fgcolor());
+                    }
+                    if color {
+                        assert!(
+                            !colors.contains(&cell(start).fgcolor()),
+                            "{label} shares a color"
+                        );
+                        colors.push(cell(start).fgcolor());
+                    } else {
+                        assert_eq!(cell(start).fgcolor(), vt100::Color::Default);
+                    }
+                    if cols >= 80 {
+                        let right = usize::from(width) - 2 - "conversation".len();
+                        assert_eq!(cell(right as u16).contents(), "c");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -4642,7 +4699,7 @@ mod tests {
             sidebar: false,
             ..Ui::default()
         };
-        for cols in [20, 40, 80, 100] {
+        for cols in [20, 40, 80, 100, 160] {
             let mut state = super::super::preview_state(24, cols, &ui);
             let before = display(&mut state).screen().contents();
             state.set_context(
@@ -4657,7 +4714,7 @@ mod tests {
             );
             let header = after.lines().next().unwrap();
             assert!(header.width() <= usize::from(cols));
-            if cols == 100 {
+            if cols == 160 {
                 assert!(header.contains(r"项目\nname"));
                 assert!(header.contains(r"修改标题\r\x1b[2J\u{202e}extra-long-title"));
             }

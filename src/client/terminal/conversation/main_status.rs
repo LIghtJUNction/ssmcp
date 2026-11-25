@@ -47,27 +47,63 @@ pub(super) fn member_lifecycle(member: &Value) -> (u8, &'static str) {
     }
 }
 
-pub(super) fn header(context: &str, view: &str, status: &str, width: u16) -> (String, String) {
-    let padding = if width >= 32 { "  " } else { "" };
-    let label = if width >= 40 {
-        let view = fit(view, width.saturating_sub(status.width() as u16 + 20));
-        format!("{status} · {view}{padding}")
+fn title(context: &str, limit: u16) -> String {
+    let brand = "SSMCP main";
+    if usize::from(limit) < brand.len() {
+        return if limit >= 5 { "SSMCP" } else { "" }.into();
+    }
+    let full = format!("{brand}{context}");
+    if full.width() <= usize::from(limit) {
+        return full;
+    }
+    let prefix = fit(&full, limit - 1);
+    let prefix = prefix.trim_end().trim_end_matches("  /").trim_end();
+    if prefix.len() <= brand.len() {
+        brand.into()
     } else {
-        format!("{status}{padding}")
-    };
-    let right = fit(&label, width);
-    let available = width.saturating_sub(right.width() as u16 + 1);
-    let title = if width >= 32 {
-        fit(&format!("{padding}SSMCP main{context}"), available)
-    } else if available >= 10 {
-        "SSMCP main".into()
-    } else if available >= 5 {
-        "SSMCP".into()
-    } else {
+        format!("{prefix}…")
+    }
+}
+
+/// Anchor the status in the middle of the conversation pane, independently of
+/// the title and view. An odd spare cell belongs to the right side.
+pub(super) fn header(state: &State, view: &str, status: &str, width: u16) -> String {
+    let center = fit(status, width);
+    let remaining = usize::from(width) - center.width();
+    let left_width = remaining / 2;
+    let right_width = remaining - left_width;
+    let margin = if width >= 40 { 2 } else { 0 };
+    // Reserve a separator next to the status even after a long title is clipped.
+    let left_limit = left_width.saturating_sub(margin + 1);
+    let title = title(&state.context_label, left_limit as u16);
+    let right_limit = right_width.saturating_sub(margin + 1);
+    let view = if view == "conversation" && view.len() > right_limit {
         String::new()
+    } else {
+        fit(view, right_limit as u16)
     };
-    let gap = usize::from(width).saturating_sub(title.width() + right.width());
-    (title, format!("{}{right}", " ".repeat(gap)))
+    let tone = match status {
+        "Working" => PanelTone::Success,
+        "Idle" => PanelTone::Normal,
+        "Dreaming" => PanelTone::Accent,
+        "Retiring" => PanelTone::Warning,
+        "Offline" => PanelTone::Error,
+        _ => PanelTone::Muted,
+    };
+    let left_gap = left_width.saturating_sub(margin + title.width());
+    let right_gap = right_width.saturating_sub(view.width() + margin);
+    format!(
+        "{}{}{}",
+        state.tone(
+            PanelTone::Heading,
+            &format!("{:margin$}{title}{:left_gap$}", "", "")
+        ),
+        state.tone(tone, &center),
+        state.tone(
+            PanelTone::Muted,
+            &format!("{:right_gap$}{view}{:margin$}", "", "")
+        ),
+    )
 }
 
 #[cfg(test)]
