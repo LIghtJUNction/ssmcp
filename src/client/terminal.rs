@@ -1519,7 +1519,7 @@ impl vt100::Callbacks for Replies {
 struct State {
     worker: Option<worker::Monitor>,
     context_label: String,
-    announcements: announcements::Announcements,
+    reader: announcements::Reader,
     server_origin: Option<footer::Origin>,
     connection_versions: Option<super::update::ConnectionVersions>,
     guide: Option<guide::Guide>,
@@ -1570,7 +1570,7 @@ impl State {
             events: events::EventView::new(),
             attached_history: None,
             context_label: String::new(),
-            announcements: Default::default(),
+            reader: Default::default(),
             server_origin: None,
             connection_versions: None,
             guide: None,
@@ -1796,8 +1796,8 @@ impl State {
         let mut geometry =
             Geometry::new(rows, cols, &self.ui, self.conversation.preferred_input_rows);
         if self.ui.layout == Layout::Chat && rows >= 6 {
-            geometry.banner_rows = (self.announcements.visible().count() as u16)
-                .min(geometry.log_rows.saturating_sub(1));
+            geometry.banner_rows =
+                (self.reader.visible().count() as u16).min(geometry.log_rows.saturating_sub(1));
             geometry.log_rows -= geometry.banner_rows;
             geometry.pty_rows = geometry.log_rows;
         }
@@ -2251,7 +2251,7 @@ impl State {
                 self.worker.is_none()
                     && self.ui.layout == Layout::Chat
                     && self.conversation.view == conversation::View::Agents
-                    && !self.announcements.is_reading()
+                    && !self.reader.is_reading()
                     && !self.help
                     && !self.sleep.visible,
             );
@@ -2268,7 +2268,7 @@ impl State {
             .image_cells(self.graphics.cell().filter(|_| self.ui.color));
         if self.ui.layout == Layout::Chat {
             let frame = self.chat_frame(now);
-            if !self.announcements.is_reading()
+            if !self.reader.is_reading()
                 && !self.help
                 && self.conversation.view == conversation::View::Activity
                 && !self.raw_logs

@@ -159,9 +159,9 @@ fn shortcuts(hint_kind: Hint, width: u16, status: &str) -> String {
             "Enter send · Alt+C select/copy · F1 help",
         ],
         Hint::Conversation => [
-            "Alt+C select/copy · ↑↓ select · Enter expand · PgUp/PgDn scroll · ←/→ panels · Tab input",
-            "Alt+C select/copy · ↑↓ select · Enter expand · Tab input",
-            "Alt+C select/copy · Enter expand · Tab input",
+            "↑↓ select · Enter expand · f full-screen tool · PgUp/PgDn scroll · Alt+C select/copy · Tab input",
+            "Enter expand · f full-screen tool · Alt+C select/copy · Tab input",
+            "f full-screen tool · Tab input",
         ],
         Hint::Audit => [
             "Alt+C select/copy · ↑↓ browse · Enter details · PgUp/PgDn scroll · ←/→ panels · Tab input",

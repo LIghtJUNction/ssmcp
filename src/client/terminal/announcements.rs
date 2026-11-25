@@ -1,12 +1,17 @@
-//! Session-local announcement banners and their full-screen reader.
+//! Session-local announcement banners and the full-screen conversation reader.
 use super::*;
 
 #[derive(Default)]
-pub(super) struct Announcements {
+pub(super) struct Reader {
     // Slots follow the public account response: server first, then personal.
     entries: [Option<Entry>; 2],
-    reading: Option<usize>,
+    reading: Option<Page>,
     scroll: usize,
+}
+
+enum Page {
+    Announcement(usize),
+    Tool(String),
 }
 
 struct Entry {
@@ -15,7 +20,7 @@ struct Entry {
     dismissed: bool,
 }
 
-impl Announcements {
+impl Reader {
     pub(super) fn is_reading(&self) -> bool {
         self.reading.is_some()
     }
@@ -51,7 +56,7 @@ impl State {
     pub(super) fn update_announcements(&mut self, lines: [Option<&str>; 2], seconds: u64) {
         let mut changed = false;
         for (slot, line) in lines.into_iter().enumerate() {
-            let current = &mut self.announcements.entries[slot];
+            let current = &mut self.reader.entries[slot];
             let text = line.map(panel::safe_text);
             if text.as_deref() == current.as_ref().map(|entry| entry.text.as_str()) {
                 continue;
@@ -71,10 +76,10 @@ impl State {
                     dismissed,
                 }
             });
-            if self.announcements.reading == Some(slot)
+            if matches!(self.reader.reading, Some(Page::Announcement(i)) if i == slot)
                 && current.as_ref().map(|v| &v.identity) != updated.as_ref().map(|v| &v.identity)
             {
-                self.announcements.reading = None;
+                self.reader.reading = None;
             }
             *current = updated;
             changed = true;
@@ -87,16 +92,26 @@ impl State {
 
     pub(super) fn open_announcements(&mut self) -> Result<(), String> {
         let slot = self
-            .announcements
+            .reader
             .visible()
             .next()
             .map(|(slot, _)| slot)
-            .or_else(|| self.announcements.entries.iter().position(Option::is_some))
+            .or_else(|| self.reader.entries.iter().position(Option::is_some))
             .ok_or("No current announcements")?;
-        self.announcements.reading = Some(slot);
-        self.announcements.scroll = 0;
+        self.reader.reading = Some(Page::Announcement(slot));
+        self.reader.scroll = 0;
         self.dirty = true;
         Ok(())
+    }
+
+    pub(super) fn open_selected_tool(&mut self) {
+        if let Some(text) = self.events.selected_tool_detail() {
+            self.reader.reading = Some(Page::Tool(text));
+            self.reader.scroll = 0;
+        } else {
+            self.notice = Some("Select an individual tool call or response to read".into());
+        }
+        self.dirty = true;
     }
 
     fn notice_row(&self, title: &str, width: u16, tone: PanelTone) -> String {
@@ -109,25 +124,25 @@ impl State {
     }
 
     fn dismiss_announcement(&mut self, slot: usize) {
-        if let Some(entry) = &mut self.announcements.entries[slot] {
+        if let Some(entry) = &mut self.reader.entries[slot] {
             entry.dismissed = true;
         }
-        self.announcements.reading = None;
+        self.reader.reading = None;
         self.resize(self.geometry.rows, self.geometry.cols);
         self.dirty = true;
     }
 
     pub(super) fn announcement_banner(&self, row: u16, width: u16) -> String {
         let text = self
-            .announcements
+            .reader
             .visible()
             .nth(usize::from(row))
             .map_or("", |(_, text)| text);
         self.notice_row(&format!(" ▸ {text}"), width, PanelTone::Muted)
     }
 
-    pub(super) fn announcement_key(&mut self, key: Key) -> bool {
-        let Some(slot) = self.announcements.reading else {
+    pub(super) fn reader_key(&mut self, key: Key) -> bool {
+        if self.reader.reading.is_none() {
             if let Key::Mouse {
                 button: 0,
                 x,
@@ -139,7 +154,7 @@ impl State {
                 && (1..self.geometry.chat_body_top()).contains(&y)
             {
                 let selected = self
-                    .announcements
+                    .reader
                     .visible()
                     .nth(usize::from(y - 1))
                     .map(|(slot, _)| slot);
@@ -149,18 +164,18 @@ impl State {
                 {
                     self.dismiss_announcement(slot);
                 } else {
-                    self.announcements.reading = selected;
-                    self.announcements.scroll = 0;
+                    self.reader.reading = selected.map(Page::Announcement);
+                    self.reader.scroll = 0;
                     self.dirty = true;
                 }
                 return true;
             }
             return false;
-        };
+        }
         let page = usize::from(self.geometry.rows.saturating_sub(2).max(1));
-        let scroll = &mut self.announcements.scroll;
+        let scroll = &mut self.reader.scroll;
         match key {
-            Key::Escape | Key::Interrupt => self.announcements.reading = None,
+            Key::Escape | Key::Interrupt => self.reader.reading = None,
             Key::Mouse {
                 button: 0,
                 x,
@@ -170,12 +185,14 @@ impl State {
                 && self.geometry.cols >= 12
                 && x >= self.geometry.cols - 3 =>
             {
-                self.announcements.reading = None;
+                self.reader.reading = None;
             }
             Key::Back | Key::Open => {
-                let other = 1 - slot;
-                if self.announcements.entries[other].is_some() {
-                    self.announcements.reading = Some(other);
+                if let Some(Page::Announcement(slot)) = self.reader.reading
+                    && self.reader.entries[1 - slot].is_some()
+                {
+                    let other = 1 - slot;
+                    self.reader.reading = Some(Page::Announcement(other));
                     *scroll = 0;
                 }
             }
@@ -201,14 +218,18 @@ impl State {
         true
     }
 
-    pub(super) fn announcement_text(&mut self, bytes: &[u8]) -> bool {
-        let Some(slot) = self.announcements.reading else {
+    pub(super) fn reader_text(&mut self, bytes: &[u8]) -> bool {
+        if self.reader.reading.is_none() {
             return false;
-        };
+        }
         if !self.keyboard.pasting {
             match bytes {
-                b"d" | b"D" => self.dismiss_announcement(slot),
-                b"\x1b" | b"q" => self.announcements.reading = None,
+                b"d" | b"D" => {
+                    if let Some(Page::Announcement(slot)) = self.reader.reading {
+                        self.dismiss_announcement(slot);
+                    }
+                }
+                b"\x1b" | b"q" => self.reader.reading = None,
                 _ => {}
             }
         }
@@ -216,22 +237,28 @@ impl State {
         true
     }
 
-    pub(super) fn announcement_frame(&mut self) -> Option<Frame> {
-        let slot = self.announcements.reading?;
-        let entry = self.announcements.entries[slot].as_ref()?;
+    pub(super) fn reader_frame(&mut self) -> Option<Frame> {
+        let (title, text, footer) = match self.reader.reading.as_ref()? {
+            Page::Announcement(slot) => (
+                if *slot == 0 {
+                    "Server announcement"
+                } else {
+                    "Account announcement"
+                },
+                self.reader.entries[*slot].as_ref()?.text.as_str(),
+                "Esc back · D dismiss · ←/→ notices · ↑↓ / PgUp/PgDn scroll",
+            ),
+            Page::Tool(text) => (
+                "Tool call / response",
+                text.as_str(),
+                "Esc back · ↑↓ / PgUp/PgDn scroll",
+            ),
+        };
         let g = self.geometry;
         let height = usize::from(g.rows.saturating_sub(2).max(1));
-        let body = markdown::literal_rows(&entry.text, g.cols, &self.ui);
-        let start = self
-            .announcements
-            .scroll
-            .min(body.len().saturating_sub(height));
-        self.announcements.scroll = start;
-        let title = if slot == 0 {
-            "Server announcement"
-        } else {
-            "Account announcement"
-        };
+        let body = markdown::literal_rows(text, g.cols, &self.ui);
+        let start = self.reader.scroll.min(body.len().saturating_sub(height));
+        self.reader.scroll = start;
         let mut rows = Vec::with_capacity(usize::from(g.rows));
         if g.rows > 1 {
             rows.push(self.notice_row(title, g.cols, PanelTone::Heading));
@@ -244,11 +271,7 @@ impl State {
             );
         }
         if g.rows > 2 {
-            rows.push(self.chat_line(
-                "Esc back · D dismiss · ←/→ notices · ↑↓ / PgUp/PgDn scroll",
-                PanelTone::Muted,
-                g.cols,
-            ));
+            rows.push(self.chat_line(footer, PanelTone::Muted, g.cols));
         }
         Some(Frame {
             geometry: g,

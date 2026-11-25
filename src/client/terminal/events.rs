@@ -615,6 +615,18 @@ impl EventView {
         }
     }
 
+    pub(super) fn selected_tool_detail(&self) -> Option<String> {
+        if self.selected_group.is_some() {
+            return None;
+        }
+        let event = self.events.iter().find(|event| {
+            Some(event.id) == self.selected
+                && event.meta.kind == Kind::Tool
+                && event.owned_by(&self.history_selection)
+        })?;
+        Some(unstyled(&event.command_detail_text()))
+    }
+
     pub(crate) fn selected_reply(&self) -> Option<(String, String)> {
         let event = self.events.iter().find(|event| {
             Some(event.id) == self.selected

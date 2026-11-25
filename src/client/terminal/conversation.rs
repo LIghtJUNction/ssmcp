@@ -1671,7 +1671,7 @@ impl State {
         if self.sleep_key(key) {
             return;
         }
-        if self.announcement_key(key) {
+        if self.reader_key(key) {
             return;
         }
         self.events.set_scope(events::EventScope::Conversation);
@@ -2202,6 +2202,15 @@ impl State {
             }
             return;
         }
+        if character == 'f'
+            && self.conversation.content_focus
+            && self.conversation.view == View::Activity
+            && !self.raw_logs
+            && !self.conversation.logs_open
+        {
+            self.open_selected_tool();
+            return;
+        }
         if matches!(character, 'r' | 'R')
             && self.conversation.content_focus
             && self.chat_reply_available()
@@ -2687,7 +2696,7 @@ impl State {
     }
 
     fn chat_output(&mut self, output: &[u8]) {
-        if output.is_empty() || self.announcement_text(output) {
+        if output.is_empty() || self.reader_text(output) {
             return;
         }
         if output == b"\x1b[200~" && self.conversation.paste.is_none() {
@@ -3158,7 +3167,7 @@ impl State {
             self.notice = Some(error);
         }
         self.chat_refresh_completions();
-        if let Some(frame) = self.announcement_frame() {
+        if let Some(frame) = self.reader_frame() {
             return frame;
         }
         let g = self.geometry;

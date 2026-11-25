@@ -1,6 +1,88 @@
 use super::*;
 use sha2::{Digest, Sha256};
 
+#[test]
+fn full_screen_tool_reader_preserves_the_retained_json_request_and_response() {
+    let mut state = preview(28, 88);
+    state.events.clear();
+    let request =
+        json!({"id":42,"method":"tools/call","params":{"name":"example","arguments":{"count":3}}});
+    let response = json!({"id":42,"result":{"rows":[1,2],"status":"ready"}});
+    let request_text = serde_json::to_string_pretty(&request).unwrap();
+    let response_text = serde_json::to_string_pretty(&response).unwrap();
+    state.log_event(
+        "preview",
+        &json!({"request":request}),
+        format!("{request_text}\n").as_bytes(),
+    );
+    state.log_event(
+        "preview",
+        &json!({"response":response}),
+        response_text.as_bytes(),
+    );
+    state.conversation.content_focus = true;
+    state.events.select(0);
+    let detail = state.events.selected_tool_detail().unwrap();
+    assert_eq!(detail, format!("{request_text}\n{response_text}"));
+    input(&mut state, b"f");
+    let screen = display(&mut state).screen().contents();
+    assert!(
+        screen.contains("\"method\": \"tools/call\"") && screen.contains("\"status\": \"ready\""),
+        "{screen}"
+    );
+}
+
+#[test]
+fn full_screen_tool_reader_keeps_the_selected_call_output_and_draft() {
+    let mut state = preview(18, 64);
+    state.events.clear();
+    state.log_event(
+        "preview",
+        &json!({"type":"exec.started","job_id":"reader","command":["sh","-c","echo script-marker"]}),
+        b"[RUN] preview reader sh started\n",
+    );
+    let output = (0..75)
+        .map(|i| format!("response line {i:02}\n"))
+        .collect::<String>();
+    state.log_event(
+        "preview",
+        &json!({"type":"exec.stdout","job_id":"reader"}),
+        output.as_bytes(),
+    );
+    state.conversation.composer.set_text("keep this draft");
+    state.conversation.composer.left();
+    let draft = state.conversation.snapshot()["draft"].clone();
+    state.conversation.content_focus = true;
+    state.events.select(0);
+    let selection = state.events.snapshot()["selected"].clone();
+    input(&mut state, b"f");
+    let first = display(&mut state).screen().contents();
+    assert!(
+        first.contains("Tool call / response") && first.contains("script-marker"),
+        "{first}"
+    );
+    assert!(!first.contains("keep this draft") && !first.contains("response line 74"));
+    input(&mut state, b"\x1b[6~");
+    assert_ne!(display(&mut state).screen().contents(), first);
+    input(&mut state, b"\x1b[F");
+    assert!(
+        display(&mut state)
+            .screen()
+            .contents()
+            .contains("response line 74")
+    );
+    input(&mut state, b"\x1b");
+    state.chat_keyboard(&[], Instant::now() + Duration::from_millis(150), true);
+    assert!(!state.reader.is_reading());
+    assert!(state.conversation.content_focus);
+    assert_eq!(state.events.snapshot()["selected"], selection);
+    assert_eq!(state.conversation.snapshot()["draft"], draft);
+    state.conversation.content_focus = false;
+    input(&mut state, b"f");
+    assert_eq!(state.conversation.composer.text(), "keep this drafft");
+    assert!(!state.reader.is_reading());
+}
+
 fn fixture(cols: u16) -> State {
     let mut state = preview(32, cols);
     state.events.clear();
