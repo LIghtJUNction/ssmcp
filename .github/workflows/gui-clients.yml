@@ -332,7 +332,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libx11-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev \
+            dbus-user-session build-essential pkg-config libx11-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev \
             xvfb xauth x11-utils mesa-utils libgl1-mesa-dri fonts-noto-cjk xdotool imagemagick python3-xlib
       - name: Install Rust 1.100.0 for native Linux
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
@@ -469,6 +469,10 @@ jobs:
           if not window["mapped"] or window["exit_code"] != 0 or not 10000 <= window["elapsed_ms"] < 30000:
               raise SystemExit("The Release executable did not complete its bounded native window check")
           PY
+      - name: Prepare the Linux user manager and verify delegated limits
+        id: desktop_manager
+        shell: bash
+        run: bash scripts/ci_user_manager.sh prepare
       - name: Connect two independent desktop windows to one loopback account
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
@@ -477,6 +481,10 @@ jobs:
           xvfb-run --auto-servernum --server-args='-screen 0 1280x900x24 +extension GLX -nolisten tcp' \
             /usr/bin/python3 scripts/e2e_desktop_windows.py \
             "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/ssmcp-desktop"
+      - name: Restore temporary runner settings
+        if: always() && steps.desktop_manager.outcome != 'skipped'
+        shell: bash
+        run: bash scripts/ci_user_manager.sh restore
       - name: Package the exact Linux Release executable tested in Xvfb
         run: |
           python3 scripts/release.py package-gui --platform linux --evidence "$LINUX_EVIDENCE_DIR" \

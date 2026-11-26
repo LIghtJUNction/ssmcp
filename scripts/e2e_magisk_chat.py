@@ -38,8 +38,8 @@ def exercise(client, fixture, root):
         for index in range(2):
             directory = root / f"owner-{index}"
             directory.mkdir(mode=0o700)
-            env = {**base, "HOME": str(directory), "SSMCP_SESSION_HOME": str(registry),
-                   "SSMCP_AUTH_HOME": str(directory / "auth")}
+            env = {"HOME": str(directory), "SSMCP_SESSION_HOME": str(registry),
+                   "SSMCP_AUTH_HOME": str(directory / "auth"), "TMPDIR": str(directory)}
             instance = secrets.token_hex(16)
             log = (directory / "chat.log").open("w")
             try:
@@ -99,16 +99,18 @@ def exercise(client, fixture, root):
 
         status, identity = remote("ssmcp.ui.get", {"path": "/identity"})
         assert status == 200 and identity["structuredContent"]["value"]["client_id"] == left[2], (status, identity)
+        secret = "MUST_STAY_IN_WORKSPACE_" + secrets.token_hex(12)
+        (root / "owner-0" / "private.txt").write_text(secret)
         for tool, args in [("terminal.write", {"data":"unavailable"}), ("ssmcp.exec.start", {"command":["/bin/false"]}),
                            ("ssmcp.fs.read_text", {"path":"private.txt"}), ("ssmcp.client.reload", {}),
                            ("ssmcp.ui.get", {"path":"/config"})]:
             assert remote(tool, args)[0] == 502, tool
-        for command in ["exec.start", "session.new", "session.cd", "terminal.write", "client.update"]:
-            denied = bridge(left[0], "command", generation=left[1], command=command, arguments={})
-            assert denied["body"]["kind"] == "error", command
+        for command, args in [("exec.start", {"command": ["/bin/false"]}), ("session.new", {}),
+                              ("session.cd", {"path": "/"}), ("terminal.write", {"terminal_id":"main", "data":"x"}),
+                              ("client.update", {"check": True})]:
+            denied = bridge(left[0], "command", generation=left[1], command=command, arguments=args)
+            assert denied["body"]["kind"] == "error" and denied["body"]["value"]["code"] == "denied", (command, denied["body"])
 
-        secret = "MUST_STAY_IN_WORKSPACE_" + secrets.token_hex(12)
-        (root / "owner-0" / "private.txt").write_text(secret)
         message = "Please keep @private.txt and /new as literal text."
         receipt = bridge(left[0], "command", generation=left[1], command="chat.send",
                          arguments={"request_id": secrets.token_hex(16), "target":"next", "text":message})
