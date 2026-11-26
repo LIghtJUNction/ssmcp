@@ -88,6 +88,7 @@ Usage: ssmcp [username@server] [options]
 Start
   ssmcp                         Reuse your last successful connection
   ssmcp --worker N              Open chat and a worker window with N slots
+  ssmcp --worker N --daemon     Run an N-slot worker pool in the background
   ssmcp local                   Start a same-machine MCP session on Linux
   ssmcp mcp                     Start local MCP for your harness on Linux
   ssmcp mcp install             Register that control endpoint in Codex
@@ -112,7 +113,8 @@ Manage
 
 Options
   --name NAME   --title TEXT   --context NAME   --server URL   --context-root PATH
-  --worker N    Open chat and a separate worker monitor
+  --worker N    Open chat and a separate worker monitor in the foreground
+  --daemon      Start a background service without opening terminal windows
   --version [--all]    Show the version or the locked dependency tree
   --no-watchdog  --theme NAME   --no-color
 
@@ -137,7 +139,7 @@ const HELP_FULL: &str = r#"ssmcp — connect this device and manage its local se
 
 Usage: ssmcp username@server [options]
        ssmcp [--server URL] [options]
-       ssmcp [connection options] --worker N
+       ssmcp [connection options] --worker N [--daemon]
        ssmcp mcp [local options]                       (Linux)
        ssmcp mcp install [--harness codex] [--listen IP:PORT]  (Linux)
        ssmcp whoami [USERNAME@SERVER] [--json]
@@ -175,7 +177,7 @@ Usage: ssmcp username@server [options]
   --input-token-file PATH  Private bearer token file for web or MCP HTTP
   --input-socket PATH  Private Linux Unix socket path (default /tmp/ssmcp-UID/chat-input.sock)
   --agent RECIPIENT    Advanced chat recipient or explicitly configured local executor
-  --worker N          Open chat plus a separate remote task monitor
+  --worker N          Open chat plus a separate remote task monitor in the foreground
   --worker-k K        Resource share multiplier for explicit local worker executors (default 1)
   --load-harness NAME  Explicitly preload one native protocol outside worker mode
   --list-harnesses    List supported harness providers
@@ -183,7 +185,8 @@ Usage: ssmcp username@server [options]
   --agent-peer ID      Exact native message recipient for ssmcp; also set --agent-account PROVIDER:SUBJECT
   --username NAME      Named account on the selected server
   --name NAME          Display name (default: hostname-pid)
-  --daemon             Start a quiet, user-owned native background service
+  --daemon            Start a user-owned background service without terminal windows
+                      With --worker N, run the worker pool in the background
   --cpu-limit PERCENT  Linux background CPU quota; 100% is one CPU
   --memory-limit SIZE  Linux background memory cap; e.g. 512MiB
   --session-control    Grant this connection local saved-session management tools
