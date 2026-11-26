@@ -446,8 +446,8 @@ impl EventView {
                 event.cache = None;
                 if event.meta.prompt_read && success {
                     self.preserve_read_selection();
-                    if self.follow {
-                        self.latest();
+                    if self.follow && self.selected == Some(id) {
+                        self.selected = self.visible_ids().last().copied();
                     }
                 }
             }

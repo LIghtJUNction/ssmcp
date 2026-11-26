@@ -1534,11 +1534,11 @@ async fn repeating_notices_do_not_cross_controller_or_connection_boundaries() {
     let mut view = new_view(&owner);
     let body = json!({"type":"ssmcp.message","role":"tool","kind":"input","input_origin":"worker_event",
         "text":"WORKER STATE EVENTS — retained until explicit events.ack\n{\"status\":\"unavailable\",\"subscription_id\":\"one\",\"error\":\"events_gap: cursor 1 precedes retained cursor 2\"}"});
-    for controller in [&owner,&other,&owner,&other_connection,&owner] {
+    for controller in [&owner, &other, &owner, &other_connection, &owner] {
         let mut display = controller.display();
         // Exercise the discriminator even when one local pane selects all five records.
         display.history = owner.display().history;
         view.ingest_scoped_event("message", &body, b"", display);
     }
-    assert_eq!(view.visible_ids(), vec![0,1,2,3,4]);
+    assert_eq!(view.visible_ids(), vec![0, 1, 2, 3, 4]);
 }

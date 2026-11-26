@@ -86,7 +86,8 @@ impl Repeat {
 
     pub(super) fn gap(value: &Value) -> Option<Self> {
         let sub = value["subscription_id"].as_str()?;
-        if sub.is_empty() || sub.trim() != sub
+        if sub.is_empty()
+            || sub.trim() != sub
             || value["events"]
                 .as_array()
                 .is_some_and(|events| !events.is_empty())
@@ -103,11 +104,15 @@ impl Repeat {
                     .as_str()?
                     .strip_prefix("events_gap: cursor ")?;
                 let (after, boundary) = error.split_once(" precedes retained cursor ")?;
-                let retained = if let Some((retained, latest)) = boundary.split_once("; latest cursor ") {
+                let retained = if let Some((retained, latest)) =
+                    boundary.split_once("; latest cursor ")
+                {
                     latest.strip_suffix("; resubscribe with an explicit retained cursor after reconciling the gap")?
                         .parse::<u64>().ok()?;
                     retained
-                } else { boundary };
+                } else {
+                    boundary
+                };
                 retained.parse::<u64>().ok()?;
                 after.parse().ok()?
             }
