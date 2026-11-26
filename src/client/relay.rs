@@ -20,6 +20,7 @@ pub(super) const LEGACY_ACCOUNT_ALLOW: &str =
     "allow entries must use username@github; only GitHub is supported";
 const UNSUPPORTED: &str = "server does not support account clients; upgrade ssmcpd";
 
+pub(super) const FRONTEND_STATUS_ENV: &str = "SSMCP_PRIVATE_FRONTEND_RELAY_STATUS";
 const QUOTA_CODE: &str = "traffic_quota_exceeded:";
 
 fn is_quota_failure(message: &str) -> bool {
@@ -67,6 +68,7 @@ pub(super) fn command(executable: &Path, server: &str) -> Command {
         .arg("__relay")
         .env("SSMCP_RELAY_SERVER", server)
         .env_remove("SSMCP_RELAY_TOKEN")
+        .env_remove(FRONTEND_STATUS_ENV)
         .env_remove(PROJECT_OFFER_ENV)
         .env_remove(super::account::device_identity::SESSION_ENV)
         .env_remove(super::link_metrics::ENV)
@@ -348,6 +350,13 @@ pub(super) async fn run() -> crate::Result<()> {
         Err(tungstenite::Error::Http(response))
             if response.status() == StatusCode::PAYMENT_REQUIRED =>
         {
+            // The new private parent reads our OS exit status. WebSocket frames
+            // and their prose never grant authority to report this refusal.
+            if std::env::var_os(FRONTEND_STATUS_ENV).as_deref() == Some(std::ffi::OsStr::new("1")) {
+                return Err(
+                    crate::session::frontend::RelayAdmissionDenial::TrafficQuotaExceeded.into(),
+                );
+            }
             write_frame(
                 &mut tokio::io::stdout(),
                 &Frame::Reject {

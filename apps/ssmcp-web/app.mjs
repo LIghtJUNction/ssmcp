@@ -1,3 +1,4 @@
+import { gatewayFeedback, relayRestriction, renderGatewayFeedback } from './src/gateway-feedback.mjs';
 import { Gateway, launchOptions, takeLaunchPairing } from './src/gateway.mjs';
 import { BridgeClient } from './src/client.mjs';
 import { byteLength } from './src/protocol.mjs';
@@ -38,8 +39,11 @@ function element(tag, className = '', text = '') {
 }
 function setText(id, value) { $(id).textContent = value; }
 function show(id, visible) { $(id).hidden = !visible; }
+function currentError() {
+  return relayRestriction(client.error) && !relayRestriction(localError) ? client.error : localError ?? client.error;
+}
 function errorInfo(error) {
-  return { code: error?.code, message: error?.message ?? String(error), effect: error?.effect, request_id: error?.requestId };
+  return { code: error?.code, message: error?.message ?? String(error), effect: error?.effect, status: error?.status, request_id: error?.requestId };
 }
 function fail(error) { if (error?.name === 'AbortError') return; localError = error; renderStatus(); }
 async function run(key, action) {
@@ -124,7 +128,8 @@ async function enterSession(info, readOnly) {
   restoreDrafts(target);
   await client.connect(target, readOnly);
   opened.set(target, { ...info, readOnly });
-  restoreRecipient(target); setPanel('conversation'); renderAll();
+  // A connection can finish after the user has reopened navigation or settings.
+  restoreRecipient(target); setPanel('conversation', { dismissNavigation: false }); renderAll();
   $('session-tabs').querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   void client.startObservation();
 }
@@ -192,8 +197,9 @@ function renderStatus() {
   live.children[1].textContent = connected ? observationNames[client.observation] ?? connectionNames[client.status] : connectionNames[client.status];
   live.children[0].className = `status-dot ${connected && client.observation === 'observing' ? 'good' : client.error ? 'warn' : ''}`;
   setText('status-cursor', client.cursor === null ? 'zbridge v1' : `cursor ${client.cursor}`);
-  const error = localError ?? client.error;
-  show('error-banner', Boolean(error)); if (error) setText('error-text', error.message ?? String(error));
+  const error = currentError();
+  show('error-banner', Boolean(error));
+  if (error) renderGatewayFeedback($('error-text'), error, { relay: opened.get(currentTarget())?.relay });
   setText('command-count', client.ledger.records.length || '');
   show('conversation-toolbar', connected);
   show('welcome', !connected);
@@ -482,7 +488,9 @@ async function send(command, args, textarea) {
     if (textarea && mayClearDraft(record.status, submitted, { ...client.context(), text: textarea.value, target: currentTarget })) textarea.value = '';
     if (client.current(context)) localError = null;
   } else {
-    localError = Object.assign(new Error(record.status === 'unknown' ? '结果未确定。请在操作记录中核对原请求 ID；页面不会自动重发。' : record.error?.message ?? '操作已拒绝。'), { code: record.status, requestId: record.requestId });
+    if (!client.current(context)) return record;
+    localError = { ...record.error, requestId: record.requestId,
+      message: record.status === 'unknown' ? '结果未确定。请在操作记录中核对原请求 ID；页面不会自动重发。' : record.error?.message ?? '操作已拒绝。' };
   }
   renderStatus(); renderComposer(); return record;
 }
@@ -529,7 +537,7 @@ $('end-session-confirm').addEventListener('click', async () => {
   } catch (error) {
     if (!gateway.ownedSessionStatus(target)) { $('end-session-dialog').close(); return; }
     setText('end-session-error', error.effect === 'may_have_occurred'
-      ? '结束结果未确定。可对上方同一会话重试，或取消并稍后核对。' : error.message);
+      ? '结束结果未确定。可对上方同一会话重试，或取消并稍后核对。' : gatewayFeedback(error).message);
   } finally {
     submittingEnd = false; $('end-session-confirm').disabled = $('end-session-cancel').disabled = false;
     renderStatus();
@@ -628,9 +636,12 @@ $('theme-button').addEventListener('click', () => {
 });
 
 const tabButtons = [...document.querySelectorAll('[data-panel]')];
-function setPanel(name) {
-  if (settingsDialog.open) settingsDialog.close();
-  activePanel = name; setSidebar(false); renderTerminals();
+function setPanel(name, { dismissNavigation = true } = {}) {
+  if (dismissNavigation) {
+    if (settingsDialog.open) settingsDialog.close();
+    setSidebar(false);
+  }
+  activePanel = name; renderTerminals();
   tabButtons.forEach(button => { const active = button.dataset.panel === name; button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1; show(`panel-${button.dataset.panel}`, active); });
   if (name === 'conversation') renderTimeline();
   if (name === 'waits') { renderWaits(); void refreshWaits(); }
@@ -792,13 +803,13 @@ for (const direction of ['prev', 'next']) $('workers-' + direction).addEventList
 
 $('terminal-details').addEventListener('click', () => details('终端信息', client.states.get('terminals')?.terminals?.find(item => item.terminal_id === selectedTerminal)));
 $('worker-details').addEventListener('click', () => details('Worker pool', client.states.get('workers')));
-$('error-details').addEventListener('click', () => details('错误与关联请求', errorInfo(localError ?? client.error)));
+$('error-details').addEventListener('click', () => details('错误与关联请求', errorInfo(currentError())));
 $('diagnostics-button').addEventListener('click', () => details('连接与观察', {
   session: client.connection?.session, connection_id: client.connection?.connection_id, generation: client.generation,
   connection_status: client.status, observation_status: client.observation, cursor: client.cursor,
   retention_start: client.startCursor, live_cursor: client.liveCursor, capabilities: client.capabilities,
   connection_requests: client.connectionRecords, resource_errors: Object.fromEntries(client.stateErrors),
-  runtime: client.states.get('runtime'), error: (localError ?? client.error) ? errorInfo(localError ?? client.error) : null,
+  runtime: client.states.get('runtime'), error: (localError ?? client.error) ? errorInfo(currentError()) : null,
 }));
 $('commands-button').addEventListener('click', () => details('原始操作请求与回执', {
   meaning: 'confirmed 表示收到并验证原生回执；不代表异步任务完成。unknown 不会自动重发。', records: client.ledger.records,
@@ -899,18 +910,19 @@ $('launch-back').addEventListener('click', async () => {
   try {
     if (!opened.size) await listSessions();
     show('launch-setup', false); show('workbench-shell', true); renderAll();
-  } catch (error) { setText('launch-error', error.message); }
+  } catch (error) { renderGatewayFeedback($('launch-error'), error); }
   finally { updateLaunchControls(false); }
 });
 $('launch-form').addEventListener('submit', async event => {
   event.preventDefault();
   if (!gateway.authenticated || $('launch-connect').disabled) return;
-  const args = { destination: $('launch-name').value.trim() + '@' + $('launch-relay').value.trim(),
+  const relay = $('launch-relay').value.trim();
+  const args = { destination: $('launch-name').value.trim() + '@' + relay,
     terms: $('launch-terms').checked, privacy: $('launch-privacy').checked };
   updateLaunchControls(true); setText('launch-error', '');
   try {
     const target = await gateway.createOwnedSession(args);
-    const info = { name: args.destination, target, readOnly: true };
+    const info = { name: args.destination, target, readOnly: true, relay };
     opened.set(target, info);
     show('launch-setup', false); show('workbench-shell', true);
     selectedSession = info; $('connection-mode').value = 'observe'; renderAll();
@@ -927,15 +939,26 @@ $('launch-form').addEventListener('submit', async event => {
         updateLaunchControls(false);
         $('launch-terms').focus();
       }
-      const message = error.effect === 'may_have_occurred' ? '创建结果未确定，请点“核对上次创建”重试原请求。'
-        : error.status === 401 ? '本次授权已失效，请从原入口重新打开。'
-        : needsPolicy ? '请确认该服务的用户协议和隐私政策。' : error.message;
-      setText('launch-error', message);
+      if (needsPolicy) setText('launch-error', '请确认该服务的用户协议和隐私政策。');
+      else renderGatewayFeedback($('launch-error'), error, {
+        relay, creating: true, unresolved: Boolean(gateway.pendingOwnedRequest), uncertain: '创建结果未确定，请点“核对上次创建”重试原请求。',
+      });
     }
   } finally { updateLaunchControls(false); }
 });
 renderAll();
 showLaunch();
+if (!modulePage && gateway.authenticated && launchOptions(location)?.refused) {
+  // An installed desktop may have received a relay refusal before opening the browser.
+  // The URL is only a hint to read the paired gateway's result.
+  const read = new AbortController();
+  const cancel = () => read.abort();
+  const form = $('launch-form');
+  form.addEventListener('submit', cancel, { once: true });
+  gateway.request('/launch', { signal: read.signal }).catch(error => {
+    if (!read.signal.aborted && !$('launch-setup').hidden) renderGatewayFeedback($('launch-error'), error);
+  }).finally(() => form.removeEventListener('submit', cancel));
+}
 // Android delivers its in-memory bearer to this exact origin via WebView.postWebMessage.
 // Ordinary window.postMessage events have a source window and cannot complete this handoff.
 if (!gateway.authenticated && !modulePage && window.top === window && location.pathname === '/'

@@ -322,6 +322,9 @@ dialog form { display: grid; gap: 10px; } .dialog-heading { justify-content: spa
 .launch-setup .form-error:empty { display: none; }
 .launch-setup .form-error, #entry-hint, #launch-request-id { overflow-wrap: anywhere; }
 .launch-setup .form-error { font-size: 14px; }
+.traffic-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.traffic-actions a { display: inline-flex; align-items: center; min-height: 44px; color: var(--ink); }
+.traffic-actions input { max-width: 100%; min-width: 0; color: var(--ink); background: var(--field); }
 #entry-hint { color: var(--muted); margin-top: 22px; line-height: 1.8; }
 .launch-consent { display: grid; gap: 2px; color: var(--muted); font-size: 14px; }
 .launch-consent label { display: flex; align-items: center; gap: 5px; min-height: 44px; flex-wrap: wrap; }

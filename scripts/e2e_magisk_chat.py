@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Exercise the protocol-only module actor with a real account relay and local attach gateway."""
 import argparse
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 from pathlib import Path
 import secrets
 import subprocess
 import tempfile
+import threading
 import time
+import urllib.error
 import urllib.request
 
 from e2e import Harness
@@ -25,12 +28,143 @@ def until(check, proc=None):
     raise AssertionError(f"condition timed out at {check.__code__.co_firstlineno}")
 
 
+def refused_chat(client, root, status):
+    attempts = []
+
+    class Refusal(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            attempts.append(self.headers.get("Upgrade", "").lower())
+            # Identical untrusted prose for both statuses must not control the exit.
+            body = b'{"code":"traffic_quota_exceeded","url":"https://untrusted.invalid"}'
+            self.send_response(status)
+            self.send_header("Connection", "close")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            pass
+
+    directory = root / f"refusal-{status}"
+    directory.mkdir(mode=0o700)
+    instance = secrets.token_hex(16)
+    with HTTPServer(("127.0.0.1", 0), Refusal) as relay:
+        serving = threading.Thread(target=relay.serve_forever)
+        serving.start()
+        try:
+            destination = f"fixture@http://127.0.0.1:{relay.server_port}"
+            env = {"HOME": str(directory), "SSMCP_SESSION_HOME": str(directory),
+                   "SSMCP_AUTH_HOME": str(directory / "auth"), "TMPDIR": str(directory)}
+            with subprocess.Popen([client, "__magisk-chat-frontend", destination, instance],
+                                  stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, env=env, cwd=directory) as core:
+                try:
+                    assert core.wait(timeout=25) == (81 if status == 402 else 1)
+                finally:
+                    if core.poll() is None:
+                        core.kill()
+        finally:
+            relay.shutdown()
+            serving.join()
+    assert attempts == ["websocket"]
+    assert not (directory / "live" / instance / "overview.json").exists()
+
+
+def refused_owned_desktop(h, client, root):
+    """Keep the real HTTP upgrade pending until the published desktop endpoint is attached."""
+    upgrade = threading.Event()
+    release = threading.Event()
+    attempts = []
+
+    class QuotaRelay(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            attempts.append(self.headers.get("Upgrade", "").lower())
+            upgrade.set()
+            release.wait(35)
+            self.send_response(402)
+            self.send_header("Connection", "close")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_):
+            pass
+
+    directory = root / "desktop-quota"
+    directory.mkdir(mode=0o700)
+    pairing = directory / "pairing.json"
+    env = {**os.environ, "HOME": str(directory), "SSMCP_SESSION_HOME": str(directory / "sessions"),
+           "SSMCP_AUTH_HOME": str(directory / "auth")}
+    with HTTPServer(("127.0.0.1", 0), QuotaRelay) as relay:
+        serving = threading.Thread(target=relay.serve_forever)
+        serving.start()
+        try:
+            origin = f"http://127.0.0.1:{relay.server_port}"
+            gateway = h.spawn("quota-gateway", [client, "gui", "serve", "--session-mode", "owned",
+                              "--pairing-file", str(pairing)], env=env, cwd=directory)
+            until(pairing.is_file, gateway)
+            pair = json.loads(pairing.read_text())
+
+            def post(path, payload):
+                request = urllib.request.Request(f"{pair['url']}/api/gui/v1/{path}",
+                    data=json.dumps(payload).encode(), headers={"Origin": pair["url"],
+                    "Authorization": "Bearer " + pair["token"], "Content-Type": "application/json"})
+                try:
+                    response = urllib.request.urlopen(request, timeout=15)
+                except urllib.error.HTTPError as error:
+                    response = error
+                with response:
+                    return response.status, json.load(response)
+
+            status, created = post("owned-sessions", {"request_id":"quota-create",
+                                   "destination":"fixture@" + origin})
+            assert status in (200, 201), (status, created)
+            target = created["session"]
+            status, opened = post("connections", {"request_id":"quota-open",
+                                  "session":target, "read_only":True})
+            assert status == 201, (status, opened)
+            connection = opened["connection_id"]
+            assert upgrade.wait(15), "owned desktop core did not reach the relay"
+            release.set()
+            path = f"connections/{connection}/bridge"
+            query = {"version":1, "id":"quota-caps", "operation":{"op":"capabilities"}}
+
+            def failed():
+                status, body = post(path, query)
+                if status == 402:
+                    return body
+                # A successful read may complete before the child observes the upgrade reply.
+                assert status == 200 and body["body"]["kind"] == "capabilities", (status, body)
+                return None
+
+            refusal = until(failed, gateway)
+            for status, body in [(402, refusal),
+                    post(f"connections/{connection}/events",
+                         {"request_id":"quota-events","generation":"prior","wait_ms":0}),
+                    post("connections", {"request_id":"quota-reopen","session":target})]:
+                assert status == 402, (status, body)
+                assert body["error"]["code"] == "traffic_quota_exceeded", body
+                assert body["error"]["effect"] == "may_have_occurred", body
+                assert body["error"]["relay_origin"] == origin, body
+            assert attempts == ["websocket"], attempts
+        finally:
+            release.set()
+            relay.shutdown()
+            serving.join()
+
+
 def exercise(client, fixture, root):
     h = Harness(root, client.parent)
     h.fixture_binary = fixture
     peers = []
     try:
+        for status in (402, 503):
+            refused_chat(client, root, status)
         h.prepare()
+        refused_owned_desktop(h, client, root)
         registry = root / "sessions"
         registry.mkdir(mode=0o700)
         base = {key: value for key, value in os.environ.items() if not key.startswith("SSMCP_")}

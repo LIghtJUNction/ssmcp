@@ -7,7 +7,7 @@ import { Timeline, CommandLedger } from './store.mjs';
 
 const supported = ['runtime', 'terminals', 'workers', 'threads', 'chat.queue', 'time'];
 const paged = new Set(['workers', 'threads', 'chat.queue']);
-const pauseCodes = new Set(['denied', 'closed', 'authentication_required', 'unsupported_version']);
+const pauseCodes = new Set(['denied', 'closed', 'authentication_required', 'unsupported_version', 'traffic_quota_exceeded', 'online_session_limit']);
 const readTimeout = () => Object.assign(new Error('读取状态的 55 秒窗口已结束，尚未完成同步。'), { code: 'read_window_timeout' });
 
 export function abortableDelay(ms, signal) {
@@ -351,7 +351,10 @@ export class BridgeClient {
         ...(nativeUnknown ? { error: { code: 'unknown', message: '原生回执仍报告结果未确定。', effect: 'may_have_occurred' } } : {}) });
     } catch (error) {
       const rejected = (error instanceof BridgeError || typeof error.effect === 'string') && error.effect === 'none';
-      this.ledger.update(id, { status: rejected ? 'rejected' : 'unknown', error: { code: error.code ?? 'unknown', message: error.message, effect: rejected ? 'none' : 'may_have_occurred' } });
+      this.ledger.update(id, { status: rejected ? 'rejected' : 'unknown', error: {
+        code: error.code ?? 'unknown', message: error.message, effect: rejected ? 'none' : 'may_have_occurred',
+        ...(error.status ? { status: error.status } : {}), ...(error.relayOrigin ? { relayOrigin: error.relayOrigin } : {}),
+      } });
     }
     if (this.current(context)) {
       const text = record.status === 'confirmed' ? command === 'chat.send' ? '已收到本地输入队列的入队回执。' : '已收到原生操作回执。'

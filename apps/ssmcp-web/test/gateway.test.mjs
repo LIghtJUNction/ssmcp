@@ -47,6 +47,20 @@ test('CLI handoff pairs only a single explicit live selector on the loopback lan
   }
 });
 
+test('desktop setup accepts only the exact informational refusal marker on loopback', () => {
+  const token = 'ab'.repeat(32), base = 'http://127.0.0.1:8011/';
+  for (const [query, expected] of [
+    ['?setup=1&launch_refused=1', true], ['?launch_refused=1&setup=1', true],
+    ['?launch_refused=1', false], ['?setup=1&launch_refused=0', false],
+    ['?setup=1&launch_refused=1&relay=other.test', false], ['?setup=1&setup=1', false],
+  ]) {
+    const url = new URL(base + query + '#' + token);
+    assert.deepEqual(launchOptions(url), expected ? {setup:true, refused:true} : null);
+    assert.equal(takeLaunchPairing(url, {replaceState() {}}, false), expected ? token : null);
+    assert.equal(takeLaunchPairing(url, {replaceState() {}}, true), null);
+  }
+});
+
 test('a foreground selector may share a saved session label without changing the older row', async () => {
   const sessions = [{ name: 'work' }, { name: 'work', target: 'live:device-session' }];
   const gateway = new Gateway({ fetchImpl: async () => json({ sessions, has_more: false }) });

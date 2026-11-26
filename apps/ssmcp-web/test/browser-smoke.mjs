@@ -20,6 +20,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
   const foreground = 'live:' + '71'.repeat(16);
   let newCount = 0, activeTarget = foreground, cwd = '/fixture/project';
+  let connectionGate;
   const created = [], owned = new Map();
   let dropFirstReceipt = true;
   const endedTargets = [];
@@ -33,7 +34,7 @@ try {
     document.addEventListener('securitypolicyviolation', event => window.cspViolations.push(event.violatedDirective));
   });
   const caps = capabilities({ resources: ['runtime', 'threads', 'conversation', 'chat.queue', 'terminals', 'workers'], commands: ['session.new', 'session.cd', 'chat.send', 'terminal.write', 'terminal.resize', 'workers.resize', 'client.update'] });
-  let activeCaps = caps;
+  let activeCaps = caps, workbenchRefusal;
   const source = { kind: 'main', client_id: 'real.fixture.client', connection: '9007199254740993', request_id: '12' };
   const productivity = {
     members: 1,
@@ -88,13 +89,18 @@ try {
       return fulfill(route, { request_id: body.request_id, session: owned.get(body.request_id) });
     }
     if (url.pathname.endsWith('/sessions')) return fulfill(route, { sessions: [{ name: '真实会话 fixture', cwd: '/fixture/project' }, { name: '真实会话 fixture', cwd: '/fixture/project', target: foreground, manager_active: true, manager_state: 'active', connection_state: 'connected', phase: 'active', generation: '2', stop_requested: false }, ...created], next_offset: 2 + created.length, has_more: false });
-    if (url.pathname === '/api/gui/v1/connections') { activeTarget = body.session; activeCaps = body.read_only ? { ...caps, mode: 'observe', commands: [] } : caps; return fulfill(route, { status: 'connected', connection_id: 'fixture.connection', session: body.session, read_only: body.read_only, capabilities: response({ id: body.request_id, operation: { op: 'capabilities' } }, activeCaps), duplicate: false }); }
+    if (url.pathname === '/api/gui/v1/connections') {
+      if (connectionGate) await connectionGate;
+      activeTarget = body.session; activeCaps = body.read_only ? { ...caps, mode: 'observe', commands: [] } : caps; return fulfill(route, { status: 'connected', connection_id: 'fixture.connection', session: body.session, read_only: body.read_only, capabilities: response({ id: body.request_id, operation: { op: 'capabilities' } }, activeCaps), duplicate: false }); }
     if (url.pathname.endsWith('/bridge')) {
       const op = body.operation;
       if (op.op === 'capabilities') return fulfill(route, response(body, activeCaps));
       if (op.op === 'state') return fulfill(route, response(body, { resource: op.resource, schema_version: 1, value: states(op.resource) }));
       if (op.op === 'command') {
         commands.push(body);
+        if (op.command === 'chat.send' && workbenchRefusal) {
+          return route.fulfill({status:workbenchRefusal.status, contentType:'application/json', body:JSON.stringify({error:workbenchRefusal.error})});
+        }
         if (op.command === 'terminal.write' && failTerminal) return route.abort('failed');
         let value = { received: true };
         if (op.command === 'chat.send') {
@@ -467,6 +473,22 @@ try {
   await page.locator('#take-control').click();
   await page.waitForFunction(() => document.querySelector('#take-control').hidden && !document.querySelector('#connected-actions').hidden);
   assert.deepEqual(opens().map(r => r.body.read_only), [true, false]);
+  for (const [status,code,expected] of [
+    [402,'traffic_quota_exceeded','本月可用流量不足'],[409,'online_session_limit','已有 1 个在线会话'],
+  ]) {
+    workbenchRefusal = {status,error:{code,effect:'may_have_occurred',message:'service rejection',relay_origin:'https://relay.example'}};
+    await page.locator('#chat-text').fill('保留我的草稿');
+    await page.locator('#chat-send').click();
+    await page.waitForFunction(expected => document.querySelector('#error-text').textContent.includes(expected), expected);
+    const banner = page.locator('#error-banner');
+    assert.equal(await banner.getByRole('link').getAttribute('href'), 'https://relay.example/account/traffic');
+    assert.match(await banner.textContent(), /原会话及尚未收到回执的操作/);
+    assert.doesNotMatch(await banner.textContent(), /会话未创建/);
+    assert.equal(await page.locator('#chat-text').inputValue(), '保留我的草稿');
+  }
+  workbenchRefusal = null;
+  const chatsBeforeSlashCommands = commands.filter(item => item.operation.command === 'chat.send').length;
+  assert.equal(chatsBeforeSlashCommands, 4, 'two prior sends and two explicit attempts with unconfirmed receipts');
   await page.locator('#chat-text').fill('/cd /fixture/目录 with space');
   await page.locator('#chat-send').click();
   await page.waitForFunction(() => document.querySelector('#session-cwd').textContent === '/fixture/目录 with space');
@@ -479,7 +501,7 @@ try {
   assert.equal(newCount, 2);
   await page.locator('.session-tab').first().click();
   await page.waitForFunction(() => document.getElementById('chat-text').value === '留在原会话');
-  assert.equal(commands.filter(item => item.operation.command === 'chat.send').length, 2);
+  assert.equal(commands.filter(item => item.operation.command === 'chat.send').length, chatsBeforeSlashCommands);
   if (process.env.WEB_TEST_EVIDENCE) {
     await viewport(390, 844);
     await page.screenshot({ path: join(process.env.WEB_TEST_EVIDENCE, 'session-mobile.png') });
@@ -507,8 +529,17 @@ try {
   await page.locator('#end-session-cancel').click();
   await page.locator('.session-tab').first().click();
   await page.locator('#end-session').waitFor({state:'hidden'});
+  let finishSwitch;
+  connectionGate = new Promise(resolve => { finishSwitch = resolve; });
   await firstTab.click();
   await settingsTrigger.click();
+  finishSwitch();
+  connectionGate = null;
+  await page.waitForFunction(target => {
+    const current = document.querySelector('.session-tab[aria-selected="true"]');
+    return current?.title === target && !current.disabled && !document.querySelector('#connected-actions').hidden;
+  }, firstOwned);
+  assert.equal(await settingsDialog.evaluate(dialog => dialog.open), true, 'a pending connection preserves newly opened settings');
   await page.locator('#disconnect-button').click();
   await settingsDialog.getByRole('button', { name: '关闭设置' }).click();
   await page.waitForFunction(() => document.querySelector('#connected-actions').hidden);
@@ -591,6 +622,41 @@ try {
   assert.equal(mobileApiCalls, 0);
   await mobile.close();
   const setup = await browser.newPage({viewport:{width:390,height:844}});
+  const readResults = [];
+  let launchResult = { status: 200, json: { status: 'ready' } };
+  await setup.route('**/api/gui/v1/**', async route => {
+    const req = route.request();
+    readResults.push([req.method(), new URL(req.url()).pathname]);
+    assert.equal(req.headers().authorization, 'Bearer ' + token);
+    assert.equal(req.postData(), null);
+    await route.fulfill(launchResult);
+  });
+  const markedSetup = `http://127.0.0.1:${port}/?setup=1&launch_refused=1`;
+  await setup.goto(markedSetup);
+  await setup.locator('#entry-hint').waitFor();
+  assert.deepEqual(readResults, [], 'a URL flag cannot pair the page');
+  for (const [status, code, description] of [
+    [402, 'traffic_quota_exceeded', '本月可用流量不足'], [409, 'online_session_limit', '已有 1 个在线会话'],
+    [200, null, null],
+  ]) {
+    launchResult = code ? { status, json: { error: { code, message: 'Relay declined', effect: 'may_have_occurred',
+      relay_origin: 'https://saved-destination.example', recharge_url: 'https://unrelated.example/' } } }
+      : { status, json: { status: 'ready' } };
+    await setup.goto('about:blank');
+    const received = setup.waitForResponse(response => new URL(response.url()).pathname === '/api/gui/v1/launch');
+    await setup.goto(markedSetup + '#' + token);
+    await received;
+    if (description) {
+      await setup.locator('#launch-error').filter({ hasText: description }).waitFor();
+      assert.equal(await setup.locator('#launch-error a').getAttribute('href'), 'https://saved-destination.example/account/traffic');
+      assert.doesNotMatch(await setup.locator('#launch-error').textContent(), /未创建|unrelated/);
+    } else {
+      assert.equal(await setup.locator('#launch-error').textContent(), '');
+    }
+    assert.equal(setup.url(), markedSetup, 'paired fragment is scrubbed before the read');
+  }
+  assert.deepEqual(readResults, Array.from({ length: 3 }, () => ['GET', '/api/gui/v1/launch']));
+  await setup.unroute('**/api/gui/v1/**');
   const starts = [];
   await setup.route('**/api/gui/v1/**', async route => {
     const path = new URL(route.request().url()).pathname;
@@ -629,6 +695,53 @@ try {
   await setup.locator('#launch-relay').press('Enter');
   await setup.waitForFunction(() => !document.querySelector('#launch-connect').disabled);
   assert.deepEqual(starts[2], {request_id:starts[2].request_id, destination:'new-user@my.example', terms:false, privacy:false});
+  const launchError = setup.locator('#launch-error');
+  const quota = {status:402, body:{error:{code:'traffic_quota_exceeded',effect:'none',
+    message:'https://wrong.example/pay', recharge_url:'https://wrong.example/pay'}}};
+  let refusal = quota;
+  let refusedCreates = 0;
+  await setup.route('**/api/gui/v1/owned-sessions', async route => {
+    refusedCreates++;
+    await route.fulfill({status:refusal.status, contentType:'application/json', body:JSON.stringify(refusal.body)});
+  });
+  await setup.locator('#launch-connect').click();
+  const accountLink = launchError.getByRole('link', {name:'查看本月流量与订单'});
+  await accountLink.waitFor();
+  assert.equal(await accountLink.getAttribute('href'), 'https://my.example/account/traffic');
+  assert.equal(await accountLink.getAttribute('rel'), 'noopener noreferrer');
+  assert.equal(await launchError.textContent().then(text => text.includes('wrong.example')), false);
+  const launchDraft = setup.locator('#launch-name');
+  assert.equal(await launchDraft.inputValue(), 'new-user');
+  await setup.evaluate(() => Object.defineProperty(navigator, 'clipboard', {configurable:true, value:{
+    writeText: async () => { throw new Error('clipboard disabled in embedded browser'); },
+  }}));
+  await launchError.getByRole('button', {name:'复制账户地址'}).click();
+  const manualCopy = launchError.getByRole('textbox');
+  assert.equal(await manualCopy.inputValue(), 'https://my.example/account/traffic');
+  assert.equal(await manualCopy.evaluate(input => input === document.activeElement
+    && input.selectionEnd - input.selectionStart === input.value.length), true);
+  assert.equal(await setup.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  for (const [status, code, reason, expected] of [
+    [401, 'denied', 'gateway pairing is required', '本机网关需要重新配对'],
+    [403, 'denied', 'attach lease expired', '控制授权已失效'],
+    [429, 'unavailable', 'gateway request capacity reached', '请求过多'],
+    [503, 'unavailable', '缺少普通用户运行器。', '缺少普通用户运行器'],
+  ]) {
+    refusal = {status,body:{error:{code,effect:'none',message:reason}}};
+    await setup.locator('#launch-connect').click();
+    await setup.waitForFunction(expected => document.getElementById('launch-error').textContent.includes(expected), expected);
+    assert.equal(await launchError.getByRole('link').count(), 0);
+    assert.equal(await launchDraft.inputValue(), 'new-user');
+    assert.equal(await setup.locator('#launch-relay').inputValue(), 'my.example');
+  }
+  refusal = {status:409,body:{error:{code:'online_session_limit',effect:'none',message:'one online session',relay_origin:'https://my.example'}}};
+  await setup.locator('#launch-connect').click();
+  await launchError.getByRole('link').waitFor();
+  assert.match(await launchError.textContent(), /已有 1 个在线会话/);
+  assert.match(await launchError.textContent(), /结束先前在线的会话/);
+  assert.match(await launchError.textContent(), /本次会话未创建/);
+  assert.doesNotMatch(await launchError.textContent(), /流量不足/);
+  assert.equal(refusedCreates, 6);
   await setup.close();
   process.stdout.write('Browser fixture smoke passed: CSP, protocol envelopes, IME/focus, bounded DOM, scroll continuity, queue receipt, five right-aligned input origins, original-ID quote button/selected excerpt/R shortcut, preserved multiline draft and ordinary quoted delivery, unknown command, mobile panels.\n');
 } finally {

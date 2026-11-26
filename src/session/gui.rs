@@ -400,12 +400,11 @@ async fn owned_workbench(
         Some(target) => Some(target.to_owned()),
         None => crate::connection_form::desktop_profile()?,
     };
-    if let Some(destination) = destination {
-        let target = host.launch(destination).await?;
-        launch_url.query_pairs_mut().append_pair("session", &target);
-    } else {
-        launch_url.query_pairs_mut().append_pair("setup", "1");
-    }
+    let result = match destination {
+        Some(destination) => host.launch(destination).await.map(Some),
+        None => Ok(None),
+    };
+    let startup_refusal = launch_parameters(&mut launch_url, result)?;
     let app = gateway::router(
         gateway::Config {
             origin: origin.clone(),
@@ -414,8 +413,36 @@ async fn owned_workbench(
         },
         host,
     )?;
+    let app = if let Some(reason) = startup_refusal {
+        app.layer(axum::Extension(reason))
+    } else {
+        app
+    };
     launch_url.set_fragment(Some(&token));
     Ok((listener, app, launch_url))
+}
+
+fn launch_parameters(
+    url: &mut reqwest::Url,
+    outcome: Result<Option<String>, gateway::CreationError>,
+) -> crate::Result<Option<gateway::RelayRefusal>> {
+    match outcome {
+        Ok(Some(target)) => {
+            url.query_pairs_mut().append_pair("session", &target);
+        }
+        Ok(None) => {
+            url.query_pairs_mut().append_pair("setup", "1");
+        }
+        Err(gateway::CreationError::Relay(reason)) => {
+            // The paired page reads the original refusal without creating another core.
+            url.query_pairs_mut()
+                .append_pair("setup", "1")
+                .append_pair("launch_refused", "1");
+            return Ok(Some(reason));
+        }
+        Err(error) => return Err(error.into()),
+    }
+    Ok(None)
 }
 
 pub(crate) async fn shutdown() {

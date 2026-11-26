@@ -6,6 +6,42 @@ use std::{
     time::Duration,
 };
 
+/// Authoritative refusal of a frontend-owned core's account relay registration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelayAdmissionDenial {
+    TrafficQuotaExceeded,
+    OnlineSessionLimit,
+}
+
+impl RelayAdmissionDenial {
+    #[doc(hidden)]
+    pub const fn exit_code(self) -> u8 {
+        match self {
+            Self::TrafficQuotaExceeded => 81,
+            Self::OnlineSessionLimit => 82,
+        }
+    }
+
+    /// Only interpret the exit status of the private core this frontend launched.
+    pub fn from_exit(status: &ExitStatus) -> Option<Self> {
+        [Self::TrafficQuotaExceeded, Self::OnlineSessionLimit]
+            .into_iter()
+            .find(|reason| status.code() == Some(i32::from(reason.exit_code())))
+    }
+}
+
+impl std::fmt::Display for RelayAdmissionDenial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::TrafficQuotaExceeded => "本月中继流量已用完。",
+            Self::OnlineSessionLimit => "免费账户已有一个在线会话。",
+        })
+    }
+}
+
+impl std::error::Error for RelayAdmissionDenial {}
+
 /// The private attach endpoint published by this exact, still-owned process.
 pub fn target_for_pid(root: &Path, pid: u32) -> crate::Result<Option<(String, PathBuf)>> {
     for row in super::overview::foreground_rows_in(root)? {
@@ -149,6 +185,9 @@ impl OwnedSession {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(if chat { 45 } else { 7 });
         loop {
             if let Some(status) = session.try_wait()? {
+                if let Some(reason) = RelayAdmissionDenial::from_exit(&status) {
+                    return Err(Box::new(reason));
+                }
                 return Err(format!(
                     "ssmcp exited before opening its local frontend endpoint ({status})"
                 )

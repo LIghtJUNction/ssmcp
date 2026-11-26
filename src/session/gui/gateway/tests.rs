@@ -18,6 +18,7 @@ struct Counts {
     commands: AtomicUsize,
     reads: AtomicUsize,
     close_failures: AtomicUsize,
+    online_limit: AtomicBool,
 }
 struct FixtureHost {
     counts: Arc<Counts>,
@@ -28,6 +29,20 @@ struct FixtureCore {
     closed: AtomicBool,
 }
 impl Host for FixtureHost {
+    fn relay_refusal(&self, session: &str, _settle: bool) -> CoreFuture<'_, Option<RelayRefusal>> {
+        let refused = session == "fixture" && self.counts.online_limit.load(Ordering::Acquire);
+        Box::pin(async move {
+            Ok(refused.then(|| {
+                RelayRefusal::from_destination(
+                    RelayAdmissionDenial::OnlineSessionLimit,
+                    "alice@relay.example",
+                    Effect::MayHaveOccurred,
+                )
+                .unwrap()
+            }))
+        })
+    }
+
     fn sessions(&self) -> CoreFuture<'_, Vec<Value>> {
         Box::pin(async {
             Ok(vec![
@@ -173,6 +188,10 @@ struct Server {
 }
 impl Server {
     async fn new(assets: Option<PathBuf>) -> Self {
+        Self::with_launch_refusal(assets, None).await
+    }
+
+    async fn with_launch_refusal(assets: Option<PathBuf>, reason: Option<RelayRefusal>) -> Self {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -188,6 +207,11 @@ impl Server {
             }),
         )
         .unwrap();
+        let app = if let Some(reason) = reason {
+            app.layer(axum::Extension(reason))
+        } else {
+            app
+        };
         let task = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
@@ -299,6 +323,88 @@ async fn http_requires_pairing_and_exact_origin_before_accessing_core() {
         assert!(page["sessions"][0].get(private).is_none());
     }
     assert_eq!(server.counts.opens.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn paired_startup_refusal_opens_setup_and_reads_the_original_result_without_launch() {
+    let mut url = reqwest::Url::parse("http://127.0.0.1:1234").unwrap();
+    let reason = RelayRefusal::from_destination(
+        RelayAdmissionDenial::TrafficQuotaExceeded,
+        "alice@relay.example",
+        Effect::MayHaveOccurred,
+    )
+    .unwrap();
+    let reason =
+        super::super::launch_parameters(&mut url, Err(CreationError::Relay(reason))).unwrap();
+    assert_eq!(url.query(), Some("setup=1&launch_refused=1"));
+    let server = Server::with_launch_refusal(None, reason).await;
+    let unpaired = http()
+        .get(format!("{}{PREFIX}/launch", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unpaired.status(), StatusCode::UNAUTHORIZED);
+    for _ in 0..2 {
+        let result = server
+            .request(reqwest::Method::GET, "/launch")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(result.status(), StatusCode::PAYMENT_REQUIRED);
+        let body: Value = result.json().await.unwrap();
+        assert_eq!(body["error"]["effect"], "may_have_occurred");
+        assert_eq!(body["error"]["code"], "traffic_quota_exceeded");
+        assert_eq!(body["error"]["relay_origin"], "https://relay.example");
+    }
+    assert_eq!(server.counts.opens.load(Ordering::Relaxed), 0);
+    let ready = Server::new(None).await;
+    let result: Value = ready
+        .request(reqwest::Method::GET, "/launch")
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(result["status"], "ready");
+}
+
+#[tokio::test]
+async fn registered_online_limit_reaches_open_events_and_bridge_without_replaying() {
+    let server = Server::new(None).await;
+    let opened = server.open("original", false).await;
+    let id = opened["connection_id"].as_str().unwrap();
+    server.counts.online_limit.store(true, Ordering::Release);
+    for (path, input) in [
+        (
+            "/connections".into(),
+            json!({"request_id":"original","session":"fixture","read_only":false}),
+        ),
+        (
+            format!("/connections/{id}/events"),
+            json!({"request_id":"observe","generation":"fixture-core","wait_ms":0}),
+        ),
+        (
+            format!("/connections/{id}/bridge"),
+            json!({"version":1,"id":"caps","operation":{"op":"capabilities"}}),
+        ),
+    ] {
+        let response = server
+            .request(reqwest::Method::POST, &path)
+            .json(&input)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "online_session_limit");
+        assert_eq!(body["error"]["effect"], "may_have_occurred");
+        assert_eq!(body["error"]["relay_origin"], "https://relay.example");
+    }
+    assert_eq!(server.counts.opens.load(Ordering::Relaxed), 1);
+    assert_eq!(server.counts.commands.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]
@@ -769,9 +875,19 @@ impl Host for CreationHost {
     fn authorize_creation(&self, _: &str) -> Result<(), BridgeError> {
         Ok(())
     }
-    fn create(&self, _: String) -> CoreFuture<'_, String> {
+    fn create(&self, destination: String) -> CoreFuture<'_, String, CreationError> {
         Box::pin(async move {
             let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
+            if destination == "quota@relay.test" {
+                return Err(CreationError::Relay(
+                    RelayRefusal::from_destination(
+                        RelayAdmissionDenial::TrafficQuotaExceeded,
+                        &destination,
+                        zbridge::Effect::None,
+                    )
+                    .unwrap(),
+                ));
+            }
             if n == 1 {
                 tokio::time::sleep(Duration::from_millis(30)).await;
             }
@@ -883,6 +999,19 @@ async fn creation_requires_pairing_and_consent_and_deduplicates_concurrent_and_o
         .unwrap();
     assert_eq!(replay, a);
     assert_eq!(host.count.load(Ordering::SeqCst), MAX_OPEN_RECEIPTS + 3);
+    for _ in 0..2 {
+        let rejected = create("quota", "quota@relay.test").await.unwrap();
+        assert_eq!(rejected.status(), StatusCode::PAYMENT_REQUIRED);
+        let body: Value = rejected.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "traffic_quota_exceeded");
+        assert_eq!(body["error"]["relay_origin"], "https://relay.test");
+        assert_eq!(body["error"]["effect"], "none");
+    }
+    // Same request reads the original persisted refusal without another launch.
+    assert_eq!(host.count.load(Ordering::SeqCst), MAX_OPEN_RECEIPTS + 4);
+    let legacy = BridgeError::new(ErrorCode::Unavailable, "old receipt").uncertain();
+    let decoded: CreationError = serde_json::from_value(json!(&legacy)).unwrap();
+    assert!(matches!(decoded, CreationError::Bridge(error) if error == legacy));
     server.abort();
     std::fs::remove_dir_all(dir).unwrap();
 }

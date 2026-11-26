@@ -176,6 +176,7 @@ pub(super) async fn run(destination: &str, instance: String) -> crate::Result<()
         &mut registered,
         || {
             let mut command = relay::command(&executable, &server);
+            command.env(relay::FRONTEND_STATUS_ENV, "1");
             command.env(
                 "SSMCP_RELAY_CAPABILITIES",
                 format!(

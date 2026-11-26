@@ -33,7 +33,13 @@ async fn run() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             ssmcp::client::report_run_error(error.as_ref());
-            std::process::ExitCode::FAILURE
+            if let Some(reason) =
+                error.downcast_ref::<ssmcp::session::frontend::RelayAdmissionDenial>()
+            {
+                reason.exit_code().into()
+            } else {
+                std::process::ExitCode::FAILURE
+            }
         }
     }
 }

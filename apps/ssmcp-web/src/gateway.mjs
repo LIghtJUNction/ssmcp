@@ -4,12 +4,13 @@ import {
 } from './protocol.mjs';
 
 export class GatewayError extends Error {
-  constructor(message, { code = 'transport_error', effect = 'none', status = 0, requestId = null } = {}) {
+  constructor(message, { code = 'transport_error', effect = 'none', status = 0, requestId = null, relayOrigin = null } = {}) {
     super(message);
     this.name = 'GatewayError';
     this.code = code;
     this.effect = effect;
     this.status = status;
+    this.relayOrigin = relayOrigin;
     this.requestId = requestId;
   }
 }
@@ -50,7 +51,11 @@ export function launchOptions(location) {
   const url = new URL(location.href);
   const session = url.searchParams.get('session');
   if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.pathname !== '/'
-      || url.username || url.password || url.searchParams.size !== 1) return null;
+      || url.username || url.password) return null;
+  if (url.searchParams.size === 2 && url.searchParams.get('setup') === '1' && url.searchParams.get('launch_refused') === '1') {
+    return { setup: true, refused: true };
+  }
+  if (url.searchParams.size !== 1) return null;
   if (/^live:[0-9a-f]{32}$/.test(session ?? '')) return {session};
   return url.searchParams.get('setup') === '1' ? {setup: true} : null;
 }
@@ -152,17 +157,23 @@ export class Gateway {
         body: encoded, signal: controller.signal, credentials: 'same-origin', cache: 'no-store',
         redirect: 'error', referrerPolicy: 'no-referrer',
       });
-      const data = await boundedJson(response, MAX_FRAME_BYTES);
       if (!response.ok) {
-        const error = data?.error;
+        let error;
+        try { error = (await boundedJson(response, MAX_FRAME_BYTES))?.error; }
+        catch (cause) {
+          if (signal?.aborted || timedOut) throw cause;
+          // Proxies can return an empty/HTML error. Keep the HTTP status; only a
+          // validated native envelope can establish that a write had no effect.
+        }
         const valid = error && typeof error.code === 'string' && typeof error.message === 'string'
           && ['none', 'may_have_occurred'].includes(error.effect);
         throw new GatewayError(valid ? error.message.slice(0, 1024) : `网关返回 HTTP ${response.status}。`, {
           code: valid ? error.code : 'http_error', effect: valid ? error.effect : mutation ? 'may_have_occurred' : 'none',
           status: response.status, requestId,
+          relayOrigin: valid && typeof error.relay_origin === 'string' ? error.relay_origin : null,
         });
       }
-      return data;
+      return await boundedJson(response, MAX_FRAME_BYTES);
     } catch (error) {
       if (error instanceof GatewayError) throw error;
       if (mutation && dispatched) {

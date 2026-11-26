@@ -2960,7 +2960,9 @@ pub(crate) fn watchdog_retries(
 ) -> bool {
     enabled
         && error.is_none_or(|error| {
-            !error.is::<UnsupportedWireProtocol>() && !error.is::<relay::PermanentFailure>()
+            !error.is::<UnsupportedWireProtocol>()
+                && !error.is::<relay::PermanentFailure>()
+                && !error.is::<crate::session::frontend::RelayAdmissionDenial>()
         })
 }
 
@@ -3134,6 +3136,11 @@ async fn register_transport(
         _ = std::future::ready(()) => {},
     }
     let mut transport_command = command();
+    let frontend_status = matches!(transport_kind, TransportKind::Relay)
+        && transport_command
+            .as_std()
+            .get_envs()
+            .any(|(k, v)| k == relay::FRONTEND_STATUS_ENV && v == Some(std::ffi::OsStr::new("1")));
     let timing_offer = relay::timing_offer(&transport_command);
     let durable_wait_offer = relay::durable_wait_display_offer(&transport_command);
     let peer_offer = relay::peer_ports_offer(&transport_command);
@@ -3189,7 +3196,28 @@ async fn register_transport(
             }
         };
         if let Err(error) = decision {
+            // The opted-in helper exits without writing a frame on HTTP 402.
+            // Give it time to be reaped before ordinary registration cleanup
+            // kills it. An arbitrary Reject frame never qualifies.
+            let quota = frontend_status
+                && error.downcast_ref::<io::Error>().is_some_and(|e| {
+                    matches!(
+                        e.kind(),
+                        io::ErrorKind::UnexpectedEof
+                            | io::ErrorKind::BrokenPipe
+                            | io::ErrorKind::ConnectionReset
+                    )
+                })
+                && matches!(
+                    timeout(Duration::from_secs(1), process.wait()).await,
+                    Ok(Ok(status)) if crate::session::frontend::RelayAdmissionDenial::from_exit(&status) == Some(crate::session::frontend::RelayAdmissionDenial::TrafficQuotaExceeded)
+                );
             stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
+            if quota {
+                return Err(Box::new(
+                    crate::session::frontend::RelayAdmissionDenial::TrafficQuotaExceeded,
+                ));
+            }
             return Err(error);
         }
     }
@@ -3286,6 +3314,15 @@ async fn register_transport(
         ),
         Some(Frame::Reject { message }) => {
             stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
+            if frontend_status
+                && admission_server.is_some()
+                && message
+                    == "online_session_limit: free accounts can have one online session at a time"
+            {
+                return Err(Box::new(
+                    crate::session::frontend::RelayAdmissionDenial::OnlineSessionLimit,
+                ));
+            }
             // Only a parsed registration rejection is terminal for the protocol.
             // Stderr, EOF, timeouts and unrelated authorization errors stay distinct.
             if message == UNSUPPORTED_WIRE_PROTOCOL
@@ -3715,6 +3752,9 @@ async fn connect_inner(
         registered,
         || {
             let mut command = transport.command(&executable);
+            if options.frontend_owned && matches!(&transport, Transport::Account { .. }) {
+                command.env(relay::FRONTEND_STATUS_ENV, "1");
+            }
             if options.foreground_identity.is_some() {
                 command.env(relay::PROJECT_OFFER_ENV, "1");
             }

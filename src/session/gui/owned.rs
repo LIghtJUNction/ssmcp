@@ -1,9 +1,10 @@
 //! Each paired gateway registers and connects only to its own private child processes.
+use super::gateway::{CreationError, RelayRefusal};
 use super::{Attached, Connection, CoreFuture, Host, native};
-use crate::session::frontend::OwnedSession;
+use crate::session::frontend::{OwnedSession, RelayAdmissionDenial};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -46,6 +47,7 @@ pub(super) struct OwnedHost {
     receipts: PathBuf,
     policy: Policy,
     members: Mutex<BTreeMap<String, Member>>,
+    refusals: Mutex<VecDeque<(String, String, RelayAdmissionDenial)>>,
     slots: Arc<Semaphore>,
     first: Option<AsyncMutex<Option<(String, String)>>>,
 }
@@ -71,6 +73,7 @@ impl OwnedHost {
             receipts,
             policy,
             members: Mutex::new(BTreeMap::new()),
+            refusals: Mutex::new(VecDeque::new()),
             slots: Arc::new(Semaphore::new(16)),
             first: browser_launcher.then(|| AsyncMutex::new(None)),
         })
@@ -97,15 +100,56 @@ impl OwnedHost {
         self.members
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .retain(|_, member| {
-                !member
-                    .core
-                    .try_lock()
-                    .is_ok_and(|mut core| matches!(core.try_wait(), Ok(Some(_))))
+            .retain(|target, member| {
+                let Ok(mut core) = member.core.try_lock() else {
+                    return true;
+                };
+                let Ok(Some(status)) = core.try_wait() else {
+                    return true;
+                };
+                if let Some(code) = RelayAdmissionDenial::from_exit(&status) {
+                    let mut history = self.refusals.lock().unwrap_or_else(|e| e.into_inner());
+                    if history.len() >= 128 {
+                        history.pop_front();
+                    }
+                    history.push_back((target.clone(), member.destination.clone(), code));
+                }
+                false
             });
     }
 }
 impl Host for OwnedHost {
+    fn relay_refusal(&self, session: &str, settle: bool) -> CoreFuture<'_, Option<RelayRefusal>> {
+        let session = session.to_owned();
+        Box::pin(async move {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+            loop {
+                // Native pipes may close slightly before wait reports child termination.
+                self.prune();
+                if let Some((_, destination, code)) = self
+                    .refusals
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                    .find(|(target, _, _)| *target == session)
+                {
+                    self.policy.check(destination)?;
+                    return Ok(RelayRefusal::from_destination(
+                        *code,
+                        destination,
+                        zbridge::Effect::MayHaveOccurred,
+                    ));
+                }
+                if !settle
+                    || !self.retains_target(&session)
+                    || tokio::time::Instant::now() >= deadline
+                {
+                    return Ok(None);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+    }
     fn retains_target(&self, session: &str) -> bool {
         self.members
             .lock()
@@ -118,7 +162,7 @@ impl Host for OwnedHost {
     fn authorize_creation(&self, destination: &str) -> Result<(), BridgeError> {
         self.policy.check(destination)
     }
-    fn create(&self, destination: String) -> CoreFuture<'_, String> {
+    fn create(&self, destination: String) -> CoreFuture<'_, String, CreationError> {
         Box::pin(async move {
             self.policy.check(&destination)?;
             self.prune();
@@ -134,7 +178,25 @@ impl Host for OwnedHost {
             } else {
                 OwnedSession::launch_in(&exe, &destination, &self.cwd, &self.namespace).await
             }
-            .map_err(|e| native(e).uncertain())?;
+            .map_err(|error| {
+                // The chat runner registers its endpoint only after the relay
+                // has sent Ready. The desktop runner can publish it sooner.
+                if let Some(reason) = error.downcast_ref::<RelayAdmissionDenial>()
+                    && let Some(failure) = RelayRefusal::from_destination(
+                        *reason,
+                        &destination,
+                        if self.chat {
+                            zbridge::Effect::None
+                        } else {
+                            zbridge::Effect::MayHaveOccurred
+                        },
+                    )
+                {
+                    CreationError::Relay(failure)
+                } else {
+                    CreationError::Bridge(native(error).uncertain())
+                }
+            })?;
             self.policy.check(&destination).map_err(|e| e.uncertain())?;
             let target = core.target().to_owned();
             let marker = self.marker(&target)?;
@@ -143,7 +205,8 @@ impl Host for OwnedHost {
                 return Err(BridgeError::new(
                     ErrorCode::Conflict,
                     "duplicate native session target",
-                ));
+                )
+                .into());
             }
             crate::session::write_json(&marker, &target).map_err(|e| native(e).uncertain())?;
             members.insert(
@@ -181,6 +244,10 @@ impl Host for OwnedHost {
             if marker.try_exists().map_err(|e| native(e.into()))?
                 && crate::session::read_json::<String>(&marker).map_err(native)? == session
             {
+                self.refusals
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .retain(|(target, _, _)| target != &session);
                 return Ok(());
             }
             Err(BridgeError::new(
@@ -189,7 +256,7 @@ impl Host for OwnedHost {
             ))
         })
     }
-    fn launch(&self, destination: String) -> CoreFuture<'_, String> {
+    fn launch(&self, destination: String) -> CoreFuture<'_, String, CreationError> {
         Box::pin(async move {
             let first = self.first.as_ref().ok_or_else(|| {
                 BridgeError::new(
@@ -202,7 +269,7 @@ impl Host for OwnedHost {
                 return if existing == &destination {
                     Ok(target.clone())
                 } else {
-                    Err(BridgeError::invalid("this launcher already owns a session"))
+                    Err(BridgeError::invalid("this launcher already owns a session").into())
                 };
             }
             let target = self.create(destination.clone()).await?;
@@ -286,7 +353,7 @@ mod tests {
         assert!(b.sessions().await.unwrap().is_empty());
         assert!(matches!(b.connect(target.into(),false).await,Err(e) if e.code==ErrorCode::Denied));
         assert!(
-            matches!(a.launch("user@example.test".into()).await,Err(e) if e.code==ErrorCode::Denied)
+            matches!(a.launch("user@example.test".into()).await,Err(CreationError::Bridge(e)) if e.code==ErrorCode::Denied)
         );
         std::fs::remove_dir_all(root).unwrap();
     }
