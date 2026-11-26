@@ -302,6 +302,7 @@ struct Manager {
     ready: bool,
     revision: u64,
     agents: Vec<SteeringAgent>,
+    roster_received: Option<Instant>,
     sender: Option<mpsc::Sender<Transport>>,
     requests: BTreeMap<u64, Request>,
     next_request: u64,
@@ -421,6 +422,7 @@ impl Manager {
             "schema_version":1,"connected":self.connected,"supported":self.supported,
             "chat_enabled":self.chat_enabled(),
             "room_id":self.outbox.room_id,"session_id":session_id,"revision":self.revision,
+            "roster_age_ms":self.roster_received.map(|at| at.elapsed().as_millis().min(u64::MAX as u128) as u64),
             "agents":self.agents.iter().map(|agent| {
                 let mut value = serde_json::to_value(agent).expect("serializable agent");
                 value["thread_id"] = json!(agent.agent_id);
@@ -1071,6 +1073,7 @@ impl Manager {
         self.ready = false;
         self.sender = None;
         self.agents.clear();
+        self.roster_received = None;
         for request in self.requests.values() {
             if let Some(id) = command_message(&request.command)
                 && let Some(record) = self
@@ -1283,6 +1286,7 @@ impl Manager {
         self.ready = true;
         self.revision = snapshot.revision;
         self.agents.clone_from(&snapshot.agents);
+        self.roster_received = Some(Instant::now());
         self.error = None;
         for message in &snapshot.messages {
             if let Some(record) = self.outbox.records.iter_mut().find(|record| {
@@ -1958,6 +1962,7 @@ mod tests {
                 name: "Actual member".into(),
                 status: "working".into(),
                 dreaming_active: None,
+                activity: None,
                 tool_calls_10m: None,
                 activity_status: None,
                 role: None,

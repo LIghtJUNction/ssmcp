@@ -937,6 +937,10 @@ impl Drop for Hub {
     }
 }
 
+mod main_observation;
+use main_observation::DisplayCall;
+pub(super) use main_observation::MainObservation;
+
 /// A cancelled HTTP future cannot manufacture a completed native operation.
 pub(crate) struct NativeActivity<'a> {
     hub: &'a Hub,
@@ -945,6 +949,7 @@ pub(crate) struct NativeActivity<'a> {
     token: String,
     key: Option<String>,
     progress_claim: Option<Claim>,
+    display_call: Option<DisplayCall>,
     previous: Option<OperationRecord>,
     business: bool,
     answer: bool,
@@ -1069,6 +1074,7 @@ impl Hub {
             token: token.into(),
             key,
             progress_claim,
+            display_call: DisplayCall::classify(operation),
             previous,
             business,
             answer,
@@ -1089,6 +1095,9 @@ impl NativeActivity<'_> {
             return;
         };
         let mut changes = Vec::new();
+        if let Some(call) = self.display_call {
+            agent.main_activity.start(call, Instant::now());
+        }
         let wait_only = self
             .key
             .as_ref()
@@ -1144,6 +1153,15 @@ impl NativeActivity<'_> {
         };
         let now = Instant::now();
         let wall = now_ms();
+        if self.dispatched
+            && let Some(call) = self.display_call
+        {
+            agent.main_activity.finish(
+                call,
+                result.is_some_and(|r| r.as_ref().is_ok_and(|v| v["isError"] != true)),
+                now,
+            );
+        }
         let life = &mut agent.lifecycle;
         let may_settle_idle = life.revision == self.dispatch_revision;
         let mut changes = Vec::new();

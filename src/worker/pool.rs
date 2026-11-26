@@ -201,6 +201,7 @@ impl Pool {
         source: &Source,
         command_id: &str,
         command: &str,
+        title: Option<&str>,
     ) -> Result<Option<CommandLog>, String> {
         #[cfg(target_os = "linux")]
         let remote = match &self.execution {
@@ -210,7 +211,7 @@ impl Pool {
         #[cfg(not(target_os = "linux"))]
         let Execution::Remote(remote) = &self.execution;
         let actor = actor(source)?;
-        remote.command_started(&self.queue, &actor, command_id, command, now_ms())
+        remote.command_started(&self.queue, &actor, command_id, command, title, now_ms())
     }
 
     pub(crate) fn file_read_ticket(&self, source: &Source) -> Option<super::queue::ReadTicket> {

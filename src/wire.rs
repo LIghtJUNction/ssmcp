@@ -34,6 +34,7 @@ pub const MAX_ALLOWED_PRINCIPALS: usize = 32;
 pub const SESSION_ACCESS_CAPABILITY: &str = "session_access_v1";
 /// Relay-derived account/agent attribution, separately negotiated for strict v7 peers.
 pub const CONTROL_ATTRIBUTION_CAPABILITY: &str = "control_attribution_v1";
+pub(crate) const MAIN_ACTIVITY_CAPABILITY: &str = "main_activity_v1";
 pub(crate) const MAIN_LIFECYCLE_CAPABILITY: &str = "main_lifecycle_v1";
 pub(crate) const WORKER_ACTIVITY_CAPABILITY: &str = "worker_calls_v1";
 pub(crate) const WORKER_DREAMING_CAPABILITY: &str = "worker_dreaming_v1";
@@ -101,6 +102,36 @@ pub struct SteeringAgent {
     pub tool_calls_10m: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<MainActivity>,
+}
+
+/// Durations measured on the relay's monotonic clock. No command or account data.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MainActivity {
+    pub connected_ms: u64,
+    pub phase: MainPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_age_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MainPhase {
+    Work,
+    Wait,
+    Recent,
+    Quiet,
+    Unknown,
+}
+
+pub(crate) fn coordinator_role(role: Option<&str>) -> bool {
+    role.is_some_and(|role| {
+        ["main", "coordinator", "controller", "lead"]
+            .iter()
+            .any(|known| role.eq_ignore_ascii_case(known))
+    })
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

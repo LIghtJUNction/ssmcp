@@ -145,8 +145,13 @@ async fn native_exec_records_real_start_and_exit_on_its_original_pool() {
         &Source::default(),
     ] {
         assert!(
-            crate::worker::native_command_started(rejected, "must-not-log", &command_argv)
-                .is_none()
+            crate::worker::native_command_started(
+                rejected,
+                "must-not-log",
+                &command_argv,
+                Some("wrong claim")
+            )
+            .is_none()
         );
     }
     let shell = Shell::with_workspace(
@@ -158,7 +163,7 @@ async fn native_exec_records_real_start_and_exit_on_its_original_pool() {
         .call_scoped(
             "ssmcp.exec.start",
             json!({
-                "command":command_argv,"stdin":"pipe","timeout_ms":10000,
+                "command":command_argv,"title":"Run the command fixture","stdin":"pipe","timeout_ms":10000,
                 "env":{(FIXTURE):"1"}
             }),
             worker_source.clone(),
@@ -174,6 +179,10 @@ async fn native_exec_records_real_start_and_exit_on_its_original_pool() {
         .filter(|event| event.text.starts_with("Command started:"))
         .collect();
     assert_eq!(starts.len(), 1);
+    assert_eq!(
+        starts[0].activity_title.as_deref(),
+        Some("Run the command fixture")
+    );
     assert_eq!(starts[0].task_id.as_deref(), Some(task.task_id.as_str()));
     assert!(starts[0].text.contains(FIXTURE_NAME));
 
@@ -249,6 +258,18 @@ async fn native_exec_records_real_start_and_exit_on_its_original_pool() {
         .filter(|event| event.text.starts_with("Command finished:"))
         .collect();
     assert_eq!(ends.len(), 1);
+    assert_eq!(
+        ends[0].activity_title.as_deref(),
+        Some("Run the command fixture")
+    );
+    assert_eq!(
+        view.slots[0]
+            .logs
+            .iter()
+            .filter(|log| log.activity_title.is_some())
+            .count(),
+        2
+    );
     assert_eq!(ends[0].task_id.as_deref(), Some(task.task_id.as_str()));
     assert!(
         replacement.queue.snapshot().slots[0]

@@ -224,18 +224,21 @@ fn availability_revision_excludes_progress_and_native_command_log_updates() {
     let mut pool_updates = pool.subscribe();
     for update in [
         ReportUpdate {
+            activity_title: None,
             event: ReportEvent::Progress,
             command: None,
             progress: Some("checked parser".into()),
             detail: None,
         },
         ReportUpdate {
+            activity_title: None,
             event: ReportEvent::CommandStart,
             command: Some("cargo check".into()),
             progress: None,
             detail: None,
         },
         ReportUpdate {
+            activity_title: None,
             event: ReportEvent::CommandEnd,
             command: Some("cargo check".into()),
             progress: None,
@@ -263,6 +266,7 @@ fn availability_revision_excludes_progress_and_native_command_log_updates() {
             attempt: lease.attempt,
         },
         &ReportUpdate {
+            activity_title: None,
             event: ReportEvent::CommandEnd,
             command: Some("cargo check".into()),
             progress: None,
@@ -545,6 +549,7 @@ fn slot_logs_are_bounded_real_events_without_task_bodies_or_results() {
             .map(|entry| entry.text.len()
                 + entry.level.len()
                 + entry.task_id.as_ref().map_or(0, String::len)
+                + entry.activity_title.as_ref().map_or(0, String::len)
                 + 64)
             .sum::<usize>()
             <= MAX_LOG_BYTES

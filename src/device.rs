@@ -389,6 +389,7 @@ pub(crate) struct DevicePeer {
     pub chat_disabled: bool,
     pub openai_context: bool,
     pub main_lifecycle: bool,
+    pub main_activity: bool,
     pub worker_dreaming: bool,
     pub git_tracking: bool,
     pub repository_events: bool,
@@ -410,6 +411,7 @@ impl From<Registration> for DevicePeer {
             chat_disabled: false,
             openai_context: false,
             main_lifecycle: false,
+            main_activity: false,
             worker_dreaming: false,
             git_tracking: false,
             repository_events: false,
@@ -859,6 +861,7 @@ async fn connect(
         peer_ports_auto: capability_requested(&headers, wire::peer_port::AUTO_CAPABILITY),
         openai_context: capability_requested(&headers, wire::openai::CAPABILITY),
         main_lifecycle: capability_requested(&headers, wire::MAIN_LIFECYCLE_CAPABILITY),
+        main_activity: capability_requested(&headers, wire::MAIN_ACTIVITY_CAPABILITY),
         project_continuity: {
             let mut values = headers
                 .get_all(wire::project_continuity::OFFER_HEADER)

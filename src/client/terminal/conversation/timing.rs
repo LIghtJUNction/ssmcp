@@ -491,8 +491,7 @@ impl WaitFeed {
 }
 
 impl State {
-    pub(super) fn chat_wait_observations(&mut self) {
-        let snapshot = self.chat_timing_snapshot();
+    pub(super) fn chat_wait_observations(&mut self, snapshot: Snapshot) {
         let owner = crate::client::interface::history::current_owner();
         for card in self.conversation.wait_observations.update(snapshot, owner) {
             self.events

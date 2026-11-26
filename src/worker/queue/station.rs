@@ -300,6 +300,7 @@ mod tests {
             .report(
                 &lease,
                 &ReportUpdate {
+                    activity_title: None,
                     event: ReportEvent::FileRead,
                     command: None,
                     progress: None,

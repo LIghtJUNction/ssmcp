@@ -18,7 +18,7 @@ mod telemetry;
 pub(super) use events::EventRequest;
 pub(super) use operations::{WaitRequest, WaitSpec};
 pub(crate) use station::ReadTicket;
-pub(super) use telemetry::{ReportEvent, ReportUpdate, display_text};
+pub(super) use telemetry::{ReportEvent, ReportUpdate, activity_title, display_text};
 
 const MAX_QUEUED: usize = 128;
 const MAX_FINISHED: usize = 128;
@@ -1457,6 +1457,17 @@ fn trim<T>(state: &mut State<T>) {
 }
 
 fn log(slot: &mut Slot, at_ms: u64, level: &str, text: &str, task_id: Option<&str>) {
+    log_with_title(slot, at_ms, level, text, task_id, None);
+}
+
+fn log_with_title(
+    slot: &mut Slot,
+    at_ms: u64,
+    level: &str,
+    text: &str,
+    task_id: Option<&str>,
+    activity_title: Option<&str>,
+) {
     let Some(next) = slot.next_log_sequence.checked_add(1) else {
         return;
     };
@@ -1465,11 +1476,16 @@ fn log(slot: &mut Slot, at_ms: u64, level: &str, text: &str, task_id: Option<&st
         at_ms,
         level: level.into(),
         text: bounded(text, MAX_LOG_TEXT),
+        activity_title: activity_title.map(str::to_owned),
         task_id: task_id.map(str::to_owned),
     });
     slot.next_log_sequence = next;
     let size = |entry: &SlotLog| {
-        entry.text.len() + entry.level.len() + entry.task_id.as_ref().map_or(0, String::len) + 64
+        entry.text.len()
+            + entry.level.len()
+            + entry.task_id.as_ref().map_or(0, String::len)
+            + entry.activity_title.as_ref().map_or(0, String::len)
+            + 64
     };
     while slot.logs.len() > MAX_LOGS || slot.logs.iter().map(size).sum::<usize>() > MAX_LOG_BYTES {
         slot.logs.pop_front();

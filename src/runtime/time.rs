@@ -891,6 +891,11 @@ struct ObservationSpec {
     view: WaitView,
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn blocking_observation(name: &str, arguments: &Value) -> bool {
+    observation(name, arguments).is_some()
+}
+
 fn observation(name: &str, arguments: &Value) -> Option<ObservationSpec> {
     wait_view::spec(name, arguments)
 }

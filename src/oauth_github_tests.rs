@@ -253,6 +253,7 @@ impl Fixture {
                 time_observation: false,
                 openai_context: false,
                 main_lifecycle: false,
+                main_activity: false,
                 worker_dreaming: false,
                 git_tracking: false,
                 repository_events: false,

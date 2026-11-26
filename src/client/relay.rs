@@ -74,7 +74,7 @@ pub(super) fn command(executable: &Path, server: &str) -> Command {
         .env(
             "SSMCP_RELAY_CAPABILITIES",
             format!(
-                "{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{}",
                 crate::wire::SESSION_ACCESS_CAPABILITY,
                 crate::wire::CONTROL_ATTRIBUTION_CAPABILITY,
                 crate::wire::messages::CAPABILITY,
@@ -83,7 +83,8 @@ pub(super) fn command(executable: &Path, server: &str) -> Command {
                 crate::wire::wait_display::DURABLE_CAPABILITY,
                 crate::wire::wait_display::TIME_CAPABILITY,
                 crate::wire::openai::CAPABILITY,
-                crate::wire::MAIN_LIFECYCLE_CAPABILITY
+                crate::wire::MAIN_LIFECYCLE_CAPABILITY,
+                crate::wire::MAIN_ACTIVITY_CAPABILITY
             ),
         )
         .stdin(Stdio::piped())
@@ -126,7 +127,19 @@ pub(super) fn offer_chat_disabled(command: &mut Command, worker: bool) {
         .find(|(name, _)| *name == "SSMCP_RELAY_CAPABILITIES")
         .and_then(|(_, value)| value)
         .and_then(|value| value.to_str())
-        .map_or_else(String::new, |value| format!("{value},"));
+        .map_or_else(String::new, |value| {
+            // A chat-disabled connection has no coordinator roster. Keep the v7
+            // offer within the header limit even with optional worker capabilities.
+            let mut offer = value
+                .split(',')
+                .filter(|capability| *capability != crate::wire::MAIN_ACTIVITY_CAPABILITY)
+                .collect::<Vec<_>>()
+                .join(",");
+            if !offer.is_empty() {
+                offer.push(',');
+            }
+            offer
+        });
     let mut offer = format!("{offer}{}", crate::wire::CHAT_DISABLED_CAPABILITY);
     if worker {
         offer.push(',');
@@ -252,6 +265,7 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::repository_events::CAPABILITY
                 | crate::wire::GIT_TRACKING_CAPABILITY
                 | crate::wire::MAIN_LIFECYCLE_CAPABILITY
+                | crate::wire::MAIN_ACTIVITY_CAPABILITY
                 | crate::wire::WORKER_DREAMING_CAPABILITY
                 | crate::wire::WORKER_ACTIVITY_CAPABILITY
                 | crate::wire::peer_port::CAPABILITY
@@ -515,6 +529,7 @@ mod tests {
         let caps = caps.join(",");
         command.env("SSMCP_RELAY_CAPABILITIES", caps);
         offer_chat_disabled(&mut command, true);
+        assert!(!offers(&command, crate::wire::MAIN_ACTIVITY_CAPABILITY));
         assert!(offers(&command, crate::wire::WORKER_DREAMING_CAPABILITY));
         assert!(offers(&command, crate::wire::WORKER_ACTIVITY_CAPABILITY));
         assert!(access_capability_header(parent_offer(&command)).is_some());

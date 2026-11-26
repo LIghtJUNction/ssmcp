@@ -1483,9 +1483,13 @@ fn current_activity(slot: &SlotView) -> Option<String> {
         return Some(line);
     }
     slot.task_started_at_ms.map(|at| {
+        let time = clock::label(at, 40);
+        let age = update_age(slot, at)
+            .map(|age| format!(" ({age})"))
+            .unwrap_or_default();
         format!(
-            "Task claimed at {} · No command activity recorded yet",
-            clock::label(at, 40).trim()
+            "Task claimed at {}{age} · No command activity recorded yet",
+            time.trim()
         )
     })
 }
@@ -1509,6 +1513,18 @@ fn reported_task_outcome(entry: &crate::worker::SlotLog) -> Option<(PanelTone, S
     Some((tone, format!("{verb} {status}")))
 }
 
+// Relate retained event timestamps to this claim's monotonic runtime. If a
+// wall-clock adjustment puts the event outside the claim, omit the age.
+fn update_age(slot: &SlotView, at_ms: u64) -> Option<String> {
+    let offset = at_ms.checked_sub(slot.task_started_at_ms?)?;
+    let seconds = slot.current_task_elapsed_ms?.checked_sub(offset)? / 1000;
+    Some(match seconds {
+        0..10 => "just now".into(),
+        10..60 => format!("{}s ago", seconds / 10 * 10),
+        _ => format!("{}m ago", seconds / 60),
+    })
+}
+
 fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
     // These prefixes are written by queue::telemetry only after the exact task
     // claim is validated. Command text is always nested under a distinct
@@ -1522,6 +1538,15 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
                 .is_none_or(|task| entry.task_id.as_ref() == Some(task))
             && entry.text.starts_with("Progress: ")
     };
+    let latest = slot.task_id.as_ref().and_then(|task| {
+        slot.logs.iter().rev().find(|entry| {
+            entry.task_id.as_ref() == Some(task)
+                && entry.level == "info"
+                && (entry.text.starts_with("Progress: ")
+                    || entry.text.starts_with("Command started: ")
+                    || entry.text.starts_with("Command finished: "))
+        })
+    });
     let has_progress = slot.logs.iter().any(|entry| reported(&entry));
     let latest_retained = slot.progress.as_deref().is_some_and(|latest| {
         slot.logs
@@ -1546,7 +1571,8 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
             && reported_task_outcome(entry).is_some()
     });
     let intro = fallback.as_deref().or_else(|| {
-        (!has_progress && !has_outcome).then_some("Waiting for agent progress updates")
+        (!has_progress && !has_outcome && latest.is_none())
+            .then_some("Waiting for agent progress updates")
     });
     if let Some(intro) = intro {
         let tone = if fallback.is_some() {
@@ -1571,7 +1597,9 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
     }
     let mut events: Vec<(&crate::worker::SlotLog, &str, PanelTone, String, usize)> = Vec::new();
     let mut last_was_command = false;
+    let mut latest_row = None;
     for entry in &slot.logs {
+        let newest = latest.is_some_and(|step| step.sequence == entry.sequence);
         let (tag, tone, mut body, mergeable) = if reported(&entry) {
             (
                 "",
@@ -1581,6 +1609,8 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
             )
         } else if let Some((tone, text)) = reported_task_outcome(entry) {
             ("TASK", tone, text, false)
+        } else if newest && entry.text.starts_with("Command started: ") {
+            ("", PanelTone::Muted, "Command started".to_owned(), false)
         } else if let Some((command, result)) = entry
             .text
             .strip_prefix("Command finished: ")
@@ -1594,11 +1624,17 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
             })
         {
             if result == "exit 0" && entry.level == "info" {
-                last_was_command = false;
-                continue;
+                if !newest {
+                    last_was_command = false;
+                    continue;
+                }
+                ("", PanelTone::Muted, "Command finished".to_owned(), false)
+            } else {
+                let (tone, text) = command_outcome(command, result);
+                ("CMD", tone, text, true)
             }
-            let (tone, text) = command_outcome(command, result);
-            ("CMD", tone, text, true)
+        } else if newest && entry.text.starts_with("Command finished: ") {
+            ("", PanelTone::Muted, "Command finished".to_owned(), false)
         } else {
             let (tag, tone, body) = log_event(entry, false);
             if !matches!(tone, PanelTone::Warning | PanelTone::Error) {
@@ -1631,10 +1667,27 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
             && *previous_body == body
         {
             *count += 1;
+            if newest {
+                latest_row = events.len().checked_sub(1);
+            }
             continue;
+        }
+        if newest {
+            latest_row = Some(events.len());
         }
         events.push((entry, tag, tone, body, 1));
         last_was_command = mergeable;
+    }
+    if let (Some(index), Some(step)) = (latest_row, latest) {
+        let body = &mut events[index].3;
+        if let Some(title) = &step.activity_title {
+            body.push_str(" · ");
+            body.push_str(&panel::safe_text(title));
+        }
+        if let Some(age) = update_age(slot, step.at_ms) {
+            body.push_str(" · ");
+            body.push_str(&age);
+        }
     }
     for (entry, tag, tone, mut body, count) in events {
         if count > 1 {
@@ -2281,6 +2334,7 @@ mod tests {
             at_ms: 1_700_000_000_000 + sequence * 1000,
             level: "info".into(),
             text: format!("event-{sequence}"),
+            activity_title: None,
             task_id: None,
         }
     }
@@ -3041,6 +3095,59 @@ mod tests {
         assert!(slot.progress.is_none());
         slot.task_id = Some("fresh-task".into());
         assert!(!log_body(&progress_lines(slot, 100)).contains("Latest: cargo test"));
+    }
+
+    #[test]
+    fn latest_verified_step_shows_claim_relative_age_without_exposing_command_arguments() {
+        let mut slot = snapshot().slots.remove(1);
+        let claimed = log(0).at_ms;
+        slot.task_started_at_ms = Some(claimed);
+        slot.current_task_elapsed_ms = Some(33_000);
+        assert!(log_body(&progress_lines(&slot, 100)).contains("(30s ago)"));
+
+        let step = |seq, text: &str| SlotLog {
+            task_id: Some("task-actual".into()),
+            text: text.into(),
+            ..log(seq)
+        };
+        slot.logs = vec![
+            step(1, "Progress: first report"),
+            SlotLog {
+                activity_title: Some("Verify installation".into()),
+                ..step(2, r#"Command started: ["cargo","test","PRIVATE_PATH"]"#)
+            },
+        ];
+        let text = log_body(&progress_lines(&slot, 100));
+        assert!(
+            text.contains("first report")
+                && text.contains("Command started · Verify installation · 30s ago")
+        );
+        assert!(!text.contains("PRIVATE_PATH"));
+        slot.current_task_elapsed_ms = Some(75_000);
+        assert!(
+            log_body(&progress_lines(&slot, 100))
+                .contains("Command started · Verify installation · 1m ago")
+        );
+
+        slot.logs
+            .push(step(74, "Command finished: PRIVATE_PATH; exit 0"));
+        let text = log_body(&progress_lines(&slot, 100));
+        assert!(text.contains("Command finished · just now"));
+        assert!(!text.contains("Command started ·") && !text.contains("PRIVATE_PATH"));
+        slot.logs.push(step(75, "Progress: finished tests"));
+        slot.logs.push(SlotLog {
+            task_id: Some("different-task".into()),
+            ..step(76, "Progress: unrelated report")
+        });
+        let text = log_body(&progress_lines(&slot, 100));
+        assert!(text.contains("finished tests · just now"));
+        assert!(!text.contains("Command finished ·") && !text.contains("unrelated report"));
+        assert_eq!(update_age(&slot, claimed - 1), None);
+        assert_eq!(update_age(&slot, claimed + 80_000), None);
+        slot.task_id = Some("next-task".into());
+        slot.task_started_at_ms = None;
+        let text = log_body(&progress_lines(&slot, 100));
+        assert!(!text.contains("finished tests") && !text.contains("just now"));
     }
 
     #[test]

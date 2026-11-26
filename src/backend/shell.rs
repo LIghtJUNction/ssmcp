@@ -750,8 +750,12 @@ impl Shell {
         }
         registry.jobs.insert(job.id.clone(), job.clone());
         drop(registry);
-        let worker_command =
-            crate::worker::native_command_started(&job.creator, &job.id, &job.command);
+        let worker_command = crate::worker::native_command_started(
+            &job.creator,
+            &job.id,
+            &job.command,
+            job.title.as_deref(),
+        );
         let mut started = job.snapshot();
         started["type"] = json!("exec.started");
         self.events
@@ -1928,8 +1932,12 @@ impl Shell {
         }
         registry.jobs.insert(id.clone(), job.clone());
         drop(registry);
-        let worker_command =
-            crate::worker::native_command_started(&job.creator, &job.id, &job.command);
+        let worker_command = crate::worker::native_command_started(
+            &job.creator,
+            &job.id,
+            &job.command,
+            job.title.as_deref(),
+        );
         let mut started = job.snapshot();
         started["type"] = json!("exec.started");
         self.events

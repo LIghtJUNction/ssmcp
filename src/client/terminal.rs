@@ -271,6 +271,7 @@ pub(super) fn begin_link_metrics(
             .unwrap_or_else(|error| error.into_inner());
         state.link_metrics.begin(generation, client_id, status);
         if generation > state.conversation.process_generation {
+            state.conversation.main_jobs = Default::default();
             state.conversation.process_generation = generation;
             state.conversation.process_id = if client_id.len() == 64
                 && client_id.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -1785,6 +1786,9 @@ impl State {
         source: crate::runtime::call_scope::DisplaySource,
     ) {
         self.sync_history_owner();
+        self.conversation
+            .main_jobs
+            .observe(&self.conversation.process_id, label, value, &source);
         self.events.ingest_scoped_event(label, value, bytes, source);
         self.log_raw(bytes);
     }

@@ -115,14 +115,16 @@ fn session_summary(entry: &Value) -> Option<&str> {
 
 // Only the collaboration roster supplies lifecycle states. Native messaging
 // reachability and observed tool activity describe different things.
-fn member_lifecycle(entry: &Value) -> Option<&'static str> {
+fn member_lifecycle(entry: &Value) -> Option<&str> {
     if field(entry, "session_role") != "thread" || field(entry, "kind") == "native" {
         return None;
     }
     match field(entry, "status") {
-        "working" | "idle" | "dreaming" | "offline" | "retiring" => {
-            Some(main_status::member_lifecycle(entry).1)
-        }
+        "working" | "idle" | "dreaming" | "offline" | "retiring" => Some(
+            entry["display_status"]
+                .as_str()
+                .unwrap_or_else(|| main_status::member_lifecycle(entry).1),
+        ),
         _ => None,
     }
 }
@@ -244,7 +246,10 @@ impl State {
             ("".into(), PanelTone::Normal),
             (panel::safe_text(field(entry, "name")), PanelTone::Accent),
         ];
-        if let Some(status) = member_lifecycle(entry) {
+        if let Some(status) = entry["display_connection"]
+            .as_str()
+            .or_else(|| member_lifecycle(entry))
+        {
             rows.push((format!("Status · {status}"), PanelTone::Normal));
             if let Some(calls) = entry["tool_calls_10m"].as_u64() {
                 rows.push((format!("Tool calls in 10 min · {calls}"), PanelTone::Normal));

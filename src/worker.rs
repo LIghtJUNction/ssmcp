@@ -40,6 +40,9 @@ pub(crate) struct SlotLog {
     pub(crate) at_ms: u64,
     pub(crate) level: String,
     pub(crate) text: String,
+    /// Local display purpose from the observed native job, tied to its original claim.
+    #[serde(skip)]
+    pub(crate) activity_title: Option<String>,
     pub(crate) task_id: Option<String>,
 }
 
@@ -272,6 +275,7 @@ pub(crate) fn native_command_started(
     source: &crate::runtime::call_scope::Source,
     command_id: &str,
     argv: &[String],
+    title: Option<&str>,
 ) -> Option<NativeCommandLog> {
     let call = source.call.as_ref()?;
     let client_id = call.client_id()?;
@@ -288,7 +292,9 @@ pub(crate) fn native_command_started(
     // JSON preserves argv boundaries; this string is display data, never shell
     // input. Pool applies its bounded, control-character-safe display policy.
     let command = serde_json::to_string(argv).ok()?;
-    let command = pool.command_started(source, command_id, &command).ok()??;
+    let command = pool
+        .command_started(source, command_id, &command, title)
+        .ok()??;
     Some(NativeCommandLog { pool, command })
 }
 

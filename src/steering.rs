@@ -536,6 +536,7 @@ mod tests {
             role: None,
             status: "idle".into(),
             dreaming_active: None,
+            activity: None,
             tool_calls_10m: None,
             activity_status: None,
         }];
@@ -631,6 +632,7 @@ mod tests {
                 role: None,
                 status: "idle".into(),
                 dreaming_active: None,
+                activity: None,
                 tool_calls_10m: None,
                 activity_status: None,
             })

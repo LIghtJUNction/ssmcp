@@ -85,6 +85,7 @@ struct Agent {
     tool_window: tool_window::ToolWindow,
     capabilities: Vec<String>,
     joined_at_ms: u64,
+    main_activity: lifecycle::MainObservation,
     last_seen_ms: u64,
     expires_at_ms: u64,
     expires: Instant,
@@ -326,7 +327,15 @@ impl Hub {
 
     /// Public roster for the connected local client's UI. Mailboxes, owner keys
     /// and private participant tokens never cross this interface.
+    #[cfg(test)]
     pub(crate) fn presence(&self) -> Result<Vec<crate::wire::SteeringAgent>, String> {
+        self.display_presence(false)
+    }
+
+    pub(crate) fn display_presence(
+        &self,
+        include_activity: bool,
+    ) -> Result<Vec<crate::wire::SteeringAgent>, String> {
         let state = self.locked()?;
         Ok(state
             .agents
@@ -339,6 +348,9 @@ impl Hub {
                     role: agent.role.clone(),
                     status: agent.lifecycle.status.as_str().into(),
                     tool_calls_10m: Some(calls),
+                    activity: (include_activity
+                        && crate::wire::coordinator_role(agent.role.as_deref()))
+                    .then(|| agent.main_activity.snapshot(Instant::now())),
                     activity_status: offline.then(|| "offline".to_owned()),
                     dreaming_active: {
                         let active = agent.lifecycle.dreaming_since_ms().is_some();
@@ -408,6 +420,7 @@ impl Hub {
                         role: agent.role.clone(),
                         status: agent.lifecycle.status.as_str().into(),
                         dreaming_active: None,
+                        activity: None,
                         tool_calls_10m: None,
                         activity_status: None,
                     },
@@ -431,6 +444,7 @@ impl Hub {
             role: agent.role.clone(),
             status: agent.lifecycle.status.as_str().into(),
             dreaming_active: None,
+            activity: None,
             tool_calls_10m: None,
             activity_status: None,
         })
@@ -634,6 +648,7 @@ impl Hub {
             tool_window: tool_window::ToolWindow::new(Instant::now()),
             capabilities,
             joined_at_ms: now,
+            main_activity: lifecycle::MainObservation::new(Instant::now()),
             last_seen_ms: now,
             expires_at_ms,
             expires: Instant::now() + Duration::from_millis(LEASE_MS),
