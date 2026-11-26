@@ -18,6 +18,10 @@ function readCredential() {
 const token = readCredential();
 export const hasCredential = Boolean(token);
 
+export function openSessionGui() {
+  if (token && location.origin === 'http://127.0.0.1:42387') location.replace('/#' + token);
+}
+
 export function usesOfficialRelay(server) {
   try {
     const url = new URL(server.includes('://') ? server : 'https://' + server);

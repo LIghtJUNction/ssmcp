@@ -11,7 +11,7 @@ if [ "$#" -ne 0 ]; then
 fi
 
 echo 'SSMCP 操作菜单'
-echo '查看状态 / 启动服务 / 退出'
+echo '打开工作台 / 查看状态 / 启动服务 / 退出'
 echo '音量＋切换，音量−确认。20 秒未按音量键会自动退出。'
 
 umask 077
@@ -32,7 +32,7 @@ mkfifo "$work/keys" || exit 1
 reader=$!
 exec 3<"$work/keys"
 
-choice=查看状态
+choice=打开工作台
 while :; do
     printf '当前选择：%s\n' "$choice"
     key=$(/system/bin/timeout 20 /system/bin/sh -c '
@@ -46,9 +46,10 @@ while :; do
     ' <&3) || exit 0
     if [ "$key" = confirm ]; then break; fi
     case "$choice" in
+        打开工作台) choice=查看状态 ;;
         查看状态) choice=启动服务 ;;
         启动服务) choice=退出 ;;
-        退出) choice=查看状态 ;;
+        退出) choice=打开工作台 ;;
     esac
 done
 exec 3<&-
@@ -56,6 +57,7 @@ cleanup
 trap - 0 HUP INT TERM
 
 case "$choice" in
+    打开工作台) start_console && open_console gui || exit 1 ;;
     查看状态)
         if read_console_url; then echo '本机服务已运行。'; else echo '本机服务未运行。'; fi ;;
     启动服务)

@@ -1,4 +1,4 @@
-import { api, el, hasCredential, terminal, usesOfficialRelay } from './device-api.js';
+import { api, el, hasCredential, openSessionGui, terminal, usesOfficialRelay } from './device-api.js';
 
 function setView(view) {
   document.body.dataset.view = view;
@@ -60,6 +60,7 @@ async function configure() {
   }
 }
 el('connect').onclick = configure;
+el('open-gui').onclick = openSessionGui;
 
 async function readConfiguration(checkCompletionOnly = false) {
   const { target, configured, mcp } = await terminal('list', 0);

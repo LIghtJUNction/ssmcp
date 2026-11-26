@@ -2,41 +2,22 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
-  <meta name="theme-color" content="#000000">
-  <title>SSMCP 终端</title>
-  <link rel="stylesheet" href="console.css">
-  <script type="module" src="console.js"></script>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="referrer" content="no-referrer">
+  <title>SSMCP 工作台</title>
+  <style>
+    body { max-width: 32rem; margin: 12vh auto; padding: 0 1.5rem; font: 1rem/1.6 system-ui,sans-serif; }
+    h1 { font-size: 1.6rem; }
+    button { min-height: 44px; margin: .3rem .5rem .3rem 0; padding: .4rem 1rem; font: inherit; }
+  </style>
+  <script defer src="./open.js"></script>
 </head>
-<body data-page="terminal" data-view="notice">
-  <main>
-    <p id="status" role="status"></p>
-    <a id="open-setup" class="page-action" href="/setup" hidden>打开安装引导</a>
-    <section id="console" aria-label="设备终端" hidden>
-      <nav id="tabs" aria-label="会话"></nav>
-      <div class="terminal-workspace">
-        <pre id="screen" tabindex="0" aria-label="终端输出，点击可直接输入"></pre>
-        <span id="terminal-cursor" aria-hidden="true" hidden></span>
-        <textarea id="direct-input" rows="1" aria-label="终端输入" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
-      </div>
-      <section id="input-recovery" aria-label="终端输入草稿" hidden>
-        <strong id="draft-tab"></strong>
-        <label>回执未确认，请核对终端<textarea id="uncertain-input" readonly rows="2"></textarea></label>
-        <label>尚未发送，可选中复制<textarea id="unsent-input" readonly rows="2"></textarea></label>
-        <button id="dismiss-draft" type="button">清除草稿并继续</button>
-      </section>
-      <div id="keys" role="group" aria-label="终端按键">
-        <button type="button" id="open-keyboard" aria-label="打开键盘">⌨</button>
-        <button type="button" data-key="Tab" aria-label="Tab 补全">Tab 补全</button>
-        <button type="button" data-key="Escape">Esc</button>
-        <button type="button" data-key="Ctrl" aria-pressed="false" title="按 Ctrl 后输入一个英文字母">Ctrl</button>
-        <button type="button" data-key="ArrowLeft" aria-label="向左">←</button>
-        <button type="button" data-key="ArrowUp" aria-label="向上">↑</button>
-        <button type="button" data-key="ArrowDown" aria-label="向下">↓</button>
-        <button type="button" data-key="ArrowRight" aria-label="向右">→</button>
-        <button type="button" data-key="Enter" aria-label="回车">↵</button>
-      </div>
-    </section>
-  </main>
-</body>
+<body><main>
+  <h1>SSMCP 工作台</h1>
+  <p id="status" role="status">正在打开本机会话…</p>
+  <button id="open" type="button">打开工作台</button>
+  <button id="setup" type="button">设备配置</button>
+  <button id="zuse" type="button">Zuse 工作台</button>
+</main></body>
 </html>

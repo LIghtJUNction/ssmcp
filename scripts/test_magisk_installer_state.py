@@ -55,7 +55,7 @@ class InstallerStateTest(unittest.TestCase):
         self.starts.touch()
 
         # Only device absolute paths change in these copies of the real scripts.
-        for name in ("customize.sh", "launch.sh", "action.sh", "service.sh", "onboarding/open.sh"):
+        for name in ("customize.sh", "launch.sh", "action.sh", "service.sh", "open.sh", "onboarding/open.sh"):
             script = (MODULE / name).read_text(encoding="utf-8")
             for prefix in ("/data/adb/", "/data/local/", "/system/", "/proc/"):
                 script = script.replace(prefix, str(self.root) + prefix)
@@ -64,7 +64,7 @@ class InstallerStateTest(unittest.TestCase):
             target.write_text(script, encoding="utf-8")
             target.chmod(0o755)
         for path in (system_bin, installer_bin):
-            for tool in ("mkdir", "chmod", "cp", "mv", "ln", "mktemp", "mkfifo", "printf", "rm", "rmdir"):
+            for tool in ("mkdir", "chmod", "cat", "cp", "mv", "ln", "mktemp", "mkfifo", "printf", "rm", "rmdir"):
                 (path / tool).symlink_to(shutil.which(tool))
             executable(path / "sleep", "exec /bin/sleep 0.05\n")
         (system_bin / "sh").symlink_to("/bin/sh")
@@ -88,7 +88,7 @@ except subprocess.TimeoutExpired:
         self.template = "ssmcp test@example.invalid\n"
         (self.staged / "ssmcp.rc").write_text(self.template)
         executable(self.staged / "bin/ssmcp", """
-[ "$1" = __magisk ] || exit 1
+[ "$1" = __magisk ] && [ "$SSMCP_SESSION_HOME" = "$2/sessions" ] || exit 1
 printf '%s\\n' "$$" >> "$FIXTURE/starts"
 mkdir -p "$FIXTURE/proc/$$" || exit 1
 ln "$0" "$FIXTURE/proc/$$/exe" || exit 1
@@ -143,25 +143,49 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
         self.assertEqual(len(self.starts.read_text().splitlines()), 1)
         self.assertEqual(self.keys_read.read_text(), "")
 
-    @unittest.skipUnless(shutil.which("node"), "Node.js is required for the WebUI bridge check")
-    def test_explicit_webui_setup_uses_dedicated_launcher(self):
-        script = """
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-const calls = [];
-globalThis.location = { hostname: 'appassets.androidplatform.net' };
-globalThis.window = { ksu: { exec(command, options, callback) {
-    calls.push(command);
-    window[callback](0, '', '');
-} } };
-const source = readFileSync(process.argv[1]).toString('base64');
-const { openManagerSetup } = await import('data:text/javascript;base64,' + source);
-assert.deepEqual(calls, []);
-await openManagerSetup();
-assert.deepEqual(calls, ['/system/bin/sh /data/adb/modules/ssmcp/onboarding/open.sh']);
-"""
-        subprocess.run([shutil.which("node"), "--input-type=module", "-e", script,
-                        str(MODULE / "webroot/module-entry.js")], check=True, timeout=8)
+    def test_webui_launch_selects_gui_only_for_confirmed_target(self):
+        self.staged.rename(self.active)
+        self.shell(self.active / "open.sh")
+        self.assertEqual(urlsplit(self.opened.read_text().strip()).path, "/setup")
+        (self.state / "root-consent-v1").write_text("test@example.invalid")
+        self.shell(self.active / "open.sh")
+        url = urlsplit(self.opened.read_text().splitlines()[-1])
+        self.assertEqual((url.scheme, url.netloc, url.path, url.query, url.fragment),
+                         ("http", "127.0.0.1:42387", "/", "", self.environment["FIXTURE_FRAGMENT"]))
+        self.assertEqual((self.state / "sessions").stat().st_mode & 0o777, 0o700)
+        (self.state / "ssmcp.rc").write_text("ssmcp other@example.invalid", encoding="utf-8")
+        self.shell(self.active / "open.sh")
+        self.assertEqual(urlsplit(self.opened.read_text().splitlines()[-1]).path, "/setup")
+        self.assertEqual(len(self.starts.read_text().splitlines()), 1)
+
+    def test_disabled_or_removed_module_does_not_launch(self):
+        self.staged.rename(self.active)
+        for name in ("disable", "remove"):
+            flag = self.active / name
+            flag.touch()
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.shell(self.active / "open.sh")
+            flag.unlink()
+        self.assertEqual(self.starts.read_text(), "")
+        self.assertEqual(self.opened.read_text(), "")
+
+    def test_rejects_unowned_or_malformed_pairing_url(self):
+        self.install()
+        pid = self.owner.read_text().splitlines()[0]
+        self.staged.rename(self.active)
+        for owner, url in [(pid, "http://127.0.0.1:42387/#short"),
+                           (pid, "http://127.0.0.1:42387/#x" + "a" * 63),
+                           (pid, "http://example.invalid/#" + "a" * 64),
+                           ("999999999", "http://127.0.0.1:42387/#" + "a" * 64)]:
+            self.owner.write_text(f"{owner}\n{url}\n")
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.shell("-c", 'MODDIR=$1; . "$MODDIR/launch.sh"; read_console_url', "check", self.active)
+
+    def test_action_default_opens_workbench_or_setup(self):
+        self.staged.rename(self.active)
+        self.events.write_text("/dev/input/event1: EV_KEY KEY_VOLUMEDOWN DOWN\n")
+        self.shell(self.active / "action.sh")
+        self.assertEqual(urlsplit(self.opened.read_text().strip()).path, "/setup")
 
     def test_boot_and_legacy_action_start_without_menu_or_browser(self):
         self.staged.rename(self.active)
@@ -192,15 +216,15 @@ assert.deepEqual(calls, ['/system/bin/sh /data/adb/modules/ssmcp/onboarding/open
             return output
 
         self.assertIn("本机服务未运行", action("EV_KEY KEY_VOLUMEUP UP",
-                                         "EV_KEY KEY_VOLUMEUP REPEAT", "EV_KEY KEY_A DOWN", down))
+                                         "EV_KEY KEY_VOLUMEUP REPEAT", "EV_KEY KEY_A DOWN", up, down))
         self.assertEqual(self.starts.read_text(), "")
-        self.assertIn("已请求启动本机服务", action(up, down))
+        self.assertIn("已请求启动本机服务", action(up, up, down))
         self.wait_for_console()
         owner = self.owner.read_bytes()
         starts = self.starts.read_bytes()
-        self.assertIn("本机服务已运行", action(down))
         self.assertIn("本机服务已运行", action(up, down))
-        self.assertIn("当前选择：退出", action(up, up, down))
+        self.assertIn("本机服务已运行", action(up, up, down))
+        self.assertIn("当前选择：退出", action(up, up, up, down))
         self.assertNotIn("本机服务", action())
         self.assertEqual(self.owner.read_bytes(), owner)
         self.assertEqual(self.starts.read_bytes(), starts)
