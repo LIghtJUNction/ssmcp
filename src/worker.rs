@@ -23,6 +23,9 @@ pub(crate) use remote::CommandLog;
 /// Maximum time spent observing one worker request; queued work outlives the call.
 pub(crate) const MAX_OBSERVATION_WAIT_MS: u64 = crate::wire::MAX_OBSERVATION_WAIT_MS;
 
+/// Shared by the coordinator's generated message and the terminal history decoder.
+pub(crate) const IDLE_STATION_OBSERVATION: &str = " registered station(s) were idle when observed. Workers may be between assignment waits. Use ssmcp.worker.submit for independent work.";
+
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};

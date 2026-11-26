@@ -3078,11 +3078,16 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
     match origin? {
         "system_hook" if text.starts_with("Worker pool ") => {
             let (_, detail) = text.split_once(": ")?;
-            let (standby, _) =
-                detail.split_once(" connected external worker(s) are standing by.")?;
+            let standby = detail
+                .strip_suffix(crate::worker::IDLE_STATION_OBSERVATION)
+                .or_else(|| {
+                    detail
+                        .split_once(" connected external worker(s) are standing by.")
+                        .map(|(count, _)| count)
+                })?;
             Some(Notice {
                 repeat: progress_notices::Repeat::standby(text),
-                summary: format!("{} 个工位待命", standby.parse::<u64>().ok()?),
+                summary: format!("观察时 {} 个工位空闲", standby.parse::<u64>().ok()?),
                 tone: "muted",
             })
         }
@@ -3139,7 +3144,7 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
                     Some("completed") => ("任务完成", "muted"),
                     _ => ("任务已结束", "muted"),
                 },
-                Some("task.submitted") => ("任务已提交", "muted"),
+                Some("task.submitted") => ("任务已入队，等待领取", "muted"),
                 Some("worker.started") => ("开始执行", "muted"),
                 Some("worker.progress") => match value["data"]["task_status"].as_str() {
                     Some("failed") => ("任务失败", "error"),
@@ -3494,11 +3499,17 @@ mod tests {
         );
         assert!(coordinator_notice(Some("system_hook"), text).is_none());
         let standby = "Worker pool abc: 5 connected external worker(s) are standing by. Delegate suitable work.";
-        assert_eq!(
-            coordinator_notice(Some("system_hook"), standby)
-                .unwrap()
-                .summary,
-            "5 个工位待命"
+        let observed = format!(
+            "Worker pool abc: 5{}",
+            crate::worker::IDLE_STATION_OBSERVATION
+        );
+        for message in [standby, &observed] {
+            let notice = coordinator_notice(Some("system_hook"), message).unwrap();
+            assert_eq!(notice.summary, "观察时 5 个工位空闲");
+        }
+        assert!(progress_notices::Repeat::standby(&observed).is_some());
+        assert!(
+            progress_notices::Repeat::standby(&format!("{observed} Extra guidance.")).is_none()
         );
         assert!(
             coordinator_notice(Some("system_hook"), "Keep this custom hook visible.").is_none()

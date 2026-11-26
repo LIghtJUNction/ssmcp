@@ -72,7 +72,8 @@ pub(super) enum Repeat {
 impl Repeat {
     pub(super) fn standby(text: &str) -> Option<Self> {
         // Additional instructions from a newer relay must get their own row.
-        text.ends_with(" connected external worker(s) are standing by. Use ssmcp.worker.submit for independent work.")
+        (text.ends_with(crate::worker::IDLE_STATION_OBSERVATION)
+            || text.ends_with(" connected external worker(s) are standing by. Use ssmcp.worker.submit for independent work."))
             .then(|| Self::Standby(Sha256::digest(text).into()))
     }
 

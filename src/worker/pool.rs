@@ -893,7 +893,7 @@ impl Pool {
                 )?;
                 Ok(
                     json!({"task":task,"warnings":prepared.warnings,"worker":self.queue.compact_snapshot(),
-                    "execution":self.execution_name(),"wait_hint":"Keep task_id. For one result, block on worker.result; for several, use one worker.wait_for(any task_finished), then read ready results. Use a bounded wait_ms within your transport deadline."}),
+                    "execution":self.execution_name(),"wait_hint":"Keep task_id. A queued task with slot null and attempt 0 is waiting for its first claim. Registered remote workers collect assignments through worker.wait. For one result, block on worker.result; for several, use one worker.wait_for(any task_finished), then read ready results. Use a bounded wait_ms within your transport deadline."}),
                 )
             }
             "ssmcp.worker.result" => {
@@ -1353,6 +1353,14 @@ mod tests {
                 2,
             )
             .unwrap();
+        // The registration wait returned before submission. Idle capacity can
+        // therefore coexist with a queued task until the worker asks for it.
+        let waiting = pool.queue.result(&owner, &task.task_id).unwrap();
+        assert_eq!(waiting.status, super::super::queue::TaskStatus::Queued);
+        assert_eq!((waiting.attempt, waiting.slot), (0, None));
+        let snapshot = pool.queue.compact_snapshot();
+        assert_eq!(snapshot["idle"], 1);
+        assert_eq!(snapshot["queued"], 1);
         let assigned = pool
             .wait_remote(&executor, "availability-claim", 0)
             .await

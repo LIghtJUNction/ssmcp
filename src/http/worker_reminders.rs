@@ -459,14 +459,15 @@ fn notice(control_client_id: &str, agent_id: &str, pool: &Pool) -> Value {
         "worker_client_id":pool.client_id,
         "process_id":pool.process_id,
         "standby":standby,
+        "queued":pool.counts.queued,
         "working":pool.counts.working,
         "total":pool.counts.total,
         "desired_total":pool.counts.desired_total,
         "retiring":pool.counts.retiring,
         "registered_workers":pool.counts.registered,
         "message":format!(
-            "Worker pool {}: {standby} connected external worker(s) are standing by. Use ssmcp.worker.submit for independent work.",
-            pool.client_id
+            "Worker pool {}: {standby}{}",
+            pool.client_id, crate::worker::IDLE_STATION_OBSERVATION
         )
     })
 }
@@ -512,7 +513,7 @@ fn append_section(
         .iter()
         .filter_map(|notice| match notice["standby"].as_u64() {
             Some(count) => Some(format!(
-                "{count} standby. See structuredContent.worker_reminders."
+                "{count} registered station(s) idle at observation. See structuredContent.worker_reminders."
             )),
             None => notice["message"].as_str().map(str::to_owned),
         })
@@ -1183,6 +1184,13 @@ mod tests {
     fn notices_preserve_original_results_and_respect_the_append_budget() {
         let pool = pool_from_reply(&reply()).unwrap();
         let notice = notice("control", "main", &pool);
+        assert_eq!(notice["queued"], 0);
+        assert!(
+            notice["message"]
+                .as_str()
+                .unwrap()
+                .ends_with(crate::worker::IDLE_STATION_OBSERVATION)
+        );
         let original = json!({
             "isError":true,
             "content":[{"type":"text","text":"original result"}],

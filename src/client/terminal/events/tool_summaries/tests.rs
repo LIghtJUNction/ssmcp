@@ -1429,116 +1429,122 @@ fn summary_text_is_bounded_single_line_and_redacted() {
 #[tokio::test]
 async fn coordinator_polling_interleaves_without_hiding_details_or_new_input() {
     let fixture = Fixture::new().await;
-    let owner = source(&fixture.runtime, 1, "123", None, "operator").await;
-    let mut view = new_view(&owner);
-    let input = |view: &mut EventView, origin: &str, text: &str| {
+    history::with_test_history(fixture.root.join("history"), async {
+        let owner = source(&fixture.runtime, 1, "123", None, "operator").await;
+        let mut view = new_view(&owner);
+        let input = |view: &mut EventView, origin: &str, text: &str| {
+            view.ingest_scoped_event(
+                "message",
+                &json!({"type":"ssmcp.message","role":"tool","format":"plain",
+                    "kind":"input","input_origin":origin,"text":text}),
+                b"",
+                owner.display(),
+            );
+        };
+        let gap = |subscription: &str, cursor: u64, retained: u64| {
+            let data = json!({"status":"unavailable","subscription_id":subscription,
+                "error":format!("events_gap: cursor {cursor} precedes retained cursor {retained}; latest cursor 71289; resubscribe with an explicit retained cursor after reconciling the gap")});
+            format!("WORKER STATE EVENTS — retained until explicit events.ack\n{data}")
+        };
+        let policy = "Continue authorized work; otherwise await these events (30000 ms, same wait_id). ACK processed cursors. ui.wait delivers input.";
+        let standby = "Worker pool pool-a: 3 connected external worker(s) are standing by. Use ssmcp.worker.submit for independent work.";
+        for i in 0..3 {
+            let call = source(&fixture.runtime, 10 + i, "123", None, "operator").await;
+            view.summary_call_started(&call, "ssmcp.time.prompt", true);
+            view.summary_call_finished(&call, true);
+            input(&mut view, "worker_event", &gap("sub-a", 70243, 70265 + i));
+            input(&mut view, "system_hook", standby);
+            input(&mut view, "system_hook", policy);
+        }
+        assert_eq!(view.visible_ids(), vec![0, 1, 2, 3]);
+        let ui = Ui {
+            color: false,
+            ..Ui::default()
+        };
+        let rows = view.render(120, 22, &ui, true).join("\n");
+        for expected in [
+            "ssmcp.time.prompt · done ×3",
+            "恢复订阅 ×3",
+            "观察时 3 个工位空闲 ×3",
+            "协调者等待策略 ×3",
+        ] {
+            assert!(rows.contains(expected), "{rows}");
+        }
+        view.select(isize::MIN);
+        view.select(1);
+        assert!(view.open());
+        let expanded = view.render(230, 40, &ui, true).join("\n");
+        for retained in 70265..=70267 {
+            assert!(
+                expanded.contains(&format!("precedes retained cursor {retained}")),
+                "{expanded}"
+            );
+        }
+        assert!(view.back());
+        view.filter("retained cursor 70266", 0);
+        assert_eq!(view.visible_ids(), vec![5]);
+        view.filter("", 0);
+        view.set_scope(EventScope::All);
+        assert_eq!(view.visible_ids(), (0..12).collect::<Vec<_>>());
+        view.set_scope(EventScope::Conversation);
+        let user = gap("sub-a", 70243, 70268);
         view.ingest_scoped_event(
             "message",
-            &json!({"type":"ssmcp.message","role":"tool","format":"plain",
-                "kind":"input","input_origin":origin,"text":text}),
+            &json!({"type":"ssmcp.message","role":"user","text":user}),
             b"",
             owner.display(),
         );
-    };
-    let gap = |subscription: &str, cursor: u64, retained: u64| {
-        let data = json!({"status":"unavailable","subscription_id":subscription,
-            "error":format!("events_gap: cursor {cursor} precedes retained cursor {retained}; latest cursor 71289; resubscribe with an explicit retained cursor after reconciling the gap")});
-        format!("WORKER STATE EVENTS — retained until explicit events.ack\n{data}")
-    };
-    let policy = "Continue authorized work; otherwise await these events (30000 ms, same wait_id). ACK processed cursors. ui.wait delivers input.";
-    let standby = "Worker pool pool-a: 3 connected external worker(s) are standing by. Use ssmcp.worker.submit for independent work.";
-    for i in 0..3 {
-        let call = source(&fixture.runtime, 10 + i, "123", None, "operator").await;
-        view.summary_call_started(&call, "ssmcp.time.prompt", true);
-        view.summary_call_finished(&call, true);
-        input(&mut view, "worker_event", &gap("sub-a", 70243, 70265 + i));
-        input(&mut view, "system_hook", standby);
-        input(&mut view, "system_hook", policy);
-    }
-    assert_eq!(view.visible_ids(), vec![0, 1, 2, 3]);
-    let ui = Ui {
-        color: false,
-        ..Ui::default()
-    };
-    let rows = view.render(120, 22, &ui, true).join("\n");
-    for expected in [
-        "ssmcp.time.prompt · done ×3",
-        "恢复订阅 ×3",
-        "3 个工位待命 ×3",
-        "协调者等待策略 ×3",
-    ] {
-        assert!(rows.contains(expected), "{rows}");
-    }
-    view.select(isize::MIN);
-    view.select(1);
-    assert!(view.open());
-    let expanded = view.render(230, 40, &ui, true).join("\n");
-    for retained in 70265..=70267 {
-        assert!(
-            expanded.contains(&format!("precedes retained cursor {retained}")),
-            "{expanded}"
+        input(&mut view, "worker_event", &user);
+        input(&mut view, "worker_event", &gap("sub-a", 70244, 70270));
+        input(&mut view, "worker_event", &gap("sub-b", 70244, 70270));
+        input(
+            &mut view,
+            "system_hook",
+            &format!("{policy} Maintenance round-1: one authorized action."),
         );
-    }
-    assert!(view.back());
-    view.filter("retained cursor 70266", 0);
-    assert_eq!(view.visible_ids(), vec![5]);
-    view.filter("", 0);
-    view.set_scope(EventScope::All);
-    assert_eq!(view.visible_ids(), (0..12).collect::<Vec<_>>());
-    view.set_scope(EventScope::Conversation);
-    let user = gap("sub-a", 70243, 70268);
-    view.ingest_scoped_event(
-        "message",
-        &json!({"type":"ssmcp.message","role":"user","text":user}),
-        b"",
-        owner.display(),
-    );
-    input(&mut view, "worker_event", &user);
-    input(&mut view, "worker_event", &gap("sub-a", 70244, 70270));
-    input(&mut view, "worker_event", &gap("sub-b", 70244, 70270));
-    input(
-        &mut view,
-        "system_hook",
-        &format!("{policy} Maintenance round-1: one authorized action."),
-    );
-    let unknown =
-        "WORKER STATE EVENTS — retained until explicit events.ack\n{\"kind\":\"worker.unknown\"}";
-    input(&mut view, "worker_event", unknown);
-    for (id, success, read) in [(30, false, true), (31, true, false)] {
-        let call = source(&fixture.runtime, id, "123", None, "operator").await;
-        view.summary_call_started(&call, "ssmcp.time.prompt", read);
-        view.summary_call_finished(&call, success);
-        input(&mut view, "worker_event", &gap("sub-b", 70244, 70271));
-    }
-    assert_eq!(
-        view.visible_ids(),
-        [vec![0, 1, 2, 3], (12..22).collect()].concat()
-    );
-    let rows = view.render(200, 100, &ui, true).join("\n");
-    assert!(
-        rows.contains("precedes retained cursor 70268")
-            && rows.contains("维护请求")
-            && rows.contains("任务结果未知")
-            && rows.contains("ssmcp.time.prompt · failed"),
-        "{rows}"
-    );
+        let unknown =
+            "WORKER STATE EVENTS — retained until explicit events.ack\n{\"kind\":\"worker.unknown\"}";
+        input(&mut view, "worker_event", unknown);
+        for (id, success, read) in [(30, false, true), (31, true, false)] {
+            let call = source(&fixture.runtime, id, "123", None, "operator").await;
+            view.summary_call_started(&call, "ssmcp.time.prompt", read);
+            view.summary_call_finished(&call, success);
+            input(&mut view, "worker_event", &gap("sub-b", 70244, 70271));
+        }
+        assert_eq!(
+            view.visible_ids(),
+            [vec![0, 1, 2, 3], (12..22).collect()].concat()
+        );
+        let rows = view.render(200, 100, &ui, true).join("\n");
+        assert!(
+            rows.contains("precedes retained cursor 70268")
+                && rows.contains("维护请求")
+                && rows.contains("任务结果未知")
+                && rows.contains("ssmcp.time.prompt · failed"),
+            "{rows}"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn repeating_notices_do_not_cross_controller_or_connection_boundaries() {
     let fixture = Fixture::new().await;
-    let owner = source(&fixture.runtime, 1, "123", None, "same-label").await;
-    let other = source(&fixture.runtime, 2, "456", None, "same-label").await;
-    let second_fixture = Fixture::new().await;
-    let other_connection = source(&second_fixture.runtime, 3, "123", None, "same-label").await;
-    let mut view = new_view(&owner);
-    let body = json!({"type":"ssmcp.message","role":"tool","kind":"input","input_origin":"worker_event",
-        "text":"WORKER STATE EVENTS — retained until explicit events.ack\n{\"status\":\"unavailable\",\"subscription_id\":\"one\",\"error\":\"events_gap: cursor 1 precedes retained cursor 2\"}"});
-    for controller in [&owner, &other, &owner, &other_connection, &owner] {
-        let mut display = controller.display();
-        // Exercise the discriminator even when one local pane selects all five records.
-        display.history = owner.display().history;
-        view.ingest_scoped_event("message", &body, b"", display);
-    }
-    assert_eq!(view.visible_ids(), vec![0, 1, 2, 3, 4]);
+    history::with_test_history(fixture.root.join("history"), async {
+        let owner = source(&fixture.runtime, 1, "123", None, "same-label").await;
+        let other = source(&fixture.runtime, 2, "456", None, "same-label").await;
+        let second_fixture = Fixture::new().await;
+        let other_connection = source(&second_fixture.runtime, 3, "123", None, "same-label").await;
+        let mut view = new_view(&owner);
+        let body = json!({"type":"ssmcp.message","role":"tool","kind":"input","input_origin":"worker_event",
+            "text":"WORKER STATE EVENTS — retained until explicit events.ack\n{\"status\":\"unavailable\",\"subscription_id\":\"one\",\"error\":\"events_gap: cursor 1 precedes retained cursor 2\"}"});
+        for controller in [&owner, &other, &owner, &other_connection, &owner] {
+            let mut display = controller.display();
+            // Exercise the discriminator even when one local pane selects all five records.
+            display.history = owner.display().history;
+            view.ingest_scoped_event("message", &body, b"", display);
+        }
+        assert_eq!(view.visible_ids(), vec![0, 1, 2, 3, 4]);
+    })
+    .await;
 }
