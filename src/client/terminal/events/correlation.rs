@@ -165,6 +165,7 @@ pub(super) struct Meta {
     pub(super) language: &'static str,
     pub(super) read: Option<super::read_activity::Read>,
     pub(super) read_bookkeeping: bool,
+    pub(super) prompt_read: bool,
 }
 
 impl Meta {

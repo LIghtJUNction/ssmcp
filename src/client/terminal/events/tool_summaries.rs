@@ -338,6 +338,7 @@ impl EventView {
         &mut self,
         source: &Source,
         name: &str,
+        prompt_read: bool,
     ) {
         if !counted(name) {
             if observer(name)
@@ -392,6 +393,7 @@ impl EventView {
         // without their own output event. Native lifecycle updates merge into it.
         let mut meta = Meta {
             kind: Kind::Tool,
+            prompt_read,
             started: true,
             status: Some(Status::Running),
             ..Meta::default()
@@ -442,6 +444,12 @@ impl EventView {
                     Status::Failed
                 });
                 event.cache = None;
+                if event.meta.prompt_read && success {
+                    self.preserve_read_selection();
+                    if self.follow {
+                        self.latest();
+                    }
+                }
             }
         }
     }

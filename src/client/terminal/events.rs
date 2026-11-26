@@ -670,8 +670,13 @@ impl EventView {
         if self.scope != EventScope::Conversation || !self.query.is_empty() || self.level != 0 {
             return Vec::new();
         }
+        let folded_polls = progress_notices::groups(&self.events, &self.history_selection)
+            .into_iter()
+            .filter(|group| self.events[group.start].meta.prompt_read)
+            .flat_map(|group| group.members.into_iter().map(|i| self.events[i].id))
+            .collect::<std::collections::HashSet<_>>();
         let mut groups = tool_activity::groups(&self.events, |event| {
-            event.owned_by(&self.history_selection)
+            event.owned_by(&self.history_selection) && !folded_polls.contains(&event.id)
         });
         for group in &mut groups {
             if let Some(id) = &self.events[group.start].tool_group_id {
@@ -2138,7 +2143,7 @@ impl EventView {
                             paint(&prefix, "muted", ui, selected && focused),
                             paint(
                                 &clip_plain(&group.title, body_width),
-                                "muted",
+                                event.meta.notice.as_ref().map_or("muted", |n| n.tone),
                                 ui,
                                 selected && focused
                             )
@@ -3062,7 +3067,7 @@ fn unstyled(text: &str) -> String {
 }
 
 struct Notice {
-    progress: Option<[u8; 32]>,
+    repeat: Option<progress_notices::Repeat>,
     summary: String,
     tone: &'static str,
 }
@@ -3076,7 +3081,7 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
             let (standby, _) =
                 detail.split_once(" connected external worker(s) are standing by.")?;
             Some(Notice {
-                progress: None,
+                repeat: progress_notices::Repeat::standby(text),
                 summary: format!("{} 个工位待命", standby.parse::<u64>().ok()?),
                 tone: "muted",
             })
@@ -3085,8 +3090,13 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
             if text.starts_with("Continue authorized work; otherwise await these events") =>
         {
             Some(Notice {
-                progress: None,
-                summary: "协调者等待策略".into(),
+                repeat: progress_notices::Repeat::policy(text),
+                summary: if text.contains(" Maintenance ") {
+                    "协调者维护请求"
+                } else {
+                    "协调者等待策略"
+                }
+                .into(),
                 tone: "muted",
             })
         }
@@ -3101,7 +3111,7 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
                 return Some(Notice {
                     summary: format!("部分旧事件已过期（截至 #{last}），从 #{resume} 之后继续"),
                     tone: "warning",
-                    progress: None,
+                    repeat: progress_notices::Repeat::gap(&value),
                 });
             }
             if value["error"]
@@ -3109,7 +3119,7 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
                 .is_some_and(|error| error.starts_with("events_gap:"))
             {
                 return Some(Notice {
-                    progress: None,
+                    repeat: progress_notices::Repeat::gap(&value),
                     summary: "部分旧事件已过期，请从保留位置恢复订阅".into(),
                     tone: "warning",
                 });
@@ -3118,7 +3128,7 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
                 return Some(Notice {
                     summary,
                     tone: "muted",
-                    progress: None,
+                    repeat: None,
                 });
             }
             let progress = progress_notices::identity(&value);
@@ -3156,7 +3166,7 @@ fn coordinator_notice(origin: Option<&str>, text: &str) -> Option<Notice> {
             Some(Notice {
                 summary,
                 tone,
-                progress,
+                repeat: progress.map(progress_notices::Repeat::Progress),
             })
         }
         _ => None,

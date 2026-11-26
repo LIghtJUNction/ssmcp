@@ -60,45 +60,150 @@ pub(super) fn repository_summary(event: &Value) -> Option<String> {
     }
 }
 
-pub(super) fn groups(events: &VecDeque<Event>, history: &DisplayHistory) -> Vec<Group> {
-    let eligible = |e: &Event| {
-        if !e.owned_by(history) || e.chat_expanded || e.historical || e.truncated {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Repeat {
+    Progress([u8; 32]),
+    Gap([u8; 32]),
+    Standby([u8; 32]),
+    Policy([u8; 32]),
+    PromptRead,
+}
+
+impl Repeat {
+    pub(super) fn standby(text: &str) -> Option<Self> {
+        // Additional instructions from a newer relay must get their own row.
+        text.ends_with(" connected external worker(s) are standing by. Use ssmcp.worker.submit for independent work.")
+            .then(|| Self::Standby(Sha256::digest(text).into()))
+    }
+
+    pub(super) fn policy(text: &str) -> Option<Self> {
+        text.strip_prefix("Continue authorized work; otherwise await these events (")?
+            .strip_suffix(" ms, same wait_id). ACK processed cursors. ui.wait delivers input.")?
+            .parse::<u64>()
+            .ok()?;
+        Some(Self::Policy(Sha256::digest(text).into()))
+    }
+
+    pub(super) fn gap(value: &Value) -> Option<Self> {
+        let sub = value["subscription_id"].as_str()?.trim();
+        if sub.is_empty()
+            || value["events"]
+                .as_array()
+                .is_some_and(|events| !events.is_empty())
+        {
             return None;
         }
-        e.meta.notice.as_ref()?.progress
-    };
+        let lost = &value["retention_gap"];
+        let after = match value["status"].as_str()? {
+            "retention_gap" => lost["episode_after"]
+                .as_u64()
+                .or_else(|| lost["after"].as_u64())?,
+            "unavailable" => {
+                let error = value["error"]
+                    .as_str()?
+                    .strip_prefix("events_gap: cursor ")?;
+                let (after, boundary) = error.split_once(" precedes retained cursor ")?;
+                boundary.split(';').next()?.parse::<u64>().ok()?;
+                after.parse().ok()?
+            }
+            _ => return None,
+        };
+        let key = (
+            sub,
+            after,
+            &value["status"],
+            &value["client_id"],
+            &value["actor_id"],
+        );
+        Some(Self::Gap(
+            Sha256::digest(serde_json::to_vec(&key).ok()?).into(),
+        ))
+    }
+}
+
+fn repeat(event: &Event, history: &DisplayHistory) -> Option<Repeat> {
+    if !event.owned_by(history) || event.chat_expanded || event.historical || event.truncated {
+        return None;
+    }
+    if let Some(notice) = &event.meta.notice {
+        return notice.repeat;
+    }
+    (event.meta.prompt_read
+        && event.meta.status == Some(super::Status::Done)
+        && event.text == "[RUN] ssmcp.time.prompt\n"
+        && event.image.is_none())
+    .then_some(Repeat::PromptRead)
+}
+
+fn same_recipient(first: &Event, next: &Event) -> bool {
+    match (&first.meta.scope, &next.meta.scope) {
+        (Some(a), Some(b)) => {
+            a.connection() == b.connection()
+                && a.thread() == b.thread()
+                && a.attribution() == b.attribution()
+        }
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+pub(super) fn groups(events: &VecDeque<Event>, history: &DisplayHistory) -> Vec<Group> {
     let mut groups = Vec::new();
     let mut start = 0;
     while start < events.len() {
-        let head = &events[start];
-        let Some(key) = eligible(head) else {
+        let Some(first) = repeat(&events[start], history) else {
             start += 1;
             continue;
         };
+        // At most four headings can interleave in a run. A different value for
+        // any heading starts a new run, including a changed cursor or pool.
+        let mut by_kind = vec![(first, vec![start])];
         let mut end = start + 1;
         while end < events.len() {
             let next = &events[end];
-            let same_recipient = match (&head.meta.scope, &next.meta.scope) {
-                (Some(a), Some(b)) => {
-                    a.connection() == b.connection()
-                        && a.thread() == b.thread()
-                        && a.attribution() == b.attribution()
-                }
-                (None, None) => true,
-                _ => false,
-            };
-            if !same_recipient || eligible(next) != Some(key) {
+            if next.meta.read_bookkeeping
+                && next.meta.kind == super::Kind::Log
+                && !matches!(next.tone, "error" | "warning")
+                && !next.meta.status.is_some_and(super::Status::failed)
+                && (next.meta.history == DisplayHistory::Global
+                    || (next.owned_by(history) && same_recipient(&events[start], next)))
+            {
+                end += 1;
+                continue;
+            }
+            let Some(key) = repeat(next, history) else {
                 break;
+            };
+            if !same_recipient(&events[start], next) {
+                break;
+            }
+            if let Some((previous, members)) = by_kind.iter_mut().find(|(previous, _)| {
+                std::mem::discriminant(previous) == std::mem::discriminant(&key)
+            }) {
+                if *previous != key {
+                    break;
+                }
+                members.push(end);
+            } else if matches!(first, Repeat::Progress(_)) || matches!(key, Repeat::Progress(_)) {
+                break;
+            } else {
+                by_kind.push((key, vec![end]));
             }
             end += 1;
         }
-        let count = end - start;
-        if count > 1 {
+        for (_, members) in by_kind.into_iter().filter(|(_, members)| members.len() > 1) {
+            let start = members[0];
+            let head = &events[start];
+            let label = head
+                .meta
+                .notice
+                .as_ref()
+                .map_or("ssmcp.time.prompt · done", |n| &n.summary);
             groups.push(Group {
                 head: head.id,
                 start,
-                members: (start..end).collect(),
-                title: format!("{} ×{count}", head.meta.notice.as_ref().unwrap().summary),
+                title: format!("{label} ×{}", members.len()),
+                members,
                 expanded: false,
             });
         }
@@ -162,6 +267,25 @@ mod tests {
         view.filter("", 0);
         view.set_scope(EventScope::All);
         assert_eq!(view.visible_ids(), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn structured_gap_uses_subscription_and_original_loss_episode() {
+        let a = json!({"status":"retention_gap","subscription_id":"one",
+            "retention_gap":{"after":30,"episode_after":24,"through":31,"resume_after":33}});
+        let key = Repeat::gap(&a);
+        assert!(key.is_some());
+        let mut next = a.clone();
+        next["retention_gap"]["after"] = json!(31);
+        next["retention_gap"]["through"] = json!(37);
+        assert!(Repeat::gap(&next) == key);
+        next["retention_gap"]["episode_after"] = json!(31);
+        assert!(Repeat::gap(&next) != key);
+        next = a.clone();
+        next["subscription_id"] = json!("two");
+        assert!(Repeat::gap(&next) != key);
+        next["subscription_id"] = Value::Null;
+        assert!(Repeat::gap(&next).is_none());
     }
 
     #[test]

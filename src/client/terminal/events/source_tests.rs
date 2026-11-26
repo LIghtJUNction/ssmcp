@@ -468,7 +468,7 @@ async fn native_images_keep_distinct_cards_and_call_ownership_after_summary_corr
         let mut view = EventView::new();
         view.set_scope(EventScope::Conversation);
         view.set_history_owner(Some(b_history.clone()));
-        view.summary_call_started(&a, "ssmcp.fs.read_image");
+        view.summary_call_started(&a, "ssmcp.fs.read_image", false);
         let summary_id = view.events.back().unwrap().id;
         view.ingest_scoped_event(
             "message",

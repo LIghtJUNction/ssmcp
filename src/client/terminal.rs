@@ -595,7 +595,11 @@ pub(crate) fn audit(value: &serde_json::Value) {
 }
 
 /// Track the accepted native dispatch in the same store that renders tool windows.
-pub(crate) fn tool_summary_call_started(source: &crate::runtime::call_scope::Source, name: &str) {
+pub(crate) fn tool_summary_call_started(
+    source: &crate::runtime::call_scope::Source,
+    name: &str,
+    prompt_read: bool,
+) {
     let Some(shared) = shared().filter(|shared| shared.alive.load(Ordering::Acquire)) else {
         return;
     };
@@ -603,7 +607,7 @@ pub(crate) fn tool_summary_call_started(source: &crate::runtime::call_scope::Sou
         .state
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    state.events.summary_call_started(source, name);
+    state.events.summary_call_started(source, name, prompt_read);
     state.dirty = true;
 }
 

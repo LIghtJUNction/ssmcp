@@ -899,7 +899,10 @@ impl Runtime {
         }
         let mut history_call =
             crate::session::attach::thread_history::ToolCall::start(&source, &name);
-        crate::client::terminal::tool_summary_call_started(&source, &name);
+        let prompt_read = name == "ssmcp.time.prompt"
+            && arguments["action"] == "read"
+            && arguments.get("timer_id").is_none();
+        crate::client::terminal::tool_summary_call_started(&source, &name, prompt_read);
         let caller = source.call.clone();
         let control = matches!(tool.provider, Provider::Computer | Provider::Sessions);
         if control {

@@ -98,7 +98,7 @@ async fn stat(view: &mut EventView, runtime: &Runtime, request: u64) -> Source {
         &json!({"type":"ssmcp.controller.started","request_id":request}),
         b"",
     );
-    view.summary_call_started(&source, "ssmcp.fs.stat");
+    view.summary_call_started(&source, "ssmcp.fs.stat", false);
     view.summary_call_finished(&source, true);
     view.ingest_event(
         "controller",
@@ -117,7 +117,7 @@ fn group_id(view: &EventView, source: &Source) -> String {
 async fn command_call(view: &mut EventView, runtime: &Runtime, request: u64) -> Source {
     let source = source(runtime, request, "123", None, "same-label").await;
     let job = format!("summary-command-{request}");
-    view.summary_call_started(&source, "ssmcp.exec.start");
+    view.summary_call_started(&source, "ssmcp.exec.start", false);
     view.ingest_scoped_event(
         "shell",
         &json!({"type":"exec.started","job_id":job,"command":["printf",format!("command-{request}")]}),
@@ -174,7 +174,7 @@ async fn eleventh_real_call_reminds_once_and_summary_restarts_the_counter() {
             "ssmcp.ui.get",
             "ssmcp.client.capabilities",
         ] {
-            view.summary_call_started(&next_run, name);
+            view.summary_call_started(&next_run, name, false);
         }
         // A failed summary call stays an error for its caller without inserting
         // a card or splitting the same group's next native dispatch.
@@ -228,7 +228,7 @@ async fn oversized_native_reply_restores_only_its_original_summary_reservation()
         // Recover by observing state, not by dispatching the original business
         // operation again. The real guard above is the only overflow boundary.
         let probe = source(&fixture.runtime, 12, "123", None, "same-label").await;
-        view.summary_call_started(&probe, "ssmcp.ui.tool_summary");
+        view.summary_call_started(&probe, "ssmcp.ui.tool_summary", false);
         let body = view.tool_summary_list(&probe).unwrap();
         assert_eq!(body["groups"][0]["call_count"], 11);
         assert_eq!(body["groups"][0]["revision"], 0);
@@ -296,8 +296,8 @@ async fn lifecycle_duplicates_do_not_count_but_new_poll_requests_do() {
     history::with_test_history(fixture.root.join("history"), async {
         let call = source(&fixture.runtime, 1, "123", None, "same-label").await;
         let mut view = new_view(&call);
-        view.summary_call_started(&call, "ssmcp.exec.start");
-        view.summary_call_started(&call, "ssmcp.exec.start");
+        view.summary_call_started(&call, "ssmcp.exec.start", false);
+        view.summary_call_started(&call, "ssmcp.exec.start", false);
         // Dispatch completion can win the race with the job's first projection.
         view.summary_call_finished(&call, true);
         assert_eq!(view.events[0].meta.status, Some(Status::Done));
@@ -359,7 +359,7 @@ async fn lifecycle_duplicates_do_not_count_but_new_poll_requests_do() {
             (4, "ssmcp.exec.wait"),
         ] {
             let poll = source(&fixture.runtime, request, "123", None, "same-label").await;
-            view.summary_call_started(&poll, name);
+            view.summary_call_started(&poll, name, false);
             view.summary_call_finished(&poll, true);
         }
         assert_eq!(view.events.len(), 4);
@@ -456,7 +456,7 @@ async fn exec_read_native_result_expands_without_replaying_folded_output() {
             arguments: json!({"job_id":job_id,"wait_ms":5000}),
         }).await.unwrap();
         assert_eq!(finished["structuredContent"]["running"], false);
-        view.summary_call_started(&call, "ssmcp.exec.read");
+        view.summary_call_started(&call, "ssmcp.exec.read", false);
         let id = view.events[0].id;
         // Populate the local projection with the actual native MCP envelope.
         let result = call.clone().scope(fixture.runtime.perform(Operation::CallTool {
@@ -543,10 +543,10 @@ async fn exec_read_result_uses_current_call_identity_and_replaces_its_own_detail
         // Same request/display identity on a different live connection.
         let foreign = source(&other.runtime, 2, "123", None, "same-label").await;
         let mut view = new_view(&creator);
-        view.summary_call_started(&creator, "ssmcp.exec.start");
-        view.summary_call_started(&reader, "ssmcp.exec.read");
+        view.summary_call_started(&creator, "ssmcp.exec.start", false);
+        view.summary_call_started(&reader, "ssmcp.exec.read", false);
         let reader_id = view.events[1].id;
-        view.summary_call_started(&foreign, "ssmcp.exec.read");
+        view.summary_call_started(&foreign, "ssmcp.exec.read", false);
         let selected = view.selected;
         let original = read_result("only-current-reader\n", "");
         assert!(!view.summary_exec_read_result(&creator, &original));
@@ -758,7 +758,7 @@ async fn exec_read_compact_warnings_survive_narrow_panes_and_detail_retention() 
                 (json!(0), json!({}), "Exit 0", "warning"),
             ] {
                 let mut view = new_view(&call);
-                view.summary_call_started(&call, "ssmcp.exec.read");
+                view.summary_call_started(&call, "ssmcp.exec.read", false);
                 let mut result = read_result("stdout-payload\n", "stderr-payload\n");
                 let read = &mut result["structuredContent"];
                 read["exit_code"] = exit_code;
@@ -825,7 +825,7 @@ async fn exec_read_compact_warnings_survive_narrow_panes_and_detail_retention() 
                 result["structuredContent"][format!("{stream}_cursor")] = (raw.len() as u64).into();
             }
             let mut view = new_view(&call);
-            view.summary_call_started(&call, "ssmcp.exec.read");
+            view.summary_call_started(&call, "ssmcp.exec.read", false);
             assert!(view.summary_exec_read_result(&call, &result));
             view.summary_call_finished(&call, true);
             assert!(view.events[0].truncated);
@@ -879,7 +879,7 @@ async fn commands_and_other_tools_share_one_visible_summary_and_exact_count() {
         stat(&mut view, &fixture.runtime, 1).await;
         let command = command_call(&mut view, &fixture.runtime, 2).await;
         let read = source(&fixture.runtime, 3, "123", None, "same-label").await;
-        view.summary_call_started(&read, "ssmcp.fs.read_text");
+        view.summary_call_started(&read, "ssmcp.fs.read_text", false);
         view.ingest_scoped_event(
             "workspace",
             &json!({"type":"ssmcp.file.read","path":"src/main.rs"}),
@@ -1089,7 +1089,7 @@ async fn exact_account_connection_history_and_binding_authorize_edits() {
         history::record_request("a", "First local conversation").unwrap();
         let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
         let mut view = new_view(&first);
-        view.summary_call_started(&first, "ssmcp.fs.stat");
+        view.summary_call_started(&first, "ssmcp.fs.stat", false);
         let id = group_id(&view, &first);
         for other in [
             source(&fixture.runtime, 2, "456", None, "same-label").await,
@@ -1123,7 +1123,7 @@ async fn exact_account_connection_history_and_binding_authorize_edits() {
         assert_eq!(receipt["accepted"], true);
 
         let bound = source(&fixture.runtime, 6, "123", Some('b'), "same-label").await;
-        view.summary_call_started(&bound, "ssmcp.fs.stat");
+        view.summary_call_started(&bound, "ssmcp.fs.stat", false);
         let bound_id = group_id(&view, &bound);
         let same_binding = source(&fixture.runtime, 7, "123", Some('b'), "renamed").await;
         assert!(
@@ -1261,7 +1261,7 @@ async fn native_read_paths_and_scoped_failures_remain_in_one_logical_group() {
     history::with_test_history(fixture.root.join("history"), async {
         let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
         let mut view = new_view(&first);
-        view.summary_call_started(&first, "ssmcp.fs.read_text");
+        view.summary_call_started(&first, "ssmcp.fs.read_text", false);
         view.ingest_scoped_event(
             "workspace",
             &json!({"type":"ssmcp.file.read","path":"src/important.rs"}),
@@ -1273,7 +1273,7 @@ async fn native_read_paths_and_scoped_failures_remain_in_one_logical_group() {
         assert!(view.events[0].meta.read.is_some());
         for request in 2..=11 {
             let failed = source(&fixture.runtime, request, "123", None, "same-label").await;
-            view.summary_call_started(&failed, "ssmcp.fs.stat");
+            view.summary_call_started(&failed, "ssmcp.fs.stat", false);
             view.summary_call_finished(&failed, false);
             view.ingest_scoped_event(
                 "ssmcp",
@@ -1335,7 +1335,7 @@ async fn ui_mutations_keep_non_conversation_image_question_and_task_events() {
             (3, "ssmcp.ui.harness", "ssmcp.harness.task"),
         ] {
             let call = source(&fixture.runtime, request, "123", None, "same-label").await;
-            view.summary_call_started(&call, name);
+            view.summary_call_started(&call, name, false);
             view.ingest_scoped_event(
                 "native",
                 &json!({"type":kind}),
@@ -1424,4 +1424,102 @@ fn summary_text_is_bounded_single_line_and_redacted() {
     let safe = clean_summary("Checking API_TOKEN=private-summary-token").unwrap();
     assert!(!safe.contains("private-summary-token"));
     assert!(safe.chars().count() <= MAX_SUMMARY_CHARS);
+}
+
+#[tokio::test]
+async fn coordinator_polling_interleaves_without_hiding_details_or_new_input() {
+    let fixture = Fixture::new().await;
+    let owner = source(&fixture.runtime, 1, "123", None, "operator").await;
+    let mut view = new_view(&owner);
+    let input = |view: &mut EventView, origin: &str, text: &str| {
+        view.ingest_scoped_event(
+            "message",
+            &json!({"type":"ssmcp.message","role":"tool","format":"plain",
+                "kind":"input","input_origin":origin,"text":text}),
+            b"",
+            owner.display(),
+        );
+    };
+    let gap = |subscription: &str, cursor: u64, retained: u64| {
+        let data = json!({"status":"unavailable","subscription_id":subscription,
+            "error":format!("events_gap: cursor {cursor} precedes retained cursor {retained}; latest cursor 71289; resubscribe with an explicit retained cursor after reconciling the gap")});
+        format!("WORKER STATE EVENTS — retained until explicit events.ack\n{data}")
+    };
+    let policy = "Continue authorized work; otherwise await these events (30000 ms, same wait_id). ACK processed cursors. ui.wait delivers input.";
+    let standby = "Worker pool pool-a: 3 connected external worker(s) are standing by. Use ssmcp.worker.submit for independent work.";
+    for i in 0..3 {
+        let call = source(&fixture.runtime, 10 + i, "123", None, "operator").await;
+        view.summary_call_started(&call, "ssmcp.time.prompt", true);
+        view.summary_call_finished(&call, true);
+        input(&mut view, "worker_event", &gap("sub-a", 70243, 70265 + i));
+        input(&mut view, "system_hook", standby);
+        input(&mut view, "system_hook", policy);
+    }
+    assert_eq!(view.visible_ids(), vec![0, 1, 2, 3]);
+    let ui = Ui {
+        color: false,
+        ..Ui::default()
+    };
+    let rows = view.render(120, 22, &ui, true).join("\n");
+    for expected in [
+        "ssmcp.time.prompt · done ×3",
+        "恢复订阅 ×3",
+        "3 个工位待命 ×3",
+        "协调者等待策略 ×3",
+    ] {
+        assert!(rows.contains(expected), "{rows}");
+    }
+    view.select(isize::MIN);
+    view.select(1);
+    assert!(view.open());
+    let expanded = view.render(230, 40, &ui, true).join("\n");
+    for retained in 70265..=70267 {
+        assert!(
+            expanded.contains(&format!("precedes retained cursor {retained}")),
+            "{expanded}"
+        );
+    }
+    assert!(view.back());
+    view.filter("retained cursor 70266", 0);
+    assert_eq!(view.visible_ids(), vec![5]);
+    view.filter("", 0);
+    view.set_scope(EventScope::All);
+    assert_eq!(view.visible_ids(), (0..12).collect::<Vec<_>>());
+    view.set_scope(EventScope::Conversation);
+    let user = gap("sub-a", 70243, 70268);
+    view.ingest_scoped_event(
+        "message",
+        &json!({"type":"ssmcp.message","role":"user","text":user}),
+        b"",
+        owner.display(),
+    );
+    input(&mut view, "worker_event", &user);
+    input(&mut view, "worker_event", &gap("sub-a", 70244, 70270));
+    input(&mut view, "worker_event", &gap("sub-b", 70244, 70270));
+    input(
+        &mut view,
+        "system_hook",
+        &format!("{policy} Maintenance round-1: one authorized action."),
+    );
+    let unknown =
+        "WORKER STATE EVENTS — retained until explicit events.ack\n{\"kind\":\"worker.unknown\"}";
+    input(&mut view, "worker_event", unknown);
+    for (id, success, read) in [(30, false, true), (31, true, false)] {
+        let call = source(&fixture.runtime, id, "123", None, "operator").await;
+        view.summary_call_started(&call, "ssmcp.time.prompt", read);
+        view.summary_call_finished(&call, success);
+        input(&mut view, "worker_event", &gap("sub-b", 70244, 70271));
+    }
+    assert_eq!(
+        view.visible_ids(),
+        [vec![0, 1, 2, 3], (12..22).collect()].concat()
+    );
+    let rows = view.render(200, 100, &ui, true).join("\n");
+    assert!(
+        rows.contains("precedes retained cursor 70268")
+            && rows.contains("维护请求")
+            && rows.contains("任务结果未知")
+            && rows.contains("ssmcp.time.prompt · failed"),
+        "{rows}"
+    );
 }
