@@ -772,7 +772,28 @@ impl State {
             rows[1] = line(self, &[(PanelTone::Warning, notice.clone())]);
         }
         if let Some(snapshot) = snapshot {
-            let capacity = line(self, &[(PanelTone::Heading, "Station capacity".into())]);
+            use crate::worker::productivity::{TITLE, WIDTH};
+
+            let chart = g.cols >= 96 && height >= 12;
+            let capacity_width = if chart { g.cols - WIDTH } else { g.cols };
+            let mut plot = std::iter::once(TITLE.to_owned()).chain(
+                snapshot.productivity.as_ref().map_or_else(
+                    || vec!["No call history".into()],
+                    |productivity| productivity.plot(),
+                ),
+            );
+            let mut header = |parts: &[(PanelTone, String)]| {
+                let mut rendered = line_at_width(self, parts, capacity_width);
+                if chart {
+                    rendered.push_str(&line_at_width(
+                        self,
+                        &[(PanelTone::Accent, plot.next().unwrap_or_default())],
+                        WIDTH,
+                    ));
+                }
+                rendered
+            };
+            let capacity = header(&[(PanelTone::Heading, "Station capacity".into())]);
             if self.notice.is_some() {
                 rows.push(capacity);
             } else {
@@ -811,7 +832,7 @@ impl State {
                     ),
                 ),
             ];
-            let per_row = if g.cols >= 120 {
+            let per_row = if g.cols >= 120 && !chart {
                 6
             } else if g.cols >= 74 {
                 3
@@ -831,12 +852,12 @@ impl State {
                         )
                     })
                     .collect();
-                rows.push(line(self, &parts));
+                rows.push(header(&parts));
             }
-            rows.push(line(
-                self,
-                &[(PanelTone::Normal, member_activity_summary(snapshot, g.cols))],
-            ));
+            rows.push(header(&[(
+                PanelTone::Normal,
+                member_activity_summary(snapshot, capacity_width),
+            )]));
             let stopping = snapshot.stopping || snapshot.closed;
             let status = if stopping && snapshot.working > 0 {
                 "Stopping · waiting for worker confirmation"
@@ -847,13 +868,10 @@ impl State {
             } else {
                 "FIFO assignment"
             };
-            rows.push(line(
-                self,
-                &[(
-                    PanelTone::Muted,
-                    format!("Queued {} · {status}", snapshot.queued),
-                )],
-            ));
+            rows.push(header(&[(
+                PanelTone::Muted,
+                format!("Queued {} · {status}", snapshot.queued),
+            )]));
             let coordination = serde_json::to_value(snapshot)
                 .ok()
                 .map(|pool| {
@@ -2194,19 +2212,20 @@ fn wrap_activity(text: &str, width: usize, max_rows: usize) -> Vec<String> {
 }
 
 fn line(state: &State, parts: &[(PanelTone, String)]) -> String {
+    line_at_width(state, parts, state.geometry.cols)
+}
+
+fn line_at_width(state: &State, parts: &[(PanelTone, String)], cols: u16) -> String {
     let mut width = 0;
     let mut output = String::new();
     for (tone, text) in parts {
-        let text = fit(
-            &panel::safe_text(text),
-            state.geometry.cols.saturating_sub(width),
-        );
+        let text = fit(&panel::safe_text(text), cols.saturating_sub(width));
         width += u16::try_from(text.width()).unwrap_or(u16::MAX);
         output.push_str(&state.tone(*tone, &text));
     }
     output.push_str(&state.tone(
         PanelTone::Normal,
-        &" ".repeat(usize::from(state.geometry.cols.saturating_sub(width))),
+        &" ".repeat(usize::from(cols.saturating_sub(width))),
     ));
     output
 }
@@ -2242,6 +2261,7 @@ mod tests {
             generation: "fixture".into(),
             manager: None,
             manager_operations: Vec::new(),
+            productivity: None,
             total: 3,
             desired_total: 3,
             registered_workers: 2,
@@ -2395,6 +2415,34 @@ mod tests {
         assert!(
             compact.iter().any(|(_, line)| line.contains("4/10m")),
             "{compact:?}"
+        );
+    }
+
+    #[test]
+    fn productivity_curve_uses_the_right_side_of_the_worker_header() {
+        let mut snapshot = snapshot();
+        snapshot.productivity = Some(crate::worker::productivity::Productivity {
+            members: 2,
+            calls_per_minute: [0, 1, 0, 3, 20, 1, 0, 3, 0, 2],
+        });
+        let mut wide = state(24, 110, false);
+        let frame = wide.worker_frame(Some(&snapshot));
+        let text = screen(&frame).screen().contents();
+        let capacity = text
+            .lines()
+            .find(|line| line.contains("Station capacity"))
+            .unwrap();
+        assert!(capacity.contains("Worker calls/min (log)"), "{text}");
+        assert!(text.contains("20 |"), "{text}");
+        assert!(text.contains("-10m -------- now"), "{text}");
+
+        let mut narrow = state(24, 80, false);
+        let frame = narrow.worker_frame(Some(&snapshot));
+        assert!(
+            !screen(&frame)
+                .screen()
+                .contents()
+                .contains("Worker calls/min")
         );
     }
 

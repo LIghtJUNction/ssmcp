@@ -28,6 +28,12 @@ try {
   });
   const caps = capabilities({ resources: ['runtime', 'threads', 'conversation', 'chat.queue', 'terminals', 'workers'], commands: ['chat.send', 'terminal.write', 'terminal.resize', 'workers.resize'] });
   const source = { kind: 'main', client_id: 'real.fixture.client', connection: '9007199254740993', request_id: '12' };
+  const productivity = {
+    members: 1,
+    calls_per_minute: ['0', '0', '0', '1', '0', '0', '0', '0', '0', '0'],
+    plot: ['       1 |      *', '         |     | |', '         |     | |',
+      '       0 |*-*-*| |*-*-*-*-*-*', '         + -10m -------- now'],
+  };
   const worker = { slot: 0, epoch: '4', state: 'working', task_id: 'fixture.actual.task', task_summary: '核对原生工作状态', progress: '正在读取 fixture', registered: true, total_work_ms: '42000', current_task_elapsed_ms: '3000', logs_omitted: true };
   const inputCases = [
     { origin: 'human', text: '用户要求：检查多行输入\n@fixture-missing.txt $fixture_skill /reload' },
@@ -50,7 +56,7 @@ try {
     conversation: { schema_version: 1, scope: { kind: 'process' }, events: [...inputHistory, { sequence: '9007199254740992', kind: 'answer', text: '来自原生历史的 fixture 文本', source, value: { type: 'ssmcp.message', kind: 'answer', message_id: 'native_00000000000000000000000000000006' } }], next_cursor: '9007199254740993', start_cursor: '9007199254740987', end_cursor: '9007199254740993', has_more: false, gap: false, retention: 'live_process_memory' },
     'chat.queue': { client_id: 'fixture.client', items: queue, next_offset: queue.length, has_more: false },
     terminals: { terminals: [{ terminal_id: 'actual.terminal', name: '主终端', cwd: '/fixture/project', selected: true }], selected: 'actual.terminal', default_terminal_id: 'actual.terminal', max_terminals: 4 },
-    workers: { pool_generation: 'actual.pool', total: 1, desired_total: 1, registered_workers: 1, working: 1, idle: 0, offline: 0, retiring: 0, queued: 0, slots: [worker], slot_count: 1, offset: 0, next_offset: null },
+    workers: { pool_generation: 'actual.pool', total: 1, desired_total: 1, registered_workers: 1, working: 1, idle: 0, offline: 0, retiring: 0, queued: 0, productivity, slots: [worker], slot_count: 1, offset: 0, next_offset: null },
   })[resource];
   const fulfill = (route, body) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   await page.route('**/api/gui/v1/**', async route => {
@@ -243,6 +249,12 @@ try {
   assert.equal(commands.filter(item => item.operation.command === 'terminal.write').length, 1);
   await page.locator('#refresh-state').click();
   assert.equal(commands.filter(item => item.operation.command === 'terminal.write').length, 1);
+
+  await page.locator('#tab-workers').click();
+  assert.equal(await page.locator('#worker-productivity').textContent(), productivity.plot.join('\n'));
+  const metricsBox = await page.locator('#worker-summary').boundingBox();
+  const plotBox = await page.locator('.worker-productivity').boundingBox();
+  assert.ok(plotBox.x >= metricsBox.x + metricsBox.width);
 
   for (const width of [390, 320]) {
     await viewport(width, 844);

@@ -3147,10 +3147,7 @@ fn apply_worker_activity(members: Vec<crate::wire::WorkerMemberActivity>) -> Res
         if !valid_worker_member(&member.agent_id) {
             return Err("invalid worker activity member".into());
         }
-        if activity
-            .insert(member.agent_id, (member.tool_calls_10m, member.offline))
-            .is_some()
-        {
+        if activity.insert(member.agent_id.clone(), member).is_some() {
             return Err("duplicate worker activity member".into());
         }
     }

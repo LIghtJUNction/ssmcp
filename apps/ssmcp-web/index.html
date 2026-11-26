@@ -106,7 +106,13 @@
         <div class="panel-intro"><div><h2>Workers</h2><p class="muted">实际注册、分派和当前进展。</p></div><button class="text-button" id="worker-details" hidden>Pool 信息 ↗</button></div>
         <div class="empty-state" id="workers-empty">当前连接没有 worker pool 资源。</div>
         <div id="workers-content" hidden>
-          <div class="worker-summary" id="worker-summary"></div>
+          <div class="worker-overview">
+            <div class="worker-summary" id="worker-summary"></div>
+            <figure class="worker-productivity">
+              <figcaption>Worker 工具调用 / 分钟（对数）</figcaption>
+              <pre id="worker-productivity"></pre>
+            </figure>
+          </div>
           <form class="worker-resize" id="worker-resize" hidden><div><label for="worker-total">目标站数</label><p class="tiny">调整已有 pool；回执中的 retiring / pending 继续按真实状态显示。</p></div><input id="worker-total" type="number" min="0" max="128" required aria-label="目标 worker 站数"><button class="secondary" type="submit">应用</button></form>
           <div class="worker-list" id="worker-list"></div>
           <div class="pagination"><button class="text-button" id="workers-prev">上一页</button><span class="tiny" id="workers-page"></span><button class="text-button" id="workers-next">下一页</button></div>

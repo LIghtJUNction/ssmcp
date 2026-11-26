@@ -1233,6 +1233,8 @@ impl<T: Clone> Queue<T> {
     }
 
     fn snapshot_locked(&self, state: &State<T>) -> Snapshot {
+        let mut productivity = super::productivity::Productivity::default();
+        let mut observed = std::collections::HashSet::new();
         let slots: Vec<_> = state
             .slots
             .iter()
@@ -1255,9 +1257,16 @@ impl<T: Clone> Queue<T> {
                     .as_ref()
                     .and_then(|actor| actor.participant.as_ref())
                     .and_then(|id| state.member_activity.get(id));
+                if let Some(member) = activity
+                    && let Some(calls) = member.calls_per_minute
+                    && observed.insert(&member.agent_id)
+                {
+                    productivity.record(calls);
+                }
                 SlotView {
-                    tool_calls_10m: activity.map(|(calls, _)| *calls),
-                    activity_status: activity.and_then(|(_, offline)| offline.then_some("offline")),
+                    tool_calls_10m: activity.map(|member| member.tool_calls_10m),
+                    activity_status: activity
+                        .and_then(|member| member.offline.then_some("offline")),
                     slot: index,
                     epoch: slot.epoch,
                     state: name,
@@ -1304,6 +1313,7 @@ impl<T: Clone> Queue<T> {
             stopping: state.stopping,
             slots,
             manager_operations: state.operations.views(),
+            productivity: (productivity.members > 0).then_some(productivity),
         }
     }
 

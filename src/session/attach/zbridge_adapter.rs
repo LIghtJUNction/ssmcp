@@ -546,6 +546,10 @@ fn worker_state(
     mut snapshot: crate::worker::Snapshot,
     query: WorkerQuery,
 ) -> Result<Value, BridgeError> {
+    let productivity = snapshot.productivity.as_ref().map(|activity| {
+        json!({"members":activity.members, "calls_per_minute":activity.calls_per_minute.map(Counter),
+            "plot":activity.plot()})
+    });
     let count = snapshot.slots.len();
     let offset = usize::from(query.offset);
     if offset > count {
@@ -577,7 +581,8 @@ fn worker_state(
         "working":snapshot.working,"offline":snapshot.offline,"retiring":snapshot.retiring,
         "registered_workers":snapshot.registered_workers,"queued":snapshot.queued,
         "closed":snapshot.closed,"stopping":snapshot.stopping,"slots":slots,"slot_count":count,
-        "offset":offset,"next_offset":(end<count).then_some(end),"logs_omitted":true}),
+        "offset":offset,"next_offset":(end<count).then_some(end),"logs_omitted":true,
+        "productivity":productivity}),
     )
 }
 

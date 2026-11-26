@@ -23,3 +23,18 @@
 
 #pairing-file { max-width: 100%; }
 #pairing-path { margin-bottom: 20px; overflow-wrap: anywhere; }
+
+.worker-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 18px;
+}
+.worker-overview .worker-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.worker-productivity { margin: 0; min-width: 0; color: var(--accent); }
+.worker-productivity figcaption { font-size: 12px; }
+.worker-productivity pre { margin: 5px 0 0; overflow: auto; font-size: 12px; line-height: 1.3; }
+@media (max-width: 850px) {
+  .worker-overview { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}

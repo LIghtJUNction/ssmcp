@@ -258,6 +258,7 @@ impl Fixture {
                 git_tracking: false,
                 repository_events: false,
                 worker_activity: false,
+                worker_productivity: false,
                 project_continuity: false,
                 peer_ports: false,
                 peer_ports_auto: false,

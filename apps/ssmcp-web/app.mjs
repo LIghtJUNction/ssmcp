@@ -307,6 +307,14 @@ function renderWorkers() {
   $('worker-summary').replaceChildren(...counts.map(([key, title]) => {
     const node = element('div', 'metric'); node.append(element('strong', '', state[key] ?? '—'), element('span', '', title)); return node;
   }));
+  const productivity = state.productivity;
+  const chart = $('worker-productivity');
+  chart.textContent = Array.isArray(productivity?.plot) ? productivity.plot.join('\n') : '暂无调用记录';
+  if (Array.isArray(productivity?.calls_per_minute)) {
+    chart.setAttribute('aria-label', `最近 10 分钟，${productivity.members} 名 Worker，每分钟调用次数（由早到晚） ${productivity.calls_per_minute.join('、')}`);
+  } else {
+    chart.removeAttribute('aria-label');
+  }
   show('worker-resize', client.hasCommand('workers.resize') && typeof state.pool_generation === 'string');
   if (!workerDraftEdited && document.activeElement !== $('worker-total')) $('worker-total').value = state.desired_total ?? '';
   $('worker-resize').querySelector('button').disabled = busy.has('workers.resize');

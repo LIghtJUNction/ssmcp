@@ -461,13 +461,29 @@ fn tool_activity_matches_the_registered_participant_and_preserves_the_claim() {
     let work = claim(&remote, &queue, &quiet, "q");
     queue.set_member_activity(std::sync::Arc::new(
         [
-            ("busy".into(), (7, false)),
-            ("quiet".into(), (0, true)),
-            ("unregistered".into(), (11, false)),
+            ("busy", 7, false),
+            ("quiet", 0, true),
+            ("unregistered", 11, false),
         ]
-        .into(),
+        .into_iter()
+        .map(|(id, count, offline)| {
+            let mut calls = [0; 10];
+            calls[9] = count;
+            (
+                id.into(),
+                crate::wire::WorkerMemberActivity {
+                    agent_id: id.into(),
+                    tool_calls_10m: count,
+                    calls_per_minute: Some(calls),
+                    offline,
+                },
+            )
+        })
+        .collect(),
     ));
     let view = queue.snapshot();
+    assert_eq!(view.productivity.as_ref().unwrap().members, 2);
+    assert_eq!(view.productivity.as_ref().unwrap().calls_per_minute[9], 7);
     assert_eq!(view.slots[0].activity_status, Some("offline"));
     assert_eq!(view.slots[0].tool_calls_10m, Some(0));
     assert_eq!(view.slots[0].state, "working");

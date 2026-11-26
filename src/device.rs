@@ -394,6 +394,7 @@ pub(crate) struct DevicePeer {
     pub git_tracking: bool,
     pub repository_events: bool,
     pub worker_activity: bool,
+    pub worker_productivity: bool,
     pub project_continuity: bool,
     pub peer_ports: bool,
     pub peer_ports_auto: bool,
@@ -416,6 +417,7 @@ impl From<Registration> for DevicePeer {
             git_tracking: false,
             repository_events: false,
             worker_activity: false,
+            worker_productivity: false,
             project_continuity: false,
             peer_ports: false,
             peer_ports_auto: false,
@@ -872,6 +874,7 @@ async fn connect(
         git_tracking: capability_requested(&headers, wire::GIT_TRACKING_CAPABILITY),
         repository_events: capability_requested(&headers, wire::repository_events::CAPABILITY),
         worker_activity: capability_requested(&headers, wire::WORKER_ACTIVITY_CAPABILITY),
+        worker_productivity: capability_requested(&headers, wire::WORKER_PRODUCTIVITY_CAPABILITY),
     };
     let transport = broker
         .admit_transport()

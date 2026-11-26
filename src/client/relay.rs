@@ -146,6 +146,8 @@ pub(super) fn offer_chat_disabled(command: &mut Command, worker: bool) {
         offer.push_str(crate::wire::WORKER_DREAMING_CAPABILITY);
         offer.push(',');
         offer.push_str(crate::wire::WORKER_ACTIVITY_CAPABILITY);
+        offer.push(',');
+        offer.push_str(crate::wire::WORKER_PRODUCTIVITY_CAPABILITY);
     }
     command.env("SSMCP_RELAY_CAPABILITIES", offer);
 }
@@ -268,6 +270,7 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::MAIN_ACTIVITY_CAPABILITY
                 | crate::wire::WORKER_DREAMING_CAPABILITY
                 | crate::wire::WORKER_ACTIVITY_CAPABILITY
+                | crate::wire::WORKER_PRODUCTIVITY_CAPABILITY
                 | crate::wire::peer_port::CAPABILITY
                 | crate::wire::peer_port::AUTO_CAPABILITY
         ) || capabilities[..index].contains(value)
@@ -532,6 +535,10 @@ mod tests {
         assert!(!offers(&command, crate::wire::MAIN_ACTIVITY_CAPABILITY));
         assert!(offers(&command, crate::wire::WORKER_DREAMING_CAPABILITY));
         assert!(offers(&command, crate::wire::WORKER_ACTIVITY_CAPABILITY));
+        assert!(offers(
+            &command,
+            crate::wire::WORKER_PRODUCTIVITY_CAPABILITY
+        ));
         assert!(access_capability_header(parent_offer(&command)).is_some());
         assert!(!offers(&no_input, crate::wire::WORKER_ACTIVITY_CAPABILITY));
         assert!(offers(&command, crate::wire::CHAT_DISABLED_CAPABILITY));

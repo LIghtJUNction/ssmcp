@@ -1143,7 +1143,7 @@ async fn member_tool_window_grace_then_quiet_offline_keeps_claim_and_isolates_me
     assigned(&hub, &worker, &token);
     let before = snapshot(&hub, &worker, &token);
     let view = |id: &str| {
-        hub.worker_activity()
+        hub.worker_activity(false)
             .unwrap()
             .into_iter()
             .find(|m| m.agent_id == id)

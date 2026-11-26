@@ -117,6 +117,7 @@ impl Fixture {
             git_tracking: false,
             repository_events: false,
             worker_activity: false,
+            worker_productivity: false,
             project_continuity: false,
             peer_ports: opted_in && config.auto_candidates.is_none(),
             peer_ports_auto: opted_in && config.auto_candidates.is_some(),

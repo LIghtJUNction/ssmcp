@@ -1621,6 +1621,8 @@ impl Broker {
         let member_activity =
             control_attribution && peer.as_ref().is_some_and(|peer| peer.worker_activity);
         let worker_activity = worker_dreaming && member_activity;
+        let worker_productivity =
+            worker_activity && peer.as_ref().is_some_and(|peer| peer.worker_productivity);
         let peer_ports = access_supported
             && control_attribution
             && peer
@@ -2009,7 +2011,7 @@ impl Broker {
                                 }
                             }
                             if worker_activity {
-                                let members = session.collaboration.worker_activity()?;
+                                let members = session.collaboration.worker_activity(worker_productivity)?;
                                 if members != last_worker_activity {
                                     let frame = Frame::WorkerActivity { members: members.clone() };
                                     timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;

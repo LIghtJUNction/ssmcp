@@ -11,6 +11,7 @@ mod executor;
 #[cfg(any(target_os = "linux", test))]
 pub(crate) mod limits;
 mod pool;
+pub(crate) mod productivity;
 mod queue;
 #[cfg(target_os = "linux")]
 mod registry;
@@ -30,9 +31,8 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// Verified participant ID -> (native tool calls in the past ten minutes,
-/// relay observed offline). Shared by the display and its current queue.
-type MemberActivity = BTreeMap<String, (u64, bool)>;
+/// Verified participant activity shared by the display and its current queue.
+type MemberActivity = BTreeMap<String, crate::wire::WorkerMemberActivity>;
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct SlotLog {
@@ -146,6 +146,8 @@ pub(crate) struct Snapshot {
     pub(crate) slots: Vec<SlotView>,
     #[serde(default)]
     pub(crate) manager_operations: Vec<ManagerOperationView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) productivity: Option<productivity::Productivity>,
 }
 
 #[derive(Default)]
@@ -180,6 +182,7 @@ pub(crate) fn prepare_display(config: Config) {
         closed: false,
         stopping: false,
         manager_operations: Vec::new(),
+        productivity: None,
         slots: (0..config.count)
             .map(|slot| SlotView {
                 slot,
