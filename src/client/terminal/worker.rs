@@ -434,17 +434,15 @@ impl Monitor {
         let header_rows = usize::from(log_area_rows >= 2);
         let log_row = log_area_row + header_rows;
         let log_rows = log_area_rows.saturating_sub(header_rows + 1);
+        let commands_expanded = self
+            .expanded_commands
+            .get(&slot.slot)
+            .copied()
+            .unwrap_or(false);
         let entries = if task_view {
             task_lines(slot, snapshot, left_cols.saturating_sub(2).max(1))
         } else if details_view {
-            log_lines(
-                slot,
-                left_cols.saturating_sub(2).max(1),
-                self.expanded_commands
-                    .get(&slot.slot)
-                    .copied()
-                    .unwrap_or(false),
-            )
+            log_lines(slot, left_cols.saturating_sub(2).max(1), commands_expanded)
         } else {
             progress_lines(slot, left_cols.saturating_sub(2).max(1))
         };
@@ -503,8 +501,10 @@ impl Monitor {
                     } else {
                         "  Recent agent progress".into()
                     }
+                } else if commands_expanded {
+                    "  Work log · Enter Preview".into()
                 } else {
-                    "  Work log".into()
+                    "  Work log · Enter Full command".into()
                 },
             );
             output.push(if split {
@@ -1214,72 +1214,84 @@ fn command_summary(command: &str) -> String {
     }
 }
 
-fn command_log_summary(text: &str) -> String {
-    for prefix in ["Command started: ", "Command finished: "] {
-        if let Some(command) = text.strip_prefix(prefix) {
-            let (command, outcome) = (prefix == "Command finished: ")
-                .then(|| command.rsplit_once("; "))
-                .flatten()
-                .filter(|(_, outcome)| {
-                    outcome
-                        .strip_prefix("exit ")
-                        .or_else(|| outcome.strip_prefix("signal "))
-                        .is_some_and(|code| code.parse::<i32>().is_ok())
-                        || matches!(*outcome, "cancelled" | "timed out")
-                })
-                .map_or((command, None), |(command, outcome)| {
-                    (command, Some(outcome))
-                });
-            return format!(
-                "{prefix}{}{}",
-                command_summary(command),
-                outcome.map_or_else(String::new, |outcome| format!("; {outcome}"))
-            );
-        }
-    }
-    text.to_owned()
+fn command_preview(command: &str) -> String {
+    let Ok(args) = serde_json::from_str::<Vec<String>>(command) else {
+        // A long retained command may have been clipped inside a JSON string.
+        return clipped(command, 88);
+    };
+    let redacted = crate::audit::event(serde_json::json!({ "argv": args }));
+    let preview = redacted["argv"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(|arg| {
+            if arg.is_empty() || arg.chars().any(|c| c.is_whitespace() || c == '"') {
+                format!("{arg:?}")
+            } else {
+                arg.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    clipped(&preview, 88)
+}
+
+fn command_result(text: &str) -> Option<(&str, &str)> {
+    text.rsplit_once("; ").filter(|(_, outcome)| {
+        matches!(*outcome, "cancelled" | "timed out")
+            || outcome
+                .strip_prefix("exit ")
+                .or_else(|| outcome.strip_prefix("signal "))
+                .is_some_and(|code| code.parse::<i32>().is_ok())
+    })
 }
 
 fn log_event(entry: &crate::worker::SlotLog, expanded: bool) -> (&'static str, PanelTone, String) {
-    let text = if expanded {
-        entry.text.clone()
-    } else {
-        command_log_summary(&entry.text)
-    };
+    let text = entry.text.as_str();
     let (tag, tone, body) = if let Some(command) = text.strip_prefix("Command started: ") {
-        ("RUN", PanelTone::Accent, command)
+        let body = if expanded {
+            command.to_owned()
+        } else {
+            command_preview(command)
+        };
+        ("RUN", PanelTone::Accent, body)
     } else if let Some(command) = text.strip_prefix("Command finished: ") {
-        // Only an explicit result suffix is evidence of success. An inline
-        // script containing "exit 0" or a missing outcome never becomes DONE.
-        let outcome = command.rsplit_once("; ").map(|(_, outcome)| outcome);
+        // Classify from the retained record before rendering its preview.
+        let (invocation, outcome) = command_result(command)
+            .map_or((command, None), |(invocation, outcome)| {
+                (invocation, Some(outcome))
+            });
         let (tag, tone) = match outcome {
             Some("exit 0") => ("DONE", PanelTone::Success),
             Some("cancelled") => ("STOP", PanelTone::Warning),
-            Some("timed out") => ("FAIL", PanelTone::Error),
-            Some(outcome)
-                if outcome
-                    .strip_prefix("exit ")
-                    .or_else(|| outcome.strip_prefix("signal "))
-                    .is_some_and(|code| code.parse::<i32>().is_ok()) =>
-            {
-                ("FAIL", PanelTone::Error)
-            }
-            _ => ("END", PanelTone::Muted),
+            Some(_) => ("FAIL", PanelTone::Error),
+            None => ("END", PanelTone::Muted),
         };
-        (tag, tone, command)
+        let body = if expanded {
+            command.to_owned()
+        } else {
+            let mut preview = command_preview(invocation);
+            if let Some(outcome) = outcome {
+                preview.push_str("; ");
+                preview.push_str(outcome);
+            }
+            preview
+        };
+        (tag, tone, body)
     } else if let Some(progress) = text.strip_prefix("Progress: ") {
-        ("NOTE", PanelTone::Accent, progress)
+        ("NOTE", PanelTone::Accent, progress.to_owned())
     } else if text.starts_with("Task ") {
-        ("TASK", PanelTone::Accent, text.as_str())
+        ("TASK", PanelTone::Accent, text.to_owned())
     } else {
-        ("INFO", PanelTone::Muted, text.as_str())
+        ("INFO", PanelTone::Muted, text.to_owned())
     };
     let (tag, tone) = match entry.level.as_str() {
         "error" => ("FAIL", PanelTone::Error),
         "warning" | "warn" => ("WARN", PanelTone::Warning),
         _ => (tag, tone),
     };
-    (tag, tone, panel::safe_text(body))
+    (tag, tone, panel::safe_text(&body))
 }
 
 fn wrap_log_body(text: &str, width: usize) -> Vec<String> {
@@ -1626,14 +1638,7 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
         } else if let Some((command, result)) = entry
             .text
             .strip_prefix("Command finished: ")
-            .and_then(|text| text.rsplit_once("; "))
-            .filter(|(_, result)| {
-                matches!(*result, "cancelled" | "timed out")
-                    || result
-                        .strip_prefix("exit ")
-                        .or_else(|| result.strip_prefix("signal "))
-                        .is_some_and(|code| code.parse::<i32>().is_ok())
-            })
+            .and_then(command_result)
         {
             if result == "exit 0" && entry.level == "info" {
                 if !newest {
@@ -3698,7 +3703,8 @@ mod tests {
         assert!(compact.len() < full.len());
         let compact = log_body(&compact);
         let full = log_body(&full);
-        assert!(compact.contains("[inline script]") && compact.contains("exit 0"));
+        assert!(compact.contains("python3 -c") && compact.contains("script;"));
+        assert!(compact.contains("exit 0") && compact.contains('…'));
         assert!(!compact.contains("FULL_COMMAND_END"));
         assert!(full.contains("FULL_COMMAND_END"));
         state.worker_frame(Some(&snapshot));
@@ -3977,12 +3983,33 @@ mod tests {
     }
     #[test]
     fn worker_command_start_does_not_report_script_exit_as_an_observed_result() {
-        let text = command_log_summary(r#"Command started: ["sh","-c","echo ok; exit 0"]"#);
-        assert_eq!(text, "Command started: sh -c [inline script]");
-        let text = command_log_summary(r#"Command finished: ["sh","-c","echo ok; exit 0"]"#);
-        assert_eq!(text, "Command finished: sh -c [inline script]");
-        let text =
-            command_log_summary(r#"Command finished: ["sh","-c","echo ok; exit 0"]; exit 7"#);
-        assert_eq!(text, "Command finished: sh -c [inline script]; exit 7");
+        for (text, expected_tag) in [
+            (r#"Command started: ["sh","-c","echo ok; exit 0"]"#, "RUN"),
+            (r#"Command finished: ["sh","-c","echo ok; exit 0"]"#, "END"),
+            (
+                r#"Command finished: ["sh","-c","echo ok; exit 0"]; exit 7"#,
+                "FAIL",
+            ),
+        ] {
+            let entry = SlotLog {
+                text: text.into(),
+                ..log(0)
+            };
+            let (tag, _, body) = log_event(&entry, false);
+            assert_eq!(tag, expected_tag);
+            assert!(body.contains(r#"sh -c "echo ok; exit 0""#), "{body}");
+            assert_eq!(body.ends_with("; exit 7"), expected_tag == "FAIL");
+        }
+    }
+
+    #[test]
+    fn worker_command_preview_handles_a_truncated_invocation_and_keeps_redaction() {
+        let preview = command_preview(r#"["bash","-c","printf hello; …"#);
+        assert!(preview.contains("printf hello"), "{preview}");
+        let preview = command_preview(r#"["bash","-c","echo hello; password=fixture-secret"]"#);
+        assert!(!preview.contains("fixture-secret"), "{preview}");
+        assert!(preview.contains("echo hello"), "{preview}");
+        let preview = command_preview(r#"["curl","--token","fixture-secret"]"#);
+        assert!(!preview.contains("fixture-secret"), "{preview}");
     }
 }

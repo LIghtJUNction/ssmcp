@@ -1218,13 +1218,13 @@ class WorkerWindows(Harness):
                        and not panel["logs"]["task_view"], "F2 opens this station's diagnostic logs")
             view.keys(b"\x1b[H")
             view.panel(lambda panel: panel["logs"]["first_line"] == 0)
-            short = view.find_text("sh -c [inline script]")
+            short = view.find_text("COMMAND_BEGIN")
             short_text = region_text(short, view.panel()["logs"])
             started_lines = [line for line in short_text.splitlines()
-                             if "RUN" in line and "sh -c [inline script]" in line]
+                             if "RUN" in line and "sh -c" in line and "COMMAND_BEGIN" in line]
             self.check(started_lines and all("exit 0" not in line for line in started_lines)
-                       and "COMMAND_END" not in short_text and "[inline script]" in short_text,
-                       "default log shows a short started-command summary without inventing its script's exit")
+                       and "COMMAND_END" not in short_text and "Enter Full command" in "\n".join(short["rows"]),
+                       "default log previews the started script and shows how to expand it")
             self.check(self.bound(worker["id"], executor, "ssmcp.exec.status", {"job_id": job_id})["running"],
                        "the actual native command is still running while its started summary is inspected")
             view.save("wide-command-summary", short)
