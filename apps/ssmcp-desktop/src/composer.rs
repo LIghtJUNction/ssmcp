@@ -326,6 +326,7 @@ impl Composer {
         rect: Rect,
         text: &str,
         enabled: bool,
+        placeholder: &str,
     ) {
         self.bounds = Some(rect);
         self.focused &= enabled;
@@ -406,7 +407,7 @@ impl Composer {
         }
         if text.is_empty() {
             canvas.text(
-                "输入消息或命令…",
+                placeholder,
                 rect.x + PAD,
                 rect.y + PAD,
                 15,

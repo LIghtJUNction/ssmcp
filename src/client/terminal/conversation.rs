@@ -1307,11 +1307,25 @@ impl State {
         }
         // The native edit API treats omitted target as "keep the previous one".
         // The composer always shows a deliberate choice, including Next caller.
-        let target = Some(self.conversation.target.as_deref().unwrap_or("next"));
+        let target = self.conversation.target.as_deref().unwrap_or("next");
         let result = if let Some(id) = self.conversation.editing.clone() {
-            steering::publish_edit(&id, &text, target).map(|()| id)
+            steering::publish_edit(&id, &text, Some(target)).map(|()| id)
+        } else if target == "global" || !crate::session::attach::chat_bound() {
+            steering::submit(&text, Some(target))
         } else {
-            steering::submit(&text, target)
+            if self.conversation.agent_pending.is_some() {
+                self.notice = Some("Waiting for the previous chat receipt".into());
+                return;
+            }
+            match crate::session::attach::submit_chat(&text, target) {
+                Ok(crate::session::attach::ChatSubmission::Local(id)) => Ok(id),
+                Ok(crate::session::attach::ChatSubmission::Attached(ticket)) => {
+                    self.conversation.agent_pending = Some((self.chat_composer_stamp(), ticket));
+                    self.notice = Some("Sending to queue…".into());
+                    return;
+                }
+                Err(error) => Err(error.to_string()),
+            }
         };
         match result {
             Ok(id) => self.chat_enqueued(id, text),
@@ -6012,7 +6026,14 @@ mod tests {
             View::Activity,
             "Enter must use the typed default command"
         );
-        assert!(state.conversation.composer.is_empty());
+        // A bare /new starts a real session. Preview keeps the unsent draft
+        // and reports that live action instead of opening the suggested panel.
+        assert_eq!(state.conversation.composer.text(), "/new ");
+        assert_eq!(
+            state.notice.as_deref(),
+            Some("Preview cannot open a live session")
+        );
+        assert!(state.conversation.submitting.is_none());
     }
 
     #[test]

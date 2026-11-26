@@ -118,6 +118,44 @@ class TermuxInstall(unittest.TestCase):
         self.assertEqual(sum(c[:2]==['proot-distro','install'] for c in cmds),1)
         self.assertFalse(any(c[0] in ('git','rustup') for c in cmds))
 
+    def test_termux_entry_passes_arguments_and_opens_webui_in_android(self):
+        self.install()
+        launcher = Path(self.env["PREFIX"]) / "bin/ssmcp"
+        self.assertTrue(os.access(launcher, os.X_OK))
+        tools = self.base / "bin"
+        script = tools / "proot-distro"
+        script.unlink()
+        script.write_text("""#!/usr/bin/env python3
+import json, os, pathlib, sys, time
+state = pathlib.Path(os.environ["FIXTURE"])
+args = sys.argv[1:]
+(state / "guest-args").write_text(json.dumps(args))
+if "--bind" in args:
+    link = args[args.index("--bind") + 1].split(":")[0]
+    (pathlib.Path(link) / "url").write_text("http://127.0.0.1:4567/?setup=1#example" + chr(10))
+    for _ in range(100):
+        if (state / "opened-url").exists(): break
+        time.sleep(0.02)
+""")
+        script.chmod(0o755)
+        opener = tools / "termux-open-url"
+        opener.write_text('#!/bin/sh\nprintf "%s" "$1" > "$FIXTURE/opened-url"\n')
+        opener.chmod(0o755)
+        for args in [["alice@relay.test", "--tui"], ["webui"], ["alice@relay.test", "--webui"]]:
+            with self.subTest(args=args):
+                result = subprocess.run(["sh", str(launcher), *args], env=self.env,
+                                        capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                guest_args = json.loads((self.base / "guest-args").read_text())
+                self.assertEqual(guest_args[-len(args):], args)
+                if "webui" in args or "--webui" in args:
+                    url = self.base / "opened-url"
+                    self.assertEqual(url.read_text(), "http://127.0.0.1:4567/?setup=1#example")
+                    self.assertNotIn("example", result.stdout)
+                    url.unlink()
+                else:
+                    self.assertNotIn("--bind", guest_args)
+
     def test_binary_install_adds_missing_git_once(self):
         tools = self.base / 'bin'
         (tools / 'git').unlink()

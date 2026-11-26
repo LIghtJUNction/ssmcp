@@ -176,9 +176,7 @@ class AccountGateway:
         reconnect = () if "--no-watchdog" in extra_args or "--reconnect-delay" in extra_args else ("--reconnect-delay", "1")
         if not getattr(h, "origin", ""):
             raise RuntimeError("prepare the owned account router before creating a client")
-        target = ["--server", h.origin]
-        if not legacy:
-            target += ["--username", h.identity["username"]]
+        target = ["--server", h.origin] if legacy else [f"{h.identity['username']}@{h.origin}"]
         return [str(h.binary_dir / "ssmcp"), *target, "--name", name,
                 "--shell", shell, "--no-setup", *reconnect, *extra_args]
 

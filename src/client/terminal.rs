@@ -46,6 +46,29 @@ const SCROLLBACK_ROWS: usize = 128;
 const ENTER: &[u8] = b"\x1b[?1;6;25;66;1000;1006;2004s\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
 const COPY_HINT: &str = "Copy mode · drag then terminal Copy · Alt+C/F7/Esc back";
 const LEAVE: &[u8] = b"\x1b[?2026l\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
+// Only the active frontend may draw to the physical terminal. During a nested
+// attach the parent keeps its whole UI state and releases the alternate screen.
+static SCREEN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static REPAINT: AtomicBool = AtomicBool::new(false);
+
+pub(crate) struct ScreenLoan {
+    _guard: tokio::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for ScreenLoan {
+    fn drop(&mut self) {
+        REPAINT.store(true, Ordering::Release);
+    }
+}
+
+pub(crate) async fn lend_screen() -> io::Result<ScreenLoan> {
+    let guard = SCREEN.lock().await;
+    let mut output = io::stderr().lock();
+    output.write_all(LEAVE)?;
+    output.flush()?;
+    Ok(ScreenLoan { _guard: guard })
+}
+
 static DISPLAY: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 
 fn nonzero(value: u16) -> NonZeroU16 {
@@ -2829,6 +2852,18 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
     let mut pending_update_notice = None;
     let mut last_panel = Instant::now();
     while !shared.stop.load(Ordering::Acquire) {
+        let Ok(screen) = SCREEN.try_lock() else {
+            std::thread::sleep(FRAME_INTERVAL);
+            continue;
+        };
+        if REPAINT.swap(false, Ordering::AcqRel) {
+            previous = None;
+            previous_cell = None;
+            pending.clear();
+            offset = 0;
+            output.media = images::Renderer::default();
+            shared.state.lock().unwrap_or_else(|e| e.into_inner()).dirty = true;
+        }
         if offset >= pending.len() {
             output.media.complete();
             let (refresh, requests) = {
@@ -2870,6 +2905,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
             Ok(()) => {}
             Err(_) => break,
         }
+        drop(screen);
         update_notice::complete(&mut pending_update_notice, offset >= pending.len());
         std::thread::sleep(FRAME_INTERVAL);
     }

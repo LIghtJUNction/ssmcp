@@ -35,7 +35,7 @@ fn options() -> Result<Option<Options>, String> {
                     .next()
                     .and_then(|v| v.into_string().ok())
                     .ok_or("--target 需要 用户名@中继服务器。")?;
-                ssmcp::desktop_terminal::validate_destination(&target)?;
+                ssmcp::connection_form::validate_destination(&target)?;
                 result.destination = Some(target);
             }
             Some("--session") => {
@@ -183,7 +183,7 @@ fn run(options: Options) -> Result<(), String> {
                 if snapshot.phase.connected()
                     && let Some(target) = persist_target.take()
                 {
-                    if let Err(e) = ssmcp::desktop_terminal::save_desktop_profile(&target) {
+                    if let Err(e) = ssmcp::connection_form::save_desktop_profile(&target) {
                         desktop.notice(format!("连接已建立，无法保存启动设置：{e}"));
                     }
                 }
@@ -212,7 +212,7 @@ fn run(options: Options) -> Result<(), String> {
                 if handle.is_some() {
                     desktop.event(event)
                 } else {
-                    false
+                    launcher.event(event)
                 }
             });
             ui.begin(if consumed { None } else { event });
@@ -286,7 +286,12 @@ fn run(options: Options) -> Result<(), String> {
                         .map_err(|error| format!("无法写入渲染帧回执：{error}"))?;
                 }
             }
-            if let Some(text) = ui.clipboard.take().or_else(|| desktop.take_clipboard()) {
+            if let Some(text) = ui
+                .clipboard
+                .take()
+                .or_else(|| desktop.take_clipboard())
+                .or_else(|| launcher.take_clipboard())
+            {
                 window.copy(&text);
             }
         }

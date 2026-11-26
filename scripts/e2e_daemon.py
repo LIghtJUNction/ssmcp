@@ -248,7 +248,7 @@ class Daemon(Harness):
         return identity
 
     def daemon_arguments(self, name, *, watchdog):
-        arguments = ["--daemon", "--server", self.origin, "--username", self.identity["username"],
+        arguments = [f"{self.identity['username']}@{self.origin}", "--daemon",
                      "--no-setup", "--name", name,
                      "--title", "daemon lifecycle validation", "--shell", "/bin/sh"]
         if watchdog:

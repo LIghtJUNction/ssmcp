@@ -796,6 +796,10 @@ impl Shell {
             .expect("main terminal exists until shutdown")
     }
 
+    pub(crate) fn selected_id(&self) -> String {
+        self.registry().selected.clone()
+    }
+
     pub fn selected(&self) -> Arc<Terminal> {
         let registry = self.registry();
         registry

@@ -118,8 +118,8 @@ class RelayFrontend(Frontend):
             os.tcsetpgrp(0, os.getpgrp())
 
         self.process = subprocess.Popen(
-            [str(harness.binary_dir / "ssmcp"), "--server", harness.origin,
-             "--username", harness.identity["username"], "--name", label, "--shell", "/bin/sh", "--no-setup", "--reconnect-delay", "1"],
+            [str(harness.binary_dir / "ssmcp"), f"{harness.identity['username']}@{harness.origin}",
+             "--name", label, "--shell", "/bin/sh", "--no-setup", "--reconnect-delay", "1"],
             stdin=self.slave, stdout=subprocess.PIPE, stderr=self.slave,
             cwd=harness.workspace, env=environment, preexec_fn=own_controlling_terminal,
         )

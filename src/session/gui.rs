@@ -339,7 +339,7 @@ pub(crate) async fn launch(destination: Option<&str>) -> crate::Result<()> {
     let mut launch_url = reqwest::Url::parse(&origin)?;
     let destination = match destination {
         Some(target) => Some(target.to_owned()),
-        None => crate::desktop_terminal::desktop_profile()?,
+        None => crate::connection_form::desktop_profile()?,
     };
     if let Some(destination) = destination {
         let target = host.launch(destination).await?;

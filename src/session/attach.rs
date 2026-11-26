@@ -2,9 +2,12 @@
 //! releases an input lease; it never changes the session's desired state.
 pub(crate) mod input;
 pub(crate) mod thread_history;
-mod zbridge_adapter;
 mod workbench;
-pub(crate) use workbench::submit_session_command;
+mod zbridge_adapter;
+pub(crate) use workbench::{
+    ChatSubmission, chat_bound, open_pending_session, submit_chat, submit_session_command,
+    terminal_write,
+};
 pub use zbridge_adapter::{EventObserver, Frontend, MAX_OBSERVATION_MS, RemoteFrontend};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -1204,6 +1207,7 @@ async fn attached(
                     }
                 }
                 _ = tick.tick() => {
+                    open_pending_session().await;
                     if terminal::exit_requested() { break; }
                     apply_keys(&directory,lease,&mut selected,&terminal_ids,keys.feed("",Instant::now(),true),read_only,backend_generation).await?;
                     let queued = terminal::take_keyboard();
@@ -1413,7 +1417,14 @@ async fn send_input(
         while !remaining.is_char_boundary(end) {
             end -= 1;
         }
-        ipc::request(directory,ENDPOINT,json!({"op":"write","lease":lease,"backend_generation":backend_generation,"terminal_id":terminal_id,"data":&remaining[..end]})).await?;
+        workbench::write_attached(
+            directory,
+            lease,
+            backend_generation,
+            terminal_id,
+            &remaining[..end],
+        )
+        .await?;
         remaining = &remaining[end..];
     }
     Ok(())

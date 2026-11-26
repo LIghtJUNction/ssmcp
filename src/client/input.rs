@@ -93,6 +93,15 @@ async fn forward(terminal: &Terminal, text: &str) -> Result<(), String> {
 }
 
 async fn forward_selected(terminals: &Terminals, text: &str) -> Result<(), String> {
+    if terminals.workbench().is_some() {
+        let target = terminals.selected_id();
+        for chunk in chunks(text) {
+            crate::session::attach::terminal_write(&target, chunk)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
     for chunk in chunks(text) {
         terminals
             .selected()
@@ -195,6 +204,7 @@ async fn input_tick(
         // Dispatch monitor controls without forwarding keys or replies to a PTY.
         super::interface::apply_pending().map(|_| ())
     } else {
+        crate::session::attach::open_pending_session().await;
         forward_display(terminals, keys).await
     }
 }

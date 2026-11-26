@@ -2007,10 +2007,7 @@ class WorkerWindows(Harness):
                    and state["offline"] == 4 and state["registered_workers"] == 0,
                    "the replacement preserves requested capacity without inheriting the old manager or workers")
         expected = list(original["argv"])
-        endpoint_index = expected.index("--server")
-        self.check(expected.count("--username") == 1
-                   and expected[endpoint_index + 1:endpoint_index + 4]
-                   == [self.origin, "--username", self.identity["username"]],
+        self.check(expected.count(f"{self.identity['username']}@{self.origin}") == 1,
                    "the child originally selected the exact named loopback account")
         # Each window gets a newly allocated systemd scope in the same session slice.
         pattern = r"--unit=ssmcp-window-[0-9a-f]{32}\.scope"

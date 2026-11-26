@@ -426,7 +426,7 @@ async fn register(
     let destination = input::<LaunchRequest>(request)
         .await?
         .checked_destination()?;
-    let url = crate::desktop_terminal::registration_url(&destination)
+    let url = crate::connection_form::registration_url(&destination)
         .await
         .map_err(|e| invalid(&e.to_string()))?;
     Ok(Json(json!({"url":url})))
@@ -440,7 +440,7 @@ async fn launch(
         .await?
         .checked_destination()?;
     let target = state.host.launch(destination.clone()).await?;
-    crate::desktop_terminal::save_desktop_profile(&destination)
+    crate::connection_form::save_desktop_profile(&destination)
         .map_err(|e| unavailable(&e.to_string()))?;
     Ok(Json(json!({"session":target})))
 }

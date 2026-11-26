@@ -271,13 +271,13 @@ pub(crate) fn desktop_profile(save: Option<&str>) -> Result<Option<String>> {
     verify_directory(&root)?;
     let path = root.join("desktop-target-v1.json");
     if let Some(target) = save {
-        crate::desktop_terminal::validate_destination(target)?;
+        crate::connection_form::validate_destination(target)?;
         write_private(&path, &serde_json::to_vec(target)?)?;
     }
     read_private_limit(&path, 1024)?
         .map(|bytes| {
             let target: String = serde_json::from_slice(&bytes)?;
-            crate::desktop_terminal::validate_destination(&target)?;
+            crate::connection_form::validate_destination(&target)?;
             Ok(target)
         })
         .transpose()

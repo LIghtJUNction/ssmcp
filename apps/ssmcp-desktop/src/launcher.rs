@@ -1,5 +1,5 @@
 //! Local connection form. Editing a destination never opens a relay connection.
-use ssmcp::desktop_terminal::{self, DEFAULT_RELAY};
+use ssmcp::connection_form::{self, DEFAULT_RELAY};
 use std::path::PathBuf;
 use zgpui::native::{ButtonStyle, Canvas, Rect, Ui};
 
@@ -25,6 +25,8 @@ pub fn executable() -> Result<PathBuf, String> {
 }
 
 pub struct Launcher {
+    editor: crate::composer::Composer,
+    submit: bool,
     user: String,
     relay: String,
     accepted: bool,
@@ -35,27 +37,55 @@ pub struct Launcher {
 
 impl Launcher {
     pub fn new(target: Option<&str>) -> Self {
-        let saved = desktop_terminal::desktop_profile().ok().flatten();
+        let saved = connection_form::desktop_profile().ok().flatten();
         let (user, relay) = target
             .or(saved.as_deref())
             .and_then(|s| s.split_once('@'))
             .unwrap_or(("", DEFAULT_RELAY));
+        let mut editor = crate::composer::Composer::default();
+        editor.focus_end(user);
         Self {
+            editor,
+            submit: false,
             user: user.into(),
             relay: relay.into(),
             accepted: saved
                 .as_deref()
-                .is_some_and(|previous| desktop_terminal::official_relay(previous)),
+                .is_some_and(|previous| connection_form::official_relay(previous)),
             saved,
             registration: None,
             error: String::new(),
         }
     }
 
+    pub fn event(&mut self, event: &zgpui::native::Event) -> bool {
+        use zgpui::native::Event;
+        if self.editor.focused() {
+            if matches!(event, Event::Key { code: 13, .. }) {
+                self.submit = true;
+                return true;
+            }
+            if matches!(event, Event::Text(value) if value.chars().any(char::is_control)) {
+                self.error = "用户名只能填写一行。".into();
+                return true;
+            }
+        }
+        if self.editor.event(event, &mut self.user, true) {
+            self.registration = None;
+            self.error.clear();
+            return true;
+        }
+        false
+    }
+
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.editor.take_clipboard()
+    }
+
     fn destination(&self) -> Result<String, String> {
         let target = format!("{}@{}", self.user.trim(), self.relay.trim());
-        desktop_terminal::validate_destination(&target)?;
-        if desktop_terminal::official_relay(&target) && !self.accepted {
+        connection_form::validate_destination(&target)?;
+        if connection_form::official_relay(&target) && !self.accepted {
             return Err("使用默认中继前，请阅读并同意用户协议和隐私政策。".into());
         }
         Ok(target)
@@ -68,16 +98,6 @@ impl Launcher {
     }
 
     pub fn draw(&mut self, c: &mut Canvas<'_>, ui: &mut Ui, w: f32, h: f32) -> Option<String> {
-        if ui.button(
-            c,
-            506,
-            Rect::new((w - 114.).max(4.), 20., 92., 34.),
-            "GitHub ↗",
-            ButtonStyle::Quiet,
-            true,
-        ) {
-            self.open(SOURCE);
-        }
         let width = (w - 40.).clamp(1., 660.);
         let x = (w - width) / 2.;
         let y = ((h - 190.) / 2.).max(67.);
@@ -96,14 +116,13 @@ impl Launcher {
         };
         let relay_y = if narrow { y + 90. } else { y };
         c.text("ssmcp", x, y + 7., if narrow { 19 } else { 24 }, true, TEXT);
-        let changed_user = ui.input(
+        self.editor.draw(
             c,
-            501,
+            ui,
             Rect::new(user_x, y, user_w.max(1.), 44.),
-            &mut self.user,
-            "用户名",
-            false,
+            &self.user,
             true,
+            "用户名",
         );
         c.ellipsis(
             "↑ 用户名，首次注册时自选",
@@ -141,11 +160,11 @@ impl Launcher {
             false,
             MUTED,
         );
-        if changed_user || changed_relay {
+        if changed_relay {
             self.registration = None;
             self.error.clear();
         }
-        let official = desktop_terminal::official_relay(&format!("account@{}", self.relay.trim()));
+        let official = connection_form::official_relay(&format!("account@{}", self.relay.trim()));
         let actions_y = relay_y + 94.;
         if official {
             let label = if self.accepted {
@@ -201,7 +220,8 @@ impl Launcher {
             !self.user.trim().is_empty()
                 && !self.relay.trim().is_empty()
                 && (!official || self.accepted),
-        ) {
+        ) || std::mem::take(&mut self.submit)
+        {
             match self.destination() {
                 Ok(target) => return Some(target),
                 Err(error) => self.error = error,
@@ -231,7 +251,7 @@ impl Launcher {
                             .build()
                             .map_err(|e| e.to_string())
                             .and_then(|rt| {
-                                rt.block_on(desktop_terminal::registration_url(&destination))
+                                rt.block_on(connection_form::registration_url(&destination))
                                     .map_err(|e| e.to_string())
                             });
                         let _ = tx.send(result);
@@ -239,6 +259,16 @@ impl Launcher {
                 }
                 Err(error) => self.error = error,
             }
+        }
+        if ui.button(
+            c,
+            506,
+            Rect::new((w - 114.).max(4.), 20., 92., 34.),
+            "GitHub ↗",
+            ButtonStyle::Quiet,
+            true,
+        ) {
+            self.open(SOURCE);
         }
         if !self.error.is_empty() {
             c.ellipsis(&self.error, x, submit_y + 88., width, 13, false, 0xb42318ff);
@@ -264,7 +294,7 @@ impl Launcher {
     }
 
     fn open(&mut self, url: &str) {
-        if let Err(error) = desktop_terminal::open_link(url) {
+        if let Err(error) = connection_form::open_link(url) {
             self.error = format!("无法打开浏览器：{error}");
         }
     }
@@ -274,8 +304,25 @@ impl Launcher {
 mod tests {
     use super::*;
     #[test]
+    fn username_accepts_typing_on_open_and_enter_runs_validation() {
+        let mut form = Launcher::new(Some("Alice@relay.example"));
+        form.event(&zgpui::native::Event::Text("2".into()));
+        assert_eq!(form.user, "Alice2");
+        form.event(&zgpui::native::Event::Key {
+            code: 13,
+            control: false,
+            shift: false,
+            text: String::new(),
+        });
+        assert!(form.submit);
+        assert_eq!(form.destination().unwrap(), "Alice2@relay.example");
+    }
+
+    #[test]
     fn official_consent_is_required_for_equivalent_origins() {
         let mut form = Launcher {
+            editor: Default::default(),
+            submit: false,
             user: "Alice".into(),
             relay: "HTTPS://SSMCP.LMM.BEST:443/".into(),
             accepted: false,

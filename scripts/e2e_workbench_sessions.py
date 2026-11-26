@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import tempfile
-import time
 import urllib.request
 import uuid
 

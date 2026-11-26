@@ -880,6 +880,7 @@ impl Desktop {
             Rect::new(bounds.x, y, (bounds.w - 92.).max(1.), 64.),
             &self.composer,
             self.pending.is_none(),
+            "输入消息或命令…",
         );
         let unknown_same = self.unknown_draft.as_ref() == Some(&self.composer);
         let can_submit =

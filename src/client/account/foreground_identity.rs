@@ -182,7 +182,7 @@ mod tests {
             } else if label == "other" {
                 vec!["bob@relay.example".into()]
             } else {
-                Vec::new()
+                vec!["alice@relay.example".into()]
             };
             if label == "allow" {
                 assert!(

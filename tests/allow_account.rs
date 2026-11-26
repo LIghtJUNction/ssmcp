@@ -208,7 +208,7 @@ async fn allow_help_uses_only_server_qualified_accounts() {
 }
 
 #[tokio::test]
-async fn device_cli_connects_without_a_token_with_explicit_or_remembered_target() {
+async fn device_cli_requires_an_explicit_target_and_connects_without_a_token() {
     for (legacy, explicit, saved) in [
         (false, true, false),
         (true, true, true),
@@ -259,6 +259,12 @@ async fn device_cli_connects_without_a_token_with_explicit_or_remembered_target(
             "rejected registration must not publish credentials"
         );
         let stderr = String::from_utf8(output.stderr).unwrap();
+        if !explicit {
+            assert!(stderr.contains("ssmcp username@server"), "{stderr}");
+            assert!(hellos.lock().unwrap().is_empty());
+            assert_eq!(whoamis.load(Ordering::SeqCst), 0);
+            continue;
+        }
         assert!(
             stderr.contains(if legacy {
                 "unsupported admission"
@@ -278,11 +284,7 @@ async fn device_cli_connects_without_a_token_with_explicit_or_remembered_target(
             continue;
         }
         assert_eq!(captured.len(), 1);
-        let expected = if explicit {
-            vec![format!("alice@{base}")]
-        } else {
-            vec![format!("saved-target@{base}")]
-        };
+        let expected = vec![format!("alice@{base}")];
         assert_eq!(captured[0].allow, expected);
     }
 }

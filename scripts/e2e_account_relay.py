@@ -638,13 +638,17 @@ class Harness:
         visits = [e for e in journal if e["kind"] == "control_allowed"]
         self.check([e["connection_id"] for e in visits] == [connection.id, reconnected.id],
                    "multiple verified native calls record one control visit per real connection")
-        bare = self.spawn("B", "--name", "B resumed", "--no-watchdog", "--no-setup", "--shell", "/bin/sh")
+        before = self.state.connect_attempts[""]
+        bare = self.cli("B", success=False)
+        self.check("username@server" in bare.stderr and self.state.connect_attempts[""] == before,
+                   "a remembered target cannot open a relay connection from a bare invocation")
+        explicit = self.unsigned("B resumed")
         resumed = self.connection("B resumed")
         self.check(not resumed.token and resumed.hello["metadata"]["allow"] == [self.state.allow_principal],
-                   "a new client invocation without a target reconnects without a token")
+                   "an explicit target reconnects without a token")
         resumed.call("terminal.status", {})
         self.controller_consent(resumed)
-        self.stop(bare)
+        self.stop(explicit)
         self.check(not any(path in ("/api/client/invites", "/api/client/enroll",
                                     "/api/client/login/start", "/api/client/login/poll")
                            for _, path in self.state.requests),
