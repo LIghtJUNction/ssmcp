@@ -185,11 +185,12 @@ Usage: ssmcp username@server [options]
   --agent-peer ID      Exact native message recipient for ssmcp; also set --agent-account PROVIDER:SUBJECT
   --username NAME      Named account on the selected server
   --name NAME          Display name (default: hostname-pid)
-  --daemon             Start a quiet, user-owned native background service
-  --control-only       With --daemon, run an unsupervised native control process
-  --cpu-limit PERCENT  Linux background CPU quota; 100% is one CPU
-  --memory-limit SIZE  Linux background memory cap; e.g. 512MiB
+  --daemon            Start a user-owned background service without terminal windows
+                      With --worker N, run the worker pool in the background
+  --cpu-limit PERCENT  Linux only, with --daemon or sessions create; 100% is one CPU
+  --memory-limit SIZE  Linux only, with --daemon or sessions create; e.g. 512MiB
   --session-control    Grant this connection local saved-session management tools
+  --control-only       With --daemon, run an unsupervised native control process
   --no-watchdog        Disable automatic reconnects (enabled by default)
   --watchdog           Enable automatic reconnects explicitly (compatibility flag)
   --reconnect-delay N  Initial retry delay, 1..=3600 seconds (default 5; bounded exponential backoff)
