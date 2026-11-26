@@ -216,18 +216,23 @@ fn account_panel(
             html.push_str("</div>");
         }
         html.push_str(&format!(
-            r#"<div class="account-footer"><small class="account-note">使用 GitHub 登录</small><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="quiet" type="submit">退出登录</button></form></div>"#
+            r#"<div class="account-footer"><button type="button" class="quiet" data-passkey="register" data-csrf="{csrf}" aria-describedby="passkey-status" disabled>绑定通行密钥</button><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="quiet" type="submit">退出登录</button></form></div>"#
         ));
     } else if enabled {
         html.push_str(&format!(
-            r#"<h2 id="account-title">已有账户？在这里继续。</h2><p class="account-description">使用 GitHub 登录，查看用户名、在线连接与本月流量。</p>
-<form class="login-form" method="post" action="/account/login"><input type="hidden" name="csrf" value="{csrf}"><button class="login-button" type="submit">{GITHUB_ICON}使用 GitHub 登录<span class="arrow" aria-hidden="true">↗</span></button></form>
-<small class="account-note">第一次使用可从下面的安装步骤开始，登录网页获取用户名。</small>"#
+            r#"<h2 id="account-title">登录账户</h2><p class="account-description">已绑定通行密钥的账户可以直接登录。首次注册请使用 GitHub。</p>
+<form class="login-form" method="post" action="/account/login"><input type="hidden" name="csrf" value="{csrf}"><div class="account-actions"><button class="login-button" type="button" data-passkey="login" data-csrf="{csrf}" aria-describedby="passkey-status" disabled>使用通行密钥登录</button><button class="quiet" type="submit">{GITHUB_ICON}使用 GitHub 注册或登录</button></div></form>"#
         ));
     } else {
         html.push_str(
             r##"<h2 id="account-title">账户登录暂未开放。</h2><p class="account-description">可以先安装客户端。账号服务启用后，在这里完成登录。</p><a class="text-link" href="#install">查看安装步骤 <span aria-hidden="true">↗</span></a>"##,
         );
+    }
+    if account.is_some() || enabled {
+        let script = super::assets::url("portal.js");
+        html.push_str(&format!(
+            r#"<p id="passkey-status" class="account-note" role="status" aria-live="polite"></p><noscript><p class="account-note">使用通行密钥需要启用 JavaScript。</p></noscript><script src="{script}" defer></script>"#
+        ));
     }
     html.push_str("</div></section>");
     html
@@ -383,6 +388,31 @@ mod tests {
             Some(traffic),
             AccountSettings::default(),
         )
+    }
+
+    #[test]
+    fn passkey_controls_follow_the_server_rendered_account() {
+        let account = sample_account();
+        let panel = |account, enabled| {
+            account_panel(
+                account,
+                "fixture-csrf",
+                enabled,
+                false,
+                None,
+                "https://relay.example",
+                AccountSettings::default(),
+            )
+        };
+        let guest = panel(None, true);
+        assert!(guest.contains("使用通行密钥登录") && guest.contains("使用 GitHub 注册或登录"));
+        assert!(guest.contains(r#"data-passkey="login" data-csrf="fixture-csrf""#));
+        assert!(!guest.contains(r#"data-passkey="register""#));
+        let signed_in = panel(Some(&account), true);
+        assert!(signed_in.contains(r#"data-passkey="register" data-csrf="fixture-csrf""#));
+        assert!(!signed_in.contains(r#"data-passkey="login""#));
+        assert!(signed_in.contains(super::super::assets::url("portal.js")));
+        assert!(!panel(None, false).contains("data-passkey"));
     }
 
     #[test]

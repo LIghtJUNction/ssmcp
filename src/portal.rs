@@ -5,6 +5,7 @@ mod dashboard;
 mod dashboard_view;
 pub mod frontend;
 mod guide;
+mod passkeys;
 pub(crate) mod relay_accounting;
 mod sessions;
 mod setup;
@@ -67,6 +68,7 @@ struct BrowserState {
     sessions: HashMap<DigestKey, Session>,
     pending: HashMap<DigestKey, Pending>,
     rates: HashMap<String, Rate>,
+    passkeys: HashMap<DigestKey, passkeys::Pending>,
 }
 
 struct Session {
@@ -91,6 +93,7 @@ impl BrowserState {
             persisted.remove(key)?;
         }
         self.pending.retain(|_, pending| pending.browser != key);
+        self.passkeys.remove(&key);
         Ok(self.sessions.remove(&key))
     }
 
@@ -99,6 +102,8 @@ impl BrowserState {
         self.sessions.retain(|_, s| s.expires > now);
         self.pending
             .retain(|_, p| p.expires > now && self.sessions.contains_key(&p.browser));
+        self.passkeys
+            .retain(|key, pending| pending.expires > now && self.sessions.contains_key(key));
         self.rates
             .retain(|_, r| now.duration_since(r.start) < Duration::from_secs(60));
     }
@@ -111,7 +116,11 @@ impl BrowserState {
         let oldest = self
             .sessions
             .iter()
-            .filter(|(key, session)| session.subject.is_none() && !pending.contains(*key))
+            .filter(|(key, session)| {
+                session.subject.is_none()
+                    && !pending.contains(*key)
+                    && !self.passkeys.contains_key(*key)
+            })
             .min_by_key(|(_, session)| session.expires)
             .map(|(key, _)| *key);
         let key = oldest.ok_or(Problem::Busy)?;
@@ -159,6 +168,9 @@ pub(crate) enum Problem {
     UsernameBound,
     UsernameRenameLimit,
     Banned,
+    PasskeyInvalid,
+    PasskeyExpired,
+    PasskeyConflict,
     TrafficQuotaExceeded,
     TrafficPeriodMismatch,
     TrafficGrantConflict,
@@ -166,6 +178,9 @@ pub(crate) enum Problem {
 impl Problem {
     pub(crate) fn status(self) -> StatusCode {
         match self {
+            Self::PasskeyInvalid => StatusCode::BAD_REQUEST,
+            Self::PasskeyExpired => StatusCode::GONE,
+            Self::PasskeyConflict => StatusCode::CONFLICT,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Csrf | Self::Forbidden | Self::Banned => StatusCode::FORBIDDEN,
             Self::Busy | Self::UsernameRenameLimit => StatusCode::TOO_MANY_REQUESTS,
@@ -192,6 +207,9 @@ impl Problem {
             Self::Invalid => {
                 "输入无效。仅接受 OpenSSH 支持的单行 SSH 公钥，不接受私钥或 authorized_keys 授权选项。"
             }
+            Self::PasskeyInvalid => "未能验证这把通行密钥，请重新操作，或使用 GitHub 登录。",
+            Self::PasskeyExpired => "这次通行密钥 验证已结束，请重新开始。",
+            Self::PasskeyConflict => "这把通行密钥 已绑定，请使用现有通行密钥，或选择另一把。",
             Self::Unauthorized => "登录已失效，请回到首页重新登录。",
             Self::Csrf => "页面验证未通过，请回到首页刷新后重试。",
             Self::Busy => "操作过于频繁或服务繁忙，请稍后重试。",
@@ -370,6 +388,7 @@ impl Portal {
             .sessions
             .retain(|_, session| session.subject.as_deref() != Some(subject));
         let active: HashSet<_> = browser.sessions.keys().copied().collect();
+        browser.passkeys.retain(|key, _| active.contains(key));
         browser
             .pending
             .retain(|_, pending| active.contains(&pending.browser));
@@ -547,6 +566,7 @@ pub fn routes() -> Router<Arc<Broker>> {
         .route("/api/client/account/{username}", get(client_account))
         .merge(guide::routes())
         .merge(setup::routes())
+        .merge(passkeys::routes())
         .merge(dashboard::routes())
         .merge(commerce::routes())
         .layer(middleware::map_response(security_headers))
@@ -587,7 +607,7 @@ async fn security_headers(mut response: Response) -> Response {
         HeaderValue::from_static("nosniff"),
     );
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    h.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'"));
+    h.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'"));
     h.insert(
         "permissions-policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
@@ -941,6 +961,20 @@ async fn finish_identity(
     previous: DigestKey,
     identity: Identity,
 ) -> Result<Response, Problem> {
+    issue_identity_session(portal, previous, identity, LoginMethod::Github).await
+}
+
+enum LoginMethod {
+    Github,
+    Passkey,
+}
+
+async fn issue_identity_session(
+    portal: &Portal,
+    previous: DigestKey,
+    identity: Identity,
+    method: LoginMethod,
+) -> Result<Response, Problem> {
     {
         let mut browser = portal.browser.lock().map_err(|_| Problem::Storage)?;
         browser.prune();
@@ -956,7 +990,12 @@ async fn finish_identity(
             AuditOutcome::Pending,
         )
         .await?;
-    let account = portal.storage(move |s| s.login(&identity)).await?;
+    let account = portal
+        .storage(move |s| match method {
+            LoginMethod::Github => s.login(&identity),
+            LoginMethod::Passkey => s.account(&identity.subject),
+        })
+        .await?;
     let raw = random()?;
     let csrf = random()?;
     {

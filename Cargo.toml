@@ -253,6 +253,7 @@ tokio = { version = "1.54", features = ["test-util"] }
 mime = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+webauthn-rs = { version = "=0.6.2", default-features = false, features = ["conditional-ui"] }
 time = { version = "0.3.55", default-features = false }
 
 [target.'cfg(unix)'.dependencies]

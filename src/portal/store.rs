@@ -15,6 +15,7 @@ use std::{
 
 pub(super) const MAX_KEYS: usize = 20;
 pub(super) mod external;
+mod passkeys;
 const MAX_ACCOUNTS: usize = 4096;
 const MAX_HANDLE_ALIASES: usize = 128;
 const MAX_DATABASE: u64 = 8 * 1024 * 1024;
@@ -104,6 +105,7 @@ pub(crate) struct Store {
     directory: File,
     _lock: File,
     database: Database,
+    passkeys: passkeys::Credentials,
     failed: bool,
     traffic: super::traffic::TrafficLedger,
     monthly_allowances: crate::user_policy::MonthlyTrafficAllowances,
@@ -208,12 +210,14 @@ impl Store {
             Err(e) => return Err(e.into()),
         };
         validate(&database)?;
+        let passkeys = passkeys::Credentials::open(&anchored, &database)?;
         let traffic =
             super::traffic::TrafficLedger::open_for_store(&directory, database.external.is_some())?;
         let mut store = Self {
             directory,
             _lock: lock,
             database,
+            passkeys,
             failed: false,
             traffic,
             monthly_allowances: Default::default(),
@@ -680,8 +684,14 @@ impl Store {
         if data.len() as u64 > MAX_DATABASE {
             return Err(Problem::Limit);
         }
+        self.replace_private("accounts.json", &data)?;
+        self.database = next;
+        Ok(())
+    }
+
+    fn replace_private(&mut self, name: &str, bytes: &[u8]) -> Result<(), Problem> {
         let dir = PathBuf::from(format!("/proc/self/fd/{}", self.directory.as_raw_fd()));
-        let temporary = dir.join(format!(".accounts-{}.tmp", super::random()?));
+        let temporary = dir.join(format!(".{name}-{}.tmp", super::random()?));
         let result = (|| -> std::io::Result<()> {
             let mut file = OpenOptions::new()
                 .write(true)
@@ -689,9 +699,9 @@ impl Store {
                 .mode(0o600)
                 .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
                 .open(&temporary)?;
-            file.write_all(&data)?;
+            file.write_all(bytes)?;
             file.sync_all()?;
-            fs::rename(&temporary, dir.join("accounts.json"))?;
+            fs::rename(&temporary, dir.join(name))?;
             self.directory.sync_all()
         })();
         if result.is_err() {
@@ -700,7 +710,6 @@ impl Store {
             self.failed = true;
             return Err(Problem::Storage);
         }
-        self.database = next;
         Ok(())
     }
 }
@@ -827,6 +836,185 @@ mod tests {
             subject: subject.into(),
             login: login.into(),
         }
+    }
+
+    fn stored_passkey(id: u8) -> webauthn_rs::prelude::Passkey {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        // Public P-256 generator point; this fixture contains no authenticator secret.
+        serde_json::from_value(serde_json::json!({"cred":{
+            "cred_id": URL_SAFE_NO_PAD.encode([id]), "counter":0, "transports":null,
+            "cred":{"type_":"ES256","key":{"EC_EC2":{"curve":"SECP256R1",
+                "x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+                "y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}}},
+            "user_verified":true,"backup_eligible":false,"backup_state":false,
+            "registration_policy":"required","extensions":{},
+            "attestation":{"data":"None","metadata":"None"},"attestation_format":"None"
+        }}))
+        .unwrap()
+    }
+
+    #[test]
+    fn passkeys_bind_to_existing_accounts_and_round_trip_without_rewriting_accounts() {
+        use std::os::unix::fs::MetadataExt;
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        store.login(&identity("123", "alice")).unwrap();
+        store.login(&identity("456", "bob")).unwrap();
+        let alice = store.registration_handle("123").unwrap();
+        let bob = store.registration_handle("456").unwrap();
+        assert_ne!(alice, bob);
+        let original = fs::read(directory.0.join("accounts.json")).unwrap();
+        let file = directory.0.join("passkeys-v1.json");
+        assert!(store.passkeys_for("123").unwrap().is_empty());
+        assert!(!file.exists());
+        assert_eq!(
+            store.bind_passkey("999", alice, stored_passkey(1)),
+            Err(Problem::Unauthorized)
+        );
+        store.bind_passkey("123", alice, stored_passkey(1)).unwrap();
+        assert_eq!(
+            store.bind_passkey("123", alice, stored_passkey(1)),
+            Err(Problem::PasskeyConflict)
+        );
+        assert_eq!(
+            store.bind_passkey("456", bob, stored_passkey(1)),
+            Err(Problem::PasskeyConflict)
+        );
+        assert_eq!(
+            store.bind_passkey("123", bob, stored_passkey(3)),
+            Err(Problem::PasskeyConflict)
+        );
+        assert_eq!(
+            store.bind_passkey("456", alice, stored_passkey(3)),
+            Err(Problem::PasskeyConflict)
+        );
+        store.bind_passkey("456", bob, stored_passkey(2)).unwrap();
+        assert_eq!(fs::metadata(&file).unwrap().mode() & 0o777, 0o600);
+        assert_eq!(
+            original,
+            fs::read(directory.0.join("accounts.json")).unwrap()
+        );
+        drop(store);
+        let mut store = Store::open(&directory.0).unwrap();
+        assert_eq!(store.passkey_owner(&[1]).unwrap().0, "123");
+        assert_eq!(store.registration_handle("123").unwrap(), alice);
+        assert_eq!(store.passkey_owner(&[2]).unwrap().1, bob);
+        assert_eq!(store.passkeys_for("456").unwrap(), vec![stored_passkey(2)]);
+        assert!(matches!(
+            store.passkey_owner(&[99]),
+            Err(Problem::Unauthorized)
+        ));
+        let result = serde_json::from_value(serde_json::json!({
+            "cred_id":"AQ","needs_update":true,"user_verified":true,
+            "backup_state":true,"backup_eligible":true,"counter":4,"extensions":{}
+        }))
+        .unwrap();
+        assert_eq!(
+            store.update_passkey("456", &result),
+            Err(Problem::Unauthorized)
+        );
+        store.update_passkey("123", &result).unwrap();
+        let inode = fs::metadata(&file).unwrap().ino();
+        store.update_passkey("123", &result).unwrap();
+        assert_eq!(inode, fs::metadata(&file).unwrap().ino());
+        drop(store);
+        let mut store = Store::open(&directory.0).unwrap();
+        let key = serde_json::to_value(store.passkey_owner(&[1]).unwrap().2).unwrap();
+        assert_eq!(key["cred"]["counter"], 4);
+        assert_eq!(key["cred"]["backup_state"], true);
+        store.set_policy("123", Some(true), None).unwrap();
+        assert!(matches!(store.passkeys_for("123"), Err(Problem::Banned)));
+        assert!(matches!(store.passkey_owner(&[1]), Err(Problem::Banned)));
+        assert_eq!(
+            store.bind_passkey("123", alice, stored_passkey(3)),
+            Err(Problem::Banned)
+        );
+        assert_eq!(store.update_passkey("123", &result), Err(Problem::Banned));
+    }
+
+    #[test]
+    fn passkey_limit_is_per_account_and_failed_writes_are_not_published() {
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        store.login(&identity("123", "a")).unwrap();
+        store.login(&identity("456", "b")).unwrap();
+        let alice = store.registration_handle("123").unwrap();
+        let bob = store.registration_handle("456").unwrap();
+        for id in 1..=8 {
+            store
+                .bind_passkey("123", alice, stored_passkey(id))
+                .unwrap();
+        }
+        assert_eq!(
+            store.bind_passkey("123", alice, stored_passkey(9)),
+            Err(Problem::Limit)
+        );
+        store.bind_passkey("456", bob, stored_passkey(9)).unwrap();
+        let file = directory.0.join("passkeys-v1.json");
+        fs::rename(&file, directory.0.join("saved-passkeys")).unwrap();
+        fs::create_dir(&file).unwrap();
+        assert_eq!(
+            store.bind_passkey("456", bob, stored_passkey(10)),
+            Err(Problem::Storage)
+        );
+        assert!(matches!(store.passkey_owner(&[10]), Err(Problem::Storage)));
+        drop(store);
+        fs::remove_dir(&file).unwrap();
+        fs::rename(directory.0.join("saved-passkeys"), &file).unwrap();
+        let reopened = Store::open(&directory.0).unwrap();
+        assert_eq!(reopened.passkeys_for("123").unwrap().len(), 8);
+        assert!(matches!(
+            reopened.passkey_owner(&[10]),
+            Err(Problem::Unauthorized)
+        ));
+    }
+
+    #[test]
+    fn passkey_store_rejects_damaged_bindings_and_nonprivate_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        store.login(&identity("123", "a")).unwrap();
+        store.login(&identity("456", "b")).unwrap();
+        let alice = store.registration_handle("123").unwrap();
+        store.bind_passkey("123", alice, stored_passkey(1)).unwrap();
+        drop(store);
+        let file = directory.0.join("passkeys-v1.json");
+        let original = fs::read(&file).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(Store::open(&directory.0).is_err());
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut values: Vec<serde_json::Value> = serde_json::from_slice(&original).unwrap();
+        values.push(values[0].clone());
+        fs::write(&file, serde_json::to_vec(&values).unwrap()).unwrap();
+        assert!(Store::open(&directory.0).is_err());
+        values[1]["passkey"] = serde_json::to_value(stored_passkey(2)).unwrap();
+        values[1]["subject"] = serde_json::json!("456");
+        fs::write(&file, serde_json::to_vec(&values).unwrap()).unwrap();
+        assert!(
+            Store::open(&directory.0).is_err(),
+            "a handle has two owners"
+        );
+        values[1]["subject"] = serde_json::json!("123");
+        values[1]["user_handle"] = serde_json::json!(webauthn_rs::prelude::Uuid::new_v4());
+        fs::write(&file, serde_json::to_vec(&values).unwrap()).unwrap();
+        assert!(
+            Store::open(&directory.0).is_err(),
+            "one owner has two handles"
+        );
+        values.pop();
+        values[0]["subject"] = serde_json::json!("999");
+        fs::write(&file, serde_json::to_vec(&values).unwrap()).unwrap();
+        assert!(Store::open(&directory.0).is_err());
+        fs::write(&file, original).unwrap();
+        assert_eq!(
+            Store::open(&directory.0)
+                .unwrap()
+                .passkey_owner(&[1])
+                .unwrap()
+                .0,
+            "123"
+        );
     }
 
     #[test]
