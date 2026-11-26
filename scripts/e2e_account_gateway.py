@@ -129,6 +129,8 @@ class AccountGateway:
         environment = direct_loopback({key: value for key, value in inherited.items()
                                        if not key.startswith("SSMCP_")})
         environment["SSMCP_RELAY_COMPOSER_FIXTURE"] = str(self.directory)
+        if getattr(h, "fixture_primary_recharged", False):
+            environment["SSMCP_RELAY_COMPOSER_FIXTURE_RECHARGED"] = "1"
         lifetime = getattr(h, "fixture_timeout_seconds", None)
         if lifetime is not None:
             if type(lifetime) is not int or not 30 <= lifetime <= 1800:

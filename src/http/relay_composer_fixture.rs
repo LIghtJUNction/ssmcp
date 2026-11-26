@@ -362,6 +362,15 @@ async fn run(directory: PathBuf) -> crate::Result<()> {
         .await
         .map_err(|_| "could not issue the second isolated account credential")?;
     broker.configure_user_policies(8 * 1024 * 1024).await?;
+    // Only multi-session scenarios opt the primary synthetic account into paid status.
+    if std::env::var_os("SSMCP_RELAY_COMPOSER_FIXTURE_RECHARGED").as_deref()
+        == Some(std::ffi::OsStr::new("1"))
+    {
+        broker
+            .record_recharge("123")
+            .await
+            .map_err(|_| "could not seed the multi-session fixture recharge")?;
+    }
     let broker = Arc::new(broker);
     let routes = super::router(broker.clone());
     running.tasks.push(tokio::spawn(async move {

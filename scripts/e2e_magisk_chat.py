@@ -159,6 +159,7 @@ def refused_owned_desktop(h, client, root):
 def exercise(client, fixture, root):
     h = Harness(root, client.parent)
     h.fixture_binary = fixture
+    h.fixture_primary_recharged = True
     peers = []
     try:
         for status in (402, 503):
