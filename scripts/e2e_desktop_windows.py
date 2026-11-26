@@ -9,7 +9,7 @@ import tempfile
 from Xlib import X, display
 from Xlib.protocol import event
 
-from e2e_account_relay import Harness, IDENTITY, descendants, process_running, wait_for
+from e2e_account_relay import Harness, IDENTITY, process_running, wait_for
 
 
 def run(desktop):
@@ -45,10 +45,15 @@ def run(desktop):
                 return dict(test.state.sessions)
 
         def registration(proc):
-            children = set(descendants(proc.pid))
             for overview in registry.glob("frontends/*/live/*/overview.json"):
-                pid = json.loads(overview.read_text())["pid"]
-                if pid in children:
+                try:
+                    pid = json.loads(overview.read_text())["pid"]
+                    status = Path(f"/proc/{pid}/status").read_text()
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                # The desktop's bridge thread spawns the core. PPid identifies
+                # its owning desktop process regardless of the spawning thread.
+                if f"PPid:\t{proc.pid}" in status.splitlines():
                     return pid, overview.parents[2]
             return None
 
