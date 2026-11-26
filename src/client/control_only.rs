@@ -38,12 +38,14 @@ struct Controls {
     generation: u64,
 }
 impl Controls {
-    async fn open(options: &Options) -> crate::Result<Self> {
-        let process = Backend::start_with_harness(options.shell_preference()?, None, None).await?;
+    async fn open() -> crate::Result<Self> {
+        // Existing discovery constructor allocates no shell or command process.
+        let process = Backend::for_discovery()?;
         let result = (|| {
             process.configure_chat(false)?;
             let registry = process.registry.clone();
             registry.replace(Provider::Ui, vec![])?;
+            registry.replace(Provider::Terminal, vec![])?;
             registry.replace(Provider::Harnesses, vec![])?;
             registry.replace(Provider::Client, vec![json!({
                 "name":"ssmcp.client.capabilities", "description":"Read this control-only connection capability manifest.",
@@ -100,25 +102,10 @@ impl Controls {
                 return self.capabilities();
             }
             crate::wire::Operation::CallTool { name, arguments } => (name, arguments),
-            crate::wire::Operation::Status {} => ("terminal.status".into(), json!({})),
-            crate::wire::Operation::Read {
-                cursor,
-                max_bytes,
-                wait_ms,
-            } => (
-                "terminal.read".into(),
-                json!({"cursor":cursor,"max_bytes":max_bytes,"wait_ms":wait_ms}),
-            ),
-            crate::wire::Operation::Write { data } => {
-                ("terminal.write".into(), json!({"data":data}))
-            }
-            crate::wire::Operation::Resize { rows, cols } => {
-                ("terminal.resize".into(), json!({"rows":rows,"cols":cols}))
-            }
             _ => return Err("operation unavailable in control-only mode".into()),
         };
         let tool = self.process.registry.lookup(&name)?;
-        if !matches!(tool.provider, Provider::Exec | Provider::Terminal) {
+        if !matches!(tool.provider, Provider::Exec) {
             return Err("tool unavailable in control-only mode".into());
         }
         self.host.call(&tool, arguments).await
@@ -199,7 +186,7 @@ pub(super) async fn run(options: &Options) -> crate::Result<()> {
         ..
     } = link;
     let outcome = async {
-        let controls = Controls::open(options).await?;
+        let controls = Controls::open().await?;
         println!("{}", json!({"type":"shell", "mode":"control-only", "client_id":ready.3,
             "url":ready.0, "chat_enabled":false}));
         let mut incoming = Incoming::start(reader, transport_kind);
@@ -224,11 +211,20 @@ pub(super) async fn run(options: &Options) -> crate::Result<()> {
                         Some(Ok(Some(Frame::Call { id, operation, attribution, code_context, .. }))) => {
                             let admitted = authorize(server, &ready.3, attribution.as_deref())
                                 .and_then(|()| CallScope::from_relay_for_client(controls.generation,
-                                    Some(&ready.3), id, attribution.as_deref(), code_context.as_ref()));
+                                    Some(&ready.3), id, attribution.as_deref(), code_context.as_ref()))
+                                .and_then(|scope| {
+                                    // Preserve normal Linux resource admission, lazily after
+                                    // authorization and before any requested process is created.
+                                    #[cfg(target_os = "linux")]
+                                    if matches!(&operation, crate::wire::Operation::CallTool { name, .. } if name == "ssmcp.exec.start") {
+                                        crate::session_budget::enter().map_err(|error| format!("could not admit command memory ceiling: {error}"))?;
+                                    }
+                                    Ok(scope)
+                                });
                             match admitted {
                                 Err(error) => send(&mut writer, Frame::Reply { id, result: Err(error) }).await?,
-                                Ok(_) if requests.len() >= MAX_INFLIGHT => write_frame(&mut writer,
-                                    &Frame::Reply { id, result: Err("control-only request limit reached; no request admitted".into()) }).await?,
+                                Ok(_) if requests.len() >= MAX_INFLIGHT => send(&mut writer,
+                                    Frame::Reply { id, result: Err("control-only request limit reached; no request admitted".into()) }).await?,
                                 Ok(scope) => {
                                     let controls = controls.clone();
                                     requests.spawn(async move {
@@ -289,6 +285,7 @@ mod tests {
             vec!["--session-control"],
             vec!["--watchdog"],
             vec!["--tty", "kitty"],
+            vec!["--shell", "/bin/sh"],
             vec!["--reconnect-delay", "1"],
             vec!["--memory-limit", "512MiB"],
         ] {
@@ -330,15 +327,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn native_catalog_cannot_dispatch_workflow_or_events() {
-        let options = options(&[
-            "alice@relay.example",
-            "--daemon",
-            "--control-only",
-            "--shell",
-            "/bin/sh",
-        ])
-        .unwrap();
-        let controls = Controls::open(&options).await.unwrap();
+        let controls = Controls::open().await.unwrap();
         let page = controls
             .perform(crate::wire::Operation::ListTools { cursor: None })
             .await
@@ -349,9 +338,8 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert!(names.contains(&"ssmcp.exec.start") && names.contains(&"terminal.status"));
+        assert!(names.contains(&"ssmcp.exec.start") && !names.contains(&"terminal.status"));
         assert!(names.iter().all(|name| *name == "ssmcp.client.capabilities"
-            || name.starts_with("terminal.")
             || (name.starts_with("ssmcp.exec.") && !name.ends_with("events"))));
         for name in [
             "ssmcp.exec.events",
@@ -374,7 +362,39 @@ mod tests {
             );
         }
         assert_eq!(controls.capabilities().unwrap()["chat_enabled"], false);
+        let job = controls.perform(crate::wire::Operation::CallTool {
+            name: "ssmcp.exec.start".into(), arguments: json!({"command":["/bin/sh","-c","printf CONTROL_ONLY_UNIT"],"timeout_ms":5000})
+        }).await.unwrap();
+        let job_id = job["structuredContent"]["job_id"].as_str().unwrap();
+        controls
+            .perform(crate::wire::Operation::CallTool {
+                name: "ssmcp.exec.wait".into(),
+                arguments: json!({"job_id":job_id,"wait_ms":5000}),
+            })
+            .await
+            .unwrap();
+        let output = controls
+            .perform(crate::wire::Operation::CallTool {
+                name: "ssmcp.exec.read".into(),
+                arguments: json!({"job_id":job_id,"max_bytes":4096}),
+            })
+            .await
+            .unwrap();
+        assert!(output.to_string().contains("CONTROL_ONLY_UNIT"));
+        #[cfg(target_os = "linux")]
+        let owned_pid = {
+            let job = controls
+                .perform(crate::wire::Operation::CallTool {
+                    name: "ssmcp.exec.start".into(),
+                    arguments: json!({"command":["/bin/sleep","120"]}),
+                })
+                .await
+                .unwrap();
+            job["structuredContent"]["pid"].as_u64().unwrap()
+        };
         controls.shutdown().await;
+        #[cfg(target_os = "linux")]
+        assert!(!std::path::Path::new(&format!("/proc/{owned_pid}")).exists());
         assert!(
             controls
                 .perform(crate::wire::Operation::Status {})

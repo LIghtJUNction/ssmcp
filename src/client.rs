@@ -1234,6 +1234,7 @@ impl Options {
                 || session_control
                 || harness.is_some()
                 || tty.is_some()
+                || shell.is_some()
                 || list_tools
                 || local_mode
                 || !resource_limits.is_empty()
@@ -1242,7 +1243,7 @@ impl Options {
                 || explicit_watchdog == Some(true)
                 || reconnect_delay_secs.is_some()
             {
-                return Err("--control-only requires --daemon and a relay connection; omit worker, chat/agent, harness, TTY, context, session-control, resource limits and reconnect options".into());
+                return Err("--control-only requires --daemon and a relay connection; omit worker, chat/agent, harness, shell/TTY, context, session-control, resource limits and reconnect options".into());
             }
             chat.input = chat_io::Input::None;
             watchdog = false;

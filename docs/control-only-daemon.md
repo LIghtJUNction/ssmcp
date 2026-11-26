@@ -27,18 +27,21 @@ wait "$control_pid"
 The binary does not fork, install a service, write a PID file, enable startup or
 survive logout by itself. An existing service manager can invoke the same command
 as a simple process with null stdin and captured stdout/stderr, and owns restart
-and logout policy. No service manager is installed or invoked by this mode.
+and logout policy. No service manager is installed by this mode. On Linux, the first authorized
+command start uses the existing session resource-admission code, which can ask
+an already running user manager for transient resource scopes/slices. This is
+resource accounting, not persistent session or service installation.
 Use connection registration output to distinguish readiness from a live PID.
 SIGKILL or machine failure cannot promise graceful cleanup.
 
 ## Capability boundary
 
-The initial minimal catalog contains `terminal.*`, ordinary `ssmcp.exec.*`
+The initial minimal catalog contains ordinary `ssmcp.exec.*`
 (excluding `ssmcp.exec.events`) and `ssmcp.client.capabilities`. These are the same
 native implementations, bounds and owned process cleanup used by the normal
 client. Command/job status, output cursors, authenticated attribution and request
 IDs are necessary native control state. Optional harnesses/plugins cannot be
-loaded through this mode. Filesystem, desktop, network forwarding, saved-session
+loaded through this mode. Interactive terminal selection, filesystem, desktop, network forwarding, saved-session
 management, reload and resource tools are outside this initial catalog; use
 ordinary authorized process control within its existing permissions as needed.
 
@@ -53,8 +56,8 @@ The sole relay-maintenance exception is an empty capability-manifest read;
 it grants no control and cannot execute a tool.
 
 Do not combine this mode with chat/agent flags, worker pools, harness preload,
-TTY observation, context roots, session-control, background resource-limit flags
-or reconnect configuration. For resource constraints, configure the caller's
+shell selection, TTY observation, context roots, session-control, background resource-limit flags
+or reconnect configuration. Additional constraints belong to the caller's
 existing service manager. No startup work or command is configured implicitly.
 
 ## Compatibility
@@ -66,6 +69,13 @@ it is not silently enabled by lack of a terminal or by `--input none`.
 
 ## Isolated acceptance
 
+On Linux, execution retains the existing delegated cgroup memory requirement.
+An existing user manager must support the normal SSMCP resource admission.
+Admission occurs only on an authorized command-start request. This mode does
+not install/start a manager or disable command memory ceilings. Without the
+required user bus and delegation, registration and read-only process controls
+work, but native command starts fail closed.
+
 Build the CLI and library test executable with the locked toolchain, then run:
 
 ```sh
@@ -76,6 +86,12 @@ SSMCP_E2E_FIXTURE_BINARY=/absolute/path/to/target/debug/deps/ssmcp-TESTHASH \
 ```
 
 The Python fixture uses loopback and disposable account/controller state. It
-checks the real CLI without a TTY, native execution, local revocation, catalog
-exclusions, process cleanup and the unchanged default foreground connection.
-It neither connects to a live relay nor invokes a service manager or model.
+checks the real CLI without a TTY, native control, local revocation, catalog
+exclusions, signals and disconnection. Execution and owned-command cleanup
+require the existing resource delegation; missing prerequisites are reported
+as blockers, never as successful command execution. Library tests separately
+exercise native execution using the existing library-test resource policy.
+Default parsing and offline discovery are checked without requiring a manager.
+It never connects to a live relay, installs a service or invokes a model.
+On a capable Linux host, native command admission uses the existing user manager.
+Use `--require-execution` to make missing execution prerequisites exit with code 2.
