@@ -1051,8 +1051,8 @@ fn monitor_help(width: usize) -> Vec<(PanelTone, String)> {
         "F2   Progress / logs and client metrics",
         "Enter   Open logs / expand command text",
         "T   Full task / back",
-        "Main chat · /worker retire #NN selects one station",
         "Ctrl+R Reload · Ctrl+C Stop",
+        "Main chat · /worker retire #NN selects one station",
     ]
     .into_iter()
     .enumerate()
