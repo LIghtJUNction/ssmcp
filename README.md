@@ -615,3 +615,6 @@ cargo run --locked --bin ssmcp -- ui preview
 
 [MIT License](LICENSE)
 
+
+For an explicit unsupervised native control process without chat or workflows,
+see [control-only daemon mode](docs/control-only-daemon.md).

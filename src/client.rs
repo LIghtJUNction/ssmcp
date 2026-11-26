@@ -14,6 +14,7 @@ mod computer_control;
 mod config;
 mod connection_context;
 pub(crate) mod context_memory;
+mod control_only;
 mod controller_accounts;
 mod controller_command;
 mod environment;
@@ -92,6 +93,7 @@ Start
   ssmcp mcp                     Start local MCP for your harness on Linux
   ssmcp mcp install             Register that control endpoint in Codex
   ssmcp alice@relay.example     Make this device available to that account
+  ssmcp --daemon --control-only Run native controls without chat or workflows
   ssmcp list [--json]           List this OS user's saved local sessions
   ssmcp attach NAME             Reopen a running local session
   ssmcp attach NAME --read-only Observe a running local session
@@ -184,6 +186,7 @@ Usage: ssmcp username@server [options]
   --username NAME      Named account on the selected server
   --name NAME          Display name (default: hostname-pid)
   --daemon             Start a quiet, user-owned native background service
+  --control-only       With --daemon, run an unsupervised native control process
   --cpu-limit PERCENT  Linux background CPU quota; 100% is one CPU
   --memory-limit SIZE  Linux background memory cap; e.g. 512MiB
   --session-control    Grant this connection local saved-session management tools
@@ -488,6 +491,7 @@ struct Options {
     worker_window: Option<Mutex<WorkerController>>,
     list_tools: bool,
     daemon: bool,
+    control_only: bool,
     resource_limits: crate::session::limits::Limits,
     session_control: bool,
     watchdog: bool,
@@ -644,6 +648,7 @@ impl Options {
         let mut worker_window_child = false;
         let mut list_tools = false;
         let mut daemon = false;
+        let mut control_only = false;
         let mut resource_limits = crate::session::limits::Limits::default();
         let mut session_control = false;
         let mut watchdog = default_watchdog;
@@ -878,6 +883,7 @@ impl Options {
                 Some("--no-setup") => {}
                 Some("--portal") => return Err("--portal has been replaced by --server URL".into()),
                 Some("--daemon") => daemon = true,
+                Some("--control-only") => control_only = true,
                 Some(flag @ ("--cpu-limit" | "--memory-limit")) => {
                     let value = args
                         .next()
@@ -1222,6 +1228,25 @@ impl Options {
                 "--allow requires a relay connection and cannot be used with --list-tools".into(),
             );
         }
+        if control_only {
+            if !daemon
+                || worker.is_some()
+                || session_control
+                || harness.is_some()
+                || tty.is_some()
+                || list_tools
+                || local_mode
+                || !resource_limits.is_empty()
+                || !context_roots.is_empty()
+                || !chat.arguments().is_empty()
+                || explicit_watchdog == Some(true)
+                || reconnect_delay_secs.is_some()
+            {
+                return Err("--control-only requires --daemon and a relay connection; omit worker, chat/agent, harness, TTY, context, session-control, resource limits and reconnect options".into());
+            }
+            chat.input = chat_io::Input::None;
+            watchdog = false;
+        }
         validate_title(title.as_deref())?;
         if let Some(name) = &name
             && (name.trim().is_empty() || name.len() > 128 || name.chars().any(char::is_control))
@@ -1246,6 +1271,7 @@ impl Options {
             worker_window: None,
             list_tools,
             daemon,
+            control_only,
             resource_limits,
             session_control,
             watchdog,
@@ -2319,6 +2345,9 @@ pub async fn run() -> crate::Result<()> {
             || options.reconnect_delay_secs != runner.spec().reconnect_delay_secs)
     {
         return Err("saved background session options do not match its manifest".into());
+    }
+    if options.control_only {
+        return control_only::run(&options).await;
     }
     if options.daemon {
         let result = crate::session::start(options.session_spec()?).await?;
