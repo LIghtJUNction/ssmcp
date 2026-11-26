@@ -834,7 +834,12 @@ Home/End. F2 cycles activity, audit, agents, queue, questions and history.
 syntax-highlighted source, and Left returns to the list. Source audit uses the
 same current protocol 7; older protocol connections are no longer accepted.
 .SS "Context handoff"
-Use /handoff [note] to prepare a bounded Markdown snapshot of the current
+Use /handoff [note] to ask the selected session agent for a standalone
+handoff prompt. The agent calls ssmcp.ui.handoff to copy its prompt to the
+local clipboard. When the terminal confirms the copy, paste the prompt into
+the next agent.
+.PP
+Use /handoff-export [note] to prepare a bounded Markdown snapshot of the current
 conversation, pending requests and questions. It is saved privately as
 \&.ssmcp/inputs/handoff-*.md and inserted as an editable @file draft.
 The current recipient is retained; no requirement is automatically sent,

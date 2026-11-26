@@ -243,6 +243,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/handoff",
+        description: "Ask the current agent for a handoff prompt and copy it",
+    },
+    SlashCommand {
+        name: "/handoff-export",
         description: "Prepare a context file and editable handoff draft",
     },
 ];
@@ -1140,14 +1144,17 @@ mod tests {
         assert_eq!(draft.text(), "/re");
         draft.set_text("/");
         assert!(draft.move_suggestion(-1));
-        assert_eq!(draft.selected_suggestion().unwrap().name, "/handoff");
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/handoff-export");
         assert!(
             draft
                 .rows(60, 3, &ui, true)
                 .lines
                 .iter()
-                .any(|line| line.contains("› /handoff"))
+                .any(|line| line.contains("› /handoff-export"))
         );
+        draft.set_text("/handoff");
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/handoff");
+        draft.set_text("/");
         draft.insert("au");
         assert_eq!(draft.selected_suggestion().unwrap().name, "/audit");
     }

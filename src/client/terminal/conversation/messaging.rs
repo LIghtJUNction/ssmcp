@@ -114,6 +114,7 @@ fn local_command(text: &str) -> bool {
                 | "/attach"
                 | "/select"
                 | "/copy"
+                | "/handoff-export"
                 | "/command"
                 | "/tasks"
                 | "/logs"

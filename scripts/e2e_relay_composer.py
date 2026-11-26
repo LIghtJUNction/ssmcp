@@ -638,7 +638,7 @@ class RelayComposer(Composer):
         handoff_before = self.queue()["queue"]
         note = "RELAY_EXPLICIT_HANDOFF_NOTE 界"
         self.focus_input(front)
-        front.send(b"\x01\x0b/handoff " + note.encode() + ENTER)
+        front.send(b"\x01\x0b/handoff-export " + note.encode() + ENTER)
 
         def exported_handoff():
             front.pump(0.05)

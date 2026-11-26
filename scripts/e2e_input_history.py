@@ -18,6 +18,7 @@ from pathlib import Path
 import platform
 import re
 import shlex
+import shutil
 import signal
 import struct
 import subprocess
@@ -85,11 +86,22 @@ class InputHistory(Composer):
         )
         launcher.chmod(0o700)
         self.binary_dir = launchers
+        self.clipboard = directory / "clipboard"
+        writer = launchers / "wl-copy"
+        cat = shutil.which("cat")
+        if not cat:
+            raise RuntimeError("test requires system cat")
+        writer.write_text("#!/bin/sh\n" + shlex.quote(cat) + " > "
+                          + shlex.quote(str(self.clipboard)) + "\n")
+        writer.chmod(0o700)
 
     def client_environment(self, label, **options):
         environment = super().client_environment(label, **options)
+        environment.pop("DISPLAY", None)
         environment.update({
             "HOME": str(self.home),
+            "PATH": str(self.binary_dir) + os.pathsep + environment["PATH"],
+            "WAYLAND_DISPLAY": "fixture-clipboard",
             "XDG_STATE_HOME": str(self.state_home),
             "XDG_CONFIG_HOME": str(self.directory / "config"),
             "XDG_DATA_HOME": str(self.directory / "data"),
@@ -449,10 +461,10 @@ class InputHistory(Composer):
         marker = self.workspace / "handoff-must-not-run.txt"
         note = "HANDOFF_NOTE 界 $(touch handoff-must-not-run.txt)"
         before = {item["id"] for item in self.queue()["queue"]}
-        front.send("/handoff " + note + "\r")
+        front.send("/handoff-export " + note + "\r")
         state = self.wait_state(front, lambda state: re.fullmatch(
             r'\n@\"\.ssmcp/inputs/handoff-[0-9a-f]{32}\.md\"\n', state["draft"]["text"]) is not None,
-            "/handoff did not produce a reviewable Markdown reference")
+            "/handoff-export did not produce a reviewable Markdown reference")
         draft = state["draft"]["text"]
         path = re.fullmatch(r'\n@\"([^\"]+)\"\n', draft).group(1)
         saved = self.workspace / path
@@ -489,6 +501,40 @@ class InputHistory(Composer):
         self.expect_delivery(self.work(member=member), pending, request_text=pending_text,
                              agent_id=member["agent_id"])
         self.check(not marker.exists(), "explicitly receiving the pending text does not execute handoff note contents")
+
+    def clipboard_handoff_scenario(self, front, member):
+        command = "/handoff 下一位先检查剩余任务"
+        queued = self.submit_source(front, command)
+        self.check(queued["target"] == member["agent_id"], "handoff uses the exact selected recipient")
+        delivered = self.work(member=member)
+        self.expect_delivery(delivered, queued, agent_id=member["agent_id"])
+        prompt = self.messages(delivered)[0]["text"]
+        token = re.search(r"with token ([0-9a-f]{32})", prompt).group(1)
+        self.sensitive.append(token)
+        self.check("ssmcp.ui.handoff" in prompt and "下一位先检查剩余任务" in prompt,
+                   "the agent receives the tool name, request token and user's handoff note")
+
+        def complete(request_token, handoff):
+            result = self.response("await collab.bind(%s, %s); return await call(%s, %s, %s);" % (
+                json.dumps(self.client_id),
+                json.dumps({"agent_id": member["agent_id"], "token": member["token"]}),
+                json.dumps(self.client_id), json.dumps("ssmcp.ui.handoff"),
+                json.dumps({"token": request_token, "text": handoff}),
+            ))
+            return result["structuredContent"]["result"]
+
+        handoff = "继续检查输入恢复。\n已核对队列，下一步运行回归用例。"
+        denied = complete("0" * 32, handoff)
+        self.check(denied.get("isError") and not self.clipboard.exists(),
+                   "a mismatched token cannot change the clipboard")
+        receipt = complete(token, handoff)["structuredContent"]
+        self.check(receipt["copied"] and self.clipboard.read_bytes() == handoff.encode(),
+                   "the native handoff tool copies the exact multiline UTF-8 text")
+        front.until(lambda shot: "Handoff copied. Paste it into the next agent." in text(shot),
+                    "the terminal confirms that the handoff is ready to paste")
+        self.check(complete(token, "must not replace").get("isError")
+                   and self.clipboard.read_bytes() == handoff.encode(),
+                   "a completed handoff cannot overwrite the clipboard again")
 
     def copy_and_help(self, front):
         draft = "COPY_HELP_DRAFT 界后缀"
@@ -743,6 +789,7 @@ class InputHistory(Composer):
                    "the expanded queue record is bound to the original reference text")
         self.paste_scenario(front, member)
         self.attachment_handoff_scenario(front, member)
+        self.clipboard_handoff_scenario(front, member)
         self.copy_and_help(front)
         self.shell_scenario(front)
         self.live_restart_scenario(front)
@@ -778,7 +825,7 @@ def main():
     report = {
         "status": "failed", "platform": platform.system(),
         "transport": "isolated account OAuth + owned PTY + independent vt100 decoder",
-        "scope": "enumerated @/$ completion, file/skill/image delivery, large paste, private image attach, editable handoff, idempotent replies, copy/help, local shell/tasks, current RAM events, fresh-process reset, and preservation of ignored legacy files; no models",
+        "scope": "enumerated @/$ completion, file/skill/image delivery, large paste, private image attach, clipboard handoff and editable export, idempotent replies, copy/help, local shell/tasks, current RAM events, fresh-process reset, and preservation of ignored legacy files; no models",
         "binaries": {name: sha256(path) for name, path in binaries.items()},
         "sources": {name: sha256(Path(__file__).with_name(name)) for name in (
             "e2e_input_history.py", "e2e.py", "e2e_dashboard.py", "e2e_composer.py",

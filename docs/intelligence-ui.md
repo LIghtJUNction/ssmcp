@@ -73,7 +73,7 @@ return await call(clientId, "ssmcp.ui.present", {
 
 完整文字进入现有 `/copy` 缓存和实时消息记录，沿用现有脱敏规则。事件中的 `value.message_id` 对应原生回执的 `message_id`。视觉表格的省略不改写生成的正文；事件投影仍受自身分页和保留预算限制。当前事件使用 `ssmcp.ui.events` 的 `action: "thread"` 读取，查询沿用真实客户端与线程身份，分页检查 `generation`、`next_cursor` 和 `retention_gap_possible`。[事件接口与边界](conversation-history.md)
 
-展示沿用当前活动流的浏览和折叠行为。对话与结构化布局只保留在当前进程内存中，重启或 `/reload` 后清空；旧文件不会作为历史恢复来源，也不会被迁移删除。需要保留当前内容时，可显式复制或使用 `/handoff` 导出。
+展示沿用当前活动流的浏览和折叠行为。对话与结构化布局只保留在当前进程内存中，重启或 `/reload` 后清空；旧文件不会作为历史恢复来源，也不会被迁移删除。需要保留当前内容时，可显式复制或使用 `/handoff-export` 导出。
 
 交互问题调用 `ssmcp.ui.ask` 创建，Agent 可继续工作；用户通过 `/questions` 回答，调用 `ssmcp.ui.questions` 读取结果。结构化展示本身不提交草稿、不回答问题，也不切换当前收件目标。
 

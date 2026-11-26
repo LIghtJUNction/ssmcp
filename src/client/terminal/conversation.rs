@@ -905,7 +905,7 @@ impl State {
             "/login" => return Err("Authorize the controller using the MCP URL in /logs. This device connects to its registered owner without signing in.".into()),
             "/allow" => self.chat_allow(rest)?,
             "/logout" => return Err("This device has no account login. Use /exit to close this session.".into()),
-            "/handoff" => {
+            "/handoff-export" => {
                 if self.preview {
                     return Err("Preview cannot export a live conversation".into());
                 }
@@ -1261,6 +1261,24 @@ impl State {
             self.notice = Some("Finish the held queue edit before using this local command".into());
             return;
         }
+        let mut words = text.trim_start().splitn(2, char::is_whitespace);
+        if words.next() == Some("/handoff") {
+            if self.preview || self.physical_enter.is_none() {
+                self.notice = Some("Run /handoff from the live local terminal".into());
+            } else if self.conversation.editing.is_some() {
+                self.notice = Some("Finish the held queue edit before requesting a handoff".into());
+            } else if self.conversation.native_recipient.is_some()
+                || self.conversation.target.as_deref() == Some("global")
+            {
+                self.notice = Some("Select a session agent or Next caller for /handoff".into());
+            } else {
+                match crate::client::handoff::clipboard::request(words.next().unwrap_or("").trim()) {
+                    Ok(prompt) => self.chat_submit_text(&prompt),
+                    Err(error) => self.notice = Some(error),
+                }
+            }
+            return;
+        }
         if self.conversation.editing.is_none() && self.chat_native_is_command(&text) {
             match self.chat_command(text.trim_start()) {
                 Ok(true) => {
@@ -1282,8 +1300,12 @@ impl State {
                 Ok(false) => {}
             }
         }
+        self.chat_submit_text(&text);
+    }
+
+    fn chat_submit_text(&mut self, text: &str) {
         if self.conversation.native_recipient.is_some() {
-            self.chat_native_submit(&text);
+            self.chat_native_submit(text);
             return;
         }
         if self.preview {
@@ -1302,7 +1324,7 @@ impl State {
                 self.notice = Some("Previous delivery is unconfirmed · check its receipt before editing or sending again".into());
                 return;
             }
-            match crate::client::chat_io::terminal_submit(&text) {
+            match crate::client::chat_io::terminal_submit(text) {
                 Ok(Some(ticket)) => {
                     self.conversation.agent_pending = Some((stamp, ticket));
                     self.notice =
@@ -1321,15 +1343,15 @@ impl State {
         // The composer always shows a deliberate choice, including Next caller.
         let target = self.conversation.target.as_deref().unwrap_or("next");
         let result = if let Some(id) = self.conversation.editing.clone() {
-            steering::publish_edit(&id, &text, Some(target)).map(|()| id)
+            steering::publish_edit(&id, text, Some(target)).map(|()| id)
         } else if target == "global" || !crate::session::attach::chat_bound() {
-            steering::submit(&text, Some(target))
+            steering::submit(text, Some(target))
         } else {
             if self.conversation.agent_pending.is_some() {
                 self.notice = Some("Waiting for the previous chat receipt".into());
                 return;
             }
-            match crate::session::attach::submit_chat(&text, target) {
+            match crate::session::attach::submit_chat(text, target) {
                 Ok(crate::session::attach::ChatSubmission::Local(id)) => Ok(id),
                 Ok(crate::session::attach::ChatSubmission::Attached(ticket)) => {
                     self.conversation.agent_pending = Some((self.chat_composer_stamp(), ticket));
@@ -1340,7 +1362,7 @@ impl State {
             }
         };
         match result {
-            Ok(id) => self.chat_enqueued(id, text),
+            Ok(id) => self.chat_enqueued(id, text.to_owned()),
             Err(error) => self.notice = Some(error),
         }
     }

@@ -536,6 +536,9 @@ pub(crate) async fn call(
     if name == tool_summary::TOOL {
         return tool_summary::call(arguments);
     }
+    if name == super::handoff::clipboard::TOOL {
+        return super::handoff::clipboard::call(arguments).await;
+    }
     if name == reply::TOOL {
         return reply::call(arguments);
     }
@@ -672,6 +675,7 @@ pub(crate) fn tools() -> Vec<Value> {
         listener::tool(),
         tool_summary::tool(),
         reply::tool(),
+        super::handoff::clipboard::tool(),
         user_wait::tool(),
         json!({"name":"ssmcp.ui.filter","description":"Filter the retained visible log history by case-insensitive text and all/commands/errors. Matching blocks keep their output. Does not alter audit events or running commands.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string","maxLength":256,"description":"Plain text, at most 256 UTF-8 bytes; empty clears the text filter."},"level":{"type":"string","enum":["all","commands","errors"]}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
         get_tool(),

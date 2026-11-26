@@ -55,6 +55,7 @@ pub(crate) fn human_chat_tool(name: &str) -> bool {
             | "ssmcp.ui.question_ack"
             | "ssmcp.ui.question_delivery"
             | "ssmcp.ui.reply"
+            | "ssmcp.ui.handoff"
     )
 }
 
