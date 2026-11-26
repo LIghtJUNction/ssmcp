@@ -303,6 +303,8 @@ impl Desktop {
     }
 
     pub fn sync(&mut self, view: &View) {
+        self.composer_editor
+            .set_available_commands(|capability| view.command(capability));
         if let Some(target) = &view.target {
             let index = self
                 .tabs
@@ -1059,11 +1061,17 @@ impl Desktop {
         ) {
             self.thread_picker = !self.thread_picker;
         }
+        let suggestion_height =
+            if self.pending.is_none() && self.composer_editor.has_suggestions(&self.composer) {
+                crate::composer::SUGGESTION_HEIGHT
+            } else {
+                0.
+            };
         let history_bounds = Rect::new(
             bounds.x,
             bounds.y + 36.,
             bounds.w,
-            (bounds.h - 164.).max(1.),
+            (bounds.h - 164. - suggestion_height).max(1.),
         );
         if view.resource("conversation") {
             self.history(canvas, ui, &view.conversation, history_bounds, 0);
@@ -1079,16 +1087,32 @@ impl Desktop {
             ThreadChoice::Agent(id) => view.agents.iter().any(|agent| &agent.id == id),
             _ => true,
         };
-        let can_send = match self.composer.trim().split_whitespace().next() {
-            Some("/cd") => self.can_command(view, "session.cd"),
-            Some("/new") => self.can_command(view, "session.new"),
-            _ => {
+        let verb = self.composer.split_whitespace().next();
+        let can_send = match crate::composer::SLASH_COMMANDS
+            .iter()
+            .find(|command| Some(command.verb) == verb)
+        {
+            Some(command) => self.can_command(view, command.capability),
+            None => {
                 self.can_command(view, "chat.send")
                     && view.can_send
                     && !view.reloading
                     && exact_target
             }
         };
+        if suggestion_height > 0. {
+            self.composer_editor.draw_suggestions(
+                canvas,
+                ui,
+                Rect::new(
+                    bounds.x,
+                    y - 14. - suggestion_height,
+                    (bounds.w - 92.).max(1.),
+                    suggestion_height - 3.,
+                ),
+                &self.composer,
+            );
+        }
         self.composer_editor.draw(
             canvas,
             ui,

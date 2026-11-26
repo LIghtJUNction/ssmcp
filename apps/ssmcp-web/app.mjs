@@ -26,6 +26,10 @@ let sessions = [], sessionOffset = 0, sessionsNext = null, selectedSession = nul
 let selectedTerminal = null, selectedThread = 'process', timelineOffset = 0, activePanel = 'conversation';
 let lastRenderedRows = [], localError = null, workerDraftEdited = false, queueOffset = 0;
 const composing = new WeakSet();
+const slashCommands = [
+  { word: '/new', name: 'session.new', description: '新建会话' },
+  { word: '/cd', name: 'session.cd', description: '切换工作目录', takesPath: true },
+];
 let directoryRead = 0, endTarget = null, submittingEnd = false;
 
 function element(tag, className = '', text = '') {
@@ -212,12 +216,13 @@ function renderComposer() {
   const chat = client.hasCommand('chat.send');
   const supported = chat || client.hasCommand('session.new') || client.hasCommand('session.cd');
   show('chat-form', supported);
+  renderSlashOptions();
   fillAgents($('chat-target'), [['next', '下一个合法接收者']], $('chat-target').value, true);
   fillAgents($('thread-filter'), [['process', '整个会话'], ['main', '主对话']], selectedThread, true);
   const validTarget = $('chat-target').selectedOptions[0]?.disabled !== true;
   const input = $('chat-text').value;
   const command = sessionCommand(input);
-  const canSend = command ? (command.name === 'session.new' ? gateway.authenticated : client.hasCommand(command.name)) : chat && threads?.can_send === true && validTarget;
+  const canSend = command ? slashAvailable(command) : chat && threads?.can_send === true && validTarget;
   $('chat-send').disabled = !canSend || busy.has('chat.send') || busy.has('session.new') || busy.has('session.cd') || busy.has('session-select') || !input.trim() || byteLength(input) > 16_384;
   const note = !client.connection ? '' : !supported ? '只读会话' : !validTarget ? '请选择接收方。'
     : byteLength(input) > 16_384 ? '输入超过 16 KiB。'
@@ -592,21 +597,96 @@ $('new-events').addEventListener('click', () => { timelineOffset = 0; lastRender
 $('timeline-scroller').addEventListener('scroll', () => { const scroll = $('timeline-scroller'); if (timelineOffset === 0 && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 90) show('new-events', false); }, { passive: true });
 $('history-more').addEventListener('click', () => run('history', () => client.loadHistory()));
 
+const chatInput = $('chat-text');
+const slashList = $('slash-options');
+let selectedSlash = null;
+let slashDismissed = false;
+
+function slashAvailable(command) {
+  return command.name === 'session.new' ? gateway.authenticated : client.hasCommand(command.name);
+}
+function slashWord() {
+  if (chatInput.selectionStart !== chatInput.selectionEnd || /[\r\n]/.test(chatInput.value)) return null;
+  const match = /^(\s*)(\/\S*)/.exec(chatInput.value);
+  if (!match) return null;
+  const start = match[1].length, end = match[0].length, caret = chatInput.selectionStart;
+  return caret > start && caret <= end ? { start, end, prefix: chatInput.value.slice(start, caret) } : null;
+}
+function renderSlashOptions() {
+  const query = !slashDismissed && !composing.has(chatInput) && !$('chat-form').hidden
+    && document.activeElement === chatInput && slashWord();
+  const choices = query ? slashCommands.filter(item => item.word.startsWith(query.prefix) && slashAvailable(item)) : [];
+  if (!choices.includes(selectedSlash)) selectedSlash = choices[0] ?? null;
+  slashList.hidden = !selectedSlash;
+  for (const [index, item] of slashCommands.entries()) {
+    const option = slashList.children[index];
+    option.hidden = !choices.includes(item);
+    option.setAttribute('aria-selected', String(item === selectedSlash));
+    if (item === selectedSlash) chatInput.setAttribute('aria-activedescendant', option.id);
+  }
+  if (!selectedSlash) chatInput.removeAttribute('aria-activedescendant');
+  return choices;
+}
+function completeSlash(item) {
+  const query = slashWord();
+  if (!query || !item.word.startsWith(query.prefix) || !slashAvailable(item)) return;
+  const separator = /^[ \t]+/.exec(chatInput.value.slice(query.end))?.[0] ?? '';
+  const replacement = item.word + (item.takesPath && !separator ? ' ' : '');
+  const size = byteLength(chatInput.value.slice(0, query.start) + replacement + chatInput.value.slice(query.end));
+  if (size > 16_384) return;
+  chatInput.setRangeText(replacement, query.start, query.end, 'end');
+  const caret = chatInput.selectionEnd + separator.length;
+  chatInput.setSelectionRange(caret, caret);
+  chatInput.focus({ preventScroll: true });
+  slashDismissed = true;
+  renderComposer();
+}
+for (const item of slashCommands) {
+  const option = element('button', 'slash-option');
+  option.type = 'button'; option.tabIndex = -1;
+  option.id = 'slash-option-' + item.word.slice(1);
+  option.setAttribute('role', 'option');
+  option.append(element('code', '', item.word), element('span', '', item.description));
+  // Keep the caret (and the mobile keyboard) in the draft while choosing.
+  option.addEventListener('pointerdown', event => event.preventDefault());
+  option.addEventListener('click', () => completeSlash(item));
+  slashList.append(option);
+}
+chatInput.addEventListener('focus', () => { slashDismissed = false; renderSlashOptions(); });
+chatInput.addEventListener('blur', () => { slashDismissed = true; renderSlashOptions(); });
+chatInput.addEventListener('selectionchange', renderSlashOptions);
+chatInput.addEventListener('input', () => { slashDismissed = false; });
+chatInput.addEventListener('keydown', event => {
+  if (event.isComposing || event.keyCode === 229 || composing.has(chatInput)
+      || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+  if (!['ArrowDown', 'ArrowUp', 'Tab', 'Enter', 'Escape'].includes(event.key)) return;
+  const choices = renderSlashOptions();
+  if (!choices.length) return;
+  event.preventDefault();
+  if (event.key === 'Tab' || event.key === 'Enter') { completeSlash(selectedSlash); return; }
+  if (event.key === 'Escape') slashDismissed = true;
+  else {
+    const step = event.key === 'ArrowDown' ? 1 : -1;
+    selectedSlash = choices[(choices.indexOf(selectedSlash) + step + choices.length) % choices.length];
+  }
+  renderSlashOptions();
+});
 for (const [textareaId, formId] of [['chat-text', 'chat-form'], ['terminal-input', 'terminal-form']]) {
   const textarea = $(textareaId);
   textarea.addEventListener('input', renderComposer);
-  textarea.addEventListener('compositionstart', () => composing.add(textarea));
+  textarea.addEventListener('compositionstart', () => { composing.add(textarea); renderSlashOptions(); });
   textarea.addEventListener('compositionend', () => { composing.delete(textarea); renderComposer(); });
   textarea.addEventListener('keydown', event => {
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing && !composing.has(textarea)) {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing && event.keyCode !== 229 && !composing.has(textarea)) {
       event.preventDefault(); if (!$(formId).querySelector('button[type="submit"]').disabled) $(formId).requestSubmit();
     }
   });
 }
 $('chat-target').addEventListener('change', renderComposer); $('terminal-newline').addEventListener('change', renderComposer);
 function sessionCommand(text) {
-  const match = /^\/(new|cd)(?:[ \t]+([^\r\n]*))?$/.exec(text.trim());
-  return match ? { name: 'session.' + match[1], argument: (match[2] ?? '').trim() } : null;
+  const match = /^(\/\S+)(?:[ \t]+([^\r\n]*))?$/.exec(text.trim());
+  const item = match && slashCommands.find(command => command.word === match[1]);
+  return item ? { name: item.name, argument: (match[2] ?? '').trim() } : null;
 }
 async function applySessionCommand(command, textarea) {
   if (command.name === 'session.new') {

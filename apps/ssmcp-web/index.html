@@ -102,7 +102,8 @@
           <form class="composer" id="chat-form" hidden>
             <label for="chat-text" class="sr-only">发送到 CLI 输入队列</label>
             <span class="prompt" aria-hidden="true">›</span>
-            <textarea id="chat-text" rows="1" maxlength="16384" placeholder="输入消息或 / 命令" spellcheck="false"></textarea>
+            <div id="slash-options" class="slash-options" role="listbox" aria-label="斜杠命令" hidden></div>
+            <textarea id="chat-text" aria-autocomplete="list" aria-controls="slash-options" rows="1" maxlength="16384" placeholder="输入消息或 / 命令" spellcheck="false"></textarea>
             <button class="send-button" id="chat-send" type="submit" aria-label="发送" title="发送 · Ctrl / ⌘ + Enter">↑</button>
           </form>
           <p class="tiny composer-note" id="composer-note">先连接一个会话。</p>

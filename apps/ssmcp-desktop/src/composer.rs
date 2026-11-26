@@ -5,6 +5,30 @@ use zgpui::native::{ButtonStyle, Canvas, Event, Rect, Ui};
 const MAX_BYTES: usize = 4096;
 const LINE_HEIGHT: f32 = 22.0;
 const PAD: f32 = 11.0;
+pub const SUGGESTION_HEIGHT: f32 = 36.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SlashCommand {
+    pub verb: &'static str,
+    pub capability: &'static str,
+    insertion: &'static str,
+    hint: &'static str,
+}
+
+pub const SLASH_COMMANDS: [SlashCommand; 2] = [
+    SlashCommand {
+        verb: "/new",
+        capability: "session.new",
+        insertion: "/new",
+        hint: "新建会话",
+    },
+    SlashCommand {
+        verb: "/cd",
+        capability: "session.cd",
+        insertion: "/cd ",
+        hint: "切换目录",
+    },
+];
 
 #[derive(Debug)]
 struct Line {
@@ -89,9 +113,129 @@ pub struct Composer {
     preferred_x: Option<f32>,
     clipboard: Option<String>,
     submit: bool,
+    available_commands: [bool; SLASH_COMMANDS.len()],
+    suggestion_index: usize,
+    suggestions_dismissed: bool,
+    suggestion_boxes: Vec<(Rect, SlashCommand)>,
+    pressed_suggestion: Option<SlashCommand>,
 }
 impl Composer {
+    pub fn set_available_commands(&mut self, supports: impl Fn(&str) -> bool) {
+        self.available_commands = SLASH_COMMANDS.map(|command| supports(command.capability));
+    }
+    fn suggestions<'a>(&'a self, text: &'a str) -> impl Iterator<Item = SlashCommand> + 'a {
+        let active = self.focused
+            && !self.suggestions_dismissed
+            && self.cursor == text.len()
+            && self.selection().is_empty()
+            && text.starts_with('/');
+        SLASH_COMMANDS
+            .into_iter()
+            .zip(self.available_commands)
+            .filter_map(move |(command, enabled)| {
+                (active && enabled && command.verb.starts_with(text) && command.insertion != text)
+                    .then_some(command)
+            })
+    }
+    pub fn has_suggestions(&self, text: &str) -> bool {
+        self.suggestions(text).next().is_some()
+    }
+    fn fill_suggestion(&mut self, text: &mut String, command: SlashCommand) {
+        text.clear();
+        text.push_str(command.insertion);
+        self.focus_end(text);
+        self.suggestions_dismissed = true;
+        self.suggestion_boxes.clear();
+    }
+    fn suggestion_at(&self, x: f32, y: f32) -> Option<SlashCommand> {
+        self.suggestion_boxes
+            .iter()
+            .find(|(rect, _)| rect.contains(x, y))
+            .map(|(_, command)| *command)
+    }
+    fn suggestion_key(&mut self, code: i32, text: &mut String) -> bool {
+        let count = self.suggestions(text).count();
+        if count == 0 {
+            return false;
+        }
+        self.suggestion_index = self.suggestion_index.min(count - 1);
+        match code {
+            1003 => self.suggestion_index = (self.suggestion_index + count - 1) % count,
+            1004 => self.suggestion_index = (self.suggestion_index + 1) % count,
+            9 | 13 => {
+                let command = self
+                    .suggestions(text)
+                    .nth(self.suggestion_index)
+                    .expect("visible suggestion");
+                self.fill_suggestion(text, command);
+            }
+            27 => {
+                self.suggestions_dismissed = true;
+                self.suggestion_boxes.clear();
+            }
+            _ => return false,
+        }
+        true
+    }
+    pub fn draw_suggestions(
+        &mut self,
+        canvas: &mut Canvas<'_>,
+        ui: &mut Ui,
+        rect: Rect,
+        text: &str,
+    ) {
+        self.suggestion_boxes.clear();
+        let count = self.suggestions(text).count();
+        if count == 0 {
+            return;
+        }
+        self.suggestion_index = self.suggestion_index.min(count - 1);
+        let width = (rect.w / count as f32).min(190.);
+        for i in 0..count {
+            let command = self.suggestions(text).nth(i).expect("visible suggestion");
+            let item = Rect::new(
+                rect.x + i as f32 * width,
+                rect.y,
+                (width - 4.).max(1.),
+                rect.h,
+            );
+            self.suggestion_boxes.push((item, command));
+            if self.suggestion_index == i {
+                canvas.rect(item, 7., 0xe8f0feff);
+            }
+            ui.button(
+                canvas,
+                52_000 + i as u64,
+                item,
+                "",
+                ButtonStyle::Quiet,
+                true,
+            );
+            canvas.ellipsis(
+                command.verb,
+                item.x + 10.,
+                item.y + 7.,
+                item.w - 16.,
+                14,
+                true,
+                0x202124ff,
+            );
+            if item.w > 112. {
+                canvas.ellipsis(
+                    command.hint,
+                    item.x + 59.,
+                    item.y + 9.,
+                    item.w - 67.,
+                    12,
+                    false,
+                    0x5f6368ff,
+                );
+            }
+        }
+    }
     pub fn focus_end(&mut self, text: &str) {
+        self.suggestions_dismissed = false;
+        self.suggestion_index = 0;
         self.cursor = text.len();
         self.anchor = None;
         self.focused = true;
@@ -106,6 +250,8 @@ impl Composer {
         self.focused = false;
         self.bounds = None;
         self.submit = false;
+        self.suggestion_boxes.clear();
+        self.pressed_suggestion = None;
     }
     pub fn take_clipboard(&mut self) -> Option<String> {
         self.clipboard.take()
@@ -143,6 +289,8 @@ impl Composer {
         if value.is_empty() || text.len() - range.len() + value.len() > MAX_BYTES {
             return;
         }
+        self.suggestions_dismissed = false;
+        self.suggestion_index = 0;
         text.replace_range(range.clone(), &value);
         self.cursor = range.start + value.len();
         self.anchor = None;
@@ -161,6 +309,8 @@ impl Composer {
                 range.end += ch.len_utf8();
             }
         }
+        self.suggestions_dismissed = false;
+        self.suggestion_index = 0;
         text.replace_range(range.clone(), "");
         self.cursor = range.start;
         self.anchor = None;
@@ -189,9 +339,27 @@ impl Composer {
         self.cursor = boundary(text, self.cursor);
         self.anchor = self.anchor.map(|at| boundary(text, at));
         match event {
+            Event::Up(x, y) if self.pressed_suggestion.is_some() => {
+                let pressed = self.pressed_suggestion.take();
+                if enabled
+                    && pressed == self.suggestion_at(*x, *y)
+                    && let Some(command) = pressed
+                    && self.suggestions(text).any(|candidate| candidate == command)
+                {
+                    self.fill_suggestion(text, command);
+                }
+                return true;
+            }
             Event::Move(x, y) | Event::Up(x, y) => self.pointer = (*x, *y),
             Event::Down(x, y) => {
                 self.pointer = (*x, *y);
+                if enabled
+                    && let Some(command) = self.suggestion_at(*x, *y)
+                    && self.suggestions(text).any(|candidate| candidate == command)
+                {
+                    self.pressed_suggestion = Some(command);
+                    return true;
+                }
                 self.focused = enabled && self.bounds.is_some_and(|rect| rect.contains(*x, *y));
                 if self.focused {
                     let rect = self.bounds.unwrap();
@@ -231,6 +399,9 @@ impl Composer {
                 shift,
                 text: value,
             } if self.focused && enabled => {
+                if !*control && !*shift && self.suggestion_key(*code, text) {
+                    return true;
+                }
                 if *code == 9 {
                     self.focused = false;
                     return false;
@@ -440,6 +611,85 @@ mod tests {
             text: String::new(),
         }
     }
+    #[test]
+    fn slash_suggestions_filter_by_capability_and_complete_without_submitting() {
+        let mut editor = Composer::default();
+        editor.set_available_commands(|_| true);
+        let mut draft = "/".to_owned();
+        editor.focus_end(&draft);
+        assert_eq!(
+            editor
+                .suggestions(&draft)
+                .map(|c| c.verb)
+                .collect::<Vec<_>>(),
+            ["/new", "/cd"]
+        );
+        assert!(editor.event(&key(1004, false, false), &mut draft, true));
+        assert!(editor.event(&key(13, false, false), &mut draft, true));
+        assert_eq!(draft, "/cd ");
+        assert!(!editor.take_submit());
+        assert!(!editor.has_suggestions(&draft));
+        editor.event(&Event::Text("目录 with spaces".into()), &mut draft, true);
+        assert_eq!(draft, "/cd 目录 with spaces");
+        assert!(!editor.has_suggestions(&draft));
+
+        draft = "/n".to_owned();
+        editor.focus_end(&draft);
+        editor.set_available_commands(|id| id == "session.cd");
+        assert!(!editor.has_suggestions(&draft));
+        editor.set_available_commands(|id| id == "session.new");
+        assert!(editor.event(&key(9, false, false), &mut draft, true));
+        assert_eq!(draft, "/new");
+        assert!(!editor.take_submit());
+        editor.event(&key(13, true, false), &mut draft, true);
+        assert!(editor.take_submit());
+    }
+
+    #[test]
+    fn escape_and_noncommand_text_preserve_normal_multiline_editing() {
+        let mut editor = Composer::default();
+        editor.set_available_commands(|_| true);
+        let mut draft = "/".to_owned();
+        editor.focus_end(&draft);
+        assert!(editor.event(&key(27, false, false), &mut draft, true));
+        assert!(editor.focused);
+        assert!(!editor.has_suggestions(&draft));
+        editor.event(&Event::Text("n".into()), &mut draft, true);
+        assert!(editor.has_suggestions(&draft));
+        editor.event(&key(13, false, true), &mut draft, true);
+        assert_eq!(draft, "/n\n");
+        for input in ["hello /", "/cd path", "/unknown", "> /new", "/new", " /c"] {
+            draft = input.into();
+            editor.focus_end(&draft);
+            assert!(!editor.has_suggestions(&draft));
+        }
+        draft = "/cd".into();
+        editor.focus_at(&draft, 1);
+        assert!(!editor.has_suggestions(&draft));
+    }
+
+    #[test]
+    fn click_completes_only_the_same_still_available_suggestion() {
+        let mut editor = Composer::default();
+        let mut draft = "/".to_owned();
+        let rect = Rect::new(5., 10., 50., 32.);
+        editor.focus_end(&draft);
+        editor.set_available_commands(|_| true);
+        editor.suggestion_boxes.push((rect, SLASH_COMMANDS[1]));
+        assert!(editor.event(&Event::Down(10., 16.), &mut draft, true));
+        assert!(editor.event(&Event::Up(100., 96.), &mut draft, true));
+        assert_eq!(draft, "/");
+        editor.event(&Event::Down(10., 16.), &mut draft, true);
+        editor.set_available_commands(|id| id == "session.new");
+        editor.event(&Event::Up(10., 16.), &mut draft, true);
+        assert_eq!(draft, "/");
+        editor.set_available_commands(|_| true);
+        editor.event(&Event::Down(10., 16.), &mut draft, true);
+        editor.event(&Event::Up(10., 16.), &mut draft, true);
+        assert_eq!(draft, "/cd ");
+        assert!(!editor.take_submit());
+    }
+
     #[test]
     fn multiline_quote_keeps_original_identity_and_draft_through_edit_and_submit() {
         let mut text = ssmcp::client::replies::quote_reply(
