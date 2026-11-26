@@ -87,7 +87,7 @@ Windows 用户推荐桌面版。桌面版复用 CLI 的会话和权限系统，�
 
 需要命令行、自动化或后台服务的专业开发者可安装 CLI：
 
-Android 上使用 Termux 安装 CLI，默认校验并安装正式版预编译包。首次运行会创建 Debian Bookworm 容器。需要在手机上编译时，把最后的 `bin` 改为 `source`。两个模式都接受可选版本号。
+Termux 可直接安装 Android 原生 CLI。安装脚本核对发行包的 SHA-256 和程序版本，然后将 CLI 放入 Termux 的 `$PREFIX/bin`。需要在手机上编译时，把 `bin` 改为 `source`。两个模式均可追加版本号。
 
 ```sh
 curl -fL https://raw.githubusercontent.com/LIghtJUNction/ssmcp/main/scripts/install-ssmcp-termux.sh -o install-ssmcp-termux.sh
@@ -96,7 +96,7 @@ ssmcp alice@ssmcp.lmm.best          # TUI
 ssmcp alice@ssmcp.lmm.best --webui  # 打开 Android 浏览器
 ```
 
-Termux 已安装时，用 `sh install-ssmcp-termux.sh update` 更新。需要在已 root 的 Android 上开机运行时，可从源码构建 [SSMCP Magisk 模块](packaging/magisk/README.md)，刷入后通过手机网页配置和查看会话。
+Termux 安装后，用 `ssmcp update --check` 查看版本，或用 `ssmcp update` 更新。需要在已 root 的 Android 上开机运行时，可从源码构建 [SSMCP Magisk 模块](packaging/magisk/README.md)，刷入后通过手机网页配置和查看会话。
 
 Linux / macOS：
 
@@ -127,7 +127,7 @@ ssmcp update           # 校验下载后替换当前安装
 ssmcp alice@relay.example.com --name dev --title "开发与测试"
 ```
 
-把 `alice` 换成控制者在该中继登记的用户名。设备从当前项目目录主动建立 HTTPS/WSS 连接，接受该账号获准的操作。账号登录在控制者的浏览器完成。下次直接运行 `ssmcp` 可以复用上一次前台连接目标。
+把 `alice` 换成控制者在该中继登记的用户名。设备从当前项目目录主动建立 HTTPS/WSS 连接，接受该账号获准的操作。账号登录在控制者的浏览器完成。下次从终端连接时，仍需输入 `ssmcp 用户名@中继服务器`。
 
 完整步骤见[账号与设备](docs/client-accounts.md)和[默认服务器与可信公钥](docs/client-server.md)。
 
@@ -149,7 +149,7 @@ ssmcp alice@relay.example.com --name dev --title "开发与测试"
 
 `link` 的候选实现调用目标客户端的图片读取工具，单图上限 400 KiB；默认 120 秒失效，首次 GET 会消费链接，HEAD 不消费。创建返回 URL、资源链接和清理 ID，不返回图片 base64。是否已部署须查看当前服务目录。[临时图片链接 API](docs/image-links.md)
 
-由被控端用户在愿意开放的项目目录运行 `ssmcp 用户名@中继服务器`。这里填写控制者在该中继已注册的用户名，被控端无需登录。控制者用 MCP 应用完成该中继的 OAuth 授权。连接成功后，直接运行 `ssmcp` 会复用上一次连接。用户名和公告在中继的账户页面管理。
+由被控端用户在愿意开放的项目目录运行 `ssmcp 用户名@中继服务器`。这里填写控制者在该中继已注册的用户名，被控端无需登录。控制者用 MCP 应用完成该中继的 OAuth 授权。用户名和公告在中继的账户页面管理。
 
 主窗口中的 `/invite` 生成会话内工作组协作说明，Agent 通过 `collab.join` 登记会话身份。协作邀请与设备授权各自独立。[账号与授权](docs/client-accounts.md)
 

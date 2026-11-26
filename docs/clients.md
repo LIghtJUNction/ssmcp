@@ -17,7 +17,7 @@ SSMCP 的图形客户端让你从浏览器、Windows / Linux 桌面或手机继�
 
 ### Web：由 CLI 同源提供页面与 API
 
-安装了桌面菜单项的 Linux 用户可以直接点击 **SSMCP Web**。也可以运行 `ssmcp gui open`，在本机默认浏览器中打开内置工作台。已有会话和新消息在网页中显示。选择本机网关生成的私有 `pairing.json` 并选择会话；需要发送消息时选“控制会话”。[启动与配对](gui-gateway.md#启动与配对)
+运行 `ssmcp alice@relay.example --webui` 即可在本机默认浏览器中打开该连接的对话。Linux 桌面的 **SSMCP Web** 菜单项和 `ssmcp webui` 支持首次配置，也可使用已确认的目标。需要观察已有会话时，运行 `ssmcp gui open` 并选择配对文件。[启动与配对](gui-gateway.md#启动与配对)
 
 `ssmcp gui serve --listen 127.0.0.1:8787` 在指定端口提供内置网页与 API。Node.js 20+ 仅用于可选的开发服务器和前端测试。开发页面可以通过本机网关调试：
 

@@ -1,210 +1,156 @@
-"""Offline dispatch tests. Set SSMCP_UPSTREAM_INSTALLER to exercise a real release install.sh."""
+"""Offline installation, version checks and updates of the native Termux CLI."""
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
-import platform
-import shutil
 import subprocess
-import tarfile
 import tempfile
 import unittest
-
+import zipfile
 
 SCRIPT = Path(__file__).with_name("install-ssmcp-termux.sh")
+TAG = "v0.10.54"
+
+
+def executable(version):
+    return f'#!/bin/sh\nif [ "$1" = --version ]; then echo "ssmcp {version}"; else printf "%s\\n" "$@"; fi\n'.encode()
+
+
 DISPATCH = r'''#!/usr/bin/env python3
 import json, os, pathlib, shutil, sys
 p = pathlib.Path
-state = p(os.environ['FIXTURE'])
-args = sys.argv[1:]
-tool = p(sys.argv[0]).name
-with (state/'calls').open('a') as log:
-    log.write(json.dumps([tool, *args])+'\n')
-if tool == 'proot-distro':
-    runtime = p(os.environ.get('TERMUX__PREFIX') or os.environ['PREFIX']) / 'var/lib/proot-distro'
-    rootfs = runtime / 'containers/ssmcp-debian/rootfs'
-    legacy = runtime / 'installed-rootfs/ssmcp-debian'
-    if args == ['install','debian:bookworm','--name','ssmcp-debian']:
-        rootfs.mkdir(parents=True)
-    elif args[:5] == ['login','ssmcp-debian','--','/bin/sh','-s']:
-        if legacy.is_dir() and not rootfs.exists():
-            rootfs.parent.mkdir(parents=True, exist_ok=True)
-            legacy.rename(rootfs)
-        if not rootfs.is_dir(): sys.exit(1)
-        os.execv('/bin/sh', ['/bin/sh', *args[4:]])
-    else: sys.exit(2)
-elif tool == 'apt-get':
-    if args[:1] == ['install'] and 'git' in args and not (state/'bin/git').exists():
-        (state/'bin/git').symlink_to('dispatch')
-elif tool == 'curl':
-    url = next(a for a in args if a.startswith('https://'))
-    if url.endswith('/releases/latest'):
-        print('https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.39',end='')
+state = p(os.environ["FIXTURE"])
+tool, args = p(sys.argv[0]).name, sys.argv[1:]
+with (state / "calls").open("a") as log:
+    log.write(json.dumps([tool, *args]) + "\n")
+if tool == "uname":
+    print(os.environ["ARCH"])
+elif tool == "curl":
+    url = next(a for a in args if a.startswith("https://"))
+    if url.endswith("/releases/latest"):
+        print("https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.54", end="")
     else:
-        flag = '-o' if '-o' in args else '--output'
-        shutil.copyfile(state/'release'/url.split('/')[-1], args[args.index(flag)+1])
-elif tool == 'git':
-    if args==['init','-q','source']:
-        p('source').mkdir()
-        (p('source')/'rust-toolchain.toml').write_text('[toolchain]\nchannel = "1.100.0"\n')
-    elif args==['rev-parse','HEAD']: print('1234abcd')
-    elif args not in (['remote','add','origin','https://github.com/LIghtJUNction/ssmcp.git'],
-                       ['fetch','--depth','1','origin','refs/tags/v0.10.39'],
-                       ['checkout','-q','--detach','FETCH_HEAD'],['submodule','update','--init','--recursive','--depth','1']): sys.exit(2)
-elif tool == 'rustup':
-    assert args==['run','--install','1.100.0','cargo','build','--locked','--release','--bin','ssmcp']
-    if os.getenv('BUILD_FAIL'): sys.exit(44)
-    dest=p('target/release/ssmcp')
-    dest.parent.mkdir(parents=True)
-    dest.write_bytes((state/'client').read_bytes())
-    dest.chmod(0o755)
-elif tool != 'pkg': sys.exit(2)
-'''
-CLIENT = b'#!/bin/sh\nprintf "ssmcp 0.10.39\\n"\n'
-STUB = b'''set -eu
-[ "$1 $2 $3" = "--version v0.10.39 --dir" ]
-cp "$FIXTURE/client" "$4/ssmcp"
-chmod 755 "$4/ssmcp"
+        shutil.copyfile(state / "release" / url.split("/")[-1], args[args.index("-o") + 1])
+elif tool == "git":
+    if args == ["init", "-q", "source"]:
+        p("source").mkdir()
+elif tool == "cargo":
+    assert args == ["build", "--locked", "--release", "--bin", "ssmcp"]
+    if os.environ.get("BUILD_FAIL"):
+        sys.exit(44)
+    out = p(os.environ["CARGO_TARGET_DIR"]) / "release/ssmcp"
+    out.parent.mkdir(parents=True)
+    out.write_bytes((state / "client").read_bytes())
+elif tool != "pkg":
+    sys.exit(2)
 '''
 
 
-@unittest.skipUnless(platform.system() == "Linux" and platform.libc_ver()[0] == "glibc",
-                     "the guest control-flow fixture uses GNU/Linux command-line tools")
 class TermuxInstall(unittest.TestCase):
     def setUp(self):
-        cleanup = tempfile.TemporaryDirectory()
-        self.addCleanup(cleanup.cleanup)
-        self.base = Path(cleanup.name)
-        self.release = self.base / 'release'
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name)
+        self.release = self.base / "release"
         self.release.mkdir()
-        tools = self.base / 'bin'
+        tools = self.base / "tools"
         tools.mkdir()
-        dispatcher = tools / 'dispatch'
+        dispatcher = tools / "dispatch"
         dispatcher.write_text(DISPATCH)
         dispatcher.chmod(0o755)
-        for name in ['pkg', 'apt-get', 'rustup', 'git', 'curl', 'proot-distro']:
+        for name in ("pkg", "uname", "git", "curl", "cargo"):
             (tools / name).symlink_to(dispatcher.name)
-        (self.base / 'client').write_bytes(CLIENT)
-        upstream = os.getenv('SSMCP_UPSTREAM_INSTALLER')
-        (self.release / 'install.sh').write_bytes(Path(upstream).read_bytes() if upstream else STUB)
-        arch = {'arm64':'aarch64','amd64':'x86_64'}.get(platform.machine(),platform.machine())
-        archive = self.release / f'ssmcp-{arch}-unknown-linux-gnu.tar.gz'
-        with tarfile.open(archive, 'w:gz') as tf:
-            entry = tarfile.TarInfo('ssmcp')
-            entry.mode, entry.size = 0o755, len(CLIENT)
-            tf.addfile(entry, io.BytesIO(CLIENT))
-        (self.release / 'SHA256SUMS').write_text(''.join(
-            f'{hashlib.sha256(f.read_bytes()).hexdigest()}  {f.name}\n'
-            for f in [self.release/'install.sh', archive]))
-        home = self.base / 'home'
-        home.mkdir()
-        self.dest = home / '.local/bin/ssmcp'
-        self.env = dict(os.environ, HOME=str(home), PREFIX=str(self.base / 'prefix'),
-                        FIXTURE=str(self.base), PATH=f'{tools}:/usr/bin:/bin')
-        self.env.pop('TERMUX__PREFIX', None)
-        self.calls = self.base / 'calls'
+        self.client = executable(TAG[1:])
+        (self.base / "client").write_bytes(self.client)
+        for name, entry in [("ssmcp-magisk-arm64.zip", "bin/ssmcp"),
+                            ("ssmcp-android-debug.apk", "lib/x86_64/libssmcp.so")]:
+            with zipfile.ZipFile(self.release / name, "w") as archive:
+                archive.writestr(entry, self.client)
+                archive.writestr("unused", "unrelated APK/module contents")
+        self.checksums()
+        self.dest = self.base / "prefix/bin/ssmcp"
+        self.env = dict(os.environ, PREFIX=str(self.base / "prefix"), FIXTURE=str(self.base),
+                        ARCH="aarch64", PATH=f"{tools}:/usr/bin:/bin")
+        self.calls = self.base / "calls"
+
+    def checksums(self):
+        (self.release / "SHA256SUMS").write_text("".join(
+            f"{hashlib.sha256(f.read_bytes()).hexdigest()}  {f.name}\n"
+            for f in sorted(self.release.glob("ssmcp-*"))))
 
     def install(self, *args, success=True):
-        run = subprocess.run(['/bin/sh', str(SCRIPT), *args], env=self.env,
-                             text=True, capture_output=True, timeout=10)
-        self.assertEqual(run.returncode == 0, success, run.stdout + run.stderr)
+        result = subprocess.run(["/bin/sh", SCRIPT, *args], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
+        return result
 
-    def test_latest_binary_and_reuse(self):
-        self.install()
-        self.install('bin','v0.10.39')
-        self.assertEqual(self.dest.read_bytes(),CLIENT)
-        cmds = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        self.assertEqual(sum(c[:2]==['proot-distro','install'] for c in cmds),1)
-        self.assertFalse(any(c[0] in ('git','rustup') for c in cmds))
+    def test_native_android_assets_on_both_architectures(self):
+        for arch, asset in [("aarch64", "ssmcp-magisk-arm64.zip"),
+                            ("x86_64", "ssmcp-android-debug.apk")]:
+            with self.subTest(arch=arch):
+                self.env["ARCH"] = arch
+                self.install()
+                self.assertEqual(self.dest.read_bytes(), self.client)
+                args = ["alice@relay.test", "--webui"]
+                self.assertEqual(subprocess.check_output([self.dest, *args], text=True).splitlines(), args)
+                calls = [json.loads(row) for row in self.calls.read_text().splitlines()]
+                self.assertTrue(any(arg.endswith("/" + asset) for call in calls for arg in call))
+                self.assertFalse(any(call[0] in ("git", "pkg", "cargo") for call in calls))
+                self.calls.unlink()
 
-    def test_termux_entry_passes_arguments_and_opens_webui_in_android(self):
-        self.install()
-        launcher = Path(self.env["PREFIX"]) / "bin/ssmcp"
-        self.assertTrue(os.access(launcher, os.X_OK))
-        tools = self.base / "bin"
-        script = tools / "proot-distro"
-        script.unlink()
-        script.write_text("""#!/usr/bin/env python3
-import json, os, pathlib, sys, time
-state = pathlib.Path(os.environ["FIXTURE"])
-args = sys.argv[1:]
-(state / "guest-args").write_text(json.dumps(args))
-if "--bind" in args:
-    link = args[args.index("--bind") + 1].split(":")[0]
-    (pathlib.Path(link) / "url").write_text("http://127.0.0.1:4567/?setup=1#example" + chr(10))
-    for _ in range(100):
-        if (state / "opened-url").exists(): break
-        time.sleep(0.02)
-""")
-        script.chmod(0o755)
-        opener = tools / "termux-open-url"
-        opener.write_text('#!/bin/sh\nprintf "%s" "$1" > "$FIXTURE/opened-url"\n')
-        opener.chmod(0o755)
-        for args in [["alice@relay.test", "--tui"], ["webui"], ["alice@relay.test", "--webui"]]:
-            with self.subTest(args=args):
-                result = subprocess.run(["sh", str(launcher), *args], env=self.env,
-                                        capture_output=True, text=True, timeout=5)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                guest_args = json.loads((self.base / "guest-args").read_text())
-                self.assertEqual(guest_args[-len(args):], args)
-                if "webui" in args or "--webui" in args:
-                    url = self.base / "opened-url"
-                    self.assertEqual(url.read_text(), "http://127.0.0.1:4567/?setup=1#example")
-                    self.assertNotIn("example", result.stdout)
-                    url.unlink()
-                else:
-                    self.assertNotIn("--bind", guest_args)
-
-    def test_binary_install_adds_missing_git_once(self):
-        tools = self.base / 'bin'
-        (tools / 'git').unlink()
-        self.env['PATH'] = str(tools)
-        for name in ('awk', 'cat', 'chmod', 'cp', 'getconf', 'grep', 'gzip', 'mkdir',
-                     'mktemp', 'mv', 'python3', 'rm', 'sh', 'sha256sum', 'tar', 'uname', 'wc'):
-            (tools / name).symlink_to(shutil.which(name))
-        self.assertTrue(Path('/etc/ssl/certs/ca-certificates.crt').stat().st_size)
-        self.install('bin','v0.10.39')
-        self.install('bin','v0.10.39')
-        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        self.assertEqual([c for c in calls if c[0] == 'apt-get'], [
-            ['apt-get','update'],
-            ['apt-get','install','-y','--no-install-recommends','ca-certificates','curl','git'],
-        ])
-
-    def test_legacy_guest_is_migrated_by_login_without_reinstalling(self):
-        prefix = self.base / 'custom-termux-prefix'
-        self.env['TERMUX__PREFIX'] = str(prefix)
-        runtime = prefix / 'var/lib/proot-distro'
-        legacy = runtime / 'installed-rootfs/ssmcp-debian'
-        legacy.mkdir(parents=True)
-        (legacy / 'existing-data').write_text('keep')
-        self.install('bin','v0.10.39')
-        self.install('bin','v0.10.39')
-        self.assertEqual((runtime / 'containers/ssmcp-debian/rootfs/existing-data').read_text(), 'keep')
-        self.assertFalse(any(json.loads(line)[:2] == ['proot-distro','install']
-                             for line in self.calls.read_text().splitlines()))
-
-    def test_checksum_failure_preserves_client(self):
-        self.dest.parent.mkdir(parents=True)
-        self.dest.write_text('keep')
-        (self.release/'install.sh').write_text('exit 0')
-        self.install('bin','v0.10.39',success=False)
-        self.assertEqual(self.dest.read_text(),'keep')
-
-    def test_locked_source_and_failure_preserves_client(self):
-        self.install('source','v0.10.39')
-        self.assertEqual(self.dest.read_bytes(),CLIENT)
-        self.dest.write_text('previous')
-        self.env['BUILD_FAIL']='1'
-        self.install('source','v0.10.39',success=False)
-        self.assertEqual(self.dest.read_text(),'previous')
-
-    def test_invalid_version_is_rejected_before_environment_changes(self):
-        self.install('bin','v1.2.3; echo oops',success=False)
-        self.install('bin','v1.2.3\nextra',success=False)
+    def test_invalid_tag_and_unsupported_architecture(self):
+        for tag in ("v1.2.3; echo fail", "v1.2.3\nextra"):
+            self.install("bin", tag, success=False)
         self.assertFalse(self.calls.exists())
+        self.env["ARCH"] = "armv7l"
+        self.install("bin", TAG, success=False)
+        self.assertFalse(self.dest.exists())
+
+    def test_checksum_error_preserves_previous_client(self):
+        self.install()
+        (self.release / "ssmcp-magisk-arm64.zip").write_bytes(b"corrupt")
+        self.install("bin", TAG, success=False)
+        self.assertEqual(self.dest.read_bytes(), self.client)
+
+    def test_missing_or_duplicate_digest_fails_before_downloading_asset(self):
+        for checksums in ["", (self.release / "SHA256SUMS").read_text() * 2]:
+            (self.release / "SHA256SUMS").write_text(checksums)
+            self.install("bin", TAG, success=False)
+            self.assertNotIn("zip", self.calls.read_text())
+            self.calls.unlink()
+            self.assertFalse(self.dest.exists())
+
+    def test_version_mismatch_preserves_existing_binary(self):
+        self.install()
+        with zipfile.ZipFile(self.release / "ssmcp-magisk-arm64.zip", "w") as archive:
+            archive.writestr("bin/ssmcp", executable("0.0.1"))
+        self.checksums()
+        self.install("bin", TAG, success=False)
+        self.assertEqual(self.dest.read_bytes(), self.client)
+
+    def test_update_checks_before_replacing_and_never_downgrades(self):
+        self.install()
+        self.dest.write_bytes(executable("0.10.2"))
+        self.assertIn("Update available", self.install("update", "--check").stdout)
+        self.assertEqual(self.dest.read_bytes(), executable("0.10.2"))
+        self.install("update")
+        self.assertEqual(self.dest.read_bytes(), self.client)
+        self.dest.write_bytes(executable("0.11.0"))
+        self.install("update")
+        self.assertEqual(self.dest.read_bytes(), executable("0.11.0"))
+
+    def test_native_source_pins_tag_and_preserves_previous_binary_on_failure(self):
+        self.install("source", TAG)
+        calls = [json.loads(row) for row in self.calls.read_text().splitlines()]
+        self.assertIn(["git", "fetch", "--depth", "1", "origin", "refs/tags/" + TAG], calls)
+        self.assertIn(["git", "submodule", "update", "--init", "--recursive", "--depth", "1"], calls)
+        self.assertEqual(self.dest.read_bytes(), self.client)
+        previous = executable("0.10.2")
+        self.dest.write_bytes(previous)
+        self.env["BUILD_FAIL"] = "1"
+        self.install("source", TAG, success=False)
+        self.assertEqual(self.dest.read_bytes(), previous)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

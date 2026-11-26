@@ -1,6 +1,6 @@
 //! Lifetime and discovery of the ordinary CLI process owned by a graphical frontend.
 use std::{
-    io,
+    io::{self, IsTerminal},
     path::{Path, PathBuf},
     process::{Child, ExitStatus, Stdio},
     time::Duration,
@@ -43,7 +43,11 @@ impl OwnedSession {
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit());
+            .stderr(if io::stderr().is_terminal() {
+                Stdio::null()
+            } else {
+                Stdio::inherit()
+            });
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

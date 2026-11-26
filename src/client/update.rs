@@ -300,7 +300,29 @@ async fn android_update(mode: Mode) -> crate::Result<()> {
     .iter()
     .any(|path| super::reload::same_executable(Path::new(path), &executable).unwrap_or(false));
     if !module_entry {
-        return Err("For the supported Termux installation, run ssmcp update from the ssmcp-debian proot guest.".into());
+        let prefix = std::env::var_os("PREFIX")
+            .ok_or("Use the updater from a Termux installation or the module manager.")?;
+        let bin = Path::new(&prefix).join("bin");
+        if !super::reload::same_executable(&bin.join("ssmcp"), &executable).unwrap_or(false) {
+            return Err(
+                "Only the CLI installed in Termux's bin directory can update itself.".into(),
+            );
+        }
+        let mut command = tokio::process::Command::new(bin.join("sh"));
+        command.args([
+            "-c",
+            include_str!("../../scripts/install-ssmcp-termux.sh"),
+            "ssmcp-termux-update",
+            "update",
+        ]);
+        if mode == Mode::Check {
+            command.arg("--check");
+        }
+        let status = command.status().await?;
+        if !status.success() {
+            return Err(format!("Termux updater exited with {status}").into());
+        }
+        return Ok(());
     }
     let client = crate::http_client::builder()
         .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION")))

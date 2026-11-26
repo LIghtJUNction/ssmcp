@@ -129,6 +129,7 @@ include = [
     "/scripts/test_installer_helpers.ps1",
     "/scripts/install.ps1",
     "/scripts/install.sh",
+    "/scripts/install-ssmcp-termux.sh",
     "/docs/releases.md",
     "/docs/release-notes-*.md",
     "/scripts/e2e.py",

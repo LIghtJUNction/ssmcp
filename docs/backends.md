@@ -9,7 +9,7 @@
 先在 Linux、macOS 或 Windows 进入需要工作的本机目录，再启动一个客户端。它始终提供交互式 shell，以及原生命令和工作区能力。把 `octocat@github` 换成允许访问这条连接的 GitHub 用户名；安装方式和平台范围见[版本与安装](releases.md)。
 
 ```sh
-ssmcp --server https://relay.example --allow alice@relay.example --name dev --title "检查当前项目并修复构建"
+ssmcp alice@relay.example --name dev --title "检查当前项目并修复构建"
 ```
 
 | 参数 | 作用 |
@@ -30,14 +30,14 @@ ssmcp --server https://relay.example --allow alice@relay.example --name dev --ti
 
 ### 从旧的后端选择参数迁移
 
-删除旧命令中的 `-t TYPE`、`--type TYPE`、`--backend PROGRAM` 和尾随的后端参数，并把旧 SSH 接入改为明确的 HTTPS 服务器与账号名单。例如使用 `ssmcp --server https://relay.example --name dev --allow alice@relay.example`。把需要的原生 CLI 安装到 `PATH`，原生账户、插件、MCP 与模型设置继续在各 CLI 中维护。[账号接入](client-accounts.md)
+删除旧命令中的 `-t TYPE`、`--type TYPE`、`--backend PROGRAM` 和尾随的后端参数，并把旧 SSH 接入改为明确的 HTTPS 服务器与账号名单。例如使用 `ssmcp alice@relay.example --name dev`。把需要的原生 CLI 安装到 `PATH`，原生账户、插件、MCP 与模型设置继续在各 CLI 中维护。[账号接入](client-accounts.md)
 
 ```sh
 # 不连接 SSH，先检查这台电脑实际发现了什么。
 ssmcp --list-tools
 
 # 同一连接提供原生 shell、命令任务和工作区能力。
-ssmcp --server https://relay.example --name dev --title "继续项目开发" --allow alice@relay.example
+ssmcp alice@relay.example --name dev --title "继续项目开发"
 ```
 
 外部客户端通过标准 MCP 接入。旧导入选项见[迁移说明](optional-harnesses.md)，显式 SSMCP peer 见[连接说明](agent-entry.md)。

@@ -8,7 +8,7 @@ ssmcp alice@relay.example
 
 `alice` 必须是该中继上已注册的账号。被控端无需登录，也无需账户凭据或邀请码。控制应用通过会话 `/logs` 中的 MCP URL 完成 OAuth。服务端把用户名解析成稳定账号 ID，并在发现与调用时核对权限。[客户端入口](../src/client.rs) · [服务端检查](../src/device.rs)
 
-连接成功后，直接运行 `ssmcp` 会复用上一次前台连接目标。可随时给出另一个 `username@server` 或 `local`。`--context` 和 `SSMCP_CONTEXT` 可为本次启动明确选择连接方式。用户名和服务器会显示在启动日志中。开发环境可明确写 `alice@http://127.0.0.1:PORT`，普通主机名默认走 HTTPS。
+每次从命令行连接中继时，都需写出 `ssmcp username@server`。运行 `ssmcp local` 可启动本地会话。只输入 `ssmcp` 会显示用法并退出。用户名和服务器会显示在启动日志中。开发环境可明确写 `alice@http://127.0.0.1:PORT`，普通主机名默认走 HTTPS。
 
 ## 设置控制者账号
 

@@ -30,7 +30,8 @@ ssmcp \- connect devices and control authorized terminals through an MCP gateway
 .I relay provider subject
 .PP
 .B ssmcp
-.RB [ \-\-server " https://origin" ]
+.I username@server
+.RB [ \-\-tui | \-\-webui | \-\-gui ]
 .RB [ \-\-name " name" ]
 .RB [ \-\-title " title" ]
 .RB [ \-\-no-watchdog ]
@@ -43,8 +44,9 @@ ssmcp \- connect devices and control authorized terminals through an MCP gateway
 ssmcp provides a local shell, managed command jobs and file tools.
 Run ssmcp username@server to connect over HTTPS and WSS. The device selects
 a registered relay account without logging in. The controlling MCP client
-authorizes independently. Bare ssmcp reuses the last successful foreground
-connection target. Each live connection has a new client ID.
+authorizes independently. Bare ssmcp prints usage and exits. The default frontend is the TUI.
+Use ssmcp webui or ssmcp gui to open the connection form.
+Each live connection has a new client ID.
 .PP
 On Linux, ssmcp local serves MCP on loopback. Open /logs in the SSMCP window
 for its URL and one-time authorization code. Add the URL to your MCP client,
@@ -637,11 +639,11 @@ output thresholds.
 ssmcp alice@ssmcp.example.com --name laptop
 ssmcp whoami alice@ssmcp.example.com --json
 ssmcp local
-ssmcp --name laptop
+ssmcp alice@ssmcp.example.com --gui
 ssmcp list
 ssmcp attach saved:dev
 ssmcp controllers history --json
-ssmcp --no-watchdog --name one-attempt
+ssmcp alice@ssmcp.example.com --no-watchdog --name one-attempt
 ssmcp --list-tools
 .fi
 .PP

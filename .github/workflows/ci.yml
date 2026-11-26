@@ -143,10 +143,12 @@ jobs:
         run: python3 scripts/collect_native_validation_kit.py capture --identity "$RUNNER_TEMP/native-validation-source.json"
       - run: cargo fmt --all -- --check
       - name: Build the frontend session core
+        id: frontend_core
         run: cargo build --locked --bin ssmcp
       - name: Verify browser first use and explicit CLI targets
         run: python3 scripts/e2e_frontend_launch.py --client target/debug/ssmcp
       - name: Verify independent frontend sessions and working directories
+        if: ${{ !cancelled() && steps.frontend_core.outcome == 'success' }}
         run: python3 scripts/e2e_workbench_sessions.py --binary target/debug/ssmcp
       - name: Check release tooling and installer
         run: |
@@ -154,7 +156,7 @@ jobs:
           python3 scripts/test_release.py
           python3 scripts/test_setup_server.py
           python3 scripts/test_installer_download_bounds.py
-          SSMCP_UPSTREAM_INSTALLER="$PWD/scripts/install.sh" python3 scripts/test_termux_install.py
+          python3 scripts/test_termux_install.py
           python3 scripts/test_collect_native_validation_kit.py
       - name: Check JavaScript orchestration helpers
         run: make test-code-mode

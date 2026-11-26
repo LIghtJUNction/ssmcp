@@ -149,7 +149,7 @@ install -m 0755 "$ssmcp_unpack_dir/ssmcp" "$HOME/.local/bin/ssmcp"
 rm -rf "$ssmcp_unpack_dir"
 ```
 
-核验步骤按操作系统选择一条。确认 `~/.local/bin` 已在 `PATH` 中后，在项目目录运行 `ssmcp --server https://relay.example --name dev --title "维护当前项目" --allow alice@relay.example`，替换为实际服务器和已注册账号。安装网关还需要配置 HTTPS、OAuth、账号存储与系统隔离依赖，不能只把 `ssmcpd` 复制到服务器就视为部署完成。
+核验步骤按操作系统选择一条。确认 `~/.local/bin` 已在 `PATH` 中后，在项目目录运行 `ssmcp alice@relay.example --name dev --title "维护当前项目"`，替换为实际服务器和已注册账号。安装网关还需要配置 HTTPS、OAuth、账号存储与系统隔离依赖，不能只把 `ssmcpd` 复制到服务器就视为部署完成。
 
 ## 维护者：固定源码后正式发布
 

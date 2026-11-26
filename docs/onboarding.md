@@ -25,7 +25,7 @@ ssmcp alice@relay.example --name device-b
 
 ## 服务器、重连与撤销
 
-可通过 `ssmcp config set server https://relay.example` 保存默认服务器；也可继续在命令中显式传入 `--server`。公开 origin、TLS 与服务器公钥固定的配置见[服务器连接](client-server.md)。
+账号查询命令可通过 `ssmcp config set server https://relay.example` 保存默认服务器。每次从命令行连接设备时，仍需写出 `用户名@服务器`。公开 origin、TLS 与服务器公钥固定的配置见[服务器连接](client-server.md)。
 
 看门狗默认开启，连接中断后会重试；`--no-watchdog` 可关闭。重新连接仍须通过服务器的当前账号和授权检查。停止被控设备进程会关闭该连接；控制者退出登录或失去权限时，不能继续操作共享设备，但不会因此关闭其他获准控制者的连接。[连接生命周期](client-accounts.md#修改名单与连接生命周期)
 

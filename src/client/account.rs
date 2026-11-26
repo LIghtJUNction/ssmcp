@@ -706,6 +706,14 @@ fn browser_command(url: &Url) -> Command {
         c.args(["url.dll,FileProtocolHandler", url.as_str()]);
         c
     } else if cfg!(target_os = "android") {
+        if let Some(prefix) = std::env::var_os("PREFIX") {
+            let opener = Path::new(&prefix).join("bin/termux-open-url");
+            if opener.is_absolute() && opener.is_file() {
+                let mut command = Command::new(opener);
+                command.arg(url.as_str());
+                return command;
+            }
+        }
         let mut c = Command::new("/system/bin/am");
         c.args([
             "start",
@@ -741,25 +749,6 @@ pub(crate) fn open_desktop_link(url: &Url) -> Result<()> {
 }
 
 pub(crate) async fn open_browser(url: &Url) -> Result<()> {
-    #[cfg(target_os = "linux")]
-    if std::env::var_os("SSMCP_TERMUX_BROWSER_FIFO").as_deref()
-        == Some(std::ffi::OsStr::new("/run/ssmcp-browser/url"))
-    {
-        use std::io::Write;
-        use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
-        if url.scheme() == "http" && url.host_str() == Some("127.0.0.1") {
-            let mut pipe = std::fs::OpenOptions::new()
-                .write(true)
-                .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
-                .open("/run/ssmcp-browser/url")?;
-            if !pipe.metadata()?.file_type().is_fifo() {
-                return Err("expected Termux browser handoff pipe".into());
-            }
-            writeln!(pipe, "{url}")?;
-            return Ok(());
-        }
-    }
-
     let mut child = browser_command(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

@@ -12,7 +12,7 @@
 
 模块会话从 `/data/adb/ssmcp/workspace` 启动。可把已安装的 Android 可执行文件放在 `/data/adb/ssmcp/home/.local/bin`，新启动的模块会话会在这里查找工具。终端内的 `/update --check` 会检查已发布的 Magisk ZIP。
 
-配置位于 `/data/adb/ssmcp/ssmcp.rc`。也可以直接写入一行 `ssmcp username@server`，模块重启后按这条命令连接。刷入更新时会保留目录里的配置和本地状态。更新时，从项目 Releases 下载新版 `ssmcp-magisk-arm64.zip`，在模块管理器中刷入。Termux 可用 `sh scripts/install-ssmcp-termux.sh update [--check]` 在现有 Debian proot 安装中更新。
+配置位于 `/data/adb/ssmcp/ssmcp.rc`。也可以直接写入一行 `ssmcp username@server`，模块重启后按这条命令连接。刷入更新时会保留目录里的配置和本地状态。更新时，从项目 Releases 下载新版 `ssmcp-magisk-arm64.zip`，在模块管理器中刷入。Termux 用户可用 `ssmcp update --check` 检查版本，或用 `ssmcp update` 更新安装在 `$PREFIX/bin` 的 Android 原生 CLI。
 
 本地工作台和引导使用回环地址。模块从私有目录读取当前进程的配对凭据，通过启动地址的片段交给浏览器。请勿分享启动 URL。移除模块并重启后，数据仍保留在 `/data/adb/ssmcp`。
 
