@@ -333,7 +333,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libx11-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev \
-            xvfb xauth x11-utils mesa-utils libgl1-mesa-dri fonts-noto-cjk
+            xvfb xauth x11-utils mesa-utils libgl1-mesa-dri fonts-noto-cjk xdotool imagemagick
       - name: Install Rust 1.100.0 for native Linux
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
         with:
@@ -421,7 +421,9 @@ jobs:
           deadline = started + 30
           probe_text = ""
           with (evidence / "window.log").open("w") as log:
-              process = subprocess.Popen([str(binary), "--exit-after-ms", "10000"], stdout=log, stderr=subprocess.STDOUT)
+              first_frame = evidence / "first-frame.json"
+              process = subprocess.Popen([str(binary), "--exit-after-ms", "10000",
+                                          "--first-frame-receipt", str(first_frame)], stdout=log, stderr=subprocess.STDOUT)
               try:
                   while process.poll() is None and time.monotonic() < deadline:
                       try:
@@ -436,6 +438,26 @@ jobs:
                           window.update(mapped=True, width=int(width[1]), height=int(height[1]))
                           break
                       time.sleep(0.1)
+                  if window["mapped"]:
+                      while not first_frame.is_file() and time.monotonic() < deadline and process.poll() is None:
+                          time.sleep(0.05)
+                      if not first_frame.is_file():
+                          raise RuntimeError("The mapped window did not render its connection form")
+                      wid = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--name",
+                                                     "^ssmcp-desktop$"], text=True, timeout=3).strip()
+                      def capture(name):
+                          subprocess.run(["import", "-silent", "-window", wid, str(evidence / name)],
+                                         check=True, timeout=4)
+                      capture("first-run.png")
+                      subprocess.run(["xdotool", "windowfocus", "--sync", wid], check=True, timeout=3)
+                      subprocess.run(["xdotool", "type", "--clearmodifiers", "Alice"], check=True, timeout=3)
+                      subprocess.run(["xdotool", "key", "Return"], check=True, timeout=3)
+                      time.sleep(0.25)
+                      capture("first-run-consent.png")
+                      subprocess.run(["xdotool", "windowsize", "--sync", wid, "430", "575"],
+                                     check=True, timeout=3)
+                      time.sleep(0.25)
+                      capture("first-run-narrow.png")
                   process.wait(timeout=max(0.001, deadline - time.monotonic()))
               finally:
                   if process.poll() is None:
@@ -908,6 +930,40 @@ jobs:
           fi
           grep -Fx "Pkg.Revision = $ndk_revision" "$ANDROID_NDK_HOME/source.properties"
           apps/ssmcp-android/build-native.sh 2>&1 | tee "$ANDROID_EVIDENCE_DIR/native-build.log"
+
+      - name: Package the same arm64 CLI as an installable Magisk module
+        if: github.event_name == 'workflow_dispatch' && github.workflow == 'GUI clients'
+        run: |
+          set -euo pipefail
+          module="$RUNNER_TEMP/magisk/packaging/magisk"
+          mkdir -p "$RUNNER_TEMP/magisk"
+          git archive "$SOURCE_COMMIT" packaging/magisk/kam.toml packaging/magisk/src |
+            tar -x -C "$RUNNER_TEMP/magisk"
+          # The normal hook compiles the CLI. The preceding step built this exact
+          # revision for API 26, so stage its executable and package it with Kam.
+          executable="$PWD/apps/ssmcp-android/app/src/main/jniLibs/arm64-v8a/libssmcp.so"
+          cmp "$executable" "${CARGO_TARGET_DIR:-$PWD/target}/aarch64-linux-android/release/ssmcp"
+          install -Dm755 "$executable" "$module/src/ssmcp/bin/ssmcp"
+          mkdir -p "$module/hooks"
+          cargo install --locked --git https://github.com/MemDeco-WG/Kam.git --rev 74f50bd219f88633d8cd07d61e89d05478b2fd55 kam
+          kam_bin="${CARGO_HOME:-$HOME/.cargo}/bin/kam"
+          (cd "$module" && "$kam_bin" export && "$kam_bin" check && "$kam_bin" build)
+          archive="$module/dist/ssmcp-magisk-arm64.zip"
+          cmp "$executable" <(unzip -p "$archive" bin/ssmcp)
+          PYTHONPATH=scripts python3 -c 'from pathlib import Path; import release, sys; root=Path.cwd(); release.verify_magisk_archive(root, Path(sys.argv[1]), release.version(root))' "$archive"
+          (cd "$module/dist" && sha256sum ssmcp-magisk-arm64.zip > ssmcp-magisk-arm64.zip.sha256)
+
+      - name: Retain the installable Magisk module
+        if: github.event_name == 'workflow_dispatch' && github.workflow == 'GUI clients'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ssmcp-magisk-arm64
+          path: |
+            ${{ runner.temp }}/magisk/packaging/magisk/dist/ssmcp-magisk-arm64.zip
+            ${{ runner.temp }}/magisk/packaging/magisk/dist/ssmcp-magisk-arm64.zip.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Restore Gradle dependency cache
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1

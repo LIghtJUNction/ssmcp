@@ -99,7 +99,8 @@ pub(crate) fn chat_bound() -> bool {
                 .unwrap_or_else(|e| e.into_inner())
                 .runtime
                 .as_ref()
-                .is_some_and(|r| r.frontend_client_id().is_some())
+                .and_then(|r| r.frontend_client_id())
+                .is_some_and(crate::client::steering::frontend_chat_ready)
         })
 }
 

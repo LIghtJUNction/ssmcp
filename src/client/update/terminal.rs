@@ -59,11 +59,11 @@ async fn run(check: bool) -> crate::Result<(bool, String, String)> {
     let (status, out, err) =
         tokio::try_join!(child.wait(), output_tail(stdout), output_tail(stderr))?;
     let summary = if status.success() {
-        let lines = out.lines().filter(|line| !line.trim().is_empty());
+        let mut lines = out.lines().filter(|line| !line.trim().is_empty());
         lines
             .clone()
             .find(|line| line.starts_with("Update available:"))
-            .or_else(|| lines.last())
+            .or_else(|| lines.next_back())
             .unwrap_or("Update command completed")
             .to_owned()
     } else {
