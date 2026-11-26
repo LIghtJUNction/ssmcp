@@ -21,7 +21,7 @@ const BLUE_SOFT: u32 = 0xe8f0feff;
 const GREEN: u32 = 0x147d4eff;
 const AMBER: u32 = 0xe3ba77ff;
 const RED: u32 = 0xb42318ff;
-const SIDE: f32 = 228.;
+const SIDE: f32 = 256.;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -44,6 +44,46 @@ impl Page {
             Self::Waits => 5,
         }
     }
+}
+
+enum SidebarRow<'a> {
+    Page(Page, &'static str),
+    SessionsHeading,
+    Filter,
+    Session(usize, &'a Session),
+    SessionPages(usize),
+    Empty,
+    Control,
+    Disconnect,
+    NamedSession,
+    ObserveNamed,
+    Setup,
+    Update,
+}
+
+fn sidebar_link(
+    canvas: &mut Canvas<'_>,
+    ui: &mut Ui,
+    id: u64,
+    rect: Rect,
+    label: &str,
+    selected: bool,
+    enabled: bool,
+) -> bool {
+    if selected {
+        canvas.rect(rect, 10., BLUE_SOFT);
+    }
+    let clicked = ui.button(canvas, id, rect, "", ButtonStyle::Quiet, enabled);
+    canvas.ellipsis(
+        label,
+        rect.x + 14.,
+        rect.y + (rect.h - 19.) / 2.,
+        rect.w - 28.,
+        15,
+        selected,
+        if enabled { TEXT } else { MUTED },
+    );
+    clicked
 }
 
 struct Layout {
@@ -80,7 +120,10 @@ pub struct Desktop {
     page: Page,
     session_filter: String,
     named_session: String,
+    sidebar_settings: bool,
+    sidebar_offset: usize,
     session_page: usize,
+    sidebar_redraw: bool,
     composer: String,
     composer_editor: crate::composer::Composer,
     terminal_input: String,
@@ -119,7 +162,10 @@ impl Default for Desktop {
             page: Page::Conversation,
             session_filter: String::new(),
             named_session: String::new(),
+            sidebar_settings: false,
+            sidebar_offset: 0,
             session_page: 0,
+            sidebar_redraw: false,
             composer: String::new(),
             composer_editor: crate::composer::Composer::default(),
             terminal_input: String::new(),
@@ -166,6 +212,10 @@ impl Desktop {
         self.local_notice = text;
     }
 
+    pub fn take_sidebar_redraw(&mut self) -> bool {
+        std::mem::take(&mut self.sidebar_redraw)
+    }
+
     pub fn take_setup(&mut self) -> bool {
         std::mem::take(&mut self.setup)
     }
@@ -175,6 +225,23 @@ impl Desktop {
     }
 
     pub fn event(&mut self, event: &NativeEvent) -> bool {
+        if self.sidebar_open {
+            match event {
+                NativeEvent::Key { code: 27, .. } => {
+                    self.sidebar_open = false;
+                    return true;
+                }
+                NativeEvent::Scroll(delta) if self.pointer.0 < SIDE => {
+                    self.sidebar_offset = if *delta > 0 {
+                        self.sidebar_offset.saturating_sub(2)
+                    } else {
+                        self.sidebar_offset.saturating_add(2)
+                    };
+                    return true;
+                }
+                _ => {}
+            }
+        }
         if matches!(
             event,
             NativeEvent::Key {
@@ -459,11 +526,16 @@ impl Desktop {
             canvas,
             1,
             Rect::new(10., 12., 42., 34.),
-            "☰",
+            if self.sidebar_open { "×" } else { "☰" },
             ButtonStyle::Quiet,
             true,
         ) {
             self.sidebar_open = !self.sidebar_open;
+            if self.sidebar_open {
+                self.sidebar_settings = false;
+                self.sidebar_offset = 0;
+                self.composer_editor.blur();
+            }
         }
         let mut x = 24.;
         if self.sidebar_open && width > 540. {
@@ -583,241 +655,373 @@ impl Desktop {
         view: &View,
         height: f32,
     ) {
-        canvas.rect(Rect::new(0., 51., SIDE, height - 51.), 0., SURFACE);
-        canvas.line((SIDE, 0.), (SIDE, height), 1., LINE);
-        canvas.text("ssmcp", 61., 16., 18, true, TEXT);
-        let pages = [
-            (Page::Conversation, "对话"),
-            (Page::Terminal, "终端"),
-            (Page::Workers, "Workers"),
-            (Page::Waits, "等待"),
-            (Page::Events, "事件"),
-            (Page::Receipts, "回执"),
-        ];
-        for (i, (page, label)) in pages.into_iter().enumerate() {
-            if ui.button(
-                canvas,
-                20 + i as u64,
-                Rect::new(
-                    12. + (i % 2) as f32 * 98.,
-                    56. + (i / 2) as f32 * 34.,
-                    94.,
-                    31.,
-                ),
-                label,
-                ButtonStyle::Quiet,
-                true,
-            ) {
-                self.page = page;
-                self.thread_picker = false;
-                self.sidebar_open = false;
+        const TOP: f32 = 62.;
+        const ROW: f32 = 44.;
+        let footer = (height - 54.).max(TOP);
+        let visible = ((footer - TOP) / ROW).floor() as usize;
+        let mut rows = Vec::new();
+        if self.sidebar_settings {
+            rows.extend([
+                SidebarRow::Page(Page::Events, "事件"),
+                SidebarRow::Page(Page::Receipts, "回执"),
+                SidebarRow::Control,
+                SidebarRow::Disconnect,
+            ]);
+            if !view.window_sessions {
+                rows.extend([SidebarRow::NamedSession, SidebarRow::ObserveNamed]);
             }
-        }
-        if ui.button(
-            canvas,
-            11,
-            Rect::new(12., 168., 96., 34.),
-            if view.phase == Phase::Controlling {
-                "切回只读"
-            } else {
-                "申请控制"
-            },
-            ButtonStyle::Quiet,
-            view.target.is_some() && self.pending.is_none() && !view.busy,
-        ) && let Some(target) = view.target.clone()
-        {
-            self.send(
-                handle,
-                Intent::Connect {
-                    target,
-                    control: view.phase != Phase::Controlling,
-                },
-            );
-        }
-        if ui.button(
-            canvas,
-            12,
-            Rect::new(109., 168., 95., 34.),
-            "断开",
-            ButtonStyle::Quiet,
-            view.phase.connected() && self.pending.is_none(),
-        ) {
-            self.send(handle, Intent::Disconnect);
-        }
-        if ui.button(
-            canvas,
-            101,
-            Rect::new(146., 208., 66., 30.),
-            "刷新",
-            ButtonStyle::Quiet,
-            !view.sessions_loading,
-        ) {
-            self.send(handle, Intent::RefreshSessions);
-            if view.phase.connected() {
-                self.send(handle, Intent::Refresh);
+            rows.push(SidebarRow::Setup);
+            if view.command("client.update") {
+                rows.push(SidebarRow::Update);
             }
-        }
-        let sessions_heading = if view.window_sessions {
-            "窗口会话"
         } else {
-            "本地会话"
-        };
-        canvas.text(sessions_heading, 24., 215., 13, true, MUTED);
-        if ui.input(
+            rows.push(SidebarRow::SessionsHeading);
+            if view.sessions.len() > 4 || !self.session_filter.is_empty() {
+                rows.push(SidebarRow::Filter);
+            }
+            let filter = self.session_filter.to_lowercase();
+            let sessions: Vec<_> = view
+                .sessions
+                .iter()
+                .enumerate()
+                .filter(|(_, session)| session.name.to_lowercase().contains(&filter))
+                .collect();
+            let per_page = visible.saturating_sub(7).clamp(1, 5);
+            let pages = sessions.len().div_ceil(per_page).max(1);
+            self.session_page = self.session_page.min(pages - 1);
+            if sessions.is_empty() {
+                rows.push(SidebarRow::Empty);
+            } else {
+                rows.extend(
+                    sessions
+                        .into_iter()
+                        .skip(self.session_page * per_page)
+                        .take(per_page)
+                        .map(|(index, session)| SidebarRow::Session(index, session)),
+                );
+            }
+            if pages > 1 {
+                rows.push(SidebarRow::SessionPages(pages));
+            }
+            rows.extend([
+                SidebarRow::Page(Page::Conversation, "对话"),
+                SidebarRow::Page(Page::Terminal, "终端"),
+                SidebarRow::Page(Page::Workers, "Workers"),
+                SidebarRow::Page(Page::Waits, "等待"),
+            ]);
+        }
+        let limit = rows.len().saturating_sub(visible);
+        self.sidebar_offset = self.sidebar_offset.min(limit);
+        canvas.rect(
+            Rect::new(0., 50., SIDE, (height - 50.).max(0.)),
+            0.,
+            SURFACE,
+        );
+        canvas.line((SIDE, 0.), (SIDE, height), 1., LINE);
+        canvas.text(
+            if self.sidebar_settings {
+                "连接与设置"
+            } else {
+                "ssmcp"
+            },
+            62.,
+            18.,
+            17,
+            true,
+            TEXT,
+        );
+        for (index, row) in rows
+            .into_iter()
+            .skip(self.sidebar_offset)
+            .take(visible)
+            .enumerate()
+        {
+            let y = TOP + index as f32 * ROW;
+            let rect = Rect::new(12., y, SIDE - 24., ROW - 2.);
+            match row {
+                SidebarRow::Page(page, label) => {
+                    if sidebar_link(
+                        canvas,
+                        ui,
+                        20 + page.index() as u64,
+                        rect,
+                        label,
+                        self.page == page,
+                        true,
+                    ) {
+                        self.page = page;
+                        self.thread_picker = false;
+                        self.sidebar_open = false;
+                        self.sidebar_redraw = true;
+                    }
+                }
+                SidebarRow::SessionsHeading => {
+                    canvas.text(
+                        if view.window_sessions {
+                            "窗口会话"
+                        } else {
+                            "本地会话"
+                        },
+                        26.,
+                        y + 15.,
+                        12,
+                        true,
+                        MUTED,
+                    );
+                    if ui.button(
+                        canvas,
+                        101,
+                        Rect::new(SIDE - 68., y + 3., 54., 36.),
+                        "刷新",
+                        ButtonStyle::Quiet,
+                        !view.sessions_loading,
+                    ) {
+                        self.send(handle, Intent::RefreshSessions);
+                        if view.phase.connected() {
+                            self.send(handle, Intent::Refresh);
+                        }
+                    }
+                }
+                SidebarRow::Filter => {
+                    if ui.input(
+                        canvas,
+                        102,
+                        rect.inset(3.),
+                        &mut self.session_filter,
+                        "筛选会话",
+                        false,
+                        true,
+                    ) {
+                        self.session_page = 0;
+                        self.sidebar_redraw = true;
+                    }
+                }
+                SidebarRow::Session(session_index, session) => {
+                    let selected = matches!(view.target.as_ref(), Some(Target::Named(name)) if name == &session.name);
+                    if selected {
+                        canvas.rect(rect, 10., BLUE_SOFT);
+                    }
+                    let enabled = self.pending.is_none() && !view.busy;
+                    if ui.button(
+                        canvas,
+                        50_000 + session_index as u64,
+                        rect,
+                        "",
+                        ButtonStyle::Quiet,
+                        enabled,
+                    ) {
+                        self.named_session = session.name.clone();
+                        self.layouts.clear();
+                        self.send(
+                            handle,
+                            Intent::Connect {
+                                target: Target::Named(session.name.clone()),
+                                control: false,
+                            },
+                        );
+                    }
+                    canvas.ellipsis(
+                        &session.name,
+                        rect.x + 14.,
+                        y + 3.,
+                        rect.w - 28.,
+                        14,
+                        selected,
+                        if enabled { TEXT } else { MUTED },
+                    );
+                    let state = if view.window_sessions {
+                        "由本窗口创建"
+                    } else {
+                        match session.connection.as_str() {
+                            "connected" => "已连接",
+                            "disconnected" => "未连接",
+                            _ => "状态待确认",
+                        }
+                    };
+                    canvas.ellipsis(state, rect.x + 14., y + 23., rect.w - 28., 11, false, MUTED);
+                }
+                SidebarRow::SessionPages(pages) => {
+                    let right = rect.x + rect.w;
+                    if ui.button(
+                        canvas,
+                        51_100,
+                        Rect::new(rect.x, y + 2., 40., 38.),
+                        "‹",
+                        ButtonStyle::Quiet,
+                        self.session_page > 0,
+                    ) {
+                        self.session_page -= 1;
+                        self.sidebar_redraw = true;
+                    }
+                    let label = format!("{} / {}", self.session_page + 1, pages);
+                    let x = (SIDE - canvas.measure(&label, 12, false)) / 2.;
+                    canvas.text(&label, x, y + 13., 12, false, MUTED);
+                    if ui.button(
+                        canvas,
+                        51_101,
+                        Rect::new(right - 40., y + 2., 40., 38.),
+                        "›",
+                        ButtonStyle::Quiet,
+                        self.session_page + 1 < pages,
+                    ) {
+                        self.session_page += 1;
+                        self.sidebar_redraw = true;
+                    }
+                }
+                SidebarRow::Empty => {
+                    let label = if view.sessions_loading {
+                        "正在读取…"
+                    } else if !self.session_filter.is_empty() {
+                        "没有匹配的会话"
+                    } else {
+                        "暂无会话"
+                    };
+                    canvas.text(label, 26., y + 13., 13, false, MUTED);
+                }
+                SidebarRow::Control => {
+                    let controlling = view.phase == Phase::Controlling;
+                    if sidebar_link(
+                        canvas,
+                        ui,
+                        11,
+                        rect,
+                        if controlling {
+                            "切回只读"
+                        } else {
+                            "申请控制"
+                        },
+                        false,
+                        view.target.is_some() && self.pending.is_none() && !view.busy,
+                    ) && let Some(target) = view.target.clone()
+                    {
+                        self.send(
+                            handle,
+                            Intent::Connect {
+                                target,
+                                control: !controlling,
+                            },
+                        );
+                    }
+                }
+                SidebarRow::Disconnect => {
+                    if sidebar_link(
+                        canvas,
+                        ui,
+                        12,
+                        rect,
+                        "断开连接",
+                        false,
+                        view.phase.connected() && self.pending.is_none(),
+                    ) {
+                        self.send(handle, Intent::Disconnect);
+                    }
+                }
+                SidebarRow::NamedSession => {
+                    ui.input(
+                        canvas,
+                        105,
+                        rect.inset(3.),
+                        &mut self.named_session,
+                        "输入已有会话名",
+                        false,
+                        true,
+                    );
+                }
+                SidebarRow::ObserveNamed => {
+                    if sidebar_link(
+                        canvas,
+                        ui,
+                        106,
+                        rect,
+                        "观察连接",
+                        false,
+                        !self.named_session.trim().is_empty()
+                            && self.named_session.len() <= 128
+                            && self.pending.is_none(),
+                    ) {
+                        self.layouts.clear();
+                        self.send(
+                            handle,
+                            Intent::Connect {
+                                target: Target::Named(self.named_session.trim().to_owned()),
+                                control: false,
+                            },
+                        );
+                    }
+                }
+                SidebarRow::Setup => {
+                    if sidebar_link(
+                        canvas,
+                        ui,
+                        108,
+                        rect,
+                        "连接设置",
+                        false,
+                        self.pending.is_none(),
+                    ) {
+                        self.setup = true;
+                    }
+                }
+                SidebarRow::Update => {
+                    if sidebar_link(
+                        canvas,
+                        ui,
+                        109,
+                        rect,
+                        "检查更新",
+                        false,
+                        self.pending.is_none(),
+                    ) {
+                        self.page = Page::Receipts;
+                        self.command(handle, view, "client.update", json!({"check":true}));
+                    }
+                }
+            }
+        }
+        canvas.line((24., footer), (SIDE - 24., footer), 1., LINE);
+        let width = if limit > 0 { SIDE - 110. } else { SIDE - 24. };
+        if sidebar_link(
             canvas,
-            102,
-            Rect::new(16., 246., 194., 33.),
-            &mut self.session_filter,
-            "筛选",
+            ui,
+            107,
+            Rect::new(12., footer + 5., width, 42.),
+            if self.sidebar_settings {
+                "‹  返回导航"
+            } else {
+                "连接与设置  ›"
+            },
             false,
             true,
         ) {
-            self.session_page = 0;
+            self.sidebar_settings = !self.sidebar_settings;
+            self.sidebar_offset = 0;
+            self.sidebar_redraw = true;
         }
-        let filter = self.session_filter.to_lowercase();
-        let sessions: Vec<_> = view
-            .sessions
-            .iter()
-            .filter(|session| session.name.to_lowercase().contains(&filter))
-            .collect();
-        let per_page = ((height - 474.) / 52.).floor().max(1.) as usize;
-        let pages = sessions.len().div_ceil(per_page).max(1);
-        self.session_page = self.session_page.min(pages - 1);
-        let start = self.session_page * per_page;
-        for (offset, session) in sessions.iter().skip(start).take(per_page).enumerate() {
-            let y = 286. + offset as f32 * 52.;
-            let selected = view
-                .target
-                .as_ref()
-                .is_some_and(|target| matches!(target,Target::Named(name) if name==&session.name));
-            if selected {
-                canvas.rect(Rect::new(14., y - 3., 200., 57.), 8., BLUE_SOFT);
-            }
-            if ui.button(
-                canvas,
-                200 + offset as u64,
-                Rect::new(20., y, 188., 32.),
-                &session.name,
-                ButtonStyle::Quiet,
-                self.pending.is_none() && !view.busy,
-            ) {
-                self.named_session = session.name.clone();
-                self.layouts.clear();
-                self.send(
-                    handle,
-                    Intent::Connect {
-                        target: Target::Named(session.name.clone()),
-                        control: false,
+        if limit > 0 {
+            for (id, x, label, up) in [(103, SIDE - 94., "↑", true), (104, SIDE - 52., "↓", false)]
+            {
+                if ui.button(
+                    canvas,
+                    id,
+                    Rect::new(x, footer + 5., 40., 42.),
+                    label,
+                    ButtonStyle::Quiet,
+                    if up {
+                        self.sidebar_offset > 0
+                    } else {
+                        self.sidebar_offset < limit
                     },
-                );
-            }
-            let label = if view.window_sessions {
-                "由本窗口创建"
-            } else {
-                match session.connection.as_str() {
-                    "connected" => "已连接",
-                    "disconnected" => "未连接",
-                    _ => "状态待确认",
+                ) {
+                    self.sidebar_offset = if up {
+                        self.sidebar_offset.saturating_sub(visible.max(1))
+                    } else {
+                        self.sidebar_offset
+                            .saturating_add(visible.max(1))
+                            .min(limit)
+                    };
+                    self.sidebar_redraw = true;
                 }
-            };
-            canvas.ellipsis(label, 32., y + 34., 168., 11, false, MUTED);
-        }
-        if sessions.is_empty() {
-            canvas.text(
-                if view.sessions_loading {
-                    "正在读取…"
-                } else {
-                    "还没有可列出的会话"
-                },
-                26.,
-                291.,
-                12,
-                false,
-                MUTED,
-            );
-        }
-        let paging_y = height - 180.;
-        if ui.button(
-            canvas,
-            103,
-            Rect::new(22., paging_y, 44., 30.),
-            "‹",
-            ButtonStyle::Quiet,
-            self.session_page > 0,
-        ) {
-            self.session_page -= 1;
-        }
-        canvas.text(
-            &format!("{} / {}", self.session_page + 1, pages),
-            87.,
-            paging_y + 8.,
-            12,
-            false,
-            MUTED,
-        );
-        if ui.button(
-            canvas,
-            104,
-            Rect::new(163., paging_y, 44., 30.),
-            "›",
-            ButtonStyle::Quiet,
-            self.session_page + 1 < pages,
-        ) {
-            self.session_page += 1;
-        }
-        canvas.line((22., height - 137.), (206., height - 137.), 1., LINE);
-        if !view.window_sessions {
-            ui.input(
-                canvas,
-                105,
-                Rect::new(22., height - 119., 184., 36.),
-                &mut self.named_session,
-                "输入已有会话名",
-                false,
-                true,
-            );
-            if ui.button(
-                canvas,
-                106,
-                Rect::new(22., height - 73., 184., 36.),
-                "观察连接",
-                ButtonStyle::Primary,
-                !self.named_session.trim().is_empty()
-                    && self.named_session.len() <= 128
-                    && self.pending.is_none(),
-            ) {
-                self.layouts.clear();
-                self.send(
-                    handle,
-                    Intent::Connect {
-                        target: Target::Named(self.named_session.trim().to_owned()),
-                        control: false,
-                    },
-                );
             }
-        }
-        if ui.button(
-            canvas,
-            108,
-            Rect::new(12., height - 36., 100., 30.),
-            "连接设置",
-            ButtonStyle::Quiet,
-            self.pending.is_none(),
-        ) {
-            self.setup = true;
-        }
-        if view.command("client.update")
-            && ui.button(
-                canvas,
-                109,
-                Rect::new(114., height - 36., 100., 30.),
-                "检查更新",
-                ButtonStyle::Quiet,
-                self.pending.is_none(),
-            )
-        {
-            self.page = Page::Receipts;
-            self.command(handle, view, "client.update", json!({"check":true}));
         }
     }
 

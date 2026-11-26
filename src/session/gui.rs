@@ -1,6 +1,8 @@
 //! Explicit CLI-owned gateway for web, desktop and mobile frontends.
 mod gateway;
 mod owned;
+#[cfg(windows)]
+mod windows_app;
 
 use gateway::{Connection, CoreFuture, Host};
 use owned::{OwnedHost, Policy};
@@ -213,6 +215,18 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
         print!("{HELP}");
         return Ok(());
     }
+    #[cfg(windows)]
+    if arguments[0] == "desktop" {
+        let destination = match &arguments[1..] {
+            [] => None,
+            [target] => {
+                crate::connection_form::validate_destination(target)?;
+                Some(target.as_str())
+            }
+            _ => return Err("expected gui desktop [username@server]".into()),
+        };
+        return windows_app::run(destination).await;
+    }
     let open_browser = arguments[0] == "open" && arguments.len() == 1;
     if !open_browser && arguments[0] != "serve" {
         return Err(HELP.into());
@@ -358,6 +372,18 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
 
 /// Start one explicitly selected core and give the local browser its exact attach target.
 pub(crate) async fn launch(destination: Option<&str>) -> crate::Result<()> {
+    let (listener, app, launch_url) = owned_workbench(destination).await?;
+    crate::client::account::open_browser(&launch_url).await?;
+    println!("WebUI {}", launch_url.origin().ascii_serialization());
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown())
+        .await?;
+    Ok(())
+}
+
+async fn owned_workbench(
+    destination: Option<&str>,
+) -> crate::Result<(TcpListener, axum::Router, reqwest::Url)> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let origin = format!("http://{}", listener.local_addr()?);
     let mut bytes = [0u8; 32];
@@ -389,12 +415,7 @@ pub(crate) async fn launch(destination: Option<&str>) -> crate::Result<()> {
         host,
     )?;
     launch_url.set_fragment(Some(&token));
-    crate::client::account::open_browser(&launch_url).await?;
-    println!("WebUI {origin}");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown())
-        .await?;
-    Ok(())
+    Ok((listener, app, launch_url))
 }
 
 pub(crate) async fn shutdown() {

@@ -410,6 +410,30 @@ jobs:
           & "$PWD/scripts/test_installer_helpers.ps1"
           & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -File "$PWD/scripts/test_installer_helpers.ps1"
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell installer helper tests failed" }
+      - name: Build and test the zgpui desktop on macOS
+        if: runner.os == 'macOS'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: |
+          cargo test --locked --manifest-path apps/ssmcp-desktop/Cargo.toml
+          cargo build --locked --manifest-path apps/ssmcp-desktop/Cargo.toml
+          target/debug/ssmcp-desktop --help
+          if ! launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
+            echo "No GUI login session on this runner; native build and tests completed."
+            exit 0
+          fi
+          python3 - <<'PY'
+          import json, os, subprocess, tempfile
+          from pathlib import Path
+          with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as directory:
+              receipt = Path(directory) / "frame.json"
+              env = {**os.environ, "SSMCP_AUTH_HOME": str(Path(directory) / "auth")}
+              subprocess.run(["target/debug/ssmcp-desktop", "--exit-after-ms", "1000",
+                              "--first-frame-receipt", str(receipt)], env=env, timeout=20, check=True)
+              frame = json.loads(receipt.read_text())
+              if frame["stage"] != "present_returned" or min(frame["width"], frame["height"]) <= 0:
+                  raise RuntimeError(f"macOS launcher returned an invalid first-frame receipt: {frame}")
+          PY
       - name: Check Unix streaming download bounds
         if: runner.os == 'macOS'
         run: python3 scripts/test_installer_download_bounds.py

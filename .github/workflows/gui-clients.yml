@@ -604,7 +604,7 @@ jobs:
         run: |
           $tokens = $null
           $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/e2e_windows_desktop.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/e2e_windows_web_app.ps1", [ref]$tokens, [ref]$errors) | Out-Null
           if ($errors) { throw ($errors | Out-String) }
 
       - name: Install Rust 1.100.0 for native Windows
@@ -799,13 +799,13 @@ jobs:
           sys.exit(0 if report['status'] == 'passed' else 1)
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Empty Windows overview acceptance failed; inspect overview-result.json.' }
-      - name: Launch and capture the actual Windows desktop executable
+      - name: Open two packaged system Edge windows and verify their independent gateways
         id: desktop_runtime
         if: ${{ !cancelled() && steps.native.outcome == 'success' }}
         run: |
           $evidence = Join-Path $env:RUNNER_TEMP 'ssmcp-gui-ci-windows'
           $executable = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/debug/ssmcp-desktop.exe'
-          & pwsh -NoLogo -NoProfile -File scripts/e2e_windows_desktop.ps1 -Binary $executable -EvidenceDirectory (Join-Path $evidence 'desktop-runtime') -SourceCommit $env:SOURCE_COMMIT
+          & pwsh -NoLogo -NoProfile -File scripts/e2e_windows_web_app.ps1 -Binary $executable -EvidenceDirectory (Join-Path $evidence 'desktop-runtime') -SourceCommit $env:SOURCE_COMMIT
           if ($LASTEXITCODE -ne 0) { throw 'Desktop runtime acceptance failed or was blocked; inspect desktop-runtime/result.json.' }
 
       - name: Package the tested Windows debug executable
@@ -850,7 +850,7 @@ jobs:
             ('- Actual CLI and private process/IPC lifecycle: {0}' -f $env:CLI_OUTCOME)
             ('- Empty current-user overview without registry creation: {0}; execution step: {1}' -f $overviewStatus, $env:OVERVIEW_OUTCOME)
             ('- Actual desktop window: {0}; execution step: {1}' -f $desktopStatus, $env:DESKTOP_OUTCOME)
-            '- Evidence: executable hashes, private lifecycle report, owned window metadata, captured PNG, and stdout/stderr.'
+            '- Evidence: executable hashes, private lifecycle report, two system Edge app windows, their accessible forms, and gateway shutdown.'
             '- Scope: isolated fixtures and a bounded desktop window; no external account, live session, installed service, or human visual acceptance.'
           ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 

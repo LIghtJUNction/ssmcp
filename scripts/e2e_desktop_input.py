@@ -254,6 +254,21 @@ class DesktopInputs(Sessions):
                  and self.pixels().getpixel((self.width - 97, 29)) == (182, 206, 255),
                  timeout=10, description="rendered desktop with actual native control lease")
         self.screenshot("desktop-connected")
+        # Inspect the live native drawer before touching the conversation or composer.
+        background = self.pixels().getpixel((8, 60))
+        self.click(31, 29)
+        wait_for(lambda: self.pixels().getpixel((8, 60)) != background,
+                 timeout=3, description="the native session sidebar is visible")
+        self.screenshot("desktop-sidebar")
+        region = (12, 62, 220, 238)
+        session_rows = self.pixels().crop(region).tobytes()
+        self.click(82, self.height - 27)
+        wait_for(lambda: self.pixels().crop(region).tobytes() != session_rows,
+                 timeout=3, description="connection settings replace session navigation")
+        self.screenshot("desktop-sidebar-settings")
+        self.key("Escape")
+        wait_for(lambda: self.pixels().getpixel((8, 60)) == background,
+                 timeout=3, description="Escape closes the sidebar")
         self.check(json.loads((self.artifact_dir / "first-frame.json").read_text())["pid"] == self.desktop.pid,
                    "the actual window has a present receipt from the original desktop PID")
         initial = "Desktop human input\nsecond line remains text"

@@ -119,6 +119,34 @@ fn options() -> Result<Option<Options>, String> {
 }
 
 fn run(options: Options) -> Result<(), String> {
+    #[cfg(windows)]
+    if options.target.is_none() {
+        use std::os::windows::process::CommandExt;
+        if options.first_frame_receipt.is_some()
+            || options.frame_receipts.is_some()
+            || options.exit_after.is_some()
+            || options.font.is_some()
+        {
+            return Err(
+                "Native font and frame options apply to explicit session inspection.".into(),
+            );
+        }
+        let cli = std::env::current_exe()
+            .map_err(|e| e.to_string())?
+            .with_file_name("ssmcp.exe");
+        let mut command = std::process::Command::new(cli);
+        command.args(["gui", "desktop"]).creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        if let Some(target) = options.destination {
+            command.arg(target);
+        }
+        let status = command
+            .status()
+            .map_err(|e| format!("Could not start the companion ssmcp.exe: {e}"))?;
+        return status
+            .success()
+            .then_some(())
+            .ok_or_else(|| format!("Desktop gateway exited with {status}"));
+    }
     let mut window = Window::new("ssmcp-desktop", 1080, 720)?;
     let mut palette = zgpui::native::Palette::for_theme(zgpui::native::Theme::Dark);
     palette.background = 0x101113ff;
@@ -131,6 +159,8 @@ fn run(options: Options) -> Result<(), String> {
         .as_deref()
         .unwrap_or(if cfg!(target_os = "windows") {
             "Microsoft YaHei UI"
+        } else if cfg!(target_os = "macos") {
+            "PingFang SC"
         } else {
             "Noto Sans CJK SC"
         });
@@ -291,6 +321,10 @@ fn run(options: Options) -> Result<(), String> {
             }
             if let Some(text) = ui.clipboard.take().or_else(|| desktop.take_clipboard()) {
                 window.copy(&text);
+            }
+            if desktop.take_sidebar_redraw() {
+                dirty = true;
+                continue;
             }
             if drew_form
                 && handle.is_none()
