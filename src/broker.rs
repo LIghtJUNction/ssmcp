@@ -1758,15 +1758,31 @@ impl Broker {
             });
         {
             let mut sessions = self.sessions.write().await;
-            if sessions
-                .get(&user)
-                .is_some_and(|clients| clients.len() >= wire::MAX_CLIENTS_PER_USER)
-            {
+            // Check and insert under the same lock, including connections using another
+            // SSH username or transport for the same authenticated account.
+            let rejection = match session.owner_subject.as_deref() {
+                Some(subject) if self.portal.has_storage() => (!self
+                    .user_policies
+                    .has_recharged(subject)
+                    && sessions.values().any(|clients| {
+                        clients.values().any(|client| {
+                            client.is_alive() && client.owner_subject.as_deref() == Some(subject)
+                        })
+                    }))
+                .then_some(
+                    "online_session_limit: free accounts can have one online session at a time",
+                ),
+                _ => sessions
+                    .get(&user)
+                    .is_some_and(|clients| clients.len() >= wire::MAX_CLIENTS_PER_USER)
+                    .then_some("this user has reached the 128-client connection limit"),
+            };
+            if let Some(message) = rejection {
                 drop(sessions);
                 wire::write_frame(
                     &mut writer,
                     &Frame::Reject {
-                        message: "this user has reached the 128-client connection limit".into(),
+                        message: message.into(),
                     },
                 )
                 .await?;

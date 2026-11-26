@@ -1995,6 +1995,8 @@ mod tests {
         assert!(old_ready.get("capabilities").is_none());
         let other_id = old_ready["client_id"].as_str().unwrap().to_owned();
 
+        // The grant-isolation fixture keeps the legacy and modern sessions online together.
+        broker.record_recharge("123").await.unwrap();
         let mut socket = open_socket_with_access(&base, &device, vec![], true).await;
         let id = match receive(&mut socket).await.unwrap() {
             wire::Frame::Ready {
@@ -2543,12 +2545,18 @@ mod tests {
             .unwrap();
         assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
         let mut first = open_socket(&base, &alice, vec![]).await;
-        let mut second = open_socket(&base, &alice, vec![]).await;
-        let mut foreign = open_socket(&base, &bob, vec![]).await;
         assert!(matches!(
             receive(&mut first).await,
             Some(wire::Frame::Ready { .. })
         ));
+        let mut denied = open_socket(&base, &alice, vec![]).await;
+        assert!(matches!(
+            receive(&mut denied).await,
+            Some(wire::Frame::Reject { message }) if message.starts_with("online_session_limit:")
+        ));
+        broker.record_recharge("123").await.unwrap();
+        let mut second = open_socket(&base, &alice, vec![]).await;
+        let mut foreign = open_socket(&base, &bob, vec![]).await;
         assert!(matches!(
             receive(&mut second).await,
             Some(wire::Frame::Ready { .. })

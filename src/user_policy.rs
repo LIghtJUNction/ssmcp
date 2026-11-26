@@ -331,6 +331,7 @@ pub fn valid_rate(value: u64) -> bool {
 struct Settings {
     banned: bool,
     rate: u64,
+    has_recharged: bool,
 }
 
 struct Bucket {
@@ -371,14 +372,19 @@ impl Bandwidth {
             settings: RwLock::new(Settings {
                 banned: false,
                 rate,
+                has_recharged: false,
             }),
             buckets: [Mutex::new(Bucket::new(rate)), Mutex::new(Bucket::new(rate))],
             changed: Notify::new(),
         }
     }
-    fn configure(&self, banned: bool, rate: u64) {
+    fn configure(&self, banned: bool, rate: u64, has_recharged: bool) {
         let mut settings = self.settings.write().unwrap();
-        *settings = Settings { banned, rate };
+        *settings = Settings {
+            banned,
+            rate,
+            has_recharged,
+        };
         for bucket in &self.buckets {
             let mut bucket = bucket.lock().unwrap();
             // Changing policy must not mint a fresh burst for every save.
@@ -474,6 +480,13 @@ impl UserPolicies {
             .get(subject)
             .is_some_and(|entry| entry.banned())
     }
+    pub(crate) fn has_recharged(&self, subject: &str) -> bool {
+        self.entries
+            .lock()
+            .unwrap()
+            .get(subject)
+            .is_some_and(|entry| entry.settings.read().unwrap().has_recharged)
+    }
     pub(crate) fn apply_account(
         &self,
         subject: &str,
@@ -486,12 +499,12 @@ impl UserPolicies {
         } else {
             self.default_rate()
         };
-        self.get(subject).configure(banned, rate.unwrap_or(default));
+        self.get(subject)
+            .configure(banned, rate.unwrap_or(default), has_recharged);
     }
     #[cfg(test)]
     pub(crate) fn set(&self, subject: &str, banned: bool, rate: Option<u64>) {
-        self.get(subject)
-            .configure(banned, rate.unwrap_or_else(|| self.default_rate()));
+        self.apply_account(subject, banned, rate, self.has_recharged(subject));
     }
 }
 
