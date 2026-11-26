@@ -968,7 +968,6 @@ fn append_values(response: &Value, notices: &[Value], budget: usize) -> Option<V
         .collect::<Vec<_>>()
         .join("\n");
     let text = format!("{HEADER}{summaries}");
-    object.insert("worker_events".into(), json!(notices));
     object
         .entry("structuredContent")
         .or_insert_with(|| Value::Object(Map::new()))

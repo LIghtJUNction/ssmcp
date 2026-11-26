@@ -195,7 +195,9 @@ A matching, authorized native worker event enters the retained journal before
 it can change the existing main member to `working`. A retiring member is not
 reactivated. An existing `await` read window can wake with
 `wake_reason: "subscription_event"`, the subscription ID, and a bounded
-`worker_events` notice. If its named targets remain unfinished, the response is
+`structuredContent.worker_events` notice. The text block summarizes sequences
+and outcomes, and the structured notice carries the events and ACK cursor.
+If its named targets remain unfinished, the response is
 still `pending` with `continue_wait: true`; resume the same `wait_id`. For
 durable waits, the original detached observer keeps its lifetime and target
 readiness. An event wake does not complete an unrelated task or user-input wait.
