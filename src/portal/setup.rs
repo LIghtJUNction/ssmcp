@@ -297,6 +297,21 @@ impl From<Problem> for ApiError {
                 "access_denied",
                 "The browser origin, session or CSRF token did not match.",
             ),
+            Problem::PasskeyInvalid => Self::new(
+                problem.status(),
+                "passkey_invalid",
+                "Passkey verification failed. Try again or sign in with GitHub.",
+            ),
+            Problem::PasskeyExpired => Self::new(
+                problem.status(),
+                "passkey_expired",
+                "This passkey request has expired. Start a new request.",
+            ),
+            Problem::PasskeyConflict => Self::new(
+                problem.status(),
+                "passkey_conflict",
+                "This passkey is already bound. Use an existing passkey or choose another one.",
+            ),
             Problem::UsernameInvalid => Self::new(
                 StatusCode::BAD_REQUEST,
                 "username_invalid",
