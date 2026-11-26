@@ -2782,7 +2782,10 @@ where
         None => {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "relay transport closed before the controller admission reply",
+                format!(
+                    "relay {server} closed before the controller admission reply; \
+                     verify the server runs an ssmcpd version with device controller admission"
+                ),
             )
             .into());
         }
