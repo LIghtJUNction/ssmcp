@@ -212,6 +212,24 @@ test('owned creation binds the exact receipt and only retries the original expli
   assert.notEqual(bodies.at(-1).request_id, bodies[0].request_id);
 });
 
+test('first device sign-in shows the chosen relay and reuses the original creation after approval', async () => {
+  const ids = [], target = 'live:' + 'ab'.repeat(16);
+  const args = { destination:'alice@relay.example', terms:false, privacy:false };
+  const challenge = {status:'pending', verification_url:'https://relay.example/setup?code=ABCD-1234', user_code:'ABCD-1234'};
+  let pending = true;
+  const gateway = new Gateway({fetchImpl: async (_path, {body}) => {
+    const {request_id} = JSON.parse(body); ids.push(request_id);
+    return json(pending ? {request_id, authorization:challenge} : {request_id, session:target});
+  }});
+  gateway.setToken('pairing');
+  assert.equal(await gateway.createOwnedSession(args, (url, code) => {
+    assert.equal(url, challenge.verification_url); assert.equal(code, challenge.user_code); pending = false;
+  }), target);
+  assert.deepEqual(ids, [ids[0], ids[0]]);
+  pending = true; challenge.verification_url = 'https://other.example/setup?code=ABCD-1234';
+  await assert.rejects(gateway.createOwnedSession(args, () => assert.fail('foreign link shown')), {code:'invalid_device_authorization'});
+});
+
 test('replacing pairing while an owned request is in flight discards its receipt', async () => {
   let respond;
   const gateway = new Gateway({fetchImpl: async (_path, {body}) => new Promise(resolve => {

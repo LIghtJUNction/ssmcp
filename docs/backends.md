@@ -16,10 +16,9 @@ ssmcp alice@relay.example --name dev --title "检查当前项目并修复构建"
 | --- | --- |
 | `--name NAME` | 客户端显示名称；默认包含主机名和进程 ID |
 | `--title TITLE` | 供 agent 识别任务的会话标题；最多 512 个 UTF-8 字节 |
-| `--allow USER@SERVER` | 指定当前中继上已注册的控制账号；可重复或以逗号分隔，最多 32 个不同账号 |
 | `--shell NAME\|PATH` | 选择新终端和 `!命令` 的 shell。Unix 默认优先用 zrun，其次是 `SHELL`，最后用 `/bin/sh`。Windows 默认用 `COMSPEC`，最后用系统 `cmd.exe` |
 | `--context-root PATH` | 增加只读 skills／AGENTS 文档根目录；最多 8 个，不扩展普通文件写入范围 |
-| `--list-tools` | 发现并打印本机工具目录后退出；不连接 SSH、不接受 SSH 目标或 `--allow` |
+| `--list-tools` | 打印本机工具目录后退出 |
 | `-F FILE`、`-i FILE`、`-p PORT` | OpenSSH 配置、私钥文件和端口 |
 
 在对话里输入 `/chsh` 查看当前 shell，输入 `/chsh zsh` 或 `/chsh /绝对路径` 保存首选项。使用 `/chsh system` 选择系统默认，或用 `/chsh auto` 恢复自动选择。切换完成后，新终端和 `!命令` 使用所选 shell，已打开的终端继续运行原进程。
@@ -47,7 +46,7 @@ ssmcp alice@relay.example --name dev --title "继续项目开发"
 
 `ssmcpd` 和代码模式的隔离执行环境运行在 Linux。服务端通过系统 Node.js、bubblewrap 与 util-linux 的 `prlimit` 执行编排代码；客户端只需本机 OpenSSH 与所选 shell。服务端的安装条件见[部署说明](deployment.md#系统代码运行环境)。原生 rsync 端点目前也仅在 Linux 客户端提供；macOS／Windows 可使用文件和 loopback 网络原语。[rsync 平台分支](../src/rsync.rs)
 
-被控端使用 `--allow 用户名@中继服务器` 明确列出控制账号，本机不需要登录；省略名单时要求已保存有效登录并仅授权自己。控制端始终使用真实账号认证与连接 ACL。交互终端显示连接摘要，重定向 stdout 或 `--raw` 使用机器可读输出。[账号与授权](client-accounts.md)
+在被控端运行 `ssmcp 用户名@中继服务器` 并完成设备授权。会话内的 `/allow add 用户名`、`/allow list` 和 `/allow remove 用户名` 管理可访问当前会话的控制者。交互终端显示连接摘要，重定向 stdout 或使用 `--raw` 可取得机器可读输出。[账号与授权](client-accounts.md)
 
 ## 2. 用 list 找到客户端和能力
 
@@ -276,7 +275,7 @@ Context 的 `ssmcp.skill.discovered` 表示返回具体技能元数据，`ssmcp.
 
 输出、任务、工具代号和审计游标属于各自连接；每次调用重新检查授权与提供者。文件存储在共享用户目录不意味着另一连接可读取它。断线与 reload 会清理连接拥有的进程和路由，旧连接 ID 不再可用。SSMCP peer 网关继续管理自身的进程。
 
-注册连接时，服务器把 `--allow` 中当前中继的门户用户名解析为稳定账号 ID；控制请求按已验证身份和目标 ACL 检查。注册者仅是来源记录，匿名连接没有注册者；调用与结果流量计入实际控制账号。[解析](../src/broker/allow.rs) · [访问与计费](../src/broker.rs)
+服务端先验证设备账号，再按当前会话的控制名单及控制者的稳定账号 ID 检查每次调用。设备注册账号用于计算在线会话数，调用与回复流量计入实际控制账号。[解析](../src/broker/allow.rs) · [访问与计费](../src/broker.rs)
 
 CLI 的邀请、join 和旧 SSH 登录码入口已退出当前设备接入流程。被控设备直接指定服务器账号；会话内 agent 的 `collab.join` 保留。[迁移用法](client-accounts.md)
 

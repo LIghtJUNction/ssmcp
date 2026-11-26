@@ -6,7 +6,7 @@
 ssmcp alice@relay.example --name device-b
 ~~~
 
-控制者必须登录该服务器，才能查看和操作获准的设备。被控端的名字、工作目录和 caller 显示信息用于识别设备，不是登录凭据。[完整账号与授权说明](client-accounts.md)
+被控端启动时经中继验证设备账号，控制者在 MCP 应用中登录后可以操作获准的会话。在设备上使用 `/allow add 用户名`、`/allow list`、`/allow remove 用户名` 管理当前会话的控制者。[账号与在线额度](client-accounts.md)
 
 <a id="github-allow"></a>
 

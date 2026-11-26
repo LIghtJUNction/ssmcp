@@ -15,10 +15,14 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
+import ssl
 import stat
 import subprocess
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
+
+from e2e_account_relay import loopback_tls
 
 
 FIXTURE_TEST = "http::relay_composer_fixture::relay_composer_server_fixture"
@@ -96,12 +100,134 @@ def validate_account_identity(h, directory, identity, description=(
     return identity
 
 
+class PortalPages:
+    def remember(self, *values):
+        self.sensitive.extend(value for value in values if isinstance(value, str) and value)
+
+    def loopback_origin(self, value):
+        parsed = urlsplit(value)
+        if (parsed.scheme != ("http" if value == self.github_origin else "https") or parsed.hostname != "127.0.0.1"
+                or not parsed.port or parsed.netloc != f"127.0.0.1:{parsed.port}"
+                or parsed.path or parsed.query or parsed.fragment):
+            raise AssertionError("the fixture must supply an explicit owned loopback origin")
+        return parsed
+
+    def owned_url(self, value, origin, path):
+        self.remember(value)
+        parsed = urlsplit(value)
+        owner = self.loopback_origin(origin)
+        if (parsed.scheme != owner.scheme or parsed.netloc != owner.netloc
+                or parsed.path != path or parsed.fragment):
+            raise AssertionError("the fixture returned a URL outside its exact owned route")
+        query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True,
+                         max_num_fields=16)
+        self.remember(*(item for values in query.values() for item in values))
+        return parsed, query
+
+    def portal(self, path, method="GET", data=None):
+        status, body, headers = self.oauth_request(
+            path, method, data, cookie=self.cookie,
+            headers={"Origin": self.origin, "Accept": "text/html"}, form=method == "POST")
+        headers = {key.lower(): value for key, value in headers.items()}
+        if "set-cookie" in headers:
+            raw = headers["set-cookie"]
+            cookie = raw.split(";", 1)[0]
+            self.remember(raw, cookie, cookie.partition("=")[2])
+            if not cookie.startswith("__Host-ssmcp-portal=") or not cookie.partition("=")[2]:
+                raise AssertionError("the portal did not return its own browser session cookie")
+            self.cookie = cookie
+        return status, body, headers
+
+    def page_form(self, page):
+        if not isinstance(page, str):
+            raise AssertionError("the real portal did not return an HTML form")
+        form = Form()
+        form.feed(page)
+        self.remember(form.fields.get("csrf"), form.fields.get("code"))
+        if not form.fields.get("csrf"):
+            raise AssertionError("the portal form omitted its actual CSRF token")
+        return form
+
+    def home(self, handle=None):
+        status, page, _ = self.portal("/")
+        self.check(status == 200 and isinstance(page, str), "the real portal home responds")
+        form = self.page_form(page)
+        if handle is not None:
+            start = page.find('id="account"')
+            end = page.find("</section>", start)
+            section = page[start:end] if start >= 0 and end > start else ""
+            address = handle + "@" + self.origin
+            self.check(address in section and form.fields.get("username") == handle
+                       and self.identity["principal"] not in section
+                       and "gh-" + self.identity["subject"] not in section,
+                       "the account panel and rename form display the current platform name")
+        return form
+
+    def login_portal(self):
+        form = self.home()
+        anonymous = self.cookie
+        status, _, headers = self.portal("/account/login", "POST", {"csrf": form.fields["csrf"]})
+        self.check(status == 303, "the portal starts a real GitHub authorization redirect")
+        target, query = self.owned_url(headers.get("location", ""), self.github_origin,
+                                       "/login/oauth/authorize")
+        self.check(query.get("redirect_uri") == [self.origin + "/oauth/callback/github"]
+                   and len(query.get("state", [])) == 1
+                   and query["state"][0].startswith("portal_"),
+                   "provider authorization is bound to the owned portal callback and state")
+        provider = http.client.HTTPConnection("127.0.0.1", self.loopback_origin(self.github_origin).port,
+                                              timeout=5)
+        try:
+            provider.request("GET", target.path + "?" + target.query)
+            response = provider.getresponse()
+            callback = response.getheader("Location", "")
+            self.remember(callback)
+            self.check(response.status in (302, 303) and len(response.read(8193)) <= 8192,
+                       "the owned provider issues a bounded authorization-code redirect")
+        finally:
+            provider.close()
+        callback, returned = self.owned_url(callback, self.origin, "/oauth/callback/github")
+        self.check(returned.get("state") == query["state"]
+                   and len(returned.get("code", [])) == 1 and bool(returned["code"][0]),
+                   "the provider callback preserves the exact portal state and returns one code")
+        status, _, headers = self.portal(callback.path + "?" + callback.query)
+        self.check(status == 303 and headers.get("location") == "/#account"
+                   and bool(self.cookie) and self.cookie != anonymous,
+                   "the real callback authenticates and rotates the portal session")
+
+
+class DeviceConsentBrowser(PortalPages):
+    def __init__(self, h):
+        self.oauth_request = h.oauth_request
+        self.check = h.check
+        self.sensitive = h.sensitive
+        self.origin, self.github_origin, self.identity = h.origin, h.github_origin, h.identity
+        self.cookie = None
+
+    def authorize(self, code):
+        if self.cookie is None:
+            self.login_portal()
+        path = "/setup?" + urlencode({"code": code})
+        status, page, _ = self.portal(path)
+        if status != 200 or 'action="/setup/authorize"' not in page:
+            raise AssertionError("device consent did not load on the authenticated portal")
+        fields = self.page_form(page).fields
+        if fields.get("code") != code:
+            raise AssertionError("consent did not identify this device authorization")
+        status, _, headers = self.portal("/setup/authorize", "POST", {
+            "csrf": fields["csrf"], "code": code, "decision": "allow"})
+        if status != 303 or headers.get("location") != path:
+            raise AssertionError("the portal did not approve this device grant")
+
+
 class AccountGateway:
     def __init__(self, harness):
         self.harness = harness
         self.process = None
         self.directory = None
         self.exit_code = None
+        self.tls_context = None
+        self.tls_verified = False
+        self.browser = None
 
     @property
     def prepared(self):
@@ -125,6 +251,8 @@ class AccountGateway:
         h.fixture_binary = binary
         self.directory = h.directory.resolve() / "account-gateway"
         self.directory.mkdir(mode=0o700)
+        _, self.pin, self.ca = loopback_tls(self.directory / "loopback-tls")
+        self.tls_context = ssl.create_default_context(cafile=str(self.ca))
         inherited = getattr(h, "fixture_environment", os.environ)
         environment = direct_loopback({key: value for key, value in inherited.items()
                                        if not key.startswith("SSMCP_")})
@@ -160,15 +288,54 @@ class AccountGateway:
         h.account_expires_at = data["account_expires_at"]
         h.sensitive.append(h.account_token)
         address = urlsplit(h.origin)
-        if (address.scheme != "http" or address.hostname != "127.0.0.1" or not address.port
+        if (address.scheme != "https" or address.hostname != "127.0.0.1" or not address.port
                 or address.path or address.query or address.fragment or address.username):
-            raise AssertionError("the account-router fixture must bind an explicit loopback HTTP origin")
+            raise AssertionError("the account-router fixture must bind an explicit loopback HTTPS origin")
         h.http_port = address.port
         h.user = "mcp"
         h.check(h.identity == IDENTITY,
                 "the isolated account has the expected stable provider identity and handle")
         status, result, _ = h.request("GET", path="/healthz", secret="")
         h.check(status == 200 and result.strip() == "ok", "the real production account router is healthy")
+        self.tls_verified = True
+
+    def authorize_device(self, env):
+        # Configure the same private trust path that the CLI and its detached children read.
+        if not self.prepared:
+            return
+        h = self.harness
+        config = Path(env["SSMCP_CLIENT_CONFIG"]).parent
+        config.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (config / "trusted-servers.toml").write_text(
+            f'[[servers]]\nserver = "{h.origin}"\npins = ["{self.pin}"]\n')
+        (config / "loopback-e2e-ca.pem").write_bytes(self.ca.read_bytes())
+        target = f"{h.identity['username']}@{h.origin}"
+        pattern = re.compile(re.escape((h.origin + "/setup?code=").encode())
+                             + rb"([A-Z0-9]{5}-[A-Z0-9]{5})(?![A-Z0-9])")
+        command = [h.binary_dir / "ssmcp", "login", target, "--no-browser"]
+        with subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL, cwd=h.directory,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE) as process:
+            try:
+                deadline = time.monotonic() + 12
+                output = bytearray()
+                with selectors.DefaultSelector() as selector:
+                    selector.register(process.stderr, selectors.EVENT_READ)
+                    while not (match := pattern.search(output)):
+                        if not selector.select(timeout=max(0, deadline - time.monotonic())):
+                            raise AssertionError("the device CLI did not open its OAuth grant")
+                        data = os.read(process.stderr.fileno(), 2048)
+                        if not data or len(output) + len(data) > 8192 or time.monotonic() > deadline:
+                            raise AssertionError("the device CLI did not print an owned verification URL")
+                        output.extend(data)
+                if self.browser is None:
+                    self.browser = DeviceConsentBrowser(h)
+                self.browser.authorize(match.group(1).decode())
+                if process.wait(timeout=12) != 0:
+                    raise AssertionError("the approved device could not save its OAuth credential")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
 
     def validate_account_identity(self, identity):
         return validate_account_identity(self.harness, self.directory, identity)

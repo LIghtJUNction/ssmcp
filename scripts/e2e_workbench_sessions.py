@@ -131,8 +131,9 @@ def run(binary):
             return result
         test.env = env
         try:
+            test.login(test.state)
             parent = test.unsigned("primary")
-            test.connection("primary")
+            assert test.connection("primary").token in test.state.device_tokens
             pairing = workspace / "auth" / "pairing.json"
             test.spawn("B", "gui", "serve", "--pairing-file", str(pairing))
             wait_for(pairing.exists, "gateway pairing")
@@ -309,6 +310,9 @@ def run(binary):
             print("PASS: headless owner chat, isolated relay sessions and independent shutdown", flush=True)
             print("PASS: distinct process, relay identity and private attach target; child inherits cwd; both sessions execute pwd in their own directories", flush=True)
             check_tui(test, workspace, sub, nested, http, attach, state)
+            with test.state.lock:
+                assert all(peer.token in test.state.device_tokens
+                           for peers in test.state.connections.values() for peer in peers)
             assert not test.state.errors, test.state.errors
         except Exception:
             for _, err, _, _ in test.logs:

@@ -4,9 +4,9 @@
 
 服务器部署 `ssmcpd` 和 HTTPS 反向代理；本机部署 `ssmcp`，需要调用某个 Harness 时再安装和配置它。服务器管理和旧部署迁移可继续使用 OpenSSH，当前设备连接使用 HTTPS/WSS。服务器不运行 Codex、Claude Code、Pi 或 OpenCode，模型身份和项目配置都留在本机。以下以 systemd Linux、`/usr/local` 前缀和服务端账户 `alice` 为例。
 
-当前客户端通过 HTTPS/WSS 接入核心；受控端可以使用 `--allow 用户名@服务器` 明确授权，控制端仍须完成账户 OAuth 与访问控制检查。已登录的受控端省略 `--allow` 时只允许自己。接入步骤见[配置与登录](configuration.md)。
+被控端通过 HTTPS/WSS 连接中继，首次运行时完成账号 OAuth 授权。控制者在 MCP 应用中单独登录。会话内可用 `/allow add 用户名` 增加控制者。[配置与登录](configuration.md)
 
-客户端始终提供 shell 和独立命令，并发现已配置的执行 harness。当前用户接入流程已移除 invite/join 命令；本文早期版本的 SSH 与登录码部署小节仅作历史迁移参考，不是当前客户端启动方式。核心进程重启仍会中断当前传输连接。配置 OAuth 持久目录后，DCR 登记和有效账户授权保留原来的到期时间及撤销状态；参见[授权持久化](oauth-durability.md)。
+客户端始终提供 shell 和独立命令，并发现已配置的执行 harness。需要邀请时，先验证设备启动者账号，再兑换同一中继签发的一次性邀请。本文的旧 SSH 部署示例供迁移既有系统时参考。核心进程重启仍会中断当前传输连接。配置 OAuth 持久目录后，DCR 登记和有效账户授权保留原来的到期时间及撤销状态；参见[授权持久化](oauth-durability.md)。
 
 ## 稳定核心与可替换公共前端
 
@@ -194,13 +194,13 @@ ssmcp --list-tools
 
 首次使用时可按[客户端配置与逐步登录教程](configuration.md#oauth-login)操作。已有 SSH Host 条目的复用方法见[SSH 配置](configuration.md#ssh-config)，重新打开后的行为见[连接与授权生命周期](configuration.md#session-lifetime)。
 
-GitHub 模式启动时指定允许的身份；将示例用户名换成实际获准访问的用户：
+在要开放的项目目录中启动会话，以自己的中继账号完成设备验证。
 
 ```sh
-ssmcp --name laptop --title "项目开发与测试" --allow octocat@github alice@ssmcp.example.com
+ssmcp alice@ssmcp.example.com --name laptop --title "项目开发与测试"
 ```
 
-同一服务端用户名最多同时连接 128 个客户端，可以在不同电脑或项目目录启动。每条连接有独立的 `client_id`，同名客户端也用 ID 区分。首次连接按 OpenSSH 提示核验主机密钥，或预先配置可信 known_hosts。客户端强制公钥认证，保留私钥口令与 ssh-agent 的原生处理。
+启用计费时，免费账号可同时保持一条在线会话，正式充值账号可同时注册多条。每条连接都有独立的 `client_id`。要让另一个中继账号控制当前会话，在被控端输入 `/allow add 用户名`。
 
 本机工具发现成功后，交互终端显示连接摘要；重定向 stdout 或选择 JSONL 时输出：
 
@@ -212,7 +212,7 @@ ssmcp --name laptop --title "项目开发与测试" --allow octocat@github alice
 
 同意后由 MCP 客户端取得并保存 ssmcp 令牌。调用 `tools/list` 确认工具表包含 `list`、`code_mode`、`collab` 和 `invite`，再用 `list({})` 查看允许访问的在线客户端。每个目标客户端都依据接入时解析的 GitHub 稳定用户 ID 检查权限；未获准的客户端不会显示，也不能通过猜测 `client_id` 调用。当前没有获准访问的在线连接时可先完成登录，`list` 返回空列表，之后会显示新接入且允许该身份的连接。
 
-省略 `--allow` 时保留原有 `/SSH用户名` 与登录码方式。登录码从签发起有效 1800 秒，成功使用一次即消耗；`login_expires_in` 扣除后端初始化时间。该授权只覆盖同一 SSH 账户下未设置 `--allow` 的连接，签发连接退出后撤销。设置了 `--allow` 的连接无法通过登录码授权访问。[两种授权方式](configuration.md#authorization-modes)
+旧版 SSH 部署中，终端签发的一次性控制码限于已通过身份映射的 SSH 会话。代码在签发后 1800 秒失效，成功使用后即消耗。通过门户连接的新设备使用被控端 OAuth，控制者仍需通过自己的 MCP 授权。
 
 HTTPS、localhost 和 `127.0.0.1` 回调通常直接跳转。IPv6 等 IP 回调可能先显示无脚本的自动返回页面；浏览器未自动跳转时，可点击“返回客户端”链接。两种路径都返回同一个短时 authorization code，页面不会把动态登录码放进回调 URL。
 
@@ -222,7 +222,7 @@ ssmcp 每次连接创建新的 PTY 和连接内工具运行时；退出会清理
 
 ### 本机后台客户端
 
-需要离开交互终端后保持客户端运行时，在本机项目目录使用 `ssmcp --ssh --daemon --watchdog --name workstation --allow octocat@github my-ssmcp`。这启动当前用户管理的客户端会话，与服务器的 `ssmcpd.service` 分开。服务端账户、SSH 公钥和 OAuth 配置继续生效；不自动启用开机或登录自启。[完整会话管理](session-control.md#后台运行与延时重连)
+需要后台运行时，先执行 `ssmcp login alice@ssmcp.example.com --no-browser` 并完成设备授权，再在项目目录执行 `ssmcp alice@ssmcp.example.com --daemon --watchdog --name workstation`。[后台会话管理](session-service.md)
 
 `sessions status workstation --json` 分别报告管理器与 Broker 连接状态；启动命令成功不证明已连通。watchdog 默认每 5 秒重试连接，可用 `--reconnect-delay SECONDS` 设置 1–3600 秒；该参数要求 `--watchdog`。手动 `sessions stop workstation` 后不会因延时到期重新启动。断线仍清理旧连接的命令与转发，新连接重新发现能力并取得新 ID。
 
@@ -308,7 +308,7 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 
 在 `code_mode` 中通过 `await exec.run(clientId, {command:["git","status","--short"],wait_ms:5000})` 验证命令执行；检查 `running` 和 `exit_code`，长任务沿用返回的 `job_id` 等待或读取；`wait_timed_out` 只表示本次等待到期，不会停止命令，不应重新启动同一工作。[独立命令与等待](commands.md)。交互式 Shell 使用 `terminal.write/read`。Harness 链路使用实时目录中确认无模型的状态接口，例如已注册 `pi.rpc` 时传入 `{type:"get_state",arguments:{}}`。先通过 `list({client_id})` 查看 Schema；工具真实调用与原生审批传播分别保留证据，不为开发或测试提交模型任务。Claude Code 前台 Bash 的输出在调用结束时返回，后台增量观察只跟随原生结果明确返回的输出路径。
 
-验证账号授权时，为两个客户端设置不同的 `--allow 用户名@服务器`，确认当前登录账号只看到并能调用匹配的客户端；未匹配的 `client_id` 也必须被拒绝。关闭一个客户端后，它应从列表消失；有效账号授权可继续访问其他匹配设备。重连时按当前名单重新判断。
+验证共享权限时，在被控端输入 `/allow add bob` 和 `/allow list`，从 bob 的 MCP 应用确认可以发现该会话。然后输入 `/allow remove bob`，确认后续发现和调用均被拒绝。还可以用同一免费账号尝试启动第二条会话，确认收到 `online_session_limit`，待原连接关闭后再试。
 
 ### 历史迁移记录：旧 SSH 与登录码
 
@@ -329,7 +329,7 @@ OAuth 状态使用有界内存：最多保留 1024 个客户端登记，每项�
 
 1. 安排现有任务退出，构建安装同一新版的两端程序；需要 GitHub 模式时，创建 OAuth App，按上面的 callback 和 TOML 示例配置服务器。
 2. 确认 TOML 所有权、`0600` 权限、配置优先级与 HTTPS 路径，重启 `ssmcpd`。用实际服务程序的 `--version` 检查版本。
-3. 本机带 `--allow 用户名@github` 重新连接；在 MCP 应用添加 `/mcp`，完成 GitHub 登录并明确同意当前 MCP 客户端。保留登录码方式时继续添加终端返回的 `/SSH用户名` URL。
+3. 在被控设备运行 `ssmcp 用户名@中继服务器` 并完成设备授权。在 MCP 应用添加 `/mcp`，登录并明确同意当前 MCP 客户端。
 4. 确认应用保存并轮换 ssmcp refresh token；调用 `list` 重新选择当前可访问的客户端。如果应用保留已失效的 OAuth 客户端登记，移除旧 MCP 连接后重新添加。
 
 授权默认沿用 8 小时访问令牌、30 天刷新闲置期和 90 天总期限。GitHub 授权按身份检查每条在线连接，登录码授权保留连接绑定；账户授权在启用持久化后可跨核心重启恢复，旧连接绑定授权不能。具体 MCP 应用是否自动发起刷新，需要在该应用中确认。

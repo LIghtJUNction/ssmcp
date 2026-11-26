@@ -29,29 +29,38 @@ test: test-code-mode
 	$(CARGO) build --locked --bins --example vt_snapshot
 	@set -eu; ssmcp_fixture="$${SSMCP_E2E_FIXTURE_BINARY:-}"; \
 	if test -z "$$ssmcp_fixture"; then \
-	  ssmcp_fixture="$$($(CARGO) test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"; \
+	  ssmcp_fixture="$$($(CARGO) test --locked --lib --features e2e-loopback-ca --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"; \
 	fi; \
 	SSMCP_E2E_FIXTURE_BINARY="$$ssmcp_fixture" $(MAKE) test-account-acceptance
 
+.PHONY: account-fixture-client
+account-fixture-client:
+	$(CARGO) build --locked --bin ssmcp --features e2e-loopback-ca --target-dir "$(CARGO_TARGET_DIR)"
+	mkdir -p "$(CARGO_TARGET_DIR)/account-fixture-bin"
+	cp "$(CARGO_TARGET_DIR)/debug/ssmcp" "$(CARGO_TARGET_DIR)/account-fixture-bin/ssmcp"
+	ln -sfn ../debug/examples "$(CARGO_TARGET_DIR)/account-fixture-bin/examples"
+	ln -sfn ../debug/ssmcpd "$(CARGO_TARGET_DIR)/account-fixture-bin/ssmcpd"
+	$(CARGO) build --locked --bin ssmcp --target-dir "$(CARGO_TARGET_DIR)"
+
 .PHONY: test-account-acceptance
-test-account-acceptance:
-	python3 scripts/e2e_account_relay.py --binary $(CARGO_TARGET_DIR)/debug/ssmcp
-	python3 scripts/e2e_account_names.py --bin-dir "$(CARGO_TARGET_DIR)/debug" --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" --report "$(CARGO_TARGET_DIR)/acceptance/account-names.json"
-	python3 scripts/e2e.py --bin-dir $(CARGO_TARGET_DIR)/debug
-	python3 scripts/e2e_session_features.py --bin-dir $(CARGO_TARGET_DIR)/debug
-	python3 scripts/e2e_agents.py --bin-dir $(CARGO_TARGET_DIR)/debug
+test-account-acceptance: account-fixture-client
+	python3 scripts/e2e_account_relay.py --binary "$(CARGO_TARGET_DIR)/account-fixture-bin/ssmcp"
+	python3 scripts/e2e_account_names.py --bin-dir "$(CARGO_TARGET_DIR)/account-fixture-bin" --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" --report "$(CARGO_TARGET_DIR)/acceptance/account-names.json"
+	python3 scripts/e2e.py --bin-dir $(CARGO_TARGET_DIR)/account-fixture-bin
+	python3 scripts/e2e_session_features.py --bin-dir $(CARGO_TARGET_DIR)/account-fixture-bin
+	python3 scripts/e2e_agents.py --bin-dir $(CARGO_TARGET_DIR)/account-fixture-bin
 	python3 scripts/test_e2e_unified.py
-	python3 scripts/e2e_unified.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/unified.json
-	python3 scripts/e2e_dashboard.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/dashboard.json
+	python3 scripts/e2e_unified.py --bin-dir $(CARGO_TARGET_DIR)/account-fixture-bin --report $(CARGO_TARGET_DIR)/acceptance/unified.json
+	python3 scripts/e2e_dashboard.py --bin-dir $(CARGO_TARGET_DIR)/account-fixture-bin --report $(CARGO_TARGET_DIR)/acceptance/dashboard.json
 	$(MAKE) test-client-ui
 
 # Linux acceptance: the router fixture uses a private synthetic identity provider.
 .PHONY: test-client-ui
-test-client-ui:
+test-client-ui: account-fixture-client
 	$(CARGO) build --locked --bins --example vt_snapshot
 	@set -eu; ssmcp_fixture="$${SSMCP_E2E_FIXTURE_BINARY:-}"; \
 	if test -z "$$ssmcp_fixture"; then \
-	  ssmcp_fixture="$$($(CARGO) test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"; \
+	  ssmcp_fixture="$$($(CARGO) test --locked --lib --features e2e-loopback-ca --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"; \
 	fi; \
 	SSMCP_E2E_FIXTURE_BINARY="$$ssmcp_fixture" $(MAKE) test-client-ui-ready
 
@@ -63,21 +72,21 @@ test-client-ui-ready:
 	$(MAKE) test-native-inputs-ready
 	python3 scripts/e2e_client_ui.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/client-ui
 	python3 scripts/e2e_canvas_logs.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/canvas-logs --report $(CARGO_TARGET_DIR)/acceptance/canvas-logs/report.json
-	python3 scripts/e2e_composer.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/composer.json
-	python3 scripts/e2e_questions.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/questions.json --out $(CARGO_TARGET_DIR)/acceptance/questions
-	python3 scripts/e2e_input_history.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/input-history
-	python3 scripts/e2e_presentations.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/presentations --report $(CARGO_TARGET_DIR)/acceptance/presentations.json
-	python3 scripts/e2e_file_paste.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/file-paste --report $(CARGO_TARGET_DIR)/acceptance/file-paste.json
-	python3 scripts/e2e_relay_composer.py --bin-dir $(CARGO_TARGET_DIR)/debug --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" --report $(CARGO_TARGET_DIR)/acceptance/relay-composer.json
+	python3 scripts/e2e_composer.py --bin-dir $(CARGO_TARGET_DIR)/account-fixture-bin --report $(CARGO_TARGET_DIR)/acceptance/composer.json
+	python3 scripts/e2e_questions.py --bin-dir $(CARGO_TARGET_DIR)/account-fixture-bin --report $(CARGO_TARGET_DIR)/acceptance/questions.json --out $(CARGO_TARGET_DIR)/acceptance/questions
+	python3 scripts/e2e_input_history.py --bin-dir $(CARGO_TARGET_DIR)/account-fixture-bin --out $(CARGO_TARGET_DIR)/acceptance/input-history
+	python3 scripts/e2e_presentations.py --bin-dir $(CARGO_TARGET_DIR)/account-fixture-bin --out $(CARGO_TARGET_DIR)/acceptance/presentations --report $(CARGO_TARGET_DIR)/acceptance/presentations.json
+	python3 scripts/e2e_file_paste.py --bin-dir $(CARGO_TARGET_DIR)/account-fixture-bin --out $(CARGO_TARGET_DIR)/acceptance/file-paste --report $(CARGO_TARGET_DIR)/acceptance/file-paste.json
+	python3 scripts/e2e_relay_composer.py --bin-dir $(CARGO_TARGET_DIR)/account-fixture-bin --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" --report $(CARGO_TARGET_DIR)/acceptance/relay-composer.json
 	@set -eu; mkdir -p "$(CARGO_TARGET_DIR)/acceptance"; \
 	ssmcp_interactions_out="$$(mktemp -d "$(CARGO_TARGET_DIR)/acceptance/interactions-XXXXXX")"; \
-	python3 scripts/e2e_interactions.py --bin-dir "$(CARGO_TARGET_DIR)/debug" \
+	python3 scripts/e2e_interactions.py --bin-dir "$(CARGO_TARGET_DIR)/account-fixture-bin" \
 	  --decoder "$(CARGO_TARGET_DIR)/debug/examples/vt_snapshot" \
 	  --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" \
 	  --source-revision "$(SSMCP_SOURCE_REVISION)" --out "$$ssmcp_interactions_out"
 	@set -eu; mkdir -p "$(CARGO_TARGET_DIR)/acceptance"; \
 	ssmcp_worker_windows_out="$$(mktemp -d "$(CARGO_TARGET_DIR)/acceptance/worker-windows-XXXXXX")"; \
-	python3 scripts/e2e_worker_windows.py --bin-dir "$(CARGO_TARGET_DIR)/debug" \
+	python3 scripts/e2e_worker_windows.py --bin-dir "$(CARGO_TARGET_DIR)/account-fixture-bin" \
 	  --decoder "$(CARGO_TARGET_DIR)/debug/examples/vt_snapshot" \
 	  --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" \
 	  --source-revision "$(SSMCP_SOURCE_REVISION)" \
@@ -91,12 +100,12 @@ test-native-inputs-ready:
 	@set -eu; test -n "$$SSMCP_E2E_FIXTURE_BINARY"; \
 	mkdir -p "$(CARGO_TARGET_DIR)/acceptance"; \
 	ssmcp_inputs_out="$$(mktemp -d "$(CARGO_TARGET_DIR)/acceptance/native-inputs-XXXXXX")"; \
-	python3 scripts/e2e_input_replies.py --bin-dir "$(CARGO_TARGET_DIR)/debug" \
+	python3 scripts/e2e_input_replies.py --bin-dir "$(CARGO_TARGET_DIR)/account-fixture-bin" \
 	  --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" \
 	  --build-source-commit "$(SSMCP_SOURCE_REVISION)" --report "$$ssmcp_inputs_out/tui/report.json"; \
-	ssmcp_client_sha="$$(sha256sum "$(CARGO_TARGET_DIR)/debug/ssmcp" | cut -d' ' -f1)"; \
+	ssmcp_client_sha="$$(sha256sum "$(CARGO_TARGET_DIR)/account-fixture-bin/ssmcp" | cut -d' ' -f1)"; \
 	ssmcp_fixture_sha="$$(sha256sum "$$SSMCP_E2E_FIXTURE_BINARY" | cut -d' ' -f1)"; \
-	python3 scripts/e2e_durable_wait.py --client-binary "$(CARGO_TARGET_DIR)/debug/ssmcp" \
+	python3 scripts/e2e_durable_wait.py --client-binary "$(CARGO_TARGET_DIR)/account-fixture-bin/ssmcp" \
 	  --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" --client-sha256 "$$ssmcp_client_sha" \
 	  --fixture-sha256 "$$ssmcp_fixture_sha" --build-source-commit "$(SSMCP_SOURCE_REVISION)" \
 	  --duration-seconds 15 --require-timed-prompts --report "$$ssmcp_inputs_out/durable.json"

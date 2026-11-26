@@ -670,7 +670,7 @@ def run(harness, timeout_seconds=SCENARIO_SECONDS):
                 "clock_mode": "fixture_timestamp", "retention_secs": RETENTION_SECONDS,
                 "aging_point": AGING_POINT, "aging_deferred": True,
                 "sweep_interval_secs": SWEEP_SECONDS, "scenario_timeout_seconds": timeout_seconds,
-                "transport": "owned loopback HTTP/WS account, OAuth, public code_mode and native output",
+                "transport": "owned loopback HTTPS/WSS account, OAuth, public code_mode and native output",
                 "natural_900_seconds_observed": False, "tls_handshake_exercised": False,
                 "public_path_expiry_observed": False, "automatic_cleanup_observed": False}
     process = control = child_socket = binding = release = alarm = owned = None

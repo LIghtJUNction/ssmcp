@@ -260,7 +260,7 @@ Use `exec.run(clientId,{command:["rtk","--version"],wait_ms:1000})` to inspect t
 
 ### Client reload
 
-`await call(clientId,"ssmcp.client.reload",{})` returns the native MCP acknowledgement for a client restart from the updated installed executable. Inspect `isError`, then `structuredContent`. Stops background work and discards live drafts, queues, event logs and output artifacts; rediscover the authorized project using the reconnect procedure above. GitHub --allow access persists; login-code connections require new OAuth login.
+`await call(clientId,"ssmcp.client.reload",{})` returns the native MCP acknowledgement for a client restart from the updated installed executable. Inspect `isError`, then `structuredContent`. Stops background work and discards live drafts, queues, event logs and output artifacts; rediscover the authorized project using the reconnect procedure above. When a new connection appears, check its current session ACL with `/allow list`. An expired device credential requires a new device sign-in.
 
 ### outputs
 

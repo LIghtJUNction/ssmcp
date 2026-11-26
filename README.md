@@ -18,7 +18,7 @@ SSMCP 针对长时间运行的 Agent 任务优化原生异步执行与事件驱�
 
 **Linux 与 macOS 是首要支持目标。** 功能开发、兼容性修复和日常验收优先覆盖这两个平台；Windows 客户端持续适配，并提供对应的原生测试与发布附件。
 
-同一个账号可以同时连接多台设备，Agent 通过一个 MCP 端点选择具体设备和会话。**受控设备无需登录你的 AI 账号**：AI 应用持有 MCP 授权，设备持有自己的 SSMCP 授权；命令在被选中的设备上执行。CLI 面向专业开发者，适合脚本、服务管理和诊断；Windows 用户的日常连接与任务管理优先使用[桌面版](apps/ssmcp-desktop/README.md)。
+Agent 通过一个 MCP 端点选择具体设备和会话。被控端用自己的 SSMCP 账号授权上线，AI 应用另行取得控制权限，命令在选中的设备上执行。启用计费时，每个免费账号可以同时保持一个在线会话，正式充值账号可以同时在线多个会话。CLI 适合脚本、服务管理和诊断，Windows 的日常连接也可使用[桌面版](apps/ssmcp-desktop/README.md)。
 
 你可以让不同会话分别实现功能、检查改动和运行测试，通过成员身份和定向消息协作，把结果提交到同一个项目。[了解集群协作](docs/agent-collaboration.md)
 
@@ -149,7 +149,7 @@ ssmcp alice@relay.example.com --name dev --title "开发与测试"
 
 `link` 的候选实现调用目标客户端的图片读取工具，单图上限 400 KiB；默认 120 秒失效，首次 GET 会消费链接，HEAD 不消费。创建返回 URL、资源链接和清理 ID，不返回图片 base64。是否已部署须查看当前服务目录。[临时图片链接 API](docs/image-links.md)
 
-由被控端用户在愿意开放的项目目录运行 `ssmcp 用户名@中继服务器`。这里填写控制者在该中继已注册的用户名，被控端无需登录。控制者用 MCP 应用完成该中继的 OAuth 授权。用户名和公告在中继的账户页面管理。
+在愿意开放的项目目录运行 `ssmcp 用户名@中继服务器`，首次按提示完成被控端的设备 OAuth 登录。账号验证通过后会话上线。需要共享给其他用户时，在会话中输入 `/allow add 用户名`，用 `/allow list` 查看，用 `/allow remove 用户名` 移除。控制者在自己的 MCP 应用中完成 OAuth。[账号与授权](docs/client-accounts.md)
 
 主窗口中的 `/invite` 生成会话内工作组协作说明，Agent 通过 `collab.join` 登记会话身份。协作邀请与设备授权各自独立。[账号与授权](docs/client-accounts.md)
 
@@ -189,7 +189,7 @@ ssmcp alice@relay.example.com --name dev --title "本地开发"
 ssmcp alice@relay.example.com --name build --daemon
 ```
 
-每台设备需要安装并启动 SSMCP，不需要安装或登录 AI 应用。可使用设备授权邀请，也可使用上文的 `用户名@中继服务器` 连接方式；这些授权由设备用户决定，不能从一个 AI 账号推导出所有机器的控制权限。账号登录、设备接入凭据和 AI 应用的 MCP OAuth 授权分别管理。
+每台设备单独安装 SSMCP 并验证设备启动者的账号。有效设备授权可以复用。使用邀请时，设备启动者也需在同一个中继完成身份验证。设备接入和 AI 应用的 MCP 控制授权分别管理。
 
 当前源码为完成身份签名协商的账号连接返回以下地址信息；实际运行版本以 `list` 的字段和实时 schema 为准：
 

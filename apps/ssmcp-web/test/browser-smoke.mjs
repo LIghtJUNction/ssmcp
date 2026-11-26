@@ -568,12 +568,19 @@ try {
   const moduleTab = await browser.newPage();
   const moduleHome = 'http://127.0.0.1:42387/';
   const bootstrapRequests = [];
+  let loginApproved = false;
+  const loginLink = 'https://relay.example/setup?code=ABCDE-FGHIJ';
+  const attemptIds = [];
   await moduleTab.route(moduleHome + '**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname;
     if (path.startsWith('/api/')) {
       bootstrapRequests.push(path);
       assert.equal(path, '/api/gui/v1/owned-sessions'); assert.equal(request.method(), 'POST');
       assert.equal(request.headers().authorization, 'Bearer ' + token);
+      const {request_id} = request.postDataJSON();
+      attemptIds.push(request_id);
+      if (!loginApproved) return route.fulfill({status:200, contentType:'application/json',
+        body:JSON.stringify({request_id, authorization:{status:'pending',verification_url:loginLink,user_code:'ABCDE-FGHIJ'}})});
       return route.fulfill({status:503, contentType:'application/json',
         body:JSON.stringify({error:{code:'unavailable',effect:'none',message:'缺少普通用户运行器。'}})});
     }
@@ -598,8 +605,15 @@ try {
   await moduleTab.locator('#launch-name').fill('module');
   await moduleTab.locator('#launch-relay').fill('relay.example');
   await moduleTab.locator('#launch-connect').click();
+  await moduleTab.locator('#device-login-link').waitFor();
+  assert.equal(await moduleTab.locator('#device-login-link').getAttribute('href'), loginLink);
+  assert.equal(await moduleTab.locator('#device-login-code').textContent(), 'ABCDE-FGHIJ');
+  assert.equal(await moduleTab.locator('#workbench-shell').isVisible(), false);
+  loginApproved = true;
   await moduleTab.getByText('缺少普通用户运行器。', {exact:true}).waitFor();
-  assert.deepEqual(bootstrapRequests, ['/api/gui/v1/owned-sessions']);
+  assert.ok(bootstrapRequests.length >= 2 && bootstrapRequests.every(path => path === '/api/gui/v1/owned-sessions'));
+  assert.equal(new Set(attemptIds).size, 1);
+  assert.equal(await moduleTab.locator('#device-login').isVisible(), false);
   assert.equal(await moduleTab.locator('#workbench-shell').isVisible(), false);
   await moduleTab.close();
   const mobile = await browser.newPage({

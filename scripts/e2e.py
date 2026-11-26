@@ -194,9 +194,12 @@ class Harness:
         raw_body = body if isinstance(body, (bytes, str)) else json.dumps(body).encode()
         if body is None:
             raw_body = None
-        connection = http.client.HTTPConnection(
-            "127.0.0.1", self.http_port, timeout=getattr(self, "http_timeout", 10)
-        )
+        timeout = getattr(self, "http_timeout", 10)
+        if self.account_gateway.tls_context is None:
+            connection = http.client.HTTPConnection("127.0.0.1", self.http_port, timeout=timeout)
+        else:
+            connection = http.client.HTTPSConnection("127.0.0.1", self.http_port, timeout=timeout,
+                                                     context=self.account_gateway.tls_context)
         try:
             connection.request(method, path or f"/{self.user}", body=raw_body, headers=request_headers)
             response = connection.getresponse()
@@ -630,6 +633,7 @@ class Harness:
             "SSMCP_CLIENT_CONFIG": str(config),
             "SSMCP_UI_CONFIG": str(config),
         })
+        self.account_gateway.authorize_device(environment)
         return environment
 
     def start_client(self, label="client", *, name="workstation", cwd=None,
@@ -960,9 +964,9 @@ def main():
         report = {
             "status": "passed", "checks": harness.checks,
             "duration_seconds": round(time.monotonic() - started, 3),
-            "transport": "production Broker/router fixture + loopback account HTTP/WS + owned local PTY",
+            "transport": "production Broker/router fixture + loopback account HTTPS/WSS + owned local PTY",
             "oauth": "real discovery/DCR/PKCE/consent with a synthetic upstream GitHub provider",
-            "tls_verified": False, "real_github_account": False, "models_started": False,
+            "tls_verified": harness.account_gateway.tls_verified, "real_github_account": False, "models_started": False,
             "fixture_exit_code": harness.fixture_exit_code,
         }
         if args.report:

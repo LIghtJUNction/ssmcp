@@ -8,8 +8,7 @@ Requires the client, vt_snapshot, and an already-built library test executable:
 The ignored Rust fixture hosts the production Broker and HTTP router inside the
 test executable. Only its upstream GitHub provider is synthetic; OAuth PKCE,
 account authentication, WebSocket frames, queue CAS, and code_mode responses use
-the real implementations. All transport is loopback HTTP/WS. This is not a TLS
-or real GitHub account test, and no installed model or live session is used.
+the real implementations. The account relay uses verified loopback TLS. The local provider uses HTTP.
 """
 
 import argparse
@@ -35,7 +34,7 @@ import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from e2e_account_gateway import has_platform_consent, validate_account_identity
-from e2e_account_relay import IDENTITY, wait_for
+from e2e_account_relay import wait_for
 from e2e_composer import (
     Composer, ENTER, LEFT, UP, editing_queue, input_text, journal_value, visible_record,
 )
@@ -43,7 +42,6 @@ from e2e_client_ui import empty_composer_ready
 from e2e_dashboard import Decoder, Frontend, sha256, text
 
 
-FIXTURE_TEST = "http::relay_composer_fixture::relay_composer_server_fixture"
 PROXY_VARIABLES = ("http_proxy", "https_proxy", "all_proxy", "no_proxy")
 
 
@@ -137,8 +135,6 @@ class RelayComposer(Composer):
     def __init__(self, directory, binary_dir, decoder, fixture_binary):
         super().__init__(directory, binary_dir, decoder)
         self.fixture_binary = fixture_binary.resolve()
-        self.fixture_directory = directory / "server"
-        self.fixture_process = None
         self.fixture_exit_code = None
         self.origin = ""
         self.issuer = ""
@@ -267,44 +263,6 @@ class RelayComposer(Composer):
                   for path in (self.state_home / "ssmcp" / namespace).rglob("*") if path.is_file()}
         self.check(actual == set(records),
                    "reload and new work add no automatic archive or checkpoint files")
-
-    def prepare(self):
-        self.fixture_directory.mkdir(mode=0o700)
-        environment = direct_loopback({key: value for key, value in os.environ.items()
-                                       if not key.startswith("SSMCP_")})
-        environment["SSMCP_RELAY_COMPOSER_FIXTURE"] = str(self.fixture_directory)
-        self.fixture_process = self.spawn("relay-router", [
-            str(self.fixture_binary), "--exact", FIXTURE_TEST, "--ignored", "--nocapture",
-        ], env=environment)
-        ready = self.fixture_directory / "ready.json"
-
-        def started():
-            if self.fixture_process.poll() is not None:
-                raise AssertionError("real router fixture exited before its private ready record")
-            return ready.is_file()
-
-        wait_for(started, "real test-router ready record", timeout=12)
-        self.check(stat.S_IMODE(ready.stat().st_mode) == 0o600,
-                   "the owned router fixture exposes credentials only in a private ready file")
-        data = json.loads(ready.read_text())
-        if data.get("schema_version") != 1:
-            raise AssertionError("unsupported relay fixture ready schema")
-        self.origin = data["server_url"]
-        self.issuer = data["issuer"]
-        self.github_origin = data["github_test_origin"]
-        self.identity = data["identity"]
-        self.account_token = data["account_token"]
-        self.account_expires_at = data["account_expires_at"]
-        self.sensitive.append(self.account_token)
-        address = urlsplit(self.origin)
-        if (address.scheme != "http" or address.hostname != "127.0.0.1" or not address.port
-                or address.path or address.query or address.fragment or address.username):
-            raise AssertionError("router fixture must bind an explicit loopback HTTP origin")
-        self.http_port = address.port
-        self.check(self.identity == (IDENTITY | {"username": "relayfixture"}),
-                   "the isolated named account has the expected stable identity and handle")
-        status, result, _ = self.request("GET", path="/healthz", secret="")
-        self.check(status == 200 and result.strip() == "ok", "the real production router is healthy")
 
     def frontend(self, label, config):
         front = RelayFrontend(self, label, config, self.decoder)
@@ -441,7 +399,7 @@ class RelayComposer(Composer):
                     "the named-account chat composer over a real WebSocket relay")
         whoami = self.account("/api/client/whoami")["identity"]
         validate_account_identity(
-            self, self.fixture_directory, whoami,
+            self, self.account_gateway.directory, whoami,
             "the client relay belongs to the isolated named account")
         self.check(any(item["id"] == self.client_id for item in self.account("/api/client/sessions")["clients"]),
                    "the real account session API sees the outbound WebSocket client")
@@ -731,17 +689,6 @@ class RelayComposer(Composer):
                               for path, saved in legacy_records.items()}}
         front.close()
 
-    def cleanup(self):
-        if self.fixture_process is not None and self.fixture_process.poll() is None:
-            (self.fixture_directory / "stop").touch()
-            try:
-                self.fixture_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
-        super().cleanup()
-        if self.fixture_process is not None:
-            self.fixture_exit_code = self.fixture_process.returncode
-
 
 def main():
     def interrupted(_signal, _frame):
@@ -766,7 +713,7 @@ def main():
         "e2e_relay_composer.py", "e2e_composer.py", "e2e_dashboard.py", "e2e.py", "e2e_account_relay.py")]
     sources += [source_directory.parent / "src/http/relay_composer_fixture.rs"]
     report = {"status": "failed", "platform": platform.system(),
-        "transport": "real production Broker/router in compiled Rust test executable + loopback HTTP/WS account relay + owned PTY",
+        "transport": "real production Broker/router in compiled Rust test executable + loopback HTTPS/WSS account relay + owned PTY",
         "oauth": "actual DCR/PKCE/consent/token exchange with an isolated synthetic GitHub provider",
         "tls_verified": False, "real_github_account": False, "models_started": False,
         "scope": "account queue delivery, CAS editing, same-account reexec with fresh RAM, legacy files left untouched, exact-recipient continuation and explicit handoff",
@@ -792,7 +739,7 @@ def main():
             if report["status"] == "passed" and harness.fixture_exit_code != 0:
                 report["status"] = "failed"
                 report["error"] = "the owned router fixture did not terminate successfully"
-            report.update(checks=harness.checks, metrics=harness.metrics,
+            report.update(tls_verified=harness.account_gateway.tls_verified, checks=harness.checks, metrics=harness.metrics,
                           fixture_exit_code=harness.fixture_exit_code,
                           duration_seconds=round(time.monotonic() - started, 3))
             if args.report:

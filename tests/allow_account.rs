@@ -1,24 +1,12 @@
 //! Actual CLI checks use private loopback peers; no tool backend or account is created.
 #![cfg(unix)]
-use axum::{
-    Json, Router,
-    extract::{State, WebSocketUpgrade, ws::Message},
-    http::HeaderMap,
-    response::Response,
-    routing::get,
-};
-use futures_util::StreamExt;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use ssmcp::wire::{self, ClientMetadata, Frame};
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -69,7 +57,8 @@ impl Home {
             .env("SSMCP_AUTH_HOME", self.0.join("auth"))
             .env("SSMCP_CLIENT_CONFIG", self.0.join("config.toml"))
             .env_remove("SSMCP_UI_CONFIG")
-            .env_remove("SSMCP_RELAY_TOKEN")
+            .env("SSMCP_RELAY_TOKEN", TOKEN)
+            .stdin(std::process::Stdio::null())
             .env("NO_COLOR", "1")
             .kill_on_drop(true);
         tokio::time::timeout(Duration::from_secs(10), command.output())
@@ -84,113 +73,15 @@ impl Drop for Home {
     }
 }
 
-#[derive(Clone)]
-struct Peer {
-    legacy: bool,
-    hellos: Arc<Mutex<Vec<ClientMetadata>>>,
-    whoamis: Arc<AtomicUsize>,
-}
-async fn whoami(State(peer): State<Peer>, headers: HeaderMap) -> Json<serde_json::Value> {
-    assert_eq!(headers["authorization"], format!("Bearer {TOKEN}"));
-    peer.whoamis.fetch_add(1, Ordering::SeqCst);
-    Json(
-        json!({"provider":"github","subject":"123","login":"owner","principal":"owner@github","username":"owner-home"}),
-    )
-}
-async fn connect(
-    State(peer): State<Peer>,
-    headers: HeaderMap,
-    upgrade: WebSocketUpgrade,
-) -> Response {
-    assert!(!headers.contains_key("authorization"));
-    let offer = headers[wire::CAPABILITIES_HEADER].to_str().unwrap();
-    assert!(
-        offer
-            .split(',')
-            .any(|v| v == wire::SESSION_ACCESS_CAPABILITY)
-    );
-    assert!(
-        offer
-            .split(',')
-            .any(|v| v == wire::CONTROL_ATTRIBUTION_CAPABILITY)
-    );
-    upgrade.on_upgrade(move |mut socket| async move {
-        async fn next_frame(socket: &mut axum::extract::ws::WebSocket) -> Frame {
-            tokio::time::timeout(Duration::from_secs(3), async {
-                loop {
-                    match socket.next().await.unwrap().unwrap() {
-                        Message::Text(text) => break serde_json::from_str(&text).unwrap(),
-                        Message::Binary(bytes) => break serde_json::from_slice(&bytes).unwrap(),
-                        Message::Ping(_) | Message::Pong(_) => continue,
-                        other => panic!("unexpected registration message: {other:?}"),
-                    }
-                }
-            })
-            .await
-            .unwrap()
-        }
-        let Frame::ResolveController { id: 0, principal } = next_frame(&mut socket).await else {
-            panic!("expected controller resolution before Hello");
-        };
-        if peer.legacy {
-            socket
-                .send(Message::Binary(
-                    serde_json::to_vec(&Frame::Reject {
-                        message: "unsupported admission".into(),
-                    })
-                    .unwrap()
-                    .into(),
-                ))
-                .await
-                .unwrap();
-            return;
-        }
-        let proposal = Frame::ResolvedController {
-            id: 0,
-            principal,
-            provider: "github".into(),
-            subject: "123".into(),
-        };
-        socket
-            .send(Message::Binary(
-                serde_json::to_vec(&proposal).unwrap().into(),
-            ))
-            .await
-            .unwrap();
-        let Frame::Hello {
-            version, metadata, ..
-        } = next_frame(&mut socket).await
-        else {
-            panic!("expected Hello")
-        };
-        assert_eq!(version, wire::VERSION);
-        peer.hellos.lock().unwrap().push(metadata);
-        let response = Frame::Reject {
-            message: "allow fixture completed without starting tools".into(),
-        };
-        socket
-            .send(Message::Binary(
-                serde_json::to_vec(&response).unwrap().into(),
-            ))
-            .await
-            .unwrap();
-        while let Ok(Some(Ok(message))) =
-            tokio::time::timeout(Duration::from_secs(3), socket.next()).await
-        {
-            if matches!(message, Message::Close(_)) {
-                break;
-            }
-        }
-    })
-}
-
 #[tokio::test]
-async fn allow_help_uses_only_server_qualified_accounts() {
+async fn device_login_help_lists_only_current_commands() {
     let home = Home::new();
     for args in [
         vec!["--help"],
         vec!["--help-full"],
         vec!["sessions", "create", "--help"],
+        vec!["login", "--help"],
+        vec!["join", "--help"],
     ] {
         let output = home.run(&args).await;
         assert!(
@@ -201,122 +92,85 @@ async fn allow_help_uses_only_server_qualified_accounts() {
         assert!(output.stderr.is_empty());
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(!text.contains("--allow"), "{args:?}: {text}");
-        assert!(!text.contains("ssmcp invite"));
-        assert!(!text.contains("ssmcp join"));
-        assert!(!text.contains("--allow USER@github"));
+        match args.as_slice() {
+            ["login", "--help"] => assert!(text.contains("ssmcp login USERNAME@SERVER")),
+            ["join", "--help"] => {
+                assert!(text.contains("ssmcp join USERNAME@SERVER --token-stdin"))
+            }
+            ["--help-full"] => {
+                assert!(text.contains("ssmcp login USERNAME@SERVER"));
+                assert!(text.contains("ssmcp join USERNAME@SERVER --token-stdin"));
+            }
+            _ => {}
+        }
     }
+    let removed = home.run(&["invite", "--help"]).await;
+    assert!(!removed.status.success());
+    assert!(String::from_utf8_lossy(&removed.stderr).contains("invite subcommand was removed"));
 }
 
 #[tokio::test]
-async fn device_cli_requires_an_explicit_target_and_connects_without_a_token() {
-    for (legacy, explicit, saved) in [
-        (false, true, false),
-        (true, true, true),
-        (false, false, true),
-    ] {
-        let home = Home::new();
-        let hellos = Arc::new(Mutex::new(Vec::new()));
-        let whoamis = Arc::new(AtomicUsize::new(0));
-        let peer = Peer {
-            legacy,
-            hellos: hellos.clone(),
-            whoamis: whoamis.clone(),
-        };
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let router = Router::new()
-            .route("/api/client/whoami", get(whoami))
-            .route("/api/client/connect", get(connect))
-            .with_state(peer);
-        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        if saved {
-            home.account(&base);
-        }
-        let mut args = vec![
-            "--server".to_owned(),
-            base.clone(),
-            "--no-watchdog".into(),
-            "--no-browser".into(),
-            "--name".into(),
-            "allow-cli-fixture".into(),
-        ];
-        if explicit {
-            args.push(format!("Alice@{base}"));
-        } else {
-            let path = home.0.join("auth/last-connection.json");
-            let target = json!({"mode":"relay", "username":"saved-target", "server":base});
-            fs::write(&path, serde_json::to_vec(&target).unwrap()).unwrap();
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
-        }
-        let output = home
-            .run(&args.iter().map(String::as_str).collect::<Vec<_>>())
-            .await;
-        server.abort();
-        let _ = server.await;
+async fn noninteractive_device_never_uses_a_controller_token_or_unsigned_transport() {
+    let home = Home::new();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    for scheme in ["http", "https"] {
+        let base = format!("{scheme}://{address}");
+        home.account(&base);
+        let target = format!("alice@{base}");
+        let output = home.run(&[&target, "--no-watchdog"]).await;
         assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            output.stdout.is_empty(),
-            "rejected registration must not publish credentials"
-        );
-        let stderr = String::from_utf8(output.stderr).unwrap();
-        if !explicit {
-            assert!(stderr.contains("ssmcp username@server"), "{stderr}");
-            assert!(hellos.lock().unwrap().is_empty());
-            assert_eq!(whoamis.load(Ordering::SeqCst), 0);
-            continue;
-        }
-        assert!(
-            stderr.contains(if legacy {
-                "unsupported admission"
+            stderr.contains(if scheme == "https" {
+                "ssmcp login"
             } else {
-                "allow fixture completed"
+                "HTTPS"
             }),
             "{stderr}"
         );
-        assert!(!stderr.contains("Starting native tools"), "{stderr}");
-        assert_eq!(whoamis.load(Ordering::SeqCst), 0);
-        let captured = hellos.lock().unwrap();
-        if legacy {
-            assert!(
-                captured.is_empty(),
-                "an old relay cannot publish the device metadata"
-            );
-            continue;
-        }
-        assert_eq!(captured.len(), 1);
-        let expected = vec![format!("alice@{base}")];
-        assert_eq!(captured[0].allow, expected);
+        assert!(!stderr.contains(TOKEN));
+        assert!(!stderr.contains("Starting native tools"));
     }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
-async fn allow_cli_rejects_wrong_servers_and_retired_syntax_before_network() {
+async fn removed_allow_flags_and_implicit_targets_cannot_open_a_session() {
     let home = Home::new();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    for target in ["alice", "alice@github", "alice@another.example"] {
-        let output = home
-            .run(&["--server", &base, "--no-watchdog", "--allow", target])
-            .await;
-        assert!(!output.status.success());
-        assert!(output.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("allow"));
-    }
-    for command in ["invite", "join", "login"] {
-        let output = home.run(&[command, "--help"]).await;
+    let base = format!("https://{}", listener.local_addr().unwrap());
+    let target = format!("alice@{base}");
+    for args in [
+        vec![target.as_str(), "--allow", "bob"],
+        vec![target.as_str(), "--allow=bob"],
+        vec!["--server", &base, "--allow", "bob@another.example"],
+    ] {
+        let output = home.run(&args).await;
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
         let error = String::from_utf8_lossy(&output.stderr);
-        assert!(error.contains("removed") || error.contains("unrecognized command"));
+        assert!(
+            error.contains("--allow was removed") && error.contains("/allow add"),
+            "{error}"
+        );
     }
-    // Old credentials must not select a device owner or cause a login probe.
     home.account(&base);
+    let path = home.0.join("auth/last-connection.json");
+    let target = json!({"mode":"relay", "username":"saved-target", "server":base});
+    fs::write(&path, serde_json::to_vec(&target).unwrap()).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     let output = home.run(&["--server", &base, "--no-watchdog"]).await;
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("ssmcp username@server"));
     assert!(
-        tokio::time::timeout(Duration::from_millis(30), listener.accept())
+        tokio::time::timeout(Duration::from_millis(50), listener.accept())
             .await
             .is_err()
     );

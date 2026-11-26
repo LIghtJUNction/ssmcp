@@ -488,6 +488,7 @@ class Daemon(Harness):
 
     def run(self):
         self.prepare()
+        self.account_gateway.authorize_device(self.environment)
         primary, peer = self.names
         self.case = "D01"
         destination = f"{self.identity['username']}@{self.origin}"
@@ -798,7 +799,7 @@ def main():
     started = time.monotonic()
     report = {"status": "blocked", "platform": platform.system(), "manager": "systemd-user",
               "source_revision": arguments.revision, "checks": [],
-              "scope": "actual Linux user-manager lifecycle + real account WebSocket router over loopback HTTP + OAuth PKCE + MCP; no Harness/model request or installation",
+              "scope": "actual Linux user-manager lifecycle + real account WebSocket router over loopback TLS + OAuth PKCE + MCP; no Harness/model request or installation",
               "not_covered": ["macOS launchd actual lifecycle", "Windows Task Scheduler actual lifecycle",
                               "cross-platform CI", "external GitHub service and public TLS termination", "logout/reboot startup"],
               "configured_reconnect_delay_seconds": arguments.reconnect_delay}
