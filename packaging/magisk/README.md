@@ -1,14 +1,14 @@
 # SSMCP for KernelSU / Magisk
 
-适用于 Android 8 及以上版本的 arm64-v8a 设备。下载 [ssmcp-magisk-arm64.zip](https://github.com/LIghtJUNction/ssmcp/releases/latest/download/ssmcp-magisk-arm64.zip)，使用模块管理器刷入。首次安装会尝试打开本机的安装引导。打开模块 WebUI 也会进入引导。首次配置前，模块只运行本地网页服务。
+适用于 Android 8 及以上版本的 arm64-v8a 设备。下载 [ssmcp-magisk-arm64.zip](https://github.com/LIghtJUNction/ssmcp/releases/latest/download/ssmcp-magisk-arm64.zip)，使用模块管理器刷入。首次安装会尝试打开本机的安装引导。模块 WebUI 打开手机上的 SSMCP 网页（http://127.0.0.1:42387/）。首次配置前，模块只运行本地网页服务。
 
 1. 输入你的 SSMCP 用户名和中继域名。已有账号可直接连接。新账号选定名字后，点击 GitHub 注册，完成绑定后返回连接。
 2. 阅读并确认 root 风险。使用官方中继时还需阅读并接受用户协议和隐私政策。官方中继每月赠送 1 GB（1,000,000,000 字节），额外流量由用户在中继网站购买。
 3. 配置完成后，打开会话即可输入消息。
 
-配置完成后，打开模块 WebUI，系统浏览器会显示这台手机的 SSMCP 会话工作台。首页直接打开本机配置的会话。模块在启动设备时恢复已确认的中继连接。停用时，在模块管理器中禁用模块并重启设备。
+模块管理器的 WebUI 目录只包含一个 index.html。打开后会自动跳转到本机工作台，也可以点页面上的链接。模块在启动设备时恢复已确认的中继连接。停用时，在模块管理器中禁用模块并重启设备。
 
-没有 WebUI 的管理器可点模块的「操作」直接打开。需要修改配置时，从模块 WebUI 选择「设备配置」。如果手机已运行 Zuse，可在同一入口选择「Zuse 工作台」。
+需要在新浏览器中完成本机配对时，可以点模块管理器的「操作」，由手机在浏览器中打开本次配对地址。
 
 模块会话从 `/data/adb/ssmcp/workspace` 启动。可把已安装的 Android 可执行文件放在 `/data/adb/ssmcp/home/.local/bin`，新启动的模块会话会在这里查找工具。终端内的 `/update --check` 会检查已发布的 Magisk ZIP。
 
@@ -38,4 +38,4 @@ PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs CHROMIUM_PATH=/path/to/chromium 
 python3 scripts/test_magisk_installer_state.py
 ```
 
-浏览器回归加载实际模块入口，在 320 和 390 像素视口检查自动打开、失败重试、设备配置及无管理器桥接时的提示。安装器测试使用隔离的 Android 目录和启动器，检查首次设置、更新、已确认账号与配置变更的跳转。
+浏览器回归加载实际模块入口，在 320 和 390 像素视口检查无 JavaScript 的自动跳转、备用链接和本机设置页。安装器测试使用隔离的 Android 目录和启动器，检查首次设置、更新、已确认账号与配置变更的跳转。

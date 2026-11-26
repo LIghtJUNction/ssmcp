@@ -21,7 +21,7 @@ include = [
     "/packaging/ssmcp-web.desktop",
     "/packaging/magisk/src/ssmcp/ssmcp.rc",
     "/packaging/magisk/src/ssmcp/onboarding/**",
-    "/packaging/magisk/src/ssmcp/webroot/**",
+    "/packaging/magisk/assets/**",
     "/skills/**",
     "/docs/workspaces.md",
     "/docs/context.md",

@@ -30,7 +30,7 @@ use crate::{
 const STATUS_ENV: &str = "SSMCP_MAGISK_CONNECTED";
 const CONSENT: &str = "root-consent-v1";
 const ONBOARDING: &str = include_str!("../../packaging/magisk/src/ssmcp/onboarding/index.html");
-const STYLE: &str = include_str!("../../packaging/magisk/src/ssmcp/webroot/console.css");
+const STYLE: &str = include_str!("../../packaging/magisk/assets/console.css");
 
 struct ScreenState {
     parser: vt100::Parser,
@@ -508,7 +508,7 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
             javascript(include_str!("../../packaging/magisk/src/ssmcp/onboarding/setup.js"))
         }))
         .route("/device-api.js", get(|| async {
-            javascript(include_str!("../../packaging/magisk/src/ssmcp/webroot/device-api.js"))
+            javascript(include_str!("../../packaging/magisk/assets/device-api.js"))
         }))
         .route("/console.css", get(|| async {
             ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STYLE)
@@ -516,7 +516,7 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
         .route("/setup", get(|| async { Html(ONBOARDING) }).post(configure))
          .route("/zuse", get(|| async {
             ([(header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'self'; frame-src http://127.0.0.1:43497; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")],
-                Html(include_str!("../../packaging/magisk/src/ssmcp/webroot/workbench.html")))
+                Html(include_str!("../../packaging/magisk/assets/workbench.html")))
         }))
         .route("/api/gui/v1/boot-session", get(boot_session))
         .route("/terminal", post(terminal))

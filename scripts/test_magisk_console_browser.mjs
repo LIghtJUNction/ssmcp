@@ -1,53 +1,53 @@
-// Real manager entry in mobile Chromium, with an isolated KernelSU bridge.
+// Exercise the packaged manager entry in mobile Chromium without a manager bridge.
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { readFile, readdir } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 
-const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const specifier = process.env.PLAYWRIGHT_MODULE || 'playwright';
+const { default: { chromium } } = await import(createRequire(import.meta.url).resolve(specifier));
 const root = resolve('packaging/magisk/src/ssmcp/webroot');
-const server = createServer(async (req, res) => {
-  const file = { '/': 'index.html', '/open.js': 'open.js' }[req.url];
-  if (!file) { res.writeHead(404).end(); return; }
-  try {
-    res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
-    res.end(await readFile(resolve(root, file)));
-  } catch { res.writeHead(500).end(); }
-});
-await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-let browser;
+const assets = resolve('packaging/magisk/assets');
+const entry = 'http://module.test/index.html';
+const destination = 'http://127.0.0.1:42387/';
+assert.deepEqual(await readdir(root), ['index.html'], 'the manager WebUI contains a single file');
+const html = await readFile(resolve(root, 'index.html'), 'utf8');
+
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, headless: true });
 try {
-  browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', headless: true });
   for (const width of [320, 390]) {
-    const page = await browser.newPage({ viewport: { width, height: 740 }, isMobile: true, hasTouch: true });
-    await page.addInitScript(() => {
-      window.commands = [];
-      window.ksu = { exec(command, options, callback) {
-        window.commands.push(command);
-        window[callback](window.commands.length === 1 ? 1 : 0, '', '');
-      } };
+    const page = await browser.newPage({ viewport: { width, height: 740 }, isMobile: true,
+      hasTouch: true, javaScriptEnabled: false });
+    const unexpected = [];
+    await page.route('**/*', route => {
+      const url = route.request().url();
+      if (url === entry || url === entry + '?manual') {
+        // A sandbox without allow-scripts suppresses automatic refresh, so the fallback can be tapped.
+        const headers = url === entry ? {} : { 'Content-Security-Policy': 'sandbox' };
+        return route.fulfill({ body: html, contentType: 'text/html; charset=utf-8', headers });
+      }
+      if (url === destination) return route.fulfill({ body: 'Workbench', contentType: 'text/plain' });
+      unexpected.push(url);
+      return route.abort();
     });
-    await page.goto('http://127.0.0.1:' + server.address().port);
-    const base = '/system/bin/sh /data/adb/modules/ssmcp/';
-    assert.deepEqual(await page.evaluate(() => window.commands), [base + 'open.sh']);
-    assert.match(await page.locator('#status').textContent(), /失败/);
-    assert.equal(await page.locator('textarea, pre, iframe').count(), 0);
-    await page.locator('#open').tap();
-    assert.match(await page.locator('#status').textContent(), /已在系统浏览器/);
-    await page.locator('#setup').tap();
-    assert.deepEqual(await page.evaluate(() => window.commands), [base + 'open.sh', base + 'open.sh', base + 'onboarding/open.sh']);
+    await page.goto(entry, { waitUntil: 'commit' });
+    await page.waitForURL(destination, { timeout: 5000 });
+    await page.goto(entry + '?manual');
+    const link = page.getByRole('link', { name: /\S/ });
+    assert.equal(await link.getAttribute('href'), destination);
+    assert.equal(await page.locator('script').count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await link.tap();
+    await page.waitForURL(destination, { timeout: 5000 });
+    assert.deepEqual(unexpected, [], 'the manager entry requests only its destination');
     await page.close();
   }
-  const fallback = await browser.newPage();
-  await fallback.goto('http://127.0.0.1:' + server.address().port);
-  assert.match(await fallback.locator('#status').textContent(), /操作/);
   const onboarding = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const token = '9a'.repeat(32), base = 'http://127.0.0.1:42387', writes = [];
   const files = {
     '/setup': resolve(root, '../onboarding/index.html'),
     '/setup.js': resolve(root, '../onboarding/setup.js'),
-    '/console.css': resolve(root, 'console.css'), '/device-api.js': resolve(root, 'device-api.js'),
+    '/console.css': resolve(assets, 'console.css'), '/device-api.js': resolve(assets, 'device-api.js'),
     '/src/gateway.mjs': resolve('apps/ssmcp-web/src/gateway.mjs'), '/src/protocol.mjs': resolve('apps/ssmcp-web/src/protocol.mjs'),
   };
   await onboarding.route(base + '/**', async route => {
@@ -79,8 +79,7 @@ try {
   await onboarding.waitForURL(base + '/#' + token);
   assert.deepEqual(writes, [{target:'my-user@relay.example',root:true,terms:false,privacy:false}]);
   await onboarding.close();
-  console.log('Magisk launcher passed at 320px and 390px, including retry, setup and fallback.');
+  console.log('Magisk WebUI redirects and opens its fallback at 320px and 390px. First-run onboarding passed.');
 } finally {
-  if (browser) await browser.close();
-  await new Promise(resolve => server.close(resolve));
+  await browser.close();
 }

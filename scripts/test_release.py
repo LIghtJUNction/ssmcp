@@ -923,6 +923,7 @@ class ReleaseTests(unittest.TestCase):
             archive.with_suffix(".zip.sha256").write_text(f"{release.digest(archive)}  {archive.name}\n")
 
         for invalid, message in (({"bin/ssmcp": b"host binary"}, "AArch64"),
+                                 ({"webroot/open.js": b"obsolete"}, "webroot"),
                                  ({"module.prop": b"id=ssmcp\nversion=v0.10.40"}, "version")):
             stage(invalid)
             with self.assertRaisesRegex(ValueError, message):

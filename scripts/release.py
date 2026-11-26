@@ -1067,6 +1067,9 @@ def verify_magisk_archive(root, archive, release_version):
                     "webroot/index.html", "onboarding/index.html", "META-INF/com/google/android/update-binary")
         if any(item not in entries or package.getinfo(item).file_size == 0 for item in required):
             raise ValueError("Magisk module is missing an install or runtime entry")
+        webroot = {name for name in entries if name.startswith("webroot/") and not name.endswith("/")}
+        if webroot != {"webroot/index.html"}:
+            raise ValueError("Magisk webroot must contain only index.html")
         lines = package.read("module.prop").decode().splitlines()
         for key in ("id", "version", "versionCode"):
             if [line for line in lines if line.startswith(key + "=")] != [f"{key}={prop[key]}"]:
