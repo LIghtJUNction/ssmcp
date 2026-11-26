@@ -41,8 +41,10 @@ function Find-Form($owner, $previous) {
         foreach ($row in $browsers) {
             if ($row.CommandLine -match '#[a-f0-9]{64}') { throw 'Pairing credential appeared in browser argv.' }
             $browser = Get-Process -Id $row.ProcessId -ErrorAction SilentlyContinue
-            if (!$browser -or !$browser.MainWindowHandle) { continue }
-            $root = [Windows.Automation.AutomationElement]::FromHandle($browser.MainWindowHandle)
+            if (!$browser) { continue }
+            $handle = $browser.MainWindowHandle
+            if ($handle -eq [IntPtr]::Zero) { continue }
+            $root = [Windows.Automation.AutomationElement]::FromHandle($handle)
             $desc = [Windows.Automation.TreeScope]::Descendants
             $edits = $root.FindAll($desc, [Windows.Automation.PropertyCondition]::new(
                 [Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Edit))
@@ -53,15 +55,15 @@ function Find-Form($owner, $previous) {
             if ('连接' -notin @($buttons | ForEach-Object { $_.Current.Name })) { continue }
             $gateway = Get-CimInstance Win32_Process -Filter "ProcessId=$($row.ParentProcessId)"
             if (!$gateway -or $gateway.ExecutablePath -ine $core) { throw 'Web window did not originate from the packaged sibling core.' }
-            return @{ browser = $browser; gateway = Get-Process -Id $gateway.ProcessId }
+            return @{ browser = $browser; handle = $handle; gateway = Get-Process -Id $gateway.ProcessId }
         }
         Start-Sleep -Milliseconds 250
     }
     throw 'The actual system Edge window did not render the shared Chinese connection form.'
 }
 
-function Control($browser, $kind, [string]$name) {
-    $root = [Windows.Automation.AutomationElement]::FromHandle($browser.MainWindowHandle)
+function Control($window, $kind, [string]$name) {
+    $root = [Windows.Automation.AutomationElement]::FromHandle($window.handle)
     $condition = [Windows.Automation.AndCondition]::new(
         [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, $kind),
         [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $name))
@@ -78,13 +80,13 @@ function Submit-Loopback($window, [string]$origin) {
     $button = [Windows.Automation.ControlType]::Button
     $value = [Windows.Automation.ValuePattern]::Pattern
     $invoke = [Windows.Automation.InvokePattern]::Pattern
-    (Control $window.browser $edit '用户名').GetCurrentPattern($value).SetValue('desktop-test')
-    $address = (Control $window.browser $edit '服务器地址').GetCurrentPattern($value)
+    (Control $window $edit '用户名').GetCurrentPattern($value).SetValue('desktop-test')
+    $address = (Control $window $edit '服务器地址').GetCurrentPattern($value)
     if ($address.Current.Value -cne 'ssmcp.lmm.best') { throw 'Unexpected default relay.' }
-    (Control $window.browser $button '连接').GetCurrentPattern($invoke).Invoke()
+    (Control $window $button '连接').GetCurrentPattern($invoke).Invoke()
     $wait = [Diagnostics.Stopwatch]::StartNew()
     do {
-        $root = [Windows.Automation.AutomationElement]::FromHandle($window.browser.MainWindowHandle)
+        $root = [Windows.Automation.AutomationElement]::FromHandle($window.handle)
         $checks = $root.FindAll([Windows.Automation.TreeScope]::Descendants,
             [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::CheckBox))
         if ($checks.Count -ge 2) { break }
@@ -94,7 +96,7 @@ function Submit-Loopback($window, [string]$origin) {
         throw 'Hosted connection did not require terms and privacy consent before core launch.'
     }
     $address.SetValue($origin)
-    (Control $window.browser $button '连接').GetCurrentPattern($invoke).Invoke()
+    (Control $window $button '连接').GetCurrentPattern($invoke).Invoke()
     $wait.Restart()
     do {
         $starts = @(Owned-Core $window.gateway)
