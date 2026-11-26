@@ -18,6 +18,7 @@ try {
   await new Promise((resolve, reject) => { server.stdout.once('data', resolve); server.once('error', reject); server.once('exit', code => reject(new Error(`Static server exited: ${code}`))); });
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
+  const foreground = 'live:' + '71'.repeat(32);
   const errors = [], commands = [], requests = [], pending = [];
   let cursor = '9007199254740993', queue = [], failTerminal = false;
   page.on('pageerror', error => errors.push(error.message));
@@ -55,7 +56,7 @@ try {
   await page.route('**/api/gui/v1/**', async route => {
     const req = route.request(); const url = new URL(req.url()); const body = req.postDataJSON();
     requests.push({ path: url.pathname, authorization: req.headers().authorization, body });
-    if (url.pathname.endsWith('/sessions')) return fulfill(route, { sessions: [{ name: '真实会话 fixture', cwd: '/fixture/project', manager_active: true, manager_state: 'active', connection_state: 'connected', phase: 'active', generation: '2', stop_requested: false }], next_offset: 1, has_more: false });
+    if (url.pathname.endsWith('/sessions')) return fulfill(route, { sessions: [{ name: '真实会话 fixture', cwd: '/fixture/project' }, { name: '真实会话 fixture', cwd: '/fixture/project', target: foreground, manager_active: true, manager_state: 'active', connection_state: 'connected', phase: 'active', generation: '2', stop_requested: false }], next_offset: 2, has_more: false });
     if (url.pathname === '/api/gui/v1/connections') return fulfill(route, { status: 'connected', connection_id: 'fixture.connection', session: body.session, read_only: body.read_only, capabilities: response({ id: body.request_id, operation: { op: 'capabilities' } }, caps), duplicate: false });
     if (url.pathname.endsWith('/bridge')) {
       const op = body.operation;
@@ -110,11 +111,20 @@ try {
   await page.locator('#pairing-token').fill(token);
   await page.locator('#authenticate').click();
   await page.waitForFunction(() => !document.querySelector('#auth-dialog').open);
-  await page.locator('.session-item').click();
+  const sessionRows = page.locator('.session-item');
+  assert.deepEqual(await sessionRows.locator('strong').allTextContents(), ['真实会话 fixture', '真实会话 fixture']);
+  await sessionRows.nth(0).click();
+  assert.equal(await sessionRows.nth(0).getAttribute('aria-current'), 'true');
+  assert.equal(await sessionRows.nth(1).getAttribute('aria-current'), 'false');
+  await sessionRows.nth(1).click();
   await page.locator('#connection-mode').selectOption('control');
   await page.locator('#connect-button').click();
   await page.getByText('来自原生历史的 fixture 文本', { exact: true }).waitFor();
   await page.getByText('Worker 任务快照 · 站点 0', { exact: true }).waitFor();
+  assert.equal(requests.find(item => item.path === '/api/gui/v1/connections').body.session, foreground);
+  assert.equal(await page.locator('#session-title').textContent(), '真实会话 fixture');
+  assert.equal(await sessionRows.nth(0).getAttribute('aria-current'), 'false');
+  assert.equal(await sessionRows.nth(1).getAttribute('aria-current'), 'true');
   assert.equal(commands.length, 0, 'connection/state reads must not dispatch commands');
   assert.equal(await page.locator('#pairing-token').inputValue(), '');
   assert.deepEqual(await page.evaluate(() => [localStorage.length, sessionStorage.length]), [0, 0]);

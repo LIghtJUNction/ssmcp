@@ -138,6 +138,7 @@ export class Gateway {
     }
     for (const session of page.sessions) {
       if (typeof session?.name !== 'string' || !session.name || session.name.length > 1024) throw new ProtocolError('会话目录缺少真实名称。');
+      if (session.target != null && (typeof session.target !== 'string' || !session.target || session.target.length > 1024)) throw new ProtocolError('会话目录的连接目标无效。');
     }
     return page;
   }

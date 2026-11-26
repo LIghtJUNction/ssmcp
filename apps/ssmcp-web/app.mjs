@@ -64,15 +64,19 @@ async function listSessions(offset = 0) {
   sessions = page.sessions; sessionOffset = offset; sessionsNext = page.has_more ? page.next_offset : null;
   renderSessions(); renderStatus();
 }
+function sessionTarget(row) { return row?.target ?? row?.name; }
 function renderSessions() {
   const nodes = sessions.map(session => {
+    const target = sessionTarget(session);
     const button = element('button', 'session-item'); button.type = 'button';
     button.disabled = ['connecting', 'disconnecting'].includes(client.status) || busy.has('session-select');
-    button.setAttribute('aria-current', String(session.name === (client.connection?.session ?? selectedSession?.name)));
-    button.append(element('strong', '', session.name), element('small', 'mono', session.cwd || session.phase || session.connection_state || '状态未提供'));
-    button.title = `${session.name}\n${session.cwd ?? ''}`;
+    button.setAttribute('aria-current', String(target === (client.connection?.session ?? sessionTarget(selectedSession))));
+    const detail = session.cwd || session.phase || session.connection_state || '状态未提供';
+    const sameName = sessions.some(item => item.name === session.name && sessionTarget(item) !== target);
+    button.append(element('strong', '', session.name), element('small', 'mono', sameName ? `${detail} · ${target}` : detail));
+    button.title = [session.name, session.cwd, target !== session.name ? target : ''].filter(Boolean).join('\n');
     button.addEventListener('click', () => run('session-select', async () => {
-      if (client.connection?.session === session.name) return;
+      if (client.connection?.session === target) return;
       if (client.connection) { saveDrafts(); await client.disconnect(); }
       selectedSession = session; timelineOffset = 0; selectedTerminal = null; workerDraftEdited = false;
       localError = null; renderAll();
@@ -94,8 +98,8 @@ function renderStatus() {
   $('auth-dot').classList.toggle('good', gateway.authenticated);
   setText('auth-button', gateway.authenticated ? '认证设置' : '连接网关');
   setText('connection-label', connected ? `SSMCP / ${client.capabilities?.mode === 'control' ? 'CONTROL' : 'OBSERVE'}` : 'WORKSPACE');
-  setText('session-title', client.connection?.session ?? selectedSession?.name ?? '工作台');
-  const info = sessions.find(item => item.name === client.connection?.session) ?? selectedSession;
+  const info = sessions.find(item => sessionTarget(item) === client.connection?.session) ?? selectedSession;
+  setText('session-title', info?.name ?? '工作台');
   setText('session-cwd', info?.cwd ?? '');
   show('connect-strip', Boolean(selectedSession) && !connected);
   show('connected-actions', connected);
@@ -402,7 +406,7 @@ $('refresh-sessions').addEventListener('click', () => run('sessions', () => list
 $('sessions-prev').addEventListener('click', () => run('sessions', () => listSessions(Math.max(0, sessionOffset - 16))));
 $('sessions-next').addEventListener('click', () => run('sessions', () => listSessions(sessionsNext)));
 $('connect-button').addEventListener('click', () => run('connect', async () => {
-  const session = selectedSession.name;
+  const session = sessionTarget(selectedSession);
   localError = null; await client.connect(session, $('connection-mode').value === 'observe');
   restoreDrafts(session); timelineOffset = 0; renderAll();
   void client.startObservation();

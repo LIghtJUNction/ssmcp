@@ -6,6 +6,15 @@ import { response, eventPage, observation, GENERATION, capabilities } from './fi
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
+test('a foreground selector may share a saved session label without changing the older row', async () => {
+  const sessions = [{ name: 'work' }, { name: 'work', target: 'live:device-session' }];
+  const gateway = new Gateway({ fetchImpl: async () => json({ sessions, has_more: false }) });
+  gateway.setToken('fixture-token');
+  assert.deepEqual((await gateway.sessions()).sessions, sessions);
+  sessions[1].target = '';
+  await assert.rejects(gateway.sessions(), /连接目标无效/);
+});
+
 test('private pairing files are bounded and accepted only for the exact page origin', async () => {
   const origin = 'http://127.0.0.1:8787', token = 'ad'.repeat(32);
   const pairing = { schema: 'ssmcp-gui-pairing-v1', token, url: origin };
