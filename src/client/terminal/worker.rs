@@ -778,7 +778,9 @@ impl State {
             } else {
                 rows[1] = capacity;
             }
+            let dreaming = snapshot.slots.iter().filter(|slot| slot.dreaming).count();
             let counts = [
+                (PanelTone::Accent, format!("☾ Dreaming {dreaming}")),
                 (PanelTone::Success, format!("○ Idle {}", snapshot.idle)),
                 (
                     PanelTone::Warning,
@@ -1066,11 +1068,6 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
     );
     if rows.len() < budget {
         let (tone, _, state) = slot_state(slot);
-        let moon = if slot.dreaming && slot.activity_status == Some("offline") {
-            "☾"
-        } else {
-            ""
-        };
         let elapsed = slot
             .current_task_elapsed_ms
             .map(|ms| format!(" · {}", duration(ms)))
@@ -1097,10 +1094,7 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
             .unwrap_or_default();
         rows.push((
             tone,
-            clipped(
-                &format!("{state}{moon}{calls}{elapsed}{retiring}{reason}"),
-                width,
-            ),
+            clipped(&format!("{state}{calls}{elapsed}{retiring}{reason}"), width),
         ));
     }
     rows
@@ -1733,12 +1727,13 @@ fn member_activity_summary(snapshot: &Snapshot, cols: u16) -> String {
 }
 
 fn slot_state(slot: &SlotView) -> (PanelTone, &'static str, &'static str) {
+    if slot.state == "idle" && slot.dreaming {
+        return (PanelTone::Accent, "☾", "Dreaming");
+    }
     if slot.activity_status == Some("offline") {
-        let symbol = if slot.dreaming { "×☾" } else { "×" };
-        return (PanelTone::Error, symbol, "offline");
+        return (PanelTone::Error, "×", "offline");
     }
     match slot.state {
-        "idle" if slot.dreaming => (PanelTone::Accent, "☾", "Dreaming"),
         "idle" => (PanelTone::Success, "○", "idle"),
         "working" => (PanelTone::Warning, "●", "working"),
         "offline" => (PanelTone::Error, "×", "offline"),
@@ -2371,15 +2366,12 @@ mod tests {
             let frame = state.worker_frame(Some(&snapshot));
             let text = screen(&frame).screen().contents();
             assert!(text.contains("Idle 1"), "{text}");
-            assert!(
-                text.contains(if cols < 24 { "☾" } else { "Dreaming" }),
-                "{text}"
-            );
+            assert!(text.contains("Dreaming 1"), "{text}");
 
             snapshot.slots[0].dreaming = false;
             let frame = state.worker_frame(Some(&snapshot));
             let text = screen(&frame).screen().contents();
-            assert!(!text.contains('☾') && !text.contains("Dreaming"), "{text}");
+            assert!(text.contains("Dreaming 0"), "{text}");
         }
     }
 
@@ -2427,20 +2419,20 @@ mod tests {
                 "Working 1",
                 "Offline 1",
                 count,
-                "×☾",
+                "Dreaming 1",
             ] {
                 assert!(text.contains(part), "{cols} columns: {text}");
             }
         }
         let compact = progress_summary(&snapshot.slots[0], 14, 3);
         assert!(
-            compact.iter().any(|(_, line)| line == "offline☾ 0/10m"),
+            compact.iter().any(|(_, line)| line == "Dreaming 0/10m"),
             "{compact:?}"
         );
         snapshot.slots[0].dreaming = false;
         let mut view = state(24, 100, false);
         let frame = view.worker_frame(Some(&snapshot));
-        assert!(!screen(&frame).screen().contents().contains('☾'));
+        assert!(screen(&frame).screen().contents().contains("Dreaming 0"));
         assert_eq!(
             member_activity_summary(&self::snapshot(), 18),
             "Members unknown"
@@ -2455,6 +2447,7 @@ mod tests {
                 let frame = state.worker_frame(Some(&snapshot()));
                 let text = screen(&frame).screen().contents();
                 for label in [
+                    "Dreaming 0",
                     "Idle 1",
                     "Working 1",
                     "Offline 1",
