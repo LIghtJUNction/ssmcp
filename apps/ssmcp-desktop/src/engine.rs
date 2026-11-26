@@ -134,10 +134,15 @@ impl Handle {
                             engine.publish();
                             let result = async {
                                 let exe = crate::launcher::executable()?;
-                                let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+                                let cwd = std::env::current_dir().map_err(|_| {
+                                    "无法打开当前文件夹。请重新打开桌面应用。".to_owned()
+                                })?;
                                 OwnedSession::launch_private(&exe, &destination, &cwd)
                                     .await
-                                    .map_err(|e| e.to_string())
+                                    .map_err(|_| {
+                                        "无法启动本机连接组件。请重新打开桌面应用后再试。"
+                                            .to_owned()
+                                    })
                             };
                             let session = tokio::select! {
                                 _ = engine.shared.stopped() => return,

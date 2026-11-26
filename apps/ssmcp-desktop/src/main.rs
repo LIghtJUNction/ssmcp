@@ -196,7 +196,8 @@ fn run(options: Options) -> Result<(), String> {
         // Compare actual dimensions independently so every new size is drawn.
         if let Some(error) = snapshot.launch_error.take() {
             handle = None;
-            launcher.error = error;
+            launcher.show_error(error);
+            ui = Ui::default();
             persist_target = None;
             snapshot = model::View::default();
             dirty = true;
@@ -207,6 +208,7 @@ fn run(options: Options) -> Result<(), String> {
         let size = window.size();
         dirty |= presented_size != Some(size);
         if dirty {
+            let drew_form = handle.is_none();
             let event = pending_event.take();
             let consumed = event.as_ref().is_some_and(|event| {
                 if handle.is_some() {
@@ -245,7 +247,8 @@ fn run(options: Options) -> Result<(), String> {
                 persist_target = None;
                 desktop = ui::Desktop::default();
                 snapshot = model::View::default();
-                launcher.error.clear();
+                launcher = launcher::Launcher::new(None);
+                ui = Ui::default();
                 revision = u64::MAX;
             }
             presented_size = Some(size);
@@ -286,13 +289,16 @@ fn run(options: Options) -> Result<(), String> {
                         .map_err(|error| format!("无法写入渲染帧回执：{error}"))?;
                 }
             }
-            if let Some(text) = ui
-                .clipboard
-                .take()
-                .or_else(|| desktop.take_clipboard())
-                .or_else(|| launcher.take_clipboard())
-            {
+            if let Some(text) = ui.clipboard.take().or_else(|| desktop.take_clipboard()) {
                 window.copy(&text);
+            }
+            if drew_form
+                && handle.is_none()
+                && let Some(focus) = launcher.initial_focus()
+            {
+                pending_event = Some(focus);
+                dirty = true;
+                continue;
             }
         }
         pending_event = window.event(if handle.is_some() || options.exit_after.is_some() {

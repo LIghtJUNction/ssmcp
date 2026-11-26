@@ -93,7 +93,7 @@ def exercise(executable, directory):
             assert status == 200, (status, opened)
             instance = opened["session"].removeprefix("live:")
             assert len(instance) == 32
-            registrations = list((directory / "sessions/frontends").glob(f"*/live/{instance}/overview.json"))
+            registrations = list((directory / "sessions/gui/owners").glob(f"*/live/{instance}/overview.json"))
             assert len(registrations) == 1, "the browser must own exactly one matching private core"
             registration = registrations[0]
             assert registration.parents[2].stat().st_mode & 0o077 == 0

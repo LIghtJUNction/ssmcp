@@ -1864,11 +1864,10 @@ impl WorkerController {
         let pending = self.retirement.take().expect("pending station request");
         if same_pool
             && receipt["accepted"].as_bool() == Some(true)
-            && pending.confirming
             && let Some(actual) = state["desired_total"].as_u64()
         {
-            // No count commands are dispatched while the exact operation is pending.
-            // Keep the child's new target instead of recreating a retired station.
+            // Preparing a station already lowers the child's target. Keep that
+            // receipt so the subsequent confirmation is not mistaken for a resize.
             self.desired = actual as usize;
         }
         if !same_pool {

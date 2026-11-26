@@ -184,14 +184,15 @@ class WebSocket:
                     }}})
                     continue
                 if frame["type"] == "steering":
-                    # Account lifecycle tests have no user requirements. Only
-                    # v7 presence polling is valid here; never simulate queue
-                    # publication, editing, or response-boundary delivery.
                     assert self.hello["version"] == 7
-                    assert frame["command"] == {"op": "snapshot"}
+                    if self.state.steering is None:
+                        assert frame["command"] == {"op": "snapshot"}
+                        messages = []
+                    else:
+                        messages = self.state.steering(self.id, frame["command"])
                     self.send({"type": "steering_reply", "id": frame["id"], "result": {"Ok": {
-                        "schema_version": 1, "client_id": self.id, "revision": 0,
-                        "agents": [], "messages": [],
+                        "schema_version": 1, "client_id": self.id, "revision": len(messages),
+                        "agents": [], "messages": messages,
                     }}})
                     continue
                 assert frame["type"] == "reply", f"unexpected client frame type: {frame['type']}"
@@ -222,6 +223,7 @@ class State:
         self.pending_polls = 1
         self.sessions = {}
         self.connections = {}
+        self.steering = None
         self.next_revoke_on_ready = False
         self.requests = []
         self.connect_attempts = {}

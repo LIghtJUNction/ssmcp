@@ -98,9 +98,7 @@ pub(crate) fn foreground_owned_workbench(
 ) -> crate::Result<axum::Router> {
     super::create_private_tree(&root)?;
     super::verify_directory(&root)?;
-    if root.canonicalize()? != super::session_root(true)?.canonicalize()? {
-        return Err("module gateway must use its native session directory".into());
-    }
+    // Each local frontend has its own verified private session directory.
     let cwd = workspace.canonicalize()?;
     if !cwd.is_dir() {
         return Err("module workspace must be a directory".into());

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 import urllib.request
 import uuid
 
@@ -97,6 +98,24 @@ def run(binary):
     with tempfile.TemporaryDirectory(prefix="ssmcp-workbench-") as tmp:
         root = Path(tmp)
         test = Harness(root, binary)
+        expected = {}
+        published = {}
+
+        def steering(client_id, command):
+            with test.state.lock:
+                if command != {"op": "snapshot"}:
+                    assert command["op"] == "publish" and command["expected_revision"] == 0
+                    assert command["target"] == "next" and command["text"] == expected[client_id]
+                    assert client_id not in published, "duplicate publication"
+                    now = time.time_ns() // 1_000_000
+                    published[client_id] = {
+                        "id": command["message_id"], "revision": 1, "text": command["text"],
+                        "target": command["target"], "state": "queued",
+                        "created_at_ms": now, "updated_at_ms": now, "delivery": None,
+                    }
+                return [published[client_id]] if client_id in published else []
+
+        test.state.steering = steering
         workspace = root / "B"
         sub = workspace / "project"
         nested = sub / "child only"
@@ -153,6 +172,24 @@ def run(binary):
             def state(connection, generation):
                 return bridge(connection, "state", generation=generation,resource="runtime",
                               query={})["body"]["value"]["value"]
+            def chat_ready(connection, generation, client_id):
+                cap = bridge(connection, "capabilities")
+                assert cap["generation"] == generation
+                commands = cap["body"]["value"]["commands"]
+                if not any(command["id"] == "chat.send" for command in commands):
+                    return False
+                threads = bridge(connection, "state", generation=generation,
+                                 resource="threads", query={})["body"]["value"]["value"]
+                assert threads["client_id"] == client_id
+                return threads["can_send"] is True
+
+            def acknowledged(connection, generation, receipt, text):
+                queue = bridge(connection, "state", generation=generation,
+                               resource="chat.queue", query={})["body"]["value"]["value"]
+                assert queue["client_id"] == receipt["client_id"]
+                return any(item["id"] == receipt["message_id"] and item["text"] == text
+                           and item["status"] == "queued" for item in queue["items"])
+
             def pwd(peer, directory):
                 job = peer.call("ssmcp.exec.start", {"command":["/bin/pwd"],"mode":"pipes"})
                 peer.call("ssmcp.exec.wait", {"job_id":job["job_id"],"wait_ms":5000})
@@ -218,10 +255,20 @@ def run(binary):
                     generation = wait_for(lambda: active(conn), "headless peer ready", timeout=15)
                     runtime = state(conn, generation)
                     assert runtime["process_id"] == proc.pid and runtime["cwd"] == str(workspace)
+                    client_id = runtime["client_id"]
+                    wait_for(lambda: chat_ready(conn, generation, client_id),
+                             "private owner received its initial chat snapshot", timeout=15)
+                    message = "frontend fixture " + label
+                    with test.state.lock:
+                        expected[client_id] = message
                     reqid = uuid.uuid4().hex
                     receipt = action(conn, generation, "chat.send", request_id=reqid,
-                                     target="next", text="frontend fixture " + label)
-                    assert receipt["request_id"] == reqid and receipt["message_id"]
+                                     target="next", text=message)
+                    assert receipt["request_id"] == reqid and receipt["client_id"] == client_id
+                    wait_for(lambda: acknowledged(conn, generation, receipt, message),
+                             "relay queue acknowledgement for this owner", timeout=15)
+                    with test.state.lock:
+                        assert published[client_id]["id"] == receipt["message_id"]
                     if label == "one":
                         first_id = runtime["client_id"]
                 assert len({first_id, runtime["client_id"], state(primary,pgen)["client_id"]}) == 3
@@ -243,6 +290,7 @@ def run(binary):
             print("PASS: headless owner chat, isolated relay sessions and independent shutdown", flush=True)
             print("PASS: distinct process, relay identity and private attach target; child inherits cwd; both sessions execute pwd in their own directories", flush=True)
             check_tui(test, workspace, sub, nested, http, attach, bridge, state)
+            assert not test.state.errors, test.state.errors
         except Exception:
             for _, err, _, _ in test.logs:
                 print(test.redacted(err.read_text(errors="replace")[-1500:]), flush=True)

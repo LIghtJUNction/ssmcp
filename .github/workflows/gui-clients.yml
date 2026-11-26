@@ -469,6 +469,14 @@ jobs:
           if not window["mapped"] or window["exit_code"] != 0 or not 10000 <= window["elapsed_ms"] < 30000:
               raise SystemExit("The Release executable did not complete its bounded native window check")
           PY
+      - name: Connect two independent desktop windows to one loopback account
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          xvfb-run --auto-servernum --server-args='-screen 0 1280x900x24 +extension GLX -nolisten tcp' \
+            python3 scripts/e2e_desktop_windows.py \
+            "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/ssmcp-desktop"
       - name: Package the exact Linux Release executable tested in Xvfb
         run: |
           python3 scripts/release.py package-gui --platform linux --evidence "$LINUX_EVIDENCE_DIR" \

@@ -476,7 +476,7 @@ impl Desktop {
         let w = (width - x - 24.).max(1.);
         let start = if self.sidebar_open { x } else { x + 38. };
         let right = width - 20.;
-        let max_tabs = (((right - start - 138.) / 94.).floor().max(1.)) as usize;
+        let max_tabs = (((right - start - 178.) / 94.).floor().max(1.)) as usize;
         let first = self
             .selected
             .unwrap_or(0)
@@ -511,8 +511,8 @@ impl Desktop {
         if ui.button(
             canvas,
             4,
-            Rect::new(tab_x, 12., 36., 34.),
-            "+",
+            Rect::new(tab_x, 12., 76., 34.),
+            "新会话",
             ButtonStyle::Quiet,
             self.can_command(view, "session.new"),
         ) {

@@ -5,8 +5,6 @@ use zgpui::native::{ButtonStyle, Canvas, Rect, Ui};
 
 pub const BG: u32 = 0xffffffff;
 const TEXT: u32 = 0x202124ff;
-const MUTED: u32 = 0x5f6368ff;
-const SOURCE: &str = "https://github.com/LIghtJUNction/ssmcp";
 
 const USERNAME_INPUT: u64 = 501;
 const RELAY_INPUT: u64 = 502;
@@ -94,11 +92,11 @@ pub fn executable() -> Result<PathBuf, String> {
                 .map(|p| p.join(name)),
         )
         .find(|p| p.is_file())
-        .ok_or_else(|| format!("找不到 {name}。请将它与桌面程序放在同一目录，或安装到 PATH。"))
+        .ok_or_else(|| "缺少连接组件。请重新安装完整的 SSMCP 桌面版。".to_owned())
 }
 
 pub struct Launcher {
-    editor: crate::composer::Composer,
+    focus_on_open: bool,
     submit: bool,
     focus: FormFocus,
     user: String,
@@ -116,10 +114,8 @@ impl Launcher {
             .or(saved.as_deref())
             .and_then(|s| s.split_once('@'))
             .unwrap_or(("", DEFAULT_RELAY));
-        let mut editor = crate::composer::Composer::default();
-        editor.focus_end(user);
         Self {
-            editor,
+            focus_on_open: true,
             submit: false,
             focus: FormFocus::default(),
             user: user.into(),
@@ -137,33 +133,40 @@ impl Launcher {
         use zgpui::native::Event;
         self.focus.event(event);
         if matches!(event, Event::Key { code: 13, .. }) {
-            if self.editor.focused()
-                || (self.focus.active && self.focus.selected == Some(RELAY_INPUT))
+            if self.focus.active
+                && matches!(self.focus.selected, Some(USERNAME_INPUT | RELAY_INPUT))
             {
                 self.submit = true;
                 return true;
             }
             return !self.focus.active;
         }
-        if self.editor.focused()
-            && matches!(event, Event::Text(value) if value.chars().any(char::is_control))
-        {
-            self.error = "用户名只能填写一行。".into();
-            return true;
-        }
-        if self.editor.event(event, &mut self.user, true) {
-            self.registration = None;
-            self.error.clear();
-            return true;
-        }
         false
     }
 
-    pub fn take_clipboard(&mut self) -> Option<String> {
-        self.editor.take_clipboard()
+    // The first rendered frame registers the native keyboard order.
+    pub fn initial_focus(&mut self) -> Option<zgpui::native::Event> {
+        std::mem::take(&mut self.focus_on_open).then_some(zgpui::native::Event::Key {
+            code: 9,
+            control: false,
+            shift: false,
+            text: String::new(),
+        })
+    }
+
+    pub fn show_error(&mut self, error: String) {
+        self.focus = FormFocus::default();
+        self.focus_on_open = true;
+        self.error = error;
     }
 
     fn destination(&self) -> Result<String, String> {
+        if self.user.trim().is_empty() {
+            return Err("请输入用户名。".into());
+        }
+        if self.relay.trim().is_empty() {
+            return Err("请输入服务器地址。".into());
+        }
         let target = format!("{}@{}", self.user.trim(), self.relay.trim());
         connection_form::validate_destination(&target)?;
         if connection_form::official_relay(&target) && !self.accepted {
@@ -182,76 +185,41 @@ impl Launcher {
         self.focus.stops.clear();
         let width = (w - 40.).clamp(1., 660.);
         let x = (w - width) / 2.;
-        let y = ((h - 190.) / 2.).max(67.);
         let narrow = width < 475.;
-        let prefix_w = if narrow { 64. } else { 88. };
-        let user_w = if narrow {
-            width - prefix_w
-        } else {
-            (width - prefix_w - 38.) * 0.44
-        };
-        let user_x = x + prefix_w;
-        let relay_x = if narrow {
-            user_x
-        } else {
-            user_x + user_w + 38.
-        };
-        let relay_y = if narrow { y + 90. } else { y };
-        c.text("ssmcp", x, y + 7., if narrow { 19 } else { 24 }, true, TEXT);
-        self.editor.draw(
+        let y = ((h - if narrow { 262. } else { 190. }) / 2.).max(40.);
+        let user_w = if narrow { width } else { (width - 20.) * 0.42 };
+        let relay_x = if narrow { x } else { x + user_w + 20. };
+        let relay_y = if narrow { y + 86. } else { y };
+        let relay_w = x + width - relay_x;
+
+        c.text("用户名", x, y - 24., 14, false, TEXT);
+        let user_changed = ui.input(
             c,
-            ui,
+            USERNAME_INPUT,
             self.focus
-                .field(USERNAME_INPUT, Rect::new(user_x, y, user_w.max(1.), 44.)),
-            &self.user,
-            true,
+                .field(USERNAME_INPUT, Rect::new(x, y, user_w, 44.)),
+            &mut self.user,
             "用户名",
-        );
-        c.ellipsis(
-            "↑ 用户名，首次注册时自选",
-            user_x,
-            y + 53.,
-            user_w.max(1.),
-            12,
             false,
-            MUTED,
+            true,
         );
-        c.text(
-            "@",
-            if narrow { x + 26. } else { relay_x - 28. },
-            relay_y + 10.,
-            18,
-            false,
-            MUTED,
-        );
-        let relay_w = (x + width - relay_x).max(1.);
-        let changed_relay = ui.input(
+        c.text("服务器地址", relay_x, relay_y - 24., 14, false, TEXT);
+        let relay_changed = ui.input(
             c,
             RELAY_INPUT,
             self.focus
                 .field(RELAY_INPUT, Rect::new(relay_x, relay_y, relay_w, 44.)),
             &mut self.relay,
-            "中继服务器",
+            DEFAULT_RELAY,
             false,
             true,
         );
-        c.ellipsis(
-            "↑ 中继服务器，可填写自建地址",
-            relay_x,
-            relay_y + 53.,
-            relay_w,
-            12,
-            false,
-            MUTED,
-        );
-        if changed_relay {
-            self.focus.selected = Some(RELAY_INPUT);
-            self.focus.active = true;
+        if user_changed || relay_changed {
             self.registration = None;
             self.error.clear();
         }
         let official = connection_form::official_relay(&format!("account@{}", self.relay.trim()));
-        let actions_y = relay_y + 94.;
+        let actions_y = relay_y + 66.;
         if official {
             let label = if self.accepted {
                 "☑ 同意"
@@ -292,8 +260,6 @@ impl Launcher {
             ) {
                 self.open(concat!("https://ssmcp.lmm.best", "/legal/privacy"));
             }
-        } else {
-            c.text("使用自建中继", x + 4., actions_y + 8., 13, false, MUTED);
         }
         let submit_y = if width < 370. {
             actions_y + 48.
@@ -305,7 +271,7 @@ impl Launcher {
             c,
             508,
             Rect::new(x + width - 92., submit_y, 92., 36.),
-            "连接  →",
+            "连接",
             ButtonStyle::Primary,
             !self.user.trim().is_empty()
                 && !self.relay.trim().is_empty()
@@ -317,21 +283,21 @@ impl Launcher {
                 Err(error) => self.error = error,
             }
         }
-        if self.focus.button(
-            ui,
-            c,
-            509,
-            Rect::new(x, submit_y + 48., 100., 30.),
-            if self.registration.is_some() {
-                "正在打开…"
-            } else {
-                "注册账号 ↗"
-            },
-            ButtonStyle::Quiet,
-            self.registration.is_none()
-                && !self.user.trim().is_empty()
-                && (!official || self.accepted),
-        ) {
+        if !self.user.trim().is_empty()
+            && self.focus.button(
+                ui,
+                c,
+                509,
+                Rect::new(x, submit_y + 48., 100., 30.),
+                if self.registration.is_some() {
+                    "正在打开…"
+                } else {
+                    "注册账号 ↗"
+                },
+                ButtonStyle::Quiet,
+                self.registration.is_none() && (!official || self.accepted),
+            )
+        {
             match self.destination() {
                 Ok(destination) => {
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -350,17 +316,6 @@ impl Launcher {
                 }
                 Err(error) => self.error = error,
             }
-        }
-        if self.focus.button(
-            ui,
-            c,
-            506,
-            Rect::new((w - 114.).max(4.), 20., 92., 34.),
-            "GitHub ↗",
-            ButtonStyle::Quiet,
-            true,
-        ) {
-            self.open(SOURCE);
         }
         if !self.error.is_empty() {
             c.ellipsis(&self.error, x, submit_y + 88., width, 13, false, 0xb42318ff);
@@ -396,18 +351,14 @@ impl Launcher {
 mod tests {
     use super::*;
     #[test]
-    fn username_accepts_typing_on_open_and_enter_runs_validation() {
-        let mut form = Launcher::new(Some("Alice@relay.example"));
-        form.event(&zgpui::native::Event::Text("2".into()));
-        assert_eq!(form.user, "Alice2");
-        form.event(&zgpui::native::Event::Key {
-            code: 13,
-            control: false,
-            shift: false,
-            text: String::new(),
-        });
-        assert!(form.submit);
-        assert_eq!(form.destination().unwrap(), "Alice2@relay.example");
+    fn first_run_validates_the_two_fields() {
+        let mut form = Launcher::new(Some("@relay.example"));
+        assert_eq!(form.destination().unwrap_err(), "请输入用户名。");
+        form.user = "Alice".into();
+        form.relay.clear();
+        assert_eq!(form.destination().unwrap_err(), "请输入服务器地址。");
+        form.relay = "relay.example".into();
+        assert_eq!(form.destination().unwrap(), "Alice@relay.example");
     }
 
     #[test]
@@ -435,8 +386,24 @@ mod tests {
                 text: String::new(),
             })
         };
-        let mut form = Launcher::new(Some("e2eprobe@relay.example"));
+        let mut form = Launcher::new(Some("e2eprob@relay.example"));
         frame(&mut form, None);
+        let focus = form.initial_focus();
+        frame(&mut form, focus);
+        frame(&mut form, Some(Event::Text("e".into())));
+        assert_eq!(form.user, "e2eprobe");
+        let next = Some(Event::Key {
+            code: 9,
+            shift: false,
+            control: false,
+            text: String::new(),
+        });
+        frame(&mut form, next);
+        assert_eq!(form.focus.selected, Some(RELAY_INPUT));
+        assert_eq!(
+            frame(&mut form, enter()).as_deref(),
+            Some("e2eprobe@relay.example")
+        );
         frame(
             &mut form,
             Some(Event::Key {
@@ -482,8 +449,8 @@ mod tests {
         assert_eq!(frame(&mut form, enter()), None);
         assert!(form.error.contains("同意"));
         // Enter on the consent button toggles only that button.
-        frame(&mut form, Some(Event::Down(245., 376.)));
-        frame(&mut form, Some(Event::Up(245., 376.)));
+        frame(&mut form, Some(Event::Down(245., 347.)));
+        frame(&mut form, Some(Event::Up(245., 347.)));
         assert!(form.accepted);
         assert_eq!(frame(&mut form, enter()), None);
         assert!(!form.accepted);
@@ -501,7 +468,7 @@ mod tests {
     #[test]
     fn official_consent_is_required_for_equivalent_origins() {
         let mut form = Launcher {
-            editor: Default::default(),
+            focus_on_open: true,
             submit: false,
             focus: FormFocus::default(),
             user: "Alice".into(),

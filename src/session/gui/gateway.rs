@@ -503,7 +503,7 @@ async fn create_owned(
     .checked_destination()?;
     state.host.authorize_creation(&destination)?;
     let path = state.host.receipt_directory().map(|dir| {
-        let key = crate::hex::encode(&Sha256::digest(input.request_id.as_str().as_bytes()));
+        let key = crate::hex::encode(Sha256::digest(input.request_id.as_str().as_bytes()));
         dir.join(format!("request-{key}.json"))
     });
     let mut result = {
