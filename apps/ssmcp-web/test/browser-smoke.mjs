@@ -94,8 +94,22 @@ try {
   assert.match(initial.headers()['content-security-policy'], /script-src 'self'/);
   assert.equal(initial.headers()['content-security-policy'].includes('unsafe-inline'), false);
   await page.locator('#welcome-connect').click();
-  await page.locator('#pairing-token').fill('fixture-pairing-only');
+  const token = '9a'.repeat(32);
+  const pairing = url => ({ name: 'pairing.json', mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({ schema: 'ssmcp-gui-pairing-v1', url, token })) });
+  await page.locator('#pairing-file').setInputFiles(pairing('https://other.example'));
   await page.locator('#authenticate').click();
+  await page.getByText('配对文件与当前网页地址不一致，请打开对应网关的网页。', { exact: true }).waitFor();
+  assert.equal(requests.length, 0, 'mismatched pairing must not contact the API');
+  await page.locator('#pairing-file').setInputFiles(pairing(new URL(page.url()).origin));
+  await page.locator('#authenticate').click();
+  await page.waitForFunction(() => !document.querySelector('#auth-dialog').open);
+  assert.equal(await page.locator('#pairing-file').inputValue(), '');
+  // Traditional token entry still works in the same tab.
+  await page.locator('#auth-button').click();
+  await page.locator('#pairing-token').fill(token);
+  await page.locator('#authenticate').click();
+  await page.waitForFunction(() => !document.querySelector('#auth-dialog').open);
   await page.locator('.session-item').click();
   await page.locator('#connection-mode').selectOption('control');
   await page.locator('#connect-button').click();
@@ -236,8 +250,8 @@ try {
   assert.equal(await page.locator('#menu-button').getAttribute('aria-expanded'), 'false');
   assert.deepEqual(errors, []);
   assert.deepEqual(await page.evaluate(() => window.cspViolations), []);
-  assert.ok(requests.every(request => request.authorization === 'Bearer fixture-pairing-only'));
-  assert.equal(requests.some(request => JSON.stringify(request.body).includes('fixture-pairing-only')), false);
+  assert.ok(requests.every(request => request.authorization === 'Bearer ' + token));
+  assert.equal(requests.some(request => JSON.stringify(request.body).includes(token)), false);
   assert.equal(commands.some(item => item.operation.command === 'terminal.resize'), false, 'viewport changes are not terminal commands');
   process.stdout.write('Browser fixture smoke passed: CSP, protocol envelopes, IME/focus, bounded DOM, scroll continuity, queue receipt, five right-aligned input origins, original-ID quote button/selected excerpt/R shortcut, preserved multiline draft and ordinary quoted delivery, unknown command, mobile panels.\n');
 } finally {

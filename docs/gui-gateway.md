@@ -5,10 +5,12 @@
 ## 启动与配对
 
 ```sh
-ssmcp gui serve --listen 127.0.0.1:8787 --assets /absolute/apps/ssmcp-web
+ssmcp gui open
 ```
 
-省略 `--listen` 时绑定一个自动分配的 loopback 端口。`--assets` 指向前端的公开静态文件目录；网关将其中的 `index.html`、JS、CSS 和受支持的静态资源同源提供。未指定资源目录时，API 仍可用，首页返回 404。入口及选项可通过 `ssmcp gui --help` 查看。
+在安装了桌面菜单项的 Linux 系统上，点击 **SSMCP Web** 即可用默认浏览器打开工作台。再次打开时会复用使用默认配对文件的网关。命令行入口是 `ssmcp gui open`。在网页上选择配对文件、选择已有会话，再按需启用“控制会话”发送消息。
+
+`ssmcp gui serve` 在自动分配的回环端口提供同一工作台和 API。`--listen 127.0.0.1:8787` 可指定固定端口，`--assets DIRECTORY` 可替换内置静态页面。
 
 启动输出包含服务地址、实际监听地址和配对文件路径，不包含令牌。默认配对文件位于当前会话状态目录的 `gui/pairing.json`；`--pairing-file /absolute/private/gui-pairing.json` 可以指定已有私有目录中的另一位置。网关复用 CLI 的私有目录和文件检查，Unix 目录要求当前用户所有且权限为 0700，凭证文件以 0600 创建；Windows 使用现有当前用户 DACL 检查。
 

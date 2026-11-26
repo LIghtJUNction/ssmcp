@@ -1,10 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Gateway } from '../src/gateway.mjs';
+import { Gateway, readPairingToken } from '../src/gateway.mjs';
 import { createRequest, MAX_FRAME_BYTES } from '../src/protocol.mjs';
 import { response, eventPage, observation, GENERATION, capabilities } from './fixtures.mjs';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+test('private pairing files are bounded and accepted only for the exact page origin', async () => {
+  const origin = 'http://127.0.0.1:8787', token = 'ad'.repeat(32);
+  const pairing = { schema: 'ssmcp-gui-pairing-v1', token, url: origin };
+  const file = fields => new Blob([JSON.stringify({ ...pairing, ...fields })]);
+  assert.equal(await readPairingToken(file({}), origin), token);
+  assert.equal(await readPairingToken(file({ url: origin + '/' }), origin), token);
+  for (const url of ['http://localhost:8787', 'http://127.0.0.1:8788', 'https://127.0.0.1:8787',
+    origin + '/other', origin + '/?redirect', origin + '/#token', 'http://x@127.0.0.1:8787']) {
+    await assert.rejects(readPairingToken(file({ url }), origin), /地址不一致/);
+  }
+  for (const fields of [{ schema: 'unknown' }, { token: 'bad' }, { url: 42 }]) {
+    await assert.rejects(readPairingToken(file(fields), origin), /格式无效/);
+  }
+  await assert.rejects(readPairingToken(new Blob(['not JSON']), origin), /无法读取/);
+  await assert.rejects(readPairingToken({ size: 9000, text() { assert.fail('oversized file read'); } }, origin), /过大/);
+});
 
 test('pairing token is sent only in Authorization and never URL, body or serializable transport state', async () => {
   const calls = [];

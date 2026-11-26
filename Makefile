@@ -107,6 +107,8 @@ install:
 	install -d $(DESTDIR)$(PREFIX)/libexec/ssmcp
 	install -m 0644 src/code_mode.js $(DESTDIR)$(PREFIX)/libexec/ssmcp/code-mode.js
 	install -m 0644 packaging/man/ssmcp.1 $(DESTDIR)$(PREFIX)/share/man/man1/
+	install -d $(DESTDIR)$(PREFIX)/share/applications
+	install -m 0644 packaging/ssmcp-web.desktop $(DESTDIR)$(PREFIX)/share/applications/
 	install -m 0644 packaging/man/ssmcpd.8 $(DESTDIR)$(PREFIX)/share/man/man8/
 	install -d $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples $(DESTDIR)$(PREFIX)/share/doc/ssmcp/docs
 	install -m 0644 README.md $(DESTDIR)$(PREFIX)/share/doc/ssmcp/

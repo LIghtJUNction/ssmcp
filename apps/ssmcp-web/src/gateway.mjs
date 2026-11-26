@@ -46,6 +46,23 @@ async function boundedJson(response, maximum) {
   try { return JSON.parse(text); } catch { throw new ProtocolError('网关没有返回有效 JSON。'); }
 }
 
+export async function readPairingToken(file, origin) {
+  if (file.size > 8 * 1024) throw new Error('配对文件过大，请选择网关生成的 pairing.json。');
+  let pairing;
+  try { pairing = JSON.parse(await file.text()); }
+  catch { throw new Error('无法读取配对文件，请重新选择 pairing.json。'); }
+  if (pairing?.schema !== 'ssmcp-gui-pairing-v1' || typeof pairing.url !== 'string'
+      || typeof pairing.token !== 'string' || !/^[0-9a-f]{64}$/i.test(pairing.token)) {
+    throw new Error('配对文件格式无效，请选择网关生成的 pairing.json。');
+  }
+  let url;
+  try { url = new URL(pairing.url); } catch { throw new Error('配对文件中的网关地址无效。'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin || url.href !== origin + '/') {
+    throw new Error('配对文件与当前网页地址不一致，请打开对应网关的网页。');
+  }
+  return pairing.token;
+}
+
 /** Same-origin HTTP transport. The pairing token never enters URLs, storage or receipts. */
 export class Gateway {
   #token = '';

@@ -21,7 +21,8 @@ use zbridge::{BridgeError, ErrorCode, Request, Response};
 
 use super::attach::RemoteFrontend;
 
-const HELP: &str = "ssmcp gui serve [--listen 127.0.0.1:PORT] [--assets DIRECTORY]\n                [--pairing-file PRIVATE_FILE] [--public-origin https://HOST]\n\nConnects frontends to existing saved CLI sessions. It does not start a model or\nsession. The listener is loopback only. For mobile access, explicitly configure\nan HTTPS reverse proxy preserving the public Host and Origin. Pairing credentials\nare written to a private local JSON file and are never returned by HTTP.\n";
+const HELP: &str = "ssmcp gui open
+ssmcp gui serve [--listen 127.0.0.1:PORT] [--assets DIRECTORY]\n                [--pairing-file PRIVATE_FILE] [--public-origin https://HOST]\n\nOpen starts the local workbench in your browser or reopens the running one.\nServe hosts the built-in web app; --assets selects a replacement directory.\nConnects frontends to existing saved CLI sessions. It does not start a model or\nsession. The listener is loopback only. For mobile access, explicitly configure\nan HTTPS reverse proxy preserving the public Host and Origin. Pairing credentials\nare written to a private local JSON file and are never returned by HTTP.\n";
 
 struct LocalHost;
 impl Host for LocalHost {
@@ -145,7 +146,8 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
         print!("{HELP}");
         return Ok(());
     }
-    if arguments[0] != "serve" {
+    let open_browser = arguments[0] == "open" && arguments.len() == 1;
+    if !open_browser && arguments[0] != "serve" {
         return Err(HELP.into());
     }
     let mut listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
@@ -181,8 +183,23 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
     let directory = super::state_path()?.join("gui");
     super::create_private_tree(&directory)?;
     super::verify_directory(&directory)?;
-    let _lock = super::lock(&directory.join("gateway.lock"), true)?;
     let pairing = pairing.unwrap_or_else(|| directory.join("pairing.json"));
+    let lock = super::lease_file(&directory.join("gateway.lock"))?;
+    if let Err(error) = crate::platform::lock_file(&lock, true) {
+        if open_browser && error.kind() == std::io::ErrorKind::WouldBlock {
+            let current: Value = super::read_json(&pairing)?;
+            let origin = current["url"].as_str().ok_or("missing gateway URL")?;
+            let url = reqwest::Url::parse(origin)?;
+            if current["schema"] != "ssmcp-gui-pairing-v1"
+                || !matches!(url.scheme(), "http" | "https")
+                || url.as_str() != format!("{}/", url.origin().ascii_serialization())
+            {
+                return Err("invalid gateway pairing file".into());
+            }
+            return crate::client::account::open_browser(&url).await;
+        }
+        return Err(error.into());
+    }
     if !pairing.is_absolute() {
         return Err("--pairing-file must be an absolute path in a private directory".into());
     }
@@ -225,6 +242,9 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
         "{}",
         json!({"service":"ssmcp-gui","listener":address,"url":origin,"pairing_file":pairing,"assets":assets})
     );
+    if open_browser {
+        crate::client::account::open_browser(&reqwest::Url::parse(&origin)?).await?;
+    }
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
         .await?;

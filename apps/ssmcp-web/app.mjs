@@ -1,4 +1,4 @@
-import { Gateway } from './src/gateway.mjs';
+import { Gateway, readPairingToken } from './src/gateway.mjs';
 import { BridgeClient } from './src/client.mjs';
 import { byteLength } from './src/protocol.mjs';
 import { renderWaitContent } from './src/wait-view.mjs';
@@ -45,7 +45,7 @@ function details(title, value) {
 }
 function authDialog() {
   if (client.connection || ['connecting', 'disconnecting'].includes(client.status)) { fail(new Error('请先完成当前连接操作并断开前端，再更换认证。')); return; }
-  setText('auth-error', ''); $('pairing-token').value = ''; $('auth-dialog').showModal(); $('pairing-token').focus();
+  setText('auth-error', ''); $('pairing-token').value = ''; $('auth-dialog').showModal(); $('pairing-file').focus();
 }
 function saveDrafts() {
   if (!client.connection) return;
@@ -116,7 +116,7 @@ function renderStatus() {
   show('conversation-toolbar', connected);
   show('welcome', !connected);
   $('authenticate').disabled = busy.has('auth');
-  $('forget-token').disabled = busy.has('forget');
+  $('forget-token').disabled = busy.has('forget') || busy.has('auth');
 }
 
 function fillAgents(select, baseOptions, selected, allowMissing) {
@@ -373,15 +373,26 @@ async function send(command, args, textarea) {
 }
 
 $('auth-button').addEventListener('click', authDialog); $('welcome-connect').addEventListener('click', authDialog);
+$('pairing-file').addEventListener('change', () => { if ($('pairing-file').files.length) $('pairing-token').value = ''; });
+$('pairing-token').addEventListener('input', () => { if ($('pairing-token').value) $('pairing-file').value = ''; });
 $('auth-form').addEventListener('submit', event => {
   event.preventDefault(); void run('auth', async () => {
     try {
-      gateway.setToken($('pairing-token').value); $('pairing-token').value = '';
-      await listSessions(); localError = null; $('auth-dialog').close();
-    } catch (error) { setText('auth-error', error.message); throw error; }
+      const file = $('pairing-file').files[0];
+      const token = file ? await readPairingToken(file, location.origin) : $('pairing-token').value.trim();
+      if (!token) throw new Error('请选择配对文件或输入令牌。');
+      if (!$('auth-dialog').open) return;
+      gateway.setToken(token);
+      $('auth-form').reset();
+      try { await listSessions(); }
+      catch (error) {
+        gateway.clearToken(); sessions = []; selectedSession = null; sessionsNext = null; renderSessions(); throw error;
+      }
+      localError = null; $('auth-dialog').close();
+    } catch (error) { setText('auth-error', error.message); }
   });
 });
-$('auth-dialog').addEventListener('close', () => { $('pairing-token').value = ''; });
+$('auth-dialog').addEventListener('close', () => { $('auth-form').reset(); });
 $('forget-token').addEventListener('click', () => run('forget', async () => {
   try { if (client.connection) { saveDrafts(); await client.disconnect(); } }
   finally { gateway.clearToken(); sessions = []; selectedSession = null; sessionOffset = 0; sessionsNext = null; $('auth-dialog').close(); renderAll(); }

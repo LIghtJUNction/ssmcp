@@ -20,6 +20,9 @@ sha256sums_aarch64=('b022546ff5f62af6a893961f79ff0a142aa3d50d7e3f3f02ce5a70bfb8a
 package() {
   install -Dm755 ssmcp "$pkgdir/usr/bin/ssmcp"
   install -Dm755 ssmcpd "$pkgdir/usr/bin/ssmcpd"
+  if [[ -f packaging/ssmcp-web.desktop ]]; then
+    install -Dm644 packaging/ssmcp-web.desktop "$pkgdir/usr/share/applications/ssmcp-web.desktop"
+  fi
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 packaging/man/ssmcp.1 "$pkgdir/usr/share/man/man1/ssmcp.1"
   install -Dm644 packaging/man/ssmcpd.8 "$pkgdir/usr/share/man/man8/ssmcpd.8"

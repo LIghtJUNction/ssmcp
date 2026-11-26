@@ -124,7 +124,17 @@
   </div>
 
   <dialog id="auth-dialog" class="auth-dialog">
-    <form id="auth-form"><div class="dialog-heading"><h2>连接本机网关</h2><button type="button" class="icon-button" data-close="auth-dialog" aria-label="关闭">×</button></div><p class="muted">使用 SSMCP CLI HTTP 网关提供的配对令牌。</p><label for="pairing-token">配对令牌</label><input id="pairing-token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" required placeholder="粘贴 pairing token"><p class="tiny">仅保存在此页面内存。刷新或清除认证后需要重新输入。</p><p class="form-error" id="auth-error" role="alert"></p><div class="form-actions"><button type="button" class="text-button" id="forget-token">清除认证</button><button type="submit" class="primary" id="authenticate">读取会话</button></div><p class="tiny mono">/api/gui/v1 · same origin</p></form>
+    <form id="auth-form">
+      <div class="dialog-heading"><h2>连接本机网关</h2><button type="button" class="icon-button" data-close="auth-dialog" aria-label="关闭">×</button></div>
+      <label for="pairing-file">选择网关生成的 pairing.json</label>
+      <input id="pairing-file" type="file" accept=".json,application/json" aria-describedby="pairing-path">
+      <p class="tiny" id="pairing-path">Linux 默认位置<br><code>~/.local/state/ssmcp/sessions/gui/pairing.json</code></p>
+      <label for="pairing-token">或粘贴配对令牌</label>
+      <input id="pairing-token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false">
+      <p class="tiny">配对文件由浏览器在本地读取。令牌仅保存在本页内存中。</p>
+      <p class="form-error" id="auth-error" role="alert"></p>
+      <div class="form-actions"><button type="button" class="text-button" id="forget-token">清除认证</button><button type="submit" class="primary" id="authenticate">读取会话</button></div>
+    </form>
   </dialog>
   <dialog id="details-dialog" class="details-dialog"><div class="dialog-heading"><h2 id="details-title">详细信息</h2><button type="button" class="icon-button" data-close="details-dialog" aria-label="关闭">×</button></div><div id="details-content"></div></dialog>
   <noscript>此工作台需要 JavaScript；没有 JavaScript 时不会建立连接或发送命令。</noscript>

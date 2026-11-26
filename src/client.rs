@@ -239,7 +239,8 @@ Use ssmcp attach NAME to connect through local IPC. Use --read-only to observe
 without taking input ownership, or -- before a literal name such as list.
 Ctrl-] detaches while the session keeps running. For sessions on another
 device, use the authorized MCP controller's list and connection-specific tools.
-ssmcp gui serve --assets PATH starts a paired GUI gateway for existing sessions.
+ssmcp gui open opens the browser workbench for existing sessions.
+ssmcp gui serve hosts the same workbench without opening a browser.
 It prints its loopback URL and private pairing-file path; see gui --help.
 Redirected stdout (or jsonl mode) emits one connection JSON object. Add its URL to
 an MCP client and authorize as the selected account.

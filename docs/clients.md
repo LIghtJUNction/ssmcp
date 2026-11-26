@@ -17,19 +17,9 @@ SSMCP 的图形客户端让你从浏览器、Windows / Linux 桌面或手机继�
 
 ### Web：由 CLI 同源提供页面与 API
 
-先让需要使用的 CLI 会话运行，再启动 GUI gateway。以下命令在明确指定的本机端口同时提供 Web 页面和 `/api/gui/v1` 接口；路径应替换成实际的应用目录与私有配对文件位置，配对文件所在的私有目录须已存在。[Gateway 部署说明](gui-gateway.md) · [CLI 命令入口](../src/session/gui.rs)
+安装了桌面菜单项的 Linux 用户可以直接点击 **SSMCP Web**。也可以运行 `ssmcp gui open`，在本机默认浏览器中打开内置工作台。已有会话和新消息在网页中显示。选择本机网关生成的私有 `pairing.json` 并选择会话；需要发送消息时选“控制会话”。[启动与配对](gui-gateway.md#启动与配对)
 
-```sh
-ssmcp gui serve --listen 127.0.0.1:8787 \
-  --assets /absolute/apps/ssmcp-web \
-  --pairing-file /absolute/private/gui-pairing.json
-```
-
-浏览器打开 `http://127.0.0.1:8787`，填写 CLI 生成的配对令牌，然后从真实会话列表中选择目标。`8787` 是示例显式选择的端口；省略 `--listen` 时，gateway 默认在 loopback 的随机端口监听。启动输出给出实际地址与配对文件路径，不输出令牌。[启动与输出实现](../src/session/gui.rs)
-
-配对文件的格式标识为 `ssmcp-gui-pairing-v1`，其中 `url` 是源地址，`token` 是客户端配对框需要的令牌。这是本次 gateway 进程的配对信息，重启后需要使用新值；它与原生 attach 的内部凭据分别管理。[配对格式与生命周期](gui-gateway.md#启动与配对)
-
-Web 生产运行只需要这些静态页面文件和 CLI gateway，无需 Node.js。Node.js 20+ 用于可选开发服务器和测试；需要独立开发页面时，可以把本机 gateway 明确交给开发服务器转发：
+`ssmcp gui serve --listen 127.0.0.1:8787` 在指定端口提供内置网页与 API。Node.js 20+ 仅用于可选的开发服务器和前端测试。开发页面可以通过本机网关调试：
 
 ```sh
 node apps/ssmcp-web/dev-server.mjs --gateway http://127.0.0.1:8787

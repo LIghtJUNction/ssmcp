@@ -681,9 +681,6 @@ async fn asset(State(state): State<Arc<Gateway>>, Path(path): Path<String>) -> R
     serve_asset(state, path).await
 }
 async fn serve_asset(state: Arc<Gateway>, path: String) -> Response {
-    let Some(root) = &state.assets else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
     if path.len() > 512
         || path.split('/').any(|part| {
             part.is_empty()
@@ -705,6 +702,30 @@ async fn serve_asset(state: Arc<Gateway>, path: String) -> Response {
         "woff2" => "font/woff2",
         "webmanifest" => "application/manifest+json",
         _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let Some(root) = &state.assets else {
+        // Only runtime assets ship over HTTP. Tests and the development proxy stay private.
+        macro_rules! assets {
+            ($($file:literal),+ $(,)?) => {
+                match path.as_str() {
+                    $($file => include_str!(concat!("../../../apps/ssmcp-web/", $file)),)+
+                    _ => return StatusCode::NOT_FOUND.into_response(),
+                }
+            };
+        }
+        let body = assets!(
+            "index.html",
+            "styles.css",
+            "app.mjs",
+            "src/client.mjs",
+            "src/gateway.mjs",
+            "src/presentation.mjs",
+            "src/protocol.mjs",
+            "src/store.mjs",
+            "src/wait-view.mjs",
+            "src/waits.mjs",
+        );
+        return ([(header::CONTENT_TYPE, mime)], body).into_response();
     };
     let result = async {
         let target = tokio::fs::canonicalize(root.join(path)).await.ok()?;

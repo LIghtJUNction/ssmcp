@@ -650,7 +650,7 @@ fn identity_matches_username(identity: &Value, requested: &str) -> bool {
             })
 }
 
-pub(super) async fn open_browser(url: &Url) -> Result<()> {
+pub(crate) async fn open_browser(url: &Url) -> Result<()> {
     let mut command = if cfg!(windows) {
         let mut c = Command::new("rundll32.exe");
         c.args(["url.dll,FileProtocolHandler", url.as_str()]);

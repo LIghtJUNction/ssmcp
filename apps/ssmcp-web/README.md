@@ -6,7 +6,11 @@ SSMCP Web 是现有 CLI 核心的浏览器前端。页面通过同源 HTTP 网�
 
 ## 启动
 
-需要 Node.js 20 或更新版本，以及已经运行的 SSMCP CLI HTTP 网关。网关启动方式和配对令牌以仓库的 [GUI gateway 文档](../../docs/gui-gateway.md) 及当前 CLI 帮助为准。
+点击 Linux 应用菜单中的 **SSMCP Web**，或执行 `ssmcp gui open`，即可在默认浏览器中打开自带的工作台。选择私有配对文件 `pairing.json`，选择已有会话和“控制会话”后即可发送消息。[GUI gateway 文档](../../docs/gui-gateway.md)
+
+### 前端开发
+
+开发服务器使用 Node.js 20 或更新版本。先启动 `ssmcp gui serve`，再将开发服务器指向它打印的本机地址。
 
 在仓库根目录运行下列命令。把 `网关端口` 换成 CLI 实际监听的端口：
 

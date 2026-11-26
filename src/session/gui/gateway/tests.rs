@@ -216,6 +216,39 @@ impl Drop for Server {
 }
 
 #[tokio::test]
+async fn default_gateway_serves_the_bundled_browser_app() {
+    let server = Server::new(None).await;
+    for (path, mime) in [
+        ("/", "text/html"),
+        ("/styles.css", "text/css"),
+        ("/app.mjs", "text/javascript"),
+        ("/src/gateway.mjs", "text/javascript"),
+    ] {
+        let page = http()
+            .get(format!("{}{path}", server.url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(page.status(), StatusCode::OK, "{path}");
+        assert!(
+            page.headers()[header::CONTENT_TYPE]
+                .to_str()
+                .unwrap()
+                .starts_with(mime)
+        );
+        assert!(!page.bytes().await.unwrap().is_empty());
+    }
+    for path in ["/dev-server.mjs", "/pairing.json", "/test/fixtures.mjs"] {
+        let page = http()
+            .get(format!("{}{path}", server.url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(page.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+}
+
+#[tokio::test]
 async fn http_requires_pairing_and_exact_origin_before_accessing_core() {
     let server = Server::new(None).await;
     let url = format!("{}{PREFIX}/sessions", server.url);
