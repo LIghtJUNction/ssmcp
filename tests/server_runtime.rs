@@ -50,17 +50,40 @@ fn runtime_check_rejects_options_before_discovering_the_runtime() {
 
 #[test]
 fn runtime_check_reports_the_dependency_failure_without_loading_server_configuration() {
-    let result = command()
-        .env("PATH", "")
-        .arg("check-runtime")
-        .output()
+    let path = std::env::temp_dir().join(format!(
+        "ssmcp-preflight-{:016x}",
+        getrandom::u64().unwrap()
+    ));
+    ssmcp::platform::private_directory(&path).unwrap();
+    let run = || {
+        command()
+            .env("HOME", &path)
+            .env("TMPDIR", &path)
+            .env("PATH", &path)
+            .env_remove("SSMCP_NODE")
+            .arg("check-runtime")
+            .output()
+            .unwrap()
+    };
+    let missing_git = run();
+    // The official tools are unpacked from the bundled Git objects before Node starts.
+    std::os::unix::fs::symlink(ssmcp::program::executable("git").unwrap(), path.join("git"))
         .unwrap();
-    assert_eq!(result.status.code(), Some(1));
-    assert!(result.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8(result.stderr).unwrap(),
-        "ssmcpd: node is not installed in PATH\n"
-    );
+    let missing_node = run();
+    std::fs::remove_dir_all(&path).unwrap();
+
+    for (result, diagnostic) in [
+        (
+            missing_git,
+            "ssmcpd: Git is required for SSMCP tool repositories",
+        ),
+        (missing_node, "ssmcpd: node is not installed in PATH\n"),
+    ] {
+        assert_eq!(result.status.code(), Some(1));
+        assert!(result.stdout.is_empty());
+        let error = String::from_utf8(result.stderr).unwrap();
+        assert!(error.starts_with(diagnostic), "{error}");
+    }
 }
 
 #[test]
