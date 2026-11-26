@@ -137,7 +137,6 @@ def run(binary):
             test.spawn("B", "gui", "serve", "--pairing-file", str(pairing))
             wait_for(pairing.exists, "gateway pairing")
             pair = json.loads(pairing.read_text())
-            connections = {}
             def http(path, data=None, route=None):
                 route = route or pair
                 origin = route["url"]
@@ -150,15 +149,17 @@ def run(binary):
                 with urllib.request.urlopen(request, timeout=15) as response:
                     return json.load(response)
             def attach(target, read_only=False, route=None):
+                route = route or pair
                 entry = http("connections", {"session":target, "request_id":uuid.uuid4().hex,
                                                "read_only":read_only}, route)
-                connection = entry["connection_id"]
-                connections[connection] = route
-                return connection
+                assert entry["session"] == target and entry["status"] == "connected", entry
+                # Connection IDs are issued independently by each gateway.
+                return route, entry["connection_id"]
             def request_bridge(connection, op, **kw):
-                return http("connections/" + connection + "/bridge", {
+                route, local_id = connection
+                return http("connections/" + local_id + "/bridge", {
                     "id": uuid.uuid4().hex, "version":1, "operation":{"op":op, **kw}
-                }, connections[connection])
+                }, route)
             def bridge(connection, op, **kw):
                 receipt = request_bridge(connection, op, **kw)
                 assert receipt["body"]["kind"] != "error", receipt["body"]
@@ -283,7 +284,10 @@ def run(binary):
                         assert published[client_id]["id"] == receipt["message_id"]
                     if label == "one":
                         first_id = runtime["client_id"]
-                assert len({first_id, runtime["client_id"], state(primary)["client_id"]}) == 3
+                primary_now = state(primary)
+                assert primary_now["process_id"] == parent.pid
+                assert primary_now["client_id"] == test.connection("primary").id
+                assert len({first_id, runtime["client_id"], primary_now["client_id"]}) == 3
                 # An unrelated CLI and the other graphical owner survive the first window closing.
                 peers[0].stdin.close()
                 assert peers[0].wait(timeout=8) == 0
@@ -291,6 +295,7 @@ def run(binary):
                 assert state(conn)["client_id"] == runtime["client_id"]
                 surviving_primary = state(primary)
                 assert surviving_primary["process_id"] == parent.pid
+                assert surviving_primary["client_id"] == test.connection("primary").id
                 assert surviving_primary["cwd"] == str(sub)
             finally:
                 for proc in peers:

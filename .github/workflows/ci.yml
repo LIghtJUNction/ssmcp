@@ -150,6 +150,22 @@ jobs:
       - name: Verify independent frontend sessions and working directories
         if: ${{ !cancelled() && steps.frontend_core.outcome == 'success' }}
         run: python3 scripts/e2e_workbench_sessions.py --binary target/debug/ssmcp
+      - name: Build fixtures for the isolated chat and station tests
+        id: focused_fixtures
+        if: ${{ !cancelled() && steps.frontend_core.outcome == 'success' && matrix.runner == 'ubuntu-24.04' }}
+        run: |
+          cargo build --locked --bins --example vt_snapshot
+          fixture=$(cargo test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')
+          echo "fixture=$fixture" >> "$GITHUB_OUTPUT"
+      - name: Verify targeted retirement with three real private PTYs
+        if: ${{ !cancelled() && steps.focused_fixtures.outcome == 'success' }}
+        run: |
+          python3 scripts/e2e_worker_windows.py --case targeted-retirement --bin-dir target/debug \
+            --fixture-binary "${{ steps.focused_fixtures.outputs.fixture }}" --source-revision "$(git rev-parse HEAD)" \
+            --report target/acceptance/worker-windows-targeted/report.json
+      - name: Verify two restricted chat sessions on the real account router
+        if: ${{ !cancelled() && steps.focused_fixtures.outcome == 'success' }}
+        run: python3 scripts/e2e_magisk_chat.py --client target/debug/ssmcp --fixture-binary "${{ steps.focused_fixtures.outputs.fixture }}"
       - name: Check release tooling and installer
         run: |
           shellcheck scripts/install.sh scripts/ci_user_manager.sh
