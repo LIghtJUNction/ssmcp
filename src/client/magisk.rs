@@ -94,6 +94,27 @@ impl Terminal {
         })
     }
 
+    fn stop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        if let Some(pid) = self.child.process_id().and_then(|id| i32::try_from(id).ok())
+            && pid > 0
+            // The unreaped PTY child owns this PID. SIGTERM lets the normal
+            // client shutdown remove its foreground registration and detach IPC.
+            && unsafe { libc::kill(pid, libc::SIGTERM) } == 0
+        {
+            for _ in 0..20 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if matches!(self.child.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+            }
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+
     fn resize(&self, rows: u16, cols: u16) -> Result<()> {
         let rows = NonZeroU16::new(rows.clamp(10, 80)).unwrap();
         let cols = NonZeroU16::new(cols.clamp(32, 200)).unwrap();
@@ -114,8 +135,7 @@ impl Terminal {
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.stop();
         let _ = std::fs::remove_file(&self.connected);
     }
 }
@@ -347,7 +367,9 @@ fn terminal_action(state: &Console, action: Action) -> Result<Value> {
             return Ok(json!({"tab": tab}));
         }
         Action::Close { tab } if tab != 0 => {
-            sessions.tabs.remove(&tab).ok_or("Unknown tab")?;
+            let closed = sessions.tabs.remove(&tab).ok_or("Unknown tab")?;
+            drop(sessions);
+            drop(closed);
             return Ok(json!({}));
         }
         Action::Close { .. } => {
