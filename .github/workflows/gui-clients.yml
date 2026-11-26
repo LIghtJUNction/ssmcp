@@ -332,8 +332,8 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            dbus-user-session build-essential pkg-config libx11-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev \
-            xvfb xauth x11-utils mesa-utils libgl1-mesa-dri fonts-noto-cjk xdotool imagemagick python3-xlib
+            build-essential pkg-config libx11-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev \
+            xvfb xauth x11-utils mesa-utils libgl1-mesa-dri fonts-noto-cjk xdotool imagemagick
       - name: Install Rust 1.100.0 for native Linux
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
         with:
@@ -469,22 +469,6 @@ jobs:
           if not window["mapped"] or window["exit_code"] != 0 or not 10000 <= window["elapsed_ms"] < 30000:
               raise SystemExit("The Release executable did not complete its bounded native window check")
           PY
-      - name: Prepare the Linux user manager and verify delegated limits
-        id: desktop_manager
-        shell: bash
-        run: bash scripts/ci_user_manager.sh prepare
-      - name: Connect two independent desktop windows to one loopback account
-        env:
-          LIBGL_ALWAYS_SOFTWARE: '1'
-          GALLIUM_DRIVER: llvmpipe
-        run: |
-          xvfb-run --auto-servernum --server-args='-screen 0 1280x900x24 +extension GLX -nolisten tcp' \
-            /usr/bin/python3 scripts/e2e_desktop_windows.py \
-            "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/ssmcp-desktop"
-      - name: Restore temporary runner settings
-        if: always() && steps.desktop_manager.outcome != 'skipped'
-        shell: bash
-        run: bash scripts/ci_user_manager.sh restore
       - name: Package the exact Linux Release executable tested in Xvfb
         run: |
           python3 scripts/release.py package-gui --platform linux --evidence "$LINUX_EVIDENCE_DIR" \
@@ -517,6 +501,59 @@ jobs:
           path: ${{ runner.temp }}/ssmcp-gui-ci-linux
           if-no-files-found: warn
           retention-days: 7
+
+  linux-sessions:
+    name: Linux release independent desktop sessions
+    needs: [validate, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      GALLIUM_DRIVER: llvmpipe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.ref }}
+          persist-credentials: false
+      - name: Install the session and display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dbus-user-session xvfb xauth xdotool \
+            python3-xlib libgl1 libgl1-mesa-dri libglx-mesa0 libx11-6 libfreetype6 libfontconfig1 fonts-noto-cjk
+      - name: Prepare the Linux user manager and verify delegated limits
+        id: desktop_manager
+        shell: bash
+        run: bash scripts/ci_user_manager.sh prepare
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ssmcp-gui-linux
+          path: ${{ runner.temp }}/ssmcp-gui-release
+      - name: Verify and exercise both executables from the release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/ssmcp-gui-release"
+          PYTHONPATH=scripts /usr/bin/python3 - "$bundle" <<'PY'
+          import json, sys, tarfile
+          from pathlib import Path
+          import release
+          bundle = Path(sys.argv[1])
+          receipt = json.loads((bundle / release.gui_receipt_name("linux")).read_text())
+          source = release.gui_source(Path.cwd(), "linux")
+          if receipt["source"] != source:
+              raise SystemExit("The release archive belongs to a different source revision")
+          archive = bundle / release.GUI_CLIENTS["linux"]["asset"]
+          release.verify_linux_gui_archive(archive, source, receipt["window"], receipt["companion_cli"])
+          with tarfile.open(archive, "r:gz") as package:
+              for name in ("ssmcp", "ssmcp-desktop"):
+                  package.extract(name, bundle, filter="data")
+          PY
+          xvfb-run --auto-servernum --server-args='-screen 0 1280x900x24 +extension GLX -nolisten tcp' \
+            /usr/bin/python3 scripts/e2e_desktop_windows.py "$bundle/ssmcp-desktop"
+      - name: Restore temporary runner settings
+        if: always() && steps.desktop_manager.outcome != 'skipped'
+        shell: bash
+        run: bash scripts/ci_user_manager.sh restore
 
   windows:
     name: Windows CLI, process/IPC, and desktop acceptance
