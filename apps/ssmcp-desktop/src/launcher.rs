@@ -8,6 +8,79 @@ const TEXT: u32 = 0x202124ff;
 const MUTED: u32 = 0x5f6368ff;
 const SOURCE: &str = "https://github.com/LIghtJUNction/ssmcp";
 
+const USERNAME_INPUT: u64 = 501;
+const RELAY_INPUT: u64 = 502;
+
+// The native input does not expose its focus. Record the enabled controls in draw order
+// so pointer and Tab selection follow the same widgets as Ui.
+#[derive(Default)]
+struct FormFocus {
+    stops: Vec<(u64, Rect)>,
+    selected: Option<u64>,
+    active: bool,
+}
+
+impl FormFocus {
+    fn event(&mut self, event: &zgpui::native::Event) {
+        use zgpui::native::Event;
+        match event {
+            Event::Down(x, y) => {
+                let hit = self
+                    .stops
+                    .iter()
+                    .rev()
+                    .find(|(_, rect)| rect.contains(*x, *y));
+                self.active = hit.is_some();
+                if let Some((id, _)) = hit {
+                    self.selected = Some(*id);
+                }
+            }
+            Event::Key { code: 27, .. } => self.active = false,
+            Event::Key { code: 9, shift, .. } if !self.stops.is_empty() => {
+                // Ui keeps the last widget as the Tab origin after Escape or a blank click.
+                let len = self.stops.len();
+                let current = self
+                    .stops
+                    .iter()
+                    .position(|(id, _)| Some(*id) == self.selected);
+                let next = if *shift {
+                    (current.unwrap_or(0) + len - 1) % len
+                } else {
+                    current.map_or(0, |i| (i + 1) % len)
+                };
+                self.selected = Some(self.stops[next].0);
+                self.active = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn field(&mut self, id: u64, rect: Rect) -> Rect {
+        self.stops.push((id, rect));
+        rect
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "track the same enabled button that Ui draws"
+    )]
+    fn button(
+        &mut self,
+        ui: &mut Ui,
+        canvas: &mut Canvas<'_>,
+        id: u64,
+        rect: Rect,
+        label: &str,
+        style: ButtonStyle,
+        enabled: bool,
+    ) -> bool {
+        if enabled {
+            self.stops.push((id, rect));
+        }
+        ui.button(canvas, id, rect, label, style, enabled)
+    }
+}
+
 pub fn executable() -> Result<PathBuf, String> {
     let name = if cfg!(windows) { "ssmcp.exe" } else { "ssmcp" };
     let this = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -27,6 +100,7 @@ pub fn executable() -> Result<PathBuf, String> {
 pub struct Launcher {
     editor: crate::composer::Composer,
     submit: bool,
+    focus: FormFocus,
     user: String,
     relay: String,
     accepted: bool,
@@ -47,6 +121,7 @@ impl Launcher {
         Self {
             editor,
             submit: false,
+            focus: FormFocus::default(),
             user: user.into(),
             relay: relay.into(),
             accepted: saved
@@ -60,15 +135,21 @@ impl Launcher {
 
     pub fn event(&mut self, event: &zgpui::native::Event) -> bool {
         use zgpui::native::Event;
-        if self.editor.focused() {
-            if matches!(event, Event::Key { code: 13, .. }) {
+        self.focus.event(event);
+        if matches!(event, Event::Key { code: 13, .. }) {
+            if self.editor.focused()
+                || (self.focus.active && self.focus.selected == Some(RELAY_INPUT))
+            {
                 self.submit = true;
                 return true;
             }
-            if matches!(event, Event::Text(value) if value.chars().any(char::is_control)) {
-                self.error = "用户名只能填写一行。".into();
-                return true;
-            }
+            return !self.focus.active;
+        }
+        if self.editor.focused()
+            && matches!(event, Event::Text(value) if value.chars().any(char::is_control))
+        {
+            self.error = "用户名只能填写一行。".into();
+            return true;
         }
         if self.editor.event(event, &mut self.user, true) {
             self.registration = None;
@@ -98,6 +179,7 @@ impl Launcher {
     }
 
     pub fn draw(&mut self, c: &mut Canvas<'_>, ui: &mut Ui, w: f32, h: f32) -> Option<String> {
+        self.focus.stops.clear();
         let width = (w - 40.).clamp(1., 660.);
         let x = (w - width) / 2.;
         let y = ((h - 190.) / 2.).max(67.);
@@ -119,7 +201,8 @@ impl Launcher {
         self.editor.draw(
             c,
             ui,
-            Rect::new(user_x, y, user_w.max(1.), 44.),
+            self.focus
+                .field(USERNAME_INPUT, Rect::new(user_x, y, user_w.max(1.), 44.)),
             &self.user,
             true,
             "用户名",
@@ -144,8 +227,9 @@ impl Launcher {
         let relay_w = (x + width - relay_x).max(1.);
         let changed_relay = ui.input(
             c,
-            502,
-            Rect::new(relay_x, relay_y, relay_w, 44.),
+            RELAY_INPUT,
+            self.focus
+                .field(RELAY_INPUT, Rect::new(relay_x, relay_y, relay_w, 44.)),
             &mut self.relay,
             "中继服务器",
             false,
@@ -161,6 +245,8 @@ impl Launcher {
             MUTED,
         );
         if changed_relay {
+            self.focus.selected = Some(RELAY_INPUT);
+            self.focus.active = true;
             self.registration = None;
             self.error.clear();
         }
@@ -172,7 +258,8 @@ impl Launcher {
             } else {
                 "☐ 同意"
             };
-            if ui.button(
+            if self.focus.button(
+                ui,
                 c,
                 503,
                 Rect::new(x, actions_y, 76., 34.),
@@ -183,7 +270,8 @@ impl Launcher {
                 self.accepted = !self.accepted;
                 self.error.clear();
             }
-            if ui.button(
+            if self.focus.button(
+                ui,
                 c,
                 504,
                 Rect::new(x + 76., actions_y, 78., 34.),
@@ -193,7 +281,8 @@ impl Launcher {
             ) {
                 self.open(concat!("https://ssmcp.lmm.best", "/legal/terms"));
             }
-            if ui.button(
+            if self.focus.button(
+                ui,
                 c,
                 505,
                 Rect::new(x + 155., actions_y, 78., 34.),
@@ -211,7 +300,8 @@ impl Launcher {
         } else {
             actions_y
         };
-        if ui.button(
+        if self.focus.button(
+            ui,
             c,
             508,
             Rect::new(x + width - 92., submit_y, 92., 36.),
@@ -227,7 +317,8 @@ impl Launcher {
                 Err(error) => self.error = error,
             }
         }
-        if ui.button(
+        if self.focus.button(
+            ui,
             c,
             509,
             Rect::new(x, submit_y + 48., 100., 30.),
@@ -260,7 +351,8 @@ impl Launcher {
                 Err(error) => self.error = error,
             }
         }
-        if ui.button(
+        if self.focus.button(
+            ui,
             c,
             506,
             Rect::new((w - 114.).max(4.), 20., 92., 34.),
@@ -319,10 +411,99 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a native display; can run under Xvfb"]
+    fn relay_enter_submits_and_respects_consent() {
+        use zgpui::native::{Event, Window};
+
+        let mut window = Window::new("connection form test", 1080, 720).unwrap();
+        let mut ui = Ui::default();
+        let mut frame = |form: &mut Launcher, event: Option<Event>| {
+            let consumed = event.as_ref().is_some_and(|e| form.event(e));
+            ui.begin(if consumed { None } else { event });
+            let mut canvas = window.begin(BG);
+            let target = form.draw(&mut canvas, &mut ui, 1080., 720.);
+            ui.end();
+            drop(canvas);
+            window.present();
+            target
+        };
+        let enter = || {
+            Some(Event::Key {
+                code: 13,
+                control: false,
+                shift: false,
+                text: String::new(),
+            })
+        };
+        let mut form = Launcher::new(Some("e2eprobe@relay.example"));
+        frame(&mut form, None);
+        frame(
+            &mut form,
+            Some(Event::Key {
+                code: 27,
+                control: false,
+                shift: false,
+                text: String::new(),
+            }),
+        );
+        assert_eq!(frame(&mut form, enter()), None);
+
+        // A fresh prefilled form must not connect when the first click lands on the background.
+        form = Launcher::new(Some("e2eprobe@relay.example"));
+        frame(&mut form, None);
+        frame(&mut form, Some(Event::Down(35., 180.)));
+        frame(&mut form, Some(Event::Up(35., 180.)));
+        assert_eq!(frame(&mut form, enter()), None);
+        frame(&mut form, Some(Event::Down(700., 285.)));
+        frame(&mut form, Some(Event::Up(700., 285.)));
+        assert_eq!(
+            frame(&mut form, enter()).as_deref(),
+            Some("e2eprobe@relay.example")
+        );
+
+        // Tab away from the relay and Shift+Tab back without editing its preset text.
+        let tab = |shift| {
+            Some(Event::Key {
+                code: 9,
+                control: false,
+                shift,
+                text: String::new(),
+            })
+        };
+        frame(&mut form, tab(false));
+        frame(&mut form, tab(true));
+        assert_eq!(
+            frame(&mut form, enter()).as_deref(),
+            Some("e2eprobe@relay.example")
+        );
+
+        form.relay = DEFAULT_RELAY.into();
+        form.accepted = false;
+        assert_eq!(frame(&mut form, enter()), None);
+        assert!(form.error.contains("同意"));
+        // Enter on the consent button toggles only that button.
+        frame(&mut form, Some(Event::Down(245., 376.)));
+        frame(&mut form, Some(Event::Up(245., 376.)));
+        assert!(form.accepted);
+        assert_eq!(frame(&mut form, enter()), None);
+        assert!(!form.accepted);
+        assert_eq!(frame(&mut form, enter()), None);
+        assert!(form.accepted);
+
+        frame(&mut form, Some(Event::Down(700., 285.)));
+        frame(&mut form, Some(Event::Up(700., 285.)));
+        assert_eq!(
+            frame(&mut form, enter()),
+            Some(format!("e2eprobe@{DEFAULT_RELAY}"))
+        );
+    }
+
+    #[test]
     fn official_consent_is_required_for_equivalent_origins() {
         let mut form = Launcher {
             editor: Default::default(),
             submit: false,
+            focus: FormFocus::default(),
             user: "Alice".into(),
             relay: "HTTPS://SSMCP.LMM.BEST:443/".into(),
             accepted: false,
