@@ -155,14 +155,20 @@ impl OwnedSession {
         let private_root = if chat {
             let home = root.join(format!("chat-{instance}"));
             crate::platform::private_directory(&home)?;
+            let (name, origin) = crate::server_endpoint::parse_target(destination)?;
+            let auth_root = home.join("auth");
+            let private = PrivateRoot(home);
+            crate::platform::private_directory(&auth_root)?;
+            crate::client::account::managed::copy_for_session(&name, &origin, &auth_root)?;
+            let home = &private.0;
             command
                 .env_clear()
-                .env("HOME", &home)
-                .env("SSMCP_AUTH_HOME", home.join("auth"))
-                .env("TMPDIR", &home)
-                .current_dir(&home)
+                .env("HOME", home)
+                .env("SSMCP_AUTH_HOME", &auth_root)
+                .env("TMPDIR", home)
+                .current_dir(home)
                 .args(["__magisk-chat-frontend", destination, &instance]);
-            Some(PrivateRoot(home))
+            Some(private)
         } else {
             command
                 .current_dir(cwd)

@@ -87,13 +87,23 @@ async fn connected(
     incoming: &mut Incoming,
     writer: Arc<Mutex<tokio::process::ChildStdin>>,
 ) -> crate::Result<()> {
+    let mut access_commands = access::connect(true, Some(server), &identity.client_id);
     let mut commands = steering::connect_with_chat(&identity.client_id, VERSION, true);
     let mut poll = tokio::time::interval(Duration::from_secs(1));
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut tasks = JoinSet::<crate::Result<()>>::new();
     loop {
         tokio::select! {
-            _ = poll.tick() => { steering::poll()?; }
+            _ = poll.tick() => { steering::poll()?; access::poll(); }
+            Some(request) = access_commands.recv() => {
+                if access::pending(request.id) {
+                    let frame = match request.command {
+                        crate::wire::AccessCommand::Add { principal } => Frame::ResolveController { id: request.id, principal },
+                        command => Frame::Access { id: request.id, command },
+                    };
+                    write_reply(&writer, frame).await?;
+                }
+            }
             Some(command) = commands.recv() => {
                 let steering::Transport::Wire { id, .. } = command else { continue };
                 let Some(mut command) = steering::pending_command(id) else { continue };
@@ -115,12 +125,23 @@ async fn connected(
                 Some(Frame::Reject { message }) => return Err(message.into()),
                 Some(Frame::CodeModeFinished { .. }) => {},
                 Some(Frame::SteeringReply { id, result }) => steering::reply(id, result)?,
+                Some(Frame::ResolvedController { id, principal, provider, subject }) => {
+                    if access::awaiting_proposal(id, &principal) {
+                        match access::resolve_grant(id, server, &principal, &provider, &subject) {
+                            Ok(()) if access::awaiting_proposal(id, &principal) =>
+                                write_reply(&writer, Frame::ApproveResolvedController { id }).await?,
+                            Ok(()) => {},
+                            Err(error) => access::reply(id, Err(error.to_string())),
+                        }
+                    }
+                }
+                Some(Frame::AccessReply { id, result }) => access::reply(id, result),
                 Some(Frame::Call { id, operation, attribution, code_context, .. }) => {
                     let scope = (|| -> Result<_, String> {
                         let source = attribution.as_deref().ok_or("missing authenticated controller")?;
                         source.validate()?;
                         if !controller_accounts::observe_verified(server, &source.account, &identity.client_id)
-                            .map_err(|e| e.to_string())?.is_allowed()
+                            .map_err(|e| e.to_string())?
                         {
                             return Err("controller not admitted to this chat session".into());
                         }
@@ -158,6 +179,7 @@ async fn connected(
 
 pub(super) async fn run(destination: &str, instance: String) -> crate::Result<()> {
     let (name, server) = crate::server_endpoint::parse_target(destination)?;
+    account::managed::ensure(&name, &server, false).await?;
     let principal = crate::server_endpoint::allow_principal(&name, &server)?;
     let metadata = crate::wire::ClientMetadata {
         name: "ssmcp-web".into(),
@@ -176,6 +198,7 @@ pub(super) async fn run(destination: &str, instance: String) -> crate::Result<()
         &mut registered,
         || {
             let mut command = relay::command(&executable, &server);
+            command.env(relay::DEVICE_USER_ENV, &name);
             command.env(relay::FRONTEND_STATUS_ENV, "1");
             command.env(
                 "SSMCP_RELAY_CAPABILITIES",
@@ -209,6 +232,7 @@ pub(super) async fn run(destination: &str, instance: String) -> crate::Result<()
     let mut incoming = Incoming::start(transport.reader, TransportKind::Relay);
     let writer = Arc::new(Mutex::new(transport.writer));
     let outcome = connected(&server, identity, &mut incoming, writer).await;
+    access::disconnect();
     steering::disconnect();
     incoming.stop().await;
     registration.shutdown().await;

@@ -1,5 +1,5 @@
 //! Foreground relay or local client. Connection details are emitted once as JSON.
-mod access;
+pub(crate) mod access;
 pub(crate) mod account;
 pub(crate) mod agent;
 #[cfg(target_os = "android")]
@@ -68,8 +68,8 @@ use crate::{
     platform::{interrupt_signal, terminate_signal},
     runtime::Runtime,
     wire::{
-        ClientMetadata, Frame, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION,
-        canonical_allow_principal, read_frame, validate_title, write_frame,
+        ClientMetadata, Frame, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION, read_frame, validate_title,
+        write_frame,
     },
 };
 use serde_json::json;
@@ -106,6 +106,7 @@ Start
   ssmcp attach NAME --read-only Observe a running local session
 
 Manage
+  login · join                  Authorize this device on its relay
   whoami · config               Read public account info and manage client settings
   controllers                   Review and approve controller accounts on this device
   context                     Saved local and HTTPS connection targets
@@ -161,6 +162,8 @@ const HELP_FULL: &str = concat!(
        ssmcp username@server [options] --worker N [--daemon]
        ssmcp mcp [local options]                       (Linux)
        ssmcp mcp install [--harness codex] [--listen IP:PORT]  (Linux)
+       ssmcp login USERNAME@SERVER [--no-browser]
+       ssmcp join USERNAME@SERVER --token-stdin [--no-browser]
        ssmcp whoami [USERNAME@SERVER] [--json]
        ssmcp list [--json]
        ssmcp controllers [list] [--json]
@@ -267,9 +270,10 @@ The watchdog reconnects by default. Use --no-watchdog to disable reconnects or
 --daemon is incompatible with --list-tools.
 
 Start a controlled device with ssmcp username@server. The account must already
-exist on the relay. The device connects without an account token. Control apps
-authorize independently through MCP OAuth, using that account. Every new relay
-connection requires an explicit username@server.
+exist on the relay. First-time device sign-in opens that relay's authorization
+page. Check the short code and confirm the device. Its dedicated credential is
+reused on later launches. Control apps authorize separately through MCP OAuth.
+For an unattended device, run ssmcp login USERNAME@SERVER --no-browser first.
 Create or manage the account on the relay portal. To inspect its public
 information, use ssmcp whoami USERNAME@SERVER.
 
@@ -683,7 +687,6 @@ impl Options {
         let mut ssh = false;
         let mut name = None;
         let mut title = None;
-        let mut allow = Vec::new();
         let mut context_roots = Vec::new();
         let mut chat = chat_io::Flags::default();
         let mut worker_count = None;
@@ -892,15 +895,8 @@ impl Options {
                 Some(value) if value.starts_with("--title=") => {
                     title = Some(value["--title=".len()..].to_owned());
                 }
-                Some("--allow") if new_connection => {
-                    return Err("--allow was removed; connect with ssmcp username@server".into());
-                }
-                Some("--allow") => {
-                    let value = args.next().ok_or("--allow requires USER@SERVER")?;
-                    add_allowed_principals(
-                        &mut allow,
-                        value.to_str().ok_or("--allow must be UTF-8")?,
-                    )?;
+                Some(value) if value == "--allow" || value.starts_with("--allow=") => {
+                    return Err("--allow was removed; connect as username@server, then use /allow add USER in the live session".into());
                 }
                 Some("--context-root") => {
                     if context_roots.len() >= 8 {
@@ -1148,12 +1144,11 @@ impl Options {
                 || identity.is_some()
                 || port.is_some()
                 || config.is_some()
-                || !allow.is_empty()
                 || daemon
                 || session_control
                 || list_tools)
         {
-            return Err("ssmcp local is a foreground OS-user session; omit destinations, account/SSH options, --allow, --daemon, --session-control and --list-tools".into());
+            return Err("ssmcp local is a foreground OS-user session; omit destinations, account/SSH options, --daemon, --session-control and --list-tools".into());
         }
         #[cfg(target_os = "linux")]
         if let Some(settings) = &local {
@@ -1229,11 +1224,6 @@ impl Options {
         if reconnect_delay_secs.is_some() && !watchdog {
             return Err("--reconnect-delay cannot be combined with --no-watchdog".into());
         }
-        if list_tools && !allow.is_empty() {
-            return Err(
-                "--allow requires a relay connection and cannot be used with --list-tools".into(),
-            );
-        }
         validate_title(title.as_deref())?;
         if let Some(name) = &name
             && (name.trim().is_empty() || name.len() > 128 || name.chars().any(char::is_control))
@@ -1252,7 +1242,7 @@ impl Options {
             temporary: false,
             name,
             title,
-            allow,
+            allow: Vec::new(),
             context_roots,
             chat,
             worker,
@@ -1369,11 +1359,6 @@ impl Options {
         }
         if let Some(title) = &self.title {
             args.extend([OsString::from("--title"), OsString::from(title)]);
-        }
-        if self.username.is_none() {
-            for principal in &self.allow {
-                args.extend([OsString::from("--allow"), OsString::from(principal)]);
-            }
         }
         for path in &self.context_roots {
             args.extend([
@@ -2220,22 +2205,6 @@ fn connection_option_takes_value(option: &str) -> bool {
         )
 }
 
-fn add_allowed_principals(allow: &mut Vec<String>, value: &str) -> Result<(), String> {
-    for entry in value.split(',') {
-        let principal =
-            canonical_allow_principal(entry.trim()).map_err(|error| format!("--allow: {error}"))?;
-        if !allow.contains(&principal) {
-            if allow.len() == MAX_ALLOWED_PRINCIPALS {
-                return Err(format!(
-                    "--allow accepts at most {MAX_ALLOWED_PRINCIPALS} distinct allow targets"
-                ));
-            }
-            allow.push(principal);
-        }
-    }
-    Ok(())
-}
-
 fn validate_destination(destination: &str) -> Result<(), String> {
     // Let OpenSSH resolve Host aliases and User from its own configuration.
     // An explicit user@host still takes precedence, just as it does with ssh.
@@ -2486,11 +2455,12 @@ async fn run_with_args(
     }
     connection_context::normalize_args(&mut args)?;
     config::normalize_args(&mut args)?;
-    if args.first().is_some_and(|arg| arg == "login")
-        || (args.first().is_some_and(|arg| arg == "setup")
-            && !args.get(1).is_some_and(|arg| arg == "browser"))
+    if args.first().is_some_and(|arg| arg == "setup")
+        && !args.get(1).is_some_and(|arg| arg == "browser")
     {
-        return Err("client login was removed; connect this device with ssmcp username@server and authorize the controller through MCP OAuth".into());
+        return Err(
+            "setup was removed; sign in on this device with ssmcp login USERNAME@SERVER".into(),
+        );
     }
     if computer_control::dispatch(&args).await? {
         return Ok(());
@@ -2509,11 +2479,8 @@ async fn run_with_args(
     if account::dispatch(&args).await? {
         return Ok(());
     }
-    if args
-        .first()
-        .is_some_and(|arg| arg == "invite" || arg == "join")
-    {
-        return Err("invite and join were removed; start the controlled device with ssmcp username@relay-server".into());
+    if args.first().is_some_and(|arg| arg == "invite") {
+        return Err("the invite subcommand was removed; redeem a device invitation with ssmcp join USERNAME@SERVER --token-stdin".into());
     }
     if args.first().is_some_and(|arg| arg == "service") {
         return crate::session::install::manage(args.into_iter().skip(1).collect()).await;
@@ -3020,7 +2987,7 @@ impl RegisteredTransport {
             )
             .await?;
             return Err(Box::new(relay::PermanentFailure(
-                "server did not acknowledge account access controls; update ssmcpd before using --allow".into()
+                "server did not acknowledge account access controls; update ssmcpd before using /allow".into()
             )));
         }
         Ok(())
@@ -3641,6 +3608,18 @@ async fn connect(
         .server
         .as_deref()
         .ok_or("a relay server is required")?;
+    let name = options
+        .username
+        .as_deref()
+        .ok_or("device login requires USERNAME@SERVER")?;
+    let interactive = service.is_none()
+        && !options.daemon
+        && !options.worker_window_child
+        && !options.frontend_owned
+        && std::io::IsTerminal::is_terminal(&std::io::stdin());
+    account::managed::ensure(name, server, interactive)
+        .await
+        .map_err(|e| relay::PermanentFailure(e.to_string()))?;
     connect_inner(
         options,
         ui,
@@ -3752,6 +3731,11 @@ async fn connect_inner(
         registered,
         || {
             let mut command = transport.command(&executable);
+            if let Some(name) = options.username.as_deref()
+                && matches!(&transport, Transport::Account { .. })
+            {
+                command.env(relay::DEVICE_USER_ENV, name);
+            }
             if options.frontend_owned && matches!(&transport, Transport::Account { .. }) {
                 command.env(relay::FRONTEND_STATUS_ENV, "1");
             }
@@ -3892,8 +3876,7 @@ async fn connect_inner(
     if let [owner] = metadata.allow.as_slice() {
         terminal::set_device_owner(owner);
     }
-    // Explicit --allow uses the same relay transport without an account token.
-    // Preserve its final authorization outcome even when the child exits first.
+    // Preserve the relay's final authorization outcome even when the transport child exits first.
     let mut incoming = Incoming::start(reader, transport_kind);
     let _link_metrics = display_session
         .as_ref()
@@ -4141,7 +4124,11 @@ async fn connect_inner(
     ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
     let mut steering_commands = steering::connect_with_chat(&client_id, VERSION, chat_enabled);
-    let mut access_commands = access::connect(access_supported);
+    let mut access_commands = access::connect(
+        access_supported && admission_server.is_some(),
+        admission_server,
+        &client_id,
+    );
     let mut message_commands = messaging::connect(messaging_supported);
     let mut chat = if !chat_enabled
         || options.frontend_owned
@@ -4282,7 +4269,7 @@ async fn connect_inner(
                         }
                     }
                     let accepted = if options.temporary {
-                        Err("this retired temporary credential cannot restart a session; start again with --allow username@relay-server".into())
+                        Err("this retired temporary credential cannot restart a session; sign in on the device and reconnect as username@relay-server".into())
                     } else {
                         backend.validate_reload().and_then(|()| restart.accept(&json!({}), requests.len(), &client_id, github_auth)).map(|_| ())
                     };
@@ -4367,7 +4354,7 @@ async fn connect_inner(
                     {
                         let result = attribution.as_ref().ok_or("missing authenticated controller identity").and_then(|source| {
                             match controller_accounts::observe_verified(server, &source.account, &client_id) {
-                                Ok(decision) if decision.is_allowed() => Ok(()),
+                                Ok(true) => Ok(()),
                                 Ok(_) => Err("controller requires local approval; inspect ssmcp controllers on the device"),
                                 Err(error) => {
                                     render::status("account", "Warning", &format!("Could not verify local controller policy: {error}"));
@@ -4408,7 +4395,7 @@ async fn connect_inner(
                         let _controller = render::controller_started(id, controller.as_ref(), attribution.as_deref(), &operation);
                         let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
                         let mut response = if options.temporary {
-                            Err("this retired temporary credential cannot restart a session; start again with --allow username@relay-server".into())
+                            Err("this retired temporary credential cannot restart a session; sign in on the device and reconnect as username@relay-server".into())
                         } else {
                             backend.validate_reload().and_then(|()| restart.accept(arguments, requests.len(), &client_id, github_auth))
                         };
@@ -4533,7 +4520,7 @@ async fn connect_inner(
                 Some(Ok(Some(Frame::MessagesReply { id, result }))) => messaging::reply(id, result),
                 Some(Ok(Some(Frame::ResolvedController { id, principal, provider, subject }))) => {
                     if let Some(server) = admission_server && access::awaiting_proposal(id, &principal) {
-                        match authorize_proposal(server, &principal, &provider, &subject) {
+                        match access::resolve_grant(id, server, &principal, &provider, &subject) {
                             Ok(()) => {
                                 let mut writer = writer.lock().await;
                                 if access::awaiting_proposal(id, &principal) {
@@ -5406,8 +5393,8 @@ mod tests {
                 "--watchdog",
                 "--reconnect-delay",
                 "20",
-                "--allow",
-                "octocat@relay.example",
+                "--username",
+                "octocat",
                 "--server",
                 "https://relay.example",
             ]
@@ -5429,7 +5416,8 @@ mod tests {
         let parsed = Options::parse(child.args.iter().map(OsString::from))
             .unwrap()
             .unwrap();
-        assert_eq!(parsed.allow, parent.allow);
+        assert_eq!(parsed.username, parent.username);
+        assert!(parsed.allow.is_empty());
         assert_eq!(parsed.destination, parent.destination);
         assert_eq!(parsed.server, parent.server);
         assert_eq!(parsed.title.as_deref(), Some("--help"));
@@ -5690,12 +5678,12 @@ mod tests {
                     "--daemon",
                     "--server",
                     "https://relay.example",
-                    "--allow",
-                    "OctoCat@Relay.Example",
+                    "--username",
+                    "octocat",
                     "--theme",
                     "nord",
                 ],
-                vec!["octocat@relay.example"],
+                Vec::<&str>::new(),
             ),
             (
                 vec![
@@ -6064,124 +6052,30 @@ mod tests {
     }
 
     #[test]
-    fn qualified_allow_flags_combine_canonicalize_and_deduplicate() {
-        let options = Options::parse(
-            [
-                "--server",
-                "https://relay.example",
-                "--allow",
-                "OctoCat@RELAY.Example:443, Alice-Dev@relay.example",
-                "--allow",
-                "OCTOCAT@relay.example,bob@relay.example",
-            ]
-            .map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            options.allow,
-            [
-                "octocat@relay.example",
-                "alice-dev@relay.example",
-                "bob@relay.example"
-            ]
-        );
-        assert_eq!(options.metadata().unwrap().allow, options.allow);
-        assert_eq!(options.server.as_deref(), Some("https://relay.example"));
-        assert!(options.destination.is_none());
-    }
-
-    #[test]
-    fn qualified_allow_survives_saved_sessions_without_credentials() {
-        let options = Options::parse(
-            [
-                "--server",
-                "https://relay.example",
-                "--name",
-                "allow-roundtrip",
-                "--allow",
-                "Alice@relay.example, ALICE_DEV@relay.example",
-                "--allow",
-                "alice@relay.example",
-            ]
-            .map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            options.allow,
-            ["alice@relay.example", "alice_dev@relay.example"]
-        );
-        let restored = Options::parse_saved(&options.session_spec().unwrap())
+    fn current_and_saved_launches_reject_startup_access_grants() {
+        let base = Options::parse_new(["owner@relay.example"].map(OsString::from))
             .unwrap()
             .unwrap();
-        assert_eq!(restored.allow, options.allow);
-        assert_eq!(restored.server, options.server);
-        assert!(restored.destination.is_none());
-    }
-
-    #[test]
-    fn allow_limits_targets_and_rejects_invalid_or_local_options() {
-        let all = (0..MAX_ALLOWED_PRINCIPALS)
-            .map(|i| format!("user-{i}@relay.example"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let options = Options::parse(
-            [
-                "--server",
-                "https://relay.example",
-                "--allow",
-                &all,
-                "--allow",
-                &all,
-            ]
-            .map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(options.allow.len(), MAX_ALLOWED_PRINCIPALS);
-        let error = Options::parse(
-            [
-                "--server",
-                "https://relay.example",
-                "--allow",
-                &all,
-                "--allow",
-                "another@relay.example",
-            ]
-            .map(OsString::from),
-        )
-        .err()
-        .unwrap();
-        assert!(error.contains("32 distinct"), "{error}");
-        for value in [
-            "",
-            "alice",
-            "root@relay.example",
-            "alice@github",
-            "alice@relay.example,",
-            ",alice@relay.example",
-            "alice@https://relay.example/path",
-        ] {
-            let error = Options::parse(
-                ["--server", "https://relay.example", "--allow", value].map(OsString::from),
-            )
-            .err()
-            .unwrap();
-            assert!(error.contains("--allow"), "{error}");
+        for flag in ["--allow", "--allow=other@relay.example"] {
+            let args = ["owner@relay.example", flag, "other@relay.example"].map(OsString::from);
+            assert!(
+                Options::parse_new(args.clone())
+                    .err()
+                    .unwrap()
+                    .contains("/allow add")
+            );
+            let mut saved = base.session_spec().unwrap();
+            saved
+                .args
+                .extend([flag.into(), "other@relay.example".into()]);
+            assert!(
+                Options::parse_saved(&saved)
+                    .err()
+                    .unwrap()
+                    .contains("/allow add")
+            );
+            assert!(Options::parse(args).err().unwrap().contains("/allow add"));
         }
-        assert!(
-            Options::parse(["--allow"].map(OsString::from))
-                .err()
-                .unwrap()
-                .contains("requires USER@SERVER")
-        );
-        assert!(
-            Options::parse(["--list-tools", "--allow", "alice@relay.example"].map(OsString::from))
-                .err()
-                .unwrap()
-                .contains("cannot be used with --list-tools")
-        );
     }
 
     #[test]

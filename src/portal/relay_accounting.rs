@@ -113,6 +113,16 @@ impl Accounting {
         .map_err(|_| Problem::Storage)?
     }
 
+    pub(crate) fn user_id(&self, principal: &str) -> Option<&str> {
+        self.user_ids.get(principal).map(String::as_str)
+    }
+
+    pub(crate) async fn has_recharged(&self, id: &str) -> Result<bool, Problem> {
+        let id = id.to_owned();
+        self.storage(move |ledger| Ok(ledger.has_recharged(&id)))
+            .await
+    }
+
     pub(crate) async fn reserve(
         &self,
         principal: &str,

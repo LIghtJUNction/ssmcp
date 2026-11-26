@@ -2,24 +2,6 @@
 use super::*;
 use crate::client::access as session_access;
 
-#[derive(Debug, PartialEq, Eq)]
-enum Action<'a> {
-    List,
-    Add(&'a str),
-    Remove(&'a str),
-}
-
-fn parse(arguments: &str) -> Result<Action<'_>, String> {
-    let words: Vec<_> = arguments.split_whitespace().collect();
-    match words.as_slice() {
-        [] => Ok(Action::List),
-        ["add" | "remove"] => Err("Use /allow, /allow USER, or /allow remove USER".into()),
-        [user] | ["add", user] => Ok(Action::Add(user)),
-        ["remove", user] => Ok(Action::Remove(user)),
-        _ => Err("Use /allow, /allow USER, or /allow remove USER".into()),
-    }
-}
-
 fn message(snapshot: &session_access::Snapshot) -> String {
     if !snapshot.connected {
         return snapshot
@@ -56,25 +38,20 @@ fn message(snapshot: &session_access::Snapshot) -> String {
             text.push('\n');
         }
     } else if !snapshot.pending {
-        text.push_str("\nThe current list is not confirmed. Use /allow to read it again.\n");
+        text.push_str("\nThe current list is not confirmed. Use /allow list to read it again.\n");
     }
-    text.push_str("\n/allow USER adds an approved controller · /allow remove USER revokes access to this session");
+    text.push_str("\n/allow add USER grants access to this session · /allow remove USER revokes access to this session");
     text
 }
 
 impl State {
     pub(super) fn chat_allow(&mut self, arguments: &str) -> Result<(), String> {
-        let action = parse(arguments)?;
         if self.preview {
             return Err("Preview cannot read or change a live session's access list".into());
         }
         self.chat_poll_access();
         let revision = session_access::snapshot().revision;
-        match action {
-            Action::List => session_access::refresh()?,
-            Action::Add(user) => session_access::add(user)?,
-            Action::Remove(user) => session_access::remove(user)?,
-        }
+        session_access::submit(arguments)?;
         // Ok means queued. A later revision with pending=false is the result.
         self.conversation.access_request = Some(revision);
         self.notice = Some("Session access requested · waiting for the server".into());
@@ -135,22 +112,6 @@ mod tests {
                 owner: true,
             }],
             ..Default::default()
-        }
-    }
-
-    #[test]
-    fn allow_syntax_keeps_user_resolution_in_the_authoritative_backend() {
-        assert_eq!(parse("").unwrap(), Action::List);
-        for user in ["Alice", "@Alice", "Alice@github"] {
-            assert_eq!(parse(user).unwrap(), Action::Add(user));
-            assert_eq!(parse(&format!("add {user}")).unwrap(), Action::Add(user));
-            assert_eq!(
-                parse(&format!("remove {user}")).unwrap(),
-                Action::Remove(user)
-            );
-        }
-        for value in ["add", "remove", "alice bob", "remove alice extra"] {
-            assert!(parse(value).is_err(), "{value}");
         }
     }
 

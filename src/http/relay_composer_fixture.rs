@@ -29,6 +29,45 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{net::TcpListener, task::JoinHandle};
+use tokio_rustls::TlsAcceptor;
+
+struct RelayTls {
+    tcp: TcpListener,
+    tls: TlsAcceptor,
+}
+
+impl axum::serve::Listener for RelayTls {
+    type Io = tokio_rustls::server::TlsStream<tokio::net::TcpStream>;
+    type Addr = std::net::SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            let (tcp, address) = axum::serve::Listener::accept(&mut self.tcp).await;
+            if let Ok(Ok(stream)) =
+                tokio::time::timeout(Duration::from_secs(3), self.tls.accept(tcp)).await
+            {
+                return (stream, address);
+            }
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.tcp.local_addr()
+    }
+}
+
+fn fixture_tls(directory: &Path) -> crate::Result<TlsAcceptor> {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+    let certificate = CertificateDer::from_pem_file(directory.join("server.pem"))?;
+    let key = PrivateKeyDer::from_pem_file(directory.join("server.key"))?;
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()?
+    .with_no_client_auth()
+    .with_single_cert(vec![certificate], key)?;
+    Ok(TlsAcceptor::from(Arc::new(config)))
+}
 
 const GITHUB_CLIENT: &str = "relay-composer-fixture-client";
 const GITHUB_SECRET: &str = "relay-composer-fixture-secret";
@@ -299,7 +338,11 @@ async fn run(directory: PathBuf) -> crate::Result<()> {
         ready: ready.clone(),
     };
     let relay_listener = TcpListener::bind("127.0.0.1:0").await?;
-    let server_url = format!("http://{}", relay_listener.local_addr()?);
+    let server_url = format!("https://{}", relay_listener.local_addr()?);
+    let relay_listener = RelayTls {
+        tcp: relay_listener,
+        tls: fixture_tls(&directory.join("loopback-tls"))?,
+    };
     let provider = Arc::new(Provider {
         callback: format!("{server_url}/oauth/callback/github"),
         ..Provider::default()
@@ -317,11 +360,7 @@ async fn run(directory: PathBuf) -> crate::Result<()> {
     }));
 
     // Keep the real ACL namespace, MCP issuer and selected CLI origin identical.
-    // Only this cfg(test) fixture runs HTTP on a private literal loopback socket;
-    // production identity construction continues to require HTTPS.
-    let mut broker = Broker::new(server_url.replacen("http://", "https://", 1));
-    broker.public_url = server_url.clone();
-    broker.oauth = crate::oauth::OAuth::new(server_url.clone());
+    let mut broker = Broker::new(server_url.clone());
     broker.identities = IdentityProviders::with_github_test_endpoints(
         &server_url,
         GitHubConfig {

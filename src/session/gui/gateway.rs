@@ -124,6 +124,12 @@ pub(super) trait Host: Send + Sync {
             "this gateway does not create owned sessions",
         ))
     }
+    fn pending_device_authorization(
+        &self,
+        _destination: &str,
+    ) -> Result<Option<Value>, BridgeError> {
+        Ok(None)
+    }
     fn create(&self, _destination: String) -> CoreFuture<'_, String, CreationError> {
         Box::pin(async {
             Err(BridgeError::new(ErrorCode::Denied, "owned sessions are disabled").into())
@@ -639,6 +645,11 @@ async fn create_owned(
                     json!({"request_id":input.request_id,"session":target}),
                 ));
             }
+            if let Some(authorization) = state.host.pending_device_authorization(&destination)? {
+                return Ok(Json(
+                    json!({"request_id":input.request_id, "authorization":authorization}),
+                ));
+            }
             if receipts.len() >= MAX_OPEN_RECEIPTS {
                 return Err(unavailable("too many unresolved creation requests").into());
             }
@@ -747,6 +758,9 @@ async fn launch(
     let destination = input::<LaunchRequest>(request)
         .await?
         .checked_destination()?;
+    if let Some(authorization) = state.host.pending_device_authorization(&destination)? {
+        return Ok(Json(json!({"authorization":authorization})));
+    }
     let target = state.host.launch(destination.clone()).await?;
     crate::connection_form::save_desktop_profile(&destination)
         .map_err(|e| unavailable(&e.to_string()))?;

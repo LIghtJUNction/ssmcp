@@ -348,7 +348,29 @@ impl Receipt {
                             value["status"].as_str(),
                             Some("queued" | "sending" | "delivered")
                         ));
+                let access_list = if receipt.command.as_str() == "session.access" {
+                    serde_json::from_value::<ssmcp::wire::AccessSnapshot>(value.clone())
+                        .ok()
+                        .filter(|snapshot| snapshot.validate().is_ok())
+                        .map(|snapshot| {
+                            snapshot
+                                .entries
+                                .into_iter()
+                                .map(|entry| {
+                                    if entry.owner {
+                                        format!("{}（所有者）", entry.principal)
+                                    } else {
+                                        entry.principal
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join("、")
+                        })
+                } else {
+                    None
+                };
                 let complete = match receipt.command.as_str() {
+                    "session.access" => access_list.is_some(),
                     "session.new" => value["session"]
                         .as_str()
                         .is_some_and(|s| s.starts_with("live:") && s.len() > 5 && s.len() <= 256),
@@ -371,6 +393,9 @@ impl Receipt {
                         }
                         "workers.resize" => "收到容量调整回执；当前站位见 Worker 页面。".into(),
                         "terminal.write" => "终端接受写入。命令是否完成请查看终端输出。".into(),
+                        "session.access" => {
+                            format!("当前会话的控制者：{}", access_list.unwrap_or_default())
+                        }
                         "session.cd" => text(value, "cwd", 2048),
                         "session.new" => "已新建会话".into(),
                         "terminal.resize" => "收到终端尺寸变更回执。".into(),
@@ -1096,6 +1121,27 @@ mod receipt_regressions {
     fn chat_value() -> Value {
         json!({"request_id":"send-one","target":"agent-one","confirmation":"local_queue_admission",
             "message_id":"message-one","status":"queued"})
+    }
+
+    #[test]
+    fn only_confirmed_session_access_receipts_display_the_controller_list() {
+        let receipt = |entries| {
+            project(&record(
+                "share",
+                "session.access",
+                json!({"entries":entries}),
+            ))
+        };
+        let list = receipt(json!([
+            {"principal":"owner@relay.test","subject":"1","login":"owner","owner":true},
+            {"principal":"list@relay.test","subject":"2","login":"list","owner":false}
+        ]));
+        assert_eq!(list.state, ReceiptState::Confirmed);
+        assert!(
+            list.detail
+                .contains("owner@relay.test（所有者）、list@relay.test")
+        );
+        assert_eq!(receipt(json!([])).state, ReceiptState::Unknown);
     }
 
     #[test]

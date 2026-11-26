@@ -244,6 +244,7 @@ impl Fixture {
         let attachment = tokio::spawn(self.broker.clone().attach_device(
             server,
             crate::device::DevicePeer {
+                external_user_id: None,
                 account: None,
                 session_access: true,
                 control_attribution: true,

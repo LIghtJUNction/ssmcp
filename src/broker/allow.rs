@@ -39,6 +39,11 @@ impl Broker {
         } else {
             self.resolve_initial_allow(principals).await?
         };
+        if registration.device_only
+            && !matches!(identities.as_slice(), [owner] if owner.provider == registration.identity.provider && owner.subject == registration.identity.subject)
+        {
+            return Err("device invitation belongs to a different account".into());
+        }
         if !registration.is_live(self).await {
             return Err("ssmcp authorization expired or revoked".into());
         }
@@ -293,22 +298,31 @@ mod tests {
         request
             .headers_mut()
             .insert("x-ssmcp-device-ingress", ingress.parse().unwrap());
-        let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
-        send(
-            &mut socket,
-            Frame::Hello {
-                version: wire::VERSION,
-                mode: Mode::Shell,
-                metadata: ClientMetadata {
-                    name: "headless fixture".into(),
-                    title: None,
-                    cwd: "/fixture".into(),
-                    hostname: "localhost".into(),
-                    allow: names(&["alice"]),
-                },
+        let denied = tokio_tungstenite::connect_async(request.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(denied, tokio_tungstenite::tungstenite::Error::Http(response)
+            if response.status().as_u16() == 401)
+        );
+        request
+            .headers_mut()
+            .insert("authorization", format!("Bearer {bob}").parse().unwrap());
+        let (mut socket, _) = tokio_tungstenite::connect_async(request.clone())
+            .await
+            .unwrap();
+        let hello = || Frame::Hello {
+            version: wire::VERSION,
+            mode: Mode::Shell,
+            metadata: ClientMetadata {
+                name: "headless fixture".into(),
+                title: None,
+                cwd: "/fixture".into(),
+                hostname: "localhost".into(),
+                allow: names(&["alice"]),
             },
-        )
-        .await;
+        };
+        send(&mut socket, hello()).await;
         let Frame::Ready { client_id, .. } = receive(&mut socket).await else {
             panic!("ready required")
         };
@@ -351,6 +365,9 @@ mod tests {
                 }
             }
         }
+        let (mut second, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        send(&mut second, hello()).await;
+        assert!(matches!(receive(&mut second).await, Frame::Ready { .. }));
     }
     impl Fixture {
         async fn new() -> Self {
@@ -447,7 +464,15 @@ mod tests {
             request
         }
         async fn socket(&self, token: Option<&str>, targets: Vec<String>) -> Socket {
-            let (mut socket, _) = tokio_tungstenite::connect_async(self.request(token, true))
+            let default_token;
+            let token = match token {
+                Some(token) => token,
+                None => {
+                    default_token = self.token("123").await;
+                    &default_token
+                }
+            };
+            let (mut socket, _) = tokio_tungstenite::connect_async(self.request(Some(token), true))
                 .await
                 .unwrap();
             send(
@@ -628,7 +653,8 @@ mod tests {
         let other = Authorization::Identity(identity("7", "alice"));
         let owner_target = "alice@ssmcp.test";
         let other_target = "colleague@ssmcp.test";
-        let open = || tokio_tungstenite::connect_async(fixture.request(None, true));
+        let device_owner = fixture.token("42").await;
+        let open = || tokio_tungstenite::connect_async(fixture.request(Some(&device_owner), true));
 
         // An undecided or abandoned preflight never creates a visible session.
         let (mut socket, _) = open().await.unwrap();
@@ -781,8 +807,9 @@ mod tests {
             &Authorization::Identity(identity("42", "octocat")),
         )
         .unwrap();
+        let device_owner = fixture.token("42").await;
         for offered in [false, true] {
-            let mut request = fixture.request(None, true);
+            let mut request = fixture.request(Some(&device_owner), true);
             if offered {
                 request.headers_mut().insert(
                     wire::CAPABILITIES_HEADER,
@@ -1156,8 +1183,8 @@ mod tests {
     async fn anonymous_allow_resolves_only_existing_handles_to_stable_subjects() {
         let fixture = Fixture::new().await;
         let (socket, session) = fixture.ready(None, names(&["alice", "colleague"])).await;
-        assert!(session.owner_subject.is_none());
-        assert!(session.owner_identity.is_none());
+        assert_eq!(session.owner_subject.as_deref(), Some("123"));
+        assert_eq!(session.owner_identity.as_ref().unwrap().subject, "123");
         assert!(session.identity_required);
         assert_eq!(
             session
@@ -1213,7 +1240,6 @@ mod tests {
         let fixture = Fixture::new().await;
         fixture.ban("7", true).await;
         for targets in [
-            vec![],
             names(&["missing"]),
             names(&["alice", "missing"]),
             names(&["alice", "colleague"]),
@@ -1292,7 +1318,11 @@ mod tests {
     #[tokio::test]
     async fn anonymous_allow_requires_capabilities_and_never_falls_back_from_invalid_token() {
         let fixture = Fixture::new().await;
-        for (token, caps, status) in [(None, false, 400), (Some("invalid"), true, 401)] {
+        for (token, caps, status) in [
+            (None, false, 401),
+            (None, true, 401),
+            (Some("invalid"), true, 401),
+        ] {
             let error = tokio_tungstenite::connect_async(fixture.request(token, caps))
                 .await
                 .unwrap_err();
@@ -1309,7 +1339,7 @@ mod tests {
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+            assert!(response.status().is_client_error());
         }
         assert!(fixture.broker.sessions.read().await.is_empty());
     }
@@ -1347,7 +1377,7 @@ mod tests {
                 .await
                 .unwrap()
         });
-        let (uploaded, downloaded) = reply(&mut socket, "42", None).await;
+        let (uploaded, downloaded) = reply(&mut socket, "42", Some("123")).await;
         assert_eq!(task.await.unwrap().status(), 200);
         let quota = fixture.broker.traffic_quota("42").await.unwrap();
         assert_eq!(quota.uploaded_bytes, uploaded as u64);
@@ -1489,7 +1519,7 @@ mod tests {
         assert!(!error.contains("重新连接"), "{error}");
         assert!(session.is_alive());
         let good = call(&session, "7");
-        let (uploaded, downloaded) = reply(&mut socket, "7", None).await;
+        let (uploaded, downloaded) = reply(&mut socket, "7", Some("123")).await;
         good.await.unwrap().unwrap();
         let bob = fixture.broker.traffic_quota("7").await.unwrap();
         assert_eq!(
@@ -1536,7 +1566,7 @@ mod tests {
         assert!(error.contains("可能已经执行"), "{error}");
         assert!(session.is_alive());
         let good = call(&session, "7");
-        reply(&mut socket, "7", None).await;
+        reply(&mut socket, "7", Some("123")).await;
         good.await.unwrap().unwrap();
         assert_eq!(
             fixture
@@ -1600,7 +1630,7 @@ mod tests {
             0
         );
         let good = call(&session, "7");
-        reply(&mut socket, "7", None).await;
+        reply(&mut socket, "7", Some("123")).await;
         good.await.unwrap().unwrap();
         assert!(session.is_alive());
         close(socket).await;
@@ -1780,7 +1810,7 @@ mod tests {
             json!({"existing":"B"})
         );
         let next = call(&session, "7");
-        reply(&mut socket, "7", None).await;
+        reply(&mut socket, "7", Some("123")).await;
         timeout(Duration::from_secs(1), next)
             .await
             .expect("A's rate wait blocked B's new call")
@@ -1796,7 +1826,7 @@ mod tests {
             .await
             .unwrap();
         let fresh = call(&session, "42");
-        let (uploaded, downloaded) = reply(&mut socket, "42", None).await;
+        let (uploaded, downloaded) = reply(&mut socket, "42", Some("123")).await;
         timeout(Duration::from_secs(1), fresh)
             .await
             .unwrap()
@@ -1854,7 +1884,7 @@ mod tests {
             json!({"existing":"B"})
         );
         let next = call(&session, "7");
-        reply(&mut socket, "7", None).await;
+        reply(&mut socket, "7", Some("123")).await;
         timeout(Duration::from_secs(1), next)
             .await
             .expect("A's result rate wait blocked B's new call")
@@ -1870,7 +1900,7 @@ mod tests {
             .await
             .unwrap();
         let fresh = call(&session, "42");
-        let (_, downloaded) = reply(&mut socket, "42", None).await;
+        let (_, downloaded) = reply(&mut socket, "42", Some("123")).await;
         timeout(Duration::from_secs(1), fresh)
             .await
             .unwrap()

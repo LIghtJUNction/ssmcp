@@ -13,6 +13,45 @@ use std::{
     time::Instant,
 };
 
+impl Portal {
+    pub(crate) fn enable_test_commerce(&mut self, state_dir: &std::path::Path, environment: &str) {
+        let private = state_dir.join("merchant.pem");
+        let public = state_dir.join("webhook.pem");
+        for (path, bytes) in [
+            (
+                &private,
+                include_bytes!("../commerce/pancake/fixtures/test-rsa-private.pem").as_slice(),
+            ),
+            (
+                &public,
+                include_bytes!("../commerce/pancake/fixtures/test-rsa-public.pem").as_slice(),
+            ),
+        ] {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(path)
+                .unwrap();
+            file.write_all(bytes).unwrap();
+        }
+        let config = CommerceConfig {
+            enabled: true,
+            environment: environment.into(),
+            monthly_sellable_gb: 10,
+            merchant_id: "MER_test".into(),
+            store_id: "STO_test".into(),
+            product_id: "PROD_test".into(),
+            checkout_origin: "https://pancake.waffo.ai".into(),
+            private_key_file: Some(private),
+            webhook_public_key_file: Some(public),
+            ..CommerceConfig::default()
+        };
+        self.configure_commerce(config, state_dir).unwrap();
+    }
+}
+
 struct App {
     broker: Arc<Broker>,
     base: String,
@@ -40,26 +79,6 @@ impl App {
             super::super::random().unwrap()
         ));
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
-        let private = path.join("merchant.pem");
-        let public = path.join("webhook.pem");
-        for (path, bytes) in [
-            (
-                &private,
-                include_bytes!("../commerce/pancake/fixtures/test-rsa-private.pem").as_slice(),
-            ),
-            (
-                &public,
-                include_bytes!("../commerce/pancake/fixtures/test-rsa-public.pem").as_slice(),
-            ),
-        ] {
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(path)
-                .unwrap();
-            file.write_all(bytes).unwrap();
-        }
         let state_dir = path.join("accounts");
         let mut broker = Broker::new("https://ssmcp.test".into());
         broker.portal = Portal::open(&state_dir).unwrap();
@@ -77,22 +96,7 @@ impl App {
             })
             .await
             .unwrap();
-        let config = CommerceConfig {
-            enabled: true,
-            environment: environment.into(),
-            monthly_sellable_gb: 10,
-            merchant_id: "MER_test".into(),
-            store_id: "STO_test".into(),
-            product_id: "PROD_test".into(),
-            checkout_origin: "https://pancake.waffo.ai".into(),
-            private_key_file: Some(private),
-            webhook_public_key_file: Some(public),
-            ..CommerceConfig::default()
-        };
-        broker
-            .portal
-            .configure_commerce(config, &state_dir)
-            .unwrap();
+        broker.portal.enable_test_commerce(&state_dir, environment);
         let alice = super::super::random().unwrap();
         let bob = super::super::random().unwrap();
         let csrf = super::super::random().unwrap();

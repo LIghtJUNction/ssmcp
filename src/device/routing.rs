@@ -274,7 +274,7 @@ pub(super) async fn challenge(
     State(broker): State<Arc<Broker>>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    let registration = authenticate(&broker, &headers, true).await?;
+    let registration = super::authenticate_device(&broker, &headers).await?;
     if !registration.is_live(&broker).await {
         return Err(problem(Problem::Unauthorized));
     }
@@ -299,6 +299,8 @@ mod tests {
             username: format!("gh-{subject}"),
             session_access: true,
             control_attribution: true,
+            device_only: false,
+            verified_launcher: true,
             key: hash(token),
             device_identity: None,
         }

@@ -15,7 +15,7 @@ pub struct SlashCommand {
     hint: &'static str,
 }
 
-pub const SLASH_COMMANDS: [SlashCommand; 2] = [
+pub const SLASH_COMMANDS: [SlashCommand; 3] = [
     SlashCommand {
         verb: "/new",
         capability: "session.new",
@@ -27,6 +27,12 @@ pub const SLASH_COMMANDS: [SlashCommand; 2] = [
         capability: "session.cd",
         insertion: "/cd ",
         hint: "切换目录",
+    },
+    SlashCommand {
+        verb: "/allow",
+        capability: "session.access",
+        insertion: "/allow ",
+        hint: "管理当前会话的控制者",
     },
 ];
 
@@ -622,7 +628,7 @@ mod tests {
                 .suggestions(&draft)
                 .map(|c| c.verb)
                 .collect::<Vec<_>>(),
-            ["/new", "/cd"]
+            ["/new", "/cd", "/allow"]
         );
         assert!(editor.event(&key(1004, false, false), &mut draft, true));
         assert!(editor.event(&key(13, false, false), &mut draft, true));

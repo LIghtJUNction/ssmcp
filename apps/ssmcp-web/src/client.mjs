@@ -345,6 +345,10 @@ export class BridgeClient {
           || value.value?.confirmation !== 'local_queue_admission' || typeof value.value?.message_id !== 'string'
           || typeof value.value?.duplicate !== 'boolean' || typeof value.value?.status !== 'string')) throw new ProtocolError('输入队列回执与原提交不匹配。', 'response_mismatch');
       if (command === 'chat.send') identifier(value.value.message_id, '输入消息 ID');
+      if (command === 'session.access' && (!Array.isArray(value.value?.entries) || !value.value.entries.length
+          || value.value.entries.some(entry => typeof entry?.principal !== 'string' || typeof entry?.subject !== 'string'))) {
+        throw new ProtocolError('服务器返回的会话权限清单无效。', 'response_mismatch');
+      }
       const nativeUnknown = ['unknown', 'uncertain'].includes(value.value?.status)
         || value.value?.uncertain === true || value.value?.effect === 'may_have_occurred';
       this.ledger.update(id, { status: nativeUnknown ? 'unknown' : 'confirmed', receipt: value.value,
@@ -357,8 +361,12 @@ export class BridgeClient {
       } });
     }
     if (this.current(context)) {
-      const text = record.status === 'confirmed' ? command === 'chat.send' ? '已收到本地输入队列的入队回执。' : '已收到原生操作回执。'
+      let text = record.status === 'confirmed' ? command === 'chat.send' ? '已收到本地输入队列的入队回执。' : '已收到原生操作回执。'
         : record.status === 'unknown' ? '结果未确定。保留此请求 ID，并核对实际状态；不会自动重发。' : record.error.message;
+      if (record.status === 'confirmed' && command === 'session.access') {
+        const accounts = record.receipt.entries.map(entry => entry.principal + (entry.owner ? '（所有者）' : ''));
+        text = '当前会话的控制者：' + accounts.join('、');
+      }
       this.timeline.put({ id: `command:${id}`, generation: context.generation, kind: 'receipt', title: command,
         text, status: record.status, metadata: record });
       this.emit('timeline');

@@ -155,7 +155,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/allow",
-        description: "List session access; /allow USER adds a locally approved controller",
+        description: "List session access; /allow add USER grants access to this session",
     },
     SlashCommand {
         name: "/logs",

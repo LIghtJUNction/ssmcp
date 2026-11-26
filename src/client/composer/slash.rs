@@ -173,7 +173,8 @@ pub(super) fn subcommands(command: &str) -> &'static [SlashCommand] {
             "/diff split" => "Show old and new lines side by side",
         },
         "/allow" => commands! {
-            "/allow add" => "USER · add a locally approved controller",
+            "/allow list" => "List users with access to this session",
+            "/allow add" => "USER · grant access to this session",
             "/allow remove" => "USER · revoke this session's access",
         },
         "/new" => commands! {

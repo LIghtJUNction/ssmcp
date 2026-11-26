@@ -348,6 +348,18 @@ pub(super) fn tls_config(server: &str) -> Result<Option<Arc<ClientConfig>>> {
         return Ok(None);
     }
     let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    #[cfg(all(feature = "e2e-loopback-ca", debug_assertions))]
+    let roots = {
+        let mut roots = roots;
+        if reqwest::Url::parse(server)?.host_str() == Some("127.0.0.1") {
+            // Detached sessions retain the private client configuration path.
+            let ca = path()?.with_file_name("loopback-e2e-ca.pem");
+            if let Some(certificate) = read_file(&ca, 16 * 1024, true)? {
+                roots.add(CertificateDer::from_pem_slice(certificate.as_bytes())?)?;
+            }
+        }
+        roots
+    };
     Ok(Some(build_tls_config(pins, roots)?))
 }
 

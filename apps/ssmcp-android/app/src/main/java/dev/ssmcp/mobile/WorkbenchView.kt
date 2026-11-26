@@ -2,6 +2,8 @@ package dev.ssmcp.mobile
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.graphics.Bitmap
 import android.os.SystemClock
 import android.view.View
@@ -36,8 +38,21 @@ internal class WorkbenchView(
         importantForAutofill = IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
         webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) =
-                !target.owns(request.url.toString())
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                val uri = request.url
+                if (request.isForMainFrame && request.hasGesture() && request.method == "GET"
+                    && uri.scheme == "https" && !uri.host.isNullOrEmpty() && uri.userInfo == null
+                    && uri.path == "/setup" && uri.fragment == null && uri.queryParameterNames == setOf("code")
+                    && uri.getQueryParameters("code").singleOrNull()?.matches(Regex("[A-Za-z0-9-]{4,32}")) == true) {
+                    try {
+                        activity.startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
+                    } catch (_: ActivityNotFoundException) {
+                        failed("请在浏览器中打开中继的 /setup 页面，输入工作台显示的验证码。")
+                    }
+                    return true
+                }
+                return !target.owns(uri.toString())
+            }
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 ++pageGeneration

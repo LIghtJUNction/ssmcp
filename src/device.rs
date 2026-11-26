@@ -46,6 +46,7 @@ const MAX_DATABASE: u64 = 8 * 1024 * 1024;
 #[serde(rename_all = "snake_case")]
 enum Kind {
     Login,
+    BrowserDevice,
     Invite,
     Device,
 }
@@ -60,6 +61,8 @@ struct Record {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     oauth_parent: Option<crate::oauth::Delegation>,
     session_ttl_secs: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    launcher: Option<String>,
 }
 
 /// Hashed secrets only. The portal's existing exclusive writer lock also protects
@@ -130,9 +133,10 @@ impl Credentials {
             || records.iter().any(|(key, r)| {
                 !valid_hash(key)
                     || crate::portal::store::stable_username(&r.subject).is_none()
-                    || (r.kind == Kind::Login
+                    || r.launcher.as_ref().is_some_and(|key| r.kind != Kind::Device || !valid_hash(key))
+                    || (matches!(r.kind, Kind::Login | Kind::BrowserDevice)
                         && (r.parent.is_some() || r.oauth_parent.is_some() || r.session_ttl_secs != 0))
-                    || (r.kind != Kind::Login
+                    || (matches!(r.kind, Kind::Invite | Kind::Device)
                         && !matches!((&r.parent, &r.oauth_parent), (Some(parent), None) if valid_hash(parent))
                         && !matches!((&r.parent, &r.oauth_parent), (None, Some(parent))
                             if parent.valid_for(&r.subject) && r.expires_at <= parent.expires_at))
@@ -190,6 +194,15 @@ impl Credentials {
         {
             return None;
         }
+        if let Some(launcher) = &record.launcher {
+            let launcher = self.records.get(launcher)?;
+            if launcher.kind != Kind::BrowserDevice
+                || launcher.subject != record.subject
+                || launcher.expires_at <= now()
+            {
+                return None;
+            }
+        }
         // OAuth liveness is checked outside this ledger's lock by every
         // enrollment/registration boundary, never while saving credentials.
         if let Some(parent) = &record.parent {
@@ -219,8 +232,9 @@ impl Credentials {
         ttl: u64,
         session_ttl_secs: u64,
     ) -> Result<(String, u64), Problem> {
-        if (kind == Kind::Login && (parent.is_some() || oauth_parent.is_some()))
-            || (kind != Kind::Login && parent.is_some() == oauth_parent.is_some())
+        let direct = matches!(kind, Kind::Login | Kind::BrowserDevice);
+        if (direct && (parent.is_some() || oauth_parent.is_some()))
+            || (!direct && parent.is_some() == oauth_parent.is_some())
             || oauth_parent
                 .as_ref()
                 .is_some_and(|value| !value.valid_for(&subject))
@@ -256,7 +270,7 @@ impl Credentials {
         let raw = secret(match kind {
             Kind::Login => "cl_",
             Kind::Invite => "ci_",
-            Kind::Device => "cd_",
+            Kind::BrowserDevice | Kind::Device => "cd_",
         })?;
         let key = hash(&raw);
         if next.contains_key(&key) {
@@ -271,6 +285,7 @@ impl Credentials {
                 parent,
                 oauth_parent,
                 session_ttl_secs,
+                launcher: None,
             },
         );
         self.save(next)?;
@@ -278,6 +293,9 @@ impl Credentials {
     }
     pub(crate) fn login(&mut self, subject: String) -> Result<(String, u64), Problem> {
         self.issue(subject, Kind::Login, None, None, LOGIN_TTL, 0)
+    }
+    pub(crate) fn device_login(&mut self, subject: String) -> Result<(String, u64), Problem> {
+        self.issue(subject, Kind::BrowserDevice, None, None, LOGIN_TTL, 0)
     }
     fn authenticate(&self, raw: &str, controller: bool) -> Result<(String, Record), Problem> {
         if !valid_secret(raw) {
@@ -290,7 +308,6 @@ impl Credentials {
         }
         Ok((key, record.clone()))
     }
-    #[cfg(test)]
     fn invite(&mut self, raw: &str, ttl: u64, session_ttl: u64) -> Result<(String, u64), Problem> {
         let (parent, record) = self.authenticate(raw, true)?;
         self.issue(
@@ -302,7 +319,6 @@ impl Credentials {
             session_ttl,
         )
     }
-    #[cfg(test)]
     fn invite_oauth(
         &mut self,
         parent: crate::oauth::Delegation,
@@ -321,7 +337,6 @@ impl Credentials {
             session_ttl,
         )
     }
-    #[cfg(test)]
     fn invitation(&self, raw: &str) -> Result<Record, Problem> {
         if !valid_secret(raw) {
             return Err(Problem::Unauthorized);
@@ -333,7 +348,23 @@ impl Credentials {
     }
     #[cfg(test)]
     fn enroll(&mut self, raw: &str) -> Result<(String, u64, String), Problem> {
+        self.exchange_invite(raw, None)
+    }
+    fn exchange_invite(
+        &mut self,
+        raw: &str,
+        launcher: Option<&str>,
+    ) -> Result<(String, u64, String), Problem> {
         let record = self.invitation(raw)?;
+        let launcher = launcher
+            .map(|raw| {
+                let (key, proof) = self.authenticate(raw, false)?;
+                if proof.kind != Kind::BrowserDevice || proof.subject != record.subject {
+                    return Err(Problem::Unauthorized);
+                }
+                Ok((key, proof.expires_at))
+            })
+            .transpose()?;
         let key = hash(raw);
         let parent_expires = match (&record.parent, &record.oauth_parent) {
             (Some(parent), None) => self.live(parent).ok_or(Problem::Unauthorized)?.expires_at,
@@ -342,7 +373,8 @@ impl Credentials {
         };
         let expires_at = now()
             .saturating_add(record.session_ttl_secs)
-            .min(parent_expires);
+            .min(parent_expires)
+            .min(launcher.as_ref().map_or(u64::MAX, |(_, expires)| *expires));
         let device = secret("cd_")?;
         let mut next = self.pruned();
         next.remove(&key);
@@ -359,6 +391,7 @@ impl Credentials {
                 parent: record.parent,
                 oauth_parent: record.oauth_parent,
                 session_ttl_secs: 0,
+                launcher: launcher.map(|(key, _)| key),
             },
         );
         self.save(next)?;
@@ -380,6 +413,9 @@ impl Credentials {
 /// One local controlled connection; account identity is optional display provenance.
 pub(crate) struct DevicePeer {
     pub account: Option<Registration>,
+    /// Stable ledger user ID for billed relays, or the provisioned principal
+    /// when billing is disabled. The device cannot set this value.
+    pub external_user_id: Option<String>,
     pub session_access: bool,
     pub control_attribution: bool,
     pub native_messages: bool,
@@ -403,6 +439,7 @@ pub(crate) struct DevicePeer {
 impl From<Registration> for DevicePeer {
     fn from(account: Registration) -> Self {
         Self {
+            external_user_id: None,
             session_access: account.session_access,
             control_attribution: account.control_attribution,
             native_messages: false,
@@ -431,6 +468,8 @@ pub(crate) struct Registration {
     pub identity: Identity,
     pub device_identity: Option<wire::device_address::Identity>,
     pub username: String,
+    pub device_only: bool,
+    verified_launcher: bool,
     /// Capability accepted from this authenticated login registration.
     pub session_access: bool,
     /// Verified caller attribution negotiated by this peer.
@@ -504,7 +543,13 @@ struct ApiError {
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({"error":self.code}))).into_response()
+        let mut response = (self.status, Json(json!({"error":self.code}))).into_response();
+        if self.code == "device_verification_required" {
+            response
+                .headers_mut()
+                .insert(header::WWW_AUTHENTICATE, "SSMCP-Device".parse().unwrap());
+        }
+        response
     }
 }
 fn fail(status: StatusCode, code: &'static str) -> ApiError {
@@ -593,10 +638,25 @@ async fn authenticate(
             login: account.github_login,
         },
         username: account.username,
+        device_only: record.kind != Kind::Login,
+        verified_launcher: record.kind != Kind::Device || record.launcher.is_some(),
         session_access: false,
         control_attribution: false,
         key,
     })
+}
+async fn authenticate_device(
+    broker: &Broker,
+    headers: &HeaderMap,
+) -> Result<Registration, ApiError> {
+    let registration = authenticate(broker, headers, false).await?;
+    if !registration.verified_launcher {
+        return Err(fail(
+            StatusCode::UNAUTHORIZED,
+            "device_verification_required",
+        ));
+    }
+    Ok(registration)
 }
 async fn body<T: serde::de::DeserializeOwned>(
     request: Request,
@@ -628,6 +688,8 @@ pub fn routes() -> Router<Arc<Broker>> {
         .route("/api/client/whoami", get(whoami))
         .route("/api/client/username", post(claim_username))
         .route("/api/client/logout", post(logout))
+        .route("/api/client/invites", post(invite))
+        .route("/api/client/enroll", post(enroll))
         .route("/api/client/sessions", get(sessions))
         .route("/api/client/connect", get(connect))
         .route(
@@ -746,6 +808,137 @@ async fn sessions(
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct InviteOptions {
+    ttl_secs: Option<u64>,
+    session_ttl_secs: Option<u64>,
+}
+
+fn require_device_enrollment(broker: &Broker) -> Result<(), ApiError> {
+    if !broker.portal.enabled(broker) {
+        return Err(fail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "client_login_unavailable",
+        ));
+    }
+    Ok(())
+}
+
+async fn invite(State(broker): State<Arc<Broker>>, request: Request) -> Result<Response, ApiError> {
+    require_device_enrollment(&broker)?;
+    origin(request.headers(), &broker)?;
+    let headers = request.headers().clone();
+    let options: InviteOptions = body(request, &broker).await?;
+    let ttl = options.ttl_secs.unwrap_or(600);
+    let session_ttl = options.session_ttl_secs.unwrap_or(3600);
+    if !(1..=3600).contains(&ttl) || !(1..=86400).contains(&session_ttl) {
+        return Err(fail(StatusCode::BAD_REQUEST, "invalid_lifetime"));
+    }
+    let mut values = headers.get_all(header::AUTHORIZATION).iter();
+    let raw = values
+        .next()
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .filter(|_| values.next().is_none())
+        .ok_or_else(|| problem(Problem::Unauthorized))?;
+    let (token, expires, session_expires) = if raw.starts_with("at_") {
+        let (parent, identity) = broker
+            .oauth
+            .delegation(IDENTITY_RESOURCE, raw)
+            .ok_or_else(|| problem(Problem::Unauthorized))?;
+        let subject = identity.subject;
+        broker
+            .portal
+            .storage(move |store| store.account(&subject))
+            .await
+            .map_err(problem)?;
+        let cap = session_ttl.min(parent.expires_at.saturating_sub(now()));
+        let issuance = parent.clone();
+        let (token, expires) = broker
+            .portal
+            .client_storage(move |store| store.invite_oauth(issuance, ttl, session_ttl))
+            .await
+            .map_err(problem)?;
+        if !broker.oauth.delegation_is_live(&parent)
+            || broker.user_policies.is_banned(&parent.subject)
+        {
+            return Err(problem(Problem::Unauthorized));
+        }
+        (token, expires, cap)
+    } else {
+        let registration = authenticate(&broker, &headers, true).await?;
+        let raw = raw.to_owned();
+        let issued = broker
+            .portal
+            .client_storage(move |store| {
+                let (_, parent) = store.authenticate(&raw, true)?;
+                let cap = session_ttl.min(parent.expires_at.saturating_sub(now()));
+                let (token, expires) = store.invite(&raw, ttl, session_ttl)?;
+                Ok((token, expires, cap))
+            })
+            .await
+            .map_err(problem)?;
+        if !registration.is_live(&broker).await {
+            return Err(problem(Problem::Unauthorized));
+        }
+        issued
+    };
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({
+            "token":token, "expires_in":expires, "session_expires_in":session_expires
+        })),
+    )
+        .into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Enroll {
+    token: String,
+}
+async fn enroll(State(broker): State<Arc<Broker>>, request: Request) -> Result<Response, ApiError> {
+    require_device_enrollment(&broker)?;
+    let launcher = bearer(request.headers())?;
+    let input: Enroll = body(request, &broker).await?;
+    let lookup = input.token.clone();
+    let record = broker
+        .portal
+        .client_storage(move |store| store.invitation(&lookup))
+        .await
+        .map_err(problem)?;
+    if !record_authorized(&broker, &record) {
+        return Err(problem(Problem::Unauthorized));
+    }
+    let subject = record.subject.clone();
+    let account = broker
+        .portal
+        .storage(move |store| store.account(&subject))
+        .await
+        .map_err(problem)?;
+    let identity = account_identity_json(
+        &Identity {
+            provider: "github".into(),
+            subject: account.subject.clone(),
+            login: account.github_login.clone(),
+        },
+        &account,
+    )
+    .map_err(problem)?;
+    let (device_token, expires_in, _) = broker
+        .portal
+        .client_storage(move |store| store.exchange_invite(&input.token, Some(&launcher)))
+        .await
+        .map_err(problem)?;
+    if !record_authorized(&broker, &record) {
+        return Err(problem(Problem::Unauthorized));
+    }
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(json!({
+        "device_token":device_token, "expires_in":expires_in, "principal":identity["principal"], "identity":identity
+    }))).into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ToolCall {
     client_id: String,
     name: String,
@@ -803,19 +996,40 @@ async fn connect(
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     origin(&headers, &broker)?;
-    if let Some(access) = &broker.relay_access {
-        if !access.permit_ingress(&headers) || headers.contains_key(header::AUTHORIZATION) {
+    let external_user_id = if let Some(access) = &broker.relay_access {
+        if !access.permit_ingress(&headers) {
             return Err(problem(Problem::Unauthorized));
         }
-    } else if !broker.portal.enabled(&broker) {
-        return Err(fail(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "client_login_unavailable",
-        ));
-    }
+        let principal = access
+            .device_principal(&headers)
+            .ok_or_else(|| fail(StatusCode::UNAUTHORIZED, "device_verification_required"))?;
+        Some(match &broker.relay_accounting {
+            Some(accounting) => accounting
+                .user_id(&principal.subject)
+                .ok_or_else(|| problem(Problem::Unauthorized))?
+                .to_owned(),
+            None => principal.subject,
+        })
+    } else {
+        if !broker.portal.enabled(&broker) {
+            return Err(fail(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "client_login_unavailable",
+            ));
+        }
+        None
+    };
     // A malformed or revoked credential is never silently treated as anonymous.
-    let mut account = if headers.contains_key(header::AUTHORIZATION) {
-        Some(authenticate(&broker, &headers, true).await?)
+    let mut account = if broker.relay_access.is_none()
+        && headers.contains_key(header::AUTHORIZATION)
+    {
+        Some(authenticate_device(&broker, &headers).await?)
+    } else if broker.relay_access.is_none() {
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, "SSMCP-Device"), (header::CACHE_CONTROL, "no-store")],
+            Json(json!({"error":"device_verification_required","message":"Sign in on the controlled device with this relay account before starting the session."})),
+        ).into_response());
     } else {
         None
     };
@@ -846,6 +1060,7 @@ async fn connect(
     let native_messages = capability_requested(&headers, wire::messages::CAPABILITY);
     let peer = DevicePeer {
         account,
+        external_user_id,
         session_access,
         control_attribution,
         native_messages,
@@ -879,13 +1094,17 @@ async fn connect(
     let transport = broker
         .admit_transport()
         .ok_or_else(|| fail(StatusCode::SERVICE_UNAVAILABLE, "gateway_draining"))?;
-    Ok(ws
+    let mut response = ws
         .max_message_size(wire::MAX_FRAME)
         .max_frame_size(wire::MAX_FRAME)
         .on_upgrade(move |socket| async move {
             let _transport = transport;
             socket_bridge(broker, peer, socket).await;
-        }))
+        });
+    response
+        .headers_mut()
+        .insert("ssmcp-device-verified", "1".parse().unwrap());
+    Ok(response)
 }
 
 async fn socket_bridge(broker: Arc<Broker>, peer: DevicePeer, socket: WebSocket) {
@@ -1965,7 +2184,7 @@ mod tests {
             wire::SESSION_ACCESS_CAPABILITY.parse().unwrap(),
         );
         assert!(
-            matches!(tokio_tungstenite::connect_async(unauthorized).await, Err(tokio_tungstenite::tungstenite::Error::Http(response)) if response.status() == StatusCode::BAD_REQUEST)
+            matches!(tokio_tungstenite::connect_async(unauthorized).await, Err(tokio_tungstenite::tungstenite::Error::Http(response)) if response.status() == StatusCode::UNAUTHORIZED)
         );
         // Sharing is explicit and requires the controller capability negotiation.
         let mut unnegotiated_registration =
@@ -2422,6 +2641,7 @@ mod tests {
         )
         .unwrap();
         broker.portal = crate::portal::Portal::open(&directory.0).unwrap();
+        broker.portal.enable_test_commerce(&directory.0, "test");
         broker
             .portal
             .storage(|store| {
@@ -2730,6 +2950,138 @@ mod tests {
             .await
             .unwrap();
         (directory, Arc::new(broker), login, admin, device)
+    }
+
+    #[tokio::test]
+    async fn invitations_require_independent_device_oauth_and_are_single_use() {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let (_directory, broker, login, _, old_invite_only) = traffic_http_fixture().await;
+        let (alice, other) = broker
+            .portal
+            .client_storage(|store| {
+                Ok((
+                    store.device_login("123".into())?.0,
+                    store.device_login("999".into())?.0,
+                ))
+            })
+            .await
+            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = crate::http::router(broker.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let http = crate::http_client::builder().build().unwrap();
+        let issued: Value = http
+            .post(format!("http://{addr}/api/client/invites"))
+            .bearer_auth(&login)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let redeem = || {
+            http.post(format!("http://{addr}/api/client/enroll"))
+                .json(&json!({"token":issued["token"]}))
+        };
+        assert_eq!(
+            redeem().send().await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            redeem().bearer_auth(&other).send().await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            redeem()
+                .bearer_auth(&old_invite_only)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let enrolled: Value = redeem()
+            .bearer_auth(&alice)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(enrolled["identity"]["subject"], "123");
+        assert_eq!(
+            redeem().bearer_auth(&alice).send().await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let endpoint = format!("ws://{addr}/api/client/connect");
+        let open = |token: Option<&str>| {
+            let mut request = endpoint.clone().into_client_request().unwrap();
+            if let Some(token) = token {
+                request
+                    .headers_mut()
+                    .insert("authorization", format!("Bearer {token}").parse().unwrap());
+            }
+            tokio_tungstenite::connect_async(request)
+        };
+        for credential in [None, Some(old_invite_only.as_str())] {
+            let Err(tokio_tungstenite::tungstenite::Error::Http(reply)) = open(credential).await
+            else {
+                panic!("device OAuth must be required")
+            };
+            assert_eq!(reply.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(reply.headers()[header::WWW_AUTHENTICATE], "SSMCP-Device");
+        }
+        let device = enrolled["device_token"].as_str().unwrap();
+        let (mut socket, upgraded) = open(Some(device)).await.unwrap();
+        assert_eq!(upgraded.headers()["ssmcp-device-verified"], "1");
+        let hello = wire::Frame::Hello {
+            version: wire::VERSION,
+            mode: wire::Mode::Shell,
+            metadata: wire::ClientMetadata {
+                name: "verified".into(),
+                title: None,
+                cwd: "/tmp".into(),
+                hostname: "fixture".into(),
+                allow: vec![],
+            },
+        };
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                serde_json::to_vec(&hello).unwrap().into(),
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(
+            receive(&mut socket).await,
+            Some(wire::Frame::Ready { .. })
+        ));
+        assert_eq!(
+            http.get(format!("http://{addr}/api/client/whoami"))
+                .bearer_auth(device)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(
+            http.post(format!("http://{addr}/api/client/logout"))
+                .bearer_auth(&login)
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .is_success()
+        );
+        assert!(receive(&mut socket).await.is_none());
+        assert!(open(Some(device)).await.is_err());
+        server.abort();
     }
 
     #[tokio::test]

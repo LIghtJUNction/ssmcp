@@ -5,7 +5,8 @@ use crate::wire::repository_events::{CAPABILITY, Counts, Event};
 #[tokio::test]
 async fn negotiated_repository_events_reach_only_currently_allowed_accounts() {
     let fixture = Fixture::new().await;
-    let mut request = fixture.request(None, true);
+    let token = fixture.token("123").await;
+    let mut request = fixture.request(Some(&token), true);
     request.headers_mut().insert(
         wire::CAPABILITIES_HEADER,
         format!(

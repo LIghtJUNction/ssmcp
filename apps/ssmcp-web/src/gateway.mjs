@@ -192,7 +192,7 @@ export class Gateway {
 
   get pendingOwnedRequest() { return this.#ownedAttempt; }
 
-  async createOwnedSession({ destination, terms, privacy }) {
+  async createOwnedSession({ destination, terms, privacy }, showAuthorization) {
     if (!this.authenticated) throw new GatewayError('请先配对本机网关。', { code: 'authentication_required' });
     if (typeof destination !== 'string' || !destination || typeof terms !== 'boolean' || typeof privacy !== 'boolean') {
       throw new TypeError('请填写会话地址并核对服务条款。');
@@ -202,8 +202,29 @@ export class Gateway {
       throw new GatewayError('上次创建结果未确定，请使用原地址和条款重试。', { code: 'pending', requestId: attempt.request_id });
     }
     try {
-      const result = await this.request('/owned-sessions', { method: 'POST', body: attempt, mutation: true, requestId: attempt.request_id });
-      if (this.#ownedAttempt !== attempt) throw new GatewayError('本机网关配对已更换。', {code: 'pairing_changed'});
+      let result;
+      for (;;) {
+        if (this.#ownedAttempt !== attempt) throw new GatewayError('本机网关配对已更换。', {code: 'pairing_changed'});
+        result = await this.request('/owned-sessions', { method: 'POST', body: attempt, mutation: true, requestId: attempt.request_id });
+        if (this.#ownedAttempt !== attempt) throw new GatewayError('本机网关配对已更换。', {code: 'pairing_changed'});
+        if (result?.request_id !== attempt.request_id || !result.authorization || result.session !== undefined) break;
+        const { status, verification_url, user_code } = result.authorization;
+        if (status === 'pending') {
+          const relay = destination.slice(destination.indexOf('@') + 1);
+          const origin = new URL(relay.includes('://') ? relay : 'https://' + relay).origin;
+          const link = new URL(verification_url);
+          if (link.protocol !== 'https:' || link.origin !== origin || link.username || link.password
+              || link.pathname !== '/setup' || link.hash || link.searchParams.size !== 1
+              || typeof user_code !== 'string' || !/^[A-Za-z0-9-]{4,32}$/.test(user_code) || link.searchParams.get('code') !== user_code) {
+            throw new GatewayError('设备授权地址与所选中继不匹配。', {code:'invalid_device_authorization'});
+          }
+          if (typeof showAuthorization !== 'function') throw new GatewayError('请在被控设备完成 OAuth 登录。', {code:'device_verification_required'});
+          showAuthorization(link.href, user_code);
+        } else if (status !== 'starting') {
+          throw new GatewayError('无法读取设备授权状态。', {code:'invalid_device_authorization'});
+        }
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
       if (result?.request_id !== attempt.request_id || typeof result?.session !== 'string' || result.session.length !== 37
           || !/^live:[0-9a-f]{32}$/.test(result.session)) {
         throw new GatewayError('创建回执无法验证，结果未确定。', {code: 'unknown', effect: 'may_have_occurred', requestId: attempt.request_id});

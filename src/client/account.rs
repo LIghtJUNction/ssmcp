@@ -17,12 +17,12 @@ use tokio::process::Command;
 
 pub(crate) mod device_identity;
 pub(crate) mod foreground_identity;
+pub(crate) mod managed;
 pub(super) mod status;
 
 pub(super) const DEFAULT_SERVER: &str = "https://ssmcp.lmm.best";
 const STORE_LIMIT: usize = 32 * 1024;
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
-#[cfg(any(test, target_os = "linux"))]
 const MAX_USERNAME_ALIASES: usize = 128;
 
 #[cfg(any(test, target_os = "linux"))]
@@ -601,7 +601,6 @@ impl Arguments {
     }
 }
 
-#[cfg(any(test, target_os = "linux"))]
 fn public_identity(value: &Value) -> Result<Value> {
     let identity = value.get("identity").unwrap_or(value);
     let login = identity["login"]
@@ -663,7 +662,6 @@ fn public_identity(value: &Value) -> Result<Value> {
 
 // Only use metadata validated by public_identity from this relay's authenticated
 // response. Aliases never enter the credential cache or replace subject checks.
-#[cfg(test)]
 fn identity_matches_username(identity: &Value, requested: &str) -> bool {
     identity["username"].as_str() == Some(requested)
         || identity["username_aliases"]
@@ -903,6 +901,7 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
     };
     match command.to_str() {
         Some("list" | "ls") => crate::session::list_command(rest).await?,
+        Some(command @ ("login" | "join")) => managed::command(command, rest).await?,
         Some("attach") => crate::session::attach::manage(rest.to_vec()).await?,
         Some("send" | "wait" | "logout") => return Err("this device accepts control through its authorized controller; use the controller for account and remote operations".into()),
         _ if standalone_interactive(args) => return Err("interactive control of remote devices is unavailable in the device client; use ssmcp attach NAME for a local session".into()),

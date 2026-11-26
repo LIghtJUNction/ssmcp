@@ -40,7 +40,22 @@ struct Member {
     destination: String,
     _slot: OwnedSemaphorePermit,
 }
+// The gateway keeps the private polling secret in the CLI. Only the public
+// verification link and short code cross into the paired browser.
+struct DeviceLogin {
+    state: tokio::sync::watch::Receiver<Result<Value, BridgeError>>,
+    task: tokio::task::JoinHandle<()>,
+    started: std::time::Instant,
+}
+
+impl Drop for DeviceLogin {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 pub(super) struct OwnedHost {
+    logins: Mutex<BTreeMap<String, DeviceLogin>>,
     cwd: PathBuf,
     chat: bool,
     namespace: PathBuf,
@@ -68,6 +83,7 @@ impl OwnedHost {
         crate::platform::private_directory(&receipts)?;
         Ok(Self {
             cwd,
+            logins: Mutex::default(),
             chat: false,
             namespace,
             receipts,
@@ -161,6 +177,56 @@ impl Host for OwnedHost {
     }
     fn authorize_creation(&self, destination: &str) -> Result<(), BridgeError> {
         self.policy.check(destination)
+    }
+    fn pending_device_authorization(
+        &self,
+        destination: &str,
+    ) -> Result<Option<Value>, BridgeError> {
+        use crate::client::account::managed;
+        self.policy.check(destination)?;
+        let (name, origin) = crate::server_endpoint::parse_target(destination).map_err(native)?;
+        let mut logins = self.logins.lock().unwrap_or_else(|err| err.into_inner());
+        if managed::authorized(&name, &origin).map_err(native)? {
+            logins.remove(destination);
+            return Ok(None);
+        }
+        logins.retain(|_, login| login.started.elapsed() < std::time::Duration::from_secs(15 * 60));
+        if let Some(login) = logins.get(destination) {
+            let result = login.state.borrow().clone();
+            if result.is_err() {
+                logins.remove(destination);
+            }
+            return result.map(Some);
+        }
+        if logins.len() >= 4 {
+            return Err(BridgeError::new(
+                ErrorCode::Unavailable,
+                "finish an existing device sign-in first",
+            ));
+        }
+        let starting = json!({"status":"starting"});
+        let (tx, rx) = tokio::sync::watch::channel(Ok(starting.clone()));
+        let task = tokio::spawn(async move {
+            let outcome = managed::ensure_with(&name, &origin, |url, code| {
+                let _ = tx.send_replace(Ok(
+                    json!({"status":"pending","verification_url":url.as_str(),"user_code":code}),
+                ));
+                Ok(())
+            })
+            .await;
+            if let Err(error) = outcome {
+                let _ = tx.send_replace(Err(native(error)));
+            }
+        });
+        logins.insert(
+            destination.to_owned(),
+            DeviceLogin {
+                state: rx,
+                task,
+                started: std::time::Instant::now(),
+            },
+        );
+        Ok(Some(starting))
     }
     fn create(&self, destination: String) -> CoreFuture<'_, String, CreationError> {
         Box::pin(async move {

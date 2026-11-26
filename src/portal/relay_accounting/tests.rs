@@ -224,6 +224,8 @@ async fn scoped_monthly_meter_and_paid_order_replay_are_durable() {
     drop(relay);
     let restarted = broker(configured).unwrap();
     let accounting = restarted.relay_accounting.as_ref().unwrap();
+    assert!(accounting.has_recharged("123").await.unwrap());
+    assert!(!accounting.has_recharged("456").await.unwrap());
     let q = accounting
         .storage(|ledger| ledger.snapshot("123"))
         .await
@@ -236,4 +238,125 @@ async fn scoped_monthly_meter_and_paid_order_replay_are_durable() {
             .await
             .unwrap()
     );
+}
+
+#[tokio::test]
+async fn external_sessions_require_both_credentials_and_count_the_registering_account() {
+    use crate::wire;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{
+        MaybeTlsStream, WebSocketStream, connect_async,
+        tungstenite::{Message, client::IntoClientRequest, handshake::client::Request},
+    };
+
+    type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
+    fn request(url: &str, ingress: Option<&str>, account: Option<&str>) -> Request {
+        let mut req = url.into_client_request().unwrap();
+        let headers = req.headers_mut();
+        if let Some(ingress) = ingress {
+            headers.insert("x-ssmcp-device-ingress", ingress.parse().unwrap());
+        }
+        if let Some(account) = account {
+            headers.insert(
+                header::AUTHORIZATION,
+                format!("Bearer {account}").parse().unwrap(),
+            );
+        }
+        headers.insert(
+            wire::CAPABILITIES_HEADER,
+            [
+                wire::SESSION_ACCESS_CAPABILITY,
+                wire::CONTROL_ATTRIBUTION_CAPABILITY,
+            ]
+            .join(", ")
+            .parse()
+            .unwrap(),
+        );
+        req
+    }
+
+    async fn expect_unauthorized(req: Request) {
+        assert!(matches!(connect_async(req).await,
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) if response.status() == StatusCode::UNAUTHORIZED));
+    }
+
+    async fn register(req: Request) -> (Socket, wire::Frame) {
+        let (mut socket, _) = connect_async(req).await.unwrap();
+        // Both registrants share to Betty. The ACL cannot select whose slot gets used.
+        let hello = wire::Frame::Hello {
+            version: wire::VERSION,
+            mode: wire::Mode::Shell,
+            metadata: wire::ClientMetadata {
+                name: "work".into(),
+                title: None,
+                cwd: "/test".into(),
+                hostname: "device".into(),
+                allow: vec!["betty@relay.invalid".into()],
+            },
+        };
+        socket
+            .send(Message::Binary(serde_json::to_vec(&hello).unwrap().into()))
+            .await
+            .unwrap();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if let Message::Binary(bytes) = socket.next().await.unwrap().unwrap() {
+                    break serde_json::from_slice::<wire::Frame>(&bytes).unwrap();
+                }
+            }
+        })
+        .await
+        .unwrap();
+        (socket, frame)
+    }
+
+    let dir = Directory::new();
+    let relay = broker(input(&dir)).unwrap();
+    let app = crate::http::relay_router(relay.clone());
+    let tcp = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let url = format!("ws://{}/api/client/connect", tcp.local_addr().unwrap());
+    let task = tokio::spawn(async move { axum::serve(tcp, app).await.unwrap() });
+    let ingress = "d".repeat(64);
+    let alice = "a".repeat(64);
+    let betty = "b".repeat(64);
+    expect_unauthorized(request(&url, None, Some(&alice))).await;
+    expect_unauthorized(request(&url, Some(&ingress), None)).await;
+    expect_unauthorized(request(&url, Some(&ingress), Some(&ingress))).await;
+    expect_unauthorized(request(&url, Some(&ingress), Some(&"e".repeat(64)))).await;
+    let mut ambiguous = request(&url, Some(&ingress), Some(&alice));
+    ambiguous.headers_mut().append(
+        header::AUTHORIZATION,
+        format!("Bearer {betty}").parse().unwrap(),
+    );
+    expect_unauthorized(ambiguous).await;
+
+    let alice_req = || request(&url, Some(&ingress), Some(&alice));
+    let (left, right) = tokio::join!(register(alice_req()), register(alice_req()));
+    let (accepted, denied) = if matches!(left.1, wire::Frame::Ready { .. }) {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    assert!(matches!(accepted.1, wire::Frame::Ready { .. }));
+    assert!(
+        matches!(denied.1, wire::Frame::Reject { message } if message.starts_with("online_session_limit:"))
+    );
+    let (other, frame) = register(request(&url, Some(&ingress), Some(&betty))).await;
+    assert!(matches!(frame, wire::Frame::Ready { .. }));
+    let accounting = relay.relay_accounting.as_ref().unwrap();
+    accounting
+        .storage(|ledger| {
+            let period = ledger.snapshot("123")?.period;
+            ledger.grant("123", &period, "first-purchase", 12, true)
+        })
+        .await
+        .unwrap();
+    let (additional, frame) = register(alice_req()).await;
+    assert!(matches!(frame, wire::Frame::Ready { .. }));
+    drop((accepted.0, denied.0, other, additional));
+    task.abort();
+    let _ = task.await;
 }

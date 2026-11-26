@@ -208,6 +208,10 @@ members = []
 exclude = ["crates/zharness", "crates/zplugin", "crates/ztuio", "crates/zbridge"]
 resolver = "3"
 
+[features]
+# Used only by the debug CLI built specifically for offline loopback integration tests.
+e2e-loopback-ca = []
+
 [dependencies]
 zbridge = { git = "https://github.com/LIghtJUNction/zbridge.git" }
 ztuio = { git = "https://github.com/LIghtJUNction/ztuio.git" }

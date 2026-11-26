@@ -248,6 +248,23 @@ impl Host for BoundHost<'_> {
             description: "Actual backend presence, registry summary and live event cursor".into(),
         }];
         let mut commands = Vec::new();
+        let access_client = crate::client::web_chat::identity()
+            .map(|peer| peer.client_id.as_str())
+            .or_else(|| {
+                runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.frontend_client_id())
+            });
+        if mode == Mode::Control
+            && access_client.is_some_and(crate::client::access::frontend_available)
+        {
+            commands.push(Command {
+                id: id("session.access"),
+                description: "List or edit access to this live session and return the relay's acknowledged access list".into(),
+                input_schema: json!({"type":"object","additionalProperties":false,"properties":{
+                    "arguments":{"type":"string","maxLength":1024}},"required":["arguments"]}),
+            });
+        }
         if crate::client::web_chat::identity().is_some() {
             for name in ["conversation", "threads", "chat.queue"] {
                 resources.push(Resource {
@@ -504,6 +521,41 @@ impl Host for BoundHost<'_> {
     fn command(&self, command: Id, arguments: Value) -> HostFuture<'_, CommandResult> {
         Box::pin(async move {
             self.authorize(Access::Control)?;
+            if command.as_str() == "session.access" {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct AccessArgs {
+                    arguments: String,
+                }
+                let args: AccessArgs = serde_json::from_value(arguments)
+                    .map_err(|_| BridgeError::invalid("invalid session access arguments"))?;
+                if args.arguments.len() > 1024 {
+                    return Err(BridgeError::invalid("session access arguments too long"));
+                }
+                let runtime = self.optional_runtime()?;
+                let client_id = crate::client::web_chat::identity()
+                    .map(|peer| peer.client_id.as_str())
+                    .or_else(|| {
+                        runtime
+                            .as_ref()
+                            .and_then(|runtime| runtime.frontend_client_id())
+                    })
+                    .ok_or_else(|| native("no connected relay session".into()))?;
+                use crate::client::access::{FrontendError, frontend_command};
+                let result = frontend_command(client_id, &args.arguments).await.map_err(
+                    |error| match error {
+                        FrontendError::Rejected(message) => BridgeError::invalid(&message),
+                        FrontendError::Unknown => native(
+                            "server receipt unavailable; use /allow list to verify access".into(),
+                        )
+                        .uncertain(),
+                    },
+                )?;
+                return Ok(CommandResult {
+                    command,
+                    value: json!(result),
+                });
+            }
             if let Some(peer) = crate::client::web_chat::identity() {
                 if command.as_str() != "chat.send" {
                     return Err(BridgeError::new(

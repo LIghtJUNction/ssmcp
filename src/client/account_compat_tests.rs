@@ -3,12 +3,7 @@ use super::*;
 
 #[test]
 fn new_and_saved_connections_reject_account_compat() {
-    let args = [
-        "--server",
-        "https://relay.example",
-        "--allow",
-        "alice@relay.example",
-    ];
+    let args = ["owner@relay.example"];
     let options = Options::parse(args.map(OsString::from)).unwrap().unwrap();
     let mut spec = options.session_spec().unwrap();
     spec.args.push("--account-compat".into());

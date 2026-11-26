@@ -373,11 +373,19 @@ impl Desktop {
                         self.unknown_draft = pending.draft.clone();
                     }
                 }
-                if same_context && matches!(pending.command.as_str(), "session.cd" | "session.new")
+                if same_context
+                    && matches!(
+                        pending.command.as_str(),
+                        "session.cd" | "session.new" | "session.access"
+                    )
                 {
                     if receipt.state == ReceiptState::Confirmed {
                         if pending.draft.as_ref() == Some(&self.composer) {
                             self.composer.clear();
+                        }
+                        if pending.command == "session.access" {
+                            self.local_notice = receipt.detail.clone();
+                            self.unknown_draft = None;
                         }
                         if let Some(target) = &receipt.new_session {
                             self.next_session = Some(Target::Named(target.clone()));
@@ -463,7 +471,7 @@ impl Desktop {
         .map(str::to_owned);
         let draft = match command {
             "session.new" if self.composer.trim() == "/new" => Some(self.composer.clone()),
-            "session.cd" => Some(self.composer.clone()),
+            "session.cd" | "session.access" => Some(self.composer.clone()),
             "chat.send" => arguments["text"].as_str().map(str::to_owned),
             "terminal.write"
                 if arguments["data"].as_str().is_some_and(|data| {
@@ -1149,6 +1157,9 @@ impl Desktop {
                 ("/new", _) => self.local_notice = "用法：/new".into(),
                 ("/cd", "") => self.local_notice = "用法：/cd 目录".into(),
                 ("/cd", path) => self.command(handle, view, "session.cd", json!({"path":path})),
+                ("/allow", args) => {
+                    self.command(handle, view, "session.access", json!({"arguments":args}))
+                }
                 _ => self.command(
                     handle,
                     view,

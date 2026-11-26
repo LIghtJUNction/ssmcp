@@ -46,6 +46,7 @@ struct Grant {
     client_name: String,
     requested_username: Option<String>,
     registration_only: bool,
+    device_only: bool,
     expires: Instant,
     decision: Decision,
     last_poll: Option<Instant>,
@@ -154,6 +155,7 @@ impl SetupState {
                     client_name,
                     requested_username: None,
                     registration_only: false,
+                    device_only: false,
                     expires,
                     decision: Decision::Pending,
                     last_poll: None,
@@ -555,7 +557,7 @@ async fn page_inner(
         state.charge("page", 600)?;
         state.by_code(&values["code"])?
     };
-    let (name, decision, requested_username, registration_only) = {
+    let (name, decision, requested_username, registration_only, device_only) = {
         let grant = grant.lock().await;
         grant.alive()?;
         (
@@ -563,6 +565,7 @@ async fn page_inner(
             grant.decision.clone(),
             grant.requested_username.clone(),
             grant.registration_only,
+            grant.device_only,
         )
     };
     if let Decision::Failed(problem) = &decision {
@@ -611,6 +614,15 @@ async fn page_inner(
         ))
         .into_response());
     }
+    if device_only {
+        return Ok(Html(device_consent_page(
+            &name,
+            &values["code"],
+            &csrf,
+            requested_username.as_deref().unwrap_or_default(),
+        ))
+        .into_response());
+    }
     Ok(Html(client_consent_page(
         &name,
         &values["code"],
@@ -647,9 +659,19 @@ async fn authorize_inner(broker: &Broker, request: Request) -> Result<Response, 
     grant.decide(&subject, allow)?;
     let username = grant.requested_username.clone().filter(|_| allow);
     let registration_only = grant.registration_only;
+    let device_only = grant.device_only;
     let result = broker
         .portal
         .storage(move |store| match username {
+            Some(username) if device_only => {
+                if store
+                    .account_by_handle(&username)?
+                    .is_none_or(|account| account.subject != subject)
+                {
+                    return Err(Problem::UsernameBound);
+                }
+                store.account(&subject)
+            }
             Some(username) if registration_only => store.register_handle(&subject, &username),
             Some(username) => store.claim_handle(&subject, &username),
             None => store.account(&subject),
@@ -678,6 +700,8 @@ mod tests;
 struct ClientStart {
     name: String,
     #[serde(default)]
+    device_only: bool,
+    #[serde(default)]
     username: Option<String>,
 }
 
@@ -702,6 +726,11 @@ async fn start_client_request(
 ) -> Result<Json<Value>, ApiError> {
     enabled(&broker)?;
     let input: ClientStart = body(request, &broker.public_url).await?;
+    if input.device_only && (registration_only || input.username.is_none()) {
+        return Err(ApiError::invalid(
+            "device authorization requires an existing username",
+        ));
+    }
     let name = input.name.trim();
     if name.is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
         return Err(ApiError::invalid(
@@ -744,6 +773,7 @@ async fn start_client_request(
         let mut grant = grant.lock().await;
         grant.requested_username = username.clone();
         grant.registration_only = registration_only;
+        grant.device_only = input.device_only;
     }
     let base = broker.public_url.trim_end_matches('/');
     Ok(Json(
@@ -829,8 +859,16 @@ async fn client_poll(
             crate::history::AuditOutcome::Pending,
         )
         .await?;
-    // The async grant mutex serializes competing poll requests through the durable
-    // write. A successful grant can mint exactly one controller credential.
+    // The grant lock serializes the durable issuance of a single token of the approved kind.
+    if grant.device_only {
+        let (device, expires) = broker
+            .portal
+            .client_storage(move |store| store.device_login(subject))
+            .await?;
+        grant.login_issued = true;
+        return Ok(Json(json!({"status":"authorized","device_token":device,
+            "identity":public_identity,"expires_in":expires})));
+    }
     let (token, expires) = broker
         .portal
         .client_storage(move |store| store.login(subject))
@@ -839,6 +877,20 @@ async fn client_poll(
     Ok(Json(json!({"status":"authorized","access_token":token,
         "identity":public_identity,"expires_in":expires})))
 }
+fn device_consent_page(name: &str, code: &str, csrf: &str, username: &str) -> String {
+    view::page(
+        "授权被控设备",
+        &format!(
+            r#"<section class="card"><h1>授权被控设备</h1><p>允许设备 <strong>{}</strong> 以 <strong>{}</strong> 的身份上线。请核对被控端显示的验证码。</p><pre>{}</pre><form method="post" action="/setup/authorize"><input type="hidden" name="csrf" value="{}"><input type="hidden" name="code" value="{}"><button class="button" type="submit" name="decision" value="allow">授权这台设备</button><button class="secondary" type="submit" name="decision" value="deny">拒绝</button></form></section>"#,
+            escape(name),
+            escape(username),
+            escape(code),
+            escape(csrf),
+            escape(code)
+        ),
+    )
+}
+
 fn client_consent_page(
     name: &str,
     code: &str,

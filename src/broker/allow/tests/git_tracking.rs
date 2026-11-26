@@ -3,7 +3,8 @@ use super::*;
 #[tokio::test]
 async fn git_tracking_frame_reaches_the_public_subscription() {
     let fixture = Fixture::new().await;
-    let mut request = fixture.request(None, true);
+    let token = fixture.token("123").await;
+    let mut request = fixture.request(Some(&token), true);
     let offer = format!(
         "{},{},{}",
         wire::SESSION_ACCESS_CAPABILITY,

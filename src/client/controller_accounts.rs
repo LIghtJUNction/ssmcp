@@ -34,6 +34,9 @@ impl Decision {
         self == Self::Candidate || self.is_allowed()
     }
 
+    fn allowed_here(self, session_grant: bool) -> bool {
+        self.is_allowed() || (session_grant && matches!(self, Self::Pending | Self::Candidate))
+    }
     pub(super) fn is_allowed(self) -> bool {
         matches!(self, Self::Default | Self::Approved)
     }
@@ -324,6 +327,7 @@ enum Observation<'a> {
         login: &'a str,
         connection: &'a str,
         previous_outcome: Option<bool>,
+        session_grant: bool,
     },
 }
 
@@ -341,8 +345,18 @@ fn observe_at(
     }
     let subject = canonical_subject(provider, subject)?;
     let verified = matches!(observation, Observation::Verified { .. });
+    let session_grant = matches!(
+        observation,
+        Observation::Verified {
+            session_grant: true,
+            ..
+        }
+    );
     transaction(root, |history| {
         let entries = &mut history.entries;
+        if session_grant && entries.is_empty() {
+            return Err("verify the selected device owner before sharing this session".into());
+        }
         if let Some((index, entry)) = entries.iter_mut().enumerate().find(|(_, entry)| {
             entry.relay == relay && entry.provider == provider && entry.subject == subject
         }) {
@@ -366,6 +380,7 @@ fn observe_at(
                 }
             }
             if !entry.status.permits_target()
+                && !entry.status.allowed_here(session_grant)
                 && entry
                     .last_denied
                     .is_none_or(|previous| now.saturating_sub(previous) >= VISIT_INTERVAL)
@@ -399,11 +414,11 @@ fn observe_at(
                             })
                             .map(|e| e.kind == EventKind::ControlAllowed)
                     });
-                    if previous == Some(status.is_allowed()) {
+                    if previous == Some(status.allowed_here(session_grant)) {
                         None
                     } else {
                         Some((
-                            if status.is_allowed() {
+                            if status.allowed_here(session_grant) {
                                 EventKind::ControlAllowed
                             } else {
                                 EventKind::ControlDenied
@@ -450,13 +465,14 @@ fn observe_at(
             last_seen: when,
             first_verified: verified.then_some(when),
             last_verified: verified.then_some(when),
-            last_denied: (!status.permits_target()).then_some(when),
+            last_denied: (!status.permits_target() && !status.allowed_here(session_grant))
+                .then_some(when),
             decided_at: None,
         });
         let index = entries.len() - 1;
         match observation {
             Observation::Verified { connection, .. } => {
-                let kind = if status.is_allowed() {
+                let kind = if status.allowed_here(session_grant) {
                     EventKind::ControlAllowed
                 } else {
                     EventKind::ControlDenied
@@ -492,6 +508,7 @@ fn verified_at(
     account: &ControlAccount,
     connection: &str,
     at: u64,
+    session_grant: bool,
 ) -> Result<Decision> {
     static VISITS: Mutex<Option<LiveVisits>> = Mutex::new(None);
     account.validate()?;
@@ -525,9 +542,12 @@ fn verified_at(
             login: &account.login,
             connection,
             previous_outcome: visits.outcomes.get(&key).copied(),
+            session_grant,
         },
     )?;
-    visits.outcomes.insert(key, decision.is_allowed());
+    visits
+        .outcomes
+        .insert(key, decision.allowed_here(session_grant));
     Ok(decision)
 }
 
@@ -535,14 +555,36 @@ pub(super) fn observe_verified(
     relay: &str,
     account: &ControlAccount,
     connection_id: &str,
-) -> Result<Decision> {
-    verified_at(
+) -> Result<bool> {
+    let session_grant = super::access::permits(relay, connection_id, account);
+    let decision = verified_at(
         &account::state_root()?,
         relay,
         account,
         connection_id,
         now()?,
-    )
+        session_grant,
+    )?;
+    Ok(decision.allowed_here(session_grant))
+}
+
+pub(super) fn check_session_target(relay: &str, provider: &str, subject: &str) -> Result<()> {
+    let relay = crate::server_endpoint::normalize_server(relay)?;
+    let subject = canonical_subject(provider, subject)?;
+    transaction(&account::state_root()?, |history| {
+        if history.entries.is_empty() {
+            return Err("verify the selected device owner before sharing this session".into());
+        }
+        if history.entries.iter().any(|entry| {
+            entry.relay == relay
+                && entry.provider == provider
+                && entry.subject == subject
+                && entry.status == Decision::Revoked
+        }) {
+            return Err("this controller was revoked on the device; review ssmcp controllers before sharing this session".into());
+        }
+        Ok(((), false))
+    })
 }
 
 pub(super) fn admit_resolved_target(

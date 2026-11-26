@@ -29,6 +29,7 @@ let lastRenderedRows = [], localError = null, workerDraftEdited = false, queueOf
 const composing = new WeakSet();
 const slashCommands = [
   { word: '/new', name: 'session.new', description: '新建会话' },
+  { word: '/allow', name: 'session.access', description: '列出、添加或移除当前会话的控制者' },
   { word: '/cd', name: 'session.cd', description: '切换工作目录', takesPath: true },
 ];
 let directoryRead = 0, endTarget = null, submittingEnd = false;
@@ -220,7 +221,7 @@ function fillAgents(select, baseOptions, selected, allowMissing) {
 function renderComposer() {
   const threads = client.states.get('threads');
   const chat = client.hasCommand('chat.send');
-  const supported = chat || client.hasCommand('session.new') || client.hasCommand('session.cd');
+  const supported = chat || client.hasCommand('session.access') || client.hasCommand('session.new') || client.hasCommand('session.cd');
   show('chat-form', supported);
   renderSlashOptions();
   fillAgents($('chat-target'), [['next', '下一个合法接收者']], $('chat-target').value, true);
@@ -229,7 +230,7 @@ function renderComposer() {
   const input = $('chat-text').value;
   const command = sessionCommand(input);
   const canSend = command ? slashAvailable(command) : chat && threads?.can_send === true && validTarget;
-  $('chat-send').disabled = !canSend || busy.has('chat.send') || busy.has('session.new') || busy.has('session.cd') || busy.has('session-select') || !input.trim() || byteLength(input) > 16_384;
+  $('chat-send').disabled = !canSend || busy.has('chat.send') || busy.has('session.access') || busy.has('session.new') || busy.has('session.cd') || busy.has('session-select') || !input.trim() || byteLength(input) > 16_384;
   const note = !client.connection ? '' : !supported ? '只读会话' : !validTarget ? '请选择接收方。'
     : byteLength(input) > 16_384 ? '输入超过 16 KiB。'
     : !command && threads?.can_send !== true ? '正在等待会话接受输入。' : '';
@@ -755,6 +756,9 @@ function sessionCommand(text) {
   return item ? { name: item.name, argument: (match[2] ?? '').trim() } : null;
 }
 async function applySessionCommand(command, textarea) {
+  if (command.name === 'session.access') {
+    await send(command.name, { arguments: command.argument }, textarea); return;
+  }
   if (command.name === 'session.new') {
     if (command.argument) throw new Error('用法：/new');
     showLaunch(); return;
@@ -921,7 +925,12 @@ $('launch-form').addEventListener('submit', async event => {
     terms: $('launch-terms').checked, privacy: $('launch-privacy').checked };
   updateLaunchControls(true); setText('launch-error', '');
   try {
-    const target = await gateway.createOwnedSession(args);
+    show('device-login', false);
+    const target = await gateway.createOwnedSession(args, (url, code) => {
+      $('device-login-link').href = url;
+      setText('device-login-code', code);
+      show('device-login', true);
+    });
     const info = { name: args.destination, target, readOnly: true, relay };
     opened.set(target, info);
     show('launch-setup', false); show('workbench-shell', true);
@@ -944,7 +953,11 @@ $('launch-form').addEventListener('submit', async event => {
         relay, creating: true, unresolved: Boolean(gateway.pendingOwnedRequest), uncertain: '创建结果未确定，请点“核对上次创建”重试原请求。',
       });
     }
-  } finally { updateLaunchControls(false); }
+  } finally {
+    show('device-login', false);
+    $('device-login-link').removeAttribute('href');
+    updateLaunchControls(false);
+  }
 });
 renderAll();
 showLaunch();
