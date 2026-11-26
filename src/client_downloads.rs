@@ -668,7 +668,7 @@ mod tests {
             assert!(!source.contains("injected.example"));
             assert!(!source.contains("@@ORIGIN@@"));
             if !path.starts_with("client/") {
-                assert!(source.contains("ssmcp --username USERNAME --server"));
+                assert!(source.contains("ssmcp USERNAME@"));
                 assert!(!source.contains("ssmcp login"));
                 assert!(!source.contains("'https://ssmcp.lmm.best'"));
             }

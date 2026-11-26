@@ -453,14 +453,16 @@ fn invalid_configuration_never_silently_selects_the_builtin_server() {
         "[client]\nserver = 'http://remote.example'\n",
     )
     .unwrap();
-    for args in [
-        vec!["config", "get", "server"],
-        vec!["whoami"],
-        vec!["--no-watchdog"],
-    ] {
+    for args in [vec!["config", "get", "server"], vec!["whoami"]] {
         let result = home.command(&args);
         assert!(!result.status.success());
         assert!(String::from_utf8_lossy(&result.stderr).contains("HTTPS origin"));
+    }
+    for args in [vec![], vec!["--no-watchdog"]] {
+        let result = home.command(&args);
+        assert!(!result.status.success());
+        assert!(result.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("ssmcp username@server"));
     }
     fs::write(home.0.join("config.toml"), "[client]\nserver = 123\n").unwrap();
     let result = home.command(&["whoami"]);
