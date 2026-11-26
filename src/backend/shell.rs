@@ -428,6 +428,10 @@ impl Shell {
         .expect("shell workspace is unavailable")
     }
 
+    pub(crate) fn retain_diagnostics_only(&self) {
+        self.events.retain_only();
+    }
+
     pub fn with_workspace(root: PathBuf, output: Arc<OutputStore>) -> Result<Arc<Self>, String> {
         let root = root
             .canonicalize()

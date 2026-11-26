@@ -2,6 +2,9 @@
 """Real CLI and disposable loopback router; no service manager or model launch."""
 import argparse
 import json
+import os
+import pty
+import time
 from pathlib import Path
 import selectors
 import signal
@@ -46,7 +49,7 @@ def run(h):
     h.check("ssmcp.exec.start" in names and all(name == "ssmcp.client.capabilities"
             or (name.startswith("ssmcp.exec.") and not name.endswith("events")) for name in names),
             "catalog contains only native process control and capability reads")
-    manifest = h.call("ssmcp.client.capabilities")
+    manifest = native(h, "ssmcp.client.capabilities")
     h.check(manifest["chat_enabled"] is False and manifest["control_only"] is True
             and "listener" not in manifest and "timing" not in manifest,
             "manifest advertises no chat, lifecycle, subscriptions or timed workflow")
@@ -72,10 +75,32 @@ def run(h):
     else:
         h.check("memory ceiling" in json.dumps(started), "native execution fails closed without resource delegation")
         blockers.append("actual CLI execution and command cleanup require existing delegated cgroup memory admission")
-    revoked = subprocess.run([str(h.binary_dir / "ssmcp"), "controllers", "revoke", h.origin,
-                              h.identity["provider"], h.identity["subject"]],
-                             stdin=subprocess.DEVNULL, capture_output=True, env=environment, timeout=10)
-    h.check(revoked.returncode == 0, "local approval command revokes the exact fixture subject")
+    master, slave = pty.openpty()
+    revoked = subprocess.Popen([str(h.binary_dir / "ssmcp"), "controllers", "revoke", h.origin,
+                                h.identity["provider"], h.identity["subject"]],
+                               stdin=slave, stdout=slave, stderr=slave, env=environment, start_new_session=True)
+    h.processes.append(revoked)
+    os.close(slave)
+    observed = bytearray()
+    confirmed = False
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(master, selectors.EVENT_READ)
+            deadline = time.monotonic() + 10
+            while revoked.poll() is None and time.monotonic() < deadline:
+                if selector.select(0.05):
+                    try:
+                        observed.extend(os.read(master, 4096))
+                    except OSError:
+                        break
+                if not confirmed and b"Type yes to confirm:" in observed:
+                    # Only this disposable fixture identity, through the existing local prompt.
+                    os.write(master, b"yes\n")
+                    confirmed = True
+        h.check(confirmed and revoked.wait(timeout=5) == 0,
+                "existing interactive local approval prompt revokes the exact disposable fixture subject")
+    finally:
+        os.close(master)
     denied = native(h, "ssmcp.exec.list")
     h.check((denied.get("denied") is True or denied.get("isError") is True)
             and "approval" in json.dumps(denied), "revoked controller cannot issue even a read-only native control request")

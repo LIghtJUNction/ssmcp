@@ -4,7 +4,10 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json, value::RawValue};
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -195,6 +198,7 @@ enum Presentation {
 pub(crate) type ProjectedEvent = (Value, crate::runtime::call_scope::Source);
 
 pub struct EventLog {
+    retain_only: AtomicBool,
     label: String,
     audit_mode: AuditMode,
     buffer: Mutex<Buffer>,
@@ -237,6 +241,7 @@ impl EventLog {
     ) -> Arc<Self> {
         Arc::new(Self {
             label: label.into(),
+            retain_only: AtomicBool::new(false),
             #[cfg(all(test, unix))]
             projection: Mutex::new(None),
             audit_mode,
@@ -248,6 +253,12 @@ impl EventLog {
                 .map(|pool| Arc::downgrade(&pool)),
             archive: Mutex::new(output.map(|store| store.capture(format!("events:{label}:jsonl")))),
         })
+    }
+
+    /// Control-only backends keep bounded diagnostics without dispatching them
+    /// to presentation, attachment, projection or event-read subscribers.
+    pub(crate) fn retain_only(&self) {
+        self.retain_only.store(true, Ordering::Release);
     }
 
     /// Test a real producer-to-presentation boundary without a global terminal.
@@ -338,7 +349,10 @@ impl EventLog {
             .is_some()
             && self.label == "shell"
             && event["method"] == "command/exec/outputDelta";
-        if !external_output && presentation != Presentation::LocalDiscovery {
+        if !self.retain_only.load(Ordering::Acquire)
+            && !external_output
+            && presentation != Presentation::LocalDiscovery
+        {
             #[cfg(all(test, unix))]
             if let Some(sink) = self.projection.lock().unwrap().as_ref() {
                 let _ = sink.try_send((event.clone(), source.clone()));
@@ -414,7 +428,9 @@ impl EventLog {
         buffer.entries.push_back((cursor, event, bytes));
         drop(buffer);
         drop(archive);
-        self.changed.notify_waiters();
+        if !self.retain_only.load(Ordering::Acquire) {
+            self.changed.notify_waiters();
+        }
     }
 
     pub fn close(&self) {
@@ -426,7 +442,9 @@ impl EventLog {
         {
             let _ = capture.finish();
         }
-        crate::client::render::finish(&self.label);
+        if !self.retain_only.load(Ordering::Acquire) {
+            crate::client::render::finish(&self.label);
+        }
         self.buffer.lock().unwrap().closed = true;
         self.changed.notify_waiters();
     }

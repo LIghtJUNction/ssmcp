@@ -22,6 +22,9 @@ fn command(executable: &std::path::Path, server: &str) -> Command {
             crate::wire::CHAT_DISABLED_CAPABILITY
         ),
     );
+    // Keep transport diagnostics on stderr directly; the shared registration
+    // helper then has no stderr event pump or presentation frontend to start.
+    command.stderr(std::process::Stdio::inherit());
     command
 }
 
@@ -40,7 +43,7 @@ struct Controls {
 impl Controls {
     async fn open() -> crate::Result<Self> {
         // Existing discovery constructor allocates no shell or command process.
-        let process = Backend::for_discovery()?;
+        let process = Backend::for_control()?;
         let result = (|| {
             process.configure_chat(false)?;
             let registry = process.registry.clone();
@@ -328,6 +331,7 @@ mod tests {
     #[tokio::test]
     async fn native_catalog_cannot_dispatch_workflow_or_events() {
         let controls = Controls::open().await.unwrap();
+        let projection = controls.process.observe_exec_projection();
         let page = controls
             .perform(crate::wire::Operation::ListTools { cursor: None })
             .await
@@ -381,6 +385,10 @@ mod tests {
             .await
             .unwrap();
         assert!(output.to_string().contains("CONTROL_ONLY_UNIT"));
+        assert!(
+            projection.try_recv().is_err(),
+            "native events must not reach a presentation subscriber"
+        );
         #[cfg(target_os = "linux")]
         let owned_pid = {
             let job = controls
