@@ -73,7 +73,7 @@ def run(h):
                 "authorized native command returns the exact expected output")
         pid_file = h.directory / "owned-command.pid"
         h.call("ssmcp.exec.start", {"command": ["/bin/sh", "-c", 'echo $$ > "$1"; exec sleep 120', "fixture", str(pid_file)]})
-        wait_for(pid_file.exists, "owned command pid")
+        wait_for(pid_file.exists, description="owned command pid")
         pid = int(pid_file.read_text())
         h.check(pid > 1 and Path(f"/proc/{pid}").exists(), "owned command is live before shutdown")
     else:
@@ -111,7 +111,7 @@ def run(h):
     process.send_signal(signal.SIGTERM)
     h.check(process.wait(timeout=15) == 0, "SIGTERM exits successfully with null stdin")
     if pid is not None:
-        wait_for(lambda: not Path(f"/proc/{pid}").exists(), "owned command cleanup", timeout=10)
+        wait_for(lambda: not Path(f"/proc/{pid}").exists(), description="owned command cleanup", timeout=10)
         h.check(True, "owned command was reaped on shutdown")
     h.check(not list(Path(environment["SSMCP_SESSION_HOME"]).iterdir()), "no saved session or service definition is created")
     h.check(not h.external_invocations("control-only"), "no agent executable was invoked")
