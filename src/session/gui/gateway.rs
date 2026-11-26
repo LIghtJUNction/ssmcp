@@ -61,7 +61,6 @@ struct Gateway {
     token: String,
     origin: String,
     authority: String,
-    magisk_entry: bool,
     assets: Option<PathBuf>,
     host: Arc<dyn Host>,
     data: Mutex<Data>,
@@ -218,7 +217,6 @@ pub(super) fn routes(
         token: config.token,
         origin,
         authority,
-        magisk_entry,
         assets,
         host,
         data: Mutex::new(Data::default()),
@@ -231,7 +229,12 @@ pub(super) fn routes(
         .route("/api/gui/v1/connections/{id}", axum::routing::delete(close))
         .route("/api/gui/v1/connections/{id}/bridge", post(bridge))
         .route("/api/gui/v1/connections/{id}/events", post(events));
-    let app = api.route("/", get(index)).route("/{*path}", get(asset));
+    let homepage = if magisk_entry {
+        get(magisk_index)
+    } else {
+        get(index)
+    };
+    let app = api.route("/", homepage).route("/{*path}", get(asset));
     Ok(app
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state))
@@ -687,15 +690,15 @@ async fn close(
     ))
 }
 
+async fn magisk_index() -> axum::response::Html<String> {
+    axum::response::Html(include_str!("../../../apps/ssmcp-web/index.html").replacen(
+        "<html ",
+        "<html data-ssmcp-magisk ",
+        1,
+    ))
+}
+
 async fn index(State(state): State<Arc<Gateway>>) -> Response {
-    if state.magisk_entry {
-        let html = include_str!("../../../apps/ssmcp-web/index.html").replacen(
-            "<html ",
-            "<html data-ssmcp-magisk ",
-            1,
-        );
-        return axum::response::Html(html).into_response();
-    }
     serve_asset(state, "index.html".into()).await
 }
 async fn asset(State(state): State<Arc<Gateway>>, Path(path): Path<String>) -> Response {
