@@ -81,7 +81,9 @@ Build the CLI and library test executable with the locked toolchain, then run:
 ```sh
 cargo test --locked --lib client::control_only::tests
 cargo build --locked --bin ssmcp
-SSMCP_E2E_FIXTURE_BINARY=/absolute/path/to/target/debug/deps/ssmcp-TESTHASH \
+cargo test --locked --lib --no-run
+# Use the executable path printed by the preceding command.
+SSMCP_E2E_FIXTURE_BINARY=/absolute/path/to/the/library-test-executable \
   python3 scripts/e2e_control_only.py --bin-dir target/debug
 ```
 
