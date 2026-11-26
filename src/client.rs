@@ -83,15 +83,19 @@ use tokio::{
 
 const WORKER_WINDOW_CHILD_FLAG: &str = "--ssmcp-worker-window-child";
 
-const HELP: &str = r#"ssmcp — make this device available to your MCP controller
+const HELP: &str = concat!(
+    r#"ssmcp — make this device available to your MCP controller
 
-Usage: ssmcp username@server [--tui | --webui | --gui] [options]
+"#,
+    frontend::usage!(),
+    r#"
 
 Start
   ssmcp alice@relay.example           Open the TUI (default)
   ssmcp alice@relay.example --webui   Open the browser conversation
-  ssmcp alice@relay.example --gui     Open the desktop connection form
-  ssmcp gui | ssmcp webui           Open a local connection form
+  ssmcp alice@relay.example --gui     Open the desktop app for this target
+  ssmcp gui                           Open the desktop connection form
+  ssmcp webui                         Open the browser connection form
   ssmcp local                   Start a same-machine MCP session on Linux
   ssmcp mcp                     Start local MCP for your harness on Linux
   ssmcp mcp install             Register that control endpoint in Codex
@@ -143,13 +147,15 @@ Use ssmcp COMMAND --help for command options; --help-full lists advanced connect
 Foreground --worker keeps chat here and opens a separate worker window.
 Workers use remote agents by default; no local model starts.
 In a connected chat: /help, @file, $skill, !command. From the initial conversation, Left at draft start opens Statistics; /sessions chooses recipients.
-"#;
+"#
+);
 
-const HELP_FULL: &str = r#"ssmcp — connect this device and manage its local sessions
+const HELP_FULL: &str = concat!(
+    r#"ssmcp — connect this device and manage its local sessions
 
-Usage: ssmcp username@server [options]
-       ssmcp username@server [--tui | --webui | --gui]
-       ssmcp gui
+"#,
+    frontend::usage!(),
+    r#"
        ssmcp username@server [options] --daemon [--name NAME]
        ssmcp username@server [options] --worker N [--daemon]
        ssmcp mcp [local options]                       (Linux)
@@ -301,7 +307,8 @@ Managed installs do not replace an external executable or change PATH.
 Background logs use JSONL without terminal colors; foreground display options
 do not change service logging. Stopping a session suppresses its watchdog.
 Reconnection starts a fresh client; jobs from the disconnected client are cleaned up.
-"#;
+"#
+);
 
 // A single reader owns every partial frame after Ready, including while a native
 // backend starts. A separate persistent status channel records a closed bridge

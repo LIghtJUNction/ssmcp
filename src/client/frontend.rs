@@ -1,7 +1,18 @@
 //! Explicit frontend selection. The destination is always data, never shell input.
 use std::{ffi::OsString, path::PathBuf};
 
-const USAGE: &str = "Usage: ssmcp username@server [--tui | --webui | --gui]. Run ssmcp gui to open the desktop connection form.";
+macro_rules! usage {
+    () => {
+        "Usage: ssmcp username@server [--tui] [options]
+       ssmcp username@server --gui
+       ssmcp username@server --webui
+       ssmcp gui
+       ssmcp webui"
+    };
+}
+pub(super) use usage;
+
+const USAGE: &str = usage!();
 
 pub(super) fn missing_target() -> &'static str {
     USAGE
@@ -109,6 +120,12 @@ mod tests {
             Launch::Desktop(Some("alice@relay.test".into()))
         );
         assert_eq!(parse_args(&["gui"]).unwrap(), Launch::Desktop(None));
+        assert_eq!(parse_args(&["webui"]).unwrap(), Launch::Web(None));
+        for selector in ["--gui", "--webui"] {
+            let error =
+                parse_args(&["alice@relay.test", selector, "--title", "phone"]).unwrap_err();
+            assert_eq!(error.to_string(), missing_target());
+        }
         for invalid in [
             &[][..],
             &["--webui", "--tui"],
