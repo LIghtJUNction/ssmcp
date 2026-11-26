@@ -367,7 +367,12 @@ impl Monitor {
                 cols: tab_width,
             });
             col += tab_width;
-            navigation.push((tone, text));
+            let tab_tone = match tone {
+                PanelTone::Warning | PanelTone::Error => tone,
+                _ if self.selected_slot() == Some(slot.slot) => PanelTone::Heading,
+                _ => PanelTone::Muted,
+            };
+            navigation.push((tab_tone, text));
         }
         let mut output = vec![navigation];
         if available == 1 {
@@ -867,126 +872,45 @@ impl State {
             monitor.coordination_row = 0;
             monitor.coordination_rows = 0;
         }
-        let mut rows = vec![
-            line(
-                self,
-                &[(
-                    PanelTone::Heading,
-                    format!("SSMCP · Workers{}", self.context_label),
-                )],
-            ),
-            String::new(),
-        ];
+        let mut rows = vec![line(
+            self,
+            &[(
+                PanelTone::Heading,
+                format!("SSMCP · Workers{}", self.context_label),
+            )],
+        )];
         if let Some(notice) = &self.notice {
-            rows[1] = line(self, &[(PanelTone::Warning, notice.clone())]);
+            rows.push(line(self, &[(PanelTone::Warning, notice.clone())]));
         }
         if let Some(snapshot) = snapshot {
             use crate::worker::productivity::{TITLE, WIDTH};
 
-            let chart = g.cols >= 96 && height >= 12;
-            let capacity_width = if chart { g.cols - WIDTH } else { g.cols };
-            let mut plot = std::iter::once(TITLE.to_owned()).chain(
-                snapshot.productivity.as_ref().map_or_else(
-                    || vec!["No call history".into()],
-                    |productivity| productivity.plot(),
-                ),
-            );
-            let mut header = |parts: &[(PanelTone, String)]| {
-                let mut rendered = line_at_width(self, parts, capacity_width);
-                if chart {
-                    rendered.push_str(&line_at_width(
-                        self,
-                        &[(PanelTone::Accent, plot.next().unwrap_or_default())],
-                        WIDTH,
-                    ));
+            let chart = snapshot
+                .productivity
+                .as_ref()
+                .filter(|_| g.cols >= 96 && height >= 12);
+            let capacity_width = if chart.is_some() {
+                g.cols - WIDTH
+            } else {
+                g.cols
+            };
+            let capacity = capacity_rows(snapshot, capacity_width);
+            let plot: Vec<_> = chart
+                .map(|series| {
+                    std::iter::once(TITLE.to_owned())
+                        .chain(series.plot())
+                        .collect()
+                })
+                .unwrap_or_default();
+            for row in 0..capacity.len().max(plot.len()) {
+                let fields = capacity.get(row).map(Vec::as_slice).unwrap_or_default();
+                let mut rendered = line_at_width(self, fields, capacity_width);
+                if chart.is_some() {
+                    let text = plot.get(row).cloned().unwrap_or_default();
+                    rendered.push_str(&line_at_width(self, &[(PanelTone::Muted, text)], WIDTH));
                 }
-                rendered
-            };
-            let capacity = header(&[(PanelTone::Heading, "Station capacity".into())]);
-            if self.notice.is_some() {
-                rows.push(capacity);
-            } else {
-                rows[1] = capacity;
+                rows.push(rendered);
             }
-            let dreaming = snapshot.slots.iter().filter(|slot| slot.dreaming).count();
-            let mut counts = vec![
-                (PanelTone::Success, format!("○ Idle {}", snapshot.idle)),
-                (PanelTone::Accent, format!("  ↳ Dreaming {dreaming}")),
-                (
-                    PanelTone::Warning,
-                    format!("● Working {}", snapshot.working),
-                ),
-                (
-                    if snapshot.offline == 0 {
-                        PanelTone::Muted
-                    } else {
-                        PanelTone::Error
-                    },
-                    format!("× Offline {}", snapshot.offline),
-                ),
-                (
-                    if snapshot.retiring == 0 {
-                        PanelTone::Muted
-                    } else {
-                        PanelTone::Warning
-                    },
-                    format!("◌ Retiring {}", snapshot.retiring),
-                ),
-                (PanelTone::Accent, format!("Σ Total {}", snapshot.total)),
-                (
-                    PanelTone::Muted,
-                    format!(
-                        "Registered {}/{}",
-                        snapshot.registered_workers, snapshot.total
-                    ),
-                ),
-            ];
-            if snapshot.desired_total != snapshot.total {
-                counts.push((
-                    PanelTone::Warning,
-                    format!("Target {}→{}", snapshot.total, snapshot.desired_total),
-                ));
-            }
-            let per_row = if g.cols >= 120 && !chart {
-                6
-            } else if g.cols >= 74 {
-                3
-            } else if g.cols >= 36 {
-                2
-            } else {
-                1
-            };
-            for group in counts.chunks(per_row) {
-                let parts: Vec<_> = group
-                    .iter()
-                    .enumerate()
-                    .map(|(index, (tone, text))| {
-                        (
-                            *tone,
-                            format!("{}{text}", if index == 0 { "" } else { "    " }),
-                        )
-                    })
-                    .collect();
-                rows.push(header(&parts));
-            }
-            rows.push(header(&[(
-                PanelTone::Normal,
-                member_activity_summary(snapshot, capacity_width),
-            )]));
-            let stopping = snapshot.stopping || snapshot.closed;
-            let status = if stopping && snapshot.working > 0 {
-                "Stopping · waiting for worker confirmation"
-            } else if stopping && snapshot.retiring > 0 {
-                "Stopping · waiting for retirement confirmation"
-            } else if stopping {
-                "Stopped"
-            } else {
-                "FIFO assignment"
-            };
-            rows.push(header(&[(
-                PanelTone::Muted,
-                format!("Queued {} · {status}", snapshot.queued),
-            )]));
             let coordination = serde_json::to_value(snapshot)
                 .ok()
                 .map(|pool| {
@@ -1878,6 +1802,81 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
     output
 }
 
+fn capacity_rows(snapshot: &Snapshot, cols: u16) -> Vec<Vec<(PanelTone, String)>> {
+    let dreaming = snapshot.slots.iter().filter(|slot| slot.dreaming).count();
+    let mut fields = vec![
+        (PanelTone::Heading, "Station capacity".to_owned()),
+        (PanelTone::Normal, format!("Working {}", snapshot.working)),
+        (PanelTone::Normal, format!("Idle {}", snapshot.idle)),
+        (PanelTone::Muted, format!("↳ Dreaming {dreaming}")),
+        (
+            if snapshot.offline > 0 {
+                PanelTone::Error
+            } else {
+                PanelTone::Muted
+            },
+            format!("Offline {}", snapshot.offline),
+        ),
+        (
+            if snapshot.retiring > 0 {
+                PanelTone::Warning
+            } else {
+                PanelTone::Muted
+            },
+            format!("Retiring {}", snapshot.retiring),
+        ),
+        (PanelTone::Muted, format!("Total {}", snapshot.total)),
+        (
+            PanelTone::Muted,
+            format!(
+                "Registered {}/{}",
+                snapshot.registered_workers, snapshot.total
+            ),
+        ),
+    ];
+    if snapshot.desired_total != snapshot.total {
+        fields.push((
+            PanelTone::Warning,
+            format!("Target {}→{}", snapshot.total, snapshot.desired_total),
+        ));
+    }
+    fields.push((PanelTone::Normal, format!("Queued {}", snapshot.queued)));
+
+    let mut rows = Vec::new();
+    let mut row = Vec::new();
+    let mut used = 0;
+    for (tone, text) in fields {
+        let width = text.width();
+        if !row.is_empty() && used + 3 + width > usize::from(cols) {
+            rows.push(std::mem::take(&mut row));
+            used = 0;
+        }
+        if row.is_empty() {
+            row.push((tone, text));
+        } else {
+            row.push((tone, format!("   {text}")));
+            used += 3;
+        }
+        used += width;
+    }
+    rows.push(row);
+    rows.push(vec![(
+        PanelTone::Muted,
+        member_activity_summary(snapshot, cols),
+    )]);
+    if snapshot.stopping || snapshot.closed {
+        let status = if snapshot.working > 0 {
+            "Stopping · waiting for worker confirmation"
+        } else if snapshot.retiring > 0 {
+            "Stopping · waiting for retirement confirmation"
+        } else {
+            "Stopped"
+        };
+        rows.push(vec![(PanelTone::Warning, status.into())]);
+    }
+    rows
+}
+
 fn member_activity_summary(snapshot: &Snapshot, cols: u16) -> String {
     let observed = snapshot
         .slots
@@ -1906,9 +1905,9 @@ fn member_activity_summary(snapshot: &Snapshot, cols: u16) -> String {
 
 fn slot_state(slot: &SlotView) -> (PanelTone, &'static str, &'static str) {
     match slot.display_state() {
-        "dreaming" => (PanelTone::Accent, "☾", "Dreaming"),
-        "idle" => (PanelTone::Success, "○", "idle"),
-        "working" => (PanelTone::Warning, "●", "working"),
+        "dreaming" => (PanelTone::Muted, "☾", "Dreaming"),
+        "idle" => (PanelTone::Muted, "○", "idle"),
+        "working" => (PanelTone::Normal, "●", "working"),
         "offline" => (PanelTone::Error, "×", "offline"),
         "retiring" => (PanelTone::Warning, "◌", "retiring"),
         _ => (PanelTone::Muted, "?", "unknown"),
@@ -2641,6 +2640,27 @@ mod tests {
         slot.retire_requested = true;
         assert!(has_command(slot, 80));
         assert!(has_command(slot, 20));
+    }
+
+    #[test]
+    fn capacity_wraps_at_the_terminal_width_without_reserving_an_empty_chart() {
+        let snapshot = snapshot();
+        let mut wide = state(24, 120, true);
+        let rendered = screen(&wide.worker_frame(Some(&snapshot)));
+        let text = rendered.screen().contents();
+        let summary = text
+            .lines()
+            .find(|line| line.contains("Station capacity"))
+            .unwrap();
+        assert!(
+            summary.contains("Working 1") && summary.contains("Offline 1"),
+            "{text}"
+        );
+        assert!(!text.contains("No call history"), "{text}");
+        let mut narrow = state(24, 32, false);
+        narrow.worker_frame(Some(&snapshot));
+        let tab_row = |view: &State| view.worker.as_ref().unwrap().tabs[0].row;
+        assert!(tab_row(&wide) < tab_row(&narrow));
     }
 
     #[test]

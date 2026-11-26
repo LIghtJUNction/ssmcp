@@ -311,7 +311,12 @@ try {
 
   await page.locator('#tab-workers').click();
   assert.equal(await page.locator('#worker-productivity').textContent(), productivity.plot.join('\n'));
-  assert.equal(await page.locator('#worker-summary .metric').first().textContent(), '1Dreaming');
+  assert.equal(await page.locator('#worker-summary .metric').first().textContent(), '1工作中');
+  assert.equal(await page.locator('#worker-summary .metric').filter({ hasText: 'Dreaming' }).textContent(), '1Dreaming');
+  assert.equal(await page.locator('#worker-peak').textContent(), '峰值 1');
+  const trendPoints = await page.locator('#worker-trend-line').evaluate(line =>
+    Array.from(line.points, point => point.y));
+  assert.deepEqual(trendPoints, [38, 38, 38, 4, 38, 38, 38, 38, 38, 38]);
   const workingCard = page.locator('#worker-list .worker-card').first();
   assert.equal(await workingCard.locator('h3').textContent(), '站点 #01');
   assert.deepEqual(await workingCard.locator('.pill').allTextContents(), ['working', '10 分钟无工具调用', '已请求退役']);
@@ -324,6 +329,9 @@ try {
   const metricsBox = await page.locator('#worker-summary').boundingBox();
   const plotBox = await page.locator('.worker-productivity').boundingBox();
   assert.ok(plotBox.x >= metricsBox.x + metricsBox.width);
+  if (process.env.WEB_TEST_EVIDENCE) {
+    await page.screenshot({ path: join(process.env.WEB_TEST_EVIDENCE, 'workers-desktop.png') });
+  }
 
   for (const width of [390, 320]) {
     await viewport(width, 844);
@@ -342,6 +350,14 @@ try {
     for (const tab of ['conversation', 'terminal', 'workers', 'waits']) {
       await page.locator('#menu-button').click();
       await page.locator(`#tab-${tab}`).click();
+      if (tab === 'workers') {
+        const summary = await page.locator('#worker-summary').boundingBox();
+        const trend = await page.locator('.worker-productivity').boundingBox();
+        assert.ok(trend.y >= summary.y + summary.height);
+        if (width === 390 && process.env.WEB_TEST_EVIDENCE) {
+          await page.screenshot({ path: join(process.env.WEB_TEST_EVIDENCE, 'workers-mobile.png') });
+        }
+      }
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${tab} must fit ${width}px viewport`);
       const panel = await page.locator(`#panel-${tab}`).boundingBox();
       assert.ok(panel && panel.x >= 0 && panel.x + panel.width <= width + 1);

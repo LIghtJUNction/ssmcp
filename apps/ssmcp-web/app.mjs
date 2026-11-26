@@ -385,7 +385,7 @@ function renderWorkers() {
   show('worker-details', Boolean(state));
   setText('worker-count', state?.total ?? '');
   if (!state) return;
-  const counts = [['dreaming', 'Dreaming'], ['idle', '空闲'], ['working', '工作中'], ['offline', '离线'], ['retiring', '退役中'], ['total', '总容量'], ['registered_workers', '已登记'], ['queued', '排队任务']];
+  const counts = [['working', '工作中'], ['idle', '空闲'], ['offline', '离线'], ['queued', '排队任务'], ['dreaming', 'Dreaming'], ['retiring', '退役中'], ['registered_workers', '已登记'], ['total', '总容量']];
   if (Number.isSafeInteger(state.desired_total) && state.desired_total !== state.total) counts.push(['desired_total', '目标容量']);
   $('worker-summary').replaceChildren(...counts.map(([key, title]) => {
     const node = element('div', 'metric'); node.append(element('strong', '', state[key] ?? '—'), element('span', '', title)); return node;
@@ -393,10 +393,21 @@ function renderWorkers() {
   const productivity = state.productivity;
   const chart = $('worker-productivity');
   chart.textContent = Array.isArray(productivity?.plot) ? productivity.plot.join('\n') : '暂无调用记录';
-  if (Array.isArray(productivity?.calls_per_minute)) {
-    chart.setAttribute('aria-label', `最近 10 分钟，${productivity.members} 名 Worker，每分钟调用次数（由早到晚） ${productivity.calls_per_minute.join('、')}`);
-  } else {
-    chart.removeAttribute('aria-label');
+  const samples = productivity?.calls_per_minute;
+  const hasTrend = Array.isArray(samples) && samples.length === 10 && samples.every(count =>
+    (typeof count === 'number' || (typeof count === 'string' && /^\d+$/.test(count))) &&
+    Number.isSafeInteger(Number(count)) && Number(count) >= 0);
+  show('worker-trend', hasTrend);
+  show('worker-peak', hasTrend);
+  show('worker-productivity', !hasTrend);
+  if (hasTrend) {
+    const peak = Math.max(...samples);
+    const scale = Math.log1p(peak || 1);
+    const points = samples.map((count, index) => `${2 + index * 176 / 9},${38 - 34 * Math.log1p(count) / scale}`);
+    $('worker-trend-line').setAttribute('points', points.join(' '));
+    $('worker-trend').querySelector('svg').setAttribute('aria-label',
+      `最近 10 分钟工具调用，对数刻度。每分钟由早到晚：${samples.join('、')}`);
+    setText('worker-peak', `峰值 ${peak}`);
   }
   show('worker-resize', client.hasCommand('workers.resize') && typeof state.pool_generation === 'string');
   if (!workerDraftEdited && document.activeElement !== $('worker-total')) $('worker-total').value = state.desired_total ?? '';
