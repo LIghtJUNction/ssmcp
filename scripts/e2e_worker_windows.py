@@ -2122,8 +2122,49 @@ class WorkerWindows(Harness):
         frontend.send(b"\x1b")
         frontend.until(empty_composer_ready, "main composer after targeted retirement")
 
+    def monitor_capacity_input(self, frontend, directory, parent, worker, manager):
+        view = ChildView(self, directory, worker, manager)
+        try:
+            view.keys(b"\x1b[200~/worker -1\r\x1b[201~\x1bOP")
+            view.until(lambda frame: "Worker monitor · F1 / Esc Back" in "\n".join(frame["rows"]),
+                       "worker PTY consumed bracketed paste before opening help")
+            unchanged = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
+            self.check(unchanged["total"] == unchanged["desired_total"] == 3,
+                       "pasted worker-window count command leaves the real pool at three")
+            view.keys(b"\x1bOP")
+            view.keys(b"/worker -1")
+            view.until(lambda frame: "/worker -1" in frame["rows"][-1],
+                       "hand-entered count is visible on the actual worker PTY")
+            view.keys(b"\r")
+            view.until(lambda frame: "Worker target 2 accepted." in "\n".join(frame["rows"]),
+                       "worker PTY shows the pool's accepted count")
+            def accepted(pool, target):
+                receipt = pool.get("last_resize") or {}
+                return (pool["total"] == pool["desired_total"] == target
+                        and receipt.get("accepted") is True and receipt.get("target") == target)
+            reduced = self.pool_projection(frontend, parent, lambda pool: accepted(pool, 2),
+                                           "parent receives the worker-window resize receipt")
+            actual = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
+            self.check(actual["total"] == actual["offline"] == 2 and actual["registered_workers"] == 0,
+                       "the worker-window command removes exactly one empty station")
+            frontend.send(b"/worker +1\r")
+            restored = self.pool_projection(frontend, parent, lambda pool: accepted(pool, 3),
+                                            "main terminal restores the third empty station")
+            self.check(restored["last_resize"]["request_id"] > reduced["last_resize"]["request_id"]
+                       and restored["generation"] == reduced["generation"] == actual["generation"],
+                       "both physical terminals resize the same pool with separate receipts")
+            self.cases["monitor-capacity-input"] = {
+                "worker_pid": view.identity[0], "generation": actual["generation"],
+                "initial_total": 3, "child_total": actual["total"], "parent_total": restored["total"],
+                "shrink_request": reduced["last_resize"]["request_id"],
+                "grow_request": restored["last_resize"]["request_id"],
+            }
+        finally:
+            view.close()
+
     def worker_close(self):
         frontend, directory, _, parent, worker, manager = self.launch("worker-close")
+        self.monitor_capacity_input(frontend, directory, parent, worker, manager)
         self.retire_selected_worker(frontend, parent, worker, manager)
         (directory / "close-monitor").touch()
         self.assert_children_gone(directory)

@@ -872,36 +872,11 @@ impl Engine {
                 .filter(|slots| slots.len() <= 32)
                 .ok_or_else(|| BridgeError::invalid("invalid worker page"))?;
             for value in slots {
-                let slot = value["slot"]
-                    .as_u64()
-                    .ok_or_else(|| BridgeError::invalid("invalid worker slot"))?;
-                let epoch = counter(&value["epoch"])?;
-                if target.slots.iter().any(|worker| worker.slot == slot) {
+                let worker = Worker::from_wire(value)?;
+                if target.slots.iter().any(|seen| seen.slot == worker.slot) {
                     return Err(BridgeError::invalid("duplicate worker slot"));
                 }
-                let task = text(value, "task_summary", 1024);
-                target.slots.push(Worker {
-                    slot,
-                    epoch: epoch.0.to_string(),
-                    state: if value["display_state"].is_string() {
-                        text(value, "display_state", 64)
-                    } else {
-                        text(value, "state", 64)
-                    },
-                    registered: value["registered"] == true,
-                    task: if task.is_empty() {
-                        text(value, "task_id", 128)
-                    } else {
-                        task
-                    },
-                    progress: text(value, "progress", 512),
-                    elapsed: if value["current_task_elapsed_ms"].is_null() {
-                        String::new()
-                    } else {
-                        format!("{} ms", counter(&value["current_task_elapsed_ms"])?.0)
-                    },
-                    retiring: value["retire_requested"] == true,
-                });
+                target.slots.push(worker);
             }
             let Some(next) = next_offset(&value, offset, 128)? else {
                 break;

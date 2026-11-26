@@ -1,4 +1,4 @@
-//! A worker connection is a read-only monitor, never an alternate composer.
+//! A worker monitor with navigation and physically entered capacity controls.
 mod clock;
 mod metrics;
 
@@ -91,6 +91,9 @@ pub(super) struct Monitor {
     coordination_rows: usize,
     resources: metrics::Sampler,
     help: bool,
+    capacity_input: Option<String>,
+    capacity_escape: bool,
+    pub(super) capacity_command: Option<(String, i32)>,
 }
 
 #[derive(Default)]
@@ -277,6 +280,8 @@ impl Monitor {
         };
         if self.generation.as_deref() != Some(snapshot.generation.as_str()) {
             self.generation = Some(snapshot.generation.clone());
+            self.capacity_input = None;
+            self.capacity_command = None;
             self.selected = 0;
             self.first = 0;
             self.anchors.clear();
@@ -608,11 +613,103 @@ impl Monitor {
 }
 
 impl State {
+    /// This path is called only by the dedicated foreground monitor stdin reader.
+    /// Browser, attach and generated text use the navigation-only keyboard path.
+    pub(super) fn physical_worker_keyboard(&mut self, mut bytes: &[u8], now: Instant, flush: bool) {
+        while let Some((&byte, rest)) = bytes.split_first() {
+            if self.keyboard.pasting {
+                let consumed = self.keyboard.paste_literal_prefix(bytes, now);
+                if consumed > 0 {
+                    bytes = &bytes[consumed..];
+                    continue;
+                }
+            }
+            let ready = self.keyboard.pending.is_empty() && !self.keyboard.pasting;
+            let monitor = self.worker.as_mut().expect("monitor input");
+            if byte == 0x1b || matches!(byte, 3 | 9 | 18) {
+                // This also cancels the draft on a bracketed paste start.
+                if monitor.capacity_input.take().is_some() {
+                    monitor.capacity_escape = byte == 0x1b;
+                    self.dirty = true;
+                }
+            } else if ready && !monitor.help {
+                if let Some(draft) = &mut monitor.capacity_input {
+                    match byte {
+                        b'\r' => {
+                            let text = monitor.capacity_input.take().unwrap();
+                            let parsed = text
+                                .strip_prefix("/worker ")
+                                .and_then(|args| crate::client::worker_control::parse(args).ok());
+                            self.notice = Some(match parsed {
+                                Some(crate::client::worker_control::Command::Delta(_))
+                                    if self.preview =>
+                                {
+                                    "Preview has no connected worker pool.".into()
+                                }
+                                Some(crate::client::worker_control::Command::Delta(delta)) => {
+                                    if let Some(generation) = &monitor.generation
+                                        && monitor.capacity_command.is_none()
+                                    {
+                                        monitor.capacity_command =
+                                            Some((generation.clone(), delta));
+                                        format!("Sending /worker {delta:+} to the main terminal.")
+                                    } else {
+                                        "The worker pool is not ready for a new request.".into()
+                                    }
+                                }
+                                _ => "Use /worker +N or /worker -N.".into(),
+                            });
+                        }
+                        8 | 127 => {
+                            draft.pop();
+                            if draft.is_empty() {
+                                monitor.capacity_input = None;
+                            }
+                        }
+                        32..=126 if draft.len() < 32 => draft.push(char::from(byte)),
+                        _ => {
+                            monitor.capacity_input = None;
+                            self.notice = Some(
+                                "Capacity command cancelled. Use /worker +N or /worker -N.".into(),
+                            );
+                        }
+                    }
+                    self.dirty = true;
+                    bytes = rest;
+                    continue;
+                }
+                if byte == b'/' {
+                    monitor.capacity_input = Some("/".into());
+                    self.dirty = true;
+                    bytes = rest;
+                    continue;
+                }
+            }
+            self.worker_keyboard(&[byte], now, false);
+            bytes = rest;
+        }
+        if flush {
+            self.worker_keyboard(&[], now, true);
+        }
+    }
+
     pub(super) fn worker_keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) {
         // The raw decoder keeps split paste markers and pasted control keys literal.
         // Text is discarded; only navigation and actual monitor controls act.
         let (_, actions) = self.keyboard.feed_worker(bytes, now, flush);
+        let dismiss_draft = self
+            .worker
+            .as_ref()
+            .is_some_and(|monitor| monitor.capacity_escape);
+        if self.keyboard.pending.is_empty()
+            && let Some(monitor) = self.worker.as_mut()
+        {
+            monitor.capacity_escape = false;
+        }
         for action in actions {
+            if dismiss_draft && matches!(action, Key::Escape) {
+                continue;
+            }
             if matches!(action, Key::Interrupt) {
                 request_interrupt(self);
                 return;
@@ -993,7 +1090,18 @@ impl State {
                 "Tab/Shift+Tab ←→ Worker · F2 Logs & metrics · T Task · ↑↓ PgUp/PgDn · End Live · F1 Help · ^R Reload · ^C"
             }
         };
-        rows.push(line(self, &[(PanelTone::Muted, footer.into())]));
+        let draft = self
+            .worker
+            .as_ref()
+            .and_then(|monitor| monitor.capacity_input.as_deref());
+        let footer = match draft {
+            Some(text) => format!("{text}▏  Enter · Esc"),
+            None if !help && g.cols >= 48 && footer.width() + 11 <= usize::from(g.cols) => {
+                format!("/ Resize · {footer}")
+            }
+            None => footer.into(),
+        };
+        rows.push(line(self, &[(PanelTone::Muted, footer)]));
         Frame {
             geometry: g,
             rows,
@@ -1070,6 +1178,7 @@ fn monitor_help(width: usize) -> Vec<(PanelTone, String)> {
         "Enter   Open logs / expand command text",
         "T   Full task / back",
         "Ctrl+R Reload · Ctrl+C Stop",
+        "/worker +N or -N   Enter to resize · Esc cancels",
         "Main chat · /worker retire #NN selects one station",
     ]
     .into_iter()
@@ -3676,6 +3785,73 @@ mod tests {
                 .iter()
                 .all(|row| row.trim().is_empty())
         );
+    }
+
+    #[test]
+    fn only_a_physically_typed_monitor_count_can_forward_a_delta() {
+        let now = Instant::now();
+        for input in [b"/worker -1\r".as_slice(), b"/worker +1\r"] {
+            for split in 0..=input.len() {
+                let mut state = state(20, 80, false);
+                state.preview = false;
+                state.worker.as_mut().unwrap().generation = Some("pool".into());
+                state.physical_worker_keyboard(&input[..split], now, false);
+                state.physical_worker_keyboard(&input[split..], now, false);
+                let request = state
+                    .worker
+                    .as_mut()
+                    .unwrap()
+                    .capacity_command
+                    .take()
+                    .unwrap();
+                assert_eq!(
+                    request,
+                    ("pool".into(), if input[8] == b'-' { -1 } else { 1 })
+                );
+            }
+        }
+        for bytes in [
+            b"\x1b[200~/worker -1\r\x1b[201~\r".as_slice(),
+            b"/worker -1\x1b[200~ignored\x1b[201~\r",
+            b"/worker -1\x1b\r",
+            b"/worker retire #04\r",
+            b"/worker -129\r",
+        ] {
+            for split in 0..=bytes.len() {
+                let mut state = state(20, 80, false);
+                state.preview = false;
+                state.worker.as_mut().unwrap().generation = Some("pool".into());
+                state.physical_worker_keyboard(&bytes[..split], now, false);
+                state.physical_worker_keyboard(&bytes[split..], now, false);
+                assert!(state.worker.as_ref().unwrap().capacity_command.is_none());
+            }
+        }
+        let mut details = state(20, 80, false);
+        let snapshot = populated();
+        details.worker_frame(Some(&snapshot));
+        details.physical_worker_keyboard(b"\x1bOQ", now, false);
+        assert!(details.worker.as_ref().unwrap().showing_details(0));
+        details.physical_worker_keyboard(b"/worker -1\x1b", now, false);
+        details.physical_worker_keyboard(&[], now + std::time::Duration::from_millis(100), true);
+        let monitor = details.worker.as_ref().unwrap();
+        assert!(monitor.capacity_command.is_none() && monitor.capacity_input.is_none());
+        assert!(monitor.showing_details(0));
+        for width in [32, 80, 120] {
+            let mut state = state(20, width, false);
+            state.preview = false;
+            state.worker.as_mut().unwrap().generation = Some("pool".into());
+            state.keyboard(b"/worker -1\r", now, false);
+            assert!(state.worker.as_ref().unwrap().capacity_command.is_none());
+            state.physical_worker_keyboard(b"/worker -", now, false);
+            let frame = state.worker_frame(None);
+            assert!(screen(&frame).screen().contents().contains("/worker -"));
+            state.keyboard(b"1\r", now, false);
+            assert!(state.worker.as_ref().unwrap().capacity_command.is_none());
+            assert_eq!(
+                state.worker.as_ref().unwrap().capacity_input.as_deref(),
+                Some("/worker -")
+            );
+        }
     }
 
     #[test]

@@ -128,11 +128,21 @@ struct LinkedSnapshot {
 struct ParentState {
     closed: AtomicBool,
     reload_requested: AtomicBool,
+    monitor_delta: Mutex<Option<MonitorDelta>>,
     snapshot: Mutex<Option<(LinkedSnapshot, Instant)>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MonitorDelta {
+    client_id: String,
+    generation: String,
+    delta: i32,
 }
 
 enum ChildUpdate {
     Snapshot(Box<LinkedSnapshot>),
+    Delta(MonitorDelta),
     Reload,
 }
 
@@ -147,6 +157,14 @@ impl ParentState {
                     .snapshot
                     .lock()
                     .unwrap_or_else(|error| error.into_inner()) = Some((*snapshot, Instant::now()));
+                true
+            }
+            ChildUpdate::Delta(command) => {
+                let mut pending = self.monitor_delta.lock().unwrap_or_else(|e| e.into_inner());
+                if pending.is_some() {
+                    return false;
+                }
+                *pending = Some(command);
                 true
             }
             ChildUpdate::Reload => {
@@ -365,6 +383,7 @@ pub(super) fn launch(
         state: Arc::new(ParentState {
             closed: AtomicBool::new(false),
             reload_requested: AtomicBool::new(false),
+            monitor_delta: Mutex::new(None),
             snapshot: Mutex::new(None),
         }),
         watcher: None,
@@ -462,6 +481,34 @@ impl WindowChild {
     /// Only this owned child's authenticated control connection can request it.
     pub(super) fn take_reload_request(&self) -> bool {
         self.state.take_reload_request()
+    }
+
+    pub(super) fn take_monitor_delta(&self, state: &serde_json::Value) -> Option<Result<i32, ()>> {
+        let command = self
+            .state
+            .monitor_delta
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()?;
+        let same = state["client_id"].as_str() == Some(command.client_id.as_str())
+            && state["generation"].as_str() == Some(command.generation.as_str())
+            && state["closed"] != true
+            && state["stopping"] != true
+            && !self.is_closed();
+        Some(if same { Ok(command.delta) } else { Err(()) })
+    }
+
+    pub(super) fn reply_monitor_delta(&self, target: Result<usize, ()>) -> Result<(), String> {
+        let _writer = self.command_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stream = self
+            .control
+            .as_ref()
+            .ok_or("The worker monitor is disconnected.")?;
+        let value = target
+            .ok()
+            .and_then(|n| u8::try_from(n).ok())
+            .unwrap_or(255);
+        stream.write_all(&[b'K', value]).map_err(|e| e.to_string())
     }
 
     pub(super) fn is_closed(&self) -> bool {
@@ -717,6 +764,7 @@ impl<T> ResizeState<T> {
 enum ControlCommand {
     Stop,
     Resize(ResizeRequest),
+    MonitorReply(u8),
 }
 
 /// A fixed-size decoder preserves fragmented commands across read timeouts.
@@ -733,12 +781,20 @@ impl ControlDecoder {
         if self.opcode == 0 {
             return match byte {
                 b'S' => Ok(Some(ControlCommand::Stop)),
-                b'N' | b'T' | b'Y' => {
+                b'N' | b'T' | b'Y' | b'K' => {
                     self.opcode = byte;
                     self.received = 0;
                     Ok(None)
                 }
                 _ => Err(io::Error::other("invalid worker window command")),
+            };
+        }
+        if self.opcode == b'K' {
+            self.opcode = 0;
+            return if byte <= 128 || byte == 255 {
+                Ok(Some(ControlCommand::MonitorReply(byte)))
+            } else {
+                Err(io::Error::other("invalid monitor resize reply"))
             };
         }
         self.payload[self.received] = byte;
@@ -803,6 +859,7 @@ impl Drop for WindowChild {
 }
 
 struct ChildState {
+    monitor_pending: AtomicBool,
     stop: AtomicBool,
     ready: AtomicBool,
     reload_sent: AtomicBool,
@@ -853,6 +910,7 @@ fn connect_child(address: SocketAddr, token: &str) -> io::Result<ChildSession> {
     stream.set_read_timeout(Some(Duration::from_millis(250)))?;
     let mut reader = stream.try_clone()?;
     let state = Arc::new(ChildState {
+        monitor_pending: AtomicBool::new(false),
         stop: AtomicBool::new(false),
         ready: AtomicBool::new(false),
         reload_sent: AtomicBool::new(false),
@@ -872,6 +930,15 @@ fn connect_child(address: SocketAddr, token: &str) -> io::Result<ChildSession> {
                     Ok(0) => break,
                     Ok(_) => match decoder.push(byte[0]) {
                         Ok(Some(ControlCommand::Stop)) | Err(_) => break,
+                        Ok(Some(ControlCommand::MonitorReply(target))) => {
+                            if watched.monitor_pending.swap(false, Ordering::AcqRel) {
+                                if target <= 128 {
+                                    super::terminal::notice(&format!("Worker target {target} requested."));
+                                } else {
+                                    super::terminal::notice("Resize rejected. Check pool connection and target (0–128).");
+                                }
+                            }
+                        }
                         Ok(Some(ControlCommand::Resize(request))) => {
                             watched
                                 .resize
@@ -911,6 +978,43 @@ fn connect_child(address: SocketAddr, token: &str) -> io::Result<ChildSession> {
         state,
         watcher: Some(watcher),
     })
+}
+
+pub(super) fn forward_monitor_delta(generation: &str, delta: i32) -> Result<(), String> {
+    let state = CHILD_SESSION
+        .get()
+        .and_then(Weak::upgrade)
+        .ok_or("This worker monitor has no connected main terminal.")?;
+    let mut stream = state.stream.lock().unwrap_or_else(|e| e.into_inner());
+    if state.stop.load(Ordering::Acquire) || !state.ready.load(Ordering::Acquire) {
+        return Err("The worker monitor is reconnecting.".into());
+    }
+    let client_id = state
+        .client_id
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .ok_or("The worker monitor is reconnecting.")?;
+    if !bounded_identity(generation, 128) || delta == 0 || !(-128..=128).contains(&delta) {
+        return Err("Invalid worker count request.".into());
+    }
+    let request = MonitorDelta {
+        client_id,
+        generation: generation.to_owned(),
+        delta,
+    };
+    let mut frame = vec![b'D'];
+    serde_json::to_writer(&mut frame, &request).map_err(|e| e.to_string())?;
+    frame.push(b'\n');
+    if state.monitor_pending.swap(true, Ordering::AcqRel) {
+        return Err("The main terminal is still processing the previous count request.".into());
+    }
+    if let Err(error) = stream.write_all(&frame) {
+        state.stop.store(true, Ordering::Release);
+        let _ = stream.shutdown(Shutdown::Both);
+        return Err(format!("Worker request delivery is unconfirmed: {error}"));
+    }
+    Ok(())
 }
 
 pub(super) fn child_ready(client_id: &str) -> Result<(), String> {
@@ -976,7 +1080,11 @@ impl ChildState {
         }
         let result = self.resize.lock().unwrap_or_else(|e| e.into_inner()).apply(
             Instant::now(),
-            |total| runtime.resize_workers(total).map(|_| ()),
+            |total| {
+                runtime.resize_workers(total)?;
+                super::terminal::notice(&format!("Worker target {total} accepted."));
+                Ok(())
+            },
             |slot| runtime.prepare_worker_retirement(slot),
             |ticket| runtime.force_worker_retirement(ticket),
         );
@@ -1391,6 +1499,7 @@ fn read_snapshot(reader: &mut impl Read, pid: u32) -> io::Result<LinkedSnapshot>
     // The readiness byte was consumed by the caller and counts toward the frame.
     match read_child_update_bounded(reader, pid, MAX_STATUS_FRAME_BYTES - 1)? {
         ChildUpdate::Snapshot(snapshot) => Ok(*snapshot),
+        ChildUpdate::Delta(_) => Err(io::Error::other("worker requested resize before readiness")),
         ChildUpdate::Reload => Err(io::Error::other("worker requested reload before readiness")),
     }
 }
@@ -1411,6 +1520,18 @@ fn read_child_update_bounded(
         if byte == *b"\n" {
             if line == b"L" {
                 return Ok(ChildUpdate::Reload);
+            }
+            if let Some(body) = line.strip_prefix(b"D") {
+                let request: MonitorDelta =
+                    serde_json::from_slice(body).map_err(io::Error::other)?;
+                if !bounded_identity(&request.client_id, 128)
+                    || !bounded_identity(&request.generation, 128)
+                    || request.delta == 0
+                    || !(-128..=128).contains(&request.delta)
+                {
+                    return Err(io::Error::other("invalid worker count request"));
+                }
+                return Ok(ChildUpdate::Delta(request));
             }
             let snapshot: LinkedSnapshot =
                 serde_json::from_slice(&line).map_err(io::Error::other)?;
@@ -1858,6 +1979,7 @@ mod tests {
         let state = || ParentState {
             closed: AtomicBool::new(false),
             reload_requested: AtomicBool::new(false),
+            monitor_delta: Mutex::new(None),
             snapshot: Mutex::new(None),
         };
         let old = state();
@@ -2049,6 +2171,7 @@ mod tests {
         let state = ParentState {
             closed: AtomicBool::new(false),
             reload_requested: AtomicBool::new(false),
+            monitor_delta: Mutex::new(None),
             snapshot: Mutex::new(Some((fixture_snapshot(), Instant::now()))),
         };
         assert!(fresh_snapshot(&state).is_some());
@@ -2235,6 +2358,7 @@ mod tests {
         let parent = ParentState {
             closed: AtomicBool::new(false),
             reload_requested: AtomicBool::new(false),
+            monitor_delta: Mutex::new(None),
             snapshot: Mutex::new(Some((decoded.clone(), Instant::now()))),
         };
         let light = parent.project_snapshot(false).unwrap();
@@ -2454,6 +2578,32 @@ mod tests {
         let bytes = metadata_packet(&snapshot);
         assert!(read_child_update(&mut &bytes[..], std::process::id()).is_err());
         assert_eq!(snapshot.manager_operations[0].targets.len(), 128);
+    }
+
+    #[test]
+    fn monitor_delta_frames_are_bounded_and_never_accepted_as_readiness_or_forced_retirement() {
+        let pid = std::process::id();
+        let valid = b"D{\"client_id\":\"c\",\"generation\":\"g\",\"delta\":-1}\n";
+        assert!(read_snapshot(&mut &valid[..], pid).is_err());
+        let ChildUpdate::Delta(command) = read_child_update(&mut &valid[..], pid).unwrap() else {
+            panic!("expected scoped monitor delta");
+        };
+        assert_eq!(command.delta, -1);
+        assert_eq!(command.generation, "g");
+        for invalid in [0, -129, 129] {
+            let frame =
+                format!("D{{\"client_id\":\"c\",\"generation\":\"g\",\"delta\":{invalid}}}\n");
+            assert!(read_child_update(&mut frame.as_bytes(), pid).is_err());
+        }
+        for value in [0u8, 5, 128, 255] {
+            let mut decoder = ControlDecoder::default();
+            assert_eq!(decoder.push(b'K').unwrap(), None);
+            assert_eq!(
+                decoder.push(value).unwrap(),
+                Some(ControlCommand::MonitorReply(value))
+            );
+            assert_eq!(decoder.push(b'S').unwrap(), Some(ControlCommand::Stop));
+        }
     }
 
     #[test]

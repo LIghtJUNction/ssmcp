@@ -1821,11 +1821,10 @@ struct WorkerController {
     arguments: Vec<OsString>,
     cwd: PathBuf,
     preserve_worker_agent: bool,
-    desired: usize,
+    target: worker_control::CountTarget,
     window: Option<worker_window::WindowChild>,
     launching: Option<JoinHandle<Result<worker_window::WindowChild, String>>>,
-    pending: Option<(u64, usize, String)>,
-    local_target: bool,
+    pending: Option<(u64, usize)>,
     resize_progress: Option<(u64, worker_control::ResizeProgress)>,
     retirement: Option<PendingStationRetirement>,
 }
@@ -1837,11 +1836,12 @@ impl WorkerController {
             arguments: reload::connection_arguments(arguments.to_vec(), options, false)?,
             cwd: std::env::current_dir()?,
             preserve_worker_agent: options.worker.is_some(),
-            desired: options.worker.map_or(0, |worker| worker.count),
+            target: worker_control::CountTarget::new(
+                options.worker.map_or(0, |worker| worker.count),
+            ),
             window: None,
             launching: None,
             pending: None,
-            local_target: false,
             resize_progress: None,
             retirement: None,
         })
@@ -1873,7 +1873,7 @@ impl WorkerController {
         {
             // Preparing a station already lowers the child's target. Keep that
             // receipt so the subsequent confirmation is not mistaken for a resize.
-            self.desired = actual as usize;
+            self.target.desired = actual as usize;
         }
         if !same_pool {
             terminal::cancel_worker_retirement();
@@ -1948,9 +1948,9 @@ impl WorkerController {
                         Err(error) => format!("worker window launch ended: {error}"),
                         Ok(Ok(_)) => unreachable!(),
                     };
-                    self.desired = 0;
+                    self.target.desired = 0;
                     self.pending = None;
-                    self.local_target = false;
+                    self.target.queued_from = None;
                     self.resize_progress = None;
                     terminal::notice(&format!("Could not open worker window: {error}"));
                 }
@@ -1968,7 +1968,7 @@ impl WorkerController {
                 // Drop its owned handle before opening exactly one replacement.
                 self.window = None;
                 self.pending = None;
-                self.local_target = false;
+                self.target.queued_from = None;
                 self.resize_progress = None;
                 self.clear_retirement();
                 terminal::notice("Reloading worker window; this chat session stays connected.");
@@ -1978,19 +1978,19 @@ impl WorkerController {
             Some((Ok(true), false)) => {
                 self.window = None;
                 self.pending = None;
-                self.local_target = false;
+                self.target.queued_from = None;
                 self.resize_progress = None;
                 self.clear_retirement();
-                self.desired = 0;
+                self.target.desired = 0;
                 terminal::notice("Worker window closed; this chat session remains available.");
             }
             Some((Err(error), _)) => {
                 self.window = None;
                 self.pending = None;
-                self.local_target = false;
+                self.target.queued_from = None;
                 self.resize_progress = None;
                 self.clear_retirement();
-                self.desired = 0;
+                self.target.desired = 0;
                 terminal::notice(&format!(
                     "Worker window: {error}. This chat session remains available."
                 ));
@@ -2011,29 +2011,35 @@ impl WorkerController {
         if let (Some(state), Some(progress)) = (snapshot.as_ref(), progress) {
             let receipt = &state["last_resize"];
             let receipt_id = receipt["request_id"].as_u64();
-            if let Some((id, target, generation)) = self.pending.as_ref() {
-                let (id, target) = (*id, *target);
-                if state["generation"].as_str() != Some(generation.as_str()) {
-                    self.pending = None;
-                    self.local_target = false;
-                    self.resize_progress = None;
+            if let (Some(client), Some(generation)) =
+                (state["client_id"].as_str(), state["generation"].as_str())
+                && self.target.observe_pool(client, generation)
+            {
+                if self.pending.is_some() || self.resize_progress.is_some() {
                     terminal::notice(
-                        "Worker pool changed before its resize receipt arrived. Check /worker ls.",
+                        "Worker pool changed. Check /worker ls before requesting another count change.",
                     );
-                } else if receipt_id == Some(id) {
-                    self.pending = None;
-                    if receipt["accepted"].as_bool() == Some(true) {
-                        terminal::notice(&progress.notice());
-                        self.resize_progress = (!progress.settled()).then_some((id, progress));
-                    } else {
-                        let later_delta = self.desired as i32 - target as i32;
-                        self.desired = worker_total_after_delta(progress.target, later_delta)
-                            .unwrap_or(progress.target);
-                        let error = receipt["error"]
-                            .as_str()
-                            .unwrap_or("worker resize was rejected");
-                        terminal::notice(&format!("Worker target unchanged: {error}"));
-                    }
+                }
+                self.pending = None;
+                self.resize_progress = None;
+            }
+            if let Some((id, target)) = self.pending
+                && receipt_id == Some(id)
+            {
+                self.pending = None;
+                if receipt["accepted"].as_bool() != Some(true) {
+                    let error = receipt["error"]
+                        .as_str()
+                        .unwrap_or("worker resize was rejected");
+                    terminal::notice(&format!("Worker target unchanged: {error}"));
+                } else if target != progress.target {
+                    terminal::notice(&format!(
+                        "Worker target {target} was accepted. The pool now requests {}.",
+                        progress.target
+                    ));
+                } else {
+                    terminal::notice(&progress.notice());
+                    self.resize_progress = (!progress.settled()).then_some((id, progress));
                 }
             }
             if let Some((id, previous)) = self.resize_progress {
@@ -2044,37 +2050,59 @@ impl WorkerController {
                     self.resize_progress = (!progress.settled()).then_some((id, progress));
                 }
             }
-            // A manager can resize independently of this terminal. Only send
-            // a new target after a local command, and apply its delta to the
-            // latest acknowledged target when the terminal has no pending intent.
-            if self.pending.is_none() && !self.local_target {
-                self.desired = progress.target;
+            if self.pending.is_none()
+                && let Err(error) = self.target.reconcile(progress.target)
+            {
+                terminal::notice(&error);
             }
         }
 
         // A bounded batch keeps input responsive even if another producer is busy.
-        let previous_target = self.desired;
+        let previous_target = self.target.desired;
         for _ in 0..8 {
-            let Some(request) = worker_control::take() else {
-                break;
+            let from_monitor = self.window.as_ref().and_then(|window| {
+                snapshot
+                    .as_ref()
+                    .and_then(|state| window.take_monitor_delta(state))
+            });
+            let request = match from_monitor {
+                Some(Ok(delta)) => worker_control::Request::Delta(delta),
+                Some(Err(())) => {
+                    if let Some(window) = &self.window {
+                        let _ = window.reply_monitor_delta(Err(()));
+                    }
+                    continue;
+                }
+                None => {
+                    let Some(request) = worker_control::take() else {
+                        break;
+                    };
+                    request
+                }
             };
             match request {
                 worker_control::Request::Delta(delta) => {
-                    match worker_total_after_delta(self.desired, delta) {
-                        Ok(total) => {
-                            self.desired = total;
-                            self.local_target = true;
-                        }
-                        Err(error) => terminal::notice(&error),
+                    let total = self.target.change(delta);
+                    if from_monitor.is_some()
+                        && let Some(window) = &self.window
+                        && let Err(error) =
+                            window.reply_monitor_delta(total.as_ref().copied().map_err(|_| ()))
+                    {
+                        terminal::notice(&format!(
+                            "Could not acknowledge the worker request: {error}"
+                        ));
+                    }
+                    if let Err(error) = total {
+                        terminal::notice(&error);
                     }
                 }
                 worker_control::Request::Retire { slot, confirmation } => {
                     if self.pending.is_some()
-                        || self.desired != previous_target
+                        || self.target.desired != previous_target
                         || snapshot
                             .as_ref()
                             .and_then(|state| state["desired_total"].as_u64())
-                            .is_some_and(|target| target != self.desired as u64)
+                            .is_some_and(|target| target != self.target.desired as u64)
                     {
                         terminal::notice(
                             "A worker count change is pending. Select the station after its receipt.",
@@ -2090,35 +2118,35 @@ impl WorkerController {
             }
         }
 
-        if self.desired != previous_target
+        if self.target.desired != previous_target
             && let Some(progress) = progress
             && (self.pending.is_some() || !progress.settled())
-            && progress.target != self.desired
+            && progress.target != self.target.desired
         {
             terminal::notice(&format!(
                 "Worker target {} is queued. {}",
-                self.desired,
+                self.target.desired,
                 progress.notice()
             ));
         }
 
-        if self.window.is_none() && self.launching.is_none() && self.desired != 0 {
+        if self.window.is_none() && self.launching.is_none() && self.target.desired != 0 {
             let arguments = match worker_arguments(
                 &self.arguments,
-                self.desired,
+                self.target.desired,
                 true,
                 !self.preserve_worker_agent,
             ) {
                 Ok(arguments) => arguments,
                 Err(error) => {
-                    self.desired = 0;
+                    self.target.desired = 0;
                     terminal::notice(&error);
                     return;
                 }
             };
             let executable = self.executable.clone();
             let cwd = self.cwd.clone();
-            self.local_target = false;
+            self.target.queued_from = None;
             self.launching = Some(tokio::task::spawn_blocking(move || {
                 worker_window::launch(&executable, &arguments, &cwd)
             }));
@@ -2128,19 +2156,18 @@ impl WorkerController {
 
         if let (Some(window), Some(state), Some(progress)) =
             (self.window.as_ref(), snapshot.as_ref(), progress)
-            && self.local_target
+            && self.target.queued_from.is_some()
             && self.pending.is_none()
             && progress.settled()
             && state["stopping"].as_bool() != Some(true)
             && state["closed"].as_bool() != Some(true)
-            && let Some(generation) = state["generation"].as_str()
         {
-            self.local_target = false;
-            if progress.target != self.desired {
-                match window.request_resize(self.desired) {
-                    Ok(id) => self.pending = Some((id, self.desired, generation.to_owned())),
+            self.target.queued_from = None;
+            if progress.target != self.target.desired {
+                match window.request_resize(self.target.desired) {
+                    Ok(id) => self.pending = Some((id, self.target.desired)),
                     Err(error) => {
-                        self.desired = progress.target;
+                        self.target.desired = progress.target;
                         terminal::notice(&format!("Could not change worker target: {error}"));
                     }
                 }

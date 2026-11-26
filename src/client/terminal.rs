@@ -1012,7 +1012,17 @@ pub(super) fn monitor_keyboard_bytes(bytes: &[u8], flush: bool) -> Result<(), St
     if state.worker.is_none() {
         return Err("worker monitor was replaced; local input was not forwarded".into());
     }
-    let _ = state.keyboard(bytes, Instant::now(), flush);
+    state.physical_worker_keyboard(bytes, Instant::now(), flush);
+    let request = state
+        .worker
+        .as_mut()
+        .and_then(|monitor| monitor.capacity_command.take());
+    drop(state);
+    if let Some((generation, delta)) = request {
+        if let Err(error) = super::worker_window::forward_monitor_delta(&generation, delta) {
+            notice(&error);
+        }
+    }
     Ok(())
 }
 

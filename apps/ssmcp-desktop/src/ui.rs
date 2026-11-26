@@ -1875,6 +1875,12 @@ impl Desktop {
                 json!({"pool_generation":workers.generation,"total":total}),
             );
         }
+        let narrow = bounds.w < 520.;
+        let (summary_x, summary_y) = if narrow {
+            (bounds.x, y + 46.)
+        } else {
+            (bounds.x + 300., y + 12.)
+        };
         canvas.ellipsis(
             &format!(
                 "当前目标 {} · 排队任务 {}{}",
@@ -1886,52 +1892,65 @@ impl Desktop {
                     ""
                 }
             ),
-            bounds.x + 300.,
-            y + 12.,
-            bounds.w - 300.,
+            summary_x,
+            summary_y,
+            (bounds.x + bounds.w - summary_x).max(1.),
             12,
             false,
             MUTED,
         );
-        canvas.text("站位", bounds.x + 14., y + 63., 12, true, MUTED);
-        canvas.text("状态", bounds.x + 104., y + 63., 12, true, MUTED);
-        canvas.text("任务 / 进度", bounds.x + 242., y + 63., 12, true, MUTED);
+        let list_y = if narrow {
+            y + 75.
+        } else {
+            canvas.text("站位", bounds.x + 14., y + 63., 12, true, MUTED);
+            canvas.text("状态", bounds.x + 104., y + 63., 12, true, MUTED);
+            canvas.text("任务 / 进度", bounds.x + 262., y + 63., 12, true, MUTED);
+            y + 88.
+        };
         let body = Rect::new(
             bounds.x,
-            y + 88.,
+            list_y,
             bounds.w,
-            (bounds.y + bounds.h - y - 88.).max(1.),
+            (bounds.y + bounds.h - list_y - 24.).max(1.),
         );
-        let total_h = workers.slots.len() as f32 * 89.;
-        self.scroll[3] = self.scroll[3].min((total_h - body.h).max(0.));
+        let row_height = if narrow { 136. } else { 86. };
+        let stride = row_height + 8.;
+        self.scroll[3] = self.scroll[3].min((workers.slots.len() as f32 * stride - body.h).max(0.));
         canvas.clip(body);
         for (index, worker) in workers.slots.iter().enumerate() {
-            let y = body.y + index as f32 * 89. - self.scroll[3];
-            if y + 81. < body.y || y > body.y + body.h {
+            let y = body.y + index as f32 * stride - self.scroll[3];
+            if y + row_height < body.y || y > body.y + body.h {
                 continue;
             }
-            canvas.rect(Rect::new(body.x, y, body.w, 80.), 8., SURFACE);
+            canvas.rect(Rect::new(body.x, y, body.w, row_height), 8., SURFACE);
             canvas.text(
-                &worker.slot.to_string(),
+                &worker.station_label(),
                 body.x + 14.,
-                y + 14.,
+                y + 12.,
                 17,
                 true,
                 TEXT,
             );
+            let (epoch_x, epoch_y, epoch_w) = if narrow {
+                (body.x + 50., y + 16., 76.)
+            } else {
+                (body.x + 14., y + 45., 82.)
+            };
             canvas.ellipsis(
                 &format!("epoch {}", worker.epoch),
-                body.x + 14.,
-                y + 45.,
-                82.,
+                epoch_x,
+                epoch_y,
+                epoch_w,
                 10,
                 false,
                 MUTED,
             );
-            canvas.text(
+            let state_x = body.x + if narrow { 136. } else { 104. };
+            canvas.ellipsis(
                 worker_label(&worker.state),
-                body.x + 104.,
+                state_x,
                 y + 14.,
+                (body.x + body.w - state_x - 14.).clamp(1., 144.),
                 13,
                 true,
                 if worker.state == "working" {
@@ -1942,38 +1961,42 @@ impl Desktop {
                     MUTED
                 },
             );
+            let metadata_x = body.x + if narrow { 14. } else { 104. };
             canvas.text(
-                if worker.retiring && worker.state != "retiring" {
-                    "已请求退役"
-                } else if worker.registered {
-                    "已登记"
-                } else {
-                    "未登记"
-                },
-                body.x + 104.,
-                y + 43.,
+                worker.registration_label(),
+                metadata_x,
+                y + 37.,
                 11,
                 false,
                 MUTED,
             );
+            if worker.quiet_10m == Some(true) {
+                canvas.text("10 分钟无工具调用", metadata_x, y + 59., 11, false, MUTED);
+            }
+            let (task_x, task_y) = if narrow {
+                (body.x + 14., y + 85.)
+            } else {
+                (body.x + 262., y + 14.)
+            };
+            let task_width = (body.x + body.w - task_x - 14.).max(1.);
             canvas.ellipsis(
                 if worker.task.is_empty() {
                     "暂无任务"
                 } else {
                     &worker.task
                 },
-                body.x + 242.,
-                y + 14.,
-                body.w - 260.,
+                task_x,
+                task_y,
+                task_width,
                 13,
                 false,
                 TEXT,
             );
             canvas.ellipsis(
                 &format!("{}  {}", worker.progress, worker.elapsed),
-                body.x + 242.,
-                y + 43.,
-                body.w - 260.,
+                task_x,
+                task_y + 23.,
+                task_width,
                 12,
                 false,
                 MUTED,

@@ -162,7 +162,7 @@ jobs:
         run: |
           python3 scripts/e2e_worker_windows.py --case targeted-retirement --bin-dir target/debug \
             --fixture-binary "${{ steps.focused_fixtures.outputs.fixture }}" --source-revision "$(git rev-parse HEAD)" \
-            --report target/acceptance/worker-windows-targeted/report.json
+            --report "$RUNNER_TEMP/ssmcp-worker-windows-targeted/report.json"
       - name: Verify two restricted chat sessions on the real account router
         if: ${{ !cancelled() && steps.focused_fixtures.outcome == 'success' }}
         run: python3 scripts/e2e_magisk_chat.py --client target/debug/ssmcp --fixture-binary "${{ steps.focused_fixtures.outputs.fixture }}"
@@ -282,6 +282,9 @@ jobs:
           name: unified-acceptance-${{ matrix.runner }}
           path: |
             ${{ runner.temp }}/ssmcp-unified-report*
+            ${{ runner.temp }}/ssmcp-worker-windows-targeted/report.json
+            ${{ runner.temp }}/ssmcp-worker-windows-targeted/report-evidence/*.json
+            ${{ runner.temp }}/ssmcp-worker-windows-targeted/report-evidence/*.png
             ${{ runner.temp }}/ssmcp-dashboard-report*
             ${{ runner.temp }}/ssmcp-command-stats/
             ${{ runner.temp }}/ssmcp-account-relay-report.json

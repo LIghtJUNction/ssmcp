@@ -105,6 +105,8 @@ Use these commands in the main chat:
 
 Invitation text appears in a local, scrollable panel, and the client also tries to copy it to the clipboard. A missing clipboard does not prevent reading the prompt. When the pool is fully staffed, `/invite worker` displays `Worker stations are fully staffed.` and does not generate another invitation. Sending a prompt to an external agent does not itself connect that agent or start a model.
 
+In an attached Workers terminal, type `/worker -1` or `/worker +1` and press Enter to adjust capacity through the main terminal. Esc cancels the draft. Only locally typed capacity commands use this control. The main terminal reports the accepted target and each change in retirement progress.
+
 Shrinking a pool preserves in-flight claims and cancellation acknowledgements. A station being removed while its task is still running remains **working**. Once it has no running task but still awaits retirement confirmation, it is **retiring**. The physical station count is `idle + working + offline + retiring`; `desired_total` describes the requested capacity while retirement is pending.
 
 To remove a worker that can no longer acknowledge retirement, enter `/worker retire #03` in the main terminal, substituting the number shown in the worker window. Read the station and task in the prompt. If that worker remains stuck, enter the same command again. The pool records any unconfirmed task as `unknown` with `replay_safe: false`. Other stations keep their claims. A normal release before confirmation preserves the recorded result. The pool cannot stop work that the external agent may still be doing.
@@ -174,6 +176,7 @@ Press F2 to open the selected station's logs and client resource details. Wide t
 | Left / Right or Tab / Shift+Tab | Select the previous or next worker. |
 | F2 | Switch the selected worker between progress and logs / client resource details. |
 | F1 | Open or close the monitor help page. |
+| `/worker +N` or `/worker -N`, then Enter | Request a capacity change from the attached main terminal. |
 | T | Open or close the full task, including complete task and manager IDs. |
 | Enter | From progress, open logs with command text expanded; in log details, expand or compact command arguments. |
 | Esc | Close help or the current task / log detail view. |
@@ -315,7 +318,7 @@ The Sessions recipient row and the selected worker display the number of attribu
 
 One user-issued bound native tool or catalog call, client-scoped resource read, explicit collaboration action, authenticated event or messaging request, or typed await counts once on its connection. Explicit UI waits count once as well. An await covering several targets counts once, including when the relay repeats a native observation in the background. An explicit new read of a retained wait counts as a new call. Automatic probes produce no count. Server-wide discoveries, account-owned jobs, and multi-connection transfers do not select one verified member on one connection. A member's signed-in account and display name cannot establish attribution.
 
-This display concerns tool use. A registered member can work outside the relay for ten minutes and keep a valid task claim. The worker monitor counts Offline from scheduler station state and shows registrations against current capacity. During a shrink, an occupied station stays Working until its claim finishes; the separate target shows the requested capacity while retirement is pending.
+This display concerns tool use. A registered member can work outside the relay for ten minutes and keep a valid task claim. The worker monitor counts Offline from scheduler station state and shows registrations against current capacity. During a shrink, an occupied station stays Working until the worker reports the outcome of its active claim. The target shows the requested capacity while retirement is pending.
 
 ## Share work between occupied and idle stations
 

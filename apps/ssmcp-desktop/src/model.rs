@@ -197,11 +197,62 @@ pub struct Worker {
     pub slot: u64,
     pub epoch: String,
     pub state: String,
+    pub quiet_10m: Option<bool>,
     pub registered: bool,
     pub task: String,
     pub progress: String,
     pub elapsed: String,
     pub retiring: bool,
+}
+
+impl Worker {
+    pub fn from_wire(value: &Value) -> Result<Self, BridgeError> {
+        let state = text(value, "state", 64);
+        let display = text(value, "display_state", 64);
+        // Earlier bridges reported ten quiet minutes by overwriting the display state.
+        let legacy_quiet = !state.is_empty() && state != "offline" && display == "offline";
+        let task = text(value, "task_summary", 1024);
+        Ok(Self {
+            slot: value["slot"]
+                .as_u64()
+                .ok_or_else(|| BridgeError::invalid("invalid worker slot"))?,
+            epoch: counter(&value["epoch"])?.0.to_string(),
+            state: if state.is_empty() || (state == "idle" && display == "dreaming") {
+                display
+            } else {
+                state
+            },
+            quiet_10m: value["quiet_10m"]
+                .as_bool()
+                .or_else(|| legacy_quiet.then_some(true)),
+            registered: value["registered"] == true,
+            task: if task.is_empty() {
+                text(value, "task_id", 128)
+            } else {
+                task
+            },
+            progress: text(value, "progress", 512),
+            elapsed: if value["current_task_elapsed_ms"].is_null() {
+                String::new()
+            } else {
+                format!("{} ms", counter(&value["current_task_elapsed_ms"])?.0)
+            },
+            retiring: value["retire_requested"] == true,
+        })
+    }
+
+    pub fn station_label(&self) -> String {
+        format!("#{:02}", self.slot.saturating_add(1))
+    }
+
+    pub fn registration_label(&self) -> &'static str {
+        match (self.registered, self.retiring && self.state != "retiring") {
+            (true, true) => "已登记 · 已请求退役",
+            (false, true) => "未登记 · 已请求退役",
+            (true, false) => "已登记",
+            (false, false) => "未登记",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -826,6 +877,35 @@ fn nonzero(value: u16) -> std::num::NonZeroU16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_worker_keeps_state_registration_retirement_and_activity_independent() {
+        let mut slot = json!({"slot": 3, "epoch": "2", "state": "working",
+            "display_state": "working", "quiet_10m": true, "registered": true,
+            "retire_requested": true});
+        let worker = Worker::from_wire(&slot).unwrap();
+        assert_eq!(worker.station_label(), "#04");
+        assert_eq!(worker.state, "working");
+        assert_eq!(worker.quiet_10m, Some(true));
+        assert_eq!(worker.registration_label(), "已登记 · 已请求退役");
+        slot["quiet_10m"] = Value::Null;
+        let worker = Worker::from_wire(&slot).unwrap();
+        assert_eq!(worker.quiet_10m, None);
+
+        slot.as_object_mut().unwrap().remove("quiet_10m");
+        slot["display_state"] = json!("offline");
+        let legacy = Worker::from_wire(&slot).unwrap();
+        assert_eq!(legacy.state, "working");
+        assert_eq!(legacy.quiet_10m, Some(true));
+        slot["quiet_10m"] = json!(false);
+        assert_eq!(Worker::from_wire(&slot).unwrap().quiet_10m, Some(false));
+        slot["quiet_10m"] = Value::Null;
+        slot["state"] = json!("offline");
+        assert_eq!(Worker::from_wire(&slot).unwrap().quiet_10m, None);
+        slot["state"] = json!("idle");
+        slot["display_state"] = json!("dreaming");
+        assert_eq!(Worker::from_wire(&slot).unwrap().state, "dreaming");
+    }
 
     #[test]
     fn window_sessions_accept_only_its_own_targets() {

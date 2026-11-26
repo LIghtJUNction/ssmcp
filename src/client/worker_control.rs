@@ -67,6 +67,62 @@ impl Confirmation {
     }
 }
 
+#[derive(Default)]
+pub(super) struct CountTarget {
+    pub desired: usize,
+    pub queued_from: Option<usize>,
+    pool: Option<(String, String)>,
+}
+
+impl CountTarget {
+    pub fn new(desired: usize) -> Self {
+        Self {
+            desired,
+            ..Self::default()
+        }
+    }
+
+    /// Returns true when the previous pool ceased to be authoritative.
+    pub fn observe_pool(&mut self, client: &str, generation: &str) -> bool {
+        if self
+            .pool
+            .as_ref()
+            .is_some_and(|(c, g)| c == client && g == generation)
+        {
+            return false;
+        }
+        let replaced = self
+            .pool
+            .replace((client.to_owned(), generation.to_owned()))
+            .is_some();
+        if replaced {
+            self.queued_from = None;
+        }
+        replaced
+    }
+
+    pub fn change(&mut self, delta: i32) -> Result<usize, String> {
+        let next = super::worker_total_after_delta(self.desired, delta)?;
+        self.queued_from.get_or_insert(self.desired);
+        self.desired = next;
+        Ok(next)
+    }
+
+    /// The pending intent is a signed delta. Another manager may legitimately
+    /// have moved the target while the terminal waited for a prior release.
+    pub fn reconcile(&mut self, actual: usize) -> Result<(), String> {
+        let base = self.queued_from.take();
+        let previous = std::mem::replace(&mut self.desired, actual);
+        if let Some(base) = base {
+            let delta = previous as i32 - base as i32;
+            if delta != 0 {
+                self.change(delta)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ResizeProgress {
     pub target: usize,
@@ -215,6 +271,23 @@ pub(super) fn take() -> Option<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn queued_worker_delta_follows_external_resize_and_is_cleared_on_pool_replacement() {
+        let mut target = CountTarget::new(5);
+        assert!(!target.observe_pool("child", "pool-1"));
+        assert_eq!(target.change(-1).unwrap(), 4);
+        target.reconcile(10).unwrap();
+        assert_eq!((target.desired, target.queued_from), (9, Some(10)));
+        target.reconcile(9).unwrap();
+        assert_eq!((target.desired, target.queued_from), (8, Some(9)));
+        assert!(target.observe_pool("new-child", "pool-1"));
+        target.reconcile(3).unwrap();
+        assert_eq!((target.desired, target.queued_from), (3, None));
+        target.change(-1).unwrap();
+        assert!(target.reconcile(0).is_err());
+        assert_eq!((target.desired, target.queued_from), (0, None));
+    }
+
     #[test]
     fn shrink_progress_includes_work_before_the_release_acknowledgement() {
         let mut state = serde_json::json!({
