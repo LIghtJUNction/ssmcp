@@ -1,10 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Gateway, readPairingToken } from '../src/gateway.mjs';
+import { Gateway, readPairingToken, takeMagiskPairing } from '../src/gateway.mjs';
 import { createRequest, MAX_FRAME_BYTES } from '../src/protocol.mjs';
 import { response, eventPage, observation, GENERATION, capabilities } from './fixtures.mjs';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+test('module owner pairing scrubs the fragment before accepting the exact local landing page', () => {
+  const home = 'http://127.0.0.1:42387/', token = '1a'.repeat(32);
+  for (const [url, modulePage, expected] of [
+    [home, true, token], [home, false, null], [home + 'other', true, null],
+    [home + '?other=1', true, null], ['http://127.0.0.1:42388/', true, null],
+    ['http://localhost:42387/', true, null], ['https://elsewhere.example/', true, null],
+  ]) {
+    const location = new URL(url + '#' + token), scrubbed = [];
+    const history = { replaceState: (_, __, clean) => scrubbed.push(clean) };
+    assert.equal(takeMagiskPairing(location, history, modulePage), expected);
+    assert.deepEqual(scrubbed, [url]);
+  }
+  const location = new URL(home + '#' + token);
+  let replacement;
+  location.replace = url => { replacement = url; };
+  assert.equal(takeMagiskPairing(location, { replaceState() { throw new Error(); } }, true), null);
+  assert.equal(replacement, home);
+  for (const invalid of ['#' + token.toUpperCase(), '#not-a-module-secret']) {
+    const clean = [];
+    assert.equal(takeMagiskPairing(new URL(home + invalid), { replaceState: (_, __, url) => clean.push(url) }, true), null);
+    assert.deepEqual(clean, [home]);
+  }
+});
 
 test('a foreground selector may share a saved session label without changing the older row', async () => {
   const sessions = [{ name: 'work' }, { name: 'work', target: 'live:device-session' }];

@@ -1,4 +1,4 @@
-import { Gateway, readPairingToken } from './src/gateway.mjs';
+import { Gateway, readPairingToken, takeMagiskPairing } from './src/gateway.mjs';
 import { BridgeClient } from './src/client.mjs';
 import { byteLength } from './src/protocol.mjs';
 import { renderWaitContent } from './src/wait-view.mjs';
@@ -6,6 +6,10 @@ import { plain, shortId, duration, redact, mayClearDraft, quoteReply } from './s
 
 const $ = id => document.getElementById(id);
 const gateway = new Gateway();
+{
+  const pairing = takeMagiskPairing(location, history, document.documentElement.hasAttribute('data-ssmcp-magisk'));
+  if (pairing) gateway.setToken(pairing);
+}
 const client = new BridgeClient(gateway);
 const busy = new Set();
 const drafts = new Map();
@@ -544,3 +548,13 @@ document.addEventListener('visibilitychange', () => {
   // No lease release or command cancellation is inferred from tab visibility.
 });
 renderAll();
+if (gateway.authenticated) {
+  void run('auth', async () => {
+    try { await listSessions(); }
+    catch {
+      gateway.clearToken();
+      renderAll();
+      throw new Error('模块配对失败，请从模块管理器重新打开 SSMCP。');
+    }
+  });
+}

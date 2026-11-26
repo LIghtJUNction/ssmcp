@@ -46,6 +46,22 @@ async function boundedJson(response, maximum) {
   try { return JSON.parse(text); } catch { throw new ProtocolError('网关没有返回有效 JSON。'); }
 }
 
+export function takeMagiskPairing(location, history, modulePage) {
+  const fragment = location.hash;
+  if (!fragment) return null;
+  const moduleOrigin = 'http://127.0.0.1:42387';
+  const moduleHome = modulePage && location.href === moduleOrigin + '/' + fragment;
+  if (!moduleHome && !/^#[0-9a-f]{64}$/i.test(fragment)) return null;
+  const clean = location.origin + location.pathname + location.search;
+  try { history.replaceState(history.state, '', clean); }
+  catch {
+    // Navigate to the clean address if this embedded browser rejects a history update.
+    try { location.replace(clean); } catch { /* No credential is accepted on failure. */ }
+    return null;
+  }
+  return moduleHome && /^#[0-9a-f]{64}$/.test(fragment) ? fragment.slice(1) : null;
+}
+
 export async function readPairingToken(file, origin) {
   if (file.size > 8 * 1024) throw new Error('配对文件过大，请选择网关生成的 pairing.json。');
   let pairing;
@@ -63,7 +79,7 @@ export async function readPairingToken(file, origin) {
   return pairing.token;
 }
 
-/** Same-origin HTTP transport. The pairing token never enters URLs, storage or receipts. */
+/** Same-origin HTTP transport. Requests only send the in-memory token in their authorization header. */
 export class Gateway {
   #token = '';
   constructor({ fetchImpl = globalThis.fetch.bind(globalThis), prefix = '/api/gui/v1' } = {}) {

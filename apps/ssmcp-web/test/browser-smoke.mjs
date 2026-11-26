@@ -263,6 +263,37 @@ try {
   assert.ok(requests.every(request => request.authorization === 'Bearer ' + token));
   assert.equal(requests.some(request => JSON.stringify(request.body).includes(token)), false);
   assert.equal(commands.some(item => item.operation.command === 'terminal.resize'), false, 'viewport changes are not terminal commands');
+  // Only the Magisk build marks its loopback landing document.
+  const moduleTab = await browser.newPage();
+  const moduleHome = 'http://127.0.0.1:42387/';
+  const bootstrapRequests = [];
+  let denyPairing = false;
+  await moduleTab.route(moduleHome + '**', async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path === '/api/gui/v1/sessions') {
+      bootstrapRequests.push({ address: moduleTab.url(), auth: request.headers().authorization });
+      return route.fulfill({ status: denyPairing ? 401 : 200, contentType: 'application/json',
+        body: JSON.stringify(denyPairing ? {} : { sessions: [{ name: '模块会话' }], has_more: false }) });
+    }
+    const asset = await fetch('http://127.0.0.1:' + port + path);
+    assert.equal(asset.status, 200, path);
+    const source = await asset.text();
+    return route.fulfill({ status: 200, contentType: asset.headers.get('content-type'),
+      body: path === '/' ? source.replace('<html ', '<html data-ssmcp-magisk ') : source });
+  });
+  await moduleTab.goto(moduleHome + '#' + token);
+  await moduleTab.waitForFunction(() => document.querySelector('#auth-status')?.textContent === '已设置认证', null, { timeout: 8000 });
+  assert.equal(await moduleTab.locator('.session-item strong').textContent(), '模块会话');
+  assert.deepEqual(bootstrapRequests, [{ address: moduleHome, auth: 'Bearer ' + token }]);
+  assert.deepEqual(await moduleTab.evaluate(() => [location.hash, localStorage.length, sessionStorage.length]), ['', 0, 0]);
+  denyPairing = true;
+  await moduleTab.goto('about:blank');
+  await moduleTab.goto(moduleHome + '#' + token);
+  await moduleTab.getByText('模块配对失败，请从模块管理器重新打开 SSMCP。', { exact: true }).waitFor();
+  assert.equal(moduleTab.url(), moduleHome);
+  assert.equal(await moduleTab.locator('#auth-status').textContent(), '尚未认证');
+  await moduleTab.close();
   process.stdout.write('Browser fixture smoke passed: CSP, protocol envelopes, IME/focus, bounded DOM, scroll continuity, queue receipt, five right-aligned input origins, original-ID quote button/selected excerpt/R shortcut, preserved multiline draft and ordinary quoted delivery, unknown command, mobile panels.\n');
 } finally {
   if (browser) await browser.close();
