@@ -324,6 +324,25 @@ jobs:
           test -x "$RUNNER_TEMP/ssmcp-install/usr/local/bin/ssmcpd"
           test -f "$RUNNER_TEMP/ssmcp-install/usr/lib/systemd/system/ssmcpd.service"
           test -f "$RUNNER_TEMP/ssmcp-install/usr/local/libexec/ssmcp/code-mode.js"
+      - name: Select Node for the portal browser test
+        if: ${{ !cancelled() && steps.focused_fixtures.outcome == 'success' }}
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - name: Sign back into a GitHub account using a bound passkey
+        if: ${{ !cancelled() && steps.focused_fixtures.outcome == 'success' }}
+        env:
+          PORTAL_TEST_BINARY: ${{ steps.focused_fixtures.outputs.fixture }}
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ssmcp-browser" --no-save --no-package-lock --no-audit --no-fund playwright@1.65.1
+          export PLAYWRIGHT_MODULE="$RUNNER_TEMP/ssmcp-browser/node_modules/playwright"
+          node "$PLAYWRIGHT_MODULE/cli.js" install --with-deps chromium
+          test_name=portal::tests::chromium_passkey_signs_back_into_the_same_github_account
+          "$PORTAL_TEST_BINARY" --list --ignored > "$RUNNER_TEMP/ssmcp-portal-ignored-tests.txt"
+          grep -Fx "$test_name: test" "$RUNNER_TEMP/ssmcp-portal-ignored-tests.txt"
+          for fallback in 0 1; do
+            PASSKEY_TEST_FALLBACK="$fallback" "$PORTAL_TEST_BINARY" "$test_name" --exact --ignored --nocapture
+          done
       - name: Freeze the successful Linux x86_64 validation kit
         if: success() && matrix.runner == 'ubuntu-24.04'
         run: |
