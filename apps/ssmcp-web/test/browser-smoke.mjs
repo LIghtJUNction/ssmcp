@@ -292,6 +292,18 @@ try {
 
   for (const width of [390, 320]) {
     await viewport(width, 844);
+    await page.locator('#menu-button').click();
+    const drawer = page.locator('#sidebar');
+    const settings = drawer.locator('#sidebar-settings');
+    assert.equal(await settings.evaluate(el => el.open), false);
+    assert.equal(await page.locator('#close-menu').evaluate(el => el === document.activeElement), true);
+    assert.equal(await drawer.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+    assert.ok((await drawer.locator('[aria-selected="true"]').boundingBox()).height >= 44);
+    await settings.locator('summary').click();
+    assert.equal(await drawer.locator('#diagnostics-button').isVisible(), true);
+    await settings.locator('summary').click();
+    await page.locator('#dismiss-sidebar').click({ position: { x: width - 8, y: 40 } });
+    assert.equal(await page.locator('#menu-button').evaluate(el => el === document.activeElement), true);
     for (const tab of ['conversation', 'terminal', 'workers', 'waits']) {
       await page.locator('#menu-button').click();
       await page.locator(`#tab-${tab}`).click();

@@ -74,11 +74,22 @@ async function listSessions(offset = 0) {
 }
 function sessionTarget(row) { return row?.target ?? row?.name; }
 function currentTarget() { return client.connection?.session ?? sessionTarget(selectedSession); }
+const mobileNavigation = matchMedia('(max-width: 700px)');
+function syncNavigationLayout() {
+  $('sidebar-settings').open = !mobileNavigation.matches;
+  setSidebar(false);
+}
 function setSidebar(open) {
+  const wasOpen = $('sidebar').classList.contains('is-open');
   $('sidebar').classList.toggle('is-open', open);
+  document.querySelector('.main').inert = open;
+  if (open) $('close-menu').focus({ preventScroll: true });
+  else if (wasOpen && mobileNavigation.matches) $('menu-button').focus({ preventScroll: true });
   $('menu-button').setAttribute('aria-expanded', String(open));
   show('dismiss-sidebar', open);
 }
+syncNavigationLayout();
+mobileNavigation.addEventListener('change', syncNavigationLayout);
 function renderSessionTabs() {
   const current = client.connection?.session;
   const nodes = [...opened].map(([target, tab]) => {
@@ -541,7 +552,7 @@ $('refresh-state').addEventListener('click', () => run('refresh', async () => { 
 $('menu-button').addEventListener('click', () => setSidebar(!$('sidebar').classList.contains('is-open')));
 for (const id of ['close-menu', 'dismiss-sidebar']) $(id).addEventListener('click', () => setSidebar(false));
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && $('sidebar').classList.contains('is-open')) { setSidebar(false); $('menu-button').focus(); }
+  if (event.key === 'Escape' && $('sidebar').classList.contains('is-open')) setSidebar(false);
 });
 $('theme-button').addEventListener('click', () => { const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme:dark)').matches; document.documentElement.dataset.theme = dark ? 'light' : 'dark'; });
 
@@ -558,7 +569,8 @@ tabButtons.forEach(button => {
     if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault(); const index = tabButtons.indexOf(button);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabButtons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + tabButtons.length) % tabButtons.length;
-    setPanel(tabButtons[next].dataset.panel); tabButtons[next].focus();
+    setPanel(tabButtons[next].dataset.panel);
+    if (!mobileNavigation.matches) tabButtons[next].focus();
   });
 });
 $('thread-filter').addEventListener('change', () => { selectedThread = $('thread-filter').value; timelineOffset = 0; lastRenderedRows = []; renderTimeline({ preservePage: false }); });
