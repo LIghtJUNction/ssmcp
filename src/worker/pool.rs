@@ -23,6 +23,8 @@ use std::{
     time::Duration,
 };
 
+const RETIREMENT_HINT: &str = "The pool ordered retirement of this station. Stop starting work, ensure your owned activity has stopped, then call worker.release with this exact retirement receipt. Do not leave before acknowledging release.";
+
 #[derive(Clone)]
 pub(crate) struct TaskContext {
     #[cfg(target_os = "linux")]
@@ -181,6 +183,21 @@ impl Pool {
                     .into(),
             ),
         }
+    }
+
+    fn complete_remote(&self, actor: &Actor, completion: Completion) -> Result<Value, String> {
+        let claim = completion.claim.clone();
+        let (task, duplicate) =
+            self.remote()?
+                .complete(&self.queue, actor, completion, now_ms())?;
+        let mut response = json!({"status":"recorded","claim":claim,"task":task,"duplicate":duplicate,
+            "completion_source":"authenticated_remote_agent","worker":self.queue.compact_snapshot(),
+            "wait_hint":remote::WAIT_HINT});
+        if let Some(retirement) = claim.pending_retirement(&self.queue, actor) {
+            response["retirement"] = json!(retirement);
+            response["wait_hint"] = json!(RETIREMENT_HINT);
+        }
+        Ok(response)
     }
 
     /// Trusted local UI/IPC entry point. Remote callers use worker.resize,
@@ -413,7 +430,7 @@ impl Pool {
                 json!({"request_id":{"type":"string","minLength":1,"maxLength":128},"wait_ms":{"type":"integer","minimum":0,"maximum":MAX_OBSERVATION_WAIT_MS,"default":5000}}), json!(["request_id"]), false),
             tool("claim", "Nonblocking worker.wait. Only a verified remote participant can claim one same-account task; assigning a slot does not execute the text.",
                 json!({"request_id":{"type":"string","minLength":1,"maxLength":128}}), json!(["request_id"]), false),
-            tool("complete", "Report a remote task's result using the exact claim and authenticated claimant. This records an external agent report, not independently observed OS completion. Identical retries are idempotent while retained; changed results and stale claims are rejected. After completion return to worker.wait; the idle deadline precedes Dreaming. Completion alone does not authorize offline.",
+            tool("complete", "Report a remote task's result using the exact claim and authenticated claimant. This records an external agent report, not independently observed OS completion. Identical retries are idempotent while retained; changed results and stale claims are rejected. If the completion returns a retirement receipt, stop owned activity and acknowledge it with worker.release. Otherwise return to worker.wait; the idle deadline precedes Dreaming. Completion alone does not authorize offline.",
                 json!({
                     "claim":claim_schema,
                     "status":{"type":"string","enum":["completed","failed","cancelled"]},
@@ -426,7 +443,7 @@ impl Pool {
                     "progress":{"type":"string","minLength":1,"maxLength":1024},
                     "detail":{"type":"string","minLength":1,"maxLength":1024}}),
                 json!(["claim","request_id","event"]), false),
-            tool("release", "Acknowledge the exact pool-ordered retirement receipt returned by worker.wait, using the same authenticated worker. First finish the active claim and stop starting work; release is refused while a task remains active. Only this acknowledgement removes the station. Identical retained retries are idempotent. This records your shutdown acknowledgement; it does not kill an external model or process. After success, leave your collaboration session if needed and stop waiting.",
+            tool("release", "Acknowledge the exact pool-ordered retirement receipt returned by worker.wait or worker.complete, using the same authenticated worker. First finish the active claim and stop starting work; release is refused while a task remains active. Only this acknowledgement removes the station. Identical retained retries are idempotent. This records your shutdown acknowledgement; it does not kill an external model or process. After success, leave your collaboration session if needed and stop waiting.",
                 json!({"retirement":retirement_schema}), json!(["retirement"]), false),
         ]);
         tools
@@ -726,7 +743,7 @@ impl Pool {
                 Claimed::Retiring { retirement } => {
                     return Ok(json!({"status":"retiring","retirement":retirement,
                         "execution":"remote","worker":self.queue.compact_snapshot(),
-                        "wait_hint":"The pool ordered retirement of this station. Stop starting work, ensure your owned activity has stopped, then call worker.release with this exact retirement receipt. Do not leave before acknowledging release."}));
+                        "wait_hint":RETIREMENT_HINT}));
                 }
                 Claimed::Released { retirement } => {
                     return Ok(json!({"status":"released","retirement":retirement,
@@ -956,15 +973,7 @@ impl Pool {
             "ssmcp.worker.complete" => {
                 let completion: Completion = serde_json::from_value(arguments)
                     .map_err(|error| format!("invalid remote completion: {error}"))?;
-                let claim = completion.claim.clone();
-                let (task, duplicate) =
-                    self.remote()?
-                        .complete(&self.queue, &actor, completion, now_ms())?;
-                Ok(
-                    json!({"status":"recorded","claim":claim,"task":task,"duplicate":duplicate,
-                    "completion_source":"authenticated_remote_agent","worker":self.queue.compact_snapshot(),
-                    "wait_hint":remote::WAIT_HINT}),
-                )
+                self.complete_remote(&actor, completion)
             }
             "ssmcp.worker.report" => {
                 let report: Report = serde_json::from_value(arguments)
@@ -1781,6 +1790,54 @@ mod tests {
                 .all(|tool| tool["inputSchema"]["additionalProperties"] == false)
         );
         assert!(actor(&Source::default()).is_err());
+    }
+
+    #[tokio::test]
+    async fn busy_shrink_returns_the_release_order_in_the_completion_and_preserves_queued_work() {
+        let (pool, owner) = availability_pool(2);
+        let mut occupants = Vec::new();
+        for name in ["first", "second"] {
+            let worker = Actor {
+                participant: Some(name.into()),
+                ..owner.clone()
+            };
+            submit_observed(&pool, &owner, name);
+            let assigned = pool.wait_remote(&worker, name, 0).await.unwrap();
+            let done: Completion = serde_json::from_value(json!({
+                "claim": assigned["claim"], "status": "completed", "output": name
+            }))
+            .unwrap();
+            occupants.push((worker, done));
+        }
+        let queued = submit_observed(&pool, &owner, "queued");
+        let first = pool.resize(1).unwrap();
+        assert_eq!(first["resize_pending"], true);
+        assert_eq!(first["worker"]["working"], 2);
+        assert_eq!(first["worker"]["retiring"], 0);
+        assert!(pool.resize(0).is_err());
+        for target in [1, 0] {
+            let (worker, done) = occupants.pop().unwrap();
+            assert_eq!(pool.resize(target).unwrap()["resize_pending"], true);
+            let receipt = pool.complete_remote(&worker, done.clone()).unwrap();
+            assert_eq!(receipt["status"], "recorded");
+            assert_eq!(receipt["wait_hint"], RETIREMENT_HINT);
+            let pending = pool.complete_remote(&worker, done.clone()).unwrap();
+            assert_eq!(pending["duplicate"], true);
+            assert_eq!(pending["retirement"], receipt["retirement"]);
+            let ticket = serde_json::from_value(receipt["retirement"].clone()).unwrap();
+            pool.remote()
+                .unwrap()
+                .release(&pool.queue, &worker, ticket, 10)
+                .unwrap();
+            let released = pool.complete_remote(&worker, done).unwrap();
+            assert!(released.get("retirement").is_none());
+            assert_eq!(pool.queue.snapshot().total, target);
+        }
+        assert_eq!(
+            pool.queue.result(&owner, &queued.task_id).unwrap().status,
+            TaskStatus::Queued
+        );
+        pool.shutdown().await.unwrap();
     }
 
     #[tokio::test]

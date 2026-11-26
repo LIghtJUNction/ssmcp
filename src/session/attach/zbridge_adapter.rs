@@ -668,6 +668,7 @@ fn worker_state(
     for slot in snapshot.slots.drain(offset..end) {
         slots.push(json!({"slot":slot.slot,"epoch":Counter(slot.epoch),"state":slot.state,
             "display_state":slot.display_state(),
+            "quiet_10m":slot.tool_calls_10m.map(|_| slot.quiet_10m()),
             "task_id":slot.task_id,"reason":slot.reason,"registered":slot.registered,
             "retire_requested":slot.retire_requested,"task_summary":slot.task_summary,
             "last_command":slot.last_command,"progress":slot.progress,

@@ -1928,13 +1928,8 @@ impl Desktop {
                 false,
                 MUTED,
             );
-            let state = if worker.retiring {
-                "退役中"
-            } else {
-                worker_label(&worker.state)
-            };
             canvas.text(
-                state,
+                worker_label(&worker.state),
                 body.x + 104.,
                 y + 14.,
                 13,
@@ -1948,7 +1943,9 @@ impl Desktop {
                 },
             );
             canvas.text(
-                if worker.registered {
+                if worker.retiring && worker.state != "retiring" {
+                    "已请求退役"
+                } else if worker.registered {
                     "已登记"
                 } else {
                     "未登记"

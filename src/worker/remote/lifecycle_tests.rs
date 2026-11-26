@@ -177,13 +177,20 @@ fn shrink_selects_offline_then_idle_and_never_discards_working_results() {
     assert!(queue.cancellation_requested(&lease));
     assert!(queue.retire_requested(&lease));
     let done = complete(current);
+    assert!(done.claim.pending_retirement(&queue, &working).is_none());
     let (result, duplicate) = remote.complete(&queue, &working, done.clone(), 6).unwrap();
     assert!(!duplicate);
     assert_eq!(result.output.as_deref(), Some("real result"));
     counts(&queue, (1, 0, 0, 0, 1));
-    let release = retirement(&remote, &queue, &working);
+    let release = done.claim.pending_retirement(&queue, &working).unwrap();
+    assert_eq!(retirement(&remote, &queue, &working), release);
+    assert!(done.claim.pending_retirement(&queue, &idle).is_none());
+    let mut old = done.claim.clone();
+    old.epoch += 1;
+    assert!(old.pending_retirement(&queue, &working).is_none());
     remote.release(&queue, &working, release, 7).unwrap();
     counts(&queue, (0, 0, 0, 0, 0));
+    assert!(done.claim.pending_retirement(&queue, &working).is_none());
     assert!(remote.complete(&queue, &working, done, 8).unwrap().1);
     assert_eq!(
         queue.result(&owner, &task.task_id).unwrap().status,

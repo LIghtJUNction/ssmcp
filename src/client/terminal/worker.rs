@@ -309,7 +309,12 @@ impl Monitor {
         }
         self.resources.sample(snapshot.process_id, Instant::now());
         let width = usize::from(cols);
-        let count = (width.saturating_sub(4) / 19)
+        let tab_cells = if snapshot.slots.iter().any(SlotView::quiet_10m) {
+            25
+        } else {
+            19
+        };
+        let count = (width.saturating_sub(4) / tab_cells)
             .max(1)
             .min(snapshot.slots.len());
         self.first = self.first.min(self.selected);
@@ -321,9 +326,16 @@ impl Monitor {
         let mut col = 0;
         for slot in snapshot.slots.iter().skip(self.first).take(count) {
             let (tone, symbol, label) = slot_state(slot);
+            let quiet = if !slot.quiet_10m() {
+                ""
+            } else if width < 24 {
+                " ~"
+            } else {
+                " quiet"
+            };
             let text = if width < 24 {
                 format!(
-                    "{}#{:02} {symbol} ",
+                    "{}#{:02} {symbol}{quiet} ",
                     if self.selected_slot() == Some(slot.slot) {
                         "›"
                     } else {
@@ -333,7 +345,7 @@ impl Monitor {
                 )
             } else {
                 format!(
-                    "{}#{:02} {symbol} {label}  ",
+                    "{}#{:02} {symbol} {label}{quiet}  ",
                     if self.selected_slot() == Some(slot.slot) {
                         "› "
                     } else {
@@ -800,9 +812,9 @@ impl State {
                 rows[1] = capacity;
             }
             let dreaming = snapshot.slots.iter().filter(|slot| slot.dreaming).count();
-            let counts = [
-                (PanelTone::Accent, format!("☾ Dreaming {dreaming}")),
+            let mut counts = vec![
                 (PanelTone::Success, format!("○ Idle {}", snapshot.idle)),
+                (PanelTone::Accent, format!("  ↳ Dreaming {dreaming}")),
                 (
                     PanelTone::Warning,
                     format!("● Working {}", snapshot.working),
@@ -828,10 +840,16 @@ impl State {
                     PanelTone::Muted,
                     format!(
                         "Registered {}/{}",
-                        snapshot.registered_workers, snapshot.desired_total
+                        snapshot.registered_workers, snapshot.total
                     ),
                 ),
             ];
+            if snapshot.desired_total != snapshot.total {
+                counts.push((
+                    PanelTone::Warning,
+                    format!("Target {}→{}", snapshot.total, snapshot.desired_total),
+                ));
+            }
             let per_row = if g.cols >= 120 && !chart {
                 6
             } else if g.cols >= 74 {
@@ -1114,9 +1132,17 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
                 }
             })
             .unwrap_or_default();
+        let quiet = if slot.quiet_10m() && width >= 28 {
+            " · quiet"
+        } else {
+            ""
+        };
         rows.push((
             tone,
-            clipped(&format!("{state}{calls}{elapsed}{retiring}{reason}"), width),
+            clipped(
+                &format!("{state}{quiet}{calls}{elapsed}{retiring}{reason}"),
+                width,
+            ),
         ));
     }
     if show_retire_command && rows.len() < budget {
@@ -1749,17 +1775,24 @@ fn member_activity_summary(snapshot: &Snapshot, cols: u16) -> String {
         .iter()
         .filter(|slot| slot.tool_calls_10m.is_some())
         .count();
-    let offline = snapshot
-        .slots
-        .iter()
-        .filter(|slot| slot.activity_status == Some("offline"))
-        .count();
-    match (observed, cols) {
-        (0, _) => "Members unknown".into(),
-        (_, 0..=28) => format!("Members offline {offline}"),
-        (_, 29..=49) => format!("Members offline {offline}/{observed} · 10m"),
-        _ => format!("Member activity · Offline {offline} of {observed} observed (10m)"),
+    if observed == 0 {
+        return "Members unknown".into();
     }
+    let quiet = snapshot.slots.iter().filter(|slot| slot.quiet_10m());
+    let count = quiet.clone().count();
+    let mut text = if cols < 50 {
+        format!("10m quiet {count}/{observed}")
+    } else {
+        format!("Member activity · Quiet {count}/{observed} (10m)")
+    };
+    for slot in quiet {
+        let id = format!(" #{:02}", slot.slot + 1);
+        if text.width() + id.width() > usize::from(cols) {
+            break;
+        }
+        text.push_str(&id);
+    }
+    text
 }
 
 fn slot_state(slot: &SlotView) -> (PanelTone, &'static str, &'static str) {
@@ -2409,6 +2442,61 @@ mod tests {
     }
 
     #[test]
+    fn quiet_claim_during_shrink_keeps_its_working_tab_and_current_capacity() {
+        let mut snapshot = snapshot();
+        let working = snapshot.slots[1].clone();
+        snapshot.slots = (0..6)
+            .map(|slot| SlotView {
+                slot,
+                task_id: Some(format!("claim-{slot}")),
+                tool_calls_10m: Some(if slot == 3 { 0 } else { 1 }),
+                activity_status: (slot == 3).then_some("offline"),
+                retire_requested: slot == 3,
+                ..working.clone()
+            })
+            .collect();
+        snapshot.total = 6;
+        snapshot.registered_workers = 6;
+        snapshot.desired_total = 5;
+        snapshot.working = 6;
+        snapshot.idle = 0;
+        snapshot.offline = 0;
+        let quiet = &snapshot.slots[3];
+        assert_eq!(quiet.display_state(), "working");
+        assert!(quiet.quiet_10m());
+        for cols in [18, 32, 80, 160] {
+            let mut view = state(30, cols, false);
+            let text = screen(&view.worker_frame(Some(&snapshot)))
+                .screen()
+                .contents();
+            for expected in [
+                "Working 6",
+                "Offline 0",
+                "Registered 6/6",
+                "Target 6→5",
+                "#04",
+            ] {
+                assert!(text.contains(expected), "{cols}: {text}");
+            }
+            if cols < 50 {
+                assert!(text.contains("10m quiet 1/6 #04"), "{text}");
+            } else {
+                assert!(text.contains("Quiet 1/6 (10m) #04"), "{text}");
+            }
+            if cols == 160 {
+                assert!(text.contains("#04 ● working quiet"), "{text}");
+            }
+        }
+        let progress = progress_summary(quiet, 96, 3);
+        assert!(
+            progress
+                .iter()
+                .any(|(_, text)| text.contains("working · quiet · 0 calls/10m"))
+        );
+        assert_eq!(quiet.task_id.as_deref(), Some("claim-3"));
+    }
+
+    #[test]
     fn worker_progress_shows_the_registered_members_tool_window() {
         let mut snapshot = snapshot();
         snapshot.slots[0].tool_calls_10m = Some(0);
@@ -2416,7 +2504,7 @@ mod tests {
         let mut view = state(20, 100, false);
         let offline = view.worker_frame(Some(&snapshot));
         let text = screen(&offline).screen().contents();
-        assert!(text.contains("offline · 0 calls/10m"), "{text}");
+        assert!(text.contains("idle · quiet · 0 calls/10m"), "{text}");
         assert!(text.contains("Idle 1"), "{text}");
 
         snapshot.slots[0].tool_calls_10m = Some(4);
@@ -2482,9 +2570,9 @@ mod tests {
         snapshot.slots[0].dreaming = true;
         snapshot.slots[1].tool_calls_10m = Some(5);
         for (cols, count) in [
-            (18, "Members offline 1"),
-            (32, "Members offline 1/2 · 10m"),
-            (100, "Member activity · Offline 1 of 2 observed (10m)"),
+            (18, "10m quiet 1/2 #01"),
+            (32, "10m quiet 1/2 #01"),
+            (100, "Member activity · Quiet 1/2 (10m) #01"),
         ] {
             let mut view = state(24, cols, false);
             let frame = view.worker_frame(Some(&snapshot));

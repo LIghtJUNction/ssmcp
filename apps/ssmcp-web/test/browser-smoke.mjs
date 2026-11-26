@@ -41,7 +41,7 @@ try {
     plot: ['       1 |      *', '         |     | |', '         |     | |',
       '       0 |*-*-*| |*-*-*-*-*-*', '         + -10m -------- now'],
   };
-  const worker = { slot: 0, epoch: '4', state: 'working', task_id: 'fixture.actual.task', task_summary: '核对原生工作状态', progress: '正在读取 fixture', registered: true, total_work_ms: '42000', current_task_elapsed_ms: '3000', logs_omitted: true };
+  const worker = { slot: 0, epoch: '4', state: 'working', quiet_10m: true, retire_requested: true, task_id: 'fixture.actual.task', task_summary: '核对原生工作状态', progress: '正在读取 fixture', registered: true, total_work_ms: '42000', current_task_elapsed_ms: '3000', logs_omitted: true };
   const inputCases = [
     { origin: 'human', text: '用户要求：检查多行输入\n@fixture-missing.txt $fixture_skill /reload' },
     { origin: 'system_hook', text: '系统提示：继续当前任务' },
@@ -312,6 +312,9 @@ try {
   await page.locator('#tab-workers').click();
   assert.equal(await page.locator('#worker-productivity').textContent(), productivity.plot.join('\n'));
   assert.equal(await page.locator('#worker-summary .metric').first().textContent(), '1Dreaming');
+  const workingCard = page.locator('#worker-list .worker-card').first();
+  assert.equal(await workingCard.locator('h3').textContent(), '站点 #01');
+  assert.deepEqual(await workingCard.locator('.pill').allTextContents(), ['working', '10 分钟无工具调用', '已请求退役']);
   assert.equal(await page.locator('#worker-list .worker-card').nth(1).locator('.pill').textContent(), '☾ Dreaming');
   await page.locator('#update-button').click();
   await page.getByRole('button', { name: '检查更新' }).click();

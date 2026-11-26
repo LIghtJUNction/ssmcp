@@ -86,11 +86,14 @@ pub(crate) struct SlotView {
 }
 
 impl SlotView {
+    /// The relay marks a member quiet only after a full ten-minute window without calls.
+    pub(crate) fn quiet_10m(&self) -> bool {
+        self.tool_calls_10m.is_some() && self.activity_status == Some("offline")
+    }
+
     pub(crate) fn display_state(&self) -> &'static str {
         if self.state == "idle" && self.dreaming {
             "dreaming"
-        } else if self.activity_status == Some("offline") {
-            "offline"
         } else {
             self.state
         }

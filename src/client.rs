@@ -1824,7 +1824,9 @@ struct WorkerController {
     desired: usize,
     window: Option<worker_window::WindowChild>,
     launching: Option<JoinHandle<Result<worker_window::WindowChild, String>>>,
-    pending: Option<(u64, usize)>,
+    pending: Option<(u64, usize, String)>,
+    local_target: bool,
+    resize_progress: Option<(u64, worker_control::ResizeProgress)>,
     retirement: Option<PendingStationRetirement>,
 }
 
@@ -1839,6 +1841,8 @@ impl WorkerController {
             window: None,
             launching: None,
             pending: None,
+            local_target: false,
+            resize_progress: None,
             retirement: None,
         })
     }
@@ -1946,6 +1950,8 @@ impl WorkerController {
                     };
                     self.desired = 0;
                     self.pending = None;
+                    self.local_target = false;
+                    self.resize_progress = None;
                     terminal::notice(&format!("Could not open worker window: {error}"));
                 }
             }
@@ -1962,6 +1968,8 @@ impl WorkerController {
                 // Drop its owned handle before opening exactly one replacement.
                 self.window = None;
                 self.pending = None;
+                self.local_target = false;
+                self.resize_progress = None;
                 self.clear_retirement();
                 terminal::notice("Reloading worker window; this chat session stays connected.");
                 // Re-check parent stop intent on the next UI tick before launch.
@@ -1970,6 +1978,8 @@ impl WorkerController {
             Some((Ok(true), false)) => {
                 self.window = None;
                 self.pending = None;
+                self.local_target = false;
+                self.resize_progress = None;
                 self.clear_retirement();
                 self.desired = 0;
                 terminal::notice("Worker window closed; this chat session remains available.");
@@ -1977,6 +1987,8 @@ impl WorkerController {
             Some((Err(error), _)) => {
                 self.window = None;
                 self.pending = None;
+                self.local_target = false;
+                self.resize_progress = None;
                 self.clear_retirement();
                 self.desired = 0;
                 terminal::notice(&format!(
@@ -1993,19 +2005,50 @@ impl WorkerController {
         if self.retirement_pending(snapshot.as_ref()) {
             return;
         }
-        if let (Some((id, target)), Some(snapshot)) = (self.pending, snapshot.as_ref()) {
-            let receipt = &snapshot["last_resize"];
-            if receipt["request_id"].as_u64() == Some(id) {
-                self.pending = None;
-                if receipt["accepted"].as_bool() != Some(true) {
-                    let actual = snapshot["desired_total"].as_u64().unwrap_or(0) as usize;
-                    let later_delta = self.desired as i32 - target as i32;
-                    self.desired = worker_total_after_delta(actual, later_delta).unwrap_or(actual);
-                    let error = receipt["error"]
-                        .as_str()
-                        .unwrap_or("worker resize was rejected");
-                    terminal::notice(&format!("Worker target unchanged: {error}"));
+        let progress = snapshot
+            .as_ref()
+            .and_then(worker_control::ResizeProgress::read);
+        if let (Some(state), Some(progress)) = (snapshot.as_ref(), progress) {
+            let receipt = &state["last_resize"];
+            let receipt_id = receipt["request_id"].as_u64();
+            if let Some((id, target, generation)) = self.pending.as_ref() {
+                let (id, target) = (*id, *target);
+                if state["generation"].as_str() != Some(generation.as_str()) {
+                    self.pending = None;
+                    self.local_target = false;
+                    self.resize_progress = None;
+                    terminal::notice(
+                        "Worker pool changed before its resize receipt arrived. Check /worker ls.",
+                    );
+                } else if receipt_id == Some(id) {
+                    self.pending = None;
+                    if receipt["accepted"].as_bool() == Some(true) {
+                        terminal::notice(&progress.notice());
+                        self.resize_progress = (!progress.settled()).then_some((id, progress));
+                    } else {
+                        let later_delta = self.desired as i32 - target as i32;
+                        self.desired = worker_total_after_delta(progress.target, later_delta)
+                            .unwrap_or(progress.target);
+                        let error = receipt["error"]
+                            .as_str()
+                            .unwrap_or("worker resize was rejected");
+                        terminal::notice(&format!("Worker target unchanged: {error}"));
+                    }
                 }
+            }
+            if let Some((id, previous)) = self.resize_progress {
+                if receipt_id != Some(id) || progress.target != previous.target {
+                    self.resize_progress = None;
+                } else if progress != previous {
+                    terminal::notice(&progress.notice());
+                    self.resize_progress = (!progress.settled()).then_some((id, progress));
+                }
+            }
+            // A manager can resize independently of this terminal. Only send
+            // a new target after a local command, and apply its delta to the
+            // latest acknowledged target when the terminal has no pending intent.
+            if self.pending.is_none() && !self.local_target {
+                self.desired = progress.target;
             }
         }
 
@@ -2018,7 +2061,10 @@ impl WorkerController {
             match request {
                 worker_control::Request::Delta(delta) => {
                     match worker_total_after_delta(self.desired, delta) {
-                        Ok(total) => self.desired = total,
+                        Ok(total) => {
+                            self.desired = total;
+                            self.local_target = true;
+                        }
                         Err(error) => terminal::notice(&error),
                     }
                 }
@@ -2045,14 +2091,15 @@ impl WorkerController {
         }
 
         if self.desired != previous_target
-            && snapshot.as_ref().is_some_and(|snapshot| {
-                snapshot["retiring"]
-                    .as_u64()
-                    .is_some_and(|count| count != 0)
-                    && snapshot["desired_total"].as_u64() != Some(self.desired as u64)
-            })
+            && let Some(progress) = progress
+            && (self.pending.is_some() || !progress.settled())
+            && progress.target != self.desired
         {
-            terminal::notice("Worker target queued; waiting for retiring workers to leave.");
+            terminal::notice(&format!(
+                "Worker target {} is queued. {}",
+                self.desired,
+                progress.notice()
+            ));
         }
 
         if self.window.is_none() && self.launching.is_none() && self.desired != 0 {
@@ -2071,6 +2118,7 @@ impl WorkerController {
             };
             let executable = self.executable.clone();
             let cwd = self.cwd.clone();
+            self.local_target = false;
             self.launching = Some(tokio::task::spawn_blocking(move || {
                 worker_window::launch(&executable, &arguments, &cwd)
             }));
@@ -2078,22 +2126,21 @@ impl WorkerController {
             return;
         }
 
-        if let (Some(window), Some(snapshot)) = (self.window.as_ref(), snapshot.as_ref()) {
-            let actual = snapshot["desired_total"]
-                .as_u64()
-                .map(|value| value as usize);
-            let settled = snapshot["retiring"].as_u64() == Some(0)
-                && snapshot["total"].as_u64() == snapshot["desired_total"].as_u64();
-            if self.pending.is_none()
-                && settled
-                && snapshot["stopping"].as_bool() != Some(true)
-                && snapshot["closed"].as_bool() != Some(true)
-                && actual.is_some_and(|actual| actual != self.desired)
-            {
+        if let (Some(window), Some(state), Some(progress)) =
+            (self.window.as_ref(), snapshot.as_ref(), progress)
+            && self.local_target
+            && self.pending.is_none()
+            && progress.settled()
+            && state["stopping"].as_bool() != Some(true)
+            && state["closed"].as_bool() != Some(true)
+            && let Some(generation) = state["generation"].as_str()
+        {
+            self.local_target = false;
+            if progress.target != self.desired {
                 match window.request_resize(self.desired) {
-                    Ok(id) => self.pending = Some((id, self.desired)),
+                    Ok(id) => self.pending = Some((id, self.desired, generation.to_owned())),
                     Err(error) => {
-                        self.desired = actual.unwrap_or(0);
+                        self.desired = progress.target;
                         terminal::notice(&format!("Could not change worker target: {error}"));
                     }
                 }

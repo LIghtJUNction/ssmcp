@@ -22,6 +22,22 @@ pub(super) struct Claim {
     pub(super) attempt: u64,
 }
 
+impl Claim {
+    /// A retained completion may be retried after this station was reused.
+    /// Only expose a still-current release order for the original occupant.
+    pub(super) fn pending_retirement<T: Clone>(
+        &self,
+        queue: &Queue<T>,
+        actor: &Actor,
+    ) -> Option<Retirement> {
+        queue.retirement(actor).filter(|ticket| {
+            ticket.generation == self.generation
+                && ticket.slot == self.slot
+                && ticket.epoch == self.epoch
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Status {

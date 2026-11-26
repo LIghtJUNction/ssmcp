@@ -386,6 +386,7 @@ function renderWorkers() {
   setText('worker-count', state?.total ?? '');
   if (!state) return;
   const counts = [['dreaming', 'Dreaming'], ['idle', '空闲'], ['working', '工作中'], ['offline', '离线'], ['retiring', '退役中'], ['total', '总容量'], ['registered_workers', '已登记'], ['queued', '排队任务']];
+  if (Number.isSafeInteger(state.desired_total) && state.desired_total !== state.total) counts.push(['desired_total', '目标容量']);
   $('worker-summary').replaceChildren(...counts.map(([key, title]) => {
     const node = element('div', 'metric'); node.append(element('strong', '', state[key] ?? '—'), element('span', '', title)); return node;
   }));
@@ -406,8 +407,13 @@ function renderWorkers() {
     $('worker-list').dataset.signature = signature;
     $('worker-list').replaceChildren(...slots.map(slot => {
       const card = element('article', 'worker-card'); const heading = element('div', 'worker-card-header');
-      heading.append(element('h3', '', `站点 ${slot.slot}`), element('span', 'pill', ((slot.display_state === 'dreaming' && '☾ Dreaming') || slot.display_state || slot.state || '未提供状态')));
-      if (slot.retire_requested) heading.append(element('span', 'pill', 'retiring'));
+      const station = Number.isSafeInteger(slot.slot) ? '#' + String(slot.slot + 1).padStart(2, '0') : '—';
+      const status = slot.state === 'idle' && slot.display_state === 'dreaming' ? '☾ Dreaming' : slot.state || '未提供状态';
+      heading.append(element('h3', '', `站点 ${station}`), element('span', 'pill', status));
+      if (slot.quiet_10m === true || (slot.display_state === 'offline' && slot.state && slot.state !== 'offline')) {
+        heading.append(element('span', 'pill', '10 分钟无工具调用'));
+      }
+      if (slot.retire_requested && slot.state !== 'retiring') heading.append(element('span', 'pill', '已请求退役'));
       card.append(heading, element('p', 'worker-task', plain(slot.task_summary || slot.task_id || slot.reason || (slot.registered ? '没有当前任务。' : '尚未注册。'))));
       if (slot.progress !== null && slot.progress !== undefined && slot.progress !== '') card.append(element('p', 'worker-progress', plain(typeof slot.progress === 'string' ? slot.progress : JSON.stringify(slot.progress))));
       if (slot.last_command) card.append(element('p', 'tiny mono', plain(typeof slot.last_command === 'string' ? slot.last_command : JSON.stringify(slot.last_command), 250)));

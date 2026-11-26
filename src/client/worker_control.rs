@@ -67,6 +67,40 @@ impl Confirmation {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ResizeProgress {
+    pub target: usize,
+    total: usize,
+    awaiting_release: usize,
+}
+
+impl ResizeProgress {
+    pub fn read(state: &serde_json::Value) -> Option<Self> {
+        Some(Self {
+            target: state["desired_total"].as_u64()? as usize,
+            total: state["total"].as_u64()? as usize,
+            awaiting_release: state["retiring"].as_u64()? as usize,
+        })
+    }
+
+    pub fn settled(self) -> bool {
+        self.total == self.target && self.awaiting_release == 0
+    }
+
+    pub fn notice(self) -> String {
+        if self.settled() {
+            return format!("Worker capacity is now {}.", self.total);
+        }
+        let finishing = self
+            .total
+            .saturating_sub(self.target + self.awaiting_release);
+        format!(
+            "Worker target {} · {} stations · {} finishing claimed work · {} awaiting release.",
+            self.target, self.total, finishing, self.awaiting_release
+        )
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Request {
     Delta(i32),
@@ -181,6 +215,35 @@ pub(super) fn take() -> Option<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shrink_progress_includes_work_before_the_release_acknowledgement() {
+        let mut state = serde_json::json!({
+            "total": 6, "desired_total": 5, "retiring": 0, "offline": 0,
+            "working": 6, "queued": 1, "activity": {"offline": 1}
+        });
+        let progress = ResizeProgress::read(&state).unwrap();
+        assert!(!progress.settled());
+        assert!(
+            progress
+                .notice()
+                .contains("1 finishing claimed work · 0 awaiting release")
+        );
+        state["retiring"] = 1.into();
+        let progress = ResizeProgress::read(&state).unwrap();
+        assert!(!progress.settled());
+        assert!(
+            progress
+                .notice()
+                .contains("0 finishing claimed work · 1 awaiting release")
+        );
+        state["total"] = 5.into();
+        state["retiring"] = 0.into();
+        assert_eq!(
+            ResizeProgress::read(&state).unwrap().notice(),
+            "Worker capacity is now 5."
+        );
+    }
+
     #[test]
     fn accepts_explicit_worker_count_changes() {
         assert_eq!(parse("ls"), Ok(Command::List));

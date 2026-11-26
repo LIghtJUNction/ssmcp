@@ -311,11 +311,11 @@ done
 
 ## Member tool activity
 
-The Sessions recipient row and the selected worker display the number of attributable tool requests admitted for that member during the past ten minutes. The relay uses a monotonic clock and groups requests by millisecond. A newly joined member may show zero while the observation window fills. One full quiet interval enables an Offline activity label. A subsequent call clears it. A client that has no measured value leaves the count blank.
+The Sessions recipient row and the selected worker display the number of attributable tool requests admitted for that member during the past ten minutes. The relay uses a monotonic clock and groups requests by millisecond. A newly joined member may show zero while the observation window fills. After ten full minutes without a call, the Sessions row shows Offline activity and the worker monitor lists the station number as quiet. A subsequent call clears that activity marker. A client that has no measured value leaves the count blank.
 
 One user-issued bound native tool or catalog call, client-scoped resource read, explicit collaboration action, authenticated event or messaging request, or typed await counts once on its connection. Explicit UI waits count once as well. An await covering several targets counts once, including when the relay repeats a native observation in the background. An explicit new read of a retained wait counts as a new call. Automatic probes produce no count. Server-wide discoveries, account-owned jobs, and multi-connection transfers do not select one verified member on one connection. A member's signed-in account and display name cannot establish attribution.
 
-This display concerns tool use. A registered member can work outside the relay for ten minutes and keep a valid task claim. Native station counts, cancellation, retirement acknowledgement, Dreaming approval and retained results follow their existing protocols.
+This display concerns tool use. A registered member can work outside the relay for ten minutes and keep a valid task claim. The worker monitor counts Offline from scheduler station state and shows registrations against current capacity. During a shrink, an occupied station stays Working until its claim finishes; the separate target shows the requested capacity while retirement is pending.
 
 ## Share work between occupied and idle stations
 
