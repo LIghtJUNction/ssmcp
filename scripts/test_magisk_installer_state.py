@@ -158,6 +158,26 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
         self.assertEqual(urlsplit(self.opened.read_text().splitlines()[-1]).path, "/setup")
         self.assertEqual(len(self.starts.read_text().splitlines()), 1)
 
+    def test_webui_rc_line_endings_and_malformed_commands(self):
+        self.staged.rename(self.active)
+        self.shell(self.active / "open.sh")
+        target = "test@example.invalid"
+        (self.state / "root-consent-v1").write_text(target, encoding="utf-8")
+        command = f"ssmcp {target}".encode("ascii")
+        for name, contents, expected in (
+            ("LF", command + b"\n", "/"),
+            ("CRLF", command + b"\r\n", "/"),
+            ("CRLF with comments and blank lines", b"# phone\r\n\r\n" + command + b" \t\r\n", "/"),
+            ("no final newline", command, "/"),
+            ("extra argument", command + b" extra\r\n", "/setup"),
+            ("two commands", (command + b"\r\n") * 2, "/setup"),
+            ("embedded carriage return", b"ssmcp test@\rexample.invalid\r\n", "/setup"),
+        ):
+            with self.subTest(name=name):
+                (self.state / "ssmcp.rc").write_bytes(contents)
+                self.shell(self.active / "open.sh")
+                self.assertEqual(urlsplit(self.opened.read_text().splitlines()[-1]).path, expected)
+
     def test_disabled_or_removed_module_does_not_launch(self):
         self.staged.rename(self.active)
         for name in ("disable", "remove"):

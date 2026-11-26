@@ -34,7 +34,11 @@ start_console() {
 has_confirmed_target() {
     [ -s "$state/root-consent-v1" ] || return 1
     target=
-    while read -r command arg extra || [ -n "$command" ]; do
+    carriage_return=$(printf '\r')
+    while IFS= read -r line || [ -n "$line" ]; do
+        read -r command arg extra <<EOF
+${line%"$carriage_return"}
+EOF
         case "$command" in ''|'#'*) continue ;; esac
         [ "$command" = ssmcp ] && [ -n "$arg" ] && [ -z "$extra" ] && [ -z "$target" ] || return 1
         target=$arg
