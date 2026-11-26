@@ -490,12 +490,13 @@ class Daemon(Harness):
         self.prepare()
         primary, peer = self.names
         self.case = "D01"
+        destination = f"{self.identity['username']}@{self.origin}"
         for arguments, diagnostic in (
-            (["--no-watchdog", "--reconnect-delay", "2", "--server", self.origin],
+            ([destination, "--no-watchdog", "--reconnect-delay", "2"],
              "--reconnect-delay cannot be combined with --no-watchdog"),
-            (["--watchdog", "--reconnect-delay", "0", "--server", self.origin],
+            ([destination, "--watchdog", "--reconnect-delay", "0"],
              "--reconnect-delay must be in 1..=3600 seconds"),
-            (["--watchdog", "--reconnect-delay", "3601", "--server", self.origin],
+            ([destination, "--watchdog", "--reconnect-delay", "3601"],
              "--reconnect-delay must be in 1..=3600 seconds"),
             (["--daemon", "--list-tools"],
              "--list-tools cannot be combined with --daemon"),
