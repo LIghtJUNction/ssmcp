@@ -50,6 +50,22 @@ pub(crate) struct Filter {
     pub include_own_waits: bool,
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct WaitExclusions<'a> {
+    pub(crate) origin_wait_id: Option<&'a str>,
+    // Only a side observer may sleep through an already reported empty loss episode.
+    pub(crate) reported_gap: Option<u64>,
+}
+
+impl<'a> WaitExclusions<'a> {
+    pub(crate) fn origin(id: &'a str) -> Self {
+        Self {
+            origin_wait_id: Some(id),
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Hub {
     state: Mutex<State>,
@@ -651,7 +667,7 @@ impl Hub {
         subscription_id: &str,
         limit: usize,
     ) -> Result<Value, String> {
-        self.read_excluding(actor, subscription_id, limit, None)
+        self.read_excluding(actor, subscription_id, limit, WaitExclusions::default())
     }
 
     fn read_excluding(
@@ -659,7 +675,7 @@ impl Hub {
         actor: &Actor,
         subscription_id: &str,
         limit: usize,
-        exclude_origin_wait_id: Option<&str>,
+        exclusions: WaitExclusions<'_>,
     ) -> Result<Value, String> {
         actor.validate()?;
         valid_limit(limit)?;
@@ -694,7 +710,7 @@ impl Hub {
         for event in journal.events.iter().filter(|event| event.seq > scan_after) {
             if event.visible_to(&recipient)
                 && filter.matches(event)
-                && !event.excluded_wait(actor, filter.include_own_waits, exclude_origin_wait_id)
+                && !event.excluded_wait(actor, filter.include_own_waits, exclusions.origin_wait_id)
             {
                 if events.len() >= limit || bytes + event.value_bytes + 1 > MAX_READ_BYTES - 2048 {
                     has_more = true;
@@ -714,8 +730,9 @@ impl Hub {
             .expect("validated subscription");
         subscription.delivered = subscription.delivered.max(next_cursor);
         journal.touch(subscription_id, now);
+        let new_gap = lost.is_some_and(|(episode, _)| Some(episode) != exclusions.reported_gap);
         let mut result = json!({
-            "status":if events.is_empty() && lost.is_none() {"pending"} else {"ready"},
+            "status":if events.is_empty() && !new_gap {"pending"} else {"ready"},
             "subscription_id":subscription_id,"events":events,"cursor":cursor,
             "next_cursor":next_cursor,"has_more":has_more,
             "oldest_cursor":journal.oldest_cursor,"latest_cursor":journal.sequence,
@@ -823,8 +840,14 @@ impl Hub {
         limit: usize,
         wait_ms: u64,
     ) -> Result<Value, String> {
-        self.wait_excluding(actor, subscription_id, limit, wait_ms, None)
-            .await
+        self.wait_excluding(
+            actor,
+            subscription_id,
+            limit,
+            wait_ms,
+            WaitExclusions::default(),
+        )
+        .await
     }
 
     pub(crate) async fn wait_excluding(
@@ -833,7 +856,7 @@ impl Hub {
         subscription_id: &str,
         limit: usize,
         wait_ms: u64,
-        exclude_origin_wait_id: Option<&str>,
+        exclusions: WaitExclusions<'_>,
     ) -> Result<Value, String> {
         actor.validate()?;
         valid_limit(limit)?;
@@ -848,14 +871,13 @@ impl Hub {
             let notified = self.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            let page =
-                self.read_excluding(actor, subscription_id, limit, exclude_origin_wait_id)?;
+            let page = self.read_excluding(actor, subscription_id, limit, exclusions)?;
             if page["status"] == "ready" || wait_ms == 0 || tokio::time::Instant::now() >= deadline
             {
                 return Ok(page);
             }
             if tokio::time::timeout_at(deadline, notified).await.is_err() {
-                return self.read_excluding(actor, subscription_id, limit, exclude_origin_wait_id);
+                return self.read_excluding(actor, subscription_id, limit, exclusions);
             }
         }
     }

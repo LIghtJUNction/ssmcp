@@ -3,7 +3,7 @@
 use crate::{
     broker::{Authorization, Broker, Session},
     code_mode::{self, RunBinding},
-    events::{Actor, Filter, Hub},
+    events::{Actor, Filter, Hub, WaitExclusions},
 };
 use serde::Deserialize;
 pub(crate) mod worker_subscriptions;
@@ -932,7 +932,7 @@ pub(crate) async fn observe(
     agent_credentials: (&str, &str),
     subscription_id: &str,
     (limit, wait_ms): (usize, u64),
-    exclude_origin_wait_id: Option<&str>,
+    exclusions: WaitExclusions<'_>,
 ) -> Result<Value, String> {
     validate_observation(subscription_id, limit, wait_ms)?;
     let context = Context::create(
@@ -953,13 +953,7 @@ pub(crate) async fn observe(
     check_native_sources(&native_sources(broker, &record, &sources))?;
     let result = broker
         .events
-        .wait_excluding(
-            &context.actor,
-            subscription_id,
-            limit,
-            wait_ms,
-            exclude_origin_wait_id,
-        )
+        .wait_excluding(&context.actor, subscription_id, limit, wait_ms, exclusions)
         .await?;
     let sources = authorize_record(broker, access_token, &context, &record, true).await?;
     let result = attach_native_sources(result, native_sources(broker, &record, &sources))?;
@@ -1285,7 +1279,7 @@ pub(crate) async fn dispatch(
                         &subscription_id,
                         limit,
                         0,
-                        Some(&observation.id),
+                        WaitExclusions::origin(&observation.id),
                     )
                     .await?;
                 let remaining = wait_ms
@@ -1299,7 +1293,7 @@ pub(crate) async fn dispatch(
                         (&context.actor.agent_id, &context.binding.token),
                         &subscription_id,
                         (limit, remaining),
-                        Some(&observation.id),
+                        WaitExclusions::origin(&observation.id),
                     )
                     .await?
                 } else {

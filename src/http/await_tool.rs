@@ -1028,7 +1028,7 @@ async fn observe(
                 (&scope.binding.agent_id, &scope.binding.token),
                 subscription_id,
                 (*limit, timeout_ms),
-                Some(wait_id),
+                crate::events::WaitExclusions::origin(wait_id),
             )
             .await
         }

@@ -171,6 +171,23 @@ impl Fixture {
         receipt
     }
 
+    fn drop_oversized_event(&self) {
+        let err = self
+            .native
+            .broker
+            .events
+            .publish_system(
+                &self.owner,
+                self.pool.client_id(),
+                self.pool_member["agent_id"].as_str(),
+                "worker.completed",
+                json!({"task_id":"lost","detail":"x".repeat(5000)}),
+                (None, None),
+            )
+            .unwrap_err();
+        assert!(err.starts_with("events_event_too_large"));
+    }
+
     fn queue_input(&self, id: &str) {
         self.native
             .session
@@ -570,23 +587,6 @@ async fn sparse_retention_keeps_real_notices_and_one_warning_across_partial_ack(
         }
     }
 
-    fn drop_oversized(fixture: &Fixture) {
-        let err = fixture
-            .native
-            .broker
-            .events
-            .publish_system(
-                &fixture.owner,
-                fixture.pool.client_id(),
-                fixture.pool_member["agent_id"].as_str(),
-                "worker.completed",
-                json!({"task_id":"lost","detail":"x".repeat(5000)}),
-                (None, None),
-            )
-            .unwrap_err();
-        assert!(err.starts_with("events_event_too_large"));
-    }
-
     let mut fixture = Fixture::new(true).await;
     fixture.bind_main().await;
     let context = fixture.context().await;
@@ -603,7 +603,7 @@ async fn sparse_retention_keeps_real_notices_and_one_warning_across_partial_ack(
     let ack = |through: u64| json!({"action":"ack","subscription_id":id,"through":through});
     let first = fixture.emit("worker.completed")["seq"].as_u64().unwrap();
     let second = fixture.emit("worker.completed")["seq"].as_u64().unwrap();
-    drop_oversized(&fixture);
+    fixture.drop_oversized_event();
     let last = fixture.emit("worker.completed")["seq"].as_u64().unwrap();
     let page = fixture.control(read()).await.unwrap();
     let gap = page["retention_gap"].clone();
@@ -644,7 +644,7 @@ async fn sparse_retention_keeps_real_notices_and_one_warning_across_partial_ack(
     );
 
     // Extend the outstanding loss before acknowledging its original high-water mark.
-    drop_oversized(&fixture);
+    fixture.drop_oversized_event();
     fixture.control(ack(missing)).await.unwrap();
     let extended = fixture.control(read()).await.unwrap();
     assert_eq!(seqs(&extended), [last]);
@@ -667,7 +667,7 @@ async fn sparse_retention_keeps_real_notices_and_one_warning_across_partial_ack(
         .control(ack(extended["next_cursor"].as_u64().unwrap()))
         .await
         .unwrap();
-    drop_oversized(&fixture);
+    fixture.drop_oversized_event();
     let next = fixture.control(read()).await.unwrap();
     assert_ne!(next["retention_gap"]["episode_after"], gap["episode_after"]);
     assert!(seqs(&next).is_empty());
@@ -846,7 +846,7 @@ async fn retiring_main_and_revoked_main_cannot_be_woken_or_read() {
 }
 
 #[tokio::test]
-async fn both_ordinary_and_durable_await_wake_without_completing_the_original_target() {
+async fn ordinary_and_durable_await_report_a_gap_once_and_wake_for_new_work() {
     for durable in [false, true] {
         let mut fixture = Fixture::new(true).await;
         fixture.bind_main().await;
@@ -871,16 +871,43 @@ async fn both_ordinary_and_durable_await_wake_without_completing_the_original_ta
             request["lifetime_ms"] = json!(60_000);
             request["window_ms"] = json!(1000);
         }
-        let caller = fixture.await_call(request);
-        let publish = async {
-            tokio::task::yield_now().await;
-            fixture.emit("worker.completed");
-        };
-        let (pending, ()) = tokio::time::timeout(Duration::from_secs(2), async {
-            tokio::join!(caller, publish)
-        })
-        .await
-        .unwrap();
+        fixture.drop_oversized_event();
+        let first = fixture.await_call(request).await;
+        assert_eq!(first["wake_reason"], "subscription_event");
+        let loss = &first["worker_events"][0];
+        assert_eq!(loss["history_complete"], false);
+        assert_eq!(loss["events"], json!([]));
+        let read = || json!({"action":"read","subscription_id":loss["subscription_id"]});
+        assert_eq!(
+            fixture.control(read()).await.unwrap()["retention_gap"],
+            loss["retention_gap"]
+        );
+        // Another failed publication grows the same outstanding episode. An
+        // unrelated resumed window must stay asleep, but the next real event wakes it.
+        fixture.drop_oversized_event();
+        let caller = fixture.await_call(json!({"wait_id":first["wait_id"],"timeout_ms":1000}));
+        tokio::pin!(caller);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), &mut caller)
+                .await
+                .is_err()
+        );
+        let event = fixture.emit("worker.completed");
+        let pending = tokio::time::timeout(Duration::from_secs(2), caller)
+            .await
+            .unwrap();
+        assert_eq!(pending["wait_id"], first["wait_id"]);
+        let retained = &pending["worker_events"][0];
+        assert_eq!(retained["events"][0]["id"], event["event_id"]);
+        assert_eq!(retained["cursor"], loss["cursor"]);
+        assert_eq!(
+            retained["retention_gap"]["episode_after"],
+            loss["retention_gap"]["episode_after"]
+        );
+        assert!(
+            retained["retention_gap"]["through"].as_u64().unwrap()
+                > loss["retention_gap"]["through"].as_u64().unwrap()
+        );
         assert_eq!(pending["status"], "pending", "{pending}");
         assert_eq!(pending["continue_wait"], true);
         assert_eq!(pending["wake_reason"], "subscription_event");
@@ -1158,15 +1185,18 @@ fn automatic_repeat_projection_keeps_material_events_and_explicit_recovery_avail
     let raw = AdvisoryPage::from_notice(&page);
     let fallback = read_required(&page);
     assert_eq!(
-        reminders.project(0, raw, fallback.clone(), now),
+        reminders.project(0, raw, fallback.clone(), now, false),
         Some(fallback.clone())
     );
     for _ in 0..100 {
-        assert_eq!(reminders.project(0, raw, fallback.clone(), now), None);
+        assert_eq!(
+            reminders.project(0, raw, fallback.clone(), now, false),
+            None
+        );
     }
     // Room for the complete notice re-arms delivery even with the same raw cursor.
     assert_eq!(
-        reminders.project(0, raw, page.clone(), now),
+        reminders.project(0, raw, page.clone(), now, false),
         Some(page.clone())
     );
     let mut project = |revision, receipt: &Value, at| {
@@ -1175,6 +1205,7 @@ fn automatic_repeat_projection_keeps_material_events_and_explicit_recovery_avail
             AdvisoryPage::from_notice(receipt),
             receipt.clone(),
             at,
+            false,
         )
     };
     for offset in 1..=100 {

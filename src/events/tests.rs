@@ -803,7 +803,7 @@ async fn explicit_own_wait_observation_still_excludes_the_active_origin_id() {
     )
     .unwrap();
     let pending = hub
-        .wait_excluding(&a, &id, 64, 0, Some("current"))
+        .wait_excluding(&a, &id, 64, 0, WaitExclusions::origin("current"))
         .await
         .unwrap();
     assert_eq!(pending["status"], "pending");
@@ -819,7 +819,7 @@ async fn explicit_own_wait_observation_still_excludes_the_active_origin_id() {
     )
     .unwrap();
     let page = hub
-        .wait_excluding(&a, &id, 64, 0, Some("current"))
+        .wait_excluding(&a, &id, 64, 0, WaitExclusions::origin("current"))
         .await
         .unwrap();
     assert_eq!(page["events"].as_array().unwrap().len(), 1);

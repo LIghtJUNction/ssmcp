@@ -111,24 +111,39 @@ impl ModelReminder {
     // remains recoverable by explicit read/wait. Only events.ack advances the cursor.
     const RETRY: Duration = Duration::from_secs(5 * 60);
 
+    fn reported_gap(&self, revision: u64) -> Option<u64> {
+        let last = self.last.as_ref()?;
+        if let AdvisoryPage::Gap(episode) = last.page
+            && last.revision == revision
+            && last.visible_events.is_some()
+            && last.at.elapsed() < Self::RETRY
+        {
+            return Some(episode);
+        }
+        None
+    }
+
     fn project(
         &mut self,
         revision: u64,
         page: Option<AdvisoryPage>,
         notice: Value,
         now: std::time::Instant,
+        wake: bool,
     ) -> Option<Value> {
         let Some(page) = page else {
             return Some(notice);
         };
         let visible_events = (notice["status"] != "read_required")
             .then(|| notice["events"].as_array().map_or(0, Vec::len));
-        if self.last.as_ref().is_some_and(|last| {
-            last.revision == revision
-                && last.page == page
-                && last.visible_events >= visible_events
-                && now.duration_since(last.at) < Self::RETRY
-        }) {
+        if !wake
+            && self.last.as_ref().is_some_and(|last| {
+                last.revision == revision
+                    && last.page == page
+                    && last.visible_events >= visible_events
+                    && now.duration_since(last.at) < Self::RETRY
+            })
+        {
             return None;
         }
         self.last = Some(SentAdvisory {
@@ -788,7 +803,16 @@ async fn read_notice(
             NOTICE_LIMIT,
             wait_ms.min(crate::wire::MAX_OBSERVATION_WAIT_MS),
         ),
-        wait_id,
+        WaitExclusions {
+            origin_wait_id: wait_id,
+            reported_gap: wait_id.and_then(|_| {
+                entry
+                    .model_reminder
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .reported_gap(entry.revision)
+            }),
+        },
     )
     .await;
     if !broker.event_subscriptions.workers.current(context, &entry)
@@ -885,7 +909,7 @@ fn notice_summary(notice: &Value) -> String {
     if let Some(through) = notice["retention_gap"]["through"].as_u64() {
         let _ = write!(
             summary,
-            " event history incomplete through {through}. Reading retained events."
+            " event history incomplete through {through}. Reconcile original task IDs with worker.events and worker.result before events.ack."
         );
     }
     let events = notice["events"]
@@ -1286,7 +1310,8 @@ pub(in crate::http) async fn append(
     }
     // A wait woken by a subscription must return its complete reason. Compact
     // only unsolicited repeats after the final authorization checks above.
-    if response["structuredContent"]["wake_reason"] == "subscription_event" || notices.is_empty() {
+    let wake = response["structuredContent"]["wake_reason"] == "subscription_event";
+    if notices.is_empty() {
         return appended;
     }
     let now = std::time::Instant::now();
@@ -1298,7 +1323,7 @@ pub(in crate::http) async fn append(
                 .model_reminder
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
-                .project(entry.revision, *advisory, notice, now)
+                .project(entry.revision, *advisory, notice, now, wake)
         })
         .collect();
     if projected.is_empty() {
