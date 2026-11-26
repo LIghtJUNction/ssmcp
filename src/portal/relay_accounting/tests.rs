@@ -136,7 +136,10 @@ async fn default_external_allowance_is_one_decimal_gb_before_and_after_purchase(
         accounting.reserve("alice", true, 1).await,
         Err(TrafficError::Exhausted)
     );
-    assert_eq!(snapshot("456").await.unwrap().remaining_bytes, Some(allowance));
+    assert_eq!(
+        snapshot("456").await.unwrap().remaining_bytes,
+        Some(allowance)
+    );
 }
 
 #[tokio::test]
