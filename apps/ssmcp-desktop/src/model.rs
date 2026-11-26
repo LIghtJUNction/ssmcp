@@ -362,6 +362,7 @@ impl Receipt {
 pub struct View {
     pub connection: u64,
     pub sessions: Vec<Session>,
+    pub window_sessions: bool,
     pub cwd: String,
     pub launch_error: Option<String>,
     pub sessions_loading: bool,
@@ -395,6 +396,20 @@ pub struct View {
 }
 
 impl View {
+    pub fn has_window_session(&self, target: &Target) -> bool {
+        matches!(target, Target::Named(name) if self.sessions.iter().any(|s| &s.name == name))
+    }
+
+    pub fn remember_window_session(&mut self, target: &str) {
+        if self.window_sessions && !self.sessions.iter().any(|s| s.name == target) {
+            self.sessions.push(Session {
+                name: target.to_owned(),
+                phase: String::new(),
+                connection: String::new(),
+            });
+        }
+    }
+
     pub fn resource(&self, name: &str) -> bool {
         self.phase.connected()
             && self.capabilities.as_ref().is_some_and(|caps| {
@@ -811,6 +826,24 @@ fn nonzero(value: u16) -> std::num::NonZeroU16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_sessions_accept_only_its_own_targets() {
+        let mut view = View::default();
+        let main = "live:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let child = "live:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let other = Target::Named("live:cccccccccccccccccccccccccccccccc".into());
+        view.remember_window_session(main);
+        assert!(view.sessions.is_empty());
+        view.window_sessions = true;
+        for name in [main, child, main] {
+            view.remember_window_session(name);
+            assert!(view.has_window_session(&Target::Named(name.into())));
+        }
+        assert_eq!(view.sessions.len(), 2);
+        assert!(!view.has_window_session(&other));
+        assert!(!view.has_window_session(&Target::Directory("/tmp/foreign".into())));
+    }
 
     #[test]
     fn decimal_cursors_are_lossless_and_numeric_json_is_rejected() {

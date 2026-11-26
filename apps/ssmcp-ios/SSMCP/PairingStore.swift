@@ -1,8 +1,12 @@
 import Foundation
+import CryptoKit
 import Security
 
 enum PairingStore {
     private static let service = "dev.ssmcp.mobile.pairing.v1"
+    static func receiptScope(origin: String, token: String) -> String {
+        SHA256.hash(data: Data((origin + "\u{0}" + token).utf8)).map { String(format: "%02x", $0) }.joined()
+    }
     static func save(origin: String, token: String) throws {
         let data = try jsonData(["origin": origin, "token": token])
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
@@ -48,8 +52,9 @@ enum CommandJournal {
     static func insert(_ entries: [[String: String]], value: [String: String], capacity: Int = 20) throws -> [[String: String]] {
         try require(!entries.contains(where: { $0["id"] == value["id"] }), "Request ID was already reserved")
         var next = entries
+        let latestOwned = entries.last { $0["operation"] == "session.create" && state($0) == "confirmed" }?["id"]
         while next.count >= capacity {
-            guard let index = next.firstIndex(where: { ["confirmed", "rejected"].contains(state($0)) }) else {
+            guard let index = next.firstIndex(where: { $0["id"] != latestOwned && ["confirmed", "rejected"].contains(state($0)) }) else {
                 throw BridgeFailure("receipt_capacity", "未确定结果已达到存储上限；请核对这些请求后再提交。")
             }
             next.remove(at: index)
@@ -76,22 +81,31 @@ enum CommandJournal {
         UserDefaults.standard.removeObject(forKey: key)
     }
     static func reserve(session: String, id: String, operation: String, generation: String = "",
-                        connection: String = "", target: String = "", text: String? = nil) throws {
+                        connection: String = "", target: String = "", text: String? = nil, gateway: String? = nil) throws {
         var value = ["id": id, "session": session, "operation": operation, "generation": generation,
             "connection_id": connection, "target": target, "state": "unknown"]
+        if let gateway { value["gateway"] = gateway }
         if let text {
             try require(text.utf8.count <= 16 * 1024, "Input exceeds its byte limit")
             value["text_base64"] = Data(text.utf8).base64EncodedString()
         }
         try save(insert(load(), value: value))
     }
-    static func settle(_ id: String, state: CommandState) throws {
+    static func settle(_ id: String, state: CommandState, session: String? = nil) throws {
         try require(state != .notSent, "An unsent request has no remote receipt")
         var entries = try load()
         guard let index = entries.firstIndex(where: { $0["id"] == id }) else { throw BridgeFailure("receipt_store", "原始请求记录缺失") }
         entries[index]["state"] = state.rawValue
+        if let session { entries[index]["session"] = session }
         if state == .confirmed || state == .rejected { entries[index].removeValue(forKey: "text_base64") }
         try save(entries)
+    }
+    static func lastOwnedSession(scope: String) throws -> String? {
+        try load().last { $0["operation"] == "session.create" && $0["gateway"] == scope && state($0) == "confirmed" }?["session"]
+    }
+    static func pendingCreation(scope: String, destination: String) throws -> String? {
+        try load().last { $0["operation"] == "session.create" && $0["gateway"] == scope &&
+            $0["target"] == destination && state($0) == "unknown" }?["id"]
     }
     static func inputs() -> [UnconfirmedInput] {
         guard let entries = try? load() else { return [] }

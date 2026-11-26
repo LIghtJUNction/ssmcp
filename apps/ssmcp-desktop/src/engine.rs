@@ -2,6 +2,7 @@
 use crate::model::*;
 use serde_json::{Value, json};
 use ssmcp::session::attach::{EventObserver, RemoteFrontend};
+use ssmcp::session::frontend::OwnedSession;
 use std::{
     future::Future,
     sync::{
@@ -134,13 +135,9 @@ impl Handle {
                             let result = async {
                                 let exe = crate::launcher::executable()?;
                                 let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-                                ssmcp::session::frontend::OwnedSession::launch(
-                                    &exe,
-                                    &destination,
-                                    &cwd,
-                                )
-                                .await
-                                .map_err(|e| e.to_string())
+                                OwnedSession::launch_private(&exe, &destination, &cwd)
+                                    .await
+                                    .map_err(|e| e.to_string())
                             };
                             let session = tokio::select! {
                                 _ = engine.shared.stopped() => return,
@@ -154,8 +151,10 @@ impl Handle {
                                 }
                             };
                             let target = Target::Named(session.target().to_owned());
+                            engine.view.window_sessions = true;
+                            engine.view.remember_window_session(session.target());
+                            engine.owner = Some(session);
                             engine.run(Some(target), true).await;
-                            drop(session);
                         } else {
                             engine.run(target, control).await;
                         }
@@ -241,6 +240,7 @@ struct Engine {
     shared: Arc<Shared>,
     receiver: mpsc::Receiver<Intent>,
     view: View,
+    owner: Option<OwnedSession>,
     frontend: Option<RemoteFrontend>,
     model: BridgeModel,
     observer: Option<EventObserver>,
@@ -257,6 +257,7 @@ impl Engine {
             shared,
             receiver,
             view: View::default(),
+            owner: None,
             frontend: None,
             model: BridgeModel::default(),
             observer: None,
@@ -355,9 +356,9 @@ impl Engine {
                 self.view.phase = Phase::Disconnected;
                 self.view.clear_live(false);
                 self.view.notice = if released {
-                    "已确认释放桌面连接；CLI 会话继续运行。"
+                    "已释放当前会话的桌面连接。"
                 } else {
-                    "桌面连接已关闭，租约释放尚未确认；CLI 会话继续运行，租约由服务按期处理。"
+                    "桌面连接已关闭，正在等待服务确认租约释放。"
                 }
                 .into();
                 self.publish();
@@ -397,6 +398,10 @@ impl Engine {
     }
 
     async fn refresh_sessions(&mut self) {
+        // Window-owned tabs are populated only from the owner and its session.new receipts.
+        if self.owner.is_some() {
+            return;
+        }
         self.view.sessions_loading = true;
         self.publish();
         match ReadBudget::new(READ_TIMEOUT)
@@ -426,6 +431,11 @@ impl Engine {
     }
 
     async fn connect(&mut self, target: Target, control: bool) {
+        if self.owner.is_some() && !self.view.has_window_session(&target) {
+            self.view.notice = "请先在本窗口创建会话。".into();
+            self.publish();
+            return;
+        }
         let budget = ReadBudget::new(REFRESH_TIMEOUT);
         let same_target = self.view.target.as_ref() == Some(&target);
         self.release().await;
@@ -450,9 +460,12 @@ impl Engine {
         self.publish();
         let opened = budget
             .wait(&self.shared, async {
-                match &target {
-                    Target::Named(name) => RemoteFrontend::connect_local(name, !control).await,
-                    Target::Directory(directory) => {
+                match (&self.owner, &target) {
+                    (Some(owner), Target::Named(name)) => owner.connect_in(name, !control).await,
+                    (None, Target::Named(name)) => {
+                        RemoteFrontend::connect_local(name, !control).await
+                    }
+                    (_, Target::Directory(directory)) => {
                         RemoteFrontend::connect(directory.clone(), !control).await
                     }
                 }
@@ -1075,8 +1088,11 @@ impl Engine {
             // Preflight failure: no transport callback ran, so no effect occurred.
             record.outcome = CommandOutcome::Error(error.clone());
         }
-        self.view
-            .record(Receipt::from_record(&record, connection, &arguments));
+        let receipt = Receipt::from_record(&record, connection, &arguments);
+        if let Some(target) = &receipt.new_session {
+            self.view.remember_window_session(target);
+        }
+        self.view.record(receipt);
         self.view.busy = false;
         self.refresh_due = true;
         if let Err(error) = result {

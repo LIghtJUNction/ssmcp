@@ -8,8 +8,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, VecDeque},
     future::Future,
@@ -48,6 +49,34 @@ pub(super) trait Host: Send + Sync {
             ))
         })
     }
+    fn retains_target(&self, _session: &str) -> bool {
+        true
+    }
+    fn receipt_directory(&self) -> Option<&std::path::Path> {
+        None
+    }
+    fn authorize_creation(&self, _destination: &str) -> Result<(), BridgeError> {
+        Err(BridgeError::new(
+            ErrorCode::Denied,
+            "this gateway does not create owned sessions",
+        ))
+    }
+    fn create(&self, _destination: String) -> CoreFuture<'_, String> {
+        Box::pin(async {
+            Err(BridgeError::new(
+                ErrorCode::Denied,
+                "owned sessions are disabled",
+            ))
+        })
+    }
+    fn end_owned(&self, _session: String) -> CoreFuture<'_, ()> {
+        Box::pin(async {
+            Err(BridgeError::new(
+                ErrorCode::Denied,
+                "owned sessions are disabled",
+            ))
+        })
+    }
     fn sessions(&self) -> CoreFuture<'_, Vec<Value>>;
     fn connect(&self, session: String, read_only: bool) -> CoreFuture<'_, Arc<dyn Connection>>;
 }
@@ -72,6 +101,7 @@ struct Gateway {
     assets: Option<PathBuf>,
     host: Arc<dyn Host>,
     data: Mutex<Data>,
+    creations: Mutex<Vec<CreationReceipt>>,
     next_connection: AtomicU64,
     requests: Semaphore,
 }
@@ -228,11 +258,17 @@ pub(super) fn routes(
         assets,
         host,
         data: Mutex::new(Data::default()),
+        creations: Mutex::new(Vec::new()),
         next_connection: AtomicU64::new(1),
         requests: Semaphore::new(32),
     });
     let api = Router::new()
         .route("/api/gui/v1/launch", post(launch))
+        .route("/api/gui/v1/owned-sessions", post(create_owned))
+        .route(
+            "/api/gui/v1/owned-sessions/{session}",
+            axum::routing::delete(end_owned),
+        )
         .route("/api/gui/v1/register", post(register))
         .route("/api/gui/v1/sessions", get(sessions))
         .route("/api/gui/v1/connections", get(connections).post(open))
@@ -329,6 +365,8 @@ impl Gateway {
     fn prune(self: &Arc<Self>) {
         let expired = {
             let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
+            data.connections
+                .retain(|_, c| self.host.retains_target(&c.session));
             let now = Instant::now();
             let expired: Vec<_> = data
                 .connections
@@ -417,6 +455,156 @@ impl LaunchRequest {
         crate::server_endpoint::allow_principal(&name, &origin)
             .map_err(|_| invalid("invalid destination"))
     }
+}
+
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct CreateRequest {
+    request_id: Id,
+    destination: String,
+    #[serde(default)]
+    terms: bool,
+    #[serde(default)]
+    privacy: bool,
+}
+struct CreationReceipt {
+    input: CreateRequest,
+    result: tokio::sync::watch::Receiver<Option<Result<String, BridgeError>>>,
+}
+#[derive(Serialize, Deserialize)]
+struct SavedCreation {
+    input: CreateRequest,
+    outcome: Option<Result<String, BridgeError>>,
+}
+fn check_create_id(prior: &CreateRequest, input: &CreateRequest) -> Result<(), ApiError> {
+    if prior != input {
+        return Err(BridgeError::new(
+            ErrorCode::Conflict,
+            "creation request_id was used with different fields",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+async fn create_owned(
+    State(state): State<Arc<Gateway>>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let input: CreateRequest = input(request).await?;
+    if input.destination.len() > 512 {
+        return Err(invalid("destination exceeds 512 bytes"));
+    }
+    let destination = LaunchRequest {
+        destination: input.destination.clone(),
+        terms: input.terms,
+        privacy: input.privacy,
+    }
+    .checked_destination()?;
+    state.host.authorize_creation(&destination)?;
+    let path = state.host.receipt_directory().map(|dir| {
+        let key = crate::hex::encode(&Sha256::digest(input.request_id.as_str().as_bytes()));
+        dir.join(format!("request-{key}.json"))
+    });
+    let mut result = {
+        let mut receipts = state.creations.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(prior) = receipts
+            .iter()
+            .find(|r| r.input.request_id == input.request_id)
+        {
+            check_create_id(&prior.input, &input)?;
+            prior.result.clone()
+        } else {
+            if let Some(path) = &path
+                && path
+                    .try_exists()
+                    .map_err(|_| unavailable("cannot inspect creation receipt"))?
+            {
+                let saved: SavedCreation = crate::session::read_json(path).map_err(|_| {
+                    unavailable("cannot read original creation receipt").uncertain()
+                })?;
+                check_create_id(&saved.input, &input)?;
+                let target = saved.outcome.ok_or_else(|| {
+                    unavailable("unconfirmed original creation; do not repeat").uncertain()
+                })??;
+                return Ok(Json(
+                    json!({"request_id":input.request_id,"session":target}),
+                ));
+            }
+            if receipts.len() >= MAX_OPEN_RECEIPTS {
+                return Err(unavailable("too many unresolved creation requests").into());
+            }
+            let mut saved = SavedCreation {
+                input: input.clone(),
+                outcome: None,
+            };
+            if let Some(path) = &path {
+                crate::session::write_json(path, &saved)
+                    .map_err(|_| unavailable("could not reserve creation receipt"))?;
+            }
+            let (tx, rx) = tokio::sync::watch::channel(None);
+            receipts.push(CreationReceipt {
+                input: input.clone(),
+                result: rx.clone(),
+            });
+            let state = state.clone();
+            // Finish the original operation even when the HTTP waiter has disconnected.
+            tokio::spawn(async move {
+                let mut outcome = timeout(NATIVE_DEADLINE, state.host.create(destination))
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(unavailable("session startup timed out; outcome unknown").uncertain())
+                    });
+                let mut durable = false;
+                if let Some(path) = path {
+                    saved.outcome = Some(outcome.clone());
+                    durable = crate::session::write_json(&path, &saved).is_ok();
+                    if !durable {
+                        outcome =
+                            Err(unavailable("could not persist creation outcome").uncertain());
+                    }
+                }
+                let _ = tx.send_replace(Some(outcome));
+                if durable {
+                    state
+                        .creations
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .retain(|r| r.input.request_id != saved.input.request_id);
+                }
+            });
+            rx
+        }
+    };
+    loop {
+        if let Some(outcome) = result.borrow_and_update().clone() {
+            return Ok(Json(
+                json!({"request_id":input.request_id,"session":outcome?}),
+            ));
+        }
+        result
+            .changed()
+            .await
+            .map_err(|_| unavailable("session creator stopped; outcome unknown").uncertain())?;
+    }
+}
+
+async fn end_owned(
+    State(state): State<Arc<Gateway>>,
+    Path(session): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    state.host.end_owned(session.clone()).await?;
+    let mut data = state.data.lock().unwrap_or_else(|e| e.into_inner());
+    data.connections.retain(|_, c| c.session != session);
+    for receipt in &mut data.opens {
+        if receipt.request.session == session && matches!(receipt.outcome, OpenOutcome::Opening) {
+            receipt.outcome = OpenOutcome::Failed(BridgeError::new(
+                ErrorCode::Closed,
+                "owner ended this session",
+            ));
+        }
+    }
+    Ok(Json(json!({"session":session,"status":"closed"})))
 }
 
 async fn register(
@@ -603,6 +791,15 @@ async fn open(State(state): State<Arc<Gateway>>, request: Request) -> Result<Res
         .and_then(|r| r);
         {
             let mut data = state.data.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(OpenOutcome::Failed(error)) = data
+                .opens
+                .iter()
+                .find(|r| r.request.request_id == input.request_id)
+                .map(|r| &r.outcome)
+            {
+                flight.settled = true;
+                return Err(error.clone().into());
+            }
             data.opens
                 .iter_mut()
                 .find(|r| r.request.request_id == input.request_id)

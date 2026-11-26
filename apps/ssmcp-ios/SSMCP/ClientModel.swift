@@ -25,6 +25,8 @@ struct WorkerSummary: Identifiable {
     @Published var origin = ""
     @Published var token = ""
     @Published var readOnly = true
+    @Published private(set) var ownedSession: String?
+    var hasGateway: Bool { gateway != nil }
     @Published private(set) var status = "未连接"
     /// Only mutations occupy this lane; a close or explicit command can cancel reads immediately.
     @Published private(set) var busy = false
@@ -87,7 +89,13 @@ struct WorkerSummary: Identifiable {
         self.gateway = gateway; self.connection = initialConnection; self.inbox = initialInbox
         self.makeBudget = makeBudget
         guard loadPairing else { return }
-        do { if let saved = try PairingStore.load() { origin = saved.0; token = saved.1 } }
+        do {
+            if let saved = try PairingStore.load() {
+                let api = try Gateway(origin: saved.0, token: saved.1)
+                self.gateway = api; origin = api.origin; token = saved.1
+                ownedSession = try CommandJournal.lastOwnedSession(scope: PairingStore.receiptScope(origin: api.origin, token: saved.1))
+            }
+        }
         catch { status = "配对信息不可用，请删除后重新配对。" }
     }
     func setActive(_ value: Bool) {
@@ -119,20 +127,21 @@ struct WorkerSummary: Identifiable {
         }
         return error
     }
-    func configureAndList() async {
+    func configure() {
         guard !busy, connection == nil else { return }
         do {
             let api = try Gateway(origin: origin, token: token)
+            let previous = try CommandJournal.lastOwnedSession(scope: PairingStore.receiptScope(origin: api.origin, token: token))
             try PairingStore.save(origin: api.origin, token: token)
             stopReads(); gateway = api; origin = api.origin; epoch += 1
-            await listSessions()
+            ownedSession = previous; sessions = []; nextSessionOffset = nil; status = "已保存网关配对"
         } catch { fail(error, "配对失败") }
     }
     func deletePairing() {
         guard !busy, connection == nil else { return }
         do {
             try PairingStore.delete(); stopReads(); gateway = nil; origin = ""; token = ""
-            sessions = []; nextSessionOffset = nil; status = "已删除配对信息；未确定的请求记录仍保留。"; epoch += 1
+            ownedSession = nil; sessions = []; nextSessionOffset = nil; status = "已删除配对信息；未确定的请求记录仍保留。"; epoch += 1
         } catch { fail(error, "删除失败") }
     }
     func listSessions(more: Bool = false) async {
@@ -150,7 +159,38 @@ struct WorkerSummary: Identifiable {
             nextSessionOffset = page.1; status = "选择会话"
         } catch { if mark == epoch, readBudget === budget, !budget.isCancelled { fail(error, "读取失败") } }
     }
-    func open(_ session: String) async {
+    func createSession(destination input: String, terms: Bool, privacy: Bool) async {
+        guard let api = gateway, !busy, connection == nil else { return }
+        let destination = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = destination.split(separator: "@", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts.allSatisfy({ !$0.isEmpty }), destination.utf8.count <= 512,
+              !destination.contains(where: { $0.isWhitespace }) else {
+            status = "请输入用户名@中继地址"; return
+        }
+        stopReads(); busy = true; epoch += 1
+        let requestID = UUID().uuidString
+        var reserved = false, received = false
+        do {
+            let scope = PairingStore.receiptScope(origin: api.origin, token: token)
+            if let pending = try CommandJournal.pendingCreation(scope: scope, destination: destination) {
+                busy = false; status = "已有待核对的创建请求 " + pending; return
+            }
+            try CommandJournal.reserve(session: destination, id: requestID, operation: "session.create",
+                                       target: destination, gateway: scope)
+            reserved = true; status = "正在网关上新建会话"
+            let target = try await api.createSession(destination: destination, terms: terms, privacy: privacy, requestID: requestID)
+            received = true
+            try CommandJournal.settle(requestID, state: .confirmed, session: target)
+            ownedSession = target; note("已新建会话 " + target + " · " + requestID)
+            busy = false
+            await open(target, readOnly: false)
+        } catch {
+            let failure = mutationFailure(error, received: received, attempted: reserved)
+            if reserved, let known = failure as? BridgeFailure, !known.unknown { try? CommandJournal.settle(requestID, state: .rejected) }
+            busy = false; fail(failure, "新建会话 " + requestID)
+        }
+    }
+    func open(_ session: String, readOnly requestedMode: Bool? = nil) async {
         guard let api = gateway, !busy, connection == nil else { return }
         stopReads(); busy = true; epoch += 1
         let requestID = UUID().uuidString
@@ -158,7 +198,7 @@ struct WorkerSummary: Identifiable {
         var reserved = false, received = false
         do {
             try CommandJournal.reserve(session: session, id: requestID, operation: "connection.open"); reserved = true
-            let opened = try await api.open(session: session, readOnly: readOnly, openRequestID: requestID)
+            let opened = try await api.open(session: session, readOnly: requestedMode ?? readOnly, openRequestID: requestID)
             received = true
             try CommandJournal.settle(requestID, state: .confirmed)
             connection = opened; inbox = nil; pendingHistory = nil; chatCursor = nil

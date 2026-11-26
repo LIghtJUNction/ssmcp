@@ -513,6 +513,7 @@ struct Options {
     server: Option<String>,
     username: Option<String>,
     foreground_identity: Option<account::foreground_identity::Identity>,
+    frontend_owned: bool,
     workbench: Option<Arc<crate::session::workbench::Workbench>>,
     temporary: bool,
     name: Option<String>,
@@ -544,6 +545,14 @@ struct Options {
 }
 
 impl Options {
+    fn terminal_frontend(&self) -> bool {
+        !self.frontend_owned && self.chat.input == chat_io::Input::Terminal
+    }
+
+    fn chat_enabled(&self) -> bool {
+        self.worker.is_none() && self.chat.input != chat_io::Input::None
+    }
+
     fn forget_foreground(&self) -> crate::Result<()> {
         if let Some(identity) = &self.foreground_identity {
             identity.replace_previous(None)?;
@@ -1237,6 +1246,7 @@ impl Options {
             server,
             username,
             foreground_identity: None,
+            frontend_owned: false,
             workbench: None,
             temporary: false,
             name,
@@ -2232,6 +2242,10 @@ pub async fn run() -> crate::Result<()> {
         let [_, destination, instance] = args.as_slice() else {
             return Err("the frontend runner requires an explicit destination and instance".into());
         };
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            return Err("the frontend core requires its owner's private input pipe".into());
+        }
         crate::server_endpoint::parse_target(
             destination.to_str().ok_or("invalid frontend destination")?,
         )?;
@@ -2427,7 +2441,7 @@ async fn run_with_args(
     if args.first().is_some_and(|arg| arg == "sessions") {
         return crate::session::manage(args.into_iter().skip(1).collect()).await;
     }
-    if !args.first().is_some_and(|arg| arg == "__session-run") {
+    if frontend_instance.is_none() && !args.first().is_some_and(|arg| arg == "__session-run") {
         match frontend::parse(&mut args)? {
             frontend::Launch::Desktop(target) => return frontend::desktop(target).await,
             frontend::Launch::Web(target) => {
@@ -2465,6 +2479,7 @@ async fn run_with_args(
     let Some(mut options) = parsed else {
         return Ok(());
     };
+    options.frontend_owned = frontend_instance.is_some();
     options
         .resource_limits
         .require_background(service.is_some() || options.daemon)?;
@@ -2538,7 +2553,7 @@ async fn run_with_args(
     }
     // Remember the launch entry before the first connection or later updates.
     reload::installed_program()?;
-    let mut ui = if service.is_some() {
+    let mut ui = if service.is_some() || options.frontend_owned {
         ui::Ui::default()
     } else {
         ui::Ui::load(options.ui_config.as_deref())?
@@ -2554,7 +2569,7 @@ async fn run_with_args(
     }
     ui.timestamps |= options.timestamps;
     ui.color &= !options.no_color;
-    if service.is_some() {
+    if service.is_some() || options.frontend_owned {
         ui.dashboard = false;
         ui.color = false;
         ui.log_format = render::LogFormat::Jsonl;
@@ -2606,6 +2621,8 @@ async fn run_with_args(
         .await
         {
             Ok(registration) => Some(registration),
+            // A graphical owner has no interactive fallback. Its private endpoint is required.
+            Err(error) if options.frontend_owned => return Err(error),
             Err(error) => {
                 render::status(
                     "overview",
@@ -3598,7 +3615,7 @@ async fn connect_inner(
         }
     };
     let mut metric_channel = None;
-    let chat_enabled = options.worker.is_none() && options.chat.input != chat_io::Input::None;
+    let chat_enabled = options.chat_enabled();
     let admission_server = match &transport {
         Transport::Account { server } => Some(*server),
         #[cfg(target_os = "linux")]
@@ -3702,7 +3719,7 @@ async fn connect_inner(
     if let Some(worker) = options.worker {
         crate::worker::prepare_display(worker);
     }
-    let display_session = if options.chat.input == chat_io::Input::Terminal {
+    let display_session = if options.terminal_frontend() {
         match transport.start_display(
             ui,
             &metadata.cwd,
@@ -3874,6 +3891,9 @@ async fn connect_inner(
     }
     let published: crate::Result<()> = if let Some(runner) = service {
         runner.record("connected", attempt, None, Some(&output), None)
+    } else if options.frontend_owned {
+        // The owner receives its connection through the private endpoint.
+        Ok(())
     } else if chat_enabled && options.chat.input != chat_io::Input::Terminal {
         // External input owns stdout. A local OAuth client still needs its
         // connection URL and one-time code on the operator's stderr.
@@ -3894,7 +3914,7 @@ async fn connect_inner(
     }
     #[cfg(target_os = "android")]
     magisk::signal_connected();
-    if service.is_none() && !options.worker_window_child {
+    if service.is_none() && !options.worker_window_child && !options.frontend_owned {
         let target =
             options
                 .username
@@ -3945,7 +3965,7 @@ async fn connect_inner(
             "Enter login_code on the MCP OAuth page. Ctrl-C disconnects and revokes access."
         },
     );
-    let local_input = match if options.chat.input == chat_io::Input::Terminal {
+    let local_input = match if options.terminal_frontend() {
         if options.worker.is_some() {
             input::Input::attach_monitor(backend.terminals())
         } else {
@@ -3997,6 +4017,7 @@ async fn connect_inner(
     let mut access_commands = access::connect(access_supported);
     let mut message_commands = messaging::connect(messaging_supported);
     let mut chat = if !chat_enabled
+        || options.frontend_owned
         || (options.chat.input == chat_io::Input::Terminal
             && options.chat.agent == chat_io::Agent::NextCaller)
     {
@@ -4506,6 +4527,18 @@ pub fn report_run_error(error: &(dyn std::error::Error + 'static)) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn frontend_owner_keeps_chat_and_never_consumes_terminal_input() {
+        let mut options = Options::parse_new([OsString::from("alice@relay.example")])
+            .unwrap()
+            .unwrap();
+        assert!(options.terminal_frontend());
+        assert!(options.chat_enabled());
+        options.frontend_owned = true;
+        assert!(!options.terminal_frontend());
+        assert!(options.chat_enabled());
+    }
+
     #[tokio::test]
     async fn managed_file_cleanup_does_not_overlap_and_shutdown_waits_for_the_scan() {
         use std::future::Future;

@@ -1,6 +1,6 @@
 import {
   MAX_FRAME_BYTES, MAX_OBSERVATION_MS, ProtocolError, byteLength,
-  counter, createRequest, identifier, object, validateObservation, validateRequest, validateResponse,
+  counter, createRequest, identifier, object, requestId, validateObservation, validateRequest, validateResponse,
 } from './protocol.mjs';
 
 export class GatewayError extends Error {
@@ -109,6 +109,8 @@ export async function readPairingToken(file, origin) {
 /** Same-origin HTTP transport. Requests only send the in-memory token in their authorization header. */
 export class Gateway {
   #token = '';
+  #ownedAttempt = null;
+  #ownedUncertain = false;
   constructor({ fetchImpl = globalThis.fetch.bind(globalThis), prefix = '/api/gui/v1' } = {}) {
     if (!/^\/[A-Za-z0-9_/-]+$/.test(prefix) || prefix.startsWith('//')) {
       throw new TypeError('网关前缀必须是同源路径。');
@@ -121,9 +123,14 @@ export class Gateway {
     if (typeof token !== 'string' || !token.trim() || token.length > 4096 || /[\r\n]/.test(token)) {
       throw new TypeError('请输入有效的配对令牌。');
     }
+    const changed = this.#token !== token.trim();
+    if (changed) {
+      this.#ownedAttempt = null; this.#ownedUncertain = false;
+    }
     this.#token = token.trim();
+    return changed;
   }
-  clearToken() { this.#token = ''; }
+  clearToken() { this.#token = ''; this.#ownedAttempt = null; this.#ownedUncertain = false; }
   get authenticated() { return this.#token.length > 0; }
 
   async request(path, { method = 'GET', body, signal, mutation = false, requestId = null, timeoutMs = 15_000 } = {}) {
@@ -168,6 +175,35 @@ export class Gateway {
     } finally {
       clearTimeout(timeout);
       signal?.removeEventListener('abort', cancel);
+    }
+  }
+
+  get pendingOwnedRequest() { return this.#ownedAttempt; }
+
+  async createOwnedSession({ destination, terms, privacy }) {
+    if (!this.authenticated) throw new GatewayError('请先配对本机网关。', { code: 'authentication_required' });
+    if (typeof destination !== 'string' || !destination || typeof terms !== 'boolean' || typeof privacy !== 'boolean') {
+      throw new TypeError('请填写会话地址并核对服务条款。');
+    }
+    const attempt = this.#ownedAttempt ??= Object.freeze({ request_id: requestId('owned'), destination, terms, privacy });
+    if (attempt.destination !== destination || attempt.terms !== terms || attempt.privacy !== privacy) {
+      throw new GatewayError('上次创建结果未确定，请使用原地址和条款重试。', { code: 'pending', requestId: attempt.request_id });
+    }
+    try {
+      const result = await this.request('/owned-sessions', { method: 'POST', body: attempt, mutation: true, requestId: attempt.request_id });
+      if (this.#ownedAttempt !== attempt) throw new GatewayError('本机网关配对已更换。', {code: 'pairing_changed'});
+      if (result?.request_id !== attempt.request_id || typeof result?.session !== 'string' || result.session.length !== 37
+          || !/^live:[0-9a-f]{32}$/.test(result.session)) {
+        throw new GatewayError('创建回执无法验证，结果未确定。', {code: 'unknown', effect: 'may_have_occurred', requestId: attempt.request_id});
+      }
+      this.#ownedAttempt = null; this.#ownedUncertain = false;
+      return result.session;
+    } catch (error) {
+      if (this.#ownedAttempt === attempt) {
+        if (error.effect === 'may_have_occurred') this.#ownedUncertain = true;
+        else if (!this.#ownedUncertain) this.#ownedAttempt = null;
+      }
+      throw error;
     }
   }
 

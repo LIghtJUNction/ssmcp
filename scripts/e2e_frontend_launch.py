@@ -93,10 +93,14 @@ def exercise(executable, directory):
             assert status == 200, (status, opened)
             instance = opened["session"].removeprefix("live:")
             assert len(instance) == 32
-            registration = directory / "sessions/live" / instance / "overview.json"
+            registrations = list((directory / "sessions/frontends").glob(f"*/live/{instance}/overview.json"))
+            assert len(registrations) == 1, "the browser must own exactly one matching private core"
+            registration = registrations[0]
+            assert registration.parents[2].stat().st_mode & 0o077 == 0
+            assert not (directory / "sessions/live" / instance).exists()
             pid = json.loads(registration.read_text())["pid"]
             assert request(url, "launch", {"destination": target}) == (200, opened)
-            assert len(list((directory / "sessions/live").glob("*/overview.json"))) == 1
+            assert not list((directory / "sessions/live").glob("*/overview.json"))
         finally:
             stop(process)
         wait_for(lambda: not Path(f"/proc/{pid}").exists())

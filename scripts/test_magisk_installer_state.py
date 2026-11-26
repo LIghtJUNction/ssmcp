@@ -93,6 +93,8 @@ printf '%s\\n' "$$" >> "$FIXTURE/starts"
 mkdir -p "$FIXTURE/proc/$$" || exit 1
 ln "$0" "$FIXTURE/proc/$$/exe" || exit 1
 printf '%s\\nhttp://127.0.0.1:%s/#%s\\n' "$$" "$3" "$FIXTURE_FRAGMENT" > "$2/staged.url"
+printf '%s\\nhttp://127.0.0.1:%s/setup#%s\\n' "$$" "$3" "$FIXTURE_SETUP_FRAGMENT" > "$2/staged-setup.url"
+mv "$2/staged-setup.url" "$2/setup.url"
 mv "$2/staged.url" "$2/console.url"
 """)
         executable(system_bin / "am", """
@@ -101,7 +103,7 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
 """)
         self.environment = {
             "ARCH": "arm64", "API": "36", "BOOTMODE": "true",
-            "FIXTURE": str(self.root), "FIXTURE_FRAGMENT": "a" * 64,
+            "FIXTURE": str(self.root), "FIXTURE_FRAGMENT": "a" * 64, "FIXTURE_SETUP_FRAGMENT": "b" * 64,
             "MODPATH": str(self.staged), "TMPDIR": str(self.scratch),
             "HOME": str(home), "PATH": str(installer_bin),
         }
@@ -139,7 +141,7 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
         self.assertEqual([url.path for url in urls], ["/setup", "/setup"])
         for url in urls:
             self.assertEqual((url.scheme, url.netloc, url.fragment),
-                             ("http", "127.0.0.1:42387", self.environment["FIXTURE_FRAGMENT"]))
+                             ("http", "127.0.0.1:42387", self.environment["FIXTURE_SETUP_FRAGMENT"]))
         self.assertEqual(len(self.starts.read_text().splitlines()), 1)
         self.assertEqual(self.keys_read.read_text(), "")
 
@@ -200,6 +202,15 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
             self.owner.write_text(f"{owner}\n{url}\n")
             with self.assertRaises(subprocess.CalledProcessError):
                 self.shell("-c", 'MODDIR=$1; . "$MODDIR/launch.sh"; read_console_url', "check", self.active)
+
+    def test_setup_requires_its_own_pairing_file(self):
+        self.install()
+        self.staged.rename(self.active)
+        setup = self.state / "setup.url"
+        setup.write_bytes(self.owner.read_bytes())
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.shell(self.active / "onboarding/open.sh")
+        self.assertEqual(len(self.opened.read_text().splitlines()), 1)
 
     def test_action_default_opens_workbench_or_setup(self):
         self.staged.rename(self.active)

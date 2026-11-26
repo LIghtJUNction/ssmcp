@@ -657,7 +657,12 @@ impl Desktop {
                 self.send(handle, Intent::Refresh);
             }
         }
-        canvas.text("本地会话", 24., 215., 13, true, MUTED);
+        let sessions_heading = if view.window_sessions {
+            "窗口会话"
+        } else {
+            "本地会话"
+        };
+        canvas.text(sessions_heading, 24., 215., 13, true, MUTED);
         if ui.input(
             canvas,
             102,
@@ -706,10 +711,14 @@ impl Desktop {
                     },
                 );
             }
-            let label = match session.connection.as_str() {
-                "connected" => "CLI 已连接",
-                "disconnected" => "CLI 未连接",
-                _ => "状态待确认",
+            let label = if view.window_sessions {
+                "由本窗口创建"
+            } else {
+                match session.connection.as_str() {
+                    "connected" => "已连接",
+                    "disconnected" => "未连接",
+                    _ => "状态待确认",
+                }
             };
             canvas.ellipsis(label, 32., y + 34., 168., 11, false, MUTED);
         }
@@ -757,33 +766,35 @@ impl Desktop {
             self.session_page += 1;
         }
         canvas.line((22., height - 137.), (206., height - 137.), 1., LINE);
-        ui.input(
-            canvas,
-            105,
-            Rect::new(22., height - 119., 184., 36.),
-            &mut self.named_session,
-            "输入已有会话名",
-            false,
-            true,
-        );
-        if ui.button(
-            canvas,
-            106,
-            Rect::new(22., height - 73., 184., 36.),
-            "观察连接",
-            ButtonStyle::Primary,
-            !self.named_session.trim().is_empty()
-                && self.named_session.len() <= 128
-                && self.pending.is_none(),
-        ) {
-            self.layouts.clear();
-            self.send(
-                handle,
-                Intent::Connect {
-                    target: Target::Named(self.named_session.trim().to_owned()),
-                    control: false,
-                },
+        if !view.window_sessions {
+            ui.input(
+                canvas,
+                105,
+                Rect::new(22., height - 119., 184., 36.),
+                &mut self.named_session,
+                "输入已有会话名",
+                false,
+                true,
             );
+            if ui.button(
+                canvas,
+                106,
+                Rect::new(22., height - 73., 184., 36.),
+                "观察连接",
+                ButtonStyle::Primary,
+                !self.named_session.trim().is_empty()
+                    && self.named_session.len() <= 128
+                    && self.pending.is_none(),
+            ) {
+                self.layouts.clear();
+                self.send(
+                    handle,
+                    Intent::Connect {
+                        target: Target::Named(self.named_session.trim().to_owned()),
+                        control: false,
+                    },
+                );
+            }
         }
         if ui.button(
             canvas,
@@ -936,7 +947,7 @@ impl Desktop {
         } else if !exact_target {
             "所选线程不在当前线程页中；请重新选择后发送。"
         } else if view.reloading {
-            "CLI 正在重新加载连接，暂不能发送。"
+            "会话正在重新连接，暂不能发送。"
         } else if !view.receipt_capacity() {
             "回执容量已满，请先核对未解决的操作结果。"
         } else if !view.command("chat.send") {
@@ -1443,7 +1454,7 @@ impl Desktop {
             } else if !terminal.running {
                 "终端进程已退出；当前保留最后观察到的画面。"
             } else if !terminal.dimensions_confirmed {
-                "默认本地画布为 24 × 80；CLI 状态未提供实际尺寸。可显式调整所有终端。"
+                "当前会话尚未提供终端尺寸。默认画布为 24 × 80，可调整所有终端。"
             } else {
                 "实时 VT 文本投影 · 尺寸来自最近的调整回执 · 不补造连接前输出"
             },
@@ -1804,7 +1815,7 @@ impl Desktop {
                     canvas,
                     body,
                     "这一页没有输入记录",
-                    "队列状态来自 CLI；本地入队并不等于模型已读取。",
+                    "队列显示当前会话的消息投递进度。",
                 );
             }
             self.scroll[4] = self.scroll[4].min((view.queue.len() as f32 * 122. - body.h).max(0.));
@@ -1847,7 +1858,7 @@ impl Desktop {
                     } else if item.retarget_required {
                         "目标需要重新选择；客户端不会自动转发。"
                     } else {
-                        "显示 CLI 的真实队列状态。"
+                        "显示当前会话的投递状态。"
                     },
                     body.x + 16.,
                     y + 78.,

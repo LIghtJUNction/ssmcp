@@ -434,6 +434,7 @@ async fn closing_a_long_lived_connection_keeps_its_open_retry_receipt() {
         host: Arc::new(FixtureHost {
             counts: counts.clone(),
         }),
+        creations: Mutex::new(Vec::new()),
         next_connection: AtomicU64::new(2),
         requests: Semaphore::new(32),
         data: Mutex::new(Data {
@@ -499,6 +500,7 @@ async fn idle_expiry_preserves_an_unconfirmed_release_and_its_retry_receipt() {
         host: Arc::new(FixtureHost {
             counts: counts.clone(),
         }),
+        creations: Mutex::new(Vec::new()),
         next_connection: AtomicU64::new(2),
         requests: Semaphore::new(32),
         data: Mutex::new(Data {
@@ -754,4 +756,144 @@ async fn public_assets_cannot_escape_their_directory_or_expose_pairing_json() {
     }
     drop(server);
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+struct CreationHost {
+    count: AtomicUsize,
+    dir: PathBuf,
+}
+impl Host for CreationHost {
+    fn receipt_directory(&self) -> Option<&std::path::Path> {
+        Some(&self.dir)
+    }
+    fn authorize_creation(&self, _: &str) -> Result<(), BridgeError> {
+        Ok(())
+    }
+    fn create(&self, _: String) -> CoreFuture<'_, String> {
+        Box::pin(async move {
+            let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
+            if n == 1 {
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+            Ok(format!("live:{n:032x}"))
+        })
+    }
+    fn sessions(&self) -> CoreFuture<'_, Vec<Value>> {
+        Box::pin(async { Ok(vec![]) })
+    }
+    fn connect(&self, _: String, _: bool) -> CoreFuture<'_, Arc<dyn Connection>> {
+        Box::pin(async { Err(unavailable("fixture has no native endpoint")) })
+    }
+}
+#[tokio::test]
+async fn creation_requires_pairing_and_consent_and_deduplicates_concurrent_and_old_requests() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let dir = std::env::temp_dir().join(crate::session::random_suffix().unwrap());
+    crate::platform::private_directory(&dir).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let host = Arc::new(CreationHost {
+        count: AtomicUsize::new(0),
+        dir: dir.clone(),
+    });
+    let app = router(
+        Config {
+            token: TOKEN.into(),
+            origin: url.clone(),
+            assets: None,
+        },
+        host.clone(),
+    )
+    .unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let client = http();
+    let uri = format!("{url}{PREFIX}/owned-sessions");
+    let create = |id: &str, d: &str| {
+        client
+            .post(&uri)
+            .bearer_auth(TOKEN)
+            .json(&json!({"request_id":id,"destination":d,"terms":false,"privacy":false}))
+            .send()
+    };
+    assert_eq!(
+        client
+            .post(&uri)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client
+            .post(&uri)
+            .bearer_auth(TOKEN)
+            .header("Origin", "https://wrong.test")
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        create("no-consent", "user@ssmcp.lmm.best")
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let (a, b) = tokio::join!(
+        create("same", "user@relay.test"),
+        create("same", "user@relay.test")
+    );
+    let a: Value = a.unwrap().error_for_status().unwrap().json().await.unwrap();
+    let b: Value = b.unwrap().error_for_status().unwrap().json().await.unwrap();
+    assert_eq!(a, b);
+    assert_eq!(
+        a,
+        json!({"request_id":"same","session":"live:00000000000000000000000000000001"})
+    );
+    assert_eq!(
+        create("same", "other@relay.test").await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+    // More than a complete in-memory receipt window can pass without replaying the old request.
+    for n in 0..MAX_OPEN_RECEIPTS + 2 {
+        let row: Value = create(&format!("req-{n}"), "user@relay.test")
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_ne!(a["session"], row["session"]);
+    }
+    let replay: Value = create("same", "user@relay.test")
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(replay, a);
+    assert_eq!(host.count.load(Ordering::SeqCst), MAX_OPEN_RECEIPTS + 3);
+    server.abort();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[tokio::test]
+async fn attach_gateway_rejects_owned_creation() {
+    let server = Server::new(None).await;
+    let r = server
+        .request(reqwest::Method::POST, "/owned-sessions")
+        .json(&json!({"request_id":"owned","destination":"user@relay.test"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
 }

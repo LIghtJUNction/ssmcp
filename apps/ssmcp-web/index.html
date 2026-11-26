@@ -12,7 +12,7 @@
 <body>
   <main id="launch-setup" class="launch-setup" hidden>
     <form id="launch-form">
-      <h1>首次连接</h1>
+      <h1 id="launch-title">创建独立会话</h1>
       <div class="launch-line">
         <code>ssmcp</code>
         <label><input id="launch-name" placeholder="用户名" required maxlength="32" autocomplete="off" autocapitalize="none" spellcheck="false"><span>↑ 用户名，首次注册可自定</span></label>
@@ -23,9 +23,11 @@
         <label><input id="launch-terms" type="checkbox" required> 我同意<a href="https://ssmcp.lmm.best/legal/terms" target="_blank" rel="noopener noreferrer">用户协议</a></label>
         <label><input id="launch-privacy" type="checkbox" required> 我同意<a href="https://ssmcp.lmm.best/legal/privacy" target="_blank" rel="noopener noreferrer">隐私政策</a></label>
       </div>
-      <div class="launch-actions"><button class="primary" type="submit" id="launch-connect">连接 →</button><button class="text-button" type="submit" id="launch-register">注册用户名</button><a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/deployment.md" target="_blank" rel="noopener noreferrer">自部署</a><a href="https://github.com/LIghtJUNction/ssmcp" target="_blank" rel="noopener noreferrer">GitHub</a></div>
+      <div class="launch-actions"><button class="primary" type="submit" id="launch-connect">创建会话</button><button class="text-button" type="submit" id="launch-register">注册用户名</button><a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/deployment.md" target="_blank" rel="noopener noreferrer">自部署</a><a href="https://github.com/LIghtJUNction/ssmcp" target="_blank" rel="noopener noreferrer">GitHub</a></div>
+      <div class="launch-actions"><button type="button" class="text-button" id="launch-pair">配对设置</button><button type="button" class="text-button" id="launch-back">浏览现有会话</button></div>
       <a class="source-link" id="registration-link" target="_blank" rel="noopener noreferrer" hidden>前往中继完成注册</a>
       <p class="form-error" id="launch-error" role="alert"></p>
+      <p class="tiny mono" id="launch-request-id" hidden></p>
     </form>
   </main>
   <div class="shell" id="workbench-shell">
@@ -67,7 +69,7 @@
         <div class="session-tabs" id="session-tabs" role="tablist" aria-label="已打开的会话"></div>
         <button class="icon-button" id="new-session" aria-label="新建会话" title="新建会话 · /new" hidden>+</button>
       </header>
-      <div class="work-title"><h1 id="session-title">ssmcp</h1><span id="session-cwd" class="tiny mono"></span></div>
+      <div class="work-title"><h1 id="session-title">ssmcp</h1><span id="session-cwd" class="tiny mono"></span><button class="text-button" type="button" id="take-control" hidden>申请控制此会话</button></div>
       <div class="connect-strip" id="connect-strip" hidden>
         <label>连接模式 <select id="connection-mode"><option value="observe">只读观察</option><option value="control">控制会话</option></select></label>
         <button class="primary" id="connect-button">连接会话 <span aria-hidden="true">↗</span></button>
@@ -76,7 +78,7 @@
       <div class="banner" id="error-banner" role="alert" hidden><span id="error-text"></span><button class="text-button" id="error-details">详细信息</button></div>
       <section class="panel conversation-panel" id="panel-conversation" role="tabpanel" aria-labelledby="tab-conversation">
         <div class="timeline-scroller" id="timeline-scroller" tabindex="0" aria-label="对话与事件时间线">
-          <div class="welcome" id="welcome"><button class="secondary" id="welcome-connect">连接本机网关</button></div>
+          <div class="welcome" id="welcome"><p id="module-pairing-help" hidden>在 Magisk 管理器中打开「模块」→「SSMCP」→「执行操作」，使用同一台设备的浏览器打开配对页面。</p><button class="secondary" id="welcome-connect">连接本机网关</button></div>
           <div class="timeline-empty" id="timeline-empty" hidden><span class="prompt" aria-hidden="true">›</span><span>新对话</span></div>
           <div class="timeline-paging" id="timeline-paging" hidden><button class="text-button" id="timeline-older">更早的记录</button><span id="timeline-page-label" class="tiny"></span><button class="text-button" id="timeline-newer">较新的记录</button></div>
           <div class="timeline" id="timeline"></div>
@@ -151,7 +153,7 @@
       <input id="pairing-token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false">
       <p class="tiny">配对文件由浏览器在本地读取。令牌仅保存在本页内存中。</p>
       <p class="form-error" id="auth-error" role="alert"></p>
-      <div class="form-actions"><button type="button" class="text-button" id="forget-token">清除认证</button><button type="submit" class="primary" id="authenticate">读取会话</button></div>
+      <div class="form-actions"><button type="button" class="text-button" id="forget-token">清除认证</button><button type="submit" class="primary" id="authenticate">使用此配对</button></div>
     </form>
   </dialog>
   <dialog id="details-dialog" class="details-dialog"><div class="dialog-heading"><h2 id="details-title">详细信息</h2><button type="button" class="icon-button" data-close="details-dialog" aria-label="关闭">×</button></div><div id="details-content"></div></dialog>

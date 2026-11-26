@@ -161,7 +161,7 @@ impl Sessions {
 
 struct Console {
     dir: PathBuf,
-    token: String,
+    device_token: String,
     host: String,
     sessions: tokio::sync::Mutex<Sessions>,
 }
@@ -196,6 +196,35 @@ fn saved_target(dir: &Path) -> Result<Option<String>> {
     Ok(Some(target))
 }
 
+/// Loading the UI never promotes an rc edit to consent. Only the native setup
+/// and boot paths write the original target acknowledgement.
+fn confirmed_web_destination(dir: &Path) -> Result<Option<String>> {
+    let read = |name: &str| -> std::io::Result<Option<String>> {
+        match std::fs::read_to_string(dir.join(name)) {
+            Ok(value) => Ok(Some(value)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    };
+    let (Some(rc), Some(consent)) = (read("ssmcp.rc")?, read(CONSENT)?) else {
+        return Ok(None);
+    };
+    let Ok((written, destination)) = rc_target(&rc) else {
+        return Ok(None);
+    };
+    Ok((written == consent).then_some(destination))
+}
+
+fn web_owner_destination(dir: &Path) -> Result<Option<String>> {
+    // This host would launch the new process with its own credentials. The
+    // module daemon itself has root. It can serve the UI but cannot own a
+    // browser session while running with that identity.
+    if unsafe { libc::getuid() == 0 || libc::geteuid() == 0 } {
+        return Err("The module has no unprivileged session host. Open the SSMCP Android app to create an independent session.".into());
+    }
+    confirmed_web_destination(dir)
+}
+
 fn save(dir: &Path, name: &str, server: &str) -> Result<String> {
     let target = allow_principal(name, server)?;
     for (file, contents) in [
@@ -221,19 +250,19 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn authorized(state: &Console, headers: &HeaderMap) -> bool {
+fn authorized(host: &str, secret: &str, headers: &HeaderMap) -> bool {
     headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
-        == Some(&state.host)
+        == Some(host)
         && headers
             .get(header::ORIGIN)
-            .is_none_or(|value| value.as_bytes() == format!("http://{}", state.host).as_bytes())
+            .is_none_or(|value| value.as_bytes() == format!("http://{host}").as_bytes())
         && headers
             .get(header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "))
-            .is_some_and(|token| bool::from(token.as_bytes().ct_eq(state.token.as_bytes())))
+            .is_some_and(|token| bool::from(token.as_bytes().ct_eq(secret.as_bytes())))
 }
 
 fn failure(status: StatusCode, message: impl ToString) -> Response {
@@ -253,7 +282,7 @@ async fn configure(
     headers: HeaderMap,
     Json(input): Json<Setup>,
 ) -> Response {
-    if !authorized(&state, &headers) {
+    if !authorized(&state.host, &state.device_token, &headers) {
         return failure(
             StatusCode::UNAUTHORIZED,
             "Open the console from the Magisk module action.",
@@ -322,7 +351,7 @@ enum Action {
 
 /// Select only the boot process started by this module, even when other tabs exist.
 async fn boot_session(State(state): State<Arc<Console>>, headers: HeaderMap) -> Response {
-    if !authorized(&state, &headers) {
+    if !authorized(&state.host, &state.device_token, &headers) {
         return failure(StatusCode::UNAUTHORIZED, "Open the module WebUI to pair.");
     }
     let pid = state
@@ -354,7 +383,7 @@ async fn terminal(
     headers: HeaderMap,
     Json(action): Json<Action>,
 ) -> Response {
-    if !authorized(&state, &headers) {
+    if !authorized(&state.host, &state.device_token, &headers) {
         return failure(
             StatusCode::UNAUTHORIZED,
             "Open the console from the Magisk module action.",
@@ -459,6 +488,22 @@ fn javascript(source: &'static str) -> Response {
         .into_response()
 }
 
+fn pairing_token() -> Result<String> {
+    let mut bytes = [0; 32];
+    getrandom::fill(&mut bytes)?;
+    Ok(crate::hex::encode(bytes))
+}
+
+fn publish_pairing(dir: &Path, name: &str, url: &str) -> Result<()> {
+    let staged = dir.join(format!(".{name}.new"));
+    write_private(
+        &staged,
+        format!("{}\n{url}\n", std::process::id()).as_bytes(),
+    )?;
+    std::fs::rename(staged, dir.join(name))?;
+    Ok(())
+}
+
 pub(super) async fn run(args: &[OsString]) -> Result<()> {
     let [dir, port] = args else {
         return Err("Expected state directory and port".into());
@@ -477,29 +522,34 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
             let _ = std::fs::remove_file(entry.path());
         }
     }
-    let mut bytes = [0; 32];
-    getrandom::fill(&mut bytes)?;
-    let token = crate::hex::encode(&bytes);
-    let gui = crate::session::gui::foreground_workbench(
-        dir.join("sessions"),
+    // The module's CLI and browser have different registries and credentials.
+    // A paired workbench cannot authorize the device setup or terminal routes.
+    let web_token = pairing_token()?;
+    let device_token = pairing_token()?;
+    let web_workspace = dir.join("web-workspace");
+    std::fs::create_dir_all(&web_workspace)?;
+    let configuration = dir.clone();
+    let gui = crate::session::gui::foreground_owned_workbench(
+        dir.join("web-sessions"),
+        web_workspace,
         format!("http://{host}"),
-        token.clone(),
+        web_token.clone(),
+        move || web_owner_destination(&configuration),
     )?;
     let mut sessions = Sessions::default();
     if let Some(target) = saved_target(&dir)? {
         sessions.open(&target, &dir)?;
         sessions.target = Some(target);
     }
-    let path = dir.join("console.url");
-    let staged = dir.join(".console.url.new");
-    write_private(
-        &staged,
-        format!("{}\nhttp://{host}/#{token}\n", std::process::id()).as_bytes(),
+    publish_pairing(
+        &dir,
+        "setup.url",
+        &format!("http://{host}/setup#{device_token}"),
     )?;
-    std::fs::rename(staged, path)?;
+    publish_pairing(&dir, "console.url", &format!("http://{host}/#{web_token}"))?;
     let state = Arc::new(Console {
         dir,
-        token,
+        device_token,
         host,
         sessions: tokio::sync::Mutex::new(sessions),
     });
@@ -539,6 +589,81 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
 #[cfg(test)]
 mod rc_tests {
     use super::rc_target;
+
+    #[test]
+    fn module_action_and_device_setup_have_separate_private_credentials() {
+        use super::{authorized, pairing_token, publish_pairing};
+        use axum::http::{HeaderMap, header};
+        use std::os::unix::fs::PermissionsExt;
+
+        let web = pairing_token().unwrap();
+        let device = pairing_token().unwrap();
+        assert_ne!(web, device);
+        let host = "127.0.0.1:42387";
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, host.parse().unwrap());
+        headers.insert(header::ORIGIN, format!("http://{host}").parse().unwrap());
+        assert!(!authorized(host, &device, &headers));
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {web}").parse().unwrap(),
+        );
+        assert!(!authorized(host, &device, &headers));
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {device}").parse().unwrap(),
+        );
+        assert!(authorized(host, &device, &headers));
+        headers.insert(header::ORIGIN, "https://other.example".parse().unwrap());
+        assert!(!authorized(host, &device, &headers));
+        headers.remove(header::ORIGIN);
+        headers.insert(header::HOST, "other.example".parse().unwrap());
+        assert!(!authorized(host, &device, &headers));
+
+        let dir =
+            std::env::temp_dir().join(format!("ssmcp-magisk-pair-{}", pairing_token().unwrap()));
+        std::fs::create_dir(&dir).unwrap();
+        for (name, url) in [
+            ("console.url", format!("http://{host}/#{web}")),
+            ("setup.url", format!("http://{host}/setup#{device}")),
+        ] {
+            publish_pairing(&dir, name, &url).unwrap();
+            let file = dir.join(name);
+            let metadata = std::fs::metadata(&file).unwrap();
+            assert_eq!(metadata.permissions().mode() & 0o077, 0);
+            let contents = std::fs::read_to_string(&file).unwrap();
+            assert!(contents == format!("{}\n{url}\n", std::process::id()));
+            std::fs::remove_file(file).unwrap();
+        }
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn workbench_configuration_never_creates_or_replaces_native_consent() {
+        use super::{CONSENT, confirmed_web_destination, pairing_token};
+        let dir =
+            std::env::temp_dir().join(format!("ssmcp-magisk-consent-{}", pairing_token().unwrap()));
+        std::fs::create_dir(&dir).unwrap();
+        let rc = dir.join("ssmcp.rc");
+        let consent = dir.join(CONSENT);
+        std::fs::write(&rc, "ssmcp Alice@https://relay.example\n").unwrap();
+        assert!(confirmed_web_destination(&dir).unwrap().is_none());
+        assert!(!consent.exists());
+        std::fs::write(&consent, "Alice@https://relay.example").unwrap();
+        assert_eq!(
+            confirmed_web_destination(&dir).unwrap().as_deref(),
+            Some("alice@relay.example")
+        );
+        std::fs::write(&rc, "ssmcp Bob@https://relay.example\n").unwrap();
+        assert!(confirmed_web_destination(&dir).unwrap().is_none());
+        assert_eq!(
+            std::fs::read_to_string(&consent).unwrap(),
+            "Alice@https://relay.example"
+        );
+        std::fs::remove_file(rc).unwrap();
+        std::fs::remove_file(consent).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
 
     #[test]
     fn manual_rc_preserves_the_owner_spelling_and_normalizes_the_connection() {

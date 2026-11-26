@@ -1,7 +1,9 @@
 //! Explicit CLI-owned gateway for web, desktop and mobile frontends.
 mod gateway;
+mod owned;
 
 use gateway::{Connection, CoreFuture, Host};
+use owned::{OwnedHost, Policy};
 use serde_json::{Value, json};
 use std::{
     ffi::OsString,
@@ -22,44 +24,14 @@ use zbridge::{BridgeError, ErrorCode, Request, Response};
 use super::attach::RemoteFrontend;
 
 const HELP: &str = "ssmcp gui open
-ssmcp gui serve [--listen 127.0.0.1:PORT] [--assets DIRECTORY]\n                [--pairing-file PRIVATE_FILE] [--public-origin https://HOST]\n\nOpen starts the local workbench in your browser or reopens the running one.\nServe hosts the built-in web app; --assets selects a replacement directory.\nConnects frontends to existing saved CLI sessions. It does not start a model or\nsession. The listener is loopback only. For mobile access, explicitly configure\nan HTTPS reverse proxy preserving the public Host and Origin. Pairing credentials\nare written to a private local JSON file and are never returned by HTTP.\n";
+ssmcp gui serve [--listen 127.0.0.1:PORT] [--assets DIRECTORY] [--session-mode attach|owned]\n                [--pairing-file PRIVATE_FILE] [--public-origin https://HOST]\n\nOpen starts the local workbench in your browser or reopens the running one.\nServe hosts the built-in web app; --assets selects a replacement directory.\nAttach mode connects to existing sessions. Owned mode creates private sessions\non request from a paired client. The listener is loopback only. For mobile access, explicitly configure\nan HTTPS reverse proxy preserving the public Host and Origin. Pairing credentials\nare written to a private local JSON file and are never returned by HTTP.\n";
 
 #[derive(Default)]
 struct LocalHost {
     foreground_root: Option<PathBuf>,
-    // Only a deliberately opened, paired local launcher may create its first core.
-    launcher: Option<tokio::sync::Mutex<Option<(String, super::frontend::OwnedSession)>>>,
 }
 
 impl Host for LocalHost {
-    fn launch(&self, destination: String) -> CoreFuture<'_, String> {
-        Box::pin(async move {
-            let state = self.launcher.as_ref().ok_or_else(|| {
-                BridgeError::new(
-                    ErrorCode::Denied,
-                    "this gateway only attaches to existing sessions",
-                )
-            })?;
-            let mut launched = state.lock().await;
-            if let Some((existing, core)) = launched.as_ref() {
-                if existing == &destination {
-                    return Ok(core.target().to_owned());
-                }
-                return Err(BridgeError::invalid("this launcher already owns a session"));
-            }
-            let core = super::frontend::OwnedSession::launch(
-                &std::env::current_exe().map_err(|e| native(e.into()))?,
-                &destination,
-                &std::env::current_dir().map_err(|e| native(e.into()))?,
-            )
-            .await
-            .map_err(native)?;
-            let target = core.target().to_owned();
-            *launched = Some((destination, core));
-            Ok(target)
-        })
-    }
-
     fn sessions(&self) -> CoreFuture<'_, Vec<Value>> {
         Box::pin(async {
             match &self.foreground_root {
@@ -111,10 +83,45 @@ pub(crate) fn foreground_workbench(
         },
         Arc::new(LocalHost {
             foreground_root: Some(root),
-            launcher: None,
         }),
         true,
     )?)
+}
+/// Build a paired device workbench under the active native account consent.
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn foreground_owned_workbench(
+    root: PathBuf,
+    workspace: PathBuf,
+    origin: String,
+    token: String,
+    confirmed_destination: impl Fn() -> crate::Result<Option<String>> + Send + Sync + 'static,
+) -> crate::Result<axum::Router> {
+    super::create_private_tree(&root)?;
+    super::verify_directory(&root)?;
+    if root.canonicalize()? != super::session_root(true)?.canonicalize()? {
+        return Err("module gateway must use its native session directory".into());
+    }
+    let cwd = workspace.canonicalize()?;
+    if !cwd.is_dir() {
+        return Err("module workspace must be a directory".into());
+    }
+    let host = Arc::new(OwnedHost::new(
+        cwd,
+        &root,
+        Policy(Some(Arc::new(confirmed_destination))),
+        false,
+    )?);
+    let app = gateway::routes(
+        gateway::Config {
+            token,
+            origin,
+            assets: None,
+        },
+        host.clone(),
+        true,
+    )?;
+    host.monitor_consent();
+    Ok(app)
 }
 fn native(error: crate::Error) -> BridgeError {
     BridgeError::new(ErrorCode::Unavailable, error.to_string())
@@ -228,6 +235,7 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
     let mut assets = None;
     let mut pairing = None;
     let mut public_origin = None;
+    let mut owned = false;
     let (options, remainder) = arguments[1..].as_chunks::<2>();
     for pair in options {
         match pair[0].as_str() {
@@ -236,6 +244,11 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
                     .parse()
                     .map_err(|_| "--listen requires a loopback IP:port")?
             }
+            "--session-mode" => match pair[1].as_str() {
+                "owned" => owned = true,
+                "attach" => owned = false,
+                _ => return Err("--session-mode must be attach or owned".into()),
+            },
             "--assets" => assets = Some(PathBuf::from(&pair[1]).canonicalize()?),
             "--pairing-file" => pairing = Some(PathBuf::from(&pair[1])),
             "--public-origin" => {
@@ -257,23 +270,34 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
     let directory = super::state_path()?.join("gui");
     super::create_private_tree(&directory)?;
     super::verify_directory(&directory)?;
-    let pairing = pairing.unwrap_or_else(|| directory.join("pairing.json"));
-    let lock = super::lease_file(&directory.join("gateway.lock"))?;
-    if let Err(error) = crate::platform::lock_file(&lock, true) {
-        if open_browser && error.kind() == std::io::ErrorKind::WouldBlock {
-            let current: Value = super::read_json(&pairing)?;
-            let origin = current["url"].as_str().ok_or("missing gateway URL")?;
-            let url = reqwest::Url::parse(origin)?;
-            if current["schema"] != "ssmcp-gui-pairing-v1"
-                || !matches!(url.scheme(), "http" | "https")
-                || url.as_str() != format!("{}/", url.origin().ascii_serialization())
-            {
-                return Err("invalid gateway pairing file".into());
+    let pairing = pairing.unwrap_or_else(|| {
+        directory.join(if owned {
+            "owner-pairing.json"
+        } else {
+            "pairing.json"
+        })
+    });
+    let _attach_lock = if owned {
+        None
+    } else {
+        let lock = super::lease_file(&directory.join("gateway.lock"))?;
+        if let Err(error) = crate::platform::lock_file(&lock, true) {
+            if open_browser && error.kind() == std::io::ErrorKind::WouldBlock {
+                let current: Value = super::read_json(&pairing)?;
+                let origin = current["url"].as_str().ok_or("missing gateway URL")?;
+                let url = reqwest::Url::parse(origin)?;
+                if current["schema"] != "ssmcp-gui-pairing-v1"
+                    || !matches!(url.scheme(), "http" | "https")
+                    || url.as_str() != format!("{}/", url.origin().ascii_serialization())
+                {
+                    return Err("invalid gateway pairing file".into());
+                }
+                return crate::client::account::open_browser(&url).await;
             }
-            return crate::client::account::open_browser(&url).await;
+            return Err(error.into());
         }
-        return Err(error.into());
-    }
+        Some(lock)
+    };
     if !pairing.is_absolute() {
         return Err("--pairing-file must be an absolute path in a private directory".into());
     }
@@ -284,6 +308,17 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
     {
         return Err("pairing credentials must stay outside the public assets directory".into());
     }
+    if let Some(assets) = &assets {
+        let owner_sessions = directory.canonicalize()?.join("owners");
+        if assets.starts_with(&owner_sessions) || owner_sessions.starts_with(assets) {
+            return Err("gateway assets may not expose native owner state".into());
+        }
+    }
+    let mut name = OsString::from(".ssmcp-pairing-");
+    name.push(pairing.file_name().ok_or("pairing file has no name")?);
+    name.push(".lock");
+    let _pairing_lock = super::lease_file(&parent.join(name))?;
+    crate::platform::lock_file(&_pairing_lock, true)?;
     if pairing.try_exists()? {
         let previous: Value = super::read_json(&pairing)?;
         if previous["schema"] != "ssmcp-gui-pairing-v1" {
@@ -296,13 +331,23 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
     let mut secret = [0_u8; 32];
     crate::platform::random_bytes(&mut secret)?;
     let token = crate::hex::encode(secret);
+    let host: Arc<dyn Host> = if owned {
+        Arc::new(OwnedHost::new(
+            std::env::current_dir()?,
+            &super::session_root(true)?,
+            Policy::default(),
+            false,
+        )?)
+    } else {
+        Arc::new(LocalHost::default())
+    };
     let app = gateway::router(
         gateway::Config {
             token: token.clone(),
             origin: origin.clone(),
             assets: assets.clone(),
         },
-        Arc::new(LocalHost::default()),
+        host,
     )?;
     super::write_json(
         &pairing,
@@ -332,10 +377,12 @@ pub(crate) async fn launch(destination: Option<&str>) -> crate::Result<()> {
     let mut bytes = [0u8; 32];
     crate::platform::random_bytes(&mut bytes)?;
     let token = crate::hex::encode(bytes);
-    let host = Arc::new(LocalHost {
-        foreground_root: None,
-        launcher: Some(tokio::sync::Mutex::new(None)),
-    });
+    let host = Arc::new(OwnedHost::new(
+        std::env::current_dir()?,
+        &super::session_root(true)?,
+        Policy::default(),
+        true,
+    )?);
     let mut launch_url = reqwest::Url::parse(&origin)?;
     let destination = match destination {
         Some(target) => Some(target.to_owned()),

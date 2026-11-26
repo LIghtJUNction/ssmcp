@@ -1,4 +1,4 @@
-import { Gateway, launchOptions, readPairingToken, registerAccount, takeLaunchPairing } from './src/gateway.mjs';
+import { Gateway, readPairingToken, registerAccount, takeLaunchPairing } from './src/gateway.mjs';
 import { BridgeClient } from './src/client.mjs';
 import { byteLength } from './src/protocol.mjs';
 import { renderWaitContent } from './src/wait-view.mjs';
@@ -7,7 +7,6 @@ import { plain, shortId, duration, redact, mayClearDraft, quoteReply } from './s
 const $ = id => document.getElementById(id);
 const gateway = new Gateway();
 const modulePage = document.documentElement.hasAttribute('data-ssmcp-magisk');
-const launch = launchOptions(location);
 {
   const pairing = takeLaunchPairing(location, history, modulePage);
   if (pairing) gateway.setToken(pairing);
@@ -63,7 +62,10 @@ function saveDrafts() {
 function restoreDrafts(session) {
   const draft = drafts.get(session);
   $('chat-text').value = draft?.chat ?? ''; $('terminal-input').value = draft?.terminal ?? '';
-  if (draft?.target && [...$('chat-target').options].some(option => option.value === draft.target)) $('chat-target').value = draft.target;
+}
+function restoreRecipient(session) {
+  const target = drafts.get(session)?.target;
+  if (target && [...$('chat-target').options].some(option => option.value === target)) $('chat-target').value = target;
 }
 
 async function listSessions(offset = 0) {
@@ -97,14 +99,17 @@ async function enterSession(info, readOnly) {
   if (client.connection) { saveDrafts(); await client.disconnect(); }
   localError = null; selectedSession = info; timelineOffset = 0;
   selectedTerminal = null; selectedThread = 'process'; lastRenderedRows = []; workerDraftEdited = false;
+  restoreDrafts(target);
   await client.connect(target, readOnly);
   opened.set(target, { ...info, readOnly });
-  restoreDrafts(target); setPanel('conversation'); renderAll();
+  restoreRecipient(target); setPanel('conversation'); renderAll();
   $('session-tabs').querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   void client.startObservation();
 }
 function renderSessions() {
-  const nodes = sessions.map(session => {
+  const listed = new Set(sessions.map(sessionTarget));
+  const rows = [...sessions, ...[...opened.values()].filter(item => !listed.has(sessionTarget(item)))];
+  const nodes = rows.map(session => {
     const target = sessionTarget(session);
     const button = element('button', 'session-item'); button.type = 'button';
     button.disabled = ['connecting', 'disconnecting'].includes(client.status) || busy.has('session-select');
@@ -137,11 +142,14 @@ function renderStatus() {
   $('auth-dot').classList.toggle('good', gateway.authenticated);
   setText('auth-button', gateway.authenticated ? '认证设置' : '连接网关');
   setText('connection-label', connected ? `SSMCP / ${client.capabilities?.mode === 'control' ? 'CONTROL' : 'OBSERVE'}` : 'WORKSPACE');
-  const info = sessions.find(item => sessionTarget(item) === client.connection?.session) ?? selectedSession;
+  const info = opened.get(client.connection?.session) ?? selectedSession;
   setText('session-title', info?.name ?? 'ssmcp');
   $('session-title').classList.toggle('sr-only', connected);
   setText('session-cwd', client.states.get('runtime')?.cwd ?? info?.cwd ?? '');
-  show('new-session', client.hasCommand('session.new'));
+  show('new-session', gateway.authenticated);
+  show('take-control', client.connection?.read_only === true);
+  $('take-control').disabled = client.status !== 'connected' || busy.has('connect') || busy.has('session-select') || busy.has('disconnect');
+  show('module-pairing-help', modulePage && !gateway.authenticated);
   $('new-session').disabled = busy.has('session.new') || busy.has('session-select');
   for (const button of $('session-tabs').children) button.disabled = busy.has('session.new') || busy.has('session-select');
   show('connect-strip', Boolean(selectedSession) && !connected);
@@ -190,7 +198,7 @@ function renderComposer() {
   const validTarget = $('chat-target').selectedOptions[0]?.disabled !== true;
   const input = $('chat-text').value;
   const command = sessionCommand(input);
-  const canSend = command ? client.hasCommand(command.name) : chat && threads?.can_send === true && validTarget;
+  const canSend = command ? (command.name === 'session.new' ? gateway.authenticated : client.hasCommand(command.name)) : chat && threads?.can_send === true && validTarget;
   $('chat-send').disabled = !canSend || busy.has('chat.send') || busy.has('session.new') || busy.has('session.cd') || busy.has('session-select') || !input.trim() || byteLength(input) > 16_384;
   const note = !client.connection ? '' : !supported ? '只读会话' : !validTarget ? '请选择接收方。'
     : byteLength(input) > 16_384 ? '输入超过 16 KiB。'
@@ -437,7 +445,7 @@ async function send(command, args, textarea) {
   renderStatus(); renderComposer(); return record;
 }
 
-$('auth-button').addEventListener('click', authDialog); $('welcome-connect').addEventListener('click', authDialog);
+$('auth-button').addEventListener('click', authDialog); $('welcome-connect').addEventListener('click', () => gateway.authenticated ? showLaunch() : authDialog());
 $('pairing-file').addEventListener('change', () => { if ($('pairing-file').files.length) $('pairing-token').value = ''; });
 $('pairing-token').addEventListener('input', () => { if ($('pairing-token').value) $('pairing-file').value = ''; });
 $('auth-form').addEventListener('submit', event => {
@@ -447,20 +455,18 @@ $('auth-form').addEventListener('submit', event => {
       const token = file ? await readPairingToken(file, location.origin) : $('pairing-token').value.trim();
       if (!token) throw new Error('请选择配对文件或输入令牌。');
       if (!$('auth-dialog').open) return;
-      gateway.setToken(token);
-      $('auth-form').reset();
-      try { await listSessions(); }
-      catch (error) {
-        gateway.clearToken(); opened.clear(); drafts.clear(); sessions = []; selectedSession = null; sessionsNext = null; renderSessions(); throw error;
+      if (gateway.setToken(token)) {
+        opened.clear(); drafts.clear(); sessions = []; selectedSession = null; sessionOffset = 0; sessionsNext = null;
       }
-      localError = null; $('auth-dialog').close();
+      $('auth-form').reset();
+      localError = null; $('auth-dialog').close(); renderAll(); showLaunch();
     } catch (error) { setText('auth-error', error.message); }
   });
 });
 $('auth-dialog').addEventListener('close', () => { $('auth-form').reset(); });
 $('forget-token').addEventListener('click', () => run('forget', async () => {
   try { if (client.connection) { saveDrafts(); await client.disconnect(); } }
-  finally { gateway.clearToken(); opened.clear(); drafts.clear(); sessions = []; selectedSession = null; sessionOffset = 0; sessionsNext = null; $('auth-dialog').close(); renderAll(); }
+  finally { gateway.clearToken(); show('launch-setup', false); show('workbench-shell', true); opened.clear(); drafts.clear(); sessions = []; selectedSession = null; sessionOffset = 0; sessionsNext = null; $('auth-dialog').close(); renderAll(); }
 }));
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => $(button.dataset.close).close()));
 $('refresh-sessions').addEventListener('click', () => run('sessions', () => listSessions(sessionOffset)));
@@ -468,6 +474,14 @@ $('sessions-prev').addEventListener('click', () => run('sessions', () => listSes
 $('sessions-next').addEventListener('click', () => run('sessions', () => listSessions(sessionsNext)));
 $('connect-button').addEventListener('click', () => run('connect', async () => {
   await enterSession(selectedSession, $('connection-mode').value === 'observe');
+}));
+$('take-control').addEventListener('click', () => run('connect', async () => {
+  const info = opened.get(client.connection?.session);
+  if (!info || !client.connection.read_only) return;
+  saveDrafts();
+  await client.disconnect();
+  selectedSession = info; $('connection-mode').value = 'control';
+  await enterSession(info, false);
 }));
 $('disconnect-button').addEventListener('click', () => run('disconnect', async () => { saveDrafts(); await client.disconnect(); renderAll(); }));
 $('observe-button').addEventListener('click', () => run('observe', async () => {
@@ -552,29 +566,19 @@ function sessionCommand(text) {
   return match ? { name: 'session.' + match[1], argument: (match[2] ?? '').trim() } : null;
 }
 async function applySessionCommand(command, textarea) {
-  if (command.name === 'session.new' && command.argument) throw new Error('用法：/new');
-  if (command.name === 'session.cd' && !command.argument) throw new Error('用法：/cd 路径');
-  const context = client.context();
-  const args = command.name === 'session.cd' ? { path: command.argument } : {};
-  const record = await send(command.name, args, textarea);
-  if (record.status !== 'confirmed' || !client.current(context)) return;
-  if (command.name === 'session.cd') {
-    const cwd = record.receipt?.cwd;
-    if (typeof cwd !== 'string' || !cwd) throw new Error('目录回执缺少路径。');
-    selectedSession.cwd = cwd;
-    setText('session-cwd', cwd);
-    return;
+  if (command.name === 'session.new') {
+    if (command.argument) throw new Error('用法：/new');
+    showLaunch(); return;
   }
-  const target = record.receipt?.session;
-  if (typeof target !== 'string' || !/^live:[0-9a-f]{32}$/.test(target)) throw new Error('新会话回执缺少有效目标。');
-  // Creation was acknowledged. Keep this target reachable if the subsequent attach fails.
-  const info = { name: record.receipt.name || target, target, cwd: record.receipt.cwd };
-  opened.set(target, { ...info, readOnly: false });
-  renderSessionTabs();
-  await listSessions();
-  await enterSession(sessions.find(item => sessionTarget(item) === target) ?? info, false);
+  if (!command.argument) throw new Error('用法：/cd 路径');
+  const context = client.context();
+  const record = await send(command.name, { path: command.argument }, textarea);
+  if (record.status !== 'confirmed' || !client.current(context)) return;
+  const cwd = record.receipt?.cwd;
+  if (typeof cwd !== 'string' || !cwd) throw new Error('目录回执缺少路径。');
+  selectedSession.cwd = cwd; setText('session-cwd', cwd);
 }
-$('new-session').addEventListener('click', () => run('session.new', () => applySessionCommand({ name: 'session.new', argument: '' })));
+$('new-session').addEventListener('click', showLaunch);
 $('chat-form').addEventListener('submit', event => {
   event.preventDefault(); if ($('chat-send').disabled || composing.has($('chat-text'))) return;
   const command = sessionCommand($('chat-text').value);
@@ -681,54 +685,64 @@ $('launch-relay').addEventListener('input', () => {
   show('launch-hosted', hosted);
   $('launch-terms').required = hosted; $('launch-privacy').required = hosted;
 });
+function showLaunch() {
+  if (!gateway.authenticated) { authDialog(); return; }
+  show('launch-setup', true); show('workbench-shell', false);
+  show('launch-back', !modulePage || opened.size > 0);
+  setText('launch-back', opened.size ? '返回工作台' : '浏览现有会话');
+  setText('launch-error', gateway.pendingOwnedRequest ? '上次创建结果未确定，请核对原请求。' : '');
+  updateLaunchControls(false);
+  if (!matchMedia('(pointer: coarse)').matches) $('launch-name').focus();
+}
+function updateLaunchControls(sending) {
+  const pending = Boolean(gateway.pendingOwnedRequest);
+  for (const id of ['launch-name', 'launch-relay', 'launch-terms', 'launch-privacy']) $(id).disabled = sending || pending;
+  $('launch-connect').disabled = sending;
+  $('launch-register').disabled = sending || pending;
+  $('launch-pair').disabled = sending || Boolean(client.connection);
+  $('launch-back').disabled = sending || (pending && !opened.size);
+  show('launch-request-id', pending);
+  setText('launch-request-id', pending ? '请求 ID ' + gateway.pendingOwnedRequest.request_id : '');
+  setText('launch-connect', pending ? '核对上次创建' : '创建会话');
+}
+$('launch-pair').addEventListener('click', authDialog);
+$('launch-back').addEventListener('click', async () => {
+  if ($('launch-back').disabled || !gateway.authenticated || (modulePage && !opened.size)) return;
+  updateLaunchControls(true);
+  try {
+    if (!opened.size) await listSessions();
+    show('launch-setup', false); show('workbench-shell', true); renderAll();
+  } catch (error) { setText('launch-error', error.message); }
+  finally { updateLaunchControls(false); }
+});
 $('launch-form').addEventListener('submit', async event => {
   event.preventDefault();
-  if ($('launch-connect').disabled) return;
-  const destination = $('launch-name').value.trim() + '@' + $('launch-relay').value.trim();
-  $('launch-register').disabled = $('launch-connect').disabled = true; setText('launch-error', '');
+  const registering = event.submitter?.id === 'launch-register';
+  if (!gateway.authenticated || (registering ? $('launch-register').disabled : $('launch-connect').disabled)) return;
+  const args = { destination: $('launch-name').value.trim() + '@' + $('launch-relay').value.trim(),
+    terms: $('launch-terms').checked, privacy: $('launch-privacy').checked };
+  updateLaunchControls(true); setText('launch-error', '');
   try {
-    const args = {destination, terms: $('launch-terms').checked, privacy: $('launch-privacy').checked};
-    if (event.submitter?.id === 'launch-register') {
+    if (registering) {
       await registerAccount(body => gateway.request('/register', {method: 'POST', body, mutation: true}), args, $('registration-link'));
-      setText('launch-error', '完成注册后，回到此页连接。'); return;
+      setText('launch-error', '完成注册后，回到此页。'); return;
     }
-    const result = await gateway.request('/launch', {method: 'POST', body: args, mutation: true});
-    if (!/^live:[0-9a-f]{32}$/.test(result?.session ?? '')) throw new Error('启动回执缺少有效会话。');
+    const target = await gateway.createOwnedSession(args);
+    const info = { name: args.destination, target, readOnly: true };
+    opened.set(target, info);
     show('launch-setup', false); show('workbench-shell', true);
-    await listSessions();
-    const info = sessions.find(item => sessionTarget(item) === result.session) ?? {name: destination, target: result.session};
-    await enterSession(info, false);
+    selectedSession = info; $('connection-mode').value = 'observe'; renderAll();
+    await enterSession(info, true);
   } catch (error) {
-    if (event.submitter?.id !== 'launch-register' && error.effect === 'may_have_occurred') {
-      show('launch-setup', false); show('workbench-shell', true);
-      fail(error); await run('sessions', () => listSessions());
-    } else if ($('launch-setup').hidden) fail(error);
-    else setText('launch-error', error.message);
-  } finally { $('launch-register').disabled = $('launch-connect').disabled = false; }
+    if ($('launch-setup').hidden) { fail(error); renderAll(); }
+    else {
+      const message = error.effect === 'may_have_occurred' ? '创建结果未确定，请点“核对上次创建”重试原请求。'
+        : error.status === 401 ? '配对已失效，请打开“配对设置”重新配对。'
+        : modulePage && [403, 404, 503].includes(error.status) ? error.message + ' 请在普通用户账户下启动本机网关并重新配对。'
+        : error.status === 403 ? '网关拒绝创建，请核对账户权限并使用普通用户的本机网关。' : error.message;
+      setText('launch-error', message);
+    }
+  } finally { updateLaunchControls(false); }
 });
 renderAll();
-if (gateway.authenticated && launch?.setup && !modulePage) {
-  show('launch-setup', true); show('workbench-shell', false);
-  if (!matchMedia('(pointer: coarse)').matches) $('launch-name').focus();
-} else if (gateway.authenticated) {
-  void run('auth', async () => {
-    try { await listSessions(); }
-    catch {
-      gateway.clearToken(); renderAll();
-      throw new Error(modulePage ? '模块配对失败，请从模块管理器重新打开 SSMCP。' : '配对失败，请重新打开 WebUI。');
-    }
-    let target = launch?.session;
-    if (modulePage) {
-      for (let attempt = 0; attempt < 20; attempt++) {
-        const boot = await gateway.request('/boot-session');
-        if (boot.session) { target = boot.session; break; }
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-      if (!target) throw new Error('启动会话尚未就绪，请从模块管理器重新打开。');
-    }
-    if (target) {
-      const info = sessions.find(item => sessionTarget(item) === target) ?? { name: target, target };
-      await enterSession(info, false);
-    }
-  });
-}
+if (gateway.authenticated) showLaunch();

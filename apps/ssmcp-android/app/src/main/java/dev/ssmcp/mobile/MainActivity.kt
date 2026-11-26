@@ -54,11 +54,12 @@ class MainActivity : Activity() {
         root.addView(frame, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
         try {
-            val previous = store.load()
-            val mode = prefs.getString("mode", if (previous != null) "remote" else "local")
-            when (mode) {
-                "local" -> openLocal(prefs.getString("command", StartCommand.DEFAULT)!!)
-                "remote" -> openRemote(prefs.getString("origin", previous?.first) ?: "", "", previous)
+            when (prefs.getString("mode", "local")) {
+                "local" -> openLocal()
+                "remote" -> {
+                    val previous = store.load()
+                    openRemote(prefs.getString("origin", previous?.first) ?: "", "", previous)
+                }
                 else -> statusLabel.text = "工作台已停止"
             }
         } catch (_: Exception) { statusLabel.text = "无法恢复启动设置，请重新配置。" }
@@ -118,11 +119,10 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun openLocal(text: String) {
-        val command = StartCommand.parse(text)
+    private fun openLocal() {
         transition {
-            val page = LocalRuntime.open(applicationContext, command)
-            prefs.edit().putString("mode", "local").putString("command", command.text).apply()
+            val page = LocalRuntime.open(applicationContext)
+            prefs.edit().putString("mode", "local").remove("command").apply()
             page
         }
     }
@@ -144,14 +144,22 @@ class MainActivity : Activity() {
         val page = web
         if (page == null) { showSettings(); return }
         page.evaluateJavascript("""(() => {
+            const launch = document.getElementById('launch-setup');
+            if (launch && !launch.hidden && (document.getElementById('launch-name')?.disabled
+                || document.getElementById('launch-connect')?.disabled)) return 'creating';
             const actions = document.getElementById('connected-actions');
             const connect = document.getElementById('connect-button');
             const strip = document.getElementById('connect-strip');
-            return Boolean((actions && !actions.hidden) || (strip && !strip.hidden && connect && connect.disabled));
-        })()""") {
-            if (isDestroyed) return@evaluateJavascript
-            if (it == "true") statusLabel.text = "请先在工作台断开当前会话，再更改启动设置。"
-            else showSettings()
+            return (actions && !actions.hidden) || (strip && !strip.hidden && connect && connect.disabled)
+                ? 'connected' : 'ready';
+        })()""") { state ->
+            if (isDestroyed || web !== page) return@evaluateJavascript
+            when (state) {
+                "\"creating\"" -> statusLabel.text = "请先核对本次创建的结果，再更改启动设置。"
+                "\"connected\"" -> statusLabel.text = "请先在工作台断开当前会话，再更改启动设置。"
+                "\"ready\"" -> showSettings()
+                else -> statusLabel.text = "正在读取工作台状态，请稍后再试。"
+            }
         }
     }
 
@@ -161,7 +169,7 @@ class MainActivity : Activity() {
             setPadding(dp(24), dp(8), dp(24), dp(4))
         }
         val modes = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
-        val local = RadioButton(this).apply { id = View.generateViewId(); text = "本机 CLI" }
+        val local = RadioButton(this).apply { id = View.generateViewId(); text = "此设备" }
         val remote = RadioButton(this).apply { id = View.generateViewId(); text = "已有网关" }
         modes.addView(local); modes.addView(remote); layout.addView(modes)
         val previous = runCatching { store.load() }.getOrNull()
@@ -169,8 +177,6 @@ class MainActivity : Activity() {
             hint = hintText; inputType = kind; setSingleLine(); setText(value); isSaveEnabled = false
             layout.addView(this)
         }
-        val command = entry("ssmcp 用户名@服务器", prefs.getString("command", StartCommand.DEFAULT)!!,
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
         val address = entry("https://gui.example", prefs.getString("origin", previous?.first) ?: "",
             InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
         val token = entry("配对令牌（也可在工作台配对）", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
@@ -186,14 +192,13 @@ class MainActivity : Activity() {
         }
         modes.setOnCheckedChangeListener { _, checked ->
             val onDevice = checked == local.id
-            command.visibility = if (onDevice) View.VISIBLE else View.GONE
             address.visibility = if (onDevice) View.GONE else View.VISIBLE
             token.visibility = address.visibility
             forget.visibility = if (!onDevice && previous != null && !forgotten) View.VISIBLE else View.GONE
-            hint.text = if (onDevice) "ssmcp gui serve 打开本机工作台。填写 ssmcp 用户名@服务器 可同时启动会话。"
+            hint.text = if (onDevice) "打开本机工作台后，填写用户名和中继地址以创建会话。"
                 else "填写提供工作台的 HTTPS 地址。本机 HTTP 使用 127.0.0.1 和网关实际端口。"
         }
-        modes.check(if (prefs.getString("mode", if (previous != null) "remote" else "local") == "remote") remote.id else local.id)
+        modes.check(if (prefs.getString("mode", "local") == "remote") remote.id else local.id)
         val dialog = AlertDialog.Builder(this).setTitle("启动设置").setView(ScrollView(this).apply { addView(layout) })
             .setPositiveButton("打开", null).setNegativeButton("取消", null)
             .setNeutralButton("停止本机", null).create()
@@ -205,7 +210,7 @@ class MainActivity : Activity() {
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 try {
-                    if (local.isChecked) openLocal(command.text.toString())
+                    if (local.isChecked) openLocal()
                     else openRemote(address.text.toString(), token.text.toString().trim(), if (forgotten) null else previous)
                     dialog.dismiss()
                 } catch (e: Exception) { hint.text = e.message ?: "启动设置无效。" }
@@ -240,5 +245,10 @@ class MainActivity : Activity() {
 
     override fun onPause() { web?.onPause(); super.onPause() }
     override fun onResume() { super.onResume(); web?.onResume() }
-    override fun onDestroy() { ++generation; removePage(); super.onDestroy() }
+    override fun onDestroy() {
+        ++generation
+        removePage()
+        if (isFinishing) LocalRuntime.executor.submit { LocalRuntime.stop() }
+        super.onDestroy()
+    }
 }

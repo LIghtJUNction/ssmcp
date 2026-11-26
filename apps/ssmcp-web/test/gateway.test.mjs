@@ -166,3 +166,46 @@ test('lost or malformed close acknowledgement is a possibly completed mutation',
     await assert.rejects(gateway.close('original.connection'), error => error.effect === 'may_have_occurred');
   }
 });
+
+test('owned creation binds the exact receipt and only retries the original explicit request', async () => {
+  const bodies = [], target = 'live:' + '3a'.repeat(16);
+  let respond = () => { throw new Error('connection lost'); };
+  const gateway = new Gateway({ fetchImpl: async (path, init) => {
+    assert.equal(path, '/api/gui/v1/owned-sessions');
+    assert.equal(init.method, 'POST'); assert.equal(init.redirect, 'error');
+    assert.equal(init.headers.Authorization, 'Bearer pair');
+    const body = JSON.parse(init.body); bodies.push(body); return respond(body);
+  }});
+  const args = { destination: 'alice@relay.example', terms: false, privacy: false };
+  await assert.rejects(gateway.createOwnedSession(args), /配对/);
+  gateway.setToken('pair');
+  await assert.rejects(gateway.createOwnedSession(args), {effect: 'may_have_occurred'});
+  await assert.rejects(gateway.createOwnedSession({...args, privacy: true}), {code: 'pending'});
+  assert.equal(bodies.length, 1);
+  for (const invalid of [{session:target, request_id:'other'}, {session:'live:bad'},
+    {session:target + '\n'}, {session:[target]}, {session:target.toUpperCase()}]) {
+    respond = body => json({request_id:body.request_id, ...invalid});
+    await assert.rejects(gateway.createOwnedSession(args), {effect:'may_have_occurred'});
+  }
+  respond = () => json({error:{code:'denied', effect:'none', message:'denied'}}, 403);
+  await assert.rejects(gateway.createOwnedSession(args), {status:403});
+  gateway.setToken('pair');
+  respond = body => json({request_id:body.request_id, session:target});
+  assert.equal(await gateway.createOwnedSession(args), target);
+  assert.ok(bodies.every(body => JSON.stringify(body) === JSON.stringify(bodies[0])));
+  assert.equal(gateway.pendingOwnedRequest, null);
+  await gateway.createOwnedSession(args);
+  assert.notEqual(bodies.at(-1).request_id, bodies[0].request_id);
+});
+
+test('replacing pairing while an owned request is in flight discards its receipt', async () => {
+  let respond;
+  const gateway = new Gateway({fetchImpl: async (_path, {body}) => new Promise(resolve => {
+    respond = () => resolve(json({request_id:JSON.parse(body).request_id, session:'live:' + 'ab'.repeat(16)}));
+  })});
+  gateway.setToken('original');
+  const received = gateway.createOwnedSession({destination:'alice@local', terms:false, privacy:false});
+  gateway.setToken('replacement'); respond();
+  await assert.rejects(received, {code:'pairing_changed'});
+  assert.equal(gateway.pendingOwnedRequest, null);
+});

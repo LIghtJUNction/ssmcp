@@ -119,24 +119,28 @@ def run(binary):
             test.spawn("B", "gui", "serve", "--pairing-file", str(pairing))
             wait_for(pairing.exists, "gateway pairing")
             pair = json.loads(pairing.read_text())
-            origin = pair["url"]
-            def http(path, data=None):
+            connections = {}
+            def http(path, data=None, route=None):
+                route = route or pair
+                origin = route["url"]
                 request = urllib.request.Request(
                     origin + "/api/gui/v1/" + path,
                     data=None if data is None else json.dumps(data).encode(),
-                    headers={"Authorization": "Bearer " + pair["token"],
+                    headers={"Authorization": "Bearer " + route["token"],
                              "Origin": origin, "Content-Type": "application/json"},
                 )
                 with urllib.request.urlopen(request, timeout=15) as response:
                     return json.load(response)
-            def attach(target, read_only=False):
+            def attach(target, read_only=False, route=None):
                 entry = http("connections", {"session":target, "request_id":uuid.uuid4().hex,
-                                               "read_only":read_only})
-                return entry["connection_id"]
+                                               "read_only":read_only}, route)
+                connection = entry["connection_id"]
+                connections[connection] = route
+                return connection
             def bridge(connection, op, **kw):
                 receipt = http("connections/" + connection + "/bridge", {
                     "id": uuid.uuid4().hex, "version":1, "operation":{"op":op, **kw}
-                })
+                }, connections[connection])
                 assert receipt["body"]["kind"] != "error", receipt["body"]
                 return receipt
             def active(connection):
@@ -173,6 +177,70 @@ def run(binary):
             pwd(test.state.sessions[second_state["client_id"]],nested)
             pwd(test.connection("primary"),sub)
             assert state(primary,pgen)["cwd"] == str(sub)
+            # These peers belong to independent frontends, even with an existing CLI
+            # in the same workspace. Only a private ownership pipe, never a TTY, is provided.
+            master, slave = os.openpty()
+            try:
+                wrong_input = subprocess.run(
+                    [binary, "__frontend-run", test.state.allow_principal, uuid.uuid4().hex],
+                    cwd=workspace, env=test.env("B"), stdin=slave, capture_output=True, timeout=5)
+                assert wrong_input.returncode and b"private input pipe" in wrong_input.stderr
+            finally:
+                os.close(master)
+                os.close(slave)
+            peers = []
+            try:
+                for label in ("one", "two"):
+                    instance = uuid.uuid4().hex
+                    private = root / ("registry-" + label)
+                    private.mkdir(mode=0o700)
+                    peer_env = dict(test.env("B"), SSMCP_SESSION_HOME=str(private))
+                    pairing = private / "observer.json"
+                    debug_gateway = subprocess.Popen(
+                        [binary, "gui", "serve", "--listen", "127.0.0.1:0",
+                         "--pairing-file", str(pairing)],
+                        cwd=workspace, env=peer_env, start_new_session=True,
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    test.processes.append(debug_gateway)
+                    wait_for(pairing.exists, "private diagnostic gateway ready")
+                    route = json.loads(pairing.read_text())
+                    proc = subprocess.Popen(
+                        [binary, "__frontend-run", test.state.allow_principal, instance],
+                        cwd=workspace, env=peer_env, stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    peers.append(proc)
+                    target = "live:" + instance
+                    wait_for(lambda: (private / "live" / instance / "overview.json").is_file(),
+                             "new owner registration", timeout=15)
+                    assert {row["target"] for row in http("sessions", route=route)["sessions"]} == {target}
+                    assert target not in {row["target"] for row in http("sessions")["sessions"]}
+                    conn = attach(target, route=route)
+                    generation = wait_for(lambda: active(conn), "headless peer ready", timeout=15)
+                    runtime = state(conn, generation)
+                    assert runtime["process_id"] == proc.pid and runtime["cwd"] == str(workspace)
+                    reqid = uuid.uuid4().hex
+                    receipt = action(conn, generation, "chat.send", request_id=reqid,
+                                     target="next", text="frontend fixture " + label)
+                    assert receipt["request_id"] == reqid and receipt["message_id"]
+                    if label == "one":
+                        first_id = runtime["client_id"]
+                assert len({first_id, runtime["client_id"], state(primary,pgen)["client_id"]}) == 3
+                # An unrelated CLI and the other graphical owner survive the first window closing.
+                peers[0].stdin.close()
+                assert peers[0].wait(timeout=8) == 0
+                assert peers[1].poll() is None
+                assert state(conn, generation)["client_id"] == runtime["client_id"]
+                assert state(primary, pgen)["cwd"] == str(sub)
+            finally:
+                for proc in peers:
+                    proc.stdin.close()
+                    if proc.poll() is None:
+                        try:
+                            proc.wait(timeout=8)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            proc.wait()
+            print("PASS: headless owner chat, isolated relay sessions and independent shutdown", flush=True)
             print("PASS: distinct process, relay identity and private attach target; child inherits cwd; both sessions execute pwd in their own directories", flush=True)
             check_tui(test, workspace, sub, nested, http, attach, bridge, state)
         except Exception:

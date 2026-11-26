@@ -1,4 +1,4 @@
-//! Lifetime and discovery of the ordinary CLI process owned by a graphical frontend.
+//! Private discovery and lifetime of frontend-owned session cores.
 use std::{
     io::{self, IsTerminal},
     path::{Path, PathBuf},
@@ -26,21 +26,73 @@ pub struct OwnedSession {
     child: Child,
     target: String,
     directory: PathBuf,
+    root: PathBuf,
+    private_root: Option<PrivateRoot>,
+}
+
+/// A newly created, lifetime-scoped registry for a single frontend.
+struct PrivateRoot(PathBuf);
+
+impl PrivateRoot {
+    fn create() -> crate::Result<Self> {
+        let parent = super::session_root(true)?.join("frontends");
+        super::create_private_tree(&parent)?;
+        super::verify_directory(&parent)?;
+        let path = parent.join(super::random_suffix()?);
+        crate::platform::private_directory(&path)?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for PrivateRoot {
+    fn drop(&mut self) {
+        // Only launch_private creates this tree. Caller-supplied roots remain owned by callers.
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 impl OwnedSession {
     pub async fn launch(executable: &Path, destination: &str, cwd: &Path) -> crate::Result<Self> {
+        let root = super::session_root(true)?;
+        Self::launch_in(executable, destination, cwd, &root).await
+    }
+
+    /// Create a registry shared exclusively by this window and the tabs it starts.
+    pub async fn launch_private(
+        executable: &Path,
+        destination: &str,
+        cwd: &Path,
+    ) -> crate::Result<Self> {
+        let root = PrivateRoot::create()?;
+        let mut owner = Self::launch_in(executable, destination, cwd, &root.0).await?;
+        owner.private_root = Some(root);
+        Ok(owner)
+    }
+
+    /// Start a core inside the caller's registry without changing the parent's environment.
+    pub async fn launch_in(
+        executable: &Path,
+        destination: &str,
+        cwd: &Path,
+        session_root: &Path,
+    ) -> crate::Result<Self> {
         crate::server_endpoint::parse_target(destination)?;
         if !executable.is_absolute() {
             return Err("the frontend requires an absolute ssmcp executable path".into());
         }
-        let root = super::session_root(true)?;
+        if !session_root.is_absolute() {
+            return Err("frontend session root must be absolute".into());
+        }
+        super::create_private_tree(session_root)?;
+        super::verify_directory(session_root)?;
+        let root = session_root.canonicalize()?;
         let instance = super::random_suffix()?;
         let target = format!("live:{instance}");
         let mut command = std::process::Command::new(executable);
         command
             .args(["__frontend-run", destination, &instance])
             .current_dir(cwd)
+            .env("SSMCP_SESSION_HOME", &root)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(if io::stderr().is_terminal() {
@@ -57,6 +109,8 @@ impl OwnedSession {
             child: command.spawn()?,
             target: String::new(),
             directory: PathBuf::new(),
+            root,
+            private_root: None,
         };
         let deadline = tokio::time::Instant::now() + Duration::from_secs(7);
         loop {
@@ -66,7 +120,8 @@ impl OwnedSession {
                 )
                 .into());
             }
-            if let Ok((directory, _, pid)) = super::overview::foreground_target_in(&root, &target)
+            if let Ok((directory, _, pid)) =
+                super::overview::foreground_target_in(&session.root, &target)
                 && pid == session.child.id()
             {
                 session.target = target;
@@ -79,6 +134,60 @@ impl OwnedSession {
             tokio::time::sleep(Duration::from_millis(60)).await;
         }
     }
+    /// Open the private endpoint of this owned process, pinned to its PID.
+    pub async fn connect(&self, read_only: bool) -> crate::Result<super::attach::RemoteFrontend> {
+        super::attach::RemoteFrontend::connect_for_pid(
+            self.directory.clone(),
+            read_only,
+            Some(self.child.id()),
+        )
+        .await
+    }
+
+    /// Open the owner or a tab in this same private registry, pinned to its registered PID.
+    pub async fn connect_in(
+        &self,
+        target: &str,
+        read_only: bool,
+    ) -> crate::Result<super::attach::RemoteFrontend> {
+        if target == self.target {
+            return self.connect(read_only).await;
+        }
+        let (directory, _, pid) = super::overview::foreground_target_in(&self.root, target)?;
+        super::attach::RemoteFrontend::connect_for_pid(directory, read_only, Some(pid)).await
+    }
+
+    pub fn session_root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Wait for this exact child to exit before reporting a successful close.
+    pub async fn shutdown(&mut self) -> crate::Result<()> {
+        async fn wait(child: &mut Child) -> io::Result<()> {
+            while child.try_wait()?.is_none() {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Ok(())
+        }
+        drop(self.child.stdin.take());
+        let grace = Duration::from_secs(2);
+        match tokio::time::timeout(grace, wait(&mut self.child)).await {
+            Ok(result) => result?,
+            Err(_) => {
+                if let Err(error) = self.child.kill()
+                    && self.child.try_wait()?.is_none()
+                {
+                    return Err(error.into());
+                }
+                tokio::time::timeout(grace, wait(&mut self.child))
+                    .await
+                    .map_err(|_| "could not confirm that the frontend core exited")??;
+            }
+        }
+        drop(self.private_root.take());
+        Ok(())
+    }
+
     pub fn target(&self) -> &str {
         &self.target
     }
@@ -102,5 +211,39 @@ impl Drop for OwnedSession {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn explicit_shutdown_reaps_only_its_child_and_preserves_caller_state() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmcp-owner-{}",
+            super::super::random_suffix().unwrap()
+        ));
+        crate::platform::private_directory(&root).unwrap();
+        let child = || OwnedSession {
+            child: std::process::Command::new("/bin/sh")
+                .args(["-c", "read -r line || exit 0"])
+                .stdin(Stdio::piped())
+                .spawn()
+                .unwrap(),
+            target: String::new(),
+            directory: PathBuf::new(),
+            root: root.clone(),
+            private_root: None,
+        };
+        let mut first = child();
+        let mut second = child();
+        first.shutdown().await.unwrap();
+        assert!(first.try_wait().unwrap().is_some());
+        assert!(second.try_wait().unwrap().is_none());
+        first.shutdown().await.unwrap();
+        second.shutdown().await.unwrap();
+        assert!(root.is_dir());
+        std::fs::remove_dir(root).unwrap();
     }
 }

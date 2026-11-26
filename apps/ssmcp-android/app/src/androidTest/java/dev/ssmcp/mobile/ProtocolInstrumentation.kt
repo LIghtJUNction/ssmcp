@@ -10,7 +10,13 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
 import java.io.File
+import java.net.ConnectException
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.net.Socket
+import java.net.SocketTimeoutException
+import java.net.URI
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -31,7 +37,9 @@ class ProtocolInstrumentation : Instrumentation() {
                 check(runCatching { Workbench.at(bad) }.isFailure) { "Unexpected workbench origin" }
             }
             check(Workbench.at("http://127.0.0.1:8787").owns("http://127.0.0.1:8787/app.mjs"))
-            check(runCatching { StartCommand.parse("ssmcp sample@example.test ; exit") }.isFailure)
+            check(android.system.Os.geteuid() == targetContext.applicationInfo.uid && android.system.Os.geteuid() != 0) {
+                "Instrumentation must run under the non-root application UID"
+            }
             val info = targetContext.packageManager.getPackageInfo(targetContext.packageName, 0)
             val binary = File(targetContext.applicationInfo.nativeLibraryDir, "libssmcp.so")
             val version = ProcessBuilder(binary.path, "--version").start()
@@ -41,7 +49,7 @@ class ProtocolInstrumentation : Instrumentation() {
                     info.versionCode > 1) { "The packaged CLI and application release versions disagree" }
             } finally { version.destroy() }
             exerciseWorkbench()
-            result.putString("stream", "SSMCP Android WebView checks passed: packaged CLI, loopback pairing, rendered sessions, control lease, observe, release, origin boundary.\n")
+            result.putString("stream", "SSMCP Android WebView checks passed: packaged CLI, app UID, loopback pairing, legacy launch migration, recreation, explicit owned session, read-only observation, release and gateway exit.\n")
             finish(Activity.RESULT_OK, result)
         } catch (error: Throwable) {
             result.putString("stream", "SSMCP check failed: ${error.javaClass.simpleName}: ${error.message}\n")
@@ -76,49 +84,83 @@ class ProtocolInstrumentation : Instrumentation() {
         error("Timed out waiting for $stage")
     }
 
+    private fun awaitSetup(activity: Activity) = waitFor(activity, "paired local creation form", """
+        document.querySelector('#launch-setup')?.hidden === false
+            && document.querySelector('#workbench-shell')?.hidden === true
+            && document.querySelector('#auth-status')?.textContent === '已设置认证'
+            && document.querySelector('#auth-dialog')?.open === false
+            && document.querySelector('#pairing-token')?.value === ''
+            && !document.querySelector('#launch-name')?.disabled
+            && !document.querySelector('#launch-connect')?.disabled
+            && location.protocol === 'http:' && location.hostname === '127.0.0.1' && !location.hash && !location.search
+    """.trimIndent())
+
     private fun exerciseWorkbench() {
-        // Never displace an existing user's command, workspace or credentials on a developer phone.
         val prefs = targetContext.getSharedPreferences("workbench", Context.MODE_PRIVATE)
         check(prefs.all.isEmpty() && !targetContext.getSharedPreferences("pairing", Context.MODE_PRIVATE).contains("token")) {
             "Instrumentation requires a fresh app installation in an isolated Android user"
         }
-        val unusedPort = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { it.localPort }
-        val name = "webview-fixture"
-        check(prefs.edit().putString("mode", "local")
-            .putString("command", "ssmcp androidfixture@http://127.0.0.1:$unusedPort --name $name").commit())
-        var activity: Activity? = null
-        try {
-            val opened = startActivitySync(Intent(targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            activity = opened
-            waitFor(opened, "automatic same-origin pairing", """
-                document.querySelector('#workbench-shell')?.hidden === false
-                    && document.querySelector('#auth-status')?.textContent === '已设置认证'
-                    && document.querySelector('#auth-dialog')?.open === false
-                    && document.querySelector('#pairing-token')?.value === ''
-                    && location.protocol === 'http:' && location.hostname === '127.0.0.1' && !location.hash
-            """.trimIndent())
-            waitFor(opened, "the native foreground session", """
-                (() => {
-                  const row = [...document.querySelectorAll('.session-item')].find(x => x.querySelector('strong').textContent === '$name');
-                  if (row) { row.click(); return true; }
-                  document.getElementById('refresh-sessions').click();
-                  return false;
-                })()
-            """.trimIndent())
-            waitFor(opened, "explicit session selection", "!document.getElementById('connect-strip').hidden")
-            js(opened, "document.getElementById('connection-mode').value='control'; document.getElementById('connect-button').click()")
-            waitFor(opened, "native control lease", "document.getElementById('connection-label').textContent === 'SSMCP / CONTROL'")
-            waitFor(opened, "event observation", "document.getElementById('observe-button').textContent === '暂停观察'")
-            js(opened, "document.getElementById('observe-button').click()")
-            waitFor(opened, "paused observation", "document.getElementById('observe-button').textContent === '继续观察'")
-            js(opened, "document.getElementById('disconnect-button').click()")
-            waitFor(opened, "verified release", """
-                document.getElementById('connected-actions').hidden && document.getElementById('error-banner').hidden
-            """.trimIndent())
-        } finally {
-            activity?.let { runOnMainSync { it.finish() } }
-            LocalRuntime.executor.submit { LocalRuntime.stop() }.get(10, TimeUnit.SECONDS)
-            prefs.edit().clear().commit()
+        val loopback = InetAddress.getByName("127.0.0.1")
+        ServerSocket(0, 1, loopback).use { legacyRelay ->
+            val legacy = "ssmcp legacy@http://127.0.0.1:${legacyRelay.localPort} --name legacy"
+            check(prefs.edit().putString("mode", "local").putString("command", legacy).commit())
+            var activity: Activity? = null
+            try {
+                val opened = startActivitySync(Intent(targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                activity = opened
+                awaitSetup(opened)
+                check(!prefs.contains("command")) { "The legacy CLI command was retained" }
+                val origin = URI(js(opened, "location.origin")!!.trim('"'))
+                val monitor = addMonitor(MainActivity::class.java.name, null, false)
+                val recreated = try {
+                    runOnMainSync { opened.recreate() }
+                    checkNotNull(waitForMonitorWithTimeout(monitor, 10_000)) { "The activity was not recreated" }
+                } finally {
+                    removeMonitor(monitor)
+                }
+                activity = recreated
+                awaitSetup(recreated)
+                check(js(recreated, "location.origin") == "\"$origin\"") { "Recreation replaced the app-owned gateway" }
+                legacyRelay.soTimeout = 500
+                try {
+                    legacyRelay.accept().use { error("The app attempted to replay the legacy relay connection") }
+                } catch (_: SocketTimeoutException) { /* No connection arrived. */ }
+
+                val unusedPort = ServerSocket(0, 1, loopback).use { it.localPort }
+                js(recreated, """
+                    document.getElementById('launch-name').value = 'androidfixture';
+                    const relay = document.getElementById('launch-relay');
+                    relay.value = 'http://127.0.0.1:$unusedPort';
+                    relay.dispatchEvent(new Event('input', { bubbles: true }));
+                    document.getElementById('launch-connect').click()
+                """.trimIndent())
+                waitFor(recreated, "the explicitly created owned session", """
+                    !document.getElementById('workbench-shell').hidden
+                        && !document.getElementById('connected-actions').hidden
+                        && /^live:[0-9a-f]{32}$/.test(document.querySelector('#session-tabs [aria-selected="true"]')?.title)
+                        && document.getElementById('connection-label').textContent === 'SSMCP / OBSERVE'
+                """.trimIndent())
+                waitFor(recreated, "event observation", "document.getElementById('observe-button').textContent === '暂停观察'")
+                js(recreated, "document.getElementById('observe-button').click()")
+                waitFor(recreated, "paused observation", "document.getElementById('observe-button').textContent === '继续观察'")
+                js(recreated, "document.getElementById('disconnect-button').click()")
+                waitFor(recreated, "verified release", """
+                    document.getElementById('connected-actions').hidden && document.getElementById('error-banner').hidden
+                """.trimIndent())
+                runOnMainSync { recreated.finishAndRemoveTask() }
+                activity = null
+                val deadline = SystemClock.elapsedRealtime() + 10_000
+                while (true) {
+                    try { Socket().use { it.connect(InetSocketAddress(loopback, origin.port), 500) } }
+                    catch (_: ConnectException) { break }
+                    check(SystemClock.elapsedRealtime() < deadline) { "The app-owned gateway outlived its finished activity" }
+                    Thread.sleep(100)
+                }
+            } finally {
+                activity?.let { runOnMainSync { it.finishAndRemoveTask() } }
+                LocalRuntime.executor.submit { LocalRuntime.stop() }.get(10, TimeUnit.SECONDS)
+                prefs.edit().clear().commit()
+            }
         }
     }
 }

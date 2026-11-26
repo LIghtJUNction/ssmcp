@@ -107,11 +107,12 @@ private final class BoundedTransport {
 }
 
 struct SessionSummary: Identifiable {
+    let target: String
     let name: String
     let cwd: String
     let phase: String
     let managerState: String
-    var id: String { name }
+    var id: String { target }
 }
 struct OpenConnection {
     let id: String
@@ -121,6 +122,7 @@ struct OpenConnection {
 
 protocol GatewayAPI: AnyObject {
     var origin: String { get }
+    func createSession(destination: String, terms: Bool, privacy: Bool, requestID: String) async throws -> String
     func sessions(offset: Int, budget: ReadBudget) async throws -> ([SessionSummary], Int?)
     func open(session: String, readOnly: Bool, openRequestID: String) async throws -> OpenConnection
     func capabilities(_ id: String, budget: ReadBudget) async throws -> Capabilities
@@ -167,6 +169,9 @@ final class Gateway: GatewayAPI {
                 effect: command ? "may_have_occurred" : "none")
         }
         _ = try budget?.remaining()
+        if path == "/owned-sessions", [404, 405, 501].contains(response.statusCode) {
+            throw BridgeFailure("unsupported", "此网关未提供独立会话创建功能。")
+        }
         let raw: JSONObject
         do { raw = try object(JSONSerialization.jsonObject(with: data)) }
         catch { throw BridgeFailure("invalid_response", "Invalid JSON response", effect: command ? "may_have_occurred" : "none") }
@@ -179,11 +184,19 @@ final class Gateway: GatewayAPI {
         return raw
     }
 
+    func createSession(destination: String, terms: Bool, privacy: Bool, requestID: String) async throws -> String {
+        let raw = try await http("POST", "/owned-sessions", body: [
+            "request_id": try bridgeID(requestID), "destination": destination, "terms": terms, "privacy": privacy
+        ], command: true)
+        return try BridgeProtocol.createdSession(raw, requestID: requestID)
+    }
+
     func sessions(offset: Int = 0, budget: ReadBudget = ReadBudget()) async throws -> ([SessionSummary], Int?) {
         let raw = try await http("GET", "/sessions?offset=\(offset)&limit=16", budget: budget)
         guard let rows = raw["sessions"] as? [JSONObject], rows.count <= 16 else { throw BridgeFailure("invalid_response", "Invalid session page") }
         let sessions = try rows.map { row in
-            SessionSummary(name: try string(row["name"]), cwd: try string(row["cwd"]),
+            let name = try string(row["name"])
+            return SessionSummary(target: row["target"] as? String ?? name, name: name, cwd: try string(row["cwd"]),
                 phase: row["phase"] as? String ?? "", managerState: row["manager_state"] as? String ?? "")
         }
         let next = raw["next_offset"] is NSNull ? nil : try integer(raw["next_offset"], 0...Int.max)

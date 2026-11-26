@@ -2,6 +2,31 @@ import XCTest
 @testable import SSMCP
 
 final class ProtocolTests: XCTestCase {
+    func testCreateReceiptRequiresItsRequestAndExactLiveTarget() throws {
+        let id = UUID().uuidString
+        let target = "live:" + String(repeating: "a7", count: 16)
+        XCTAssertEqual(try BridgeProtocol.createdSession(["request_id": id, "session": target], requestID: id), target)
+        for invalid in [
+            ["request_id": "another", "session": target], ["request_id": id, "session": "saved:first"],
+            ["request_id": id, "session": target.uppercased()], ["request_id": id, "session": target + "0"]
+        ] {
+            XCTAssertThrowsError(try BridgeProtocol.createdSession(invalid, requestID: id)) { error in
+                XCTAssertTrue((error as? BridgeFailure)?.unknown == true)
+            }
+        }
+    }
+
+    func testOwnedSessionReceiptStaysWithItsPairingWhenJournalFills() throws {
+        let endpoint = "https://gateway.test"
+        let scope = PairingStore.receiptScope(origin: endpoint, token: "one")
+        XCTAssertNotEqual(scope, PairingStore.receiptScope(origin: endpoint, token: "two"))
+        XCTAssertNotEqual(scope, PairingStore.receiptScope(origin: "https://other.test", token: "one"))
+        let created = ["id": "create", "operation": "session.create", "state": "confirmed", "gateway": scope]
+        let ordinary = ["id": "old", "state": "confirmed"]
+        let result = try CommandJournal.insert([created, ordinary], value: ["id": "new", "state": "unknown"], capacity: 2)
+        XCTAssertEqual(result.map { $0["id"] }, ["create", "new"])
+    }
+
     func testLosslessCountersAndBounds() throws {
         XCTAssertGreaterThan(try Counter("9007199254740993"), try Counter("9007199254740992"))
         XCTAssertEqual(try Counter("18446744073709551615").text, "18446744073709551615")
@@ -184,6 +209,13 @@ private final class TestClock { var now: TimeInterval = 0 }
     var caps: Capabilities
     var page: EventPage
     var eventCalls = 0
+    var listCalls = 0
+    var creations: [String] = []
+    var openedTargets: [String] = []
+    var openedModes: [Bool] = []
+    var createFailure: BridgeFailure?
+    var openFailure: BridgeFailure?
+    let owned = "live:" + String(repeating: "01", count: 16)
     var historyCursors: [String] = []
     var budgets: [ObjectIdentifier] = []
     var capabilitiesCost: TimeInterval = 0
@@ -195,9 +227,18 @@ private final class TestClock { var now: TimeInterval = 0 }
         page = EventPage(events: [BridgeEvent(sequence: try Counter("1"), topic: "ssmcp.event", value: "gap-page-A")],
             next: try Counter("2"), gap: true, hasMore: false)
     }
-    func sessions(offset: Int, budget: ReadBudget) async throws -> ([SessionSummary], Int?) { ([], nil) }
+    func createSession(destination: String, terms: Bool, privacy: Bool, requestID: String) async throws -> String {
+        creations.append(requestID)
+        if let createFailure { throw createFailure }
+        return owned
+    }
+    func sessions(offset: Int, budget: ReadBudget) async throws -> ([SessionSummary], Int?) {
+        listCalls += 1; return ([], nil)
+    }
     func open(session: String, readOnly: Bool, openRequestID: String) async throws -> OpenConnection {
-        OpenConnection(id: "connection-1", session: session, capabilities: caps)
+        openedTargets.append(session); openedModes.append(readOnly)
+        if let openFailure { throw openFailure }
+        return OpenConnection(id: "connection-1", session: session, capabilities: caps)
     }
     func capabilities(_ id: String, budget: ReadBudget) async throws -> Capabilities {
         budgets.append(ObjectIdentifier(budget)); clock.now += capabilitiesCost; return caps
@@ -220,6 +261,45 @@ private final class TestClock { var now: TimeInterval = 0 }
 }
 
 final class ClientModelIntegrationTests: XCTestCase {
+    @MainActor func testStartupAndOwnedCreationNeverDiscoverAnotherSession() async throws {
+        let api = try ScriptedGateway(caps: testCaps([]))
+        let model = ClientModel(gateway: api, loadPairing: false)
+        model.setActive(true); model.setActive(false)
+        XCTAssertTrue(api.creations.isEmpty); XCTAssertEqual(api.listCalls, 0); XCTAssertTrue(api.openedTargets.isEmpty)
+        await model.createSession(destination: "ios@test.invalid", terms: false, privacy: false)
+        XCTAssertEqual(model.connection?.session, api.owned); XCTAssertEqual(model.ownedSession, api.owned)
+        XCTAssertEqual(api.creations.count, 1); XCTAssertEqual(api.openedTargets, [api.owned])
+        XCTAssertEqual(api.openedModes, [false]); XCTAssertEqual(api.listCalls, 0)
+    }
+
+    @MainActor func testUnavailableAndUnconfirmedCreationNeverAttachOrDiscover() async throws {
+        let api = try ScriptedGateway(caps: testCaps([]))
+        let model = ClientModel(gateway: api, loadPairing: false)
+        api.createFailure = BridgeFailure("unsupported", "此网关未提供独立会话创建功能。")
+        await model.createSession(destination: "unsupported@test.invalid", terms: false, privacy: false)
+        XCTAssertTrue(model.status.contains("未提供")); XCTAssertNil(model.connection)
+        let destination = UUID().uuidString + "@test.invalid"
+        api.createFailure = BridgeFailure("transport", "连接中断", effect: "may_have_occurred")
+        await model.createSession(destination: destination, terms: false, privacy: false)
+        let original = try XCTUnwrap(api.creations.last)
+        defer { try? CommandJournal.settle(original, state: .rejected) }
+        await model.createSession(destination: destination, terms: false, privacy: false)
+        XCTAssertEqual(api.creations.count, 2); XCTAssertTrue(model.status.contains(original))
+        XCTAssertEqual(api.listCalls, 0); XCTAssertTrue(api.openedTargets.isEmpty)
+    }
+
+    @MainActor func testCreateReceiptRemainsAvailableWhenControlIsDenied() async throws {
+        let api = try ScriptedGateway(caps: testCaps([]))
+        let model = ClientModel(gateway: api, loadPairing: false)
+        api.openFailure = BridgeFailure("denied", "输入租约已被占用")
+        await model.createSession(destination: "lease@test.invalid", terms: false, privacy: false)
+        XCTAssertNil(model.connection); XCTAssertEqual(model.ownedSession, api.owned)
+        api.openFailure = nil
+        await model.open(try XCTUnwrap(model.ownedSession), readOnly: false)
+        XCTAssertEqual(api.creations.count, 1); XCTAssertEqual(api.openedTargets, [api.owned, api.owned])
+        XCTAssertEqual(api.listCalls, 0); XCTAssertEqual(model.connection?.session, api.owned)
+    }
+
     @MainActor func testFailedGapRefreshRetainsPageAcrossPauseWithoutRefetching() async throws {
         let api = try ScriptedGateway(caps: testCaps(["runtime", "conversation"], events: true))
         var failRuntime = true

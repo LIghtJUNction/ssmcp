@@ -3,6 +3,10 @@ import SwiftUI
 @MainActor struct ContentView: View {
     @ObservedObject var model: ClientModel
     @State private var controlSession: SessionSummary?
+    @State private var destination = ""
+    @State private var terms = false
+    @State private var privacy = false
+    @State private var showsExisting = false
     @State private var selectedTerminal = ""
     @State private var showingTimeline = false
     @State private var terminalDraft = ""
@@ -28,7 +32,7 @@ import SwiftUI
         .alert("申请独占控制权限？", isPresented: Binding(get: { controlSession != nil }, set: { if !$0 { controlSession = nil } })) {
             Button("取消", role: .cancel) { controlSession = nil }
             Button("申请控制") {
-                if let session = controlSession { Task { await model.open(session.name) } }
+                if let session = controlSession { Task { await model.open(session.target, readOnly: false) } }
                 controlSession = nil
             }
         } message: { Text("终端输入和调整容量仍需每次明确提交。后台会话不会因关闭界面而停止。") }
@@ -75,13 +79,34 @@ import SwiftUI
                     Button("刷新状态") { Task { await model.refresh() } }.disabled(model.busy)
                     Button("断开连接 · 保持会话运行") { Task { await model.disconnect() } }.disabled(model.busy)
                 }
+            } else if model.hasGateway {
+                Section("在网关上新建会话") {
+                    Text(verbatim: model.origin).font(.caption).foregroundStyle(.secondary)
+                    TextField("用户名@中继地址", text: $destination)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .onChange(of: destination) { _ in terms = false; privacy = false }
+                    if usesOfficialRelay {
+                        Toggle(isOn: $terms) { Text("我同意[用户协议](https://ssmcp.lmm.best/legal/terms)") }
+                        Toggle(isOn: $privacy) { Text("我同意[隐私政策](https://ssmcp.lmm.best/legal/privacy)") }
+                    }
+                    Button("新建并控制会话") {
+                        Task { await model.createSession(destination: destination, terms: terms, privacy: privacy) }
+                    }.disabled(model.busy || destination.isEmpty || (usesOfficialRelay && !(terms && privacy)))
+                    if let owned = model.ownedSession {
+                        Button("重新连接我创建的会话") { Task { await model.open(owned, readOnly: false) } }
+                            .disabled(model.busy)
+                    }
+                }
+                Section {
+                    Button("删除保存的配对", role: .destructive) { model.deletePairing(); showsExisting = false }
+                        .disabled(model.busy)
+                }
             } else {
-                Section("连接到 CLI core") {
+                Section("配对网关") {
                     TextField("https://your-gateway.example", text: $model.origin)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                     SecureField("配对令牌", text: $model.token).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Toggle("只观察", isOn: $model.readOnly)
-                    Button("保存配对并读取会话") { Task { await model.configureAndList() } }.disabled(model.busy)
+                    Button("使用此网关") { model.configure() }.disabled(model.busy)
                     Button("删除保存的配对", role: .destructive) { model.deletePairing() }.disabled(model.busy)
                 }
             }
@@ -98,11 +123,23 @@ import SwiftUI
                     }
                 }
             }
-            Section("会话") {
-                if model.sessions.isEmpty { Text("连接后显示 core 中真实存在的会话。").foregroundStyle(.secondary) }
+            if model.hasGateway && model.connection == nil {
+                existingSessions
+            }
+            Section {
+                Text("使用 HTTPS 与系统证书校验。配对令牌保存在此设备的 Keychain。退到后台只取消观察，不取消任务。").font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var existingSessions: some View {
+        Section {
+            DisclosureGroup("连接已有会话", isExpanded: $showsExisting) {
+                Toggle("只观察", isOn: $model.readOnly)
+                Button("读取已有会话") { Task { await model.listSessions() } }.disabled(model.busy)
                 ForEach(model.sessions) { session in
                     Button {
-                        if model.readOnly { Task { await model.open(session.name) } }
+                        if model.readOnly { Task { await model.open(session.target, readOnly: true) } }
                         else { controlSession = session }
                     } label: {
                         VStack(alignment: .leading, spacing: 8) {
@@ -114,10 +151,16 @@ import SwiftUI
                 }
                 if model.nextSessionOffset != nil { Button("更多会话") { Task { await model.listSessions(more: true) } }.disabled(model.busy) }
             }
-            Section {
-                Text("使用 HTTPS 与系统证书校验。配对令牌保存在此设备的 Keychain。退到后台只取消观察，不取消任务。").font(.footnote).foregroundStyle(.secondary)
-            }
         }
+    }
+
+    private var usesOfficialRelay: Bool {
+        let parts = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return false }
+        let relay = String(parts[1])
+        let host = URLComponents(string: relay.contains("://") ? relay : "https://" + relay)?.host
+        return host?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) == "ssmcp.lmm.best"
     }
 
     private var timeline: some View {
