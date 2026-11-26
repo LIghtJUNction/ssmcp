@@ -11,7 +11,11 @@
 </head>
 <body>
   <main class="launch-setup" id="launch-setup" hidden>
-    <form id="launch-form" aria-label="连接会话">
+    <form id="launch-form" aria-labelledby="launch-title">
+      <header class="launch-heading">
+        <div class="brand-lockup"><span class="brand-sign" aria-hidden="true"></span><strong>ssmcp</strong></div>
+        <h1 id="launch-title">连接会话</h1>
+      </header>
       <label class="launch-field"><span>用户名</span>
         <input id="launch-name" name="username" required maxlength="32" autocomplete="username" autocapitalize="none" spellcheck="false" enterkeyhint="next">
       </label>
@@ -28,10 +32,12 @@
       <button type="button" class="text-button" id="launch-back" hidden>返回工作台</button>
     </form>
   </main>
-  <main class="launch-setup" id="launch-entry" hidden><p id="entry-hint" role="status"></p></main>
+  <main class="launch-setup" id="launch-entry" hidden>
+    <div class="entry-content"><div class="brand-lockup"><span class="brand-sign" aria-hidden="true"></span><strong>ssmcp</strong></div><p id="entry-hint" role="status"></p></div>
+  </main>
   <div class="shell" id="workbench-shell" hidden>
     <aside class="sidebar" id="sidebar" aria-label="会话导航">
-      <div class="brand"><strong>ssmcp</strong><button class="icon-button close-menu" id="close-menu" aria-label="关闭侧边栏">×</button></div>
+      <div class="brand"><div class="brand-lockup"><span class="brand-sign" aria-hidden="true"></span><strong>ssmcp</strong></div><button class="icon-button close-menu" id="close-menu" aria-label="关闭侧边栏">×</button></div>
       <div class="nav-heading"><span>会话</span><button class="icon-button" id="refresh-sessions" title="刷新会话" aria-label="刷新会话">↻</button></div>
       <div id="session-list" class="session-list"></div>
       <div class="pagination" id="session-pagination" hidden><button class="text-button" id="sessions-prev">上一页</button><button class="text-button" id="sessions-next">下一页</button></div>

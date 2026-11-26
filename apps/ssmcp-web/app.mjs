@@ -4,6 +4,13 @@ import { byteLength } from './src/protocol.mjs';
 import { renderWaitContent } from './src/wait-view.mjs';
 import { plain, shortId, duration, redact, mayClearDraft, quoteReply } from './src/presentation.mjs';
 
+const systemTheme = matchMedia('(prefers-color-scheme: dark)');
+function followSystemTheme() {
+  document.documentElement.dataset.theme = systemTheme.matches ? 'dark' : 'light';
+}
+followSystemTheme();
+systemTheme.onchange = followSystemTheme;
+
 const $ = id => document.getElementById(id);
 const gateway = new Gateway();
 const modulePage = document.documentElement.hasAttribute('data-ssmcp-magisk');
@@ -255,6 +262,7 @@ function eventNode(row) {
   article.dataset.row = row.id; article._row = row;
   article.classList.toggle('is-input', row.inputSide === true);
   const mark = element('div', `event-mark ${row.kind === 'answer' ? 'answer' : ''}`, row.kind === 'answer' ? 's.' : row.kind === 'input' ? '↑' : row.kind === 'receipt' ? '↗' : '·');
+  mark.setAttribute('aria-hidden', 'true');
   const body = element('div'); const heading = element('div', 'event-heading');
   heading.append(element('strong', '', row.title || row.kind), element('span', 'source', sourceLabel(row)));
   if (row.status) heading.append(element('span', `pill ${['unknown', 'confirmed', 'error', 'done'].includes(row.status) ? row.status : ''}`, row.kind === 'worker_snapshot' ? `最后观察 · ${row.status}` : row.kind === 'input' ? `队列 · ${row.status}` : stateLabels[row.status] ?? String(row.status)));
@@ -554,7 +562,11 @@ for (const id of ['close-menu', 'dismiss-sidebar']) $(id).addEventListener('clic
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && $('sidebar').classList.contains('is-open')) setSidebar(false);
 });
-$('theme-button').addEventListener('click', () => { const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme:dark)').matches; document.documentElement.dataset.theme = dark ? 'light' : 'dark'; });
+$('theme-button').addEventListener('click', () => {
+  systemTheme.onchange = null;
+  const root = document.documentElement;
+  root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+});
 
 const tabButtons = [...document.querySelectorAll('[data-panel]')];
 function setPanel(name) {
