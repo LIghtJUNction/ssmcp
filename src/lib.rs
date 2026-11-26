@@ -12,6 +12,8 @@ mod collab;
 mod command_runtime;
 pub mod computer;
 pub mod context;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod desktop_terminal;
 #[cfg(target_os = "linux")]
 pub(crate) mod events;
 pub(crate) mod hex;

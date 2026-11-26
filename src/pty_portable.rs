@@ -168,6 +168,13 @@ impl Terminal {
         config: JobConfig<'_>,
         store: Arc<OutputStore>,
     ) -> crate::Result<Arc<Self>> {
+        Self::spawn_with_capture(config, Some(store))
+    }
+
+    pub(crate) fn spawn_with_capture(
+        config: JobConfig<'_>,
+        store: Option<Arc<OutputStore>>,
+    ) -> crate::Result<Arc<Self>> {
         let JobConfig {
             command: argv,
             cwd,
@@ -231,14 +238,19 @@ impl Terminal {
             child: Mutex::new(Some(child)),
             input: Mutex::new(Some(input)),
             output: Arc::new(Mutex::new(Output {
-                capture: Some(store.capture("terminal_session")),
+                capture: store
+                    .as_ref()
+                    .map(|store| store.capture("terminal_session")),
                 ..Output::default()
             })),
             changed: Arc::new(Notify::new()),
             closed: AtomicBool::new(false),
             pid,
             input_bytes: AtomicU64::new(0),
-            observer: store.observer().map(|pool| Arc::downgrade(&pool)),
+            observer: store
+                .as_ref()
+                .and_then(|store| store.observer())
+                .map(|pool| Arc::downgrade(&pool)),
             display_id: display_id.into(),
             observer_cwd: cwd.to_path_buf(),
             #[cfg(windows)]

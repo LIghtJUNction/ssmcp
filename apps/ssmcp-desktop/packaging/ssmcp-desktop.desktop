@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=SSMCP Desktop
-Name[zh_CN]=SSMCP 桌面工作台
-Comment=Observe and control existing local ssmcp sessions
-Comment[zh_CN]=观察与控制已有的本地 ssmcp 会话
+Name[zh_CN]=SSMCP 终端
+Comment=Connect to a relay in a native SSMCP terminal
+Comment[zh_CN]=在原生终端连接 SSMCP 服务器
 Exec=ssmcp-desktop
 Icon=ssmcp-desktop
 Terminal=false

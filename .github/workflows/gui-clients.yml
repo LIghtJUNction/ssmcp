@@ -376,6 +376,24 @@ jobs:
             echo '::error::The Linux desktop executable has unresolved runtime libraries.'
             exit 1
           fi
+      - name: Build and check the sibling Linux CLI from the same source and profile
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target x86_64-unknown-linux-gnu --bin ssmcp \
+            2>&1 | tee "$LINUX_EVIDENCE_DIR/cli-build.log"
+          cli="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/ssmcp"
+          "$cli" --version | tee "$LINUX_EVIDENCE_DIR/cli-version.log"
+          python3 - "$cli" <<'PYCLI'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          with path.open("rb") as stream:
+              sha = hashlib.file_digest(stream, "sha256").hexdigest()
+          receipt = {"file": path.name, "bytes": path.stat().st_size, "sha256": sha,
+                     "source_commit": os.environ["SOURCE_COMMIT"],
+                     "target": "x86_64-unknown-linux-gnu", "profile": "release"}
+          (Path(os.environ["LINUX_EVIDENCE_DIR"]) / "cli-executable.json").write_text(json.dumps(receipt))
+          PYCLI
       - name: Observe the Release executable in a real X11 window
         id: window
         env:
@@ -394,7 +412,7 @@ jobs:
           (evidence / "renderer.log").write_text(renderer.stdout)
           if renderer.returncode or "llvmpipe" not in renderer.stdout.lower():
               raise SystemExit("The Xvfb display must provide Mesa llvmpipe OpenGL")
-          title = "ssmcp-desktop · 本地工作台"
+          title = "ssmcp-desktop"
           window = {"source_commit": os.environ["SOURCE_COMMIT"], "target": "x86_64-unknown-linux-gnu",
                     "profile": "release", "backend": "x11-opengl", "renderer": "llvmpipe", "title": title,
                     "mapped": False, "width": 0, "height": 0, "exit_after_ms": 10000,
@@ -594,12 +612,21 @@ jobs:
           $cliExecutable = Join-Path $env:CLI_TARGET_DIR 'debug/ssmcp.exe'
           [ordered]@{
             file = 'ssmcp.exe'
+            source_commit = $env:SOURCE_COMMIT
+            target = 'x86_64-pc-windows-msvc'
+            profile = 'debug'
             bytes = (Get-Item $cliExecutable).Length
             sha256 = (Get-FileHash -Algorithm SHA256 -Path $cliExecutable).Hash.ToLowerInvariant()
           } | ConvertTo-Json | Set-Content -Path (Join-Path $evidence 'cli-executable.json')
           $executable = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/debug/ssmcp-desktop.exe'
           if (-not (Test-Path $executable -PathType Leaf)) {
             throw 'Cargo reported success without the expected desktop executable.'
+          }
+          # Stage the CLI built above next to the desktop before the real-window check.
+          $siblingCli = Join-Path (Split-Path -Parent $executable) 'ssmcp.exe'
+          Copy-Item -LiteralPath $cliExecutable -Destination $siblingCli -Force
+          if ((Get-FileHash $siblingCli).Hash -ne (Get-FileHash $cliExecutable).Hash) {
+            throw 'The staged CLI differs from the same-source debug executable.'
           }
           [ordered]@{
             file = 'ssmcp-desktop.exe'

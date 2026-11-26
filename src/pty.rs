@@ -154,6 +154,13 @@ impl Terminal {
         config: JobConfig<'_>,
         output_store: Arc<OutputStore>,
     ) -> crate::Result<Arc<Self>> {
+        Self::spawn_with_capture(config, Some(output_store))
+    }
+
+    pub(crate) fn spawn_with_capture(
+        config: JobConfig<'_>,
+        output_store: Option<Arc<OutputStore>>,
+    ) -> crate::Result<Arc<Self>> {
         let JobConfig {
             command: argv,
             cwd,
@@ -226,7 +233,9 @@ impl Terminal {
             leader,
             pid,
             output: Mutex::new(Output {
-                capture: Some(output_store.capture("terminal_session")),
+                capture: output_store
+                    .as_ref()
+                    .map(|store| store.capture("terminal_session")),
                 ..Output::default()
             }),
             changed: Arc::new(Notify::new()),
@@ -237,7 +246,10 @@ impl Terminal {
             closed: AtomicBool::new(false),
             live,
             display_id: display_id.into(),
-            observer: output_store.observer().map(|pool| Arc::downgrade(&pool)),
+            observer: output_store
+                .as_ref()
+                .and_then(|store| store.observer())
+                .map(|pool| Arc::downgrade(&pool)),
             observer_cwd: cwd.to_path_buf(),
         });
         let weak = Arc::downgrade(&terminal);

@@ -3,7 +3,7 @@
 Launch the real Windows executable in a disposable home. This checks window
 creation, waits for a presented frame matching the resized client, requires nonuniform
 client-area pixels, captures the owned window, and checks bounded normal exit.
-It does not connect to a live session or certify the complete visual layout.
+It exercises the launcher with foreground keyboard input and an owned loopback endpoint.
 Exit codes: 0 passed, 1 failed, 2 blocked by the execution environment.
 #>
 [CmdletBinding()]
@@ -26,7 +26,7 @@ $report = [ordered]@{
     platform = [Environment]::OSVersion.VersionString
     powershell = $PSVersionTable.PSVersion.ToString()
     status = 'failed'
-    scope = 'Owned Windows process, first-present and resized-present receipts, nonuniform client pixels, screenshot, and bounded normal exit; no live session or complete layout assertion.'
+    scope = 'Owned Windows process, first-present and resized-present receipts, nonuniform client pixels, screenshot, launcher editing/validation, exact sibling CLI command line, and parent/child exit.'
     process_started = $false
     forced_termination = $false
     window = $null
@@ -38,6 +38,9 @@ $stderrTask = $null
 $testRoot = $null
 $frameReceiptsPath = $null
 $previousDpi = [IntPtr]::Zero
+$cliHandle = $null
+$listener = $null
+$traceId = $null
 $script:presentReadDiagnostics = [ordered]@{ io_errors = 0; last_error = $null }
 function Read-PresentReceipts {
     param([string]$Path, [int]$OwnedProcess)
@@ -87,6 +90,53 @@ function Read-PresentReceipts {
         $previousFrame = $row['frame_index']
         $row
     }
+}
+function Send-LauncherKeys([string]$Keys) {
+    if ([SsmcpWindowProbe]::GetForegroundWindow() -ne $window) {
+        throw 'The owned launcher lost foreground focus before keyboard input.'
+    }
+    [Windows.Forms.SendKeys]::SendWait($Keys)
+}
+function Assert-LauncherText([string]$Expected) {
+    # The app copies its selection through its own window. Require fresh content
+    # so an old copy cannot pass when the field is unfocused or unresponsive.
+    Set-Clipboard -Value ([guid]::NewGuid().ToString('N'))
+    Send-LauncherKeys '^a^c'
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        if ([SsmcpWindowProbe]::GetClipboardOwner() -eq $window -and
+            (Get-Clipboard -Raw) -ceq $Expected) { return }
+        Start-Sleep -Milliseconds 50
+    } while ($deadline.Elapsed.TotalSeconds -lt 4)
+    throw "The launcher did not copy the expected command '$Expected'."
+}
+function Get-OwnedCliStarts {
+    @(Get-Event -SourceIdentifier $traceId -ErrorAction SilentlyContinue) | ForEach-Object {
+        $record = $_.SourceEventArgs.NewEvent
+        if ($record.ParentProcessID -eq $process.Id) { $record }
+    }
+}
+function Measure-ValidationPixels([int]$X, [int]$Y, [int]$Width, [string]$SavePath) {
+    if ([SsmcpWindowProbe]::CheckCapture($window, $windowOwner, $bounds, $clientRegion) -ne 0) {
+        throw 'The validation message is obscured or the owned window has moved.'
+    }
+    $area = [Drawing.Bitmap]::new($Width, 28)
+    $graphics = [Drawing.Graphics]::FromImage($area)
+    try {
+        $graphics.CopyFromScreen($X, $Y, 0, 0, $area.Size)
+        if ([SsmcpWindowProbe]::CheckCapture($window, $windowOwner, $bounds, $clientRegion) -ne 0) {
+            throw 'The owned window changed during validation feedback capture.'
+        }
+        $red = 0
+        for ($dy = 0; $dy -lt $area.Height; $dy += 2) {
+            for ($dx = 0; $dx -lt $Width; $dx += 2) {
+                $pixel = $area.GetPixel($dx, $dy)
+                if ($pixel.R - $pixel.G -gt 55 -and $pixel.R - $pixel.B -gt 55) { $red++ }
+            }
+        }
+        if ($SavePath -and $red -ge 8) { $area.Save($SavePath, [Drawing.Imaging.ImageFormat]::Png) }
+        return $red
+    } finally { $graphics.Dispose(); $area.Dispose() }
 }
 function Test-PresentJournalReader {
     param([string]$Path)
@@ -138,6 +188,7 @@ try {
         sha256 = (Get-FileHash -LiteralPath $binaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 
+    Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
     Add-Type -TypeDefinition @'
 using System;
@@ -179,6 +230,24 @@ public static class SsmcpWindowProbe {
         }
         return 0;
     }
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point point);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
+    [DllImport("user32.dll")] public static extern IntPtr GetClipboardOwner();
+    [DllImport("shell32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern IntPtr CommandLineToArgvW(string command, out int count);
+    [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
+    public static string[] Arguments(string command) {
+        int count;
+        IntPtr vector = CommandLineToArgvW(command, out count);
+        if (vector == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+        try {
+            string[] args = new string[count];
+            for (int i = 0; i < count; i++)
+                args[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(vector, i * IntPtr.Size));
+            return args;
+        } finally { LocalFree(vector); }
+    }
     [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
 }
 '@
@@ -201,7 +270,8 @@ public static class SsmcpWindowProbe {
     $process.StartInfo.RedirectStandardOutput = $true
     $process.StartInfo.RedirectStandardError = $true
     $process.StartInfo.ArgumentList.Add('--exit-after-ms')
-    $process.StartInfo.ArgumentList.Add('20000')
+    $lifetimeMs = if ($report.interactive_desktop) { 90000 } else { 20000 }
+    $process.StartInfo.ArgumentList.Add([string]$lifetimeMs)
     $firstFramePath = Join-Path $testRoot 'first-frame.json'
     $process.StartInfo.ArgumentList.Add('--first-frame-receipt')
     $process.StartInfo.ArgumentList.Add($firstFramePath)
@@ -215,10 +285,25 @@ public static class SsmcpWindowProbe {
         SSMCP_CLIENT_CONFIG = $configuration
     }.GetEnumerator()) { $process.StartInfo.Environment[$entry.Key] = $entry.Value }
     [void]$process.StartInfo.Environment.Remove('SSMCP_UI_CONFIG')
+    if ($report.interactive_desktop) {
+        # The reserved loopback listener never supplies credentials or redirects.
+        # Route even an unintended non-loopback HTTP request into the fixture.
+        $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+        $listener.Start()
+        $origin = 'http://127.0.0.1:' + $listener.LocalEndpoint.Port
+        foreach ($key in @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY')) {
+            $process.StartInfo.Environment[$key] = $origin
+        }
+        $process.StartInfo.Environment['NO_PROXY'] = '127.0.0.1,localhost'
+        $cliPath = (Get-Item -LiteralPath (Join-Path (Split-Path -Parent $binaryPath) 'ssmcp.exe')).FullName
+        # Observe even short-lived, erroneous launches before the first frame.
+        $traceId = 'ssmcp-launcher-' + [guid]::NewGuid().ToString('N')
+        Register-CimIndicationEvent -Namespace root/cimv2 -Query "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName='ssmcp.exe'" -SourceIdentifier $traceId | Out-Null
+    }
     if (-not $process.Start()) { throw 'Process.Start did not start the desktop executable.' }
     $report.process_started = $true
     $report.pid = $process.Id
-    $report.arguments = @('--exit-after-ms', '20000', '--first-frame-receipt', '<owned-test-root>/first-frame.json', '--frame-receipts', '<owned-test-root>/presented-frames.jsonl')
+    $report.arguments = @('--exit-after-ms', [string]$lifetimeMs, '--first-frame-receipt', '<owned-test-root>/first-frame.json', '--frame-receipts', '<owned-test-root>/presented-frames.jsonl')
     # Drain both streams concurrently; waiting first can deadlock a noisy child.
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
@@ -438,11 +523,93 @@ public static class SsmcpWindowProbe {
             sha256 = (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash.ToLowerInvariant()
         }
         if (-not $nonblank) { throw 'The application client area remained blank after its first-present receipt.' }
+
+        Assert-LauncherText 'ssmcp '
+        $report.launcher = [ordered]@{ prefilled_command = 'ssmcp '; default_server_clicked = $false }
+        Send-LauncherKeys '{END}'
+        Send-LauncherKeys 'e2eprobe'
+        # Hit the actual default-server control in the resized client. The form
+        # moves the server hint to its own row below 490 pixels of form width.
+        $margin = if ($client.Right -lt 420) { 16 } else { 32 }
+        $formWidth = [Math]::Min(616, $client.Right - 2 * $margin)
+        $formX = [int][Math]::Floor(($client.Right - $formWidth) / 2)
+        $formY = [int][Math]::Max(12, [Math]::Floor($client.Bottom * 0.40 - 50))
+        $hintY = $formY + 104
+        $relayX = if ($formWidth -lt 490) { $formX } else { $formX + $formWidth - 212 }
+        $relayY = if ($formWidth -lt 490) { $hintY + 22 } else { $hintY }
+        $point = [SsmcpWindowProbe+Point]::new()
+        $point.X = $clientOrigin.X + $relayX + 110
+        $point.Y = $clientOrigin.Y + $relayY + 8
+        if ([SsmcpWindowProbe]::WindowFromPoint($point) -ne $window -or
+            [SsmcpWindowProbe]::GetForegroundWindow() -ne $window -or
+            -not [SsmcpWindowProbe]::SetCursorPos($point.X, $point.Y)) {
+            throw 'The default-server button is outside the owned foreground window.'
+        }
+        [SsmcpWindowProbe]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero)
+        [SsmcpWindowProbe]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)
+        Assert-LauncherText 'ssmcp e2eprobe@ssmcp.lmm.best'
+        $report.launcher.default_server_clicked = $true
+
+        $invalid = 'ssmcp a@' + $origin
+        Send-LauncherKeys $invalid
+        Assert-LauncherText $invalid
+        $errorX = $clientOrigin.X + $formX
+        $errorY = $clientOrigin.Y + $relayY + 88
+        if ($errorY + 28 -gt $clientOrigin.Y + $client.Bottom) { throw 'The validation region does not fit in the owned client.' }
+        $before = Measure-ValidationPixels $errorX $errorY $formWidth ''
+        if ($before -ge 8) { throw 'The validation region already contained an error before submission.' }
+        Send-LauncherKeys '{ENTER}'
+        $validationClock = [Diagnostics.Stopwatch]::StartNew()
+        do {
+            $after = Measure-ValidationPixels $errorX $errorY $formWidth (Join-Path $evidence 'launcher-validation.png')
+            if ($after -ge 8) { break }
+            Start-Sleep -Milliseconds 75
+        } while ($validationClock.Elapsed.TotalSeconds -lt 5)
+        if ($after -lt 8) { throw 'Invalid input did not produce visible error-colored text below the connect button.' }
+        if (@(Get-OwnedCliStarts).Count) { throw 'The launcher spawned a CLI before a valid submission.' }
+        $report.launcher.invalid_input = @{ feedback_file = 'launcher-validation.png'; red_samples_before = $before
+            red_samples_after = $after; cli_starts = 0 }
+
+        $destination = 'e2eprobe@' + $origin
+        Send-LauncherKeys '^a'
+        Send-LauncherKeys ('ssmcp ' + $destination)
+        Assert-LauncherText ('ssmcp ' + $destination)
+        $submitTime = [DateTime]::UtcNow.ToFileTimeUtc()
+        Send-LauncherKeys '{ENTER}'
+        $launchClock = [Diagnostics.Stopwatch]::StartNew()
+        $child = $null
+        do {
+            $starts = @(Get-OwnedCliStarts)
+            if ($starts.Count -gt 1) { throw 'Multiple CLI processes were launched by the owned window.' }
+            if ($starts.Count -eq 1) {
+                $start = $starts[0]
+                if ([long]$start.TIME_CREATED -lt $submitTime) { throw 'The CLI started before the valid Enter key.' }
+                $child = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$($start.ProcessID)"
+                if ($null -ne $child) { break }
+            }
+            Start-Sleep -Milliseconds 75
+        } while ($launchClock.Elapsed.TotalSeconds -lt 8)
+        if ($null -eq $child -or $child.ParentProcessId -ne $process.Id -or $child.ExecutablePath -ine $cliPath) {
+            throw 'The observed CLI was not the same-directory binary launched by the owned desktop.'
+        }
+        $argv = [SsmcpWindowProbe]::Arguments($child.CommandLine)
+        if ($argv.Length -ne 2 -or $argv[1] -cne $destination) { throw 'The CLI did not receive the exact single account and loopback address.' }
+        $cliHandle = [Diagnostics.Process]::GetProcessById([int]$child.ProcessID)
+        $null = $cliHandle.Handle
+        $report.launcher.cli = @{ pid = $cliHandle.Id; parent_pid = $process.Id; path = $child.ExecutablePath
+            sha256 = (Get-FileHash -LiteralPath $cliPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            destination = $argv[1]; argument_count = $argv.Length - 1; start_events = $starts.Count }
+        if ($cliHandle.HasExited) { throw 'The verified CLI exited before the window-close test.' }
+        if (-not $process.CloseMainWindow()) { throw 'The owned desktop did not accept a normal window close.' }
     }
     if (-not $process.WaitForExit(25000)) { throw 'The bounded desktop process did not exit normally.' }
     $report.exit_code = $process.ExitCode
     if ($report.status -ne 'blocked') {
         if ($process.ExitCode -ne 0) { throw "The desktop executable exited with $($process.ExitCode)." }
+        if ($null -eq $cliHandle -or -not $cliHandle.WaitForExit(5000)) { throw 'The CLI survived closure of its desktop window.' }
+        if (@(Get-OwnedCliStarts).Count -ne 1) { throw 'Unexpected CLI launch count after window closure.' }
+        $report.launcher.cli.exited_after_window_close = $true
+        $report.launcher.cli.exit_code = $cliHandle.ExitCode
         $report.status = 'passed'
     }
 } catch {
@@ -466,6 +633,22 @@ public static class SsmcpWindowProbe {
             }
         } catch { $report.cleanup_error = $_.Exception.Message; $report.status = 'failed' }
         finally { $process.Dispose() }
+    }
+    if ($null -ne $cliHandle) {
+        try {
+            if (-not $cliHandle.HasExited) {
+                $cliHandle.Kill($true)
+                if (-not $cliHandle.WaitForExit(5000)) { throw 'The verified CLI did not stop during cleanup.' }
+                $report.forced_termination = $true
+                $report.status = 'failed'
+            }
+        } catch { $report.cleanup_error = $_.Exception.Message; $report.status = 'failed' }
+        finally { $cliHandle.Dispose() }
+    }
+    if ($null -ne $listener) { $listener.Stop() }
+    if ($null -ne $traceId) {
+        Unregister-Event -SourceIdentifier $traceId -ErrorAction SilentlyContinue
+        Remove-Event -SourceIdentifier $traceId -ErrorAction SilentlyContinue
     }
     if ($null -ne $frameReceiptsPath -and (Test-Path -LiteralPath $frameReceiptsPath)) {
         try {
