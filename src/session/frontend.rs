@@ -23,6 +23,14 @@ impl RelayAdmissionDenial {
         }
     }
 
+    /// Used by the private relay dispatcher and the owned core's executable entry point.
+    #[doc(hidden)]
+    pub fn exit_code_for(error: &crate::Error) -> u8 {
+        error
+            .downcast_ref::<Self>()
+            .map_or(1, |reason| reason.exit_code())
+    }
+
     /// Only interpret the exit status of the private core this frontend launched.
     pub fn from_exit(status: &ExitStatus) -> Option<Self> {
         [Self::TrafficQuotaExceeded, Self::OnlineSessionLimit]

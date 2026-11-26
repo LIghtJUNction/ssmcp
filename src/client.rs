@@ -2415,7 +2415,7 @@ async fn run_with_args(
             Ok(()) => 0,
             Err(error) => {
                 report_error(&error.to_string());
-                1
+                i32::from(crate::session::frontend::RelayAdmissionDenial::exit_code_for(&error))
             }
         };
         // This transport child owns no native tools. Exit also ends Tokio's
