@@ -304,7 +304,7 @@ impl Pancake {
         let expires_at = response
             .get("expiresAt")
             .and_then(Value::as_str)
-            .and_then(super::utc_timestamp)
+            .and_then(utc_timestamp)
             .ok_or(Error::Gateway)?;
         if expires_at <= timestamp || expires_at > order.month_end {
             return Err(Error::Gateway);
@@ -399,6 +399,47 @@ fn verify(
         return Err(Error::PaymentMismatch);
     }
     Ok(event)
+}
+
+/// Pancake returns UTC expiry times. Round any nonzero fractional second upward.
+fn utc_timestamp(raw: &str) -> Option<u64> {
+    if raw.len() > 40 {
+        return None;
+    }
+    let stamp = raw
+        .strip_suffix('Z')
+        .or_else(|| raw.strip_suffix("+00:00"))?;
+    let (whole, fraction) = stamp.split_once('.').unwrap_or((stamp, "0"));
+    let shape = b"dddd-dd-ddTdd:dd:dd";
+    if whole.len() != shape.len()
+        || !whole
+            .bytes()
+            .zip(shape)
+            .all(|(byte, &pattern)| match pattern {
+                b'd' => byte.is_ascii_digit(),
+                other => byte == other,
+            })
+        || !(1..=9).contains(&fraction.len())
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let date = time::Date::from_calendar_date(
+        whole[..4].parse().ok()?,
+        time::Month::try_from(whole[5..7].parse::<u8>().ok()?).ok()?,
+        whole[8..10].parse().ok()?,
+    )
+    .ok()?;
+    let timestamp = date
+        .with_hms(
+            whole[11..13].parse().ok()?,
+            whole[14..16].parse().ok()?,
+            whole[17..19].parse().ok()?,
+        )
+        .ok()?
+        .assume_utc()
+        .unix_timestamp();
+    Some(u64::try_from(timestamp).ok()? + u64::from(fraction.bytes().any(|b| b != b'0')))
 }
 
 #[cfg(test)]

@@ -84,3 +84,32 @@ fn environment_store_and_replay_window_are_strict() {
         Err(Error::PaymentMismatch)
     ));
 }
+
+#[test]
+fn utc_expiry_is_strict_and_never_rounded_early() {
+    assert_eq!(utc_timestamp("1970-01-01T00:00:00Z"), Some(0));
+    assert_eq!(utc_timestamp("1970-01-01T00:00:00.001Z"), Some(1));
+    assert_eq!(utc_timestamp("1970-01-01T00:00:01+00:00"), Some(1));
+    assert!(utc_timestamp("2024-02-29T00:00:00Z").is_some());
+    assert_eq!(utc_timestamp("1970-01-01T00:00:00.000000001Z"), Some(1));
+    assert_eq!(utc_timestamp("1970-01-01T00:00:00.000000000Z"), Some(0));
+    assert_eq!(
+        utc_timestamp("9999-12-31T23:59:59.9Z"),
+        Some(253_402_300_800)
+    );
+    for invalid in [
+        "1969-12-31T23:59:59.9Z",
+        "1970-01-01T00:00:00.0000000000Z",
+        "2024-02-29t00:00:00Z",
+        "2024-02-29T00:00:00z",
+        "2024-02-29T00:00:00-00:00",
+        "2000-01-0１T00:00:00Z",
+        "2023-02-29T00:00:00Z",
+        "2024-02-30T00:00:00Z",
+        "2024-02-01T00:00:60Z",
+        "1970-01-01T00:00:01+08:00",
+        "1970-01-01T00:00:01.Z",
+    ] {
+        assert_eq!(utc_timestamp(invalid), None);
+    }
+}

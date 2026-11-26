@@ -1,6 +1,4 @@
 //! Monthly traffic orders. Prices and inventory are explicit configuration, never inferred.
-mod calendar;
-pub(crate) use calendar::{expiry_label, utc_timestamp};
 pub(crate) mod pancake;
 pub(crate) mod store;
 
@@ -282,8 +280,7 @@ pub(crate) fn now() -> u64 {
         .unwrap_or(0)
 }
 
-/// Calendar boundaries use the configured fixed UTC offset, never a 30-day rolling window.
-pub(crate) fn month(timestamp: u64, offset: i32) -> Result<(String, u64), Error> {
+fn local_date(timestamp: u64, offset: i32) -> Result<libc::tm, Error> {
     if !(-720..=840).contains(&offset) {
         return Err(Error::Configuration);
     }
@@ -296,6 +293,28 @@ pub(crate) fn month(timestamp: u64, offset: i32) -> Result<(String, u64), Error>
     if unsafe { libc::gmtime_r(&raw, &mut date) }.is_null() {
         return Err(Error::Invalid);
     }
+    Ok(date)
+}
+
+pub(crate) fn expiry_label(timestamp: u64, offset: i32) -> Result<String, Error> {
+    let date = local_date(timestamp, offset)?;
+    Ok(format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC{}{:02}:{:02}",
+        date.tm_year + 1900,
+        date.tm_mon + 1,
+        date.tm_mday,
+        date.tm_hour,
+        date.tm_min,
+        date.tm_sec,
+        if offset >= 0 { "+" } else { "-" },
+        offset.abs() / 60,
+        offset.abs() % 60
+    ))
+}
+
+/// Calendar boundaries use the configured fixed UTC offset, never a 30-day rolling window.
+pub(crate) fn month(timestamp: u64, offset: i32) -> Result<(String, u64), Error> {
+    let mut date = local_date(timestamp, offset)?;
     let period = format!("{:04}-{:02}", date.tm_year + 1900, date.tm_mon + 1);
     date.tm_mon += 1;
     date.tm_mday = 1;
@@ -382,6 +401,12 @@ mod tests {
         assert_eq!(month(0, 480).unwrap(), ("1970-01".into(), 2_649_600));
         assert_eq!(month(2_649_599, 480).unwrap().0, "1970-01");
         assert_eq!(month(2_649_600, 480).unwrap().0, "1970-02");
+        assert_eq!(
+            expiry_label(2_649_600, 480).unwrap(),
+            "1970-02-01 00:00:00 UTC+08:00"
+        );
+        assert!(matches!(expiry_label(0, -721), Err(Error::Configuration)));
+        assert!(matches!(expiry_label(u64::MAX, 0), Err(Error::Invalid)));
         assert!(valid_subject("123"));
         assert!(!valid_subject("00123"));
     }
