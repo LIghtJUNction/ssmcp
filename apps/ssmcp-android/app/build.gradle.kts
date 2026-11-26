@@ -15,6 +15,19 @@ require(manifestField("packaging/magisk/kam.toml", "prop", "version") == "v$rele
     "The Android release manifests disagree or the APK cannot update the original versionCode 1"
 }
 
+val verifyPackagedCli by tasks.registering {
+    val staged = fileTree("src/main/jniLibs") {
+        include("arm64-v8a/libssmcp.so", "x86_64/libssmcp.so")
+    }
+    inputs.files(staged)
+    doLast {
+        check(staged.files.isNotEmpty() && staged.files.all { it.isFile && it.length() > 0 }) {
+            "Build the Android CLI first: run apps/ssmcp-android/build-native.sh [arm64-v8a|x86_64]"
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn(verifyPackagedCli) }
+
 android {
     namespace = "dev.ssmcp.mobile"
     compileSdk = 35

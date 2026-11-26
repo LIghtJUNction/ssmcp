@@ -2,6 +2,8 @@ package dev.ssmcp.mobile
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.graphics.Bitmap
+import android.view.View
 import android.net.Uri
 import android.webkit.*
 import java.io.ByteArrayInputStream
@@ -32,6 +34,16 @@ internal class WorkbenchView(
         webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) =
                 !target.owns(request.url.toString())
+
+            override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                if (target.owns(url)) {
+                    view.visibility = View.VISIBLE
+                } else {
+                    view.visibility = View.INVISIBLE
+                    view.stopLoading()
+                    failed("工作台跳转到了其它地址，请核对网关设置。")
+                }
+            }
 
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                 if (target.owns(request.url.toString())) return null
