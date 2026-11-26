@@ -91,7 +91,10 @@ class ProtocolInstrumentation : Instrumentation() {
             val opened = startActivitySync(Intent(targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             activity = opened
             waitFor(opened, "automatic same-origin pairing", """
-                document.title.includes('工作台') && document.querySelector('#auth-status')?.textContent === '已设置认证'
+                document.querySelector('#workbench-shell')?.hidden === false
+                    && document.querySelector('#auth-status')?.textContent === '已设置认证'
+                    && document.querySelector('#auth-dialog')?.open === false
+                    && document.querySelector('#pairing-token')?.value === ''
                     && location.protocol === 'http:' && location.hostname === '127.0.0.1' && !location.hash
             """.trimIndent())
             waitFor(opened, "the native foreground session", """

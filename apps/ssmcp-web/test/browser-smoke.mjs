@@ -239,7 +239,16 @@ try {
   assert.equal(commands.some(item => item.operation.command !== 'chat.send'), false,
     'quoted @/$/slash text remains in an ordinary chat.send payload');
 
-  await page.locator('#timeline-scroller').evaluate(node => { node.scrollTop = node.scrollHeight; });
+  // Scrolling to the bottom of a retained page does not select the latest page.
+  // Enter that state deliberately, then follow the same action as a reader.
+  await viewport(1365, 650);
+  await page.locator('#timeline-scroller').evaluate(node => { node.scrollTop = 0; });
+  await emit('返回最新页的定位事件');
+  await page.waitForFunction(expected => document.getElementById('status-cursor').textContent === `cursor ${expected}`
+    && !document.getElementById('timeline-newer').disabled, cursor);
+  assert.equal(await page.getByText('返回最新页的定位事件', { exact: true }).count(), 0);
+  await page.locator('#new-events').click();
+  await page.getByText('返回最新页的定位事件', { exact: true }).waitFor();
   for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
     await emit(`滚动检查 ${pageIndex}`, 16);
     await page.getByText(`滚动检查 ${pageIndex} 15`, { exact: true }).waitFor();

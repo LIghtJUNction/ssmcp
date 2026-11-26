@@ -166,7 +166,7 @@ struct Console {
     sessions: tokio::sync::Mutex<Sessions>,
 }
 
-fn rc_target(text: &str) -> Result<(String, String)> {
+fn rc_target(text: &str) -> Result<(&str, String)> {
     let mut lines = text
         .lines()
         .map(str::trim)
@@ -176,20 +176,23 @@ fn rc_target(text: &str) -> Result<(String, String)> {
         .ok_or("Expected ssmcp username@server in ssmcp.rc")?;
     let mut words = line.split_ascii_whitespace();
     match (words.next(), words.next(), words.next(), lines.next()) {
-        (Some("ssmcp"), Some(target), None, None) => parse_target(target),
+        (Some("ssmcp"), Some(target), None, None) => {
+            let (name, server) = parse_target(target)?;
+            Ok((target, allow_principal(&name, &server)?))
+        }
         _ => Err("Expected one ssmcp username@server line in ssmcp.rc".into()),
     }
 }
 
 fn saved_target(dir: &Path) -> Result<Option<String>> {
     let rc = std::fs::read_to_string(dir.join("ssmcp.rc"))?;
-    let Ok((name, server)) = rc_target(&rc) else {
+    let Ok((written, target)) = rc_target(&rc) else {
         return Ok(None);
     };
-    let target = allow_principal(&name, &server)?;
     // A valid command in this root-owned private file explicitly selects this
     // relay. The placeholder shipped with the module always opens local setup.
-    write_private(&dir.join(CONSENT), target.as_bytes())?;
+    // The module hook compares this marker to the spelling in the owner's rc.
+    write_private(&dir.join(CONSENT), written.as_bytes())?;
     Ok(Some(target))
 }
 
@@ -380,10 +383,7 @@ fn terminal_action(state: &Console, action: Action) -> Result<Value> {
                 .transpose()?
                 .map(|(_, server)| format!("{server}/mcp"));
             let rc = std::fs::read_to_string(state.dir.join("ssmcp.rc"))?;
-            let configured = rc_target(&rc)
-                .ok()
-                .map(|(name, server)| allow_principal(&name, &server))
-                .transpose()?;
+            let configured = rc_target(&rc).ok().map(|(_, target)| target);
             return Ok(
                 json!({"target": sessions.target, "tabs": tabs, "mcp": mcp, "configured": configured}),
             );
@@ -534,4 +534,18 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
         .with_graceful_shutdown(crate::session::gui::shutdown())
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod rc_tests {
+    use super::rc_target;
+
+    #[test]
+    fn manual_rc_preserves_the_owner_spelling_and_normalizes_the_connection() {
+        let (written, target) = rc_target("# phone\nssmcp Alice@https://relay.example\n").unwrap();
+        assert_eq!(written, "Alice@https://relay.example");
+        assert_eq!(target, "alice@relay.example");
+        assert!(rc_target("ssmcp <USERNAME>@ssmcp.lmm.best").is_err());
+        assert!(rc_target("ssmcp alice@relay.example\nssmcp bob@relay.example").is_err());
+    }
 }

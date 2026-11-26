@@ -3,10 +3,12 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 from urllib.error import HTTPError
@@ -45,18 +47,19 @@ def exercise(executable, directory):
     opener = directory / "xdg-open"
     opener.write_text('#!/bin/sh\nprintf "%s\\n" "$1" > "$FIXTURE_HANDOFF"\n')
     opener.chmod(0o700)
-    environment = {**os.environ, "HOME": str(directory), "SSMCP_SESSION_HOME": str(directory / "sessions"),
+    # A fresh install has no required config file. Keep fixture-generated state private.
+    inherited = {key: value for key, value in os.environ.items() if not key.startswith("SSMCP_")}
+    environment = {**inherited, "HOME": str(directory), "SSMCP_SESSION_HOME": str(directory / "sessions"),
                    "SSMCP_AUTH_HOME": str(directory / "auth"), "XDG_CONFIG_HOME": str(directory / "config"),
-                   "XDG_DATA_HOME": str(directory / "data"), "SSMCP_CLIENT_CONFIG": str(directory / "config.toml"),
+                   "XDG_DATA_HOME": str(directory / "data"), "XDG_STATE_HOME": str(directory / "state"),
                    "PATH": str(directory) + os.pathsep + os.environ["PATH"], "FIXTURE_HANDOFF": str(handoff)}
-    for name in ["SSMCP_CONTEXT", "SSMCP_TERMUX_BROWSER_FIFO", "SSMCP_RELAY_TOKEN"]:
-        environment.pop(name, None)
 
     def start():
         handoff.unlink(missing_ok=True)
-        process = subprocess.Popen([executable, "webui"], cwd=directory, env=environment,
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL)
+        with (directory / "launch.stderr").open("ab") as diagnostics:
+            process = subprocess.Popen([executable, "webui"], cwd=directory, env=environment,
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                       stderr=diagnostics)
         try:
             url = wait_for(lambda: handoff.is_file() and handoff.read_text().strip(), process)
             parts = urlsplit(url)
@@ -113,5 +116,20 @@ if __name__ == "__main__":
     parser.add_argument("--client", type=Path, required=True)
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="ssmcp-browser-fixture-") as root:
-        exercise(args.client.resolve(strict=True), Path(root))
+        directory = Path(root)
+        try:
+            exercise(args.client.resolve(strict=True), directory)
+        except Exception:
+            log = directory / "launch.stderr"
+            if log.exists():
+                with log.open("rb") as stream:
+                    stream.seek(max(0, log.stat().st_size - 8192))
+                    tail = stream.read().decode("utf-8", errors="replace")
+                # Browser handoff fragments and protocol credentials stay out of CI logs.
+                tail = re.sub(r"(https?://[^\s#]+)#[^\s]+", r"\1#[redacted]", tail)
+                tail = re.sub(r"""(?i)(bearer\s+|(?:token|code|secret)["']?\s*[:=]\s*["']?)[^\s,"'}]+""",
+                              r"\1[redacted]", tail)
+                tail = re.sub(r"(?i)\b[a-f0-9]{32,}\b", "[redacted]", tail)
+                print("Frontend/core stderr:\n" + tail, file=sys.stderr)
+            raise
     print("PASS: first-run form, hosted consent, exact core, idempotent launch, child cleanup, saved target and bare CLI")
