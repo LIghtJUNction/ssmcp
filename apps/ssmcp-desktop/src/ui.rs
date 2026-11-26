@@ -457,13 +457,33 @@ impl Desktop {
                 );
             }
         }
+        if view.command("client.update") {
+            for (index, (check, label)) in [(true, "检查更新"), (false, "安装更新")]
+                .into_iter()
+                .enumerate()
+            {
+                if ui.button(
+                    canvas,
+                    14 + index as u64,
+                    Rect::new(right - 186. + index as f32 * 94., 65., 88., 30.),
+                    label,
+                    ButtonStyle::Quiet,
+                    self.can_command(view, "client.update"),
+                ) {
+                    self.queue_view = false;
+                    self.page = Page::Receipts;
+                    self.scroll[4] = 0.;
+                    self.command(handle, view, "client.update", json!({"check":check}));
+                }
+            }
+        }
         let tabs = [
             (Page::Conversation, "对话"),
-            (Page::Events, "事件"),
             (Page::Terminal, "终端"),
-            (Page::Workers, "Worker"),
-            (Page::Receipts, "回执"),
+            (Page::Workers, "Workers"),
             (Page::Waits, "等待"),
+            (Page::Events, "事件"),
+            (Page::Receipts, "回执"),
         ];
         let tab_width = (w / tabs.len() as f32).min(94.);
         for (index, (page, label)) in tabs.into_iter().enumerate() {
@@ -1364,7 +1384,7 @@ impl Desktop {
         view: &View,
         bounds: Rect,
     ) {
-        canvas.text("Worker 资源", bounds.x, bounds.y, 19, true, TEXT);
+        canvas.text("Workers", bounds.x, bounds.y, 19, true, TEXT);
         let Some(workers) = &view.workers else {
             self.empty(
                 canvas,
@@ -1375,21 +1395,77 @@ impl Desktop {
             return;
         };
         let metrics = [
-            ("总容量", workers.total),
-            ("已登记", workers.registered),
-            ("工作中", workers.working),
-            ("待命", workers.idle),
-            ("离线", workers.offline),
-            ("退役中", workers.retiring),
+            ("Dreaming", workers.dreaming),
+            ("空闲", Some(workers.idle)),
+            ("工作中", Some(workers.working)),
+            ("离线", Some(workers.offline)),
+            ("退役中", Some(workers.retiring)),
+            ("总容量", Some(workers.total)),
+            ("已登记", Some(workers.registered)),
         ];
-        let mw = (bounds.w - 5. * 10.) / 6.;
+        let chart_width = 208.;
+        let side_by_side = workers.productivity.is_some() && bounds.w >= 600.;
+        let metric_width = bounds.w - if side_by_side { chart_width + 16. } else { 0. };
+        let columns = ((metric_width / 94.) as usize).clamp(2, metrics.len());
+        let rows = metrics.len().div_ceil(columns);
+        let mw = (metric_width - (columns - 1) as f32 * 10.) / columns as f32;
         for (index, (label, value)) in metrics.into_iter().enumerate() {
-            let x = bounds.x + index as f32 * (mw + 10.);
-            canvas.rect(Rect::new(x, bounds.y + 43., mw, 76.), 8., SURFACE);
-            canvas.text(label, x + 12., bounds.y + 55., 11, false, MUTED);
-            canvas.text(&value.to_string(), x + 12., bounds.y + 80., 24, true, TEXT);
+            let x = bounds.x + (index % columns) as f32 * (mw + 10.);
+            let y = bounds.y + 43. + (index / columns) as f32 * 86.;
+            canvas.rect(Rect::new(x, y, mw, 76.), 8., SURFACE);
+            canvas.ellipsis(
+                label,
+                x + 12.,
+                y + 12.,
+                (mw - 24.).max(1.),
+                11,
+                false,
+                MUTED,
+            );
+            canvas.text(
+                &value.map_or_else(|| "—".into(), |count| count.to_string()),
+                x + 12.,
+                y + 37.,
+                24,
+                true,
+                TEXT,
+            );
         }
-        let y = bounds.y + 136.;
+        let mut y = bounds.y + 136. + (rows - 1) as f32 * 86.;
+        if let Some(calls) = workers.productivity {
+            let (x, chart_y) = if side_by_side {
+                (bounds.x + metric_width + 16., bounds.y + 43.)
+            } else {
+                let chart_y = y - 6.;
+                y += 106.;
+                (bounds.x, chart_y)
+            };
+            let width = chart_width.min(bounds.w);
+            canvas.text(
+                "Worker 工具调用 / 分钟（对数）",
+                x,
+                chart_y,
+                11,
+                false,
+                MUTED,
+            );
+            let base = chart_y + 72.;
+            let peak = calls.iter().copied().max().unwrap_or(0).max(1) as f64;
+            let mut previous = None;
+            for (index, count) in calls.into_iter().enumerate() {
+                let point = (
+                    x + index as f32 * (width - 4.) / 9.,
+                    base - (48. * (count as f64).ln_1p() / peak.ln_1p()) as f32,
+                );
+                if let Some(last) = previous {
+                    canvas.line(last, point, 1., BLUE);
+                }
+                canvas.rect(Rect::new(point.0, point.1, 3., 3.), 1., BLUE);
+                previous = Some(point);
+            }
+            canvas.text("−10 分钟", x, base + 8., 10, false, MUTED);
+            canvas.text("现在", x + width - 26., base + 8., 10, false, MUTED);
+        }
         canvas.text("目标容量", bounds.x, y + 11., 13, false, MUTED);
         ui.input(
             canvas,
@@ -1444,7 +1520,12 @@ impl Desktop {
         canvas.text("站位", bounds.x + 14., y + 63., 12, true, MUTED);
         canvas.text("状态", bounds.x + 104., y + 63., 12, true, MUTED);
         canvas.text("任务 / 进度", bounds.x + 242., y + 63., 12, true, MUTED);
-        let body = Rect::new(bounds.x, y + 88., bounds.w, (bounds.h - 256.).max(80.));
+        let body = Rect::new(
+            bounds.x,
+            y + 88.,
+            bounds.w,
+            (bounds.y + bounds.h - y - 88.).max(1.),
+        );
         let total_h = workers.slots.len() as f32 * 89.;
         self.scroll[3] = self.scroll[3].min((total_h - body.h).max(0.));
         canvas.clip(body);
@@ -1966,6 +2047,7 @@ fn kind_label(kind: &str) -> &str {
 
 fn worker_label(state: &str) -> &str {
     match state {
+        "dreaming" => "☾ Dreaming",
         "working" => "工作中",
         "standby" | "idle" => "待命",
         "offline" => "离线",

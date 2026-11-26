@@ -84,6 +84,18 @@ pub(crate) struct SlotView {
     pub(crate) recent_task_durations_ms: Vec<u64>,
 }
 
+impl SlotView {
+    pub(crate) fn display_state(&self) -> &'static str {
+        if self.state == "idle" && self.dreaming {
+            "dreaming"
+        } else if self.activity_status == Some("offline") {
+            "offline"
+        } else {
+            self.state
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct ManagerView {
     pub(crate) client_id: String,

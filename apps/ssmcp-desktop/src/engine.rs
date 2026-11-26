@@ -789,6 +789,19 @@ impl Engine {
                     total: count(&value, "total"),
                     desired: count(&value, "desired_total"),
                     registered: count(&value, "registered_workers"),
+                    dreaming: value["dreaming"].as_u64(),
+                    productivity: value["productivity"]["calls_per_minute"]
+                        .as_array()
+                        .filter(|counts| counts.len() == 10)
+                        .and_then(|counts| {
+                            counts
+                                .iter()
+                                .map(|count| counter(count).map(|value| value.0))
+                                .collect::<Result<Vec<_>, _>>()
+                                .ok()?
+                                .try_into()
+                                .ok()
+                        }),
                     working: count(&value, "working"),
                     idle: count(&value, "idle"),
                     offline: count(&value, "offline"),
@@ -816,7 +829,11 @@ impl Engine {
                 target.slots.push(Worker {
                     slot,
                     epoch: epoch.0.to_string(),
-                    state: text(value, "state", 64),
+                    state: if value["display_state"].is_string() {
+                        text(value, "display_state", 64)
+                    } else {
+                        text(value, "state", 64)
+                    },
                     registered: value["registered"] == true,
                     task: if task.is_empty() {
                         text(value, "task_id", 128)

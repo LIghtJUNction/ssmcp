@@ -1750,13 +1750,8 @@ fn member_activity_summary(snapshot: &Snapshot, cols: u16) -> String {
 }
 
 fn slot_state(slot: &SlotView) -> (PanelTone, &'static str, &'static str) {
-    if slot.state == "idle" && slot.dreaming {
-        return (PanelTone::Accent, "☾", "Dreaming");
-    }
-    if slot.activity_status == Some("offline") {
-        return (PanelTone::Error, "×", "offline");
-    }
-    match slot.state {
+    match slot.display_state() {
+        "dreaming" => (PanelTone::Accent, "☾", "Dreaming"),
         "idle" => (PanelTone::Success, "○", "idle"),
         "working" => (PanelTone::Warning, "●", "working"),
         "offline" => (PanelTone::Error, "×", "offline"),

@@ -222,6 +222,8 @@ async fn real_runtime_worker_resize_requires_writer_and_exact_pool_without_manag
     };
     assert_eq!(state.value["offline"], 2);
     assert_eq!(state.value["idle"], 0);
+    assert_eq!(state.value["dreaming"], 0);
+    assert_eq!(state.value["slots"][0]["display_state"], "offline");
     assert_eq!(state.value["registered_workers"], 0);
     assert!(state.value["manager"].is_null());
     let pool_generation = state.value["pool_generation"].as_str().unwrap();

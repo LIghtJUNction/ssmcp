@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+pub(crate) use terminal::frontend_update;
 
 const API: &str = "https://api.github.com/repos/LIghtJUNction/ssmcp/releases/latest";
 const MAX_METADATA: usize = 1024 * 1024;

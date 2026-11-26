@@ -8,6 +8,24 @@ use tokio::{
 
 static UPDATING: Mutex<()> = Mutex::const_new(());
 
+fn acquire(check: bool) -> Result<tokio::sync::MutexGuard<'static, ()>, String> {
+    // A saved session's binary is a manifest-verified snapshot. Replacing it
+    // would invalidate later starts of that session.
+    if !check
+        && std::env::args_os()
+            .nth(1)
+            .is_some_and(|arg| arg == "__session-run")
+    {
+        return Err(
+            "Update the original client installation, then recreate this saved session to use it."
+                .into(),
+        );
+    }
+    UPDATING
+        .try_lock()
+        .map_err(|_| "A client update is already running".into())
+}
+
 async fn output_tail(mut pipe: impl AsyncRead + Unpin) -> std::io::Result<String> {
     const LIMIT: usize = 8192;
     let mut tail = Vec::new();
@@ -59,22 +77,46 @@ async fn run(check: bool) -> crate::Result<(bool, String, String)> {
     Ok((status.success(), summary, format!("{out}\n{err}")))
 }
 
+pub(crate) async fn frontend_update(check: bool) -> Result<serde_json::Value, String> {
+    let _guard = acquire(check)?;
+    let (ok, summary, output) = outcome(check).await;
+    let detail = details(&output, &summary);
+    Ok(serde_json::json!({
+        "ok": ok,
+        "summary": crate::audit::event(serde_json::Value::String(summary)),
+        "details": crate::audit::event(serde_json::Value::String(detail)),
+    }))
+}
+
+async fn outcome(check: bool) -> (bool, String, String) {
+    run(check).await.unwrap_or_else(|error| {
+        (
+            false,
+            format!("Unable to run client update: {error}"),
+            String::new(),
+        )
+    })
+}
+
+fn details(output: &str, summary: &str) -> String {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty() && *line != summary && !line.starts_with("Tool repository: {")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub(in crate::client) fn submit(check: bool) -> Result<(), String> {
     let (runtime, handle) = crate::client::interface::harness::local_runtime()?;
     runtime.local_registry().ensure_open()?;
-    let guard = UPDATING
-        .try_lock()
-        .map_err(|_| "A client update is already running")?;
+    let guard = acquire(check)?;
     let source = crate::runtime::call_scope::Source::capture();
     handle.spawn(source.scope(async move {
         let _guard = guard;
-        let (ok, summary, output) = run(check).await.unwrap_or_else(|error| {
-            (
-                false,
-                format!("Unable to run client update: {error}"),
-                String::new(),
-            )
-        });
+        let (ok, summary, output) = outcome(check).await;
         let level = if ok { "Info" } else { "Error" };
         let lines = output
             .lines()
@@ -84,16 +126,10 @@ pub(in crate::client) fn submit(check: bool) -> Result<(), String> {
             crate::client::render::status("update", level, line);
         }
         crate::client::render::status("update", level, &summary);
-        let details = lines
-            .filter(|line| *line != summary && !line.starts_with("Tool repository: {"))
-            .map(|line| match line {
-                "Run ssmcp update to install it." => {
-                    "Close this panel and run /update to install it."
-                }
-                _ => line,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let details = details(&output, &summary).replace(
+            "Run ssmcp update to install it.",
+            "Close this panel and run /update to install it.",
+        );
         crate::client::terminal::finish_client_update(&summary, &details);
     }));
     Ok(())

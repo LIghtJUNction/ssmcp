@@ -54,6 +54,7 @@ mod trust;
 pub(crate) mod ui;
 mod ui_command;
 mod update;
+pub(crate) use update::frontend_update;
 mod version;
 mod worker_control;
 mod worker_window;

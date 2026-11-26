@@ -112,6 +112,8 @@ function renderStatus() {
   $('refresh-state').disabled = busy.has('refresh') || !client.capabilities;
   $('refresh-sessions').disabled = busy.has('sessions') || !gateway.authenticated;
   document.querySelectorAll('.session-item').forEach(button => { button.disabled = ['connecting', 'disconnecting'].includes(client.status) || busy.has('session-select'); });
+  show('update-button', client.hasCommand('client.update'));
+  $('update-button').disabled = busy.has('client.update');
   $('observe-button').disabled = !client.capabilities?.events || busy.has('observe');
   setText('observe-button', client.observation === 'paused' ? '继续观察' : '暂停观察');
   const live = $('observation-status');
@@ -303,7 +305,7 @@ function renderWorkers() {
   show('worker-details', Boolean(state));
   setText('worker-count', state?.total ?? '');
   if (!state) return;
-  const counts = [['total', '当前站数'], ['registered_workers', '已注册'], ['working', '工作中'], ['idle', '空闲'], ['offline', '离线'], ['queued', '排队任务']];
+  const counts = [['dreaming', 'Dreaming'], ['idle', '空闲'], ['working', '工作中'], ['offline', '离线'], ['retiring', '退役中'], ['total', '总容量'], ['registered_workers', '已登记'], ['queued', '排队任务']];
   $('worker-summary').replaceChildren(...counts.map(([key, title]) => {
     const node = element('div', 'metric'); node.append(element('strong', '', state[key] ?? '—'), element('span', '', title)); return node;
   }));
@@ -324,7 +326,7 @@ function renderWorkers() {
     $('worker-list').dataset.signature = signature;
     $('worker-list').replaceChildren(...slots.map(slot => {
       const card = element('article', 'worker-card'); const heading = element('div', 'worker-card-header');
-      heading.append(element('h3', '', `站点 ${slot.slot}`), element('span', 'pill', slot.state || '未提供状态'));
+      heading.append(element('h3', '', `站点 ${slot.slot}`), element('span', 'pill', ((slot.display_state === 'dreaming' && '☾ Dreaming') || slot.display_state || slot.state || '未提供状态')));
       if (slot.retire_requested) heading.append(element('span', 'pill', 'retiring'));
       card.append(heading, element('p', 'worker-task', plain(slot.task_summary || slot.task_id || slot.reason || (slot.registered ? '没有当前任务。' : '尚未注册。'))));
       if (slot.progress !== null && slot.progress !== undefined && slot.progress !== '') card.append(element('p', 'worker-progress', plain(typeof slot.progress === 'string' ? slot.progress : JSON.stringify(slot.progress))));
@@ -428,6 +430,36 @@ $('observe-button').addEventListener('click', () => run('observe', async () => {
   if (client.observation === 'paused') { await client.pauseObservation(); localError = null; void client.startObservation(); }
   else await client.pauseObservation();
 }));
+$('update-button').addEventListener('click', () => {
+  const context = client.context();
+  setText('details-title', 'SSMCP 更新');
+  const body = $('details-content');
+  const result = element('pre', '');
+  const actions = element('div', 'form-actions');
+  for (const [check, label] of [[true, '检查更新'], [false, '安装更新']]) {
+    const button = element('button', check ? 'secondary' : 'primary', label);
+    button.addEventListener('click', () => run('client.update', async () => {
+      if (!client.current(context) || !client.hasCommand('client.update')) return;
+      for (const child of actions.children) child.disabled = true;
+      result.textContent = check ? '正在检查更新…' : '正在更新会话所在设备…';
+      try {
+        const record = await client.command('client.update', { check });
+        if (!client.current(context)) return;
+        if (record.status !== 'confirmed') {
+          result.textContent = record.error?.message ?? '更新结果未确认。';
+          return;
+        }
+        const receipt = record.receipt;
+        result.textContent = [receipt?.summary, receipt?.details].filter(value => typeof value === 'string' && value).join('\n\n') || '更新回执未提供说明。';
+      } finally {
+        for (const child of actions.children) child.disabled = false;
+      }
+    }));
+    actions.append(button);
+  }
+  body.replaceChildren(element('p', 'muted', '此操作在会话所在设备运行。'), actions, result);
+  if (!$('details-dialog').open) $('details-dialog').showModal();
+});
 $('refresh-state').addEventListener('click', () => run('refresh', async () => { localError = null; await client.refresh(); renderAll(); }));
 $('menu-button').addEventListener('click', () => { const open = $('sidebar').classList.toggle('is-open'); $('menu-button').setAttribute('aria-expanded', String(open)); });
 document.querySelector('.main').addEventListener('click', event => { if (event.target.closest('#menu-button')) return; $('sidebar').classList.remove('is-open'); $('menu-button').setAttribute('aria-expanded', 'false'); });

@@ -210,6 +210,8 @@ pub struct Workers {
     pub total: u64,
     pub desired: u64,
     pub registered: u64,
+    pub dreaming: Option<u64>,
+    pub productivity: Option<[u64; 10]>,
     pub working: u64,
     pub idle: u64,
     pub offline: u64,
@@ -311,6 +313,15 @@ impl Receipt {
                         "workers.resize" => "收到容量调整回执；当前站位见 Worker 页面。".into(),
                         "terminal.write" => "终端接受写入。命令是否完成请查看终端输出。".into(),
                         "terminal.resize" => "收到终端尺寸变更回执。".into(),
+                        "client.update" => {
+                            let summary = text(value, "summary", 2048);
+                            let details = text(value, "details", 4096);
+                            if details.is_empty() {
+                                summary
+                            } else {
+                                format!("{summary}\n{details}")
+                            }
+                        }
                         _ => "收到原请求回执。完成语义由对应操作定义。".into(),
                     };
                     (ReceiptState::Confirmed, detail)

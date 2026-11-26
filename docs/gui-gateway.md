@@ -55,6 +55,11 @@ ssmcp gui serve --listen 127.0.0.1:8787 \
 
 `read_only:false` 是明确的可写连接请求。是否取得租约、能执行哪些命令，都由实际 `RemoteFrontend` 和核心能力响应决定。`connection_id` 只是关联标识，不提供权限。`status:"connected"` 表示网关已取得桥接对象；原生 Runtime 是否活跃要读取能力与 `runtime` 状态，不能据此把离线后端画成正在工作。
 
+工作台的主视图按「对话、终端、Workers、等待」组织。宽窗口可并排显示状态和详情，窄屏将两者纵向排列。各前端分别渲染控件，使用同一份会话状态、事件与命令回执。
+
+- Workers 展示整个池的 `dreaming` 数量和每个工位的 `display_state`。工位的调度状态仍在 `state`，Dreaming 工位仍计入空闲容量。容量和工具调用趋势覆盖整个池，翻页只变更工位明细。
+- 控制连接可通过 `client.update` 提交 `{"check":true}` 检查新版，或提交 `{"check":false}` 执行正常更新流程。更新发生在会话所在设备，回执包含 `ok`、`summary` 和 `details`。已保存的会话可检查版本。更新原安装后重新创建会话才能采用新版。Android 模块由模块管理器安装。
+
 成功创建响应中，嵌套 `capabilities.id` 与外层创建请求的 `request_id` 一致，网关返回前会校验关联。前端也可以使用自己的新 ID，通过 `/bridge` 发起独立能力发现。
 
 ## 能力、状态与事件

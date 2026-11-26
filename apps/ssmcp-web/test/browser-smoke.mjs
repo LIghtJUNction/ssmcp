@@ -26,7 +26,7 @@ try {
     window.cspViolations = [];
     document.addEventListener('securitypolicyviolation', event => window.cspViolations.push(event.violatedDirective));
   });
-  const caps = capabilities({ resources: ['runtime', 'threads', 'conversation', 'chat.queue', 'terminals', 'workers'], commands: ['chat.send', 'terminal.write', 'terminal.resize', 'workers.resize'] });
+  const caps = capabilities({ resources: ['runtime', 'threads', 'conversation', 'chat.queue', 'terminals', 'workers'], commands: ['chat.send', 'terminal.write', 'terminal.resize', 'workers.resize', 'client.update'] });
   const source = { kind: 'main', client_id: 'real.fixture.client', connection: '9007199254740993', request_id: '12' };
   const productivity = {
     members: 1,
@@ -56,7 +56,8 @@ try {
     conversation: { schema_version: 1, scope: { kind: 'process' }, events: [...inputHistory, { sequence: '9007199254740992', kind: 'answer', text: '来自原生历史的 fixture 文本', source, value: { type: 'ssmcp.message', kind: 'answer', message_id: 'native_00000000000000000000000000000006' } }], next_cursor: '9007199254740993', start_cursor: '9007199254740987', end_cursor: '9007199254740993', has_more: false, gap: false, retention: 'live_process_memory' },
     'chat.queue': { client_id: 'fixture.client', items: queue, next_offset: queue.length, has_more: false },
     terminals: { terminals: [{ terminal_id: 'actual.terminal', name: '主终端', cwd: '/fixture/project', selected: true }], selected: 'actual.terminal', default_terminal_id: 'actual.terminal', max_terminals: 4 },
-    workers: { pool_generation: 'actual.pool', total: 1, desired_total: 1, registered_workers: 1, working: 1, idle: 0, offline: 0, retiring: 0, queued: 0, productivity, slots: [worker], slot_count: 1, offset: 0, next_offset: null },
+    workers: { pool_generation: 'actual.pool', total: 2, desired_total: 2, registered_workers: 2, working: 1, idle: 1, dreaming: 1, offline: 0, retiring: 0, queued: 0, productivity, slots: [worker,
+      { slot: 1, epoch: '4', state: 'idle', display_state: 'dreaming', registered: true, total_work_ms: '0' }], slot_count: 2, offset: 0, next_offset: null },
   })[resource];
   const fulfill = (route, body) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   await page.route('**/api/gui/v1/**', async route => {
@@ -76,6 +77,7 @@ try {
           value = { request_id: body.id, message_id: 'fixture.message', status: 'sending', target: op.arguments.target, duplicate: false, confirmation: 'local_queue_admission' };
           queue = [{ id: value.message_id, text: op.arguments.text, target: value.target, status: value.status, created_at_ms: '9007199254740993', updated_at_ms: '9007199254740993', uncertain: false, retarget_required: false, error: null }];
         }
+        if (op.command === 'client.update') value = { ok: true, summary: 'Fixture update check complete', details: 'Shared backend receipt' };
         if (op.command === 'workers.resize') value = { resize_pending: true, desired_total: op.arguments.total, pool_generation: 'actual.pool' };
         return fulfill(route, response(body, { command: op.command, value }));
       }
@@ -252,13 +254,20 @@ try {
 
   await page.locator('#tab-workers').click();
   assert.equal(await page.locator('#worker-productivity').textContent(), productivity.plot.join('\n'));
+  assert.equal(await page.locator('#worker-summary .metric').first().textContent(), '1Dreaming');
+  assert.equal(await page.locator('#worker-list .worker-card').nth(1).locator('.pill').textContent(), '☾ Dreaming');
+  await page.locator('#update-button').click();
+  await page.getByRole('button', { name: '检查更新' }).click();
+  await page.getByText('Fixture update check complete', { exact: false }).waitFor();
+  assert.deepEqual(commands.filter(item => item.operation.command === 'client.update').map(item => item.operation.arguments), [{ check: true }]);
+  await page.locator('[data-close="details-dialog"]').click();
   const metricsBox = await page.locator('#worker-summary').boundingBox();
   const plotBox = await page.locator('.worker-productivity').boundingBox();
   assert.ok(plotBox.x >= metricsBox.x + metricsBox.width);
 
   for (const width of [390, 320]) {
     await viewport(width, 844);
-    for (const tab of ['conversation', 'terminal', 'workers']) {
+    for (const tab of ['conversation', 'terminal', 'workers', 'waits']) {
       await page.locator(`#tab-${tab}`).click();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${tab} must fit ${width}px viewport`);
       const panel = await page.locator(`#panel-${tab}`).boundingBox();

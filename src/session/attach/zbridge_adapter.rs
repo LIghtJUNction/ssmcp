@@ -292,6 +292,12 @@ impl Host for BoundHost<'_> {
             }
             if mode == Mode::Control {
                 commands.extend(execution::commands());
+                commands.push(Command {
+                    id: id("client.update"),
+                    description: "Check or update the client on the backend host using its normal verified updater. Requires an explicit mode; does not reload a session.".into(),
+                    input_schema: json!({"type":"object","additionalProperties":false,
+                        "properties":{"check":{"type":"boolean"}},"required":["check"]}),
+                });
                 commands.push(Command { id:id("terminal.write"),
                     description:"Write explicit UTF-8 input to one real terminal under the exclusive local input lease; never automatically retry a lost receipt".into(),
                     input_schema:json!({"type":"object","additionalProperties":false,
@@ -500,6 +506,13 @@ impl Host for BoundHost<'_> {
                     execution::perform(self, &runtime, command.as_str(), arguments).await?
                 }
                 "chat.send" => chat::send(self, &runtime, arguments)?,
+                "client.update" => {
+                    let args: ClientUpdate = serde_json::from_value(arguments)
+                        .map_err(|_| BridgeError::invalid("invalid client.update arguments"))?;
+                    crate::client::frontend_update(args.check)
+                        .await
+                        .map_err(native)?
+                }
                 _ => {
                     return Err(BridgeError::new(
                         ErrorCode::Denied,
@@ -510,6 +523,12 @@ impl Host for BoundHost<'_> {
             Ok(CommandResult { command, value })
         })
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClientUpdate {
+    check: bool,
 }
 
 #[derive(Deserialize)]
@@ -551,6 +570,7 @@ fn worker_state(
             "plot":activity.plot()})
     });
     let count = snapshot.slots.len();
+    let dreaming = snapshot.slots.iter().filter(|slot| slot.dreaming).count();
     let offset = usize::from(query.offset);
     if offset > count {
         return Err(BridgeError::invalid(
@@ -561,6 +581,7 @@ fn worker_state(
     let mut slots = Vec::new();
     for slot in snapshot.slots.drain(offset..end) {
         slots.push(json!({"slot":slot.slot,"epoch":Counter(slot.epoch),"state":slot.state,
+            "display_state":slot.display_state(),
             "task_id":slot.task_id,"reason":slot.reason,"registered":slot.registered,
             "retire_requested":slot.retire_requested,"task_summary":slot.task_summary,
             "last_command":slot.last_command,"progress":slot.progress,
@@ -579,6 +600,7 @@ fn worker_state(
         json!({"process_id":snapshot.process_id,"pool_generation":snapshot.generation,"manager":manager,
         "total":snapshot.total,"desired_total":snapshot.desired_total,"idle":snapshot.idle,
         "working":snapshot.working,"offline":snapshot.offline,"retiring":snapshot.retiring,
+        "dreaming":dreaming,
         "registered_workers":snapshot.registered_workers,"queued":snapshot.queued,
         "closed":snapshot.closed,"stopping":snapshot.stopping,"slots":slots,"slot_count":count,
         "offset":offset,"next_offset":(end<count).then_some(end),"logs_omitted":true,

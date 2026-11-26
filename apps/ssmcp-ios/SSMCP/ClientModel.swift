@@ -35,6 +35,9 @@ struct WorkerSummary: Identifiable {
     @Published private(set) var terminals: [TerminalSummary] = []
     @Published private(set) var workerRows: [WorkerSummary] = []
     @Published private(set) var workerSummary = ""
+    @Published private(set) var timeSnapshot: JSONObject?
+    @Published private(set) var updateResult: String?
+    @Published private(set) var workerProductivity: [String] = []
     @Published private(set) var nextWorkerOffset: Int?
     @Published private(set) var poolGeneration: String?
     @Published private(set) var terminalOutput: [String: String] = [:]
@@ -216,6 +219,7 @@ struct WorkerSummary: Identifiable {
             }
             let terminalState = try await read("terminals", api: api, connection: current, budget: budget)
             let workerState = try await read("workers", api: api, connection: current, budget: budget, query: ["offset": workerOffset, "limit": 16])
+            let time = try await read("time", api: api, connection: current, budget: budget)
             let roster = try await read("threads", api: api, connection: current, budget: budget)
             let queued = try await read("chat.queue", api: api, connection: current, budget: budget)
             let snapshot = try prepare(terminalState, workers: workerState, roster: roster, queued: queued, history: history?.value)
@@ -226,6 +230,9 @@ struct WorkerSummary: Identifiable {
                 note("后端代次已变更；旧命令仍属于原代次，没有重放。")
             }
             connection = current
+            timeSnapshot = time
+            let productivity = workerState?["productivity"] as? JSONObject
+            workerProductivity = Array((productivity?["plot"] as? [String] ?? []).prefix(5))
             terminals = snapshot.terminals; workerRows = snapshot.workers; workerSummary = snapshot.workerSummary
             nextWorkerOffset = snapshot.nextWorker; poolGeneration = snapshot.poolGeneration
             threads = snapshot.threads; chatCanSend = snapshot.canSend; queue = snapshot.queue
@@ -254,14 +261,16 @@ struct WorkerSummary: Identifiable {
         if let workers {
             pool = try string(workers["pool_generation"])
             if let value = workers["next_offset"], !(value is NSNull) { nextWorker = try integer(value, 0...Int.max) }
-            summary = "\(workers["working"] ?? 0) 工作 · \(workers["idle"] ?? 0) 待命 · \(workers["offline"] ?? 0) 离线\n\(workers["registered_workers"] ?? 0) 已登记 · 目标 \(workers["desired_total"] ?? 0) · \(workers["retiring"] ?? 0) 退出中"
+            summary = "Dreaming \(workers["dreaming"] ?? "—") · \(workers["working"] ?? 0) 工作 · \(workers["idle"] ?? 0) 待命 · \(workers["offline"] ?? 0) 离线\n\(workers["registered_workers"] ?? 0) 已登记 · 目标 \(workers["desired_total"] ?? 0) · \(workers["retiring"] ?? 0) 退出中"
             workerRows = try ((workers["slots"] as? [JSONObject]) ?? []).prefix(32).map { row in
                 let epoch = try Counter(row["epoch"]), id = "\(row["slot"] ?? "")"
                 let details = ["task_summary", "progress", "last_command", "reason"].compactMap { key -> String? in
                     guard let value = row[key], !(value is NSNull) else { return nil }
                     return String(String(describing: value).prefix(1024))
                 }.joined(separator: "\n")
-                return WorkerSummary(id: id, title: "站位 \(id) · \(row["state"] ?? "") · epoch \(epoch)", details: details)
+                let state = row["display_state"] as? String ?? row["state"] as? String ?? ""
+                let label = state == "dreaming" ? "☾ Dreaming" : state
+                return WorkerSummary(id: id, title: "站位 \(id) · \(label) · epoch \(epoch)", details: details)
             }
         }
         let threadRows = try ((roster?["agents"] as? [JSONObject]) ?? []).prefix(32).map {
@@ -303,6 +312,7 @@ struct WorkerSummary: Identifiable {
         do { request = try BridgeProtocol.request("command", generation: expectedGeneration, target: name, arguments: arguments) }
         catch { fail(error, "无效命令"); return completion(.notSent) }
         stopReads(); busy = true
+        if name == "client.update" { updateResult = nil }
         var reserved = false, dispatched = false, received = false
         var state: CommandState = .notSent
         do {
@@ -317,6 +327,10 @@ struct WorkerSummary: Identifiable {
             try CommandJournal.settle(request.id, state: state)
             status = state == .unknown ? "\(name) · unknown · 正文仍保留" : "\(name) · 已验证回执"
             note("\(current.session) · \(name) · \(request.id)\n\(status)\n回执：\(receipt["value"] ?? "")")
+            if name == "client.update", let payload = receipt["value"] as? JSONObject {
+                updateResult = [payload["summary"] as? String, payload["details"] as? String]
+                    .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+            }
         } catch {
             let failure = mutationFailure(error, received: received, attempted: dispatched)
             state = !dispatched ? .notSent : ((failure as? BridgeFailure)?.unknown == false ? .rejected : .unknown)
@@ -394,7 +408,7 @@ struct WorkerSummary: Identifiable {
             try await api.close(current.id); received = true
             try CommandJournal.settle(requestID, state: .confirmed)
             epoch += 1; connection = nil; inbox = nil; pendingHistory = nil
-            terminals = []; terminalOutput = [:]; terminalBytes = [:]; workerRows = []
+            terminals = []; terminalOutput = [:]; terminalBytes = [:]; workerRows = []; timeSnapshot = nil; workerProductivity = []; updateResult = nil
             threads = []; conversation = []; queue = []; chatCursor = nil; chatCanSend = false
             status = "已断开 · 后台会话继续运行"
         } catch {
