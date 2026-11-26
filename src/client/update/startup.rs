@@ -161,7 +161,7 @@ fn published_version(bytes: &[u8], target: &str) -> crate::Result<Version> {
 fn available_text(current: &InstalledVersion, latest: Option<Version>) -> Option<String> {
     let latest = latest?;
     (InstalledVersion::parse(&latest.tag())? > *current)
-        .then(|| format!("ssmcp update --check · {} available", latest.tag()))
+        .then(|| format!("/update --check · {} available", latest.tag()))
 }
 
 async fn notice_at(

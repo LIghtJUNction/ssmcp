@@ -782,6 +782,16 @@ pub(crate) fn notice(message: &str) {
     }
 }
 
+pub(super) fn finish_client_update(summary: &str, details: &str) {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !state.chat_finish_client_update(summary, details) {
+            state.notice = Some(panel::safe_text(summary).chars().take(240).collect());
+            state.dirty = true;
+        }
+    }
+}
+
 pub(crate) fn follow_attach_history(selection: crate::runtime::call_scope::DisplayHistory) {
     if let Some(shared) = shared() {
         let mut state = shared

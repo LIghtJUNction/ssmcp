@@ -793,7 +793,7 @@ impl State {
                     return Err("Preview cannot check or install client updates".into());
                 }
                 crate::client::update::terminal::submit(check)?;
-                self.notice = Some("Checking for client updates…".into());
+                self.chat_show_client_update(check);
             }
             "/version" => {
                 if !rest.is_empty() {

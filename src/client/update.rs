@@ -330,13 +330,19 @@ async fn android_update(mode: Mode) -> crate::Result<()> {
         return Ok(());
     }
     println!(
-        "Magisk update {} available: https://github.com/LIghtJUNction/ssmcp/releases/download/{}/{MAGISK_ZIP}",
-        latest.tag(),
+        "ZIP: https://github.com/LIghtJUNction/ssmcp/releases/download/{}/{MAGISK_ZIP}",
         latest.tag()
     );
     if mode == Mode::Install {
-        println!("Flash the ZIP in Magisk and reboot. Your ssmcp.rc remains in /data/adb/ssmcp.");
+        println!(
+            "Install the ZIP in KernelSU or Magisk, then reboot. Configuration is kept in /data/adb/ssmcp."
+        );
     }
+    println!(
+        "Module update available: {} → {}.",
+        current.tag(),
+        latest.tag()
+    );
     Ok(())
 }
 

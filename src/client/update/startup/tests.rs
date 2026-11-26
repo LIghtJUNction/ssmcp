@@ -99,7 +99,7 @@ impl Drop for Server {
 #[tokio::test]
 async fn startup_notice_uses_cached_release_and_semver_without_repeated_http() {
     let server = Server::start("200 OK", RELEASE).await;
-    let expected = Some("ssmcp update --check · v1.2.4 available".to_owned());
+    let expected = Some("/update --check · v1.2.4 available".to_owned());
     assert_eq!(server.check("1.2.3", 1000).await, expected);
     assert_eq!(server.check("1.2.4-rc.2", 1001).await, expected);
     assert_eq!(server.check("1.2.4+local", 1001).await, None);
@@ -165,7 +165,7 @@ async fn startup_notice_revalidates_old_corrupt_future_and_other_target_caches()
         let directory = SafeDirectory::at(server.directory()).unwrap();
         directory.write_atomic(NOTICE_CACHE_FILE, &content).unwrap();
         assert_eq!(server.check("1.2.3", 1000).await,
-            Some("ssmcp update --check · v1.2.4 available".into()));
+            Some("/update --check · v1.2.4 available".into()));
         assert_eq!(server.hits(), 1);
     }
 }
@@ -287,7 +287,7 @@ async fn startup_notice_http_timeout_leaves_reconnect_backoff() {
     assert_eq!(fixture.hits(), 0);
     assert_eq!(
         fixture.check("1.2.3", 1000 + NOTICE_BACKOFF).await,
-        Some("ssmcp update --check · v1.2.4 available".into())
+        Some("/update --check · v1.2.4 available".into())
     );
     assert_eq!(fixture.hits(), 1);
 }

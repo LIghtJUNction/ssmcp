@@ -41,9 +41,11 @@ async fn run(check: bool) -> crate::Result<(bool, String, String)> {
     let (status, out, err) =
         tokio::try_join!(child.wait(), output_tail(stdout), output_tail(stderr))?;
     let summary = if status.success() {
-        out.lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
+        let lines = out.lines().filter(|line| !line.trim().is_empty());
+        lines
+            .clone()
+            .find(|line| line.starts_with("Update available:"))
+            .or_else(|| lines.last())
             .unwrap_or("Update command completed")
             .to_owned()
     } else {
@@ -74,11 +76,25 @@ pub(in crate::client) fn submit(check: bool) -> Result<(), String> {
             )
         });
         let level = if ok { "Info" } else { "Error" };
-        for line in output.lines().map(str::trim).filter(|s| !s.is_empty()) {
+        let lines = output
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty());
+        for line in lines.clone().filter(|line| *line != summary) {
             crate::client::render::status("update", level, line);
         }
         crate::client::render::status("update", level, &summary);
-        crate::client::terminal::notice(&summary);
+        let details = lines
+            .filter(|line| *line != summary && !line.starts_with("Tool repository: {"))
+            .map(|line| match line {
+                "Run ssmcp update to install it." => {
+                    "Close this panel and run /update to install it."
+                }
+                _ => line,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        crate::client::terminal::finish_client_update(&summary, &details);
     }));
     Ok(())
 }
