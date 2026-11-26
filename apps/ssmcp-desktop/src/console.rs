@@ -379,7 +379,7 @@ while IFS= read -r line; do printf 'received %s\n' "$line"; done
         .unwrap();
         fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
 
-        let target = "operator@http://127.0.0.1:12345";
+        let target = "alice@http://127.0.0.1:12345";
         let mut console = Console::start_program(program, target.into(), 1000., 700.).unwrap();
         let await_line = |console: &Console, prefix: &str| {
             let deadline = Instant::now() + Duration::from_secs(5);

@@ -35,7 +35,7 @@
 | --- | --- | --- |
 | Linux x86_64 桌面 | `ssmcp-desktop-x86_64-unknown-linux-gnu-release.tar.gz` | Ubuntu 22.04 上的原生 Release 构建、Rust 测试，以及 Xvfb/Mesa llvmpipe 下的真实 X11/OpenGL 窗口 |
 | Windows x86_64 桌面 | `ssmcp-desktop-x86_64-pc-windows-msvc-debug.zip` | 原生 MSVC Debug 构建与 Rust 测试；实际启动本次构建的自有窗口，核对初始及调整尺寸后的呈现回执、非均匀窗口像素与正常退出 |
-| Android | `ssmcp-android-debug.apk` | Debug APK；API 35 x86_64 模拟器上运行实际自定义 Instrumentation，协议与控制器测试使用注入网关 |
+| Android | `ssmcp-android-debug.apk` | Debug APK；API 35 x86_64 模拟器上运行实际自定义 Instrumentation，系统 WebView 加载 APK 自带 CLI 的真实工作台并完成配对、控制租约与释放 |
 | iOS | `ssmcp-gui-ios.json` 验证收据 | 未签名 simulator 构建与 XCTest；没有可安装到真机的 IPA |
 
 三个可下载程序附件各有独立 `.sha256` 文件。四个平台另附 `ssmcp-gui-<platform>.json`，记录源码 commit、根树与应用树、发布版本、target、实际构建 profile、测试退出状态、Actions run/attempt、工作流 commit 和证据摘要；它们也进入 `release-manifest.json` 与 `SHA256SUMS`。[资产与收据校验](../scripts/release.py)

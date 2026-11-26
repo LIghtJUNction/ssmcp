@@ -16,6 +16,8 @@ mod controller_accounts;
 mod controller_command;
 mod environment;
 #[cfg(target_os = "android")]
+mod android_app;
+#[cfg(target_os = "android")]
 mod magisk;
 
 #[cfg(test)]
@@ -2092,6 +2094,11 @@ pub async fn run() -> crate::Result<()> {
         return result;
     }
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    #[cfg(target_os = "android")]
+    if args.first().is_some_and(|arg| arg == "__android_app") {
+        args.remove(0);
+        android_app::observe_app_pipe()?;
+    }
     #[cfg(target_os = "android")]
     if args.first().is_some_and(|arg| arg == "__magisk") {
         return magisk::run(&args[1..]).await;

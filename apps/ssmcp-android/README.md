@@ -1,57 +1,49 @@
 # SSMCP Android
 
-原生 Android 客户端：Kotlin、标准 `Activity` / `View`、系统 HTTPS 和 Android Keystore。没有 WebView、Compose、AndroidX、第三方网络库或应用层分析服务。最低 Android 8（API 26）。[协议依据](../../docs/gui-bridge.md)是当前 CLI 的 zbridge 适配器；界面读取真实能力并据此开放操作。
+打开 APK 后，手机上的 SSMCP CLI 在应用私有目录启动工作台，Android 系统 WebView 加载 CLI 提供的页面。页面、会话目录、输入队列和控制租约与桌面浏览器使用同一套实现。APK 适用于 Android 8（API 26）及以上的 arm64 设备和 x86_64 模拟器。请使用支持现代 JavaScript 的系统 WebView。
 
-## 连接
+## 在手机上启动
 
-先启动提供 `/api/gui/v1` 的 SSMCP gateway，并通过自己的 HTTPS 代理转发。CLI 示例中的端口是显式配置，不是默认值：
+首次启动运行 `ssmcp gui serve`。工作台绑定设备回环的随机端口，APK 从 CLI 私有配对文件读取实际地址和令牌。空会话目录表示这个应用目前没有可查看的本机会话。
 
-```sh
-ssmcp gui serve --listen 127.0.0.1:8787 \
-  --assets /absolute/apps/ssmcp-web \
-  --pairing-file /absolute/private/gui-pairing.json \
-  --public-origin https://gui.example
+打开 **启动设置 → 本机 CLI**，填写命令，点击 **打开**。例如：
+
+```text
+ssmcp alice@relay.example --name phone
 ```
 
-在客户端填写 HTTPS 源地址（例如 `https://gui.example`）和 pairing token。令牌仅出现在 `Authorization: Bearer …`，不进入 URL 或应用日志。系统证书校验保持开启，重定向被拒绝。令牌用 Keystore 的 AES-GCM 密钥加密保存，并绑定该源地址；可以在断开后删除配对。应用禁用备份与窗口截图。
+这会在手机上启动一个使用指定中继账户的前台 CLI，显示名称为 `phone`。省略 `--name phone` 可使用 CLI 的默认名称。APK 将用户名、服务器及可选名称作为独立参数交给随包的可执行文件。网页显示会话的实际连接状态；中继账号和网络需要已就绪。应用以普通 Android 应用身份运行，工作目录为私有的 `files/workspace`。
 
-默认只读。关闭“Observe only”后，点击会话并明确申请独占控制租约，才可能得到终端输入、调整容量或聊天提交能力。权限仍由 core 决定。
+返回桌面可随后重新打开工作台。**停止本机** 会退出这个 APK 启动的会话和网关。更换启动命令或切到已有网关也会结束原本机进程。系统终止应用进程后，CLI 的所有权管道随之关闭。下一次打开应用按保存的启动设置运行。
 
-## 界面
+## 连接已有网关
 
-- **Sessions**：分页读取已有会话；打开和释放连接。断开不停止后台会话。
-- **对话**：真实成员线程、带来源的保留记录、消息队列和中文编辑器。`chat.send` 回执只确认本地入队；不表示模型已经接收或完成。
-- **Activity**：会话和 worker 事件，最多保留 300 条。
-- **Terminals**：真实终端列表、每终端最近 32 KiB 的 UTF-8 输出、明确输入以及调整全部终端尺寸。它是文本视图，不是完整 ANSI 终端模拟器；不会自动添加换行。
-- **Workers**：实际登记、工作、待命、离线与退出状态，16 站位分页；resize 使用当前 `pool_generation`。
+在 **启动设置 → 已有网关** 中填写提供 SSMCP 工作台页面及 `/api/gui/v1` 的 HTTPS 源地址。可在启动设置输入并保存该源的令牌，也可以进入工作台后输入令牌或选择网关提供的私有 `pairing.json`。原生启动设置用 Android Keystore 的 AES-GCM 密钥加密保存令牌，并将密文绑定到源地址。工作台内输入的令牌仅用于当前页面。
 
-只有 core 宣告的资源和命令会开放。尚未提供 `threads` / `conversation` / `chat.queue` / `chat.send` 的 core 会显示能力不可用。
+| 网关位置 | 地址 |
+| --- | --- |
+| 远端机器 | 网关配置的 HTTPS 源，例如 `https://gui.example`。反向代理须保留公共 Host 和 Origin。 |
+| 当前手机或模拟器 | 同一设备上的 `http://127.0.0.1:实际端口`。已有模块的默认工作台在 `http://127.0.0.1:42387/`，需要该实例的配对凭据。 |
+| 模拟器或 USB 手机上的开发机网关 | 若开发机的回环网关监听 8787，执行 `adb reverse tcp:8787 tcp:8787`，在 APK 填写 `http://127.0.0.1:8787`。模拟器的 `10.0.2.2` 指向宿主机，访问它会改变 HTTP Host，且无法提供工作台所需的浏览器安全上下文。 |
 
-## 协议与资源限制
+WebView 使用系统证书校验，只允许当前网关源，配对通过目标源明确的一次性消息交给现有表单。远端页面无法调用原生启动命令。删除原生配对可在启动设置完成。
 
-HTTP transport 集中在 `Gateway.kt`。路径固定为 `GET /sessions`、`POST /connections`、`POST /connections/{id}/bridge`、`POST /connections/{id}/events`、`DELETE /connections/{id}`，都在 `/api/gui/v1` 下。bridge 请求保持 v1 的 `version/id/operation`，返回 `body.kind/value`；原始 zbridge `events` 仍只支持 1000 ms，本客户端使用 gateway 的有界事件观察接口。
+## 查看会话和输入
 
-一次完整的观察与状态刷新共用 55 秒绝对截止。事件长等最多 50 秒；由事件触发的缺口协调或对话刷新继承本轮剩余时间。手动刷新中的 capabilities、历史页和全部状态读取也共用一个截止时间。进入后台或点击断开会立即取消读取；已发送的命令继续等待原回执。
+工作台默认以只读模式连接。需要操作时，选择会话和 **控制会话**，取得原生控制租约后，使用后端实际提供的对话、终端或 worker 功能。聊天入队回执确认本地接纳。请求结果、观察游标、缺口恢复和页面记录的保留规则见[工作台说明](../ssmcp-web/README.md)。断开前可核对操作记录；更换页面或应用进程结束会丢失页面内的草稿和记录。旧 APK 留下的操作记录可在启动设置中查看。
 
-已收到的事件页和历史页先保留为待消费页。遇到 retention gap，只有同一 generation 的权威状态全部读取成功后才消费该页、推进 `next_cursor`；失败或暂停后继续处理原页。旧刷新晚到时必须通过读取周期和游标校验，不能覆盖新快照。generation 改变后重新读取能力，原命令仍属于原代次。实现位于 [ClientController.kt](app/src/main/java/dev/ssmcp/mobile/ClientController.kt) 和 [Gateway.kt](app/src/main/java/dev/ssmcp/mobile/Gateway.kt)。
+## 构建与验证
 
-所有协议计数器保持规范十进制字符串，检查 `0…18446744073709551615`；不经过浮点数。只渲染已支持的资源 schema 1；其它版本不进入支持集合，返回未知 state 版本会停止该次刷新。帧上限 256 KiB，事件页上限 128 KiB；会话最多缓存 128 项、时间线和对话各 300 项、终端最多 16 个。
+使用 JDK 17+、Gradle 8.10.2、AGP 8.7.3、Kotlin 2.0.21、SDK / Build Tools 35 以及原生构建脚本要求的 Android NDK。APK 的 versionName 取自根 Cargo.toml，versionCode 沿用发行流程递增的 Android 发行编号。应用 ID 保持为 `dev.ssmcp.mobile`；覆盖安装还需相同签名。
 
-请求日志最多 20 条、总量最多 512 KiB。它在发送前保存原请求 ID、连接、代次、目标和 `unknown` 标记；聊天与终端输入同时保留完整原文，便于重启后核对。原文以有界 Base64 编码存入私有应用 preferences，Base64 仅用于编码；应用禁用系统备份。验证回执确认或明确拒绝后删除正文。未确定的记录不会被新请求淘汰；20 条均待确认时暂停新的修改操作。令牌仍只存在配对存储中。实现位于 [CommandJournal.kt](app/src/main/java/dev/ssmcp/mobile/CommandJournal.kt)。
-
-命令只有明确点击才发出。网络中断、回包无法关联或代次变化时，结果保留为 `unknown`，没有应用层自动重发路径。打开和关闭连接也按租约修改处理，原 open request ID 或 close connection ID 保持可查。聊天内外层共用一个请求 ID，并核对回执目标和本地队列接纳字段。编辑器只在回执已确认、连接、代次、目标和正文仍与提交时一致时清空；其它情况保留草稿和原始未知输入。
-
-## 构建与测试
-
-工程使用 AGP 8.7.3、Kotlin 2.0.21、Gradle 8.10.2、SDK / Build Tools 35 和 JDK 17+。使用已有 Gradle 安装及缓存，不在源码库保存 wrapper JAR、APK 或 SDK。
+在应用目录执行：
 
 ```sh
-gradle --offline :app:assembleDebug :app:assembleDebugAndroidTest
+./build-native.sh
+gradle :app:assembleDebug :app:assembleDebugAndroidTest
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb shell am instrument -w dev.ssmcp.mobile.test/dev.ssmcp.mobile.ProtocolInstrumentation
 ```
 
-平台 instrumentation 使用真实 `org.json`、preferences 和 controller 执行器。协议回归覆盖 counter / u64 边界、页顺序、schema 门控、租约与聊天回执关联、未知结果、草稿上下文和原文持久保存。可控制的 gateway 测试替身运行实际 controller，验证缺口页刷新失败后暂停与恢复时不重新拉取、不重复消费，以及多个状态请求累计超时后不覆盖原快照。测试不需要额外框架或网络服务。
-
-构建通过、测试 APK 编译和真实设备 instrumentation 执行是不同的验收项。端到端验收还需真实 HTTPS gateway、控制租约、前后台切换和断网测试；本 README 不将源码检查当作设备验收。
+在全新安装的测试设备或隔离的 Android 用户中运行 instrumentation。用例启动 APK 内的 CLI 和随机端口网关，让系统 WebView 执行真实工作台模块，完成配对、读取本机真实会话、申请控制、暂停观察并释放租约。中继目标限于测试设备的回环，不需要远端账号。

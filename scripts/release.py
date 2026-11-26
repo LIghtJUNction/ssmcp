@@ -762,13 +762,13 @@ def gui_source(root, platform):
 def validate_android_instrumentation(text):
     # This application has one custom Instrumentation, not a JUnit test runner.
     # adb may exit zero when the application reports RESULT_CANCELED.
-    success = "SSMCP protocol and controller checks passed:"
+    success = "SSMCP Android WebView checks passed:"
     failures = ("SSMCP check failed:", "INSTRUMENTATION_FAILED", "INSTRUMENTATION_ABORTED",
                 "FAILURES!!!", "Process crashed")
     codes = re.findall(r"(?m)^INSTRUMENTATION_CODE:\s*(-?\d+)\s*$", text)
     if (text.count(success) != 1 or any(marker in text for marker in failures)
             or (codes and codes != ["-1"])):
-        raise ValueError("Android Instrumentation did not report one successful controller/protocol run")
+        raise ValueError("Android Instrumentation did not report one successful WebView/CLI run")
 
 
 def validate_gui_test_log(platform, text):

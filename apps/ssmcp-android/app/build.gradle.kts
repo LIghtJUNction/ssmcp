@@ -1,4 +1,20 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
+// The release tool updates these two manifests together and increments the release
+// code even when a custom version skips one or more semantic-version components.
+fun manifestField(file: String, section: String, field: String): String {
+    val lines = providers.fileContents(layout.projectDirectory.file("../../../$file")).asText.get().lineSequence()
+    return lines.dropWhile { it.trim() != "[$section]" }.drop(1)
+        .takeWhile { !it.trimStart().startsWith("[") }
+        .map { it.substringBefore('#').trim() }
+        .first { it.substringBefore('=').trim() == field }
+        .substringAfter('=').trim().removeSurrounding("\"")
+}
+val releaseName = manifestField("Cargo.toml", "package", "version")
+val releaseCode = manifestField("packaging/magisk/kam.toml", "prop", "versionCode").toInt()
+require(manifestField("packaging/magisk/kam.toml", "prop", "version") == "v$releaseName" && releaseCode > 1) {
+    "The Android release manifests disagree or the APK cannot update the original versionCode 1"
+}
+
 android {
     namespace = "dev.ssmcp.mobile"
     compileSdk = 35
@@ -7,9 +23,14 @@ android {
         applicationId = "dev.ssmcp.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        versionCode = releaseCode
+        versionName = releaseName
         testInstrumentationRunner = "dev.ssmcp.mobile.ProtocolInstrumentation"
+    }
+    packaging.jniLibs {
+        useLegacyPackaging = true
+        keepDebugSymbols += "**/libssmcp.so"
     }
     buildTypes {
         release {

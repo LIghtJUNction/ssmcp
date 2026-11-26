@@ -508,7 +508,7 @@ class ReleaseTests(unittest.TestCase):
             directory.mkdir(parents=True)
             (directory / "build.log").write_text("fixture successful compilation\n")
             (directory / "tests.log").write_text(
-                "INSTRUMENTATION_RESULT: stream=SSMCP protocol and controller checks passed: fixture\n"
+                "INSTRUMENTATION_RESULT: stream=SSMCP Android WebView checks passed: fixture\n"
                 if platform == "android" else "test result: ok. 1 passed; 0 failed;\n"
                 if platform in {"linux", "windows"} else "Executed 1 test, with 0 failures (0 unexpected)\n")
             result = {"source_commit": sha, "target": spec["target"], "profile": spec["profile"],
@@ -731,7 +731,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(verified["checks"], valid)
 
     def test_android_custom_runner_requires_explicit_success_even_with_adb_exit_zero(self):
-        passed = "INSTRUMENTATION_RESULT: stream=SSMCP protocol and controller checks passed: fixture\n"
+        passed = "INSTRUMENTATION_RESULT: stream=SSMCP Android WebView checks passed: fixture\n"
         for text in (passed, passed + "INSTRUMENTATION_CODE: -1\n"):
             release.validate_android_instrumentation(text)
         for text in ("", "INSTRUMENTATION_CODE: -1\n", passed + "INSTRUMENTATION_CODE: 0\n",

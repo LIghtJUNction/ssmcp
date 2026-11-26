@@ -8,10 +8,10 @@ SSMCP 的图形客户端让你从浏览器、Windows / Linux 桌面或手机继�
 | --- | --- | --- | --- |
 | Web | 在浏览器中查看会话、继续对话和管理现有资源 | HTML、CSS、原生 ES modules；同源 HTTP gateway | [Web 使用说明](../apps/ssmcp-web/README.md) |
 | Windows / Linux 桌面 | 在运行 CLI 的电脑上使用原生窗口与 VT 终端画面 | Rust、zgpui、zbridge；直接使用本地 `RemoteFrontend` | [桌面使用说明](../apps/ssmcp-desktop/README.md) |
-| Android | 从手机访问已有 CLI 会话 | Kotlin、系统 Activity / View、HTTPS；Android 8 / API 26 起 | [Android 使用说明](../apps/ssmcp-android/README.md) |
+| Android | 在手机上启动 CLI 或访问已有网关 | Kotlin、Android 系统 WebView；Android 8 / API 26 起 | [Android 使用说明](../apps/ssmcp-android/README.md) |
 | iOS | 使用系统原生导航和对话界面 | SwiftUI、URLSession、HTTPS；iOS 16 起 | [iOS 使用说明](../apps/ssmcp-ios/README.md) |
 
-四端都围绕会话、对话、事件、终端和 worker 展开。Web 和桌面把会话导航放在侧边，正文使用宽留白与简洁状态提示；移动端使用原生页面切换，让对话、资源和操作状态各自有明确位置。页面只开放当前连接实际提供的能力，未配置 worker 池或聊天能力的会话会显示相应空状态。[Web 界面](../apps/ssmcp-web/index.html) · [桌面界面](../apps/ssmcp-desktop/src/ui.rs) · [Android 界面](../apps/ssmcp-android/app/src/main/java/dev/ssmcp/mobile/MainActivity.kt) · [iOS 界面](../apps/ssmcp-ios/SSMCP/ContentView.swift)
+四端都围绕会话、对话、事件、终端和 worker 展开。Web 和桌面把会话导航放在侧边，正文使用宽留白与简洁状态提示；Android 复用 Web 的窄屏布局，iOS 使用原生页面切换，让对话、资源和操作状态各自有明确位置。页面只开放当前连接实际提供的能力，未配置 worker 池或聊天能力的会话会显示相应空状态。[Web 界面](../apps/ssmcp-web/index.html) · [桌面界面](../apps/ssmcp-desktop/src/ui.rs) · [Android 界面](../apps/ssmcp-android/app/src/main/java/dev/ssmcp/mobile/MainActivity.kt) · [iOS 界面](../apps/ssmcp-ios/SSMCP/ContentView.swift)
 
 ## 连接已有会话
 
@@ -38,9 +38,9 @@ ssmcp-desktop --session my-session
 
 默认进入观察模式。需要控制时，可以在窗口中点击「申请控制」，或对明确的目标使用 `ssmcp-desktop --session my-session --control`。已有手工管理的 attach 服务也可以通过 `--directory /absolute/private/session-directory` 指定；普通会话列表不显示这类私有目录。[桌面连接实现](../apps/ssmcp-desktop/src/engine.rs) · [RemoteFrontend](../src/session/attach/zbridge_adapter/remote.rs)
 
-### Android 与 iOS：连接 HTTPS gateway
+### Android 与 iOS 连接网关
 
-移动端填写的是 HTTPS 源地址和配对令牌，例如 `https://gui.example`。先把本机 gateway 接到实际的 HTTPS 入口，再按部署地址设置 `--public-origin`：
+Android APK 可以直接在本机启动 CLI。在手机上连接远端网关时，填写 HTTPS 源地址和配对令牌，例如 `https://gui.example`。先把本机 gateway 接到实际的 HTTPS 入口，再按部署地址设置 `--public-origin`：
 
 ```sh
 ssmcp gui serve --listen 127.0.0.1:8787 \
@@ -51,7 +51,7 @@ ssmcp gui serve --listen 127.0.0.1:8787 \
 
 `--public-origin` 声明外部源地址；HTTPS 连接由实际的 TLS 入口提供。代理需保留配置地址对应的 `Host` 和浏览器 `Origin`，该命令本身不申请证书或部署代理。[HTTPS 代理约定](gui-gateway.md#手机与明确的-https-代理)
 
-Android 与 iOS 都使用系统证书校验，拒绝带凭据、额外路径或查询参数的源地址。Android 使用 Keystore 加密保存配对，iOS 使用 Keychain；两端都提供删除已保存配对的操作。[Android transport](../apps/ssmcp-android/app/src/main/java/dev/ssmcp/mobile/Gateway.kt) · [Android 配对存储](../apps/ssmcp-android/app/src/main/java/dev/ssmcp/mobile/TokenStore.kt) · [iOS transport](../apps/ssmcp-ios/SSMCP/Gateway.swift) · [iOS 配对存储](../apps/ssmcp-ios/SSMCP/PairingStore.swift)
+Android 与 iOS 都使用系统证书校验，拒绝带凭据、额外路径或查询参数的源地址。Android 使用 Keystore 加密保存配对，iOS 使用 Keychain；两端都提供删除已保存配对的操作。[Android WebView](../apps/ssmcp-android/app/src/main/java/dev/ssmcp/mobile/WorkbenchView.kt) · [Android 配对存储](../apps/ssmcp-android/app/src/main/java/dev/ssmcp/mobile/TokenStore.kt) · [iOS transport](../apps/ssmcp-ios/SSMCP/Gateway.swift) · [iOS 配对存储](../apps/ssmcp-ios/SSMCP/PairingStore.swift)
 
 ## 观察、控制与实际能力
 
@@ -74,13 +74,13 @@ Android 与 iOS 都使用系统证书校验，拒绝带凭据、额外路径或�
 
 ## 继续对话：阅读范围与发送目标
 
-历史范围决定显示哪些记录，发送目标决定本次输入交给谁。各端当前的控件关系如下；桌面和移动端切换线程时，也会改变下一次提交的接收目标。
+历史范围决定显示哪些记录，发送目标决定本次输入交给谁。各端当前的控件关系如下；桌面和 iOS 切换线程时，也会改变下一次提交的接收目标。
 
 | 客户端 | 阅读范围 | 下一次提交的发送目标 |
 | --- | --- | --- |
-| Web | 「整个会话」「主对话」或具体线程 | 用独立的「接收方」选择器指定 `next` 或当前 agent；切换阅读范围不会改变接收方。[Web 控件](../apps/ssmcp-web/app.mjs) |
+| Web / Android | 「整个会话」「主对话」或具体线程 | 用独立的「接收方」选择器指定 `next` 或当前 agent；切换阅读范围不会改变接收方。[Web 控件](../apps/ssmcp-web/app.mjs) |
 | Windows / Linux 桌面 | 「全部来源」「主会话」或具体 agent 线程 | 共用线程选择器：选择具体线程时发给该 agent；选择「全部来源」或「主会话」时发给 `next`。输入框下方显示当前目标。[桌面映射](../apps/ssmcp-desktop/src/model.rs) · [桌面控件](../apps/ssmcp-desktop/src/ui.rs) |
-| Android / iOS | `next` 显示共享会话记录，具体 agent 显示对应线程；当前没有独立的主会话筛选 | 共用线程与目标选择器：`next` 交给下一位合格接收者，具体线程交给该 agent。[Android 控件](../apps/ssmcp-android/app/src/main/java/dev/ssmcp/mobile/MainActivity.kt) · [iOS 控件](../apps/ssmcp-ios/SSMCP/ContentView.swift) |
+| iOS | `next` 显示共享会话记录，具体 agent 显示对应线程；当前没有独立的主会话筛选 | 共用线程与目标选择器：`next` 交给下一位合格接收者，具体线程交给该 agent。[iOS 控件](../apps/ssmcp-ios/SSMCP/ContentView.swift) |
 
 CLI 的图形输入入口只接受 `next` 或当前真实存在的一个 agent，不接受隐式广播。两种发送目标的含义如下：
 
@@ -103,7 +103,7 @@ CLI 的图形输入入口只接受 `next` 或当前真实存在的一个 agent�
 
 实时观察按有界窗口进行。原生 zbridge `events` 每页等待最多 1 秒；gateway 把这些读取组成最长 55 秒的观察，Web 和移动端通常请求 50 秒，并给包含传输在内的 HTTP 请求设 55 秒截止。桌面使用更短的 1.5 秒观察，并让整轮连接、状态刷新或缺口协调共享 15 秒预算。[桌面读取预算](../apps/ssmcp-desktop/src/engine.rs) · [GUI 事件接口](gui-bridge.md)
 
-Web 和移动端的一轮权威刷新让能力、对话、runtime、终端、worker、线程和输入队列共同使用一个 55 秒截止；事件观察自动触发的缺口或历史核对继承原窗口剩余时间，不逐页重新计时。预算耗尽时保留已收到的数据页和原游标，下一轮继续核对，处理完成后再推进游标。[Android 控制器](../apps/ssmcp-android/app/src/main/java/dev/ssmcp/mobile/ClientController.kt) · [iOS 控制器](../apps/ssmcp-ios/SSMCP/ClientModel.swift) · [Web 读取窗口](../apps/ssmcp-web/src/client.mjs)
+Web 和移动端的一轮权威刷新让能力、对话、runtime、终端、worker、线程和输入队列共同使用一个 55 秒截止；事件观察自动触发的缺口或历史核对继承原窗口剩余时间，不逐页重新计时。预算耗尽时保留已收到的数据页和原游标，下一轮继续核对，处理完成后再推进游标。[iOS 控制器](../apps/ssmcp-ios/SSMCP/ClientModel.swift) · [Web 读取窗口](../apps/ssmcp-web/src/client.mjs)
 
 `unknown` 表示没有足够证据确定一次操作的结果。命令可能已到达 CLI，只是回执没有成功返回；前端保留原请求 ID 和原代次，先读取当前状态或原消息队列。它不会把网络重连当成重发理由。终端写入回执也只证明写入被接收，worker 缩容的 `resize_pending` 则表示释放站位的握手还在继续。[命令回执模型](https://github.com/LIghtJUNction/zgpui/blob/d34c41f79ddab343e7468c5192885a82ca487687/src/bridge.rs) · [worker 管理](workers.md)
 
@@ -152,6 +152,7 @@ Linux 原生后端需要 X11、FreeType、Fontconfig 和相应 C 开发工具；
 
 ```sh
 cd apps/ssmcp-android
+./build-native.sh
 gradle --offline :app:assembleDebug :app:assembleDebugAndroidTest
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
