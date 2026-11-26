@@ -1018,10 +1018,10 @@ pub(super) fn monitor_keyboard_bytes(bytes: &[u8], flush: bool) -> Result<(), St
         .as_mut()
         .and_then(|monitor| monitor.capacity_command.take());
     drop(state);
-    if let Some((generation, delta)) = request {
-        if let Err(error) = super::worker_window::forward_monitor_delta(&generation, delta) {
-            notice(&error);
-        }
+    if let Some((generation, delta)) = request
+        && let Err(error) = super::worker_window::forward_monitor_delta(&generation, delta)
+    {
+        notice(&error);
     }
     Ok(())
 }

@@ -2860,8 +2860,10 @@ async fn run_with_args(
                 drop(service.take());
                 if let Some(controller) = &options.worker_window {
                     let controller = controller.lock().await;
-                    restart
-                        .set_worker_total(controller.desired, controller.preserve_worker_agent)?;
+                    restart.set_worker_total(
+                        controller.target.desired,
+                        controller.preserve_worker_agent,
+                    )?;
                 }
                 // exec does not run Rust destructors; stop this controller's child first.
                 drop(options.worker_window.take());
