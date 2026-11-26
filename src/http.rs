@@ -1321,7 +1321,7 @@ async fn execute(
     let controller = arguments.controller_context.clone();
     let mut audit_run = code_mode::AuditRun::new(&arguments.code, controller.clone())?;
     audit_run.openai_context = arguments.openai_context.clone();
-    if let Some(agent) = &arguments.agent {
+    let control = if let Some(agent) = &arguments.agent {
         let session = broker
             .client(&user, &authorization, &agent.client_id)
             .await?;
@@ -1333,7 +1333,10 @@ async fn execute(
         // Request identity also authorizes automatic tool-source preparation.
         // Only an actual eligible call or user wait may receive queued work.
         audit_run.bind_identity(&agent.client_id, &owner, &agent.id, &agent.token)?;
-    }
+        session.chat_enabled()
+    } else {
+        false
+    };
     let sources = tokio::time::timeout_at(
         deadline,
         tool_sources::load(
@@ -1380,6 +1383,7 @@ async fn execute(
             host,
             runner,
             sources.bundle.clone(),
+            control,
         )
         .await
     };

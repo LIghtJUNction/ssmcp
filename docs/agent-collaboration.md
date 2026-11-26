@@ -22,7 +22,7 @@
 
 另有 `collab.bind(clientId, {agent_id, token})` 用于把本次 `code_mode` 编排绑定到已登记成员，以接收客户端输入框中的定向用户要求。它是代码模式 helper，不是直接 `collab` 工具新增的 action。[绑定与用户要求](#绑定本次编排并接收用户要求)
 
-**持续等待消息时，直接调用公开 `collab` 工具。** 直接 `receive` 最长等待 55 秒，由 Rust 服务端处理，不占用 `code_mode` 的四个 JavaScript 执行槽。JavaScript 中的 `collab.receive` 最长等待 1 秒，适合在一次编排中收取消息。
+**持续等待消息时，直接调用公开 `collab` 工具。** 直接 `receive` 最长等待 55 秒，由 Rust 服务端处理，不占用 `code_mode` 的 JavaScript 执行槽。JavaScript 中的 `collab.receive` 最长等待 1 秒，适合在一次编排中收取消息。
 
 ## 加入并发现成员
 

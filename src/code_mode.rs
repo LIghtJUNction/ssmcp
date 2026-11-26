@@ -34,10 +34,13 @@ pub const MAX_IMAGES: usize = 4;
 pub const MAX_IMAGE_ENCODED_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_CALLS: usize = 128;
 pub const MAX_NATIVE_INFLIGHT: usize = 16;
-pub const MAX_CONCURRENT: usize = 4;
+pub(crate) const SHARED_RUNS: usize = 4;
+pub(crate) const CONTROL_RUNS: usize = 1;
+pub const MAX_CONCURRENT: usize = SHARED_RUNS + CONTROL_RUNS;
 const MAX_ERROR_BYTES: usize = 4096;
-static SLOTS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
-static PREPARATIONS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
+static SLOTS: Semaphore = Semaphore::const_new(SHARED_RUNS);
+static CONTROL_SLOTS: Semaphore = Semaphore::const_new(CONTROL_RUNS);
+static PREPARATIONS: Semaphore = Semaphore::const_new(SHARED_RUNS);
 
 /// Scoped around each host callback, including built-in workspace bridges. A
 /// client receives source only when an authorized native call is dispatched to
@@ -633,6 +636,7 @@ fn node_arguments(command: &mut Command) {
     command.args(crate::program::NODE_FLAGS);
 }
 
+#[cfg(test)]
 fn sandbox_command() -> Result<Command, String> {
     sandbox_command_with_runner(None)
 }
@@ -749,8 +753,8 @@ pub async fn execute(
     clients: Value,
     host: Host,
 ) -> Result<Value, String> {
-    let command = prepare_command(sandbox_command).await?;
-    execute_process(command, code, timeout_ms, clients, host).await
+    let sources = crate::tool_repository::official_seed().await?;
+    execute_with_runner(code, timeout_ms, clients, host, None, sources, false).await
 }
 
 /// Local hosts supply their private, version-matched runner. Remote execution
@@ -762,7 +766,11 @@ pub(crate) async fn execute_with_runner(
     host: Host,
     local_runner: Option<PathBuf>,
     sources: crate::tool_repository::Bundle,
+    control: bool,
 ) -> Result<Value, String> {
+    if !(1..=MAX_TIMEOUT_MS).contains(&timeout_ms) {
+        return Err(format!("timeout_ms must be 1..={MAX_TIMEOUT_MS}"));
+    }
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
     let command = tokio::time::timeout_at(
         deadline,
@@ -770,13 +778,7 @@ pub(crate) async fn execute_with_runner(
     )
     .await
     .map_err(|_| "code_mode timed out during runtime preparation".to_owned())??;
-    let remaining = deadline
-        .saturating_duration_since(tokio::time::Instant::now())
-        .as_millis();
-    if remaining == 0 {
-        return Err("code_mode timed out during runtime preparation".into());
-    }
-    execute_process_sources(command, code, remaining as u64, clients, host, sources).await
+    execute_process_sources(command, code, deadline, clients, host, sources, control).await
 }
 
 const RUNTIME_CHECK_CODE: &str =
@@ -817,8 +819,9 @@ async fn prepare_command(
     // aborted request drops only this await: the blocking worker still owns the
     // probe, reaches its existing deadline, and terminates/reaps it if needed.
     let permit = PREPARATIONS
-        .try_acquire()
-        .map_err(|_| "code_mode runtime preparation is busy; retry later".to_owned())?;
+        .acquire()
+        .await
+        .map_err(|_| "code_mode runtime preparation closed".to_owned())?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         prepare()
@@ -827,6 +830,7 @@ async fn prepare_command(
     .map_err(|_| "code_mode runtime preparation failed".to_owned())?
 }
 
+#[cfg(test)]
 async fn execute_process(
     command: Command,
     code: String,
@@ -835,16 +839,18 @@ async fn execute_process(
     host: Host,
 ) -> Result<Value, String> {
     let sources = crate::tool_repository::official_seed().await?;
-    execute_process_sources(command, code, timeout_ms, clients, host, sources).await
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    execute_process_sources(command, code, deadline, clients, host, sources, false).await
 }
 
 async fn execute_process_sources(
     mut command: Command,
     code: String,
-    timeout_ms: u64,
+    deadline: tokio::time::Instant,
     clients: Value,
     host: Host,
     sources: crate::tool_repository::Bundle,
+    control: bool,
 ) -> Result<Value, String> {
     let sources = sources.validate()?;
     if code.trim().is_empty() || code.len() > MAX_CODE_BYTES {
@@ -852,15 +858,27 @@ async fn execute_process_sources(
             "code must contain 1..={MAX_CODE_BYTES} UTF-8 bytes"
         ));
     }
-    if !(1..=MAX_TIMEOUT_MS).contains(&timeout_ms) {
-        return Err(format!("timeout_ms must be 1..={MAX_TIMEOUT_MS}"));
-    }
     if !clients.is_array() || clients.to_string().len() > MAX_RESULT_BYTES {
         return Err("clients must be an array within the code_mode metadata limit".into());
     }
-    let _permit = SLOTS
-        .try_acquire()
-        .map_err(|_| "code_mode is busy; retry later")?;
+    const QUEUE_TIMEOUT: &str =
+        "code_mode timed out waiting for a runtime; no user code was started";
+    // A participant verified on a chat-enabled connection can use the control
+    // slot even when all shared runtimes are waiting for worker assignments.
+    let admission = async {
+        tokio::select! {
+            biased;
+            permit = SLOTS.acquire() => permit,
+            permit = CONTROL_SLOTS.acquire(), if control => permit,
+        }
+    };
+    let _permit = tokio::time::timeout_at(deadline, admission)
+        .await
+        .map_err(|_| QUEUE_TIMEOUT)?
+        .map_err(|_| "code_mode runtime queue closed")?;
+    if tokio::time::Instant::now() >= deadline {
+        return Err(QUEUE_TIMEOUT.into());
+    }
     limit_process(&mut command);
     let mut process = Managed::spawn(&mut command)
         .map_err(|e| format!("cannot start isolated code_mode runtime: {e}"))?;
@@ -894,7 +912,7 @@ async fn execute_process_sources(
     };
     let mut logs = Vec::new();
     let mut images = Vec::new();
-    let result = tokio::time::timeout(Duration::from_millis(timeout_ms), async {
+    let result = tokio::time::timeout_at(deadline, async {
         send_frame(&mut worker.stdin, &json!({"type":"run", "code":code, "clients":clients, "tool_sources":sources.sources})).await?;
         bridge(&mut worker.stdout, &mut worker.stdin, host, &mut logs, &mut images).await
     }).await.unwrap_or_else(|_| Err("code_mode timed out; an already submitted native operation may continue and its outcome may be unknown. Inspect the client before retrying a mutating call.".into()));
@@ -1449,21 +1467,111 @@ mod tests {
     }
 
     // Fixed test programs verify the runner/pipe protocol; execute() always requires bubblewrap.
+    fn test_runner() -> Result<Command, String> {
+        let mut command = Command::new(executable("node")?);
+        command.env_clear();
+        node_arguments(&mut command);
+        command.arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/code_mode.js"));
+        Ok(command)
+    }
+
     async fn trusted_execute(
         code: String,
         timeout_ms: u64,
         clients: Value,
         host: Host,
     ) -> Result<Value, String> {
-        let command = prepare_command(|| {
-            let mut command = Command::new(executable("node")?);
-            command.env_clear();
-            node_arguments(&mut command);
-            command.arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/code_mode.js"));
-            Ok(command)
-        })
-        .await?;
+        let command = prepare_command(test_runner).await?;
         execute_process(command, code, timeout_ms, clients, host).await
+    }
+
+    #[tokio::test]
+    async fn control_runs_while_workers_wait_and_queued_work_runs_once() {
+        let _guard = TESTS.lock().await;
+        let (entered, mut waiting) = tokio::sync::mpsc::unbounded_channel();
+        let release = Arc::new(Semaphore::new(0));
+        let gate = release.clone();
+        let blocking: Host = Arc::new(move |_| {
+            let entered = entered.clone();
+            let gate = gate.clone();
+            Box::pin(async move {
+                entered.send(()).unwrap();
+                gate.acquire().await.unwrap().forget();
+                Ok(json!({}))
+            })
+        });
+        let mut workers = JoinSet::new();
+        for _ in 0..SHARED_RUNS {
+            workers.spawn(trusted_execute(
+                "return await call('pool','ssmcp.worker.wait',{});".into(),
+                20_000,
+                json!([]),
+                blocking.clone(),
+            ));
+        }
+        tokio::time::timeout(Duration::from_secs(10), async {
+            for _ in 0..SHARED_RUNS {
+                waiting.recv().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+
+        let executions = Arc::new(AtomicUsize::new(0));
+        let counter = executions.clone();
+        let counted: Host = Arc::new(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(json!({})) })
+        });
+        let submit = "await call('pool','submit',{}); return 42;";
+        let timed_out = trusted_execute(submit.into(), 30, json!([]), counted.clone()).await;
+        assert!(timed_out.unwrap_err().contains("no user code was started"));
+        let mut queued = Box::pin(trusted_execute(submit.into(), 10_000, json!([]), counted));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), &mut queued)
+                .await
+                .is_err()
+        );
+        let control = execute_process_sources(
+            test_runner().unwrap(),
+            "return 7;".into(),
+            tokio::time::Instant::now() + Duration::from_secs(5),
+            json!([]),
+            host(),
+            crate::tool_repository::official_seed().await.unwrap(),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(control["result"], 7);
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+
+        release.add_permits(SHARED_RUNS);
+        assert_eq!(queued.await.unwrap()["result"], 42);
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+        while let Some(result) = workers.join_next().await {
+            result.unwrap().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_preparation_waits_for_capacity_and_cancels_before_start() {
+        let _guard = TESTS.lock().await;
+        let held = PREPARATIONS.acquire_many(SHARED_RUNS as u32).await.unwrap();
+        let cancelled = prepare_command(|| panic!("cancelled preparation ran"));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), cancelled)
+                .await
+                .is_err()
+        );
+        let mut waiting = Box::pin(prepare_command(test_runner));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), &mut waiting)
+                .await
+                .is_err()
+        );
+        drop(held);
+        assert!(waiting.await.is_ok());
     }
 
     #[test]
@@ -1593,11 +1701,11 @@ mod tests {
         notice.await.unwrap();
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
-        assert_eq!(PREPARATIONS.available_permits(), MAX_CONCURRENT - 1);
+        assert_eq!(PREPARATIONS.available_permits(), SHARED_RUNS - 1);
         release.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
             cleanup.await.unwrap();
-            while PREPARATIONS.available_permits() != MAX_CONCURRENT {
+            while PREPARATIONS.available_permits() != SHARED_RUNS {
                 tokio::task::yield_now().await;
             }
         })
@@ -2836,7 +2944,7 @@ mod tests {
         task.abort();
         let _ = task.await;
         tokio::time::timeout(Duration::from_secs(2), async {
-            while !released.load(Ordering::Acquire) || SLOTS.available_permits() != MAX_CONCURRENT {
+            while !released.load(Ordering::Acquire) || SLOTS.available_permits() != SHARED_RUNS {
                 tokio::task::yield_now().await;
             }
         })

@@ -312,6 +312,8 @@ fn limits() -> Value {
             "max_native_calls":code_mode::MAX_CALLS,
             "max_native_inflight":code_mode::MAX_NATIVE_INFLIGHT,
             "max_concurrent_runs":code_mode::MAX_CONCURRENT,
+            "shared_runs":code_mode::SHARED_RUNS,
+            "reserved_chat_runs":code_mode::CONTROL_RUNS,
             "execution_location":"ssmcp server isolated process",
             "caller_workspace_access":"requires an explicit connected bridge"
         },
