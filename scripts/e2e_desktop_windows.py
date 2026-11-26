@@ -1,6 +1,7 @@
 """Open two native desktop windows against the same loopback account under Xvfb."""
 import json
 import os
+import contextlib
 from pathlib import Path
 import subprocess
 import sys
@@ -22,6 +23,8 @@ def run(desktop):
                    XDG_STATE_HOME=str(home / "state"), XDG_CACHE_HOME=str(home / "cache"),
                    XDG_DATA_HOME=str(home / "data"))
         registry = home / "sessions"
+        profile = home / "auth" / "desktop-target-v1.json"
+        evidence = os.environ.get("SSMCP_DESKTOP_E2E_EVIDENCE")
 
         def open_window(label):
             frame = home / f"{label}.json"
@@ -57,6 +60,46 @@ def run(desktop):
                     return pid, overview.parents[2]
             return None
 
+        def diagnose():
+            counts = {"desktop_processes": sum(proc.poll() is None for proc in test.processes),
+                      "relay_sessions": len(clients()), "visible_windows": len(windows()),
+                      "profile_exists": profile.is_file()}
+            with contextlib.suppress(OSError, ValueError):
+                counts["profile_matches"] = json.loads(profile.read_text()) == test.state.allow_principal
+            print("Desktop fixture " + json.dumps(counts, sort_keys=True), file=sys.stderr)
+            for overview in sorted(registry.glob("frontends/*/live/*/overview.json"))[:2]:
+                # Query just the owned synthetic core through its read-only interface.
+                selector = "live:" + overview.parent.name
+                try:
+                    result = subprocess.run(
+                        [desktop.with_name("ssmcp"), "overview", "show", selector],
+                        cwd=home, env=dict(env, SSMCP_SESSION_HOME=str(overview.parents[2])),
+                        text=True, capture_output=True, timeout=4)
+                    data = json.loads(result.stdout) if result.returncode == 0 else {}
+                    state = data.get("state")
+                    state = state if state in {"connected", "connecting", "offline", "unavailable"} else "unknown"
+                    print(f"Private core observer: exit={result.returncode} state={state}", file=sys.stderr)
+                except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+                    print(f"Private core observer: {type(error).__name__}", file=sys.stderr)
+            if evidence:
+                # Only the desktop's status and notice bands. Never capture the chat,
+                # terminal, destination fields, or raw IPC/relay identifiers.
+                from PIL import Image
+                output = Path(evidence)
+                output.mkdir(parents=True, exist_ok=True)
+                x11 = display.Display()
+                try:
+                    for index, window_id in enumerate(sorted(windows())[:2], start=1):
+                        window = x11.create_resource_object("window", int(window_id))
+                        width = window.get_geometry().width
+                        for name, x, y, w in (("phase", width - 120, 16, 104),
+                                             ("notice", 24, 88, min(850, width - 48))):
+                            pixels = window.get_image(x, y, w, 22, X.ZPixmap, 0xffffffff)
+                            image = Image.frombytes("RGB", (w, 22), pixels.data, "raw", "BGRX")
+                            image.save(output / f"window-{index}-{name}.png")
+                finally:
+                    x11.close()
+
         try:
             first = open_window("first")
             window, = windows()
@@ -71,9 +114,8 @@ def run(desktop):
 
             first_id, = wait_for(clients, "first desktop relay client", timeout=12)
             first_pid, first_root = wait_for(lambda: registration(first), "first private core")
-            profile = home / "auth" / "desktop-target-v1.json"
             wait_for(lambda: profile.is_file() and json.loads(profile.read_text())
-                     == test.state.allow_principal, "saved desktop destination")
+                     == test.state.allow_principal, "saved desktop destination", timeout=22)
 
             second = open_window("second")
             assert len(windows()) == 2
@@ -108,6 +150,12 @@ def run(desktop):
             assert not test.state.errors, test.state.errors
             print("PASS: first-run keyboard connection, two independent desktop windows, "
                   "and surviving relay session after the first window closes")
+        except Exception:
+            try:
+                diagnose()
+            except Exception as error:
+                print(f"Desktop diagnostic failed: {type(error).__name__}", file=sys.stderr)
+            raise
         finally:
             test.cleanup()
 
