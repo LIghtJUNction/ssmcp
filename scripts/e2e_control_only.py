@@ -2,6 +2,7 @@
 """Real CLI and disposable loopback router; no service manager or model launch."""
 import argparse
 import json
+import hashlib
 import os
 import pty
 import time
@@ -64,9 +65,12 @@ def run(h):
     pid = None
     started = native(h, "ssmcp.exec.start", {"command": ["/bin/sh", "-c", "printf CONTROL_ONLY_OK"], "timeout_ms": 5000})
     if "job_id" in started:
-        h.call("ssmcp.exec.wait", {"job_id": started["job_id"], "wait_ms": 5000})
+        completed = h.call("ssmcp.exec.wait", {"job_id": started["job_id"], "wait_ms": 5000})
+        h.check(not completed["running"] and completed["exit_code"] == 0,
+                "authorized native command finishes with exit code zero")
         output = h.call("ssmcp.exec.read", {"job_id": started["job_id"], "max_bytes": 4096})
-        h.check("CONTROL_ONLY_OK" in json.dumps(output), "authorized native command executes")
+        h.check(output["stdout"] == "CONTROL_ONLY_OK" and output["stderr"] == "",
+                "authorized native command returns the exact expected output")
         pid_file = h.directory / "owned-command.pid"
         h.call("ssmcp.exec.start", {"command": ["/bin/sh", "-c", 'echo $$ > "$1"; exec sleep 120', "fixture", str(pid_file)]})
         wait_for(pid_file.exists, "owned command pid")
@@ -111,7 +115,9 @@ def run(h):
         h.check(True, "owned command was reaped on shutdown")
     h.check(not list(Path(environment["SSMCP_SESSION_HOME"]).iterdir()), "no saved session or service definition is created")
     h.check(not h.external_invocations("control-only"), "no agent executable was invoked")
-    h.check(b"\x1b[" not in (h.directory / "control-only.log").read_bytes(), "no TUI or ANSI dashboard output")
+    log = (h.directory / "control-only.log").read_bytes()
+    h.check(b"\x1b[" not in log, "no TUI or ANSI dashboard output")
+    h.check(b"CONTROL_ONLY_OK" not in log, "native command output is returned only through control requests, without event presentation")
     for label, stop in (("interrupt", "signal"), ("disconnect", "relay")):
         isolated = h.client_environment(label)
         child = h.spawn(label, command, stdout=subprocess.PIPE, cwd=h.directory, env=isolated)
@@ -131,22 +137,49 @@ def run(h):
     return blockers
 
 
+def sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, default=Path("target/debug"))
     parser.add_argument("--require-execution", action="store_true", help="fail if existing resource delegation is unavailable")
+    parser.add_argument("--report", type=Path, help="write source and binary identities with the acceptance result")
+    parser.add_argument("--revision", help="exact source revision supplied by the checkout owner")
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="ssmcp-control-only-") as root:
-        h = Harness(Path(root), args.bin_dir)
-        try:
-            blockers = run(h)
-        except Exception:
-            h.diagnostics()
-            raise
-        finally:
-            h.cleanup()
-        print(json.dumps({"status": "partial" if blockers else "passed", "checks": h.checks, "blockers": blockers}))
-        return 2 if args.require_execution and blockers else 0
+    report = {"status": "failed", "revision": args.revision, "checks": [], "blockers": []}
+    try:
+        with tempfile.TemporaryDirectory(prefix="ssmcp-control-only-") as root:
+            h = Harness(Path(root), args.bin_dir)
+            try:
+                blockers = run(h)
+                report.update(status="partial" if blockers else "passed", blockers=blockers)
+            except Exception:
+                h.diagnostics()
+                raise
+            finally:
+                try:
+                    h.cleanup()
+                finally:
+                    report["checks"] = h.checks
+                    for label, binary in (("cli", h.binary_dir / "ssmcp"),
+                                          ("router_fixture", getattr(h, "fixture_binary", None))):
+                        if binary is not None and Path(binary).is_file():
+                            report[label + "_sha256"] = sha256(Path(binary))
+        print(json.dumps(report))
+        return 2 if args.require_execution and report["blockers"] else 0
+    except Exception:
+        report["status"] = "failed"
+        raise
+    finally:
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(report, indent=2) + "\n")
 
 
 if __name__ == "__main__":
