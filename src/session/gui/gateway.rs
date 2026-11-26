@@ -40,6 +40,14 @@ pub(super) trait Connection: Send + Sync {
 }
 
 pub(super) trait Host: Send + Sync {
+    fn launch(&self, _destination: String) -> CoreFuture<'_, String> {
+        Box::pin(async {
+            Err(BridgeError::new(
+                ErrorCode::Denied,
+                "session launch is unavailable",
+            ))
+        })
+    }
     fn sessions(&self) -> CoreFuture<'_, Vec<Value>>;
     fn connect(&self, session: String, read_only: bool) -> CoreFuture<'_, Arc<dyn Connection>>;
 }
@@ -224,6 +232,8 @@ pub(super) fn routes(
         requests: Semaphore::new(32),
     });
     let api = Router::new()
+        .route("/api/gui/v1/launch", post(launch))
+        .route("/api/gui/v1/register", post(register))
         .route("/api/gui/v1/sessions", get(sessions))
         .route("/api/gui/v1/connections", get(connections).post(open))
         .route("/api/gui/v1/connections/{id}", axum::routing::delete(close))
@@ -378,6 +388,61 @@ impl Gateway {
         connection.used = Instant::now();
         Ok((connection.core.clone(), connection.read_only))
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LaunchRequest {
+    destination: String,
+    #[serde(default)]
+    terms: bool,
+    #[serde(default)]
+    privacy: bool,
+}
+
+impl LaunchRequest {
+    fn checked_destination(self) -> Result<String, ApiError> {
+        let (name, origin) = crate::server_endpoint::parse_target(&self.destination)
+            .map_err(|_| invalid("enter a valid username@server"))?;
+        let url = reqwest::Url::parse(&origin).map_err(|_| invalid("invalid relay"))?;
+        if url
+            .host_str()
+            .is_some_and(|s| s.trim_end_matches('.') == "ssmcp.lmm.best")
+            && !(self.terms && self.privacy)
+        {
+            return Err(invalid(
+                "confirm the hosted relay's terms and privacy policy",
+            ));
+        }
+        crate::server_endpoint::allow_principal(&name, &origin)
+            .map_err(|_| invalid("invalid destination"))
+    }
+}
+
+async fn register(
+    State(_): State<Arc<Gateway>>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let destination = input::<LaunchRequest>(request)
+        .await?
+        .checked_destination()?;
+    let url = crate::desktop_terminal::registration_url(&destination)
+        .await
+        .map_err(|e| invalid(&e.to_string()))?;
+    Ok(Json(json!({"url":url})))
+}
+
+async fn launch(
+    State(state): State<Arc<Gateway>>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let destination = input::<LaunchRequest>(request)
+        .await?
+        .checked_destination()?;
+    let target = state.host.launch(destination.clone()).await?;
+    crate::desktop_terminal::save_desktop_profile(&destination)
+        .map_err(|e| unavailable(&e.to_string()))?;
+    Ok(Json(json!({"session":target})))
 }
 
 async fn sessions(

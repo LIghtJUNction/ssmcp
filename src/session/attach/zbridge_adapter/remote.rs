@@ -14,6 +14,17 @@ pub struct RemoteFrontend {
 }
 
 impl RemoteFrontend {
+    /// Resolve exactly the local target selected by a frontend. Foreground
+    /// endpoints are checked against the PID from the current inventory.
+    pub async fn connect_local(target: &str, read_only: bool) -> crate::Result<Self> {
+        if target.starts_with("live:") {
+            let (directory, _, pid) = crate::session::overview::foreground_target(target)?;
+            Self::connect_for_pid(directory, read_only, Some(pid)).await
+        } else {
+            Self::connect_named(target.strip_prefix("saved:").unwrap_or(target), read_only).await
+        }
+    }
+
     /// Resolve an existing saved session through the core's validated manifest.
     /// This does not start a session, disclose its descriptor, or import a lease.
     pub async fn connect_named(name: &str, read_only: bool) -> crate::Result<Self> {

@@ -109,6 +109,8 @@ fn local_command(text: &str) -> bool {
                 | "/chatgpt"
                 | "/plugin-docs"
                 | "/sessions"
+                | "/cd"
+                | "/new"
                 | "/attach"
                 | "/select"
                 | "/copy"

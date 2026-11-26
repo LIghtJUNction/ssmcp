@@ -231,6 +231,7 @@ pub struct Receipt {
     pub command: Id,
     pub state: ReceiptState,
     pub detail: String,
+    pub new_session: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -296,7 +297,14 @@ impl Receipt {
                             value["status"].as_str(),
                             Some("queued" | "sending" | "delivered")
                         ));
-                if receipt.command != record.command || uncertain || !chat_admitted {
+                let complete = match receipt.command.as_str() {
+                    "session.new" => value["session"]
+                        .as_str()
+                        .is_some_and(|s| s.starts_with("live:") && s.len() > 5 && s.len() <= 256),
+                    "session.cd" => value["cwd"].as_str().is_some_and(|s| !s.is_empty()),
+                    _ => true,
+                };
+                if receipt.command != record.command || uncertain || !chat_admitted || !complete {
                     (
                         ReceiptState::Unknown,
                         "回执未确认原请求的操作结果。原请求已保留，请核对当前状态。".into(),
@@ -312,6 +320,8 @@ impl Receipt {
                         }
                         "workers.resize" => "收到容量调整回执；当前站位见 Worker 页面。".into(),
                         "terminal.write" => "终端接受写入。命令是否完成请查看终端输出。".into(),
+                        "session.cd" => text(value, "cwd", 2048),
+                        "session.new" => "已新建会话".into(),
                         "terminal.resize" => "收到终端尺寸变更回执。".into(),
                         "client.update" => {
                             let summary = text(value, "summary", 2048);
@@ -336,6 +346,14 @@ impl Receipt {
             command: record.command.clone(),
             state,
             detail,
+            new_session: match &record.outcome {
+                CommandOutcome::Receipt(r)
+                    if state == ReceiptState::Confirmed && r.command.as_str() == "session.new" =>
+                {
+                    r.value["session"].as_str().map(str::to_owned)
+                }
+                _ => None,
+            },
         }
     }
 }
@@ -344,6 +362,8 @@ impl Receipt {
 pub struct View {
     pub connection: u64,
     pub sessions: Vec<Session>,
+    pub cwd: String,
+    pub launch_error: Option<String>,
     pub sessions_loading: bool,
     pub target: Option<Target>,
     pub phase: Phase,
@@ -434,6 +454,7 @@ impl View {
         self.generation = None;
         self.cursor = None;
         self.backend_active = false;
+        self.cwd.clear();
         self.agents.clear();
         self.queue.clear();
         self.terminals.clear();

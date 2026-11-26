@@ -1,5 +1,7 @@
 import { api, el, hasCredential, openSessionGui, terminal, usesOfficialRelay } from './device-api.js';
 
+import { registerAccount } from './src/gateway.mjs';
+
 function setView(view) {
   document.body.dataset.view = view;
   el('setup').hidden = view !== 'setup';
@@ -11,22 +13,20 @@ function status(message) {
 
 function relayChanged() {
   const server = el('server').value.trim();
-  el('server-display').textContent = server || '未填写';
   el('hosted').hidden = !usesOfficialRelay(server);
 }
 el('server').addEventListener('input', relayChanged);
 
-async function configure() {
+async function configure(register = false) {
   if (document.body.dataset.view !== 'setup' || el('connect').disabled) return;
   const name = el('name').value.trim();
   const server = el('server').value.trim();
   if (!name || !server) {
     status('请填写用户名和服务器域名。');
-    if (name && !server) el('relay-settings').open = true;
     el(name ? 'server' : 'name').focus();
     return;
   }
-  const required = [['root', '请先确认 Android root 权限。']];
+  const required = register ? [] : [['root', '请先确认 Android root 权限。']];
   if (!el('hosted').hidden) {
     required.push(['terms', '请先阅读并同意用户协议。'], ['privacy', '请先阅读并同意隐私政策。']);
   }
@@ -40,15 +40,16 @@ async function configure() {
     target: `${name}@${server}`,
     root: el('root').checked, terms: el('terms').checked, privacy: el('privacy').checked,
   };
-  const controls = ['name', 'server', 'root', 'terms', 'privacy', 'connect'].map(el);
+  const controls = ['name', 'server', 'root', 'terms', 'privacy', 'connect', 'register-name'].map(el);
   controls.forEach(control => { control.disabled = true; });
   status('正在检查中继账号…');
   try {
+    if (register) {
+      await registerAccount(body => api('/api/gui/v1/register', body), {destination: request.target, terms: request.terms, privacy: request.privacy}, el('registration-link'));
+      status('完成注册后，回到此页连接。'); return;
+    }
     await api('/setup', request);
-    setView('notice');
-    status('配置已保存，正在读取设备信息…');
-    try { await readConfiguration(); }
-    catch (error) { status(`配置已保存。读取设备信息失败：${error.message} 请刷新此页。`); }
+    openSessionGui();
   } catch (error) {
     if (error.status === 409) {
       try { await readConfiguration(); } catch (readError) { status(readError.message); return; }
@@ -59,7 +60,8 @@ async function configure() {
     controls.forEach(control => { control.disabled = false; });
   }
 }
-el('connect').onclick = configure;
+el('connect').onclick = () => configure();
+el('register-name').onclick = () => configure(true);
 el('open-gui').onclick = openSessionGui;
 
 async function readConfiguration(checkCompletionOnly = false) {

@@ -97,6 +97,19 @@ function Send-LauncherKeys([string]$Keys) {
     }
     [Windows.Forms.SendKeys]::SendWait($Keys)
 }
+function Click-Launcher([double]$X, [double]$Y) {
+    $point = [SsmcpWindowProbe+Point]::new()
+    $point.X = [int]($clientOrigin.X + $X)
+    $point.Y = [int]($clientOrigin.Y + $Y)
+    if ([SsmcpWindowProbe]::WindowFromPoint($point) -ne $window -or
+        [SsmcpWindowProbe]::GetForegroundWindow() -ne $window -or
+        -not [SsmcpWindowProbe]::SetCursorPos($point.X, $point.Y)) {
+        throw 'The target control is outside the owned foreground window.'
+    }
+    [SsmcpWindowProbe]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero)
+    [SsmcpWindowProbe]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 100
+}
 function Assert-LauncherText([string]$Expected) {
     # The app copies its selection through its own window. Require fresh content
     # so an old copy cannot pass when the field is unfocused or unresponsive.
@@ -525,41 +538,39 @@ public static class SsmcpWindowProbe {
         }
         if (-not $nonblank) { throw 'The application client area remained blank after its first-present receipt.' }
 
-        Assert-LauncherText 'ssmcp '
-        $report.launcher = [ordered]@{ prefilled_command = 'ssmcp '; default_server_clicked = $false }
-        Send-LauncherKeys '{END}'
-        Send-LauncherKeys 'e2eprobe'
-        # Hit the actual default-server control in the resized client. The form
-        # moves the server hint to its own row below 490 pixels of form width.
-        $margin = if ($client.Right -lt 420) { 16 } else { 32 }
-        $formWidth = [Math]::Min(616, $client.Right - 2 * $margin)
-        $formX = [int][Math]::Floor(($client.Right - $formWidth) / 2)
-        $formY = [int][Math]::Max(12, [Math]::Floor($client.Bottom * 0.40 - 50))
-        $hintY = $formY + 104
-        $relayX = if ($formWidth -lt 490) { $formX } else { $formX + $formWidth - 212 }
-        $relayY = if ($formWidth -lt 490) { $hintY + 22 } else { $hintY }
-        $point = [SsmcpWindowProbe+Point]::new()
-        $point.X = $clientOrigin.X + $relayX + 110
-        $point.Y = $clientOrigin.Y + $relayY + 8
-        if ([SsmcpWindowProbe]::WindowFromPoint($point) -ne $window -or
-            [SsmcpWindowProbe]::GetForegroundWindow() -ne $window -or
-            -not [SsmcpWindowProbe]::SetCursorPos($point.X, $point.Y)) {
-            throw 'The default-server button is outside the owned foreground window.'
-        }
-        [SsmcpWindowProbe]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero)
-        [SsmcpWindowProbe]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)
-        Assert-LauncherText 'ssmcp e2eprobe@ssmcp.lmm.best'
-        $report.launcher.default_server_clicked = $true
+        $formWidth = [Math]::Min(660, $client.Right - 40)
+        $formX = ($client.Right - $formWidth) / 2
+        $formY = [Math]::Max(67, ($client.Bottom - 190) / 2)
+        $narrow = $formWidth -lt 475
+        $prefix = if ($narrow) { 64 } else { 88 }
+        $nameX = $formX + $prefix + 20
+        $relayX = if ($narrow) { $nameX } else { $nameX + ($formWidth - $prefix - 38) * 0.44 + 38 }
+        $relayY = if ($narrow) { $formY + 90 } else { $formY }
+        $submitY = $relayY + 94
+        if ($formWidth -lt 370) { $submitY += 48 }
+        $submitX = $formX + $formWidth - 46
 
-        $invalid = 'ssmcp a@' + $origin
-        Send-LauncherKeys $invalid
-        Assert-LauncherText $invalid
+        Click-Launcher $relayX ($relayY + 20)
+        Assert-LauncherText 'ssmcp.lmm.best'
+        Click-Launcher $nameX ($formY + 20)
+        Send-LauncherKeys 'e2eprobe'
+        Assert-LauncherText 'e2eprobe'
+        Click-Launcher $submitX ($submitY + 16)
+        if (@(Get-OwnedCliStarts).Count) { throw 'The hosted target connected before policy consent.' }
+        $report.launcher = [ordered]@{ default_server = 'ssmcp.lmm.best'; hosted_consent_required = $true }
+        Click-Launcher $nameX ($formY + 20)
+        Send-LauncherKeys '^a'
+        Send-LauncherKeys 'a'
+        Click-Launcher $relayX ($relayY + 20)
+        Send-LauncherKeys '^a'
+        Send-LauncherKeys $origin
+        Assert-LauncherText $origin
         $errorX = $clientOrigin.X + $formX
-        $errorY = $clientOrigin.Y + $relayY + 88
+        $errorY = $clientOrigin.Y + $submitY + 86
         if ($errorY + 28 -gt $clientOrigin.Y + $client.Bottom) { throw 'The validation region does not fit in the owned client.' }
         $before = Measure-ValidationPixels $errorX $errorY $formWidth ''
         if ($before -ge 8) { throw 'The validation region already contained an error before submission.' }
-        Send-LauncherKeys '{ENTER}'
+        Click-Launcher $submitX ($submitY + 16)
         $validationClock = [Diagnostics.Stopwatch]::StartNew()
         do {
             $after = Measure-ValidationPixels $errorX $errorY $formWidth (Join-Path $evidence 'launcher-validation.png')
@@ -572,11 +583,12 @@ public static class SsmcpWindowProbe {
             red_samples_after = $after; cli_starts = 0 }
 
         $destination = 'e2eprobe@' + $origin
+        Click-Launcher $nameX ($formY + 20)
         Send-LauncherKeys '^a'
-        Send-LauncherKeys ('ssmcp ' + $destination)
-        Assert-LauncherText ('ssmcp ' + $destination)
+        Send-LauncherKeys 'e2eprobe'
+        Assert-LauncherText 'e2eprobe'
         $submitTime = [DateTime]::UtcNow.ToFileTimeUtc()
-        Send-LauncherKeys '{ENTER}'
+        Click-Launcher $submitX ($submitY + 16)
         $launchClock = [Diagnostics.Stopwatch]::StartNew()
         $child = $null
         do {
@@ -584,7 +596,7 @@ public static class SsmcpWindowProbe {
             if ($starts.Count -gt 1) { throw 'Multiple CLI processes were launched by the owned window.' }
             if ($starts.Count -eq 1) {
                 $start = $starts[0]
-                if ([long]$start.TIME_CREATED -lt $submitTime) { throw 'The CLI started before the valid Enter key.' }
+                if ([long]$start.TIME_CREATED -lt $submitTime) { throw 'The CLI started before the valid submission.' }
                 $child = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$($start.ProcessID)"
                 if ($null -ne $child) { break }
             }
@@ -594,12 +606,12 @@ public static class SsmcpWindowProbe {
             throw 'The observed CLI was not the same-directory binary launched by the owned desktop.'
         }
         $argv = [SsmcpWindowProbe]::Arguments($child.CommandLine)
-        if ($argv.Length -ne 2 -or $argv[1] -cne $destination) { throw 'The CLI did not receive the exact single account and loopback address.' }
+        if ($argv.Length -ne 4 -or $argv[1] -cne '__frontend-run' -or $argv[2] -cne $destination -or $argv[3] -notmatch '^[a-f0-9]+$') { throw 'The CLI did not receive the exact single account and loopback address.' }
         $cliHandle = [Diagnostics.Process]::GetProcessById([int]$child.ProcessID)
         $null = $cliHandle.Handle
         $report.launcher.cli = @{ pid = $cliHandle.Id; parent_pid = $process.Id; path = $child.ExecutablePath
             sha256 = (Get-FileHash -LiteralPath $cliPath -Algorithm SHA256).Hash.ToLowerInvariant()
-            destination = $argv[1]; argument_count = $argv.Length - 1; start_events = $starts.Count }
+            destination = $argv[2]; argument_count = $argv.Length - 1; start_events = $starts.Count }
         if ($cliHandle.HasExited) { throw 'The verified CLI exited before the window-close test.' }
         if (-not $process.CloseMainWindow()) { throw 'The owned desktop did not accept a normal window close.' }
     }

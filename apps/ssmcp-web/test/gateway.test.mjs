@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Gateway, readPairingToken, takeMagiskPairing } from '../src/gateway.mjs';
+import { Gateway, launchOptions, readPairingToken, takeLaunchPairing } from '../src/gateway.mjs';
 import { createRequest, MAX_FRAME_BYTES } from '../src/protocol.mjs';
 import { response, eventPage, observation, GENERATION, capabilities } from './fixtures.mjs';
 
@@ -15,18 +15,35 @@ test('module owner pairing scrubs the fragment before accepting the exact local 
   ]) {
     const location = new URL(url + '#' + token), scrubbed = [];
     const history = { replaceState: (_, __, clean) => scrubbed.push(clean) };
-    assert.equal(takeMagiskPairing(location, history, modulePage), expected);
+    assert.equal(takeLaunchPairing(location, history, modulePage), expected);
     assert.deepEqual(scrubbed, [url]);
   }
   const location = new URL(home + '#' + token);
   let replacement;
   location.replace = url => { replacement = url; };
-  assert.equal(takeMagiskPairing(location, { replaceState() { throw new Error(); } }, true), null);
+  assert.equal(takeLaunchPairing(location, { replaceState() { throw new Error(); } }, true), null);
   assert.equal(replacement, home);
   for (const invalid of ['#' + token.toUpperCase(), '#not-a-module-secret']) {
     const clean = [];
-    assert.equal(takeMagiskPairing(new URL(home + invalid), { replaceState: (_, __, url) => clean.push(url) }, true), null);
+    assert.equal(takeLaunchPairing(new URL(home + invalid), { replaceState: (_, __, url) => clean.push(url) }, true), null);
     assert.deepEqual(clean, [home]);
+  }
+});
+
+test('CLI handoff pairs only a single explicit live selector on the loopback landing page', () => {
+  const token = 'ab'.repeat(32), session = 'live:' + 'cd'.repeat(16);
+  const query = '?session=' + encodeURIComponent(session);
+  for (const [base, search, accepted] of [
+    ['http://127.0.0.1:8011/', query, true],
+    ['http://127.0.0.1:8011/', query + '&session=' + session, false],
+    ['http://127.0.0.1:8011/other', query, false],
+    ['http://127.0.0.1:8011/', '?session=saved:other', false],
+    ['https://foreign.example/', query, false],
+  ]) {
+    const url = new URL(base + search + '#' + token), clean = [];
+    assert.deepEqual(launchOptions(url), accepted ? {session} : null);
+    assert.equal(takeLaunchPairing(url, {replaceState: (_, __, address) => clean.push(address)}, false), accepted ? token : null);
+    assert.deepEqual(clean, [base + search]);
   }
 });
 

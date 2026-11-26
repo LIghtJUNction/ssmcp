@@ -242,7 +242,7 @@ try {
     }
     Write-Host "Installed $reported -> $installed"
     Write-Host 'Use the controller username from the relay account page. In your project directory run:'
-    Write-Host ('  ssmcp --username USERNAME --server ' + 'https://ssmcp.lmm.best')
+    Write-Host '  ssmcp USERNAME@ssmcp.lmm.best'
 } finally {
     if ($pending -and (Test-Path -LiteralPath $pending)) { Remove-Item -LiteralPath $pending -Force }
     if (Test-Path -LiteralPath $workDir) { Remove-Item -LiteralPath $workDir -Recurse -Force }

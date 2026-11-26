@@ -3,6 +3,8 @@
 pub(crate) mod input;
 pub(crate) mod thread_history;
 mod zbridge_adapter;
+mod workbench;
+pub(crate) use workbench::submit_session_command;
 pub use zbridge_adapter::{EventObserver, Frontend, MAX_OBSERVATION_MS, RemoteFrontend};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -1040,6 +1042,7 @@ async fn attached(
     render::configure(ui.clone());
     // Use the attached session's workspace, which may differ from the directory
     // where this frontend was launched. This grants input import only.
+    let _workbench = workbench::Binding::open(&directory, lease, read_only);
     let display_enabled = target.dashboard.unwrap_or(open["chat_enabled"] == true);
     let _local_input = display_enabled
         .then(|| crate::client::attachments::LocalInput::bind(target.cwd.clone()))

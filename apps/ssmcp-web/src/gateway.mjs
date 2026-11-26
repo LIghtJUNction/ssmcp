@@ -46,12 +46,22 @@ async function boundedJson(response, maximum) {
   try { return JSON.parse(text); } catch { throw new ProtocolError('网关没有返回有效 JSON。'); }
 }
 
-export function takeMagiskPairing(location, history, modulePage) {
+export function launchOptions(location) {
+  const url = new URL(location.href);
+  const session = url.searchParams.get('session');
+  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.pathname !== '/'
+      || url.username || url.password || url.searchParams.size !== 1) return null;
+  if (/^live:[0-9a-f]{32}$/.test(session ?? '')) return {session};
+  return url.searchParams.get('setup') === '1' ? {setup: true} : null;
+}
+
+export function takeLaunchPairing(location, history, modulePage) {
   const fragment = location.hash;
   if (!fragment) return null;
   const moduleOrigin = 'http://127.0.0.1:42387';
   const moduleHome = modulePage && location.href === moduleOrigin + '/' + fragment;
-  if (!moduleHome && !/^#[0-9a-f]{64}$/i.test(fragment)) return null;
+  const cliHome = !modulePage && Boolean(launchOptions(location));
+  if (!moduleHome && !cliHome && !/^#[0-9a-f]{64}$/i.test(fragment)) return null;
   const clean = location.origin + location.pathname + location.search;
   try { history.replaceState(history.state, '', clean); }
   catch {
@@ -59,7 +69,24 @@ export function takeMagiskPairing(location, history, modulePage) {
     try { location.replace(clean); } catch { /* No credential is accepted on failure. */ }
     return null;
   }
-  return moduleHome && /^#[0-9a-f]{64}$/.test(fragment) ? fragment.slice(1) : null;
+  return (moduleHome || cliHome) && /^#[0-9a-f]{64}$/.test(fragment) ? fragment.slice(1) : null;
+}
+
+// Open on the user's click, before awaiting the native registration request.
+export async function registerAccount(request, args, link) {
+  link.hidden = true;
+  const popup = window.open('about:blank', '_blank');
+  if (popup) popup.opener = null;
+  try {
+    const {url} = await request(args);
+    const relay = args.destination.slice(args.destination.indexOf('@') + 1);
+    const expected = new URL(relay.includes('://') ? relay : 'https://' + relay);
+    const address = new URL(url);
+    if (!['http:', 'https:'].includes(address.protocol) || address.origin !== expected.origin
+        || address.username || address.password) throw new Error('中继返回了无效的注册地址。');
+    if (popup && !popup.closed) popup.location.replace(address.href);
+    else { link.href = address.href; link.hidden = false; }
+  } catch (error) { if (popup && !popup.closed) popup.close(); throw error; }
 }
 
 export async function readPairingToken(file, origin) {

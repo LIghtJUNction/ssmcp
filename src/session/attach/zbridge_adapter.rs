@@ -291,6 +291,21 @@ impl Host for BoundHost<'_> {
                     description:"Actual worker registration and bounded station state; query offset and limit (1..32), with logs omitted".into() });
             }
             if mode == Mode::Control {
+                if let Some(workbench) = runtime.local_shell().workbench() {
+                    commands.push(Command {
+                        id: id("session.cd"),
+                        description: "Set the default directory for commands, new terminals and child sessions within this session's workspace".into(),
+                        input_schema: json!({"type":"object","additionalProperties":false,"properties":{
+                            "path":{"type":"string","minLength":1,"maxLength":4096}},"required":["path"]}),
+                    });
+                    if workbench.can_create() {
+                        commands.push(Command {
+                            id: id("session.new"),
+                            description: "Start a new independent session at the current directory on the same relay and return its exact local attach target".into(),
+                            input_schema: json!({"type":"object","additionalProperties":false,"properties":{}}),
+                        });
+                    }
+                }
                 commands.extend(execution::commands());
                 commands.push(Command {
                     id: id("client.update"),
@@ -353,7 +368,7 @@ impl Host for BoundHost<'_> {
                         .next;
                     json!({"backend_active":runtime.is_some(),"backend_generation":Counter(self.backend_generation),
                         "native_capabilities":capabilities,"live_cursor":Counter(cursor),"retention":"live_process_memory",
-                        "process_id":std::process::id(),"client_id":runtime.as_ref().and_then(|value|value.frontend_client_id())})
+                        "process_id":std::process::id(),"cwd":runtime.as_ref().map(|value|value.local_shell().cwd()),"client_id":runtime.as_ref().and_then(|value|value.frontend_client_id())})
                 }
                 "time" => {
                     no_query(query)?;
@@ -504,6 +519,25 @@ impl Host for BoundHost<'_> {
                 }
                 "exec.start" | "exec.cancel" => {
                     execution::perform(self, &runtime, command.as_str(), arguments).await?
+                }
+                "session.cd" | "session.new" => {
+                    let shell = runtime.local_shell();
+                    let view = shell
+                        .workbench()
+                        .ok_or_else(|| native("Session not initialized".into()))?;
+                    if command.as_str() == "session.cd" {
+                        #[derive(Deserialize)]
+                        #[serde(deny_unknown_fields)]
+                        struct ChangeDirectory {
+                            path: String,
+                        }
+                        let args: ChangeDirectory = serde_json::from_value(arguments)
+                            .map_err(|_| BridgeError::invalid("Expected a directory path"))?;
+                        json!({"cwd":view.cd(&args.path).map_err(BridgeError::invalid)?})
+                    } else {
+                        no_query(arguments)?;
+                        view.create().await.map_err(|e| native(e.to_string()))?
+                    }
                 }
                 "chat.send" => chat::send(self, &runtime, arguments)?,
                 "client.update" => {

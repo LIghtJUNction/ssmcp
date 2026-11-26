@@ -79,6 +79,8 @@ Worker 面板和 Sessions 的 Recipients 按当前连接上已认证的成员 ID
 
 ## 快速开始
 
+在终端启动时，写出完整的 `用户名@中继服务器`。默认打开 TUI。`--webui` 打开浏览器，`--gui` 打开桌面版。直接启动桌面应用、运行 `ssmcp gui` 或 `ssmcp webui` 可先填写连接表单。裸 `ssmcp` 显示用法并退出。
+
 ### 1. 选择客户端并安装
 
 Windows 用户推荐桌面版。桌面版复用 CLI 的会话和权限系统，提供连接、任务进度和按需展开的诊断界面。下载前核对[平台构建与发布状态](docs/clients.md)；源码和 CI 中的构建结果不表示所有平台已有正式发布包。
@@ -90,7 +92,8 @@ Android 上使用 Termux 安装 CLI，默认校验并安装正式版预编译包
 ```sh
 curl -fL https://raw.githubusercontent.com/LIghtJUNction/ssmcp/main/scripts/install-ssmcp-termux.sh -o install-ssmcp-termux.sh
 sh install-ssmcp-termux.sh bin
-proot-distro login ssmcp-debian -- /root/.local/bin/ssmcp --version
+ssmcp alice@ssmcp.lmm.best          # TUI
+ssmcp alice@ssmcp.lmm.best --webui  # 打开 Android 浏览器
 ```
 
 Termux 已安装时，用 `sh install-ssmcp-termux.sh update` 更新。需要在已 root 的 Android 上开机运行时，可从源码构建 [SSMCP Magisk 模块](packaging/magisk/README.md)，刷入后通过手机网页配置和查看会话。
@@ -256,16 +259,16 @@ Linux 上可以使用 `ssmcp local` 在当前项目启动本地 MCP 会话，无
 
 ### 使用同一入口选择连接目标
 
-把本机或 HTTPS 中继保存为命名 context，随后用同一个参数选择：
+把本机或 HTTPS 中继保存为命名 context，可通过名称查询目标：
 
 ~~~sh
 ssmcp context create here --local
 ssmcp context create work --server https://relay.example.com
-ssmcp --context work --username alice --name dev
+ssmcp alice@relay.example.com --name dev
 ssmcp context use here
 ~~~
 
-`--context` 只选择本次目标，`context use` 保存新连接的默认选择；已有连接和保存的 session 继续使用原目标。用 `ssmcp context show` 查看目标与选择来源。命名目标不保存账号凭据；完整优先级和本地运行前提见[本地与远程目标](docs/connection-contexts.md)。安装版本是否支持，以 `ssmcp context --help` 为准。
+`context use` 保存账号查询等管理命令的默认选择。中继连接须显式填写用户名与服务器；已有连接和保存的 session 继续使用原目标。用 `ssmcp context show` 查看目标与选择来源。命名目标不保存账号凭据；完整优先级和本地运行前提见[本地与远程目标](docs/connection-contexts.md)。安装版本是否支持，以 `ssmcp context --help` 为准。
 
 ### 对话与工具
 
@@ -308,7 +311,7 @@ Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重
 在项目目录的交互终端启动主聊天和关联的 worker 监控窗口：
 
 ~~~sh
-ssmcp --worker 3
+ssmcp alice@relay.example --worker 3
 ~~~
 
 这会创建三个初始离线的席位。默认 worker 是外部 Agent，继续使用它自己的应用和模型；SSMCP 提供任务队列、工具与回执，不启动模型。主窗口保留聊天输入，worker 窗口默认以全宽时间线展示 Agent 实际上报的进度，并显示当前任务和状态。尚无上报时明确等待；警告、错误和 `unknown` 保持可见。按 **F2** 查看日志与本机 SSMCP 资源详情，**F1** 查看帮助，**T** 查看任务全文。[监控操作](docs/workers.md#use-the-monitor)

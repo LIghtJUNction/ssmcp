@@ -29,7 +29,6 @@ use crate::{
 
 const STATUS_ENV: &str = "SSMCP_MAGISK_CONNECTED";
 const CONSENT: &str = "root-consent-v1";
-const RC: &str = include_str!("../../packaging/magisk/src/ssmcp/ssmcp.rc");
 const ONBOARDING: &str = include_str!("../../packaging/magisk/src/ssmcp/onboarding/index.html");
 const STYLE: &str = include_str!("../../packaging/magisk/src/ssmcp/webroot/console.css");
 
@@ -188,17 +187,16 @@ fn saved_target(dir: &Path) -> Result<Option<String>> {
         return Ok(None);
     };
     let target = allow_principal(&name, &server)?;
-    let consent = std::fs::read_to_string(dir.join(CONSENT)).unwrap_or_default();
-    Ok((consent == target).then_some(target))
+    // A valid command in this root-owned private file explicitly selects this
+    // relay. The placeholder shipped with the module always opens local setup.
+    write_private(&dir.join(CONSENT), target.as_bytes())?;
+    Ok(Some(target))
 }
 
 fn save(dir: &Path, name: &str, server: &str) -> Result<String> {
     let target = allow_principal(name, server)?;
-    let (comments, _) = RC
-        .rsplit_once("\nssmcp ")
-        .ok_or("missing rc template target")?;
     for (file, contents) in [
-        ("ssmcp.rc", format!("{comments}\nssmcp {target}\n")),
+        ("ssmcp.rc", format!("ssmcp {target}\n")),
         (CONSENT, target.clone()),
     ] {
         let staging = dir.join(format!(".{file}.new"));
@@ -317,6 +315,35 @@ enum Action {
         rows: u16,
         cols: u16,
     },
+}
+
+/// Select only the boot process started by this module, even when other tabs exist.
+async fn boot_session(State(state): State<Arc<Console>>, headers: HeaderMap) -> Response {
+    if !authorized(&state, &headers) {
+        return failure(StatusCode::UNAUTHORIZED, "Open the module WebUI to pair.");
+    }
+    let pid = state
+        .sessions
+        .lock()
+        .await
+        .tabs
+        .get(&0)
+        .and_then(|tab| tab.child.process_id());
+    let Some(pid) = pid else {
+        return Json(json!({"session": null})).into_response();
+    };
+    let root = state.dir.join("sessions");
+    match tokio::task::spawn_blocking(move || crate::session::frontend::target_for_pid(&root, pid))
+        .await
+    {
+        Ok(Ok(target)) => {
+            Json(json!({"session": target.map(|(target, _)| target)})).into_response()
+        }
+        _ => failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Could not read the boot session.",
+        ),
+    }
 }
 
 async fn terminal(
@@ -491,6 +518,7 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
             ([(header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'self'; frame-src http://127.0.0.1:43497; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")],
                 Html(include_str!("../../packaging/magisk/src/ssmcp/webroot/workbench.html")))
         }))
+        .route("/api/gui/v1/boot-session", get(boot_session))
         .route("/terminal", post(terminal))
         .layer(DefaultBodyLimit::max(24 * 1024))
         .layer(axum::middleware::map_response(|mut response: Response| async {

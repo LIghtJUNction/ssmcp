@@ -27,9 +27,39 @@ ssmcp gui serve [--listen 127.0.0.1:PORT] [--assets DIRECTORY]\n                
 #[derive(Default)]
 struct LocalHost {
     foreground_root: Option<PathBuf>,
+    // Only a deliberately opened, paired local launcher may create its first core.
+    launcher: Option<tokio::sync::Mutex<Option<(String, super::frontend::OwnedSession)>>>,
 }
 
 impl Host for LocalHost {
+    fn launch(&self, destination: String) -> CoreFuture<'_, String> {
+        Box::pin(async move {
+            let state = self.launcher.as_ref().ok_or_else(|| {
+                BridgeError::new(
+                    ErrorCode::Denied,
+                    "this gateway only attaches to existing sessions",
+                )
+            })?;
+            let mut launched = state.lock().await;
+            if let Some((existing, core)) = launched.as_ref() {
+                if existing == &destination {
+                    return Ok(core.target().to_owned());
+                }
+                return Err(BridgeError::invalid("this launcher already owns a session"));
+            }
+            let core = super::frontend::OwnedSession::launch(
+                &std::env::current_exe().map_err(|e| native(e.into()))?,
+                &destination,
+                &std::env::current_dir().map_err(|e| native(e.into()))?,
+            )
+            .await
+            .map_err(native)?;
+            let target = core.target().to_owned();
+            *launched = Some((destination, core));
+            Ok(target)
+        })
+    }
+
     fn sessions(&self) -> CoreFuture<'_, Vec<Value>> {
         Box::pin(async {
             match &self.foreground_root {
@@ -81,6 +111,7 @@ pub(crate) fn foreground_workbench(
         },
         Arc::new(LocalHost {
             foreground_root: Some(root),
+            launcher: None,
         }),
         true,
     )?)
@@ -288,6 +319,45 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
     if open_browser {
         crate::client::account::open_browser(&reqwest::Url::parse(&origin)?).await?;
     }
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown())
+        .await?;
+    Ok(())
+}
+
+/// Start one explicitly selected core and give the local browser its exact attach target.
+pub(crate) async fn launch(destination: Option<&str>) -> crate::Result<()> {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let origin = format!("http://{}", listener.local_addr()?);
+    let mut bytes = [0u8; 32];
+    crate::platform::random_bytes(&mut bytes)?;
+    let token = crate::hex::encode(bytes);
+    let host = Arc::new(LocalHost {
+        foreground_root: None,
+        launcher: Some(tokio::sync::Mutex::new(None)),
+    });
+    let mut launch_url = reqwest::Url::parse(&origin)?;
+    let destination = match destination {
+        Some(target) => Some(target.to_owned()),
+        None => crate::desktop_terminal::desktop_profile()?,
+    };
+    if let Some(destination) = destination {
+        let target = host.launch(destination).await?;
+        launch_url.query_pairs_mut().append_pair("session", &target);
+    } else {
+        launch_url.query_pairs_mut().append_pair("setup", "1");
+    }
+    let app = gateway::router(
+        gateway::Config {
+            origin: origin.clone(),
+            token: token.clone(),
+            assets: None,
+        },
+        host,
+    )?;
+    launch_url.set_fragment(Some(&token));
+    crate::client::account::open_browser(&launch_url).await?;
+    println!("WebUI {origin}");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
         .await?;

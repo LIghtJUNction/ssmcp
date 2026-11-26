@@ -111,7 +111,11 @@ pub struct Handle {
 }
 
 impl Handle {
-    pub fn start(target: Option<Target>, control: bool) -> Result<Self, String> {
+    pub fn start(
+        target: Option<Target>,
+        control: bool,
+        destination: Option<String>,
+    ) -> Result<Self, String> {
         let shared = Arc::new(Shared::default());
         let (sender, receiver) = mpsc::channel(16);
         let owned = shared.clone();
@@ -122,9 +126,40 @@ impl Handle {
                     .enable_all()
                     .build();
                 match runtime {
-                    Ok(runtime) => {
-                        runtime.block_on(Engine::new(owned, receiver).run(target, control))
-                    }
+                    Ok(runtime) => runtime.block_on(async {
+                        let mut engine = Engine::new(owned, receiver);
+                        if let Some(destination) = destination {
+                            engine.view.phase = Phase::Connecting;
+                            engine.publish();
+                            let result = async {
+                                let exe = crate::launcher::executable()?;
+                                let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+                                ssmcp::session::frontend::OwnedSession::launch(
+                                    &exe,
+                                    &destination,
+                                    &cwd,
+                                )
+                                .await
+                                .map_err(|e| e.to_string())
+                            };
+                            let session = tokio::select! {
+                                _ = engine.shared.stopped() => return,
+                                result = result => match result {
+                                    Ok(session) => session,
+                                    Err(error) => {
+                                        engine.view.launch_error = Some(error);
+                                        engine.publish();
+                                        return;
+                                    }
+                                }
+                            };
+                            let target = Target::Named(session.target().to_owned());
+                            engine.run(Some(target), true).await;
+                            drop(session);
+                        } else {
+                            engine.run(target, control).await;
+                        }
+                    }),
                     Err(_) => {
                         let mut view = owned.view.lock().unwrap_or_else(|error| error.into_inner());
                         view.notice = "无法启动本地异步运行时。".into();
@@ -416,7 +451,7 @@ impl Engine {
         let opened = budget
             .wait(&self.shared, async {
                 match &target {
-                    Target::Named(name) => RemoteFrontend::connect_named(name, !control).await,
+                    Target::Named(name) => RemoteFrontend::connect_local(name, !control).await,
                     Target::Directory(directory) => {
                         RemoteFrontend::connect(directory.clone(), !control).await
                     }
@@ -637,6 +672,7 @@ impl Engine {
         if self.view.resource("runtime") {
             let runtime = self.state("runtime", json!({}), budget).await?;
             self.view.backend_active = runtime["backend_active"] == true;
+            self.view.cwd = text(&runtime, "cwd", 2048);
         }
         if self.view.resource("terminals") {
             let value = self.state("terminals", json!({}), budget).await?;

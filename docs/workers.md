@@ -1,6 +1,6 @@
 # Worker sessions
 
-`ssmcp --worker 3` keeps the current window as the main chat and opens a second window with three worker slots. Use the main window to talk to the coordinating agent; use the worker window to follow reported agent progress and inspect task states. Logs and client resource details are available with F2. Each window has its own client connection and operating-system process.
+`ssmcp alice@relay.example --worker 3` keeps the current window as the main chat and opens a second window with three worker slots. Use the main window to talk to the coordinating agent; use the worker window to follow reported agent progress and inspect task states. Logs and client resource details are available with F2. Each window has its own client connection and operating-system process.
 
 The default worker is an external agent. It actively connects to the worker window, registers with `role: "worker"`, and calls `ssmcp.worker.wait` to wait for a task. After executing an assigned task, it reports the result with `ssmcp.worker.complete` and waits again. Starting the pool creates task capacity without starting any model.
 
@@ -72,7 +72,7 @@ worker to be idle.
 Start the main chat and its worker window with one command:
 
 ```sh
-ssmcp --worker 3
+ssmcp alice@relay.example --worker 3
 ssmcp alice@relay.example --worker 10
 ```
 
@@ -83,7 +83,7 @@ The same external-worker workflow applies on Linux, macOS and Windows. Each work
 The foreground command needs an available terminal adapter for its second window. To select a terminal explicitly, set `SSMCP_WORKER_TERMINAL` to one executable path. The value is a literal path, including any spaces; it is not a shell command or a list of options.
 
 ```sh
-SSMCP_WORKER_TERMINAL=/absolute/path/to/xterm ssmcp --worker 3
+SSMCP_WORKER_TERMINAL=/absolute/path/to/xterm ssmcp alice@relay.example --worker 3
 ```
 
 The child receives the original working directory and arguments as separate values. Startup waits for the actual worker process and its connection to become ready. A terminal launcher's successful exit alone does not establish readiness. An unavailable terminal or failed child startup produces an explicit error.
@@ -113,7 +113,7 @@ Capacity can range from zero to 128 stations. While a resize is awaiting retirem
 A worker is an external agent that actively joins the worker connection and waits for a task. Keep each agent's existing conversation open while it waits. SSMCP supplies the task queue and tools; the external application supplies the model.
 
 1. Connect the main window. Enter `/invite` and press Enter, then paste the prompt into the authorized coordinator conversation. The coordinator joins the control session as `main` and binds with its own credentials.
-2. Start the linked pool with `ssmcp --worker 3` or open stations with `/worker +N` in the main window. Check for a connected pool and a free station with `/worker ls`. In the main window, enter `/invite worker` and press Enter. Paste the prompt into each separate authorized worker conversation.
+2. Start the linked pool with `ssmcp alice@relay.example --worker 3` or open stations with `/worker +N` in the main window. Check for a connected pool and a free station with `/worker ls`. In the main window, enter `/invite worker` and press Enter. Paste the prompt into each separate authorized worker conversation.
 3. Each worker joins the linked pool as `worker`, binds with its own private credentials, and calls `ssmcp.worker.wait`. A wait timeout leaves it available. The worker calls wait again.
 4. The main agent submits tasks. A waiting worker receives one authenticated claim, performs the task, and reports it with `ssmcp.worker.complete`. After completion, it requests another task with a new wait request ID.
 

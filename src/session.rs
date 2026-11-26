@@ -4,7 +4,9 @@
 //! The native manager owns process lifetime; the client owns reconnect policy
 //! and connection-scoped tools/tasks. A saved session is not a persistent task.
 pub mod attach;
+pub(crate) mod workbench;
 pub mod control;
+pub mod frontend;
 pub mod gui;
 pub mod install;
 pub(crate) mod ipc;

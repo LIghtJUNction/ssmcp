@@ -258,6 +258,31 @@ pub(super) fn last_connection() -> Result<Option<LastConnection>> {
         .transpose()
 }
 
+// A saved desktop target records the user's explicit Connect action. CLI history
+// also includes headless launches and therefore cannot stand in for this choice.
+pub(crate) fn desktop_profile(save: Option<&str>) -> Result<Option<String>> {
+    let root = state_root()?;
+    if save.is_some() {
+        create_tree(&root)?;
+    }
+    if !root.try_exists()? {
+        return Ok(None);
+    }
+    verify_directory(&root)?;
+    let path = root.join("desktop-target-v1.json");
+    if let Some(target) = save {
+        crate::desktop_terminal::validate_destination(target)?;
+        write_private(&path, &serde_json::to_vec(target)?)?;
+    }
+    read_private_limit(&path, 1024)?
+        .map(|bytes| {
+            let target: String = serde_json::from_slice(&bytes)?;
+            crate::desktop_terminal::validate_destination(&target)?;
+            Ok(target)
+        })
+        .transpose()
+}
+
 pub(super) fn remember_connection(target: &LastConnection) -> Result<()> {
     let root = state_root()?;
     create_tree(&root)?;
@@ -650,8 +675,33 @@ fn identity_matches_username(identity: &Value, requested: &str) -> bool {
             })
 }
 
-pub(crate) async fn open_browser(url: &Url) -> Result<()> {
-    let mut command = if cfg!(windows) {
+pub(crate) async fn registration_url(destination: &str) -> Result<String> {
+    let (username, origin) = crate::server_endpoint::parse_target(destination)?;
+    let api = Api::new(&origin)?;
+    let reply = api
+        .request(
+            Method::POST,
+            "/api/client/registration/start",
+            None,
+            Some(json!({"name": "ssmcp", "username": username})),
+        )
+        .await?;
+    let value = Api::checked(reply)?;
+    let code = value["user_code"]
+        .as_str()
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 64
+                && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+        .ok_or("relay returned an invalid registration code")?;
+    let mut url = Url::parse(&origin)?.join("/setup")?;
+    url.query_pairs_mut().append_pair("code", code);
+    Ok(url.to_string())
+}
+
+fn browser_command(url: &Url) -> Command {
+    if cfg!(windows) {
         let mut c = Command::new("rundll32.exe");
         c.args(["url.dll,FileProtocolHandler", url.as_str()]);
         c
@@ -673,8 +723,44 @@ pub(crate) async fn open_browser(url: &Url) -> Result<()> {
         let mut c = Command::new("xdg-open");
         c.arg(url.as_str());
         c
-    };
+    }
+}
+
+pub(crate) fn open_desktop_link(url: &Url) -> Result<()> {
+    let mut command = browser_command(url);
     let mut child = command
+        .as_std_mut()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+pub(crate) async fn open_browser(url: &Url) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("SSMCP_TERMUX_BROWSER_FIFO").as_deref()
+        == Some(std::ffi::OsStr::new("/run/ssmcp-browser/url"))
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+        if url.scheme() == "http" && url.host_str() == Some("127.0.0.1") {
+            let mut pipe = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
+                .open("/run/ssmcp-browser/url")?;
+            if !pipe.metadata()?.file_type().is_fifo() {
+                return Err("expected Termux browser handoff pipe".into());
+            }
+            writeln!(pipe, "{url}")?;
+            return Ok(());
+        }
+    }
+
+    let mut child = browser_command(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

@@ -202,32 +202,13 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
                 self.assertEqual(self.opened.read_text(), "")
                 self.assertEqual(self.keys_read.read_text(), "")
 
-    def test_volume_menu_status_start_exit_and_timeout(self):
+    def test_module_action_opens_immediately_without_reading_volume_keys(self):
         self.staged.rename(self.active)
-        up = "EV_KEY KEY_VOLUMEUP DOWN"
-        down = "EV_KEY KEY_VOLUMEDOWN DOWN"
-
-        def action(*events):
-            self.events.write_text("".join(f"/dev/input/event1: {event}\n" for event in events))
-            output = self.shell(self.active / "action.sh")
-            self.assertNotIn("KEY_", output)
-            self.assertEqual(self.opened.read_text(), "")
-            self.assertEqual(list((self.root / "data/local/tmp").iterdir()), [])
-            return output
-
-        self.assertIn("本机服务未运行", action("EV_KEY KEY_VOLUMEUP UP",
-                                         "EV_KEY KEY_VOLUMEUP REPEAT", "EV_KEY KEY_A DOWN", up, down))
-        self.assertEqual(self.starts.read_text(), "")
-        self.assertIn("已请求启动本机服务", action(up, up, down))
-        self.wait_for_console()
-        owner = self.owner.read_bytes()
-        starts = self.starts.read_bytes()
-        self.assertIn("本机服务已运行", action(up, down))
-        self.assertIn("本机服务已运行", action(up, up, down))
-        self.assertIn("当前选择：退出", action(up, up, up, down))
-        self.assertNotIn("本机服务", action())
-        self.assertEqual(self.owner.read_bytes(), owner)
-        self.assertEqual(self.starts.read_bytes(), starts)
+        self.shell(self.active / "action.sh")
+        self.shell(self.active / "action.sh")
+        self.assertEqual(len(self.opened.read_text().splitlines()), 2)
+        self.assertEqual(len(self.starts.read_text().splitlines()), 1)
+        self.assertEqual(self.keys_read.read_text(), "")
 
     def test_initialized_update_preserves_active_service(self):
         self.install()

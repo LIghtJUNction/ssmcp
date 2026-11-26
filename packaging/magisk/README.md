@@ -4,15 +4,15 @@
 
 1. 输入你的 SSMCP 用户名和中继域名。已有账号可直接连接。新账号选定名字后，点击 GitHub 注册，完成绑定后返回连接。
 2. 阅读并确认 root 风险。使用官方中继时还需阅读并接受用户协议和隐私政策。官方中继每月赠送 1 GB（1,000,000,000 字节），额外流量由用户在中继网站购买。
-3. 配置成功后，完成页显示所选账号和当前中继的 MCP 地址。需要连接 ChatGPT 时，可在此页查看插件设置说明。点「打开工作台」进入会话页面。
+3. 配置完成后，打开会话即可输入消息。
 
-配置完成后，打开模块 WebUI，系统浏览器会显示这台手机的 SSMCP 会话工作台。选择会话后可只读观察，也可申请控制并发送消息。模块在启动设备时恢复已确认的中继连接。停用时，在模块管理器中禁用模块并重启设备。
+配置完成后，打开模块 WebUI，系统浏览器会显示这台手机的 SSMCP 会话工作台。首页直接打开本机配置的会话。模块在启动设备时恢复已确认的中继连接。停用时，在模块管理器中禁用模块并重启设备。
 
-没有 WebUI 的管理器可点模块的「操作」。菜单默认「打开工作台」，按音量−确认。按音量＋可切换到查看状态、启动服务或退出。20 秒无操作会退出菜单。需要修改配置时，从模块 WebUI 选择「设备配置」。如果手机已运行 Zuse，可在同一入口选择「Zuse 工作台」。
+没有 WebUI 的管理器可点模块的「操作」直接打开。需要修改配置时，从模块 WebUI 选择「设备配置」。如果手机已运行 Zuse，可在同一入口选择「Zuse 工作台」。
 
 模块会话从 `/data/adb/ssmcp/workspace` 启动。可把已安装的 Android 可执行文件放在 `/data/adb/ssmcp/home/.local/bin`，新启动的模块会话会在这里查找工具。终端内的 `/update --check` 会检查已发布的 Magisk ZIP。
 
-配置位于 `/data/adb/ssmcp/ssmcp.rc`。可以手工修改唯一一行 `ssmcp username@server`，重启后重新确认目标。刷入更新时会保留目录里的配置和本地状态。更新时，从项目 Releases 下载新版 `ssmcp-magisk-arm64.zip`，在模块管理器中刷入。Termux 可用 `sh scripts/install-ssmcp-termux.sh update [--check]` 在现有 Debian proot 安装中更新。
+配置位于 `/data/adb/ssmcp/ssmcp.rc`。也可以直接写入一行 `ssmcp username@server`，模块重启后按这条命令连接。刷入更新时会保留目录里的配置和本地状态。更新时，从项目 Releases 下载新版 `ssmcp-magisk-arm64.zip`，在模块管理器中刷入。Termux 可用 `sh scripts/install-ssmcp-termux.sh update [--check]` 在现有 Debian proot 安装中更新。
 
 本地工作台和引导使用回环地址。模块从私有目录读取当前进程的配对凭据，通过启动地址的片段交给浏览器。请勿分享启动 URL。移除模块并重启后，数据仍保留在 `/data/adb/ssmcp`。
 

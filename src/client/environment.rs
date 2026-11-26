@@ -42,6 +42,9 @@ pub(super) fn startup() -> crate::Result<Vec<(OsString, OsString)>> {
 
 fn skips_environment(args: &[OsString]) -> Result<bool, String> {
     // Preserve diagnostic paths even when the RC or home directory is broken.
+    if args.is_empty() {
+        return Ok(true);
+    }
     if super::version::request(args)
         .map_err(|error| error.to_string())?
         .is_some()

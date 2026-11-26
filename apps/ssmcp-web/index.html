@@ -2,75 +2,82 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
   <meta name="color-scheme" content="light dark">
   <meta name="referrer" content="no-referrer">
-  <title>SSMCP · 工作台</title>
+  <title>ssmcp</title>
   <link rel="stylesheet" href="./styles.css">
   <script type="module" src="./app.mjs"></script>
 </head>
 <body>
-  <div class="shell">
+  <main id="launch-setup" class="launch-setup" hidden>
+    <form id="launch-form">
+      <h1>首次连接</h1>
+      <div class="launch-line">
+        <code>ssmcp</code>
+        <label><input id="launch-name" placeholder="用户名" required maxlength="32" autocomplete="off" autocapitalize="none" spellcheck="false"><span>↑ 用户名，首次注册可自定</span></label>
+        <code>@</code>
+        <label><input id="launch-relay" value="ssmcp.lmm.best" required autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="url"><span>↑ 中继服务器，可改为自部署域名</span></label>
+      </div>
+      <div id="launch-hosted" class="launch-consent">
+        <label><input id="launch-terms" type="checkbox" required> 我同意<a href="https://ssmcp.lmm.best/legal/terms" target="_blank" rel="noopener noreferrer">用户协议</a></label>
+        <label><input id="launch-privacy" type="checkbox" required> 我同意<a href="https://ssmcp.lmm.best/legal/privacy" target="_blank" rel="noopener noreferrer">隐私政策</a></label>
+      </div>
+      <div class="launch-actions"><button class="primary" type="submit" id="launch-connect">连接 →</button><button class="text-button" type="submit" id="launch-register">注册用户名</button><a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/deployment.md" target="_blank" rel="noopener noreferrer">自部署</a><a href="https://github.com/LIghtJUNction/ssmcp" target="_blank" rel="noopener noreferrer">GitHub</a></div>
+      <a class="source-link" id="registration-link" target="_blank" rel="noopener noreferrer" hidden>前往中继完成注册</a>
+      <p class="form-error" id="launch-error" role="alert"></p>
+    </form>
+  </main>
+  <div class="shell" id="workbench-shell">
     <aside class="sidebar" id="sidebar" aria-label="会话导航">
-      <a class="brand" href="./" aria-label="SSMCP 工作台"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="currentColor" aria-hidden="true" focusable="false"><rect x="5" y="7" width="2" height="18" rx="1"/><rect x="5" y="7" width="7" height="2" rx="1"/><rect x="5" y="23" width="7" height="2" rx="1"/><rect x="25" y="7" width="2" height="18" rx="1"/><rect x="20" y="7" width="7" height="2" rx="1"/><rect x="20" y="23" width="7" height="2" rx="1"/><rect x="11" y="15" width="10" height="2" rx="1"/></svg></span><strong>ssmcp</strong><span class="tag">WEB</span></a>
-      <div class="nav-heading"><span>会话</span><button class="icon-button" id="refresh-sessions" title="刷新会话目录" aria-label="刷新会话目录">↻</button></div>
-      <div id="session-list" class="session-list"><p class="quiet">认证后显示本机真实会话。</p></div>
+      <div class="brand"><strong>ssmcp</strong><button class="icon-button close-menu" id="close-menu" aria-label="关闭侧边栏">×</button></div>
+      <div class="nav-heading"><span>会话</span><button class="icon-button" id="refresh-sessions" title="刷新会话" aria-label="刷新会话">↻</button></div>
+      <div id="session-list" class="session-list"></div>
       <div class="pagination" id="session-pagination" hidden><button class="text-button" id="sessions-prev">上一页</button><button class="text-button" id="sessions-next">下一页</button></div>
+      <nav class="view-list" aria-label="会话视图" role="tablist" aria-orientation="vertical">
+        <button role="tab" id="tab-conversation" data-panel="conversation" aria-controls="panel-conversation" aria-selected="true">对话 <span id="timeline-count" class="count"></span></button>
+        <button role="tab" id="tab-terminal" data-panel="terminal" aria-controls="panel-terminal" aria-selected="false" tabindex="-1">终端 <span id="terminal-count" class="count"></span></button>
+        <button role="tab" id="tab-workers" data-panel="workers" aria-controls="panel-workers" aria-selected="false" tabindex="-1">Workers <span id="worker-count" class="count"></span></button>
+        <button role="tab" id="tab-waits" data-panel="waits" aria-controls="panel-waits" aria-selected="false" tabindex="-1">等待 <span id="wait-count" class="count"></span></button>
+      </nav>
+        <div class="conversation-toolbar" id="conversation-toolbar" hidden>
+          <label class="tiny">范围 <select id="thread-filter" aria-label="对话来源"><option value="process">整个会话</option><option value="main">主对话</option></select></label>
+          <button class="text-button" id="history-more" hidden>读取更早历史</button>
+          <button class="text-button" id="threads-button" hidden>线程</button>
+          <button class="text-button" id="queue-button" hidden>输入队列</button>
+        </div>
       <div class="sidebar-bottom">
         <div class="gateway-label"><span class="status-dot" id="auth-dot"></span><span id="auth-status">尚未认证</span></div>
-        <button class="secondary" id="auth-button">连接网关</button>
-        <button class="text-button" id="theme-button">切换明暗</button>
-        <p class="tiny">同一 CLI · 同一执行状态</p>
+        <span class="live-status" id="observation-status" aria-live="polite"><span class="status-dot"></span><span>未连接</span></span>
+        <span class="sr-only" id="connection-label"></span>
+        <label class="tiny">接收方 <select id="chat-target"><option value="next">下一个接收者</option></select></label>
+        <div class="side-actions" id="connected-actions" hidden>
+          <button class="text-button" id="observe-button">暂停观察</button><button class="text-button" id="refresh-state">刷新状态</button>
+          <button class="text-button" id="update-button" hidden>更新</button><button class="text-button" id="disconnect-button">断开</button>
+        </div>
+        <div class="side-actions"><button class="text-button" id="auth-button">连接网关</button><button class="text-button" id="theme-button">切换明暗</button></div>
+        <div class="side-actions"><button class="text-button" id="diagnostics-button">连接详情</button><button class="text-button" id="commands-button">操作记录 <span id="command-count"></span></button></div>
+        <a class="source-link" href="https://github.com/LIghtJUNction/ssmcp" target="_blank" rel="noopener noreferrer">GitHub</a><span class="sr-only" id="status-cursor"></span>
       </div>
     </aside>
+    <button class="scrim" id="dismiss-sidebar" aria-label="关闭侧边栏" tabindex="-1" hidden></button>
     <main class="main">
       <header class="topbar">
-        <button class="icon-button menu-button" id="menu-button" aria-controls="sidebar" aria-expanded="false" aria-label="切换会话导航">☰</button>
-        <div class="session-heading"><div class="eyebrow" id="connection-label">WORKSPACE</div><h1 id="session-title">工作台</h1><p id="session-cwd" class="tiny mono"></p></div>
-        <div class="top-actions" id="connected-actions" hidden>
-          <button class="text-button" id="observe-button">暂停观察</button>
-          <button class="icon-button" id="refresh-state" aria-label="刷新实际状态" title="刷新实际状态">↻</button>
-          <button class="text-button" id="update-button" hidden>更新</button>
-          <button class="text-button" id="disconnect-button">断开</button>
-        </div>
+        <button class="icon-button menu-button" id="menu-button" aria-controls="sidebar" aria-expanded="false" aria-label="打开侧边栏">☰</button>
+        <div class="session-tabs" id="session-tabs" role="tablist" aria-label="已打开的会话"></div>
+        <button class="icon-button" id="new-session" aria-label="新建会话" title="新建会话 · /new" hidden>+</button>
       </header>
+      <div class="work-title"><h1 id="session-title">ssmcp</h1><span id="session-cwd" class="tiny mono"></span></div>
       <div class="connect-strip" id="connect-strip" hidden>
         <label>连接模式 <select id="connection-mode"><option value="observe">只读观察</option><option value="control">控制会话</option></select></label>
         <button class="primary" id="connect-button">连接会话 <span aria-hidden="true">↗</span></button>
         <span class="tiny">控制模式申请本地输入租约。</span>
       </div>
       <div class="banner" id="error-banner" role="alert" hidden><span id="error-text"></span><button class="text-button" id="error-details">详细信息</button></div>
-      <nav class="tabs" aria-label="工作区视图" role="tablist">
-        <button role="tab" id="tab-conversation" data-panel="conversation" aria-controls="panel-conversation" aria-selected="true">对话 <span id="timeline-count" class="count"></span></button>
-        <button role="tab" id="tab-terminal" data-panel="terminal" aria-controls="panel-terminal" aria-selected="false" tabindex="-1">终端 <span id="terminal-count" class="count"></span></button>
-        <button role="tab" id="tab-workers" data-panel="workers" aria-controls="panel-workers" aria-selected="false" tabindex="-1">Workers <span id="worker-count" class="count"></span></button>
-        <button role="tab" id="tab-waits" data-panel="waits" aria-controls="panel-waits" aria-selected="false" tabindex="-1">等待 <span id="wait-count" class="count"></span></button>
-        <span class="live-status" id="observation-status" aria-live="polite"><span class="status-dot"></span><span>未连接</span></span>
-      </nav>
-
       <section class="panel conversation-panel" id="panel-conversation" role="tabpanel" aria-labelledby="tab-conversation">
-        <div class="conversation-toolbar" id="conversation-toolbar" hidden>
-          <label class="tiny">范围 <select id="thread-filter" aria-label="对话来源"><option value="process">整个会话</option><option value="main">主对话</option></select></label>
-          <button class="text-button" id="history-more" hidden>继续读取保留历史</button>
-          <button class="text-button" id="threads-button" hidden>线程</button>
-          <button class="text-button" id="queue-button" hidden>输入队列</button>
-        </div>
         <div class="timeline-scroller" id="timeline-scroller" tabindex="0" aria-label="对话与事件时间线">
-          <div class="welcome" id="welcome">
-            <div class="welcome-intro">
-              <span class="welcome-glyph" aria-hidden="true"><svg viewBox="0 0 32 32" fill="currentColor" aria-hidden="true" focusable="false"><rect x="5" y="7" width="2" height="18" rx="1"/><rect x="5" y="7" width="7" height="2" rx="1"/><rect x="5" y="23" width="7" height="2" rx="1"/><rect x="25" y="7" width="2" height="18" rx="1"/><rect x="20" y="7" width="7" height="2" rx="1"/><rect x="20" y="23" width="7" height="2" rx="1"/><rect x="11" y="15" width="10" height="2" rx="1"/></svg></span>
-              <h2>让工作，清晰可见。</h2>
-              <p class="welcome-copy">连接正在运行的 SSMCP 会话。<br>对话、终端和 worker 进展，在同一处查看。</p>
-              <button class="primary" id="welcome-connect">连接本机网关 <span aria-hidden="true">↗</span></button>
-            </div>
-            <ul class="welcome-overview" aria-label="工作区内容">
-              <li><span class="welcome-number" aria-hidden="true">01</span><h3>对话与事件</h3><p>查看当前会话可用的消息与记录。</p></li>
-              <li><span class="welcome-number" aria-hidden="true">02</span><h3>终端</h3><p>读取实际输出，显式发送输入。</p></li>
-              <li><span class="welcome-number" aria-hidden="true">03</span><h3>Workers</h3><p>了解已有工作池的状态与进展。</p></li>
-            </ul>
-            <p class="tiny welcome-footnote">没有演示数据。连接后展示 CLI 的真实状态。</p>
-          </div>
-          <div class="timeline-empty" id="timeline-empty" hidden><h2>等待新的事件</h2><p>当前保留窗口内还没有可显示的对话。<br>连接和观察状态显示在上方。</p></div>
+          <div class="welcome" id="welcome"><button class="secondary" id="welcome-connect">连接本机网关</button></div>
+          <div class="timeline-empty" id="timeline-empty" hidden><span class="prompt" aria-hidden="true">›</span><span>新对话</span></div>
           <div class="timeline-paging" id="timeline-paging" hidden><button class="text-button" id="timeline-older">更早的记录</button><span id="timeline-page-label" class="tiny"></span><button class="text-button" id="timeline-newer">较新的记录</button></div>
           <div class="timeline" id="timeline"></div>
           <p class="tiny retention-note" id="retention-note" hidden></p>
@@ -79,15 +86,16 @@
         <div class="composer-wrap">
           <form class="composer" id="chat-form" hidden>
             <label for="chat-text" class="sr-only">发送到 CLI 输入队列</label>
-            <textarea id="chat-text" rows="2" maxlength="16384" placeholder="发给当前会话…" spellcheck="false"></textarea>
-            <div class="composer-bottom"><label class="tiny">接收方 <select id="chat-target"><option value="next">下一个合法接收者</option></select></label><span class="tiny composer-hint">Ctrl / ⌘ + Enter 发送</span><button class="send-button" id="chat-send" type="submit" aria-label="发送到本地输入队列">发送 <span aria-hidden="true">↑</span></button></div>
+            <span class="prompt" aria-hidden="true">›</span>
+            <textarea id="chat-text" rows="1" maxlength="16384" placeholder="输入消息或 / 命令" spellcheck="false"></textarea>
+            <button class="send-button" id="chat-send" type="submit" aria-label="发送" title="发送 · Ctrl / ⌘ + Enter">↑</button>
           </form>
           <p class="tiny composer-note" id="composer-note">先连接一个会话。</p>
         </div>
       </section>
 
       <section class="panel terminal-panel" id="panel-terminal" role="tabpanel" aria-labelledby="tab-terminal" hidden>
-        <div class="panel-intro"><div><h2>终端</h2><p class="muted">读取真实输出，显式发送输入。</p></div><span class="tag">PLAIN TEXT</span></div>
+        <h2 class="sr-only">终端</h2>
         <div class="empty-state" id="terminal-empty">当前连接没有终端资源。</div>
         <div id="terminal-content" hidden>
           <div class="terminal-tabs" id="terminal-list" aria-label="选择输入终端"></div>
@@ -95,11 +103,11 @@
           <pre class="terminal-output" id="terminal-output" tabindex="0" aria-label="终端文本输出"></pre>
           <form class="terminal-form" id="terminal-form" hidden>
             <label for="terminal-input" class="tiny">输入到选中的终端</label>
-            <textarea id="terminal-input" rows="2" maxlength="16384" placeholder="输入文本或命令，点击发送后才会执行" spellcheck="false"></textarea>
+            <textarea id="terminal-input" rows="2" maxlength="16384" placeholder="输入终端命令" spellcheck="false"></textarea>
             <div class="form-actions"><label class="tiny"><input type="checkbox" id="terminal-newline" checked> 末尾加换行</label><span class="tiny">Ctrl / ⌘ + Enter 发送</span><button class="primary" type="submit" id="terminal-send">发送输入</button></div>
           </form>
           <form class="resize-form" id="terminal-resize" hidden><span class="tiny">终端尺寸</span><label class="tiny">行 <input id="terminal-rows" type="number" min="1" max="1000" value="30" required></label><label class="tiny">列 <input id="terminal-cols" type="number" min="1" max="1000" value="100" required></label><button class="text-button" type="submit">应用尺寸</button></form>
-          <p class="tiny">输出为有界纯文本预览；保留原始事件元数据，不模拟完整终端屏幕。</p>
+
         </div>
       </section>
 
@@ -126,7 +134,10 @@
         <div id="waits-content" hidden></div>
       </section>
 
-      <footer class="statusbar"><span class="mono" id="status-cursor">zbridge v1</span><button class="text-button" id="diagnostics-button">连接详情</button><button class="text-button" id="commands-button">操作记录 <span id="command-count"></span></button></footer>
+      <div id="terminal-keys" class="terminal-keys" role="group" aria-label="发送到当前终端的快捷键" hidden>
+        <button data-key="escape" title="发送 Escape">Esc</button><button data-key="tab" title="发送 Tab">Tab</button>
+        <button data-key="interrupt" title="中断当前终端操作">Ctrl-C</button><button data-key="left" aria-label="向左">←</button><button data-key="down" aria-label="向下">↓</button><button data-key="up" aria-label="向上">↑</button><button data-key="right" aria-label="向右">→</button>
+      </div>
     </main>
   </div>
 

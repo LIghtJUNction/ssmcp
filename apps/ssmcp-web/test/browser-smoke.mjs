@@ -18,7 +18,9 @@ try {
   await new Promise((resolve, reject) => { server.stdout.once('data', resolve); server.once('error', reject); server.once('exit', code => reject(new Error(`Static server exited: ${code}`))); });
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
-  const foreground = 'live:' + '71'.repeat(32);
+  const foreground = 'live:' + '71'.repeat(16);
+  let newCount = 0, activeTarget = foreground, cwd = '/fixture/project';
+  const created = [];
   const errors = [], commands = [], requests = [], pending = [];
   let cursor = '9007199254740993', queue = [], failTerminal = false;
   page.on('pageerror', error => errors.push(error.message));
@@ -26,7 +28,7 @@ try {
     window.cspViolations = [];
     document.addEventListener('securitypolicyviolation', event => window.cspViolations.push(event.violatedDirective));
   });
-  const caps = capabilities({ resources: ['runtime', 'threads', 'conversation', 'chat.queue', 'terminals', 'workers'], commands: ['chat.send', 'terminal.write', 'terminal.resize', 'workers.resize', 'client.update'] });
+  const caps = capabilities({ resources: ['runtime', 'threads', 'conversation', 'chat.queue', 'terminals', 'workers'], commands: ['session.new', 'session.cd', 'chat.send', 'terminal.write', 'terminal.resize', 'workers.resize', 'client.update'] });
   const source = { kind: 'main', client_id: 'real.fixture.client', connection: '9007199254740993', request_id: '12' };
   const productivity = {
     members: 1,
@@ -51,9 +53,9 @@ try {
       message_id: item.id, input_origin: item.origin, completion_permission: false },
   }));
   const states = resource => ({
-    runtime: { backend_active: true, backend_generation: '2', live_cursor: cursor, retention: 'live_process_memory' },
+    runtime: { cwd, backend_active: true, backend_generation: '2', live_cursor: cursor, retention: 'live_process_memory' },
     threads: { client_id: 'fixture.client', connected: true, chat_enabled: true, can_send: true, reloading: false, agents: [{ agent_id: 'actual.agent', name: '主协调者', role: 'main', status: 'working' }], next_offset: 1, has_more: false },
-    conversation: { schema_version: 1, scope: { kind: 'process' }, events: [...inputHistory, { sequence: '9007199254740992', kind: 'answer', text: '来自原生历史的 fixture 文本', source, value: { type: 'ssmcp.message', kind: 'answer', message_id: 'native_00000000000000000000000000000006' } }], next_cursor: '9007199254740993', start_cursor: '9007199254740987', end_cursor: '9007199254740993', has_more: false, gap: false, retention: 'live_process_memory' },
+    conversation: { schema_version: 1, scope: { kind: 'process' }, events: activeTarget !== foreground ? [] : [...inputHistory, { sequence: '9007199254740992', kind: 'answer', text: '来自原生历史的 fixture 文本', source, value: { type: 'ssmcp.message', kind: 'answer', message_id: 'native_00000000000000000000000000000006' } }], next_cursor: '9007199254740993', start_cursor: '9007199254740987', end_cursor: '9007199254740993', has_more: false, gap: false, retention: 'live_process_memory' },
     'chat.queue': { client_id: 'fixture.client', items: queue, next_offset: queue.length, has_more: false },
     terminals: { terminals: [{ terminal_id: 'actual.terminal', name: '主终端', cwd: '/fixture/project', selected: true }], selected: 'actual.terminal', default_terminal_id: 'actual.terminal', max_terminals: 4 },
     workers: { pool_generation: 'actual.pool', total: 2, desired_total: 2, registered_workers: 2, working: 1, idle: 1, dreaming: 1, offline: 0, retiring: 0, queued: 0, productivity, slots: [worker,
@@ -63,8 +65,8 @@ try {
   await page.route('**/api/gui/v1/**', async route => {
     const req = route.request(); const url = new URL(req.url()); const body = req.postDataJSON();
     requests.push({ path: url.pathname, authorization: req.headers().authorization, body });
-    if (url.pathname.endsWith('/sessions')) return fulfill(route, { sessions: [{ name: '真实会话 fixture', cwd: '/fixture/project' }, { name: '真实会话 fixture', cwd: '/fixture/project', target: foreground, manager_active: true, manager_state: 'active', connection_state: 'connected', phase: 'active', generation: '2', stop_requested: false }], next_offset: 2, has_more: false });
-    if (url.pathname === '/api/gui/v1/connections') return fulfill(route, { status: 'connected', connection_id: 'fixture.connection', session: body.session, read_only: body.read_only, capabilities: response({ id: body.request_id, operation: { op: 'capabilities' } }, caps), duplicate: false });
+    if (url.pathname.endsWith('/sessions')) return fulfill(route, { sessions: [{ name: '真实会话 fixture', cwd: '/fixture/project' }, { name: '真实会话 fixture', cwd: '/fixture/project', target: foreground, manager_active: true, manager_state: 'active', connection_state: 'connected', phase: 'active', generation: '2', stop_requested: false }, ...created], next_offset: 2 + created.length, has_more: false });
+    if (url.pathname === '/api/gui/v1/connections') { activeTarget = body.session; return fulfill(route, { status: 'connected', connection_id: 'fixture.connection', session: body.session, read_only: body.read_only, capabilities: response({ id: body.request_id, operation: { op: 'capabilities' } }, caps), duplicate: false }); }
     if (url.pathname.endsWith('/bridge')) {
       const op = body.operation;
       if (op.op === 'capabilities') return fulfill(route, response(body, caps));
@@ -77,6 +79,13 @@ try {
           value = { request_id: body.id, message_id: 'fixture.message', status: 'sending', target: op.arguments.target, duplicate: false, confirmation: 'local_queue_admission' };
           queue = [{ id: value.message_id, text: op.arguments.text, target: value.target, status: value.status, created_at_ms: '9007199254740993', updated_at_ms: '9007199254740993', uncertain: false, retarget_required: false, error: null }];
         }
+        if (op.command === 'session.new') {
+          newCount++;
+          const target = 'live:' + newCount.toString(16).padStart(32, '0');
+          created.push({name: '会话 ' + newCount, target, cwd});
+          value = {session: target, cwd};
+        }
+        if (op.command === 'session.cd') { cwd = op.arguments.path; value = {cwd}; }
         if (op.command === 'client.update') value = { ok: true, summary: 'Fixture update check complete', details: 'Shared backend receipt' };
         if (op.command === 'workers.resize') value = { resize_pending: true, desired_total: op.arguments.total, pool_generation: 'actual.pool' };
         return fulfill(route, response(body, { command: op.command, value }));
@@ -230,6 +239,7 @@ try {
   assert.equal(commands.some(item => item.operation.command !== 'chat.send'), false,
     'quoted @/$/slash text remains in an ordinary chat.send payload');
 
+  await page.locator('#timeline-scroller').evaluate(node => { node.scrollTop = node.scrollHeight; });
   for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
     await emit(`滚动检查 ${pageIndex}`, 16);
     await page.getByText(`滚动检查 ${pageIndex} 15`, { exact: true }).waitFor();
@@ -268,17 +278,47 @@ try {
   for (const width of [390, 320]) {
     await viewport(width, 844);
     for (const tab of ['conversation', 'terminal', 'workers', 'waits']) {
+      await page.locator('#menu-button').click();
       await page.locator(`#tab-${tab}`).click();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${tab} must fit ${width}px viewport`);
       const panel = await page.locator(`#panel-${tab}`).boundingBox();
       assert.ok(panel && panel.x >= 0 && panel.x + panel.width <= width + 1);
     }
   }
+  await page.locator('#menu-button').click();
   await page.locator('#tab-conversation').click();
   await page.locator('#menu-button').click();
   assert.equal(await page.locator('#menu-button').getAttribute('aria-expanded'), 'true');
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#menu-button').getAttribute('aria-expanded'), 'false');
+  // A mobile hotkey is one native terminal write and does not submit the message draft.
+  failTerminal = false;
+  await page.locator('#chat-text').fill('留在原会话');
+  await page.locator('#terminal-keys [data-key="up"]').click();
+  await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+  for (let i=0; i<100 && !commands.some(item => item.operation.arguments.data === '\x1b[A'); i++) await delay(10);
+  assert.equal(commands.at(-1).operation.arguments.data, '\x1b[A');
+  assert.equal(await page.locator('#chat-text').inputValue(), '留在原会话');
+  await page.locator('#new-session').click();
+  await page.locator('.session-tab[aria-selected="true"]').filter({hasText:'会话 1'}).waitFor();
+  assert.equal(await page.locator('#chat-text').inputValue(), '');
+  await page.locator('#chat-text').fill('/cd /fixture/目录 with space');
+  await page.locator('#chat-send').click();
+  await page.waitForFunction(() => document.querySelector('#session-cwd').textContent === '/fixture/目录 with space');
+  await page.locator('#chat-text').fill('/new');
+  await page.locator('#chat-send').click();
+  await page.locator('.session-tab[aria-selected="true"]').filter({hasText:'会话 2'}).waitFor();
+  assert.equal(newCount, 2);
+  await page.locator('.session-tab').first().click();
+  await page.waitForFunction(() => document.getElementById('chat-text').value === '留在原会话');
+  assert.equal(commands.filter(item => item.operation.command === 'chat.send').length, 2);
+  if (process.env.WEB_TEST_EVIDENCE) {
+    await viewport(390, 844);
+    await page.screenshot({ path: join(process.env.WEB_TEST_EVIDENCE, 'session-mobile.png') });
+    await page.locator('#menu-button').click();
+    await page.screenshot({ path: join(process.env.WEB_TEST_EVIDENCE, 'session-mobile-sidebar.png') });
+    await page.locator('#close-menu').click();
+  }
   assert.deepEqual(errors, []);
   assert.deepEqual(await page.evaluate(() => window.cspViolations), []);
   assert.ok(requests.every(request => request.authorization === 'Bearer ' + token));
@@ -292,10 +332,21 @@ try {
   await moduleTab.route(moduleHome + '**', async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+    if (path === '/api/gui/v1/boot-session') return fulfill(route, {session: foreground});
+    if (path === '/api/gui/v1/connections') {
+      const open = request.postDataJSON();
+      assert.equal(open.session, foreground); assert.equal(open.read_only, false);
+      return fulfill(route, {status:'connected', connection_id:'module.connection', session:foreground, read_only:false, duplicate:false, capabilities:response({id:open.request_id, operation:{op:'capabilities'}}, caps)});
+    }
+    if (path.endsWith('/bridge')) {
+      const body = request.postDataJSON(), op = body.operation;
+      return fulfill(route, response(body, op.op === 'capabilities' ? caps : {resource:op.resource, schema_version:1, value:states(op.resource)}));
+    }
+    if (path.endsWith('/events')) return;
     if (path === '/api/gui/v1/sessions') {
       bootstrapRequests.push({ address: moduleTab.url(), auth: request.headers().authorization });
       return route.fulfill({ status: denyPairing ? 401 : 200, contentType: 'application/json',
-        body: JSON.stringify(denyPairing ? {} : { sessions: [{ name: '模块会话' }], has_more: false }) });
+        body: JSON.stringify(denyPairing ? {} : { sessions: [{ name: '模块会话', target: foreground }, { name: '另一个运行中的会话' }], has_more: false }) });
     }
     const asset = await fetch('http://127.0.0.1:' + port + path);
     assert.equal(asset.status, 200, path);
@@ -305,7 +356,8 @@ try {
   });
   await moduleTab.goto(moduleHome + '#' + token);
   await moduleTab.waitForFunction(() => document.querySelector('#auth-status')?.textContent === '已设置认证', null, { timeout: 8000 });
-  assert.equal(await moduleTab.locator('.session-item strong').textContent(), '模块会话');
+  await moduleTab.locator('#chat-text').waitFor();
+  assert.equal(await moduleTab.locator('.session-tab[aria-selected=true]').textContent(), '模块会话');
   assert.deepEqual(bootstrapRequests, [{ address: moduleHome, auth: 'Bearer ' + token }]);
   assert.deepEqual(await moduleTab.evaluate(() => [location.hash, localStorage.length, sessionStorage.length]), ['', 0, 0]);
   denyPairing = true;
@@ -315,6 +367,41 @@ try {
   assert.equal(moduleTab.url(), moduleHome);
   assert.equal(await moduleTab.locator('#auth-status').textContent(), '尚未认证');
   await moduleTab.close();
+  const setup = await browser.newPage({viewport:{width:390,height:844}});
+  const starts = [], registrations = [];
+  await setup.context().route("https://my.example/**", route => route.fulfill({body:"Registration fixture"}));
+  await setup.route('**/api/gui/v1/**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/gui/v1/register') {
+      registrations.push(route.request().postDataJSON());
+      return fulfill(route, {url:'https://my.example/setup?code=fixture'});
+    }
+    assert.equal(path, '/api/gui/v1/launch');
+    assert.equal(route.request().headers().authorization, 'Bearer ' + token);
+    starts.push(route.request().postDataJSON());
+    await route.fulfill({status:400, contentType:'application/json', body:JSON.stringify({error:{code:'denied', effect:'none', message:'测试账号未注册'}})});
+  });
+  await setup.goto(`http://127.0.0.1:${port}/?setup=1#${token}`);
+  await setup.locator('#launch-name').waitFor();
+  assert.equal(await setup.locator('#launch-relay').inputValue(), 'ssmcp.lmm.best');
+  assert.equal(starts.length, 0);
+  if (process.env.WEB_TEST_EVIDENCE) await setup.screenshot({path:join(process.env.WEB_TEST_EVIDENCE, 'first-connection-mobile.png')});
+  await setup.locator('#launch-name').fill('new-user');
+  await setup.locator('#launch-connect').click();
+  assert.equal(starts.length, 0);
+  await setup.locator('#launch-register').click();
+  assert.equal(registrations.length, 0);
+  await setup.locator('#launch-relay').fill('my.example');
+  const [registrationPage] = await Promise.all([setup.waitForEvent('popup'), setup.locator('#launch-register').click()]);
+  await registrationPage.waitForURL('https://my.example/setup?code=fixture');
+  assert.equal(await registrationPage.evaluate(() => window.opener), null);
+  assert.deepEqual(registrations, [{destination:'new-user@my.example',terms:false,privacy:false}]);
+  await registrationPage.close();
+  assert.equal(await setup.locator('#launch-name').inputValue(), 'new-user');
+  await setup.locator('#launch-connect').click();
+  await setup.getByText('测试账号未注册').waitFor();
+  assert.deepEqual(starts, [{destination:'new-user@my.example',terms:false,privacy:false}]);
+  await setup.close();
   process.stdout.write('Browser fixture smoke passed: CSP, protocol envelopes, IME/focus, bounded DOM, scroll continuity, queue receipt, five right-aligned input origins, original-ID quote button/selected excerpt/R shortcut, preserved multiline draft and ordinary quoted delivery, unknown command, mobile panels.\n');
 } finally {
   if (browser) await browser.close();

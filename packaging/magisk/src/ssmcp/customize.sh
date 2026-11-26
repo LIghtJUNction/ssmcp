@@ -6,7 +6,7 @@ if [ "$BOOTMODE" = true ] && [ ! -s /data/adb/ssmcp/root-consent-v1 ]; then
         MODDIR=$MODPATH
         # shellcheck disable=SC1091
         . "$MODDIR/launch.sh" || exit 1
-        start_console && open_console setup
+        start_console && open_console gui
     ) || ui_print "- Open SSMCP from the module manager after reboot to finish setup."
 fi
 ui_print "- 在安装引导中完成配置。日常使用请打开模块的 WebUI。"

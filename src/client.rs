@@ -17,6 +17,7 @@ pub(crate) mod context_memory;
 mod controller_accounts;
 mod controller_command;
 mod environment;
+mod frontend;
 #[cfg(target_os = "android")]
 mod magisk;
 
@@ -84,12 +85,13 @@ const WORKER_WINDOW_CHILD_FLAG: &str = "--ssmcp-worker-window-child";
 
 const HELP: &str = r#"ssmcp — make this device available to your MCP controller
 
-Usage: ssmcp [username@server] [options]
+Usage: ssmcp username@server [--tui | --webui | --gui] [options]
 
 Start
-  ssmcp                         Reuse your last successful connection
-  ssmcp --worker N              Open chat and a worker window with N slots
-  ssmcp --worker N --daemon      Run an N-slot worker pool in the background
+  ssmcp alice@relay.example           Open the TUI (default)
+  ssmcp alice@relay.example --webui   Open the browser conversation
+  ssmcp alice@relay.example --gui     Open the desktop connection form
+  ssmcp gui | ssmcp webui           Open a local connection form
   ssmcp local                   Start a same-machine MCP session on Linux
   ssmcp mcp                     Start local MCP for your harness on Linux
   ssmcp mcp install             Register that control endpoint in Codex
@@ -146,9 +148,10 @@ In a connected chat: /help, @file, $skill, !command. From the initial conversati
 const HELP_FULL: &str = r#"ssmcp — connect this device and manage its local sessions
 
 Usage: ssmcp username@server [options]
-       ssmcp [--server URL] [options]
-       ssmcp [connection options] --daemon [--name NAME]
-       ssmcp [connection options] --worker N [--daemon]
+       ssmcp username@server [--tui | --webui | --gui]
+       ssmcp gui
+       ssmcp username@server [options] --daemon [--name NAME]
+       ssmcp username@server [options] --worker N [--daemon]
        ssmcp mcp [local options]                       (Linux)
        ssmcp mcp install [--harness codex] [--listen IP:PORT]  (Linux)
        ssmcp whoami [USERNAME@SERVER] [--json]
@@ -165,7 +168,6 @@ Usage: ssmcp username@server [options]
        ssmcp tools [status|check|update]
        ssmcp --version [--all]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
-       ssmcp [options] [--server URL]
        ssmcp overview [--json] [--watch]
        ssmcp overview <show|state|jobs|exec|cancel|command> TARGET [arguments]
        ssmcp sessions list [--json]
@@ -232,9 +234,9 @@ Examples:
   ssmcp alice@my-server.example:8443 --name laptop
   ssmcp config set server https://relay.example.com
   ssmcp whoami
-  ssmcp --name laptop
+  ssmcp alice@relay.example.com --name laptop
   ssmcp list
-  ssmcp --no-watchdog --name one-shot
+  ssmcp alice@relay.example.com --no-watchdog --name one-shot
   ssmcp service install --system --user alice
   sudo systemctl enable --now ssmcp
   ssmcp attach --local workstation
@@ -259,8 +261,8 @@ The watchdog reconnects by default. Use --no-watchdog to disable reconnects or
 
 Start a controlled device with ssmcp username@server. The account must already
 exist on the relay. The device connects without an account token. Control apps
-authorize independently through MCP OAuth, using that account. A successful
-foreground connection saves its target for the next bare ssmcp invocation.
+authorize independently through MCP OAuth, using that account. Every new relay
+connection requires an explicit username@server.
 Create or manage the account on the relay portal. To inspect its public
 information, use ssmcp whoami USERNAME@SERVER.
 
@@ -504,6 +506,7 @@ struct Options {
     server: Option<String>,
     username: Option<String>,
     foreground_identity: Option<account::foreground_identity::Identity>,
+    workbench: Option<Arc<crate::session::workbench::Workbench>>,
     temporary: bool,
     name: Option<String>,
     title: Option<String>,
@@ -1076,56 +1079,21 @@ impl Options {
             return Err("--list-tools does not select a connection context".into());
         }
         if new_connection && !list_tools {
-            let explicit_target = local_mode
-                || server.is_some()
-                || destination.is_some()
-                || ssh
-                || identity.is_some()
-                || port.is_some()
-                || config.is_some();
-            let last = if !explicit_target
-                && username.is_none()
-                && context.is_none()
-                && std::env::var_os("SSMCP_CONTEXT").is_none()
-            {
-                account::last_connection().map_err(|error| error.to_string())?
-            } else {
-                None
-            };
-            match last {
-                Some(account::LastConnection::Local {
-                    listen: previous_listen,
-                    public_url: previous_url,
-                    socket: previous_socket,
-                }) => {
-                    local_mode = true;
-                    #[cfg(target_os = "linux")]
-                    {
-                        listen = listen.or(previous_listen);
-                        public_url = public_url.or(previous_url);
-                        socket = socket.or(previous_socket.map(Some));
-                    }
-                    #[cfg(not(target_os = "linux"))]
-                    let _ = (previous_listen, previous_url, previous_socket);
-                }
-                Some(account::LastConnection::Relay {
-                    username: name,
-                    server: origin,
-                }) => {
-                    username = Some(name);
-                    server = Some(origin);
-                }
-                None => {
-                    if let Some(selection) =
-                        connection_context::resolve(context.as_deref(), explicit_target)
-                            .map_err(|error| error.to_string())?
-                    {
-                        match selection.endpoint {
-                            connection_context::Endpoint::Local => local_mode = true,
-                            connection_context::Endpoint::Https(origin) => server = Some(origin),
-                        }
-                    }
-                }
+            if let Some(name) = context.as_deref() {
+                let explicit = local_mode
+                    || destination.is_some()
+                    || server.is_some()
+                    || ssh
+                    || identity.is_some()
+                    || port.is_some()
+                    || config.is_some();
+                let selected = connection_context::resolve(Some(name), explicit)
+                    .map_err(|error| error.to_string())?;
+                local_mode =
+                    selected.is_some_and(|s| s.endpoint == connection_context::Endpoint::Local);
+            }
+            if !local_mode && destination.is_none() {
+                return Err(frontend::missing_target().into());
             }
         }
         #[cfg(not(target_os = "linux"))]
@@ -1200,7 +1168,7 @@ impl Options {
             destination = None;
         }
         if new_connection && !ssh && destination.is_some() {
-            return Err("unrecognized command or destination; see ssmcp --help. For tool sources use ssmcp tools [status|check|update]; for a connection use ssmcp username@server or ssmcp --server https://server".into());
+            return Err("unrecognized command or destination; see ssmcp --help. For tool sources use ssmcp tools [status|check|update]; for a connection use ssmcp username@server".into());
         }
         if username.is_some() && (destination.is_some() || ssh) {
             return Err("a username selects HTTPS and cannot be combined with SSH options".into());
@@ -1262,6 +1230,7 @@ impl Options {
             server,
             username,
             foreground_identity: None,
+            workbench: None,
             temporary: false,
             name,
             title,
@@ -2120,7 +2089,44 @@ pub async fn run() -> crate::Result<()> {
     if let Some(result) = crate::worker::child_entry().await {
         return result;
     }
-    let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if args.is_empty() {
+        return Err(frontend::missing_target().into());
+    }
+    if matches!(
+        args.first().and_then(|arg| arg.to_str()),
+        Some("__frontend-run")
+    ) {
+        let [_, destination, instance] = args.as_slice() else {
+            return Err("the frontend runner requires an explicit destination and instance".into());
+        };
+        crate::server_endpoint::parse_target(
+            destination.to_str().ok_or("invalid frontend destination")?,
+        )?;
+        let instance = instance
+            .to_str()
+            .ok_or("invalid frontend instance")?
+            .to_owned();
+        // One anonymous stdin pipe belongs to the launching frontend. EOF also
+        // wakes this process if the window crashes without running destructors.
+        let (closed, lease) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let _ = std::io::stdin().read(&mut [0u8; 1]);
+            let _ = closed.send(());
+        });
+        tokio::select! {
+            result = run_with_args(vec![destination.clone()], Some(instance)) => return result,
+            _ = lease => return Ok(()),
+        }
+    }
+    run_with_args(args, None).await
+}
+
+async fn run_with_args(
+    mut args: Vec<OsString>,
+    frontend_instance: Option<String>,
+) -> crate::Result<()> {
     #[cfg(target_os = "android")]
     if args.first().is_some_and(|arg| arg == "__android_app") {
         args.remove(0);
@@ -2230,6 +2236,9 @@ pub async fn run() -> crate::Result<()> {
         return crate::session::overview::run(args.into_iter().skip(1).collect()).await;
     }
     if args.first().is_some_and(|arg| arg == "gui") {
+        if args.len() == 1 {
+            return frontend::desktop(None).await;
+        }
         return crate::session::gui::run(args.into_iter().skip(1).collect()).await;
     }
     if args.first().is_some_and(|arg| arg == "ui") {
@@ -2285,6 +2294,15 @@ pub async fn run() -> crate::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "sessions") {
         return crate::session::manage(args.into_iter().skip(1).collect()).await;
+    }
+    if !args.first().is_some_and(|arg| arg == "__session-run") {
+        match frontend::parse(&mut args)? {
+            frontend::Launch::Desktop(target) => return frontend::desktop(target).await,
+            frontend::Launch::Web(target) => {
+                return crate::session::gui::launch(target.as_deref()).await;
+            }
+            frontend::Launch::Tui => {}
+        }
     }
     let mut service = if args.first().is_some_and(|arg| arg == "__session-run") {
         if args.len() != 2 {
@@ -2374,6 +2392,18 @@ pub async fn run() -> crate::Result<()> {
         }
         return Err(error);
     }
+    if !options.list_tools {
+        let destination = match (&options.username, &options.server) {
+            (Some(name), Some(server)) if options.resource_limits.is_empty() => {
+                Some(crate::server_endpoint::allow_principal(name, server)?)
+            }
+            _ => None,
+        };
+        options.workbench = Some(Arc::new(crate::session::workbench::Workbench::new(
+            std::env::current_dir()?,
+            destination,
+        )?));
+    }
     // Remember the launch entry before the first connection or later updates.
     reload::installed_program()?;
     let mut ui = if service.is_some() {
@@ -2437,7 +2467,12 @@ pub async fn run() -> crate::Result<()> {
         );
     }
     let mut foreground = if service.is_none() && !options.list_tools {
-        match crate::session::overview::Registration::open(options.metadata()?).await {
+        match crate::session::overview::Registration::open_with_instance(
+            options.metadata()?,
+            frontend_instance,
+        )
+        .await
+        {
             Ok(registration) => Some(registration),
             Err(error) => {
                 render::status(
@@ -3622,6 +3657,9 @@ async fn connect_inner(
         management,
     )
     .and_then(|runtime| {
+        if let Some(workbench) = &options.workbench {
+            runtime.local_shell().bind_workbench(workbench.clone())?;
+        }
         runtime.bind_client_id(&client_id)?;
         runtime.configure_timing_version(time_observation_supported, wait_display_version)?;
         runtime.configure_chat(chat_enabled)?;
@@ -4809,7 +4847,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 error,
-                "unrecognized command or destination; see ssmcp --help. For tool sources use ssmcp tools [status|check|update]; for a connection use ssmcp username@server or ssmcp --server https://server"
+                "unrecognized command or destination; see ssmcp --help. For tool sources use ssmcp tools [status|check|update]; for a connection use ssmcp username@server"
             );
             assert!(!error.contains("SSH"));
         }
@@ -4823,11 +4861,14 @@ mod tests {
         assert_eq!(named.username.as_deref(), Some("alice"));
         assert_eq!(named.server.as_deref(), Some("https://relay.example"));
         assert!(named.destination.is_none());
-        let server = Options::parse_new(["--server", "https://relay.example"].map(OsString::from))
-            .unwrap()
-            .unwrap();
-        assert_eq!(server.server.as_deref(), Some("https://relay.example"));
-        assert!(server.destination.is_none());
+        for args in [
+            vec![],
+            vec!["--server", "https://relay.example"],
+            vec!["--worker", "3"],
+            vec!["--username", "alice"],
+        ] {
+            assert!(Options::parse_new(args.into_iter().map(OsString::from)).is_err());
+        }
         let legacy = Options::parse_new(["--ssh", "alice@relay.example"].map(OsString::from))
             .unwrap()
             .unwrap();
@@ -4856,11 +4897,10 @@ mod tests {
 
     #[test]
     fn resume_remains_literal_in_titles() {
-        let title = Options::parse_new(
-            ["--server", "https://relay.example", "--title", "resume"].map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
+        let title =
+            Options::parse_new(["alice@relay.example", "--title", "resume"].map(OsString::from))
+                .unwrap()
+                .unwrap();
         assert_eq!(title.title.as_deref(), Some("resume"));
     }
 

@@ -7,7 +7,8 @@
 | 在设备上执行 | 用途 |
 | --- | --- |
 | `ssmcp alice@relay.example` | 向中继建立被控连接，允许账号 alice |
-| `ssmcp --server URL --username NAME` | 分别指定中继和已登记的控制者用户名 |
+| `ssmcp alice@relay.example --webui` | 在浏览器中打开新会话 |
+| `ssmcp alice@relay.example --gui` | 打开桌面会话 |
 | `ssmcp whoami USER@SERVER --json` | 查询指定用户名在中继上的公开信息 |
 | `ssmcp list` 或 `ssmcp ls` | 列出当前用户的本机保存会话及登记中的前台实例 |
 | `ssmcp list --json` | 以 JSON 读取本机会话列表 |
@@ -36,7 +37,7 @@ ssmcp tools status
 
 `init` 离线创建并登记项目或全局工具来源；`--git` 创建独立本地仓库。已有目录保留，用 `enable` 登记审阅过的源码，`disable` 停用并保留文件。省略来源时使用 `project`。`paths` 只计算位置；`status` 读取实际来源并可能初始化官方种子仓库。[可信 RC、加载优先级与 Dreaming 维护流程](tool-repositories.md)
 
-连接目标使用 `ssmcp username@server` 或 `ssmcp --server https://server`。无法识别的裸命令会报告命令或目标格式错误，并给出这些入口；显式 `--ssh` 仍给出旧连接方式已移除的迁移说明。
+连接目标使用 `ssmcp username@server`。无法识别的裸命令会报告命令或目标格式错误，并给出这些入口；显式 `--ssh` 仍给出旧连接方式已移除的迁移说明。
 
 连接诊断按实际路径显示 `Relay transport` 或 `Local transport`，对应日志来源为 `relay` 或 `local`。注册超时、连接拒绝和底层 I/O 错误保留实际原因。结果回传超时只说明回传未及时完成；相关操作可能已经执行，应先核对原生任务状态，再决定是否重试。
 
@@ -86,11 +87,11 @@ Linux、macOS 使用系统 Shell、curl、tar 和校验工具；Windows 使用 W
 
 ## 远程任务池
 
-在交互终端运行 `ssmcp --worker N`，主窗口保留普通聊天输入，并打开一个关联的 worker 监控窗口。监控窗口显示席位的离线、空闲、工作和停止中状态。席位初始为离线，外部执行者接入并等待任务后才进入空闲状态；客户端不会自动启动模型。
+在交互终端运行 `ssmcp username@server --worker N`，主窗口保留普通聊天输入，并打开一个关联的 worker 监控窗口。监控窗口显示席位的离线、空闲、工作和停止中状态。席位初始为离线，外部执行者接入并等待任务后才进入空闲状态；客户端不会自动启动模型。
 
 ~~~sh
-ssmcp --worker 2
-ssmcp --worker 2 --daemon
+ssmcp alice@relay.example --worker 2
+ssmcp alice@relay.example --worker 2 --daemon
 ~~~
 
 | 主窗口命令 | 作用 |

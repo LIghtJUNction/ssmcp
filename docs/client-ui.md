@@ -265,7 +265,7 @@ No 表示继续工作；只有本机真实用户的 Yes 才能让原提问线程
 
 ### 主窗口与 worker 窗口
 
-交互运行 `ssmcp --worker N` 时，当前窗口保留聊天输入，另一个窗口显示关联任务池。主窗口的 `ssmcp.ui.get` 投影 `/worker_pool` 提供实际 worker 客户端 ID、OS PID、连接状态、席位状态、排队数和已登记 worker 人数；其 `manager` 仅包含已绑定管理者的 `client_id` 与 `thread_id`，未绑定时为 `null`。外部 worker 登记并开始等待前，席位显示离线；创建席位本身不会启动模型。
+交互运行 `ssmcp alice@relay.example --worker N` 时，当前窗口保留聊天输入，另一个窗口显示关联任务池。主窗口的 `ssmcp.ui.get` 投影 `/worker_pool` 提供实际 worker 客户端 ID、OS PID、连接状态、席位状态、排队数和已登记 worker 人数；其 `manager` 仅包含已绑定管理者的 `client_id` 与 `thread_id`，未绑定时为 `null`。外部 worker 登记并开始等待前，席位显示离线；创建席位本身不会启动模型。
 
 独立 worker 监控窗口默认以全宽 **Agent progress** 时间线展示当前任务的真实进度上报，上方保留简短任务摘要和实际状态。没有进度上报时显示 `Waiting for agent progress updates`，命令启动和结束日志不会替代进度。警告、错误、取消提示与 `unknown` 仍在默认页显示；命令失败保留实际退出码、信号或取消结果，完整命令在日志详情查看。
 

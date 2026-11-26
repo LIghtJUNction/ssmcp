@@ -167,7 +167,11 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/new",
-        description: "Add a canvas panel: chat, statistics, audit, queue or questions",
+        description: "Open a new session in the current directory",
+    },
+    SlashCommand {
+        name: "/cd",
+        description: "Change this session’s current directory",
     },
     SlashCommand {
         name: "/close",

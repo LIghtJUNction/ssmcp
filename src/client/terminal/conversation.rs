@@ -977,9 +977,18 @@ impl State {
                 }
                 self.logs_toggle();
             }
+            "/new" if rest.is_empty() => {
+                if self.preview { return Err("Preview cannot open a live session".into()); }
+                crate::session::attach::submit_session_command("session.new", json!({}))?;
+            }
+            "/cd" => {
+                if rest.is_empty() { return Err("Use /cd DIRECTORY".into()); }
+                if self.preview { return Err("Preview cannot change a live session directory".into()); }
+                crate::session::attach::submit_session_command("session.cd", json!({"path":rest}))?;
+            }
             "/new" => {
                 let view = match rest {
-                    "" | "chat" | "conversation" => View::Activity,
+                    "chat" | "conversation" => View::Activity,
                     "statistics" => View::Statistics,
                     "audit" => View::Audit,
                     "queue" => View::Queue,

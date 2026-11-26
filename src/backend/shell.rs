@@ -410,6 +410,7 @@ struct InteractiveShell {
 
 pub struct Shell {
     root: PathBuf,
+    workbench: std::sync::OnceLock<Arc<crate::session::workbench::Workbench>>,
     output: Arc<OutputStore>,
     namespace: String,
     registry: Mutex<Registry>,
@@ -420,6 +421,24 @@ pub struct Shell {
     interactive_shell: Mutex<Option<InteractiveShell>>,
 }
 impl Shell {
+    pub(crate) fn bind_workbench(
+        &self,
+        workbench: Arc<crate::session::workbench::Workbench>,
+    ) -> Result<(), String> {
+        self.workbench
+            .set(workbench)
+            .map_err(|_| "Session already initialized".into())
+    }
+
+    pub(crate) fn workbench(&self) -> Option<&crate::session::workbench::Workbench> {
+        self.workbench.get().map(Arc::as_ref)
+    }
+
+    pub(crate) fn cwd(&self) -> PathBuf {
+        self.workbench()
+            .map_or_else(|| self.root.clone(), |view| view.cwd())
+    }
+
     pub fn new() -> Arc<Self> {
         Self::with_workspace(
             std::env::current_dir().expect("shell startup directory is unavailable"),
@@ -445,6 +464,7 @@ impl Shell {
             interactive_shell: Mutex::new(None),
             output,
             namespace,
+            workbench: std::sync::OnceLock::new(),
             registry: Mutex::new(Registry::default()),
             slots: Arc::new(Semaphore::new(MAX_JOBS)),
             reuse: reuse::Cache::default(),
@@ -869,7 +889,7 @@ impl Shell {
                     );
                 }
                 let selection = self.shell_selection()?;
-                let requested = args.cwd.unwrap_or_else(|| self.root.clone());
+                let requested = args.cwd.unwrap_or_else(|| self.cwd());
                 let cwd = if requested.is_absolute() {
                     requested
                 } else {
@@ -1016,7 +1036,7 @@ impl Shell {
                 "terminal.open",
                 "Compatibility entry point. On Linux prefer ssmcp.exec.start with mode:'pty' and explicit interactive-shell argv. This creates one job in the shared exec registry; terminal_id and job_id identify the same physical PTY. Existing portable terminals remain supported here.",
                 json!({"name":{"type":"string","minLength":1,"maxLength":128},
-                    "cwd":{"type":"string","description":"Existing directory inside this client's workspace; defaults to the workspace root."},
+                    "cwd":{"type":"string","description":"Existing directory inside this session's workspace; defaults to the current session directory."},
                     "select":{"type":"boolean","default":false,"description":"Mark this terminal as selected for interactive frontends. The built-in dashboard remains an audit interface and keeps keyboard input for navigation."}}),
                 &[],
                 false,
@@ -1066,7 +1086,7 @@ impl Shell {
                 "Start an independent argv command immediately and return job_id. Supply a short title describing the purpose of complex inline scripts; it labels the command without changing execution. Commands run concurrently, survive code_mode completion, and stop when this client disconnects or reloads. No model is invoked. mode:'pty' starts a real Linux controlling terminal for stdin/stdout/stderr with merged output; mode:'pipes' forces pipes. Omitted mode preserves legacy --tty output observation. Native macOS/Windows terminals remain available through the compatibility interface; explicit exec PTY currently requires Linux.",
                 json!({"command":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":MAX_COMMAND_ARGS},
                     "title":{"type":"string","minLength":1,"maxLength":MAX_TITLE_CHARS,"description":"Optional display-only purpose, such as Check deployment status. At most 160 Unicode characters; surrounding whitespace is trimmed, blank titles and control or line-separator characters are rejected. Does not change argv, cwd, permissions or job identity."},
-                    "cwd":{"type":"string","description":"Existing directory inside the authorized workspace; relative paths and the default resolve from that workspace."},
+                    "cwd":{"type":"string","description":"Existing directory inside the authorized workspace. Relative arguments resolve from its root; omit cwd to use the current session directory."},
                     "env":{"type":"object","additionalProperties":{"type":"string"}},
                     "reuse":{"type":"object","additionalProperties":false,"required":["input_version"],
                         "description":"Opt in only for a repeatable, read-only pipe command. The verified thread may receive the same job_id for matching argv, directory, environment and input version; cancellation affects that shared job. Change input_version whenever inputs change. Defaults to independent execution when omitted.",
@@ -1566,7 +1586,7 @@ impl Shell {
         {
             return Err("invalid or oversized environment override".into());
         }
-        let requested = args.cwd.unwrap_or_else(|| self.root.clone());
+        let requested = args.cwd.unwrap_or_else(|| self.cwd());
         let cwd = if requested.is_absolute() {
             requested
         } else {

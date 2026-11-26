@@ -312,7 +312,7 @@ async fn allow_cli_rejects_wrong_servers_and_retired_syntax_before_network() {
     let output = home.run(&["--server", &base, "--no-watchdog"]).await;
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("choose an account"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("ssmcp username@server"));
     assert!(
         tokio::time::timeout(Duration::from_millis(30), listener.accept())
             .await

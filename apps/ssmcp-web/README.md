@@ -2,11 +2,13 @@
 
 SSMCP Web 是现有 CLI 核心的浏览器前端。页面通过同源 HTTP 网关连接真实 attach 会话，读取 zbridge v1 状态与事件，并在用户明确提交后调用原生命令。执行、输入队列、worker 调度和控制租约仍由 CLI 管理。
 
-应用使用原生 ES modules、HTML 和 CSS，没有运行时第三方依赖、打包步骤、外部字体或演示数据。正文、日志和元数据都作为纯文本渲染。界面默认跟随系统明暗主题；主题切换只影响当前页面。
+应用使用原生 ES modules、HTML 和 CSS，没有运行时第三方依赖、打包步骤、外部字体或演示数据。正文、日志和元数据都作为纯文本渲染。界面默认使用深色。可在侧边栏切换明暗。
 
 ## 启动
 
-点击 Linux 应用菜单中的 **SSMCP Web**，或执行 `ssmcp gui open`，即可在默认浏览器中打开自带的工作台。选择私有配对文件 `pairing.json`，选择已有会话和“控制会话”后即可发送消息。[GUI gateway 文档](../../docs/gui-gateway.md)
+运行 `ssmcp 用户名@服务器名 --webui`，默认浏览器会打开对应会话的对话框。运行 `ssmcp webui` 可打开本地初始化界面。填写用户名，确认默认中继或输入自部署域名，再点「连接」。首次注册可点「注册用户名」到所选中继完成绑定。
+
+Android 的 Magisk 模块从安装时配置的启动命令读取目标。打开模块 WebUI 后，页面会连接这个启动进程。在对话内点击标签栏的 `+` 或发送 `/new` 创建独立会话，点击已有标签切换会话。输入 `/cd 路径` 切换当前会话的工作目录。窄屏底部提供 Esc、Tab、Ctrl-C 和方向键，按键发送到当前选中的终端。
 
 ### 前端开发
 
@@ -30,7 +32,7 @@ node apps/ssmcp-web/dev-server.mjs --port 4174 --gateway http://127.0.0.1:网关
 node apps/ssmcp-web/dev-server.mjs
 ```
 
-也可由实际网关或同源 Web 服务器直接提供此目录中的 `index.html`、`styles.css`、`app.mjs` 和 `src/*.mjs`。API 前缀固定为 `/api/gui/v1`。页面不需要内联脚本或样式，可使用 `script-src 'self'; style-src 'self'; connect-src 'self'`；不能把令牌放进 URL 或静态配置文件。
+也可由实际网关或同源 Web 服务器直接提供此目录中的 `index.html`、`styles.css`、`app.mjs` 和 `src/*.mjs`。API 前缀固定为 `/api/gui/v1`。页面不需要内联脚本或样式，可使用 `script-src 'self'; style-src 'self'; connect-src 'self'`。手动配对时，令牌由表单读取。
 
 ## 已接线的能力
 
@@ -39,6 +41,7 @@ node apps/ssmcp-web/dev-server.mjs
 | 页面 | 实际接口 | 行为 |
 | --- | --- | --- |
 | 会话导航 | `GET /sessions`；`POST /connections` | 读取名称、目录与连接状态，显式选择只读或控制连接。 |
+| 新建会话与切换目录 | `session.new`、`session.cd` | 新标签使用核心返回的会话 ID。切换目录后显示核心返回的路径。 |
 | 对话与事件 | `state: conversation`；`POST /connections/{id}/events` | 展示真实历史及后续事件；来源使用经过认证的外层 envelope 或服务端历史 projection。 |
 | 线程选择 | `state: threads` | 分页查看真实 agent、角色和状态；接收方离开当前页后要求重新核对，不静默换目标。 |
 | 人类输入 | `command: chat.send`；`state: chat.queue` | 使用现有 CLI 输入队列。只有收到原始 `request_id`、目标和 `local_queue_admission` 回执后才确认入队。 |
@@ -61,7 +64,7 @@ node apps/ssmcp-web/dev-server.mjs
 
 命令只由点击或明确的 `Ctrl / ⌘ + Enter` 触发。网络失败、响应关联错误和原生 `unknown` 均保留原请求 ID，记录为未确定，不自动重发。有效的 `effect: none` 错误记录为拒绝。`confirmed` 的含义仅为“已取得并验证原生回执”，异步任务是否完成继续依赖实际状态；`chat.send` 的入队回执不等于模型已读。
 
-配对令牌只在 `Gateway` 的私有内存字段中保存，用于 `Authorization: Bearer …`。它不会进入 URL、日志、localStorage、sessionStorage、事件元数据或命令记录。输入框在认证请求发出时清空。刷新页面会丢失当前页面的认证、草稿和操作记录；在刷新前可通过“操作记录”查看需要保留的原请求 ID。
+配对令牌只在 `Gateway` 的私有内存字段中保存，用于 `Authorization: Bearer …`。CLI 或模块打开的本机链接通过 URL 片段交接令牌，页面会立即清除片段，再访问 API。输入框在认证请求发出时清空。刷新页面会丢失当前页面的认证、草稿和操作记录；在刷新前可通过“操作记录”查看需要保留的原请求 ID。
 
 ## 界面与内存边界
 
@@ -69,7 +72,7 @@ node apps/ssmcp-web/dev-server.mjs
 
 时间线最多保留 300 条或 768 KiB，每个本地分页最多渲染 40 条。终端预览最多 65,536 字符，命令账本最多 64 条，连接记录最多 32 条。未确定和发送中的操作不会为腾出空间而被静默淘汰；达到容量时拒绝新的记录，提示先核对已有请求。较早事件被本地容量释放时会显示提示。
 
-追加事件只在用户原本接近底部时自动滚动。查看较早记录时保留当前锚点，并提供“回到最新”。窄屏使用会话抽屉和三面板切换，工作区无需横向滚动。断线读取采用 1、2、4、8、16、30 秒退避，上限 30 秒；立即返回的空事件页也会让出等待时间，避免热轮询。
+追加事件只在用户原本接近底部时自动滚动。查看较早记录时保留当前锚点，并提供“回到最新”。窄屏将会话列表、终端和诊断操作收进侧边栏。标签栏可横向滚动。断线读取采用 1、2、4、8、16、30 秒退避，上限 30 秒；立即返回的空事件页也会让出等待时间，避免热轮询。
 
 ## 测试
 
@@ -91,7 +94,7 @@ CHROMIUM_PATH=/已有路径/chromium \
 node test/browser-smoke.mjs
 ```
 
-在当前受限沙箱中，基础测试已通过；Chromium 在启动时被系统 socket 权限拒绝，尚未执行浏览器检查。真实 CLI 网关、原生控制租约及浏览器外观仍需在完整开发环境中验收。不要把协议 fixture 的结果当作真实任务已执行的证据。
+浏览器检查覆盖首次注册、官方中继条款、自部署、Magisk 启动会话的精确选择、标签切换、独立草稿、快捷键字节、`/new` 和带空格的 `/cd` 路径。设置 `WEB_TEST_EVIDENCE` 为一个新的目录可保存桌面和手机尺寸的截图。
 
 ## 文件职责
 

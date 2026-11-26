@@ -390,7 +390,7 @@ impl Composer {
                 );
             }
             let display = text[line.start..line.end].replace('\t', "    ");
-            canvas.text(&display, rect.x + PAD, y, 15, false, 0x253142ff);
+            canvas.text(&display, rect.x + PAD, y, 15, false, 0x202124ff);
             if self.focused && index == cursor_line {
                 canvas.rect(
                     Rect::new(
@@ -406,12 +406,12 @@ impl Composer {
         }
         if text.is_empty() {
             canvas.text(
-                "写下新的输入…",
+                "输入消息或命令…",
                 rect.x + PAD,
                 rect.y + PAD,
                 15,
                 false,
-                0x667085ff,
+                0x5f6368ff,
             );
         }
         canvas.unclip();

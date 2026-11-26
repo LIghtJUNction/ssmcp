@@ -367,7 +367,11 @@ fn public_account_lookup_and_named_connections_do_not_use_saved_login() {
 
     let named = Server::once("400 Bad Request", json!({"error": "stop_test"}));
     home.success(&["config", "set", "server", &named.origin]);
-    let output = home.command(&["--username", "Alice", "--no-browser", "--no-watchdog"]);
+    let output = home.command(&[
+        &format!("Alice@{}", named.origin),
+        "--no-browser",
+        "--no-watchdog",
+    ]);
     assert!(!output.status.success());
     let request = named.request();
     assert!(request.starts_with("GET /api/client/connect "));
@@ -383,7 +387,7 @@ fn public_account_lookup_and_named_connections_do_not_use_saved_login() {
     home.account(&relay.origin, &selected_token);
     home.account("https://last-login.example", &previous_token);
     home.success(&["config", "set", "server", &relay.origin]);
-    let output = home.command(&["--username", "alice", "--no-watchdog"]);
+    let output = home.command(&[&format!("alice@{}", relay.origin), "--no-watchdog"]);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let error = String::from_utf8_lossy(&output.stderr);
@@ -462,4 +466,30 @@ fn invalid_configuration_never_silently_selects_the_builtin_server() {
     let result = home.command(&["whoami"]);
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("TOML"));
+}
+
+#[test]
+fn missing_target_never_contacts_the_saved_relay() {
+    let home = Home::new();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    home.account(&origin, &"a".repeat(64));
+    home.remember_target(&origin, "alice");
+    for args in [
+        vec![],
+        vec!["--no-watchdog"],
+        vec!["--username", "alice"],
+        vec!["--server", &origin],
+    ] {
+        let output = home.command(&args);
+        assert!(!output.status.success(), "{args:?}");
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("ssmcp username@server"));
+    }
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    assert!(!home.0.join("sessions").exists());
 }

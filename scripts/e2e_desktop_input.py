@@ -126,12 +126,12 @@ class DesktopInputs(Sessions):
             self.xdisplay.flush()
 
     def copied_draft(self):
-        self.click(520, self.height - 170)
+        self.click(520, self.height - 92)
         self.key("ctrl+a", "ctrl+c")
         return self.clipboard()
 
     def fill_draft(self, first, second):
-        self.click(520, self.height - 170)
+        self.click(520, self.height - 92)
         self.key("ctrl+a", "BackSpace")
         self.type(first)
         self.key("Return")
@@ -184,10 +184,10 @@ class DesktopInputs(Sessions):
 
     def input_bands(self):
         image = self.pixels()
-        # The production cards end 36 px from the window's right edge.
-        sample_x = self.width - 42
-        ys = [y for y in range(210, self.height - 220)
-              if image.getpixel((sample_x, y)) == (232, 240, 254)]
+        # The production cards end 24 px from the window's right edge.
+        sample_x = self.width - 36
+        ys = [y for y in range(122, self.height - 140)
+              if image.getpixel((sample_x, y)) == (38, 54, 80)]
         bands = []
         for y in ys:
             if not bands or y - bands[-1][-1] > 2:
@@ -251,7 +251,7 @@ class DesktopInputs(Sessions):
         self.xdisplay = display.Display(self.gui_env["DISPLAY"])
         self.window = self.xdisplay.create_resource_object("window", int(self.window_id))
         wait_for(lambda: self.pixels().size == (self.width, self.height)
-                 and self.pixels().getpixel((267, 69)) == (26, 115, 232),
+                 and self.pixels().getpixel((self.width - 97, 29)) == (182, 206, 255),
                  timeout=10, description="rendered desktop with actual native control lease")
         self.screenshot("desktop-connected")
         self.check(json.loads((self.artifact_dir / "first-frame.json").read_text())["pid"] == self.desktop.pid,
@@ -294,7 +294,7 @@ class DesktopInputs(Sessions):
                          timeout=8, description="five actual right-side Input cards")
         self.report["input_card_pixel_bands"] = bands
         image = self.pixels()
-        self.check(all(image.getpixel((300, (start + end) // 2)) != (232, 240, 254)
+        self.check(all(image.getpixel((40, (start + end) // 2)) != (38, 54, 80)
                        for start, end in bands),
                    "all five visible input cards leave a common left margin and align on the right")
         self.screenshot("desktop-five-input-origins")
@@ -312,7 +312,7 @@ class DesktopInputs(Sessions):
         self.fill_draft(*draft.split("\n"))
         # The same real message's footer is 18 px above its card bottom.
         bands = self.input_bands()
-        self.click(self.width - 159, bands[-1][1] - 13)
+        self.click(self.width - 148, bands[-1][1] - 13)
         self.check(self.copied_draft() == expected,
                    "the actual quote button inserts the same editable original-ID quotation")
         self.key("Right")

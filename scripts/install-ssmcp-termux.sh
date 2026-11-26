@@ -94,4 +94,45 @@ else
 fi
 "$dir/ssmcp" --version
 GUEST
-printf 'Start the CLI: proot-distro login %s -- /root/.local/bin/ssmcp\n' "$container"
+# Place the real command on Termux PATH; keep unrelated installations intact.
+host_bin=$PREFIX/bin
+mkdir -p "$host_bin"
+if [ -e "$host_bin/ssmcp" ] && ! grep -Fq '# Native Termux entrypoint for the CLI installed in the Debian guest.' "$host_bin/ssmcp"; then
+    fail "Termux already has another ssmcp at $host_bin/ssmcp; it was preserved."
+fi
+wrapper=$(mktemp "$host_bin/.ssmcp.XXXXXXXX")
+trap 'rm -f "$wrapper"' EXIT
+cat >"$wrapper" <<'TERMUX_LAUNCHER'
+#!/data/data/com.termux/files/usr/bin/sh
+# Native Termux entrypoint for the CLI installed in the Debian guest.
+set -eu
+webui=false
+[ "${1:-}" != webui ] || webui=true
+for arg do
+    case "$arg" in --webui) webui=true ;; --) break ;; esac
+done
+case "$webui" in
+    true)
+        work=$(mktemp -d)
+        cleanup() {
+            if [ -n "${reader:-}" ]; then kill "$reader" 2>/dev/null || true; fi
+            rm -f "$work/url"
+            rmdir "$work"
+        }
+        trap cleanup EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        mkfifo "$work/url"
+        (
+            IFS= read -r url <"$work/url" || exit 1
+            case "$url" in http://127.0.0.1:*/*) termux-open-url "$url" ;; *) exit 1 ;; esac
+        ) &
+        reader=$!
+        proot-distro login ssmcp-debian --bind "$work:/run/ssmcp-browser" -- /usr/bin/env SSMCP_TERMUX_BROWSER_FIFO=/run/ssmcp-browser/url /root/.local/bin/ssmcp "$@"
+        ;;
+    *) exec proot-distro login ssmcp-debian -- /root/.local/bin/ssmcp "$@" ;;
+esac
+TERMUX_LAUNCHER
+chmod 755 "$wrapper"
+mv -f "$wrapper" "$host_bin/ssmcp"
+printf '%s\n' 'TUI: ssmcp username@server' 'WebUI: ssmcp username@server --webui'

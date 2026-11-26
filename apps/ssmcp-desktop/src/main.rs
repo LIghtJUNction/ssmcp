@@ -1,6 +1,5 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod composer;
-mod console;
 mod engine;
 mod launcher;
 mod model;
@@ -18,6 +17,7 @@ use zgpui::native::{Event, Ui, Window};
 #[derive(Default)]
 struct Options {
     target: Option<Target>,
+    destination: Option<String>,
     control: bool,
     font: Option<String>,
     exit_after: Option<Duration>,
@@ -30,6 +30,14 @@ fn options() -> Result<Option<Options>, String> {
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some("--target") if result.destination.is_none() => {
+                let target = args
+                    .next()
+                    .and_then(|v| v.into_string().ok())
+                    .ok_or("--target 需要 用户名@中继服务器。")?;
+                ssmcp::desktop_terminal::validate_destination(&target)?;
+                result.destination = Some(target);
+            }
             Some("--session") => {
                 if result.target.is_some() {
                     return Err("只指定一个 --session 或 --directory。".into());
@@ -88,12 +96,15 @@ fn options() -> Result<Option<Options>, String> {
             }
             Some("--help" | "-h") => {
                 println!(
-                    "ssmcp-desktop [--session NAME | --directory PATH] [--control] [--font FAMILY]\n\n无参数启动连接终端；--session 或 --directory 可观察已有会话。\n--directory 使用显式提供的私有服务目录，不打印其内容。\n--exit-after-ms N 用于真实窗口的有界构建验收。\n--first-frame-receipt PATH 与有界验收一起使用，首次 present 返回后新建回执文件。\n--frame-receipts PATH 记录最多 4096 次 present 回执，用于尺寸变化后的真实窗口验收。"
+                    "ssmcp-desktop [--target USER@RELAY | --session NAME | --directory PATH] [--control] [--font FAMILY]\n\n无参数打开桌面连接界面；--session 或 --directory 可观察已有会话。\n--directory 使用显式提供的私有服务目录，不打印其内容。\n--exit-after-ms N 用于真实窗口的有界构建验收。\n--first-frame-receipt PATH 与有界验收一起使用，首次 present 返回后新建回执文件。\n--frame-receipts PATH 记录最多 4096 次 present 回执，用于尺寸变化后的真实窗口验收。"
                 );
                 return Ok(None);
             }
             _ => return Err("未知启动参数。使用 --help 查看可用选项。".into()),
         }
+    }
+    if result.target.is_some() && result.destination.is_some() {
+        return Err("--target 与已有会话参数互斥。".into());
     }
     if result.control && result.target.is_none() {
         return Err("--control 需要明确指定 --session 或 --directory。".into());
@@ -108,7 +119,13 @@ fn options() -> Result<Option<Options>, String> {
 }
 
 fn run(options: Options) -> Result<(), String> {
-    let mut window = Window::new("ssmcp-desktop", 1180, 800)?;
+    let mut window = Window::new("ssmcp-desktop", 1080, 720)?;
+    let mut palette = zgpui::native::Palette::for_theme(zgpui::native::Theme::Dark);
+    palette.background = 0x101113ff;
+    palette.surface = 0x17181bff;
+    palette.accent = 0xb6ceffff;
+    palette.on_accent = 0x152138ff;
+    window.set_palette(palette);
     let family = options
         .font
         .as_deref()
@@ -120,9 +137,15 @@ fn run(options: Options) -> Result<(), String> {
     window.set_font_family(family)?;
     let mut handle = options
         .target
-        .map(|target| engine::Handle::start(Some(target), options.control))
+        .map(|target| engine::Handle::start(Some(target), options.control, None))
         .transpose()?;
-    let mut launcher = launcher::Launcher::default();
+    let mut launcher = launcher::Launcher::new(options.destination.as_deref());
+    let mut persist_target: Option<String> = None;
+    if handle.is_none()
+        && let Some(target) = launcher.configured_target()
+    {
+        handle = Some(engine::Handle::start(None, true, Some(target))?);
+    }
     let mut desktop = ui::Desktop::default();
     let mut ui = Ui::default();
     let started = Instant::now();
@@ -153,12 +176,17 @@ fn run(options: Options) -> Result<(), String> {
         if matches!(pending_event, Some(Event::Close)) {
             break;
         }
-        let next_revision = handle
-            .as_ref()
-            .map_or_else(|| launcher.revision(), engine::Handle::revision);
+        let next_revision = handle.as_ref().map_or(0, engine::Handle::revision);
         if revision != next_revision {
             if let Some(handle) = &handle {
                 snapshot = handle.snapshot();
+                if snapshot.phase.connected()
+                    && let Some(target) = persist_target.take()
+                {
+                    if let Err(e) = ssmcp::desktop_terminal::save_desktop_profile(&target) {
+                        desktop.notice(format!("连接已建立，无法保存启动设置：{e}"));
+                    }
+                }
                 desktop.sync(&snapshot);
             }
             revision = next_revision;
@@ -166,6 +194,16 @@ fn run(options: Options) -> Result<(), String> {
         }
         // Native event coalescing can replace a resize notification with input.
         // Compare actual dimensions independently so every new size is drawn.
+        if let Some(error) = snapshot.launch_error.take() {
+            handle = None;
+            launcher.error = error;
+            persist_target = None;
+            snapshot = model::View::default();
+            dirty = true;
+        }
+        if handle.is_none() {
+            dirty |= launcher.poll_registration();
+        }
         let size = window.size();
         dirty |= presented_size != Some(size);
         if dirty {
@@ -174,7 +212,7 @@ fn run(options: Options) -> Result<(), String> {
                 if handle.is_some() {
                     desktop.event(event)
                 } else {
-                    launcher.event(event)
+                    false
                 }
             });
             ui.begin(if consumed { None } else { event });
@@ -184,14 +222,32 @@ fn run(options: Options) -> Result<(), String> {
             } else {
                 launcher::BG
             });
+            let mut submission = None;
             if let Some(handle) = &handle {
                 desktop.draw(&mut canvas, &mut ui, handle, &snapshot, width, height);
             } else {
-                launcher.draw(&mut canvas, &mut ui, width, height);
+                submission = launcher.draw(&mut canvas, &mut ui, width, height);
             }
             ui.end();
             drop(canvas);
             window.present();
+            if let Some(destination) = submission {
+                handle = Some(engine::Handle::start(
+                    None,
+                    true,
+                    Some(destination.clone()),
+                )?);
+                persist_target = Some(destination);
+                revision = u64::MAX;
+            }
+            if desktop.take_setup() {
+                handle = None;
+                persist_target = None;
+                desktop = ui::Desktop::default();
+                snapshot = model::View::default();
+                launcher.error.clear();
+                revision = u64::MAX;
+            }
             presented_size = Some(size);
             presented_frames += 1;
             if first_frame_receipt.is_some() || frame_receipts.is_some() {
@@ -230,18 +286,11 @@ fn run(options: Options) -> Result<(), String> {
                         .map_err(|error| format!("无法写入渲染帧回执：{error}"))?;
                 }
             }
-            if let Some(text) = ui
-                .clipboard
-                .take()
-                .or_else(|| desktop.take_clipboard())
-                .or_else(|| launcher.take_clipboard())
-            {
+            if let Some(text) = ui.clipboard.take().or_else(|| desktop.take_clipboard()) {
                 window.copy(&text);
             }
         }
-        pending_event = window.event(if launcher.active() {
-            24
-        } else if handle.is_some() || options.exit_after.is_some() {
+        pending_event = window.event(if handle.is_some() || options.exit_after.is_some() {
             150
         } else {
             1250

@@ -340,7 +340,7 @@ fn context_local_options_keep_loopback_foreground_and_context_root_rules() {
     home.failure(
         &["--context", "work", "--title", "--context"],
         None,
-        "choose an account with ssmcp username@server",
+        "ssmcp username@server",
     );
 }
 
@@ -471,6 +471,6 @@ fn context_local_socket_options_follow_the_selected_endpoint() {
             "/tmp/context-fixture/mcp.sock",
         ],
         None,
-        "--socket is only available with a local connection",
+        "ssmcp username@server",
     );
 }
