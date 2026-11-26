@@ -90,7 +90,7 @@ try {
     assert.equal(await page.locator('a[href*="#' + deviceToken + '"]').count(), 0);
   }
   async function expectBare(page) {
-    await page.getByText('请从 Magisk 模块操作重新打开设备设置。', {exact: true}).waitFor();
+    await page.getByText('请在设备上运行模块的 onboarding/open.sh 重新打开设备设置。', {exact: true}).waitFor();
     assert.equal(await page.locator('#setup').isHidden(), true);
     assert.equal(await page.locator('#complete').isHidden(), true);
     // A synthetic click also goes through the production view-state guard.

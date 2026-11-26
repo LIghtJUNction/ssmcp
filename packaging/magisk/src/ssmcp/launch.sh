@@ -34,30 +34,11 @@ start_console() {
     HOME="$state/home" SSMCP_SESSION_HOME="$state/sessions" TMPDIR="$state" SHELL=/system/bin/sh PATH="/system/bin:/system/xbin:$state/home/.local/bin" \
         "$MODDIR/bin/ssmcp" __magisk "$state" "$port" </dev/null >>"$state/console.log" 2>&1 &
 }
-# The native listener validates the target before starting a session. This
-# additional check only decides whether the owner should see setup or the GUI.
-has_confirmed_target() {
-    [ -s "$state/root-consent-v1" ] || return 1
-    target=
-    carriage_return=$(printf '\r')
-    while IFS= read -r line || [ -n "$line" ]; do
-        read -r command arg extra <<EOF
-${line%"$carriage_return"}
-EOF
-        case "$command" in ''|'#'*) continue ;; esac
-        [ "$command" = ssmcp ] && [ -n "$arg" ] && [ -z "$extra" ] && [ -z "$target" ] || return 1
-        target=$arg
-    done <"$state/ssmcp.rc"
-    [ -n "$target" ] && [ "$target" = "$(cat "$state/root-consent-v1")" ]
-}
 open_console() {
     case "${1:-gui}" in setup|gui) ;; *) return 1 ;; esac
+    view=${1:-gui}
     tries=0
     while [ "$tries" -lt 15 ]; do
-        view=${1:-gui}
-        if [ "$view" = gui ] && ! has_confirmed_target; then
-            view=setup
-        fi
         if read_console_url "$view"; then
             /system/bin/am start -a android.intent.action.VIEW -d "$url" >/dev/null 2>&1
             return

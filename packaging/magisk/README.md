@@ -1,14 +1,12 @@
 # SSMCP for KernelSU / Magisk
 
-适用于 Android 8 及以上版本的 arm64-v8a 设备。下载 [ssmcp-magisk-arm64.zip](https://github.com/LIghtJUNction/ssmcp/releases/latest/download/ssmcp-magisk-arm64.zip)，使用模块管理器刷入。首次安装会尝试打开本机的安装引导。模块 WebUI 打开手机上的 SSMCP 网页（http://127.0.0.1:42387/）。首次配置前，模块只运行本地网页服务。
+适用于 Android 8 及以上版本的 arm64-v8a 设备。用模块管理器刷入 [ssmcp-magisk-arm64.zip](https://github.com/LIghtJUNction/ssmcp/releases/latest/download/ssmcp-magisk-arm64.zip)，按管理器提示重启。
 
-1. 输入你的 SSMCP 用户名和中继域名。已有账号可直接连接。新账号选定名字后，点击 GitHub 注册，完成绑定后返回连接。
-2. 阅读并确认 root 风险。使用官方中继时还需阅读并接受用户协议和隐私政策。官方中继每月赠送 1 GB（1,000,000,000 字节），额外流量由用户在中继网站购买。
-3. 配置完成后，打开会话即可输入消息。
+在 KernelSU 或 Magisk 中打开 SSMCP 模块的 WebUI，填写 SSMCP 用户名和服务器地址，点击「连接」即可聊天。每次新建会话都会取得独立的中继 ID。关闭会话只会结束该会话的连接。需要在系统浏览器中打开时，点击模块的「操作」。
 
-模块管理器的 WebUI 目录只有一个 index.html。打开模块的 WebUI，填入用户名和服务器地址，再点“连接”，即可创建一个独立聊天会话。网页会自动完成本机认证。每个新会话都有自己的中继 ID，在工作台关闭该会话只会结束它自己的连接。模块在启动设备时恢复已确认的中继连接。停用时，在模块管理器中禁用模块并重启设备。
+## 高级设备会话
 
-需要在新浏览器中完成本机配对时，可以点模块管理器的「操作」，由手机在浏览器中打开本次配对地址。
+需要远程操作 Android 设备时，在手机的 root 终端运行 `sh /data/adb/modules/ssmcp/onboarding/open.sh`，打开设备会话设置。选择中继账号并确认 root 权限。使用官方中继时还需确认用户协议和隐私政策。官方中继每月赠送 1 GB（1,000,000,000 字节），额外流量可在中继网站购买。模块会在下次开机时恢复已配置的设备连接。停用时，在模块管理器中禁用模块并重启设备。
 
 模块会话从 `/data/adb/ssmcp/workspace` 启动。可把已安装的 Android 可执行文件放在 `/data/adb/ssmcp/home/.local/bin`，新启动的模块会话会在这里查找工具。终端内的 `/update --check` 会检查已发布的 Magisk ZIP。
 
@@ -38,4 +36,4 @@ PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs CHROMIUM_PATH=/path/to/chromium 
 python3 scripts/test_magisk_installer_state.py
 ```
 
-浏览器回归加载实际模块入口，在 320 和 390 像素视口检查无 JavaScript 的自动跳转、备用链接和本机设置页。安装器测试使用隔离的 Android 目录和启动器，检查首次设置、更新、已确认账号与配置变更的跳转。
+浏览器回归加载实际模块入口，在 320 和 390 像素视口检查无 JavaScript 的自动跳转、备用链接和本机设置页。安装器测试使用隔离的 Android 目录和启动器，检查首次安装、更新和重启后的工作台入口，以及单独的设备设置入口。

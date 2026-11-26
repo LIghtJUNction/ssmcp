@@ -95,5 +95,5 @@ if (hasCredential) {
   readConfiguration().catch(error => status(error.message));
 } else {
   setView('notice');
-  status('请从 Magisk 模块操作重新打开设备设置。');
+  status('请在设备上运行模块的 onboarding/open.sh 重新打开设备设置。');
 }

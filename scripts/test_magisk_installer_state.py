@@ -130,25 +130,25 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
         self.assertFalse(self.scratch.exists())
         self.assertTrue((self.state / "ssmcp.rc").is_file(), "cleanup removed the module configuration")
 
-    def test_first_install_cleanup_and_explicit_onboarding(self):
+    def test_first_install_opens_chat_and_explicit_onboarding_uses_device_credential(self):
         self.install()
         self.assertEqual((self.state / "ssmcp.rc").read_text(), self.template)
         self.assertTrue(self.owner.is_file())
         self.assertEqual(len(self.opened.read_text().splitlines()), 1)
         self.staged.rename(self.active)
         self.shell(self.active / "onboarding/open.sh")
-        urls = [urlsplit(url) for url in self.opened.read_text().splitlines()]
-        self.assertEqual([url.path for url in urls], ["/setup", "/setup"])
-        for url in urls:
-            self.assertEqual((url.scheme, url.netloc, url.fragment),
-                             ("http", "127.0.0.1:42387", self.environment["FIXTURE_SETUP_FRAGMENT"]))
+        self.assertEqual(self.opened.read_text().splitlines(), [
+            "http://127.0.0.1:42387/#" + self.environment["FIXTURE_FRAGMENT"],
+            "http://127.0.0.1:42387/setup#" + self.environment["FIXTURE_SETUP_FRAGMENT"],
+        ])
+        self.assertFalse((self.state / "root-consent-v1").exists())
         self.assertEqual(len(self.starts.read_text().splitlines()), 1)
         self.assertEqual(self.keys_read.read_text(), "")
 
-    def test_webui_launch_selects_gui_only_for_confirmed_target(self):
+    def test_daily_launch_opens_chat_regardless_of_device_consent(self):
         self.staged.rename(self.active)
         self.shell(self.active / "open.sh")
-        self.assertEqual(urlsplit(self.opened.read_text().strip()).path, "/setup")
+        self.assertEqual(urlsplit(self.opened.read_text().strip()).fragment, self.environment["FIXTURE_FRAGMENT"])
         (self.state / "root-consent-v1").write_text("test@example.invalid")
         self.shell(self.active / "open.sh")
         url = urlsplit(self.opened.read_text().splitlines()[-1])
@@ -157,28 +157,27 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
         self.assertEqual((self.state / "sessions").stat().st_mode & 0o777, 0o700)
         (self.state / "ssmcp.rc").write_text("ssmcp other@example.invalid", encoding="utf-8")
         self.shell(self.active / "open.sh")
-        self.assertEqual(urlsplit(self.opened.read_text().splitlines()[-1]).path, "/setup")
+        self.assertEqual(urlsplit(self.opened.read_text().splitlines()[-1]).fragment, self.environment["FIXTURE_FRAGMENT"])
         self.assertEqual(len(self.starts.read_text().splitlines()), 1)
 
-    def test_webui_rc_line_endings_and_malformed_commands(self):
+    def test_chat_only_update_and_reboot(self):
+        self.install()
         self.staged.rename(self.active)
-        self.shell(self.active / "open.sh")
-        target = "test@example.invalid"
-        (self.state / "root-consent-v1").write_text(target, encoding="utf-8")
-        command = f"ssmcp {target}".encode("ascii")
-        for name, contents, expected in (
-            ("LF", command + b"\n", "/"),
-            ("CRLF", command + b"\r\n", "/"),
-            ("CRLF with comments and blank lines", b"# phone\r\n\r\n" + command + b" \t\r\n", "/"),
-            ("no final newline", command, "/"),
-            ("extra argument", command + b" extra\r\n", "/setup"),
-            ("two commands", (command + b"\r\n") * 2, "/setup"),
-            ("embedded carriage return", b"ssmcp test@\rexample.invalid\r\n", "/setup"),
-        ):
-            with self.subTest(name=name):
-                (self.state / "ssmcp.rc").write_bytes(contents)
-                self.shell(self.active / "open.sh")
-                self.assertEqual(urlsplit(self.opened.read_text().splitlines()[-1]).path, expected)
+        shutil.copytree(self.active, self.staged)
+        self.opened.write_text("")
+        starts = self.starts.read_bytes()
+        self.install()
+        self.assertEqual(self.opened.read_text(), "")
+        self.assertEqual(self.starts.read_bytes(), starts)
+        self.owner.unlink()
+        self.shell(self.active / "service.sh")
+        self.wait_for_console()
+        self.assertEqual(self.opened.read_text(), "")
+        self.shell(self.active / "action.sh")
+        self.assertEqual(self.opened.read_text().splitlines(),
+                         ["http://127.0.0.1:42387/#" + self.environment["FIXTURE_FRAGMENT"]])
+        self.assertFalse((self.state / "root-consent-v1").exists())
+        self.assertEqual((self.state / "ssmcp.rc").read_text(), self.template)
 
     def test_disabled_or_removed_module_does_not_launch(self):
         self.staged.rename(self.active)
@@ -212,11 +211,11 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
             self.shell(self.active / "onboarding/open.sh")
         self.assertEqual(len(self.opened.read_text().splitlines()), 1)
 
-    def test_action_default_opens_workbench_or_setup(self):
+    def test_action_default_opens_workbench(self):
         self.staged.rename(self.active)
         self.events.write_text("/dev/input/event1: EV_KEY KEY_VOLUMEDOWN DOWN\n")
         self.shell(self.active / "action.sh")
-        self.assertEqual(urlsplit(self.opened.read_text().strip()).path, "/setup")
+        self.assertEqual(urlsplit(self.opened.read_text().strip()).fragment, self.environment["FIXTURE_FRAGMENT"])
 
     def test_boot_and_legacy_action_start_without_menu_or_browser(self):
         self.staged.rename(self.active)
