@@ -95,24 +95,55 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .nav-icon { flex: 0 0 18px; width: 18px; height: 18px; }
 .view-list button[aria-selected=true] .nav-icon { color: var(--accent); }
 .view-list .count { margin-inline-start: auto; font: 12px var(--mono); }
-.sidebar-bottom { margin-top: auto; padding-top: 24px; font-size: 12px; }
-.sidebar-bottom > .live-status { padding: 0 12px 10px; }
-.sidebar-settings { border-top: 1px solid var(--line); }
-.sidebar-settings summary {
-  display: flex; align-items: center; justify-content: space-between; min-height: 46px;
-  padding-inline: 12px; font-size: 13px; font-weight: 550; cursor: pointer; list-style: none;
+.sidebar > .sidebar-navigation { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.sidebar-bottom {
+  margin-top: auto; padding: 8px 4px 0; border-top: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
-.sidebar-settings summary::-webkit-details-marker { display: none; }
-.sidebar-settings summary::after {
-  content: ""; width: 6px; height: 6px; margin-inline-end: 4px;
-  border: solid var(--muted); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg);
+.sidebar-bottom .live-status { min-width: 0; margin: 0; flex-wrap: nowrap; gap: 6px; font-size: 12px; }
+.live-status .status-dot { flex: none; }
+.live-status > span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.settings-trigger {
+  flex: none; display: inline-flex; align-items: center; gap: 8px; min-height: 44px;
+  padding: 0 8px; border-radius: 8px; font-size: 13px; font-weight: 550;
 }
-.sidebar-settings[open] > summary::after { transform: rotate(225deg); }
-.settings-body { display: grid; gap: 10px; padding: 2px 8px 6px; }
-.setting-field { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 10px; width: 100%; color: var(--muted); }
-.setting-field select { width: 100%; min-width: 0; max-width: none; min-height: 36px; padding-inline: 6px; color: var(--ink); }
-.settings-body .side-actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 2px; }
-.settings-body .text-button, .settings-body .source-link { text-align: start; display: flex; align-items: center; min-height: 36px; padding-inline: 6px; }
+.settings-trigger::after, .settings-forward::after {
+  content: ""; display: block; width: 6px; height: 6px;
+  border: solid var(--muted); border-width: 1.5px 1.5px 0 0; transform: rotate(45deg);
+}
+dialog.settings-dialog {
+  width: min(400px, calc(100vw - 24px)); max-width: none;
+  max-height: calc(100dvh - 32px); padding: 0; overflow-y: auto;
+  overscroll-behavior: contain; scrollbar-width: thin;
+}
+.settings-dialog[open] { display: block; }
+.settings-heading { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 6px 24px; }
+.settings-heading h2 { font-size: 18px; font-weight: 600; }
+.settings-tabs {
+  display: flex; margin: 0 24px; gap: 10px; border-bottom: 1px solid var(--line);
+}
+.settings-tabs button {
+  position: relative; padding: 0 6px; min-width: 44px; min-height: 44px;
+  color: var(--muted); font-size: 13px;
+}
+.settings-tabs [aria-selected=true] { color: var(--ink); font-weight: 600; }
+.settings-tabs [aria-selected=true]::after {
+  content: ""; position: absolute; inset: auto 5px 0; height: 2px; background: var(--ink);
+}
+.settings-content { padding: 12px 18px 20px; }
+.settings-content section { min-width: 0; }
+.settings-action, .setting-field, .settings-fact {
+  width: 100%; min-height: 44px; display: flex; align-items: center; gap: 8px;
+  padding: 3px 8px; border-radius: 6px; font-size: 14px;
+}
+.settings-action { color: var(--ink); text-align: start; text-decoration: none; }
+.settings-action:hover { background: var(--hover); }
+.settings-forward::after { flex: none; margin-inline-start: auto; margin-inline-end: 4px; }
+.settings-fact, .setting-field { justify-content: space-between; }
+.settings-content .gateway-label { margin: 0; color: var(--muted); font-size: 13px; }
+.setting-field select { min-width: 0; max-width: 65%; min-height: 44px; }
+.settings-actions { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
+#command-count { color: var(--muted); font-size: 12px; }
 .side-actions, .gateway-label, .live-status, .form-actions, .pagination, .dialog-heading,
 .terminal-caption, .resize-form, .worker-card-header, .queue-pagination { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .gateway-label,.live-status { color: var(--muted); margin-bottom: 4px; }

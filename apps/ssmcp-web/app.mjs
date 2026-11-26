@@ -87,7 +87,7 @@ function sessionTarget(row) { return row?.target ?? row?.name; }
 function currentTarget() { return client.connection?.session ?? sessionTarget(selectedSession); }
 const mobileNavigation = matchMedia('(max-width: 700px)');
 function syncNavigationLayout() {
-  $('sidebar-settings').open = !mobileNavigation.matches;
+  if ($('settings-dialog').open) $('settings-dialog').close();
   setSidebar(false);
 }
 function setSidebar(open) {
@@ -579,10 +579,47 @@ $('update-button').addEventListener('click', () => {
   if (!$('details-dialog').open) $('details-dialog').showModal();
 });
 $('refresh-state').addEventListener('click', () => run('refresh', async () => { localError = null; await client.refresh(); renderAll(); }));
+const settingsDialog = $('settings-dialog');
+const settingsTabs = [...settingsDialog.querySelectorAll('[role="tab"]')];
+function selectSettingsTab(tab) {
+  for (const item of settingsTabs) {
+    const active = item === tab;
+    item.setAttribute('aria-selected', String(active));
+    item.tabIndex = active ? 0 : -1;
+    $(item.getAttribute('aria-controls')).hidden = !active;
+  }
+  tab.focus({ preventScroll: true });
+}
+$('sidebar-settings').addEventListener('click', () => {
+  settingsDialog.showModal();
+  selectSettingsTab(settingsTabs[0]);
+});
+for (const [index, tab] of settingsTabs.entries()) {
+  tab.addEventListener('click', () => selectSettingsTab(tab));
+  tab.addEventListener('keydown', event => {
+    const last = settingsTabs.length - 1;
+    const next = { ArrowLeft: (index + last) % settingsTabs.length,
+      ArrowRight: (index + 1) % settingsTabs.length, Home: 0, End: last }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    selectSettingsTab(settingsTabs[next]);
+  });
+}
+function onSettingsBackdrop(event) {
+  if (event.target !== settingsDialog) return false;
+  const { left, right, top, bottom } = settingsDialog.getBoundingClientRect();
+  return event.clientX < left || event.clientX >= right || event.clientY < top || event.clientY >= bottom;
+}
+let settingsBackdropPressed = false;
+settingsDialog.addEventListener('pointerdown', event => { settingsBackdropPressed = onSettingsBackdrop(event); });
+settingsDialog.addEventListener('click', event => {
+  if (settingsBackdropPressed && onSettingsBackdrop(event)) settingsDialog.close();
+  settingsBackdropPressed = false;
+});
 $('menu-button').addEventListener('click', () => setSidebar(!$('sidebar').classList.contains('is-open')));
 for (const id of ['close-menu', 'dismiss-sidebar']) $(id).addEventListener('click', () => setSidebar(false));
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && $('sidebar').classList.contains('is-open')) setSidebar(false);
+  if (event.key === 'Escape' && !document.querySelector('dialog[open]') && $('sidebar').classList.contains('is-open')) setSidebar(false);
 });
 $('theme-button').addEventListener('click', () => {
   systemTheme.onchange = null;
@@ -592,6 +629,7 @@ $('theme-button').addEventListener('click', () => {
 
 const tabButtons = [...document.querySelectorAll('[data-panel]')];
 function setPanel(name) {
+  if (settingsDialog.open) settingsDialog.close();
   activePanel = name; setSidebar(false); renderTerminals();
   tabButtons.forEach(button => { const active = button.dataset.panel === name; button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1; show(`panel-${button.dataset.panel}`, active); });
   if (name === 'conversation') renderTimeline();
