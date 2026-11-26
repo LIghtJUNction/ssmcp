@@ -1487,6 +1487,9 @@ async fn coordinator_polling_interleaves_without_hiding_details_or_new_input() {
         view.set_scope(EventScope::All);
         assert_eq!(view.visible_ids(), (0..12).collect::<Vec<_>>());
         view.set_scope(EventScope::Conversation);
+        assert_eq!(view.visible_ids(), vec![0, 1, 2, 3, 5, 9]);
+        assert!(view.back());
+        assert_eq!(view.visible_ids(), vec![0, 1, 2, 3]);
         let user = gap("sub-a", 70243, 70268);
         view.ingest_scoped_event(
             "message",

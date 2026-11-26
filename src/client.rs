@@ -2,6 +2,8 @@
 mod access;
 pub(crate) mod account;
 pub(crate) mod agent;
+#[cfg(target_os = "android")]
+mod android_app;
 pub(crate) mod attachments;
 mod audit_view;
 pub(crate) mod chat_io;
@@ -15,8 +17,6 @@ pub(crate) mod context_memory;
 mod controller_accounts;
 mod controller_command;
 mod environment;
-#[cfg(target_os = "android")]
-mod android_app;
 #[cfg(target_os = "android")]
 mod magisk;
 
