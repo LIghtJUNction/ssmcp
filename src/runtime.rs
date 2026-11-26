@@ -285,10 +285,6 @@ pub struct Runtime {
     workers: Mutex<Option<Arc<crate::worker::Pool>>>,
 }
 impl Runtime {
-    pub(crate) fn local_command_stats(&self) -> crate::backend::shell::LocalCommandStats {
-        self.backend.local_command_stats()
-    }
-
     pub(crate) fn local_shell(&self) -> Arc<crate::backend::shell::Shell> {
         self.backend.terminals()
     }

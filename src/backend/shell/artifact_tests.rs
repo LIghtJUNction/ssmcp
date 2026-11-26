@@ -599,7 +599,7 @@ async fn shutdown_preserves_incomplete_or_escaped_temp_artifacts() {
 }
 
 #[tokio::test]
-async fn local_tracked_command_projects_net_bytes_without_exposing_paths() {
+async fn local_tracked_command_uses_its_own_artifact_directory() {
     let directory = Fixture::new();
     let shell =
         Shell::with_workspace(directory.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
@@ -614,18 +614,13 @@ async fn local_tracked_command_projects_net_bytes_without_exposing_paths() {
         .call("ssmcp.exec.wait", json!({"job_id":job["job_id"]}))
         .await
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            let stats = shell.local_command_stats();
-            if let Some(delta) = stats.jobs[0].disk_delta {
-                assert_eq!(delta, (Some(3), false));
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
+    let root = directory.0.join(".ssmcp/task-artifacts");
+    let dirs: Vec<_> = fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(dirs.len(), 1);
+    assert_eq!(fs::read(dirs[0].join("ssmcp-test")).unwrap(), b"abc");
 }
 
 #[tokio::test]

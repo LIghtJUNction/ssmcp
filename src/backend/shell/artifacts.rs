@@ -218,11 +218,6 @@ impl Artifacts {
         })
     }
 
-    pub(super) fn completion_delta(&mut self) -> (Option<u64>, bool) {
-        let report = self.sample();
-        (report["logical_bytes"].as_u64(), self.incomplete)
-    }
-
     pub(super) fn sample(&mut self) -> Value {
         let still_owned = (|| -> io::Result<bool> {
             let current = beneath(&self.workspace, &self.relative)?;

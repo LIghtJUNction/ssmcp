@@ -704,29 +704,14 @@ class InputHistory(Composer):
                              "a second real command preserves its failure")
         failed_ids = set(re.findall(r"Job: ([0-9a-f]+-[0-9a-f]+)", text(failed))) - {identity}
         self.check(len(failed_ids) == 1, "one additional failed native job is reported")
-        failed_identity = failed_ids.pop()
         front.send("/new statistics")
         front.send(ENTER)
-        front.send(END)
-        shot = front.until(lambda shot: "Start calls 2 · Spawned 2 · Start errors 0" in text(shot)
-                           and f"{identity} · disk +3 logical bytes" in text(shot)
-                           and re.search(rf"failed · pipes · \d+ ms · {re.escape(failed_identity)}", text(shot))
-                           and "CPU time rank · Linux wait4 user + system" in text(shot)
-                           and "Peak RSS rank · Linux wait4" in text(shot)
-                           and re.search(r"CPU \d+ µs · peak RSS [1-9]\d* KiB", text(shot)) is not None,
-                           "Statistics displays two starts, the failed outcome and measured disk delta")
-        self.check("stats-proof" not in text(shot) and "$TMPDIR" not in text(shot),
-                   "Statistics stays a redacted projection of the command")
+        shot = front.until(lambda shot: "Tool calls · retained in this window" in text(shot),
+                           "Statistics displays session and tool activity")
+        self.check("Command execution" not in text(shot) and "Start calls" not in text(shot)
+                   and identity not in text(shot) and "stats-proof" not in text(shot),
+                   "Statistics omits the local execution ledger")
         self.save_shot("command-stats", front)
-        for _ in range(2):
-            front.send(HOME)
-            front.send(END)
-            observed = front.until(
-                lambda shot: "Start calls 2 · Spawned 2 · Start errors 0" in text(shot)
-                and f"{identity} · disk +3 logical bytes" in text(shot),
-                "read-only Statistics navigation leaves native start counts unchanged")
-            self.check("stats-proof" not in text(observed) and "$TMPDIR" not in text(observed),
-                       "repeated Statistics reads remain redacted")
 
     def run(self):
         self.prepare()
