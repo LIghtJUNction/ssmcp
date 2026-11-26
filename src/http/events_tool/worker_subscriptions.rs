@@ -192,10 +192,8 @@ fn principal(context: &Context) -> Source {
 }
 
 fn nonce() -> Result<String, String> {
-    let mut bytes = [0_u8; 16];
-    crate::platform::random_bytes(&mut bytes)
-        .map_err(|_| "cannot allocate automatic worker subscription ID")?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    crate::platform::random_id()
+        .map_err(|_| "cannot allocate automatic worker subscription ID".into())
 }
 
 fn main_member(context: &Context, allow_retiring: bool) -> bool {

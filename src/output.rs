@@ -1,4 +1,5 @@
 //! Bounded, connection-owned output held only in this process's memory.
+use crate::platform::random_id;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -442,12 +443,6 @@ fn inline_image_result(value: &Value, policy: &Policy) -> bool {
         && !has_long_lines(&metadata, policy.inline_lines)
 }
 
-fn random_id() -> Result<String, String> {
-    let mut bytes = [0u8; 16];
-    crate::platform::random_bytes(&mut bytes).map_err(error)?;
-    Ok(crate::hex::encode(bytes))
-}
-
 pub struct Capture {
     store: Arc<OutputStore>,
     scope: String,
@@ -602,7 +597,7 @@ impl Capture {
             return Err(self.failure.clone().unwrap());
         }
         let id = (0..8)
-            .map(|_| random_id())
+            .map(|_| random_id().map_err(error))
             .find_map(|id| match id {
                 Ok(id) if !state.entries.contains_key(&id) => Some(Ok(id)),
                 Ok(_) => None,

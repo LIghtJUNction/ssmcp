@@ -140,6 +140,13 @@ pub fn random_bytes(bytes: &mut [u8]) -> io::Result<()> {
     getrandom::fill(bytes).map_err(|error| io::Error::other(error.to_string()))
 }
 
+/// Generate a 128-bit OS-random identifier as 32 lowercase hex digits.
+pub(crate) fn random_id() -> io::Result<String> {
+    let mut bytes = [0; 16];
+    random_bytes(&mut bytes)?;
+    Ok(crate::hex::encode(bytes))
+}
+
 pub fn private_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {

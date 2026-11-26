@@ -12,6 +12,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
+use crate::platform::random_id;
 pub use config::{CleanupConfig, CleanupRule};
 pub use native::{perform, tools};
 pub use retention::RetentionSummary;
@@ -1245,12 +1246,6 @@ fn label(value: &str) -> io::Result<()> {
     } else {
         Ok(())
     }
-}
-
-fn random_id() -> io::Result<String> {
-    let mut bytes = [0u8; 16];
-    crate::platform::random_bytes(&mut bytes)?;
-    Ok(crate::hex::encode(bytes))
 }
 
 fn invalid(message: &str) -> io::Error {

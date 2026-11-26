@@ -40,7 +40,7 @@ pub struct Address {
 }
 
 pub fn encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    crate::hex::encode(bytes)
 }
 
 pub fn decode<const N: usize>(value: &str) -> Result<[u8; N], &'static str> {

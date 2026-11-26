@@ -3,6 +3,7 @@ mod audit;
 mod image;
 pub(crate) mod safety;
 
+use crate::platform::random_id;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -1168,11 +1169,6 @@ fn atomic_write(
     Ok(identity)
 }
 
-fn random_id() -> io::Result<String> {
-    let mut bytes = [0u8; 16];
-    crate::platform::random_bytes(&mut bytes)?;
-    Ok(crate::hex::encode(bytes))
-}
 fn modified(metadata: &std::fs::Metadata) -> String {
     #[cfg(unix)]
     {
