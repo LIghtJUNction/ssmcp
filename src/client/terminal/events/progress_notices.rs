@@ -85,8 +85,8 @@ impl Repeat {
     }
 
     pub(super) fn gap(value: &Value) -> Option<Self> {
-        let sub = value["subscription_id"].as_str()?.trim();
-        if sub.is_empty()
+        let sub = value["subscription_id"].as_str()?;
+        if sub.is_empty() || sub.trim() != sub
             || value["events"]
                 .as_array()
                 .is_some_and(|events| !events.is_empty())
@@ -103,7 +103,12 @@ impl Repeat {
                     .as_str()?
                     .strip_prefix("events_gap: cursor ")?;
                 let (after, boundary) = error.split_once(" precedes retained cursor ")?;
-                boundary.split(';').next()?.parse::<u64>().ok()?;
+                let retained = if let Some((retained, latest)) = boundary.split_once("; latest cursor ") {
+                    latest.strip_suffix("; resubscribe with an explicit retained cursor after reconciling the gap")?
+                        .parse::<u64>().ok()?;
+                    retained
+                } else { boundary };
+                retained.parse::<u64>().ok()?;
                 after.parse().ok()?
             }
             _ => return None,
@@ -286,6 +291,9 @@ mod tests {
         assert!(Repeat::gap(&next) != key);
         next["subscription_id"] = Value::Null;
         assert!(Repeat::gap(&next).is_none());
+        let unexpected = json!({"status":"unavailable", "subscription_id":"one",
+            "error":"events_gap: cursor 31 precedes retained cursor 32; a different diagnostic"});
+        assert!(Repeat::gap(&unexpected).is_none());
     }
 
     #[test]
