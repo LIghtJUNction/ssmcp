@@ -126,6 +126,14 @@ try {
   assert.equal(await onboarding.locator('#server').inputValue(), 'ssmcp.lmm.best');
   assert.equal(await onboarding.locator('a').filter({hasText:'GitHub'}).count(), 1);
   assert.equal(await onboarding.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  for (const theme of ['light', 'dark']) {
+    await onboarding.emulateMedia({colorScheme:theme});
+    const ink = await onboarding.locator('html').evaluate(el => getComputedStyle(el).color);
+    assert.equal(ink, theme === 'light' ? 'rgb(25, 25, 25)' : 'rgb(240, 240, 240)');
+    assert.equal(await onboarding.locator('#root').evaluate(el => getComputedStyle(el).accentColor), ink);
+    if (process.env.WEB_TEST_EVIDENCE) await onboarding.screenshot({path:resolve(process.env.WEB_TEST_EVIDENCE, 'magisk-onboarding-' + theme + '.png')});
+  }
+  await onboarding.emulateMedia({colorScheme:'light'});
   if (process.env.WEB_TEST_EVIDENCE) await onboarding.screenshot({ path: resolve(process.env.WEB_TEST_EVIDENCE, 'magisk-first-run.png') });
   await onboarding.locator('#name').fill('my-user'); await onboarding.locator('#root').check();
   await onboarding.locator('#connect').tap();

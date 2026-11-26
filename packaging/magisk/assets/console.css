@@ -1,21 +1,37 @@
 :root {
   color-scheme: dark;
-  background: #141516;
-  color: #f0f0f1;
+  accent-color: var(--ink);
+  background: var(--page);
+  color: var(--ink);
+  --ink: #f0f0f0;
   font: 16px/1.55 system-ui, "Noto Sans CJK SC", sans-serif;
   --viewport-height: 100vh;
-  --page: #141516;
-  --panel: #1c1d1f;
-  --field: #202123;
-  --terminal: #101112;
-  --line: #353638;
-  --muted: #a7a8ad;
-  --quiet: #c6c7cb;
-  --focus: #dadbe0;
+  --page: #141414;
+  --panel: #1d1d1d;
+  --field: #202020;
+  --terminal: #101010;
+  --line: #363636;
+  --muted: #aaaaaa;
+  --quiet: #c8c8c8;
+  --focus: #dddddd;
   --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --gutter: clamp(16px, 3vw, 40px);
   --left: max(var(--gutter), env(safe-area-inset-left));
   --right: max(var(--gutter), env(safe-area-inset-right));
+}
+
+@media (prefers-color-scheme: light) {
+  :root.onboarding {
+    color-scheme: light;
+    --page: #fafafa;
+    --ink: #191919;
+    --panel: #f1f1f1;
+    --field: #ffffff;
+    --line: #d9d9d9;
+    --muted: #595959;
+    --quiet: #404040;
+    --focus: #222222;
+  }
 }
 
 @supports (height: 100dvh) {
@@ -39,12 +55,12 @@ button {
   padding: 0 16px;
   font-weight: 550;
 }
-button:active, summary:active { background: #353638; }
+button:active, summary:active { background: var(--line); }
 button:disabled { cursor: wait; opacity: .55; }
-button.primary { background: #eeeff0; border-color: #eeeff0; color: #18191b; }
-button.primary:active { background: #cbcdd0; }
+button.primary { background: var(--ink); border-color: var(--ink); color: var(--page); }
+button.primary:active { background: var(--quiet); }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-::selection { background: #5b5e64; color: white; }
+::selection { background: var(--ink); color: var(--page); }
 
 .setup-header {
   padding-left: var(--left);
@@ -62,10 +78,10 @@ button.primary:active { background: #cbcdd0; }
   display: inline-block;
   width: 31px;
   height: 31px;
-  border: 1px solid #494b4e;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: #232426;
-  color: #eeeff0;
+  background: var(--field);
+  color: var(--ink);
 }
 .prompt-mark::before, .prompt-mark::after { content: ""; position: absolute; }
 .prompt-mark::before {
@@ -101,10 +117,10 @@ body[data-view="notice"] .notice-heading { display: block; margin-bottom: 20px; 
   flex: 0 0 auto;
   z-index: 3;
   padding: 10px 14px;
-  border: 1px solid #515257;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: #28292c;
-  color: #f0f0f1;
+  background: var(--panel);
+  color: var(--ink);
   font-size: 14px;
   overflow-wrap: anywhere;
 }
@@ -117,13 +133,13 @@ body[data-view="setup"] #status { position: sticky; top: env(safe-area-inset-top
 .field input {
   width: 100%;
   min-height: 46px;
-  border: 1px solid #454649;
+  border: 1px solid var(--muted);
   border-radius: 8px;
   padding: 9px 13px;
   background: var(--field);
   font: 16px/1.5 var(--mono);
 }
-input::placeholder { color: #929499; }
+input::placeholder { color: var(--muted); }
 .field p, #hosted p { margin-top: 7px; font-size: 13px; line-height: 1.55; }
 #relay-settings summary {
   display: flex;
@@ -161,9 +177,9 @@ input::placeholder { color: #929499; }
   color: var(--quiet);
   cursor: pointer;
 }
-.check-row input { width: 18px; height: 18px; flex: 0 0 auto; margin: 2px 0 0; accent-color: #e6e7e9; }
+.check-row input { width: 18px; height: 18px; flex: 0 0 auto; margin: 2px 0 0; accent-color: var(--ink); }
 .check-row a { margin-left: .25em; }
-.check-row strong { color: #edeef0; font-weight: 600; }
+.check-row strong { color: var(--ink); font-weight: 600; }
 #hosted p { margin: 6px 0 4px 28px; }
 .setup-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 22px; }
 .setup-actions button { font-size: 14px; }
@@ -177,13 +193,13 @@ input::placeholder { color: #929499; }
   margin-top: 18px;
   border-radius: 8px;
   padding: 0 18px;
-  background: #eeeff0;
-  color: #18191b;
+  background: var(--ink);
+  color: var(--page);
   font-size: 14px;
   font-weight: 600;
   text-decoration: none;
 }
-.page-action:active { background: #cbcdd0; }
+.page-action:active { background: var(--quiet); }
 .account-info, .guide-values { margin-top: 22px; }
 .account-info dt, .guide-values dt { color: var(--muted); font-size: 13px; }
 .account-info dd, .guide-values dd { margin-top: 3px; overflow-wrap: anywhere; }
@@ -198,11 +214,11 @@ input::placeholder { color: #929499; }
 
 .chevron { width: 6px; height: 6px; margin-top: -3px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
 details[open] > summary .chevron { transform: rotate(225deg); margin-top: 4px; }
-.panel-link { display: flex; justify-content: space-between; border-top: 1px solid var(--line); color: #eeeff0; }
+.panel-link { display: flex; justify-content: space-between; border-top: 1px solid var(--line); color: var(--ink); }
 @media (hover: hover) {
-  button:not(.primary):not(:disabled):hover { background: #303134; color: #fff; }
-  button.primary:not(:disabled):hover, .page-action:hover { background: #fff; }
-  a:not(.page-action):hover { color: white; text-decoration: underline; }
+  button:not(.primary):not(:disabled):hover { background: var(--panel); color: var(--ink); }
+  button.primary:not(:disabled):hover, .page-action:hover { background: var(--quiet); }
+  a:not(.page-action):hover { color: var(--ink); text-decoration: underline; }
 }
 @media (max-width: 380px) {
   :root { --gutter: 12px; }
@@ -303,7 +319,7 @@ body[data-view="console"] #status {
 .terminal-row > span { display: inline-block; height: 100%; vertical-align: top; }
 #screen { -webkit-text-size-adjust: none; text-size-adjust: none; }
 
-.workbench { height: 100vh; height: 100dvh; display: flex; flex-direction: column; background: #101112; }
+.workbench { height: 100vh; height: 100dvh; display: flex; flex-direction: column; background: #101010; }
 .workbench nav { display: flex; justify-content: space-between; align-items: center; padding-inline: var(--left) var(--right); }
 .workbench nav a { padding-block: 12px; font-size: 14px; }
 .workbench iframe { border: 0; width: 100%; flex: 1; min-height: 0; }

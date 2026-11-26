@@ -3,7 +3,7 @@ use ssmcp::connection_form::{self, DEFAULT_RELAY};
 use std::path::PathBuf;
 use zgpui::native::{ButtonStyle, Canvas, Rect, Ui};
 
-pub const BG: u32 = 0xffffffff;
+pub use zgpui::native::colors::BG;
 const TEXT: u32 = 0x202124ff;
 
 const USERNAME_INPUT: u64 = 501;

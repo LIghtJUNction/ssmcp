@@ -3,6 +3,7 @@ mod composer;
 mod engine;
 mod launcher;
 mod model;
+mod theme;
 mod ui;
 
 use model::Target;
@@ -12,7 +13,7 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
-use zgpui::native::{Event, Ui, Window};
+use zgpui::native::{Event, Theme, Ui, Window};
 
 #[derive(Default)]
 struct Options {
@@ -148,12 +149,9 @@ fn run(options: Options) -> Result<(), String> {
             .ok_or_else(|| format!("Desktop gateway exited with {status}"));
     }
     let mut window = Window::new("ssmcp-desktop", 1080, 720)?;
-    let mut palette = zgpui::native::Palette::for_theme(zgpui::native::Theme::Dark);
-    palette.background = 0x101113ff;
-    palette.surface = 0x17181bff;
-    palette.accent = 0xb6ceffff;
-    palette.on_accent = 0x152138ff;
-    window.set_palette(palette);
+    let mut appearance = Theme::Dark;
+    window.set_theme(appearance);
+    window.set_palette(theme::palette(appearance));
     let family = options
         .font
         .as_deref()
@@ -263,6 +261,14 @@ fn run(options: Options) -> Result<(), String> {
             ui.end();
             drop(canvas);
             window.present();
+            if desktop.take_theme_toggle() {
+                appearance = match appearance {
+                    Theme::Dark => Theme::Light,
+                    Theme::Light => Theme::Dark,
+                };
+                window.set_theme(appearance);
+                window.set_palette(theme::palette(appearance));
+            }
             if let Some(destination) = submission {
                 handle = Some(engine::Handle::start(
                     None,

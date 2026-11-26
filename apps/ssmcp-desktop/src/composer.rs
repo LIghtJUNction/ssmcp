@@ -594,7 +594,7 @@ impl Composer {
             canvas.rect(
                 Rect::new(rect.x + rect.w - 6.0, y, 2.0, thumb),
                 1.0,
-                0xaab4c4ff,
+                zgpui::native::colors::MUTED,
             );
         }
     }

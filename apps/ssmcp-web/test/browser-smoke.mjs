@@ -350,6 +350,28 @@ try {
   assert.equal(await page.locator('#menu-button').getAttribute('aria-expanded'), 'true');
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#menu-button').getAttribute('aria-expanded'), 'false');
+  // Exercise the shared chat surface under both system themes at a phone width.
+  await viewport(390, 844);
+  await chatDraft.fill('/');
+  for (const theme of ['light', 'dark']) {
+    await page.emulateMedia({colorScheme:theme});
+    await page.waitForFunction(value => document.documentElement.dataset.theme === value, theme);
+    const paint = await page.evaluate(() => {
+      const style = selector => getComputedStyle(document.querySelector(selector));
+      return [style('body').backgroundColor, style('#chat-form').borderTopColor,
+        style('#chat-send').backgroundColor, style('#slash-options [aria-selected=true]').backgroundColor,
+        style('#observation-status .good').backgroundColor, style('#launch-terms').accentColor,
+        getComputedStyle(document.body, '::selection').backgroundColor];
+    });
+    assert.equal(paint[0], theme === 'light' ? 'rgb(250, 250, 250)' : 'rgb(18, 18, 18)');
+    for (const color of paint) {
+      const channels = color.match(/\d+/g)?.map(Number);
+      assert.ok(channels?.length === 3 && channels.every(channel => channel === channels[0]), color);
+    }
+    if (process.env.WEB_TEST_EVIDENCE) await page.screenshot({path:join(process.env.WEB_TEST_EVIDENCE, 'slash-' + theme + '-mobile.png')});
+  }
+  await page.emulateMedia({colorScheme:'light'});
+  await viewport(320, 844);
   // Complete a command in place with an actual touch. Preserve the existing path and caret.
   await chatDraft.fill('/c   已有 路径');
   await chatDraft.evaluate(node => node.setSelectionRange(2, 2));

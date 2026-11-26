@@ -1,11 +1,22 @@
 <resources>
-    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="PlatformTheme" parent="android:style/Theme.Material.Light.NoActionBar" />
+    <color name="window_surface">#FAFAFA</color>
+    <color name="control_accent">#333333</color>
+    <bool name="light_system_bars">true</bool>
+
+    <!-- Android 8.0 does not read windowLightNavigationBar from a theme. -->
+    <color name="navigation_surface">#171717</color>
+
+    <style name="AppTheme" parent="@style/PlatformTheme">
         <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#0B57D0</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:statusBarColor">#F8FAFD</item>
-        <item name="android:navigationBarColor">#F8FAFD</item>
+        <item name="android:colorAccent">@color/control_accent</item>
+        <item name="android:colorControlActivated">@color/control_accent</item>
+        <item name="android:textColorLink">@color/control_accent</item>
+        <item name="android:windowLightStatusBar">@bool/light_system_bars</item>
+        <item name="android:windowLightNavigationBar">@bool/light_system_bars</item>
+        <item name="android:statusBarColor">@color/window_surface</item>
+        <item name="android:navigationBarColor">@color/navigation_surface</item>
         <item name="android:windowActionModeOverlay">true</item>
-        <item name="android:windowBackground">#F8FAFD</item>
+        <item name="android:windowBackground">@color/window_surface</item>
     </style>
 </resources>

@@ -11,16 +11,10 @@ use zgpui::{
     native::{ButtonStyle, Canvas, Event as NativeEvent, Rect, Ui},
 };
 
-pub const BG: u32 = 0xf7f9fcff;
-const SURFACE: u32 = 0xffffffff;
-const TEXT: u32 = 0x202124ff;
-const MUTED: u32 = 0x5f6368ff;
-const LINE: u32 = 0xe8eaedff;
-const BLUE: u32 = 0x1a73e8ff;
-const BLUE_SOFT: u32 = 0xe8f0feff;
-const GREEN: u32 = 0x147d4eff;
-const AMBER: u32 = 0xe3ba77ff;
-const RED: u32 = 0xb42318ff;
+pub use zgpui::native::colors::BG;
+use zgpui::native::colors::{
+    BLUE as ACCENT, BLUE_PALE as SELECTED, GREEN as SUCCESS, LINE, MUTED, RED, SURFACE, TEXT,
+};
 const SIDE: f32 = 256.;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -55,6 +49,7 @@ enum SidebarRow<'a> {
     Empty,
     Control,
     Disconnect,
+    Theme,
     NamedSession,
     ObserveNamed,
     Setup,
@@ -71,7 +66,7 @@ fn sidebar_link(
     enabled: bool,
 ) -> bool {
     if selected {
-        canvas.rect(rect, 10., BLUE_SOFT);
+        canvas.rect(rect, 10., SELECTED);
     }
     let clicked = ui.button(canvas, id, rect, "", ButtonStyle::Quiet, enabled);
     canvas.ellipsis(
@@ -124,6 +119,7 @@ pub struct Desktop {
     sidebar_offset: usize,
     session_page: usize,
     sidebar_redraw: bool,
+    toggle_theme: bool,
     composer: String,
     composer_editor: crate::composer::Composer,
     terminal_input: String,
@@ -166,6 +162,7 @@ impl Default for Desktop {
             sidebar_offset: 0,
             session_page: 0,
             sidebar_redraw: false,
+            toggle_theme: false,
             composer: String::new(),
             composer_editor: crate::composer::Composer::default(),
             terminal_input: String::new(),
@@ -214,6 +211,10 @@ impl Desktop {
 
     pub fn take_sidebar_redraw(&mut self) -> bool {
         std::mem::take(&mut self.sidebar_redraw)
+    }
+
+    pub fn take_theme_toggle(&mut self) -> bool {
+        std::mem::take(&mut self.toggle_theme)
     }
 
     pub fn take_setup(&mut self) -> bool {
@@ -578,7 +579,7 @@ impl Desktop {
                 );
             }
             if self.selected == Some(index) {
-                canvas.rect(Rect::new(tab_x + 14., 48., 60., 2.), 1., BLUE);
+                canvas.rect(Rect::new(tab_x + 14., 48., 60., 2.), 1., ACCENT);
             }
             tab_x += 94.;
         }
@@ -600,9 +601,9 @@ impl Desktop {
             Phase::Disconnected => "未连接",
         };
         let color = match view.phase {
-            Phase::Controlling => BLUE,
-            Phase::Observing => GREEN,
-            Phase::Connecting | Phase::Closing => AMBER,
+            Phase::Controlling => ACCENT,
+            Phase::Observing => SUCCESS,
+            Phase::Connecting | Phase::Closing => MUTED,
             Phase::Disconnected => MUTED,
         };
         canvas.rect(Rect::new(right - 80., 26., 7., 7.), 3., color);
@@ -632,7 +633,7 @@ impl Desktop {
         let top = if notice.is_empty() {
             90.
         } else {
-            canvas.ellipsis(notice, x, 90., w, 13, false, AMBER);
+            canvas.ellipsis(notice, x, 90., w, 13, false, TEXT);
             120.
         };
         let bounds = Rect::new(x, top, w, (height - top - 12.).max(120.));
@@ -666,6 +667,7 @@ impl Desktop {
             rows.extend([
                 SidebarRow::Page(Page::Events, "事件"),
                 SidebarRow::Page(Page::Receipts, "回执"),
+                SidebarRow::Theme,
                 SidebarRow::Control,
                 SidebarRow::Disconnect,
             ]);
@@ -801,7 +803,7 @@ impl Desktop {
                 SidebarRow::Session(session_index, session) => {
                     let selected = matches!(view.target.as_ref(), Some(Target::Named(name)) if name == &session.name);
                     if selected {
-                        canvas.rect(rect, 10., BLUE_SOFT);
+                        canvas.rect(rect, 10., SELECTED);
                     }
                     let enabled = self.pending.is_none() && !view.busy;
                     if ui.button(
@@ -879,6 +881,12 @@ impl Desktop {
                         "暂无会话"
                     };
                     canvas.text(label, 26., y + 13., 13, false, MUTED);
+                }
+                SidebarRow::Theme => {
+                    if sidebar_link(canvas, ui, 51_102, rect, "切换明暗", false, true) {
+                        self.toggle_theme = true;
+                        self.sidebar_redraw = true;
+                    }
                 }
                 SidebarRow::Control => {
                     let controlling = view.phase == Phase::Controlling;
@@ -1190,7 +1198,7 @@ impl Desktop {
             bounds.w,
             12,
             false,
-            if unknown_same { AMBER } else { MUTED },
+            if unknown_same { TEXT } else { MUTED },
         );
     }
 
@@ -1304,11 +1312,11 @@ impl Desktop {
                         .as_ref()
                         .is_some_and(|(selected, _)| selected == id)
                 });
-                canvas.rect(card, 10., if selected { BLUE } else { LINE });
+                canvas.rect(card, 10., if selected { ACCENT } else { LINE });
                 canvas.rect(
                     card.inset(1.),
                     9.,
-                    if row.input_side { BLUE_SOFT } else { SURFACE },
+                    if row.input_side { SELECTED } else { SURFACE },
                 );
                 if page == 0
                     && let Some(id) = &row.message_id
@@ -1335,7 +1343,7 @@ impl Desktop {
                     y + 13.,
                     12,
                     true,
-                    if row.kind == "answer" { BLUE } else { TEXT },
+                    if row.kind == "answer" { ACCENT } else { TEXT },
                 );
                 canvas.ellipsis(
                     &format!("{}  {}", row.source, row.status),
@@ -1423,7 +1431,7 @@ impl Desktop {
                         y + h - 20.,
                         10,
                         false,
-                        AMBER,
+                        TEXT,
                     );
                 }
             }
@@ -1539,7 +1547,7 @@ impl Desktop {
             bounds.w,
             (bounds.h - 220.).max(160.),
         );
-        canvas.rect(screen, 10., 0x20242bff);
+        canvas.rect(screen, 10., SURFACE);
         canvas.clip(screen.inset(15.));
         if terminal.screen.is_empty() {
             canvas.text(
@@ -1548,7 +1556,7 @@ impl Desktop {
                 screen.y + 21.,
                 14,
                 false,
-                0xb6becbff,
+                MUTED,
             );
         }
         let lines: Vec<_> = terminal.screen.lines().collect();
@@ -1574,7 +1582,7 @@ impl Desktop {
                         screen.y + 16. + row as f32 * 20.,
                         14,
                         false,
-                        0xe8edf3ff,
+                        TEXT,
                     );
                 }
                 previous_col = col;
@@ -1691,7 +1699,7 @@ impl Desktop {
             bounds.w,
             11,
             false,
-            if terminal.incomplete { AMBER } else { MUTED },
+            if terminal.incomplete { TEXT } else { MUTED },
         );
     }
 
@@ -1826,9 +1834,9 @@ impl Desktop {
                     base - (48. * (count as f64).ln_1p() / peak.ln_1p()) as f32,
                 );
                 if let Some(last) = previous {
-                    canvas.line(last, point, 1., BLUE);
+                    canvas.line(last, point, 1., ACCENT);
                 }
-                canvas.rect(Rect::new(point.0, point.1, 3., 3.), 1., BLUE);
+                canvas.rect(Rect::new(point.0, point.1, 3., 3.), 1., ACCENT);
                 previous = Some(point);
             }
             canvas.text("−10 分钟", x, base + 8., 10, false, MUTED);
@@ -1932,9 +1940,9 @@ impl Desktop {
                 13,
                 true,
                 if worker.state == "working" {
-                    BLUE
+                    ACCENT
                 } else if worker.registered {
-                    GREEN
+                    SUCCESS
                 } else {
                     MUTED
                 },
@@ -2060,7 +2068,7 @@ impl Desktop {
                     y + 14.,
                     13,
                     true,
-                    if item.uncertain { AMBER } else { TEXT },
+                    if item.uncertain { MUTED } else { TEXT },
                 );
                 canvas.ellipsis(
                     &format!("目标 {} · {}", item.target, item.id),
@@ -2142,10 +2150,10 @@ impl Desktop {
                 }
                 canvas.rect(Rect::new(body.x, y, body.w, 137.), 8., SURFACE);
                 let color = match receipt.state {
-                    ReceiptState::Unknown => AMBER,
+                    ReceiptState::Unknown => TEXT,
                     ReceiptState::Rejected => RED,
-                    ReceiptState::Confirmed => GREEN,
-                    ReceiptState::Sending => BLUE,
+                    ReceiptState::Confirmed => SUCCESS,
+                    ReceiptState::Sending => ACCENT,
                 };
                 canvas.text(
                     receipt.state.label(),

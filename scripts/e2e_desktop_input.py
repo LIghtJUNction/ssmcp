@@ -27,6 +27,11 @@ from e2e_session_service import Sessions
 from private_xvfb import PrivateXvfb
 
 
+DARK_INPUT_CARD = (46, 46, 46)
+DARK_CONTROL = (229, 229, 229)
+LIGHT_CONTROL = (39, 39, 39)
+
+
 def identity(path):
     path = Path(path).resolve(strict=True)
     return {"path": str(path), "bytes": path.stat().st_size,
@@ -187,7 +192,7 @@ class DesktopInputs(Sessions):
         # The production cards end 24 px from the window's right edge.
         sample_x = self.width - 36
         ys = [y for y in range(122, self.height - 140)
-              if image.getpixel((sample_x, y)) == (38, 54, 80)]
+              if image.getpixel((sample_x, y)) == DARK_INPUT_CARD]
         bands = []
         for y in ys:
             if not bands or y - bands[-1][-1] > 2:
@@ -251,7 +256,7 @@ class DesktopInputs(Sessions):
         self.xdisplay = display.Display(self.gui_env["DISPLAY"])
         self.window = self.xdisplay.create_resource_object("window", int(self.window_id))
         wait_for(lambda: self.pixels().size == (self.width, self.height)
-                 and self.pixels().getpixel((self.width - 97, 29)) == (182, 206, 255),
+                 and self.pixels().getpixel((self.width - 97, 29)) == DARK_CONTROL,
                  timeout=10, description="rendered desktop with actual native control lease")
         self.screenshot("desktop-connected")
         # Inspect the live native drawer before touching the conversation or composer.
@@ -266,6 +271,16 @@ class DesktopInputs(Sessions):
         wait_for(lambda: self.pixels().crop(region).tobytes() != session_rows,
                  timeout=3, description="connection settings replace session navigation")
         self.screenshot("desktop-sidebar-settings")
+        # The third settings row switches the same running window between themes.
+        self.click(82, 62 + 2 * 44 + 20)
+        wait_for(lambda: self.pixels().getpixel((self.width - 97, 29)) == LIGHT_CONTROL
+                 and self.pixels().getpixel((8, 60)) == (255, 255, 255),
+                 timeout=3, description="light sidebar and neutral control indicator")
+        self.screenshot("desktop-sidebar-light")
+        self.click(82, 62 + 2 * 44 + 20)
+        wait_for(lambda: self.pixels().getpixel((self.width - 97, 29)) == DARK_CONTROL
+                 and self.pixels().getpixel((8, 60)) == (24, 24, 24),
+                 timeout=3, description="dark sidebar and neutral control indicator")
         self.key("Escape")
         wait_for(lambda: self.pixels().getpixel((8, 60)) == background,
                  timeout=3, description="Escape closes the sidebar")
@@ -309,7 +324,7 @@ class DesktopInputs(Sessions):
                          timeout=8, description="five actual right-side Input cards")
         self.report["input_card_pixel_bands"] = bands
         image = self.pixels()
-        self.check(all(image.getpixel((40, (start + end) // 2)) != (38, 54, 80)
+        self.check(all(image.getpixel((40, (start + end) // 2)) != DARK_INPUT_CARD
                        for start, end in bands),
                    "all five visible input cards leave a common left margin and align on the right")
         self.screenshot("desktop-five-input-origins")
