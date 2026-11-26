@@ -335,15 +335,7 @@ pub(crate) async fn list_command(args: &[OsString]) -> Result<()> {
         println!("{LIST_HELP}");
         return Ok(());
     }
-    let mut entries = list().await?;
-    for entry in &mut entries {
-        entry["target"] = json!(format!(
-            "saved:{}",
-            entry["name"].as_str().ok_or("saved session has no name")?
-        ));
-        entry["kind"] = json!("saved");
-    }
-    entries.extend(overview::foreground_rows()?);
+    let entries = local_rows().await?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&entries)?);
     } else if entries.is_empty() {
@@ -432,6 +424,19 @@ pub async fn manage(mut args: Vec<OsString>) -> Result<()> {
         print_status(&value);
     }
     Ok(())
+}
+
+async fn local_rows() -> Result<Vec<Value>> {
+    let mut entries = list().await?;
+    for entry in &mut entries {
+        entry["target"] = json!(format!(
+            "saved:{}",
+            entry["name"].as_str().ok_or("saved session has no name")?
+        ));
+        entry["kind"] = json!("saved");
+    }
+    entries.extend(overview::foreground_rows()?);
+    Ok(entries)
 }
 
 pub async fn list() -> Result<Vec<Value>> {

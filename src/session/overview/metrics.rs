@@ -10,7 +10,7 @@ pub(super) struct Sample {
     ticks_per_second: u64,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(super) fn sample(pid: u32) -> Option<Sample> {
     use std::io::Read;
     let mut text = String::new();
@@ -27,12 +27,12 @@ pub(super) fn sample(pid: u32) -> Option<Sample> {
     parse_stat(&text, ticks as u64, page as u64)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 pub(super) fn sample(_pid: u32) -> Option<Sample> {
     None
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "android", test))]
 fn parse_stat(text: &str, ticks_per_second: u64, page_bytes: u64) -> Option<Sample> {
     // comm can contain spaces and parentheses; the final ')' ends field 2.
     let rest = text.rsplit_once(')')?.1;

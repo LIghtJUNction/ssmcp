@@ -17,7 +17,20 @@ async fn gui_gateway_private_attach_round_trip_uses_real_lease_and_native_state(
     )));
     std::fs::create_dir(&directory.0).unwrap();
     std::fs::set_permissions(&directory.0, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let server = crate::session::ipc::Server::bind(&directory.0, super::super::ENDPOINT)
+    let instance = crate::session::random_suffix().unwrap();
+    let live = directory.0.join("live");
+    let entry = live.join(&instance);
+    crate::platform::private_directory(&live).unwrap();
+    crate::platform::private_directory(&entry).unwrap();
+    crate::session::write_json(
+        &entry.join("overview.json"),
+        &json!({
+            "format": 1, "instance": instance, "pid":std::process::id(), "process_start_ticks":null,
+            "metadata":{"name":"private-attach-fixture","cwd":"/workspace","hostname":"fixture"}
+        }),
+    )
+    .unwrap();
+    let server = crate::session::ipc::Server::bind(&entry, super::super::ENDPOINT)
         .await
         .unwrap();
     let capture = Arc::new(Capture::new().unwrap());
@@ -55,6 +68,7 @@ async fn gui_gateway_private_attach_round_trip_uses_real_lease_and_native_state(
     });
     crate::session::gui::exercise_gateway_fixture(
         directory.0.clone(),
+        instance,
         observe_started,
         resume_events,
     )

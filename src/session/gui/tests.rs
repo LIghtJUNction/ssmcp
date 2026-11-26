@@ -1,34 +1,11 @@
 use super::*;
 use zbridge::{Effect, Id, Operation, ResponseBody};
 
-struct PrivateFixture {
-    directory: PathBuf,
-}
-impl Host for PrivateFixture {
-    fn sessions(&self) -> CoreFuture<'_, Vec<Value>> {
-        Box::pin(async {
-            Ok(vec![
-                json!({"name":"private-attach-fixture","connection_state":"disconnected"}),
-            ])
-        })
-    }
-    fn connect(&self, session: String, read_only: bool) -> CoreFuture<'_, Arc<dyn Connection>> {
-        Box::pin(async move {
-            if session != "private-attach-fixture" {
-                return Err(BridgeError::invalid("unknown fixture"));
-            }
-            let frontend = RemoteFrontend::connect(self.directory.clone(), read_only)
-                .await
-                .map_err(native)?;
-            Ok(Arc::new(Attached::new(frontend)) as Arc<dyn Connection>)
-        })
-    }
-}
-
 /// Called from the attach module's isolated real IPC fixture, without replacing
 /// process-global capture state or starting any Runtime/model/session manager.
 pub(crate) async fn exercise_gateway_fixture(
-    directory: PathBuf,
+    root: PathBuf,
+    instance: String,
     observe_started: Arc<Notify>,
     resume_events: Arc<Notify>,
 ) {
@@ -36,21 +13,51 @@ pub(crate) async fn exercise_gateway_fixture(
     const TOKEN: &str = "2222222222222222222222222222222222222222222222222222222222222222";
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let app = gateway::router(
-        gateway::Config {
-            token: TOKEN.into(),
-            origin: url.clone(),
-            assets: None,
-        },
-        Arc::new(PrivateFixture {
-            directory: directory.clone(),
-        }),
-    )
-    .unwrap();
+    let directory = root.join("live").join(&instance);
+    let app = foreground_workbench(root, url.clone(), TOKEN.into()).unwrap();
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let homepage = client
+        .get(format!("{url}/"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(homepage.contains("<html data-ssmcp-magisk "));
+    let ordinary_index = client
+        .get(format!("{url}/index.html"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!ordinary_index.contains("data-ssmcp-magisk"));
+    let listed: Value = client
+        .get(format!("{url}/api/gui/v1/sessions"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let rows = listed["sessions"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["kind"], "foreground");
+    assert_eq!(rows[0]["name"], "private-attach-fixture");
+    let target = rows[0]["target"].as_str().unwrap();
+    assert_eq!(target, format!("live:{instance}"));
+    let wrong_target = client.post(format!("{url}/api/gui/v1/connections")).bearer_auth(TOKEN)
+        .json(&json!({"request_id":"unrelated-saved-session","session":"saved:private-attach-fixture","read_only":true}))
+        .send().await.unwrap();
+    assert!(!wrong_target.status().is_success());
     // Exercise the real RemoteFrontend path that used to return a local
     // Denied error and have the HTTP transport incorrectly make it uncertain.
     let readonly: Value = client
@@ -58,7 +65,7 @@ pub(crate) async fn exercise_gateway_fixture(
         .bearer_auth(TOKEN)
         .json(&json!({
             "request_id":"private-readonly-open",
-            "session":"private-attach-fixture",
+            "session":target,
             "read_only":true
         }))
         .send()
@@ -115,8 +122,7 @@ pub(crate) async fn exercise_gateway_fixture(
         .unwrap();
     assert_eq!(detached["closed"], true);
     assert_eq!(detached["session_stopped"], false);
-    let open =
-        json!({"request_id":"private-open","session":"private-attach-fixture","read_only":false});
+    let open = json!({"request_id":"private-open","session":target,"read_only":false});
     let opened: Value = client
         .post(format!("{url}/api/gui/v1/connections"))
         .bearer_auth(TOKEN)

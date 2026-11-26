@@ -250,31 +250,49 @@ fn add(inventory: &mut Inventory, entry: crate::Result<Entry>) {
 }
 
 pub(in crate::session) fn foreground_rows() -> crate::Result<Vec<Value>> {
-    let inventory = inventory(false)?;
+    Ok(format_foreground_rows(inventory(false)?, false))
+}
+
+pub(in crate::session) fn foreground_rows_in(root: &Path) -> crate::Result<Vec<Value>> {
+    Ok(format_foreground_rows(scan_in(root, false)?, true))
+}
+
+fn format_foreground_rows(inventory: Inventory, active_only: bool) -> Vec<Value> {
     if inventory.truncated {
         eprintln!(
             "Foreground session list is truncated. An exact live:INSTANCE target can still be attached."
         );
     }
-    Ok(inventory
+    inventory
         .entries
         .into_iter()
-        .map(|entry| {
+        .filter_map(|entry| {
             let state = if entry.process_matches() {
                 "registered"
+            } else if active_only {
+                return None;
             } else {
                 "offline"
             };
-            json!({"target":entry.target,"kind":"foreground","name":entry.name,
-            "pid":entry.pid,"cwd":entry.metadata.map(|value|value.cwd),"state":state})
+            Some(
+                json!({"target":entry.target,"kind":"foreground","name":entry.name,
+            "pid":entry.pid,"cwd":entry.metadata.map(|value|value.cwd),"state":state}),
+            )
         })
-        .collect())
+        .collect()
 }
 
 pub(in crate::session) fn foreground_target(
     target: &str,
 ) -> crate::Result<(PathBuf, crate::wire::ClientMetadata, u32)> {
-    let entry = select(target)?;
+    foreground_target_in(&super::super::session_root(false)?, target)
+}
+
+pub(in crate::session) fn foreground_target_in(
+    root: &Path,
+    target: &str,
+) -> crate::Result<(PathBuf, crate::wire::ClientMetadata, u32)> {
+    let entry = select_in(root, target)?;
     if !entry.process_matches() {
         return Err("registered foreground process has ended; list local sessions again".into());
     }
@@ -289,7 +307,7 @@ pub(in crate::session) fn foreground_target(
 
 impl Entry {
     pub(super) fn process_matches(&self) -> bool {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         if let (Some(pid), Some(expected)) = (self.pid, self.process_start_ticks) {
             return metrics::sample(pid).is_some_and(|sample| sample.start_ticks == expected);
         }
@@ -298,9 +316,12 @@ impl Entry {
 }
 
 pub(super) fn select(target: &str) -> crate::Result<Entry> {
-    let root = super::super::session_root(false)?;
+    select_in(&super::super::session_root(false)?, target)
+}
+
+fn select_in(root: &Path, target: &str) -> crate::Result<Entry> {
     if let Some(name) = target.strip_prefix("saved:") {
-        let (directory, manifest) = super::super::load(&root, name)?;
+        let (directory, manifest) = super::super::load(root, name)?;
         let stopped = fs::symlink_metadata(directory.join("stop.requested")).is_ok();
         return Ok(Entry {
             target: target.into(),

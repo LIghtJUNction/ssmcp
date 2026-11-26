@@ -24,23 +24,66 @@ use super::attach::RemoteFrontend;
 const HELP: &str = "ssmcp gui open
 ssmcp gui serve [--listen 127.0.0.1:PORT] [--assets DIRECTORY]\n                [--pairing-file PRIVATE_FILE] [--public-origin https://HOST]\n\nOpen starts the local workbench in your browser or reopens the running one.\nServe hosts the built-in web app; --assets selects a replacement directory.\nConnects frontends to existing saved CLI sessions. It does not start a model or\nsession. The listener is loopback only. For mobile access, explicitly configure\nan HTTPS reverse proxy preserving the public Host and Origin. Pairing credentials\nare written to a private local JSON file and are never returned by HTTP.\n";
 
-struct LocalHost;
+#[derive(Default)]
+struct LocalHost {
+    foreground_root: Option<PathBuf>,
+}
+
 impl Host for LocalHost {
     fn sessions(&self) -> CoreFuture<'_, Vec<Value>> {
-        Box::pin(async { super::list().await.map_err(native) })
+        Box::pin(async {
+            match &self.foreground_root {
+                Some(root) => super::overview::foreground_rows_in(root).map_err(native),
+                None => super::local_rows().await.map_err(native),
+            }
+        })
     }
     fn connect(&self, session: String, read_only: bool) -> CoreFuture<'_, Arc<dyn Connection>> {
         Box::pin(async move {
-            super::validate_name(&session)
-                .map_err(|_| BridgeError::invalid("invalid saved session name"))?;
-            let root = super::session_root(false).map_err(native)?;
-            let (directory, _) = super::load(&root, &session).map_err(native)?;
-            let frontend = RemoteFrontend::connect(directory, read_only)
+            let root = match &self.foreground_root {
+                Some(root) => root.clone(),
+                None => super::session_root(false).map_err(native)?,
+            };
+            let (directory, pid) = if session.starts_with("live:") {
+                let (directory, _, pid) =
+                    super::overview::foreground_target_in(&root, &session).map_err(native)?;
+                (directory, Some(pid))
+            } else {
+                if self.foreground_root.is_some() {
+                    return Err(BridgeError::invalid("expected a foreground session target"));
+                }
+                let name = session.strip_prefix("saved:").unwrap_or(&session);
+                super::validate_name(name)
+                    .map_err(|_| BridgeError::invalid("invalid saved session name"))?;
+                (super::load(&root, name).map_err(native)?.0, None)
+            };
+            let frontend = RemoteFrontend::connect_for_pid(directory, read_only, pid)
                 .await
                 .map_err(native)?;
             Ok(Arc::new(Attached::new(frontend)) as Arc<dyn Connection>)
         })
     }
+}
+
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn foreground_workbench(
+    root: PathBuf,
+    origin: String,
+    token: String,
+) -> crate::Result<axum::Router> {
+    super::create_private_tree(&root)?;
+    super::verify_directory(&root)?;
+    Ok(gateway::routes(
+        gateway::Config {
+            token,
+            origin,
+            assets: None,
+        },
+        Arc::new(LocalHost {
+            foreground_root: Some(root),
+        }),
+        true,
+    )?)
 }
 fn native(error: crate::Error) -> BridgeError {
     BridgeError::new(ErrorCode::Unavailable, error.to_string())
@@ -228,7 +271,7 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
             origin: origin.clone(),
             assets: assets.clone(),
         },
-        Arc::new(LocalHost),
+        Arc::new(LocalHost::default()),
     )?;
     super::write_json(
         &pairing,
@@ -251,7 +294,7 @@ pub async fn run(arguments: Vec<OsString>) -> crate::Result<()> {
     Ok(())
 }
 
-async fn shutdown() {
+pub(crate) async fn shutdown() {
     #[cfg(unix)]
     {
         if let Ok(mut terminate) =

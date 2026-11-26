@@ -21,7 +21,7 @@ use crate::Result;
 const FORMAT: u32 = 1;
 const MAX_FRAME: usize = 256 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
+pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

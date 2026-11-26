@@ -23,10 +23,20 @@ impl RemoteFrontend {
     }
 
     pub async fn connect(directory: PathBuf, read_only: bool) -> crate::Result<Self> {
-        let open = crate::session::ipc::request(
+        Self::connect_for_pid(directory, read_only, None).await
+    }
+
+    pub(in crate::session) async fn connect_for_pid(
+        directory: PathBuf,
+        read_only: bool,
+        expected_pid: Option<u32>,
+    ) -> crate::Result<Self> {
+        let open = crate::session::ipc::request_for_pid(
             &directory,
             super::super::ENDPOINT,
             json!({"op":"open","read_only":read_only}),
+            crate::session::ipc::REQUEST_TIMEOUT,
+            expected_pid,
         )
         .await?;
         let lease = open["lease"]

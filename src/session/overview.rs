@@ -3,7 +3,9 @@
 mod discovery;
 mod metrics;
 pub(crate) use discovery::Registration;
-pub(super) use discovery::{foreground_rows, foreground_target};
+pub(super) use discovery::{
+    foreground_rows, foreground_rows_in, foreground_target, foreground_target_in,
+};
 
 use super::attach::{self, RemoteFrontend};
 use futures_util::{StreamExt, stream};

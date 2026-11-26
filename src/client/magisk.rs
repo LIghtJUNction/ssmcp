@@ -3,7 +3,7 @@ mod frame;
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path as Param, State},
+    extract::{DefaultBodyLimit, State},
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -30,9 +30,7 @@ use crate::{
 const STATUS_ENV: &str = "SSMCP_MAGISK_CONNECTED";
 const CONSENT: &str = "root-consent-v1";
 const RC: &str = include_str!("../../packaging/magisk/src/ssmcp/ssmcp.rc");
-const INDEX: &str = include_str!("../../packaging/magisk/src/ssmcp/webroot/index.html");
 const ONBOARDING: &str = include_str!("../../packaging/magisk/src/ssmcp/onboarding/index.html");
-const SCRIPT: &str = include_str!("../../packaging/magisk/src/ssmcp/webroot/console.js");
 const STYLE: &str = include_str!("../../packaging/magisk/src/ssmcp/webroot/console.css");
 
 struct ScreenState {
@@ -73,6 +71,7 @@ impl Terminal {
         getrandom::fill(&mut nonce)?;
         let connected = directory.join(format!("connected-{}", crate::hex::encode(nonce)));
         command.env(STATUS_ENV, &connected);
+        command.env("SSMCP_SESSION_HOME", directory.join("sessions"));
         command.env("TERM", "xterm-256color");
         command.cwd(directory.join("workspace"));
         let child = pair.slave.spawn_command(command)?;
@@ -403,28 +402,6 @@ pub(super) fn signal_connected() {
     }
 }
 
-async fn asset(Param(file): Param<String>) -> Response {
-    match file.as_str() {
-        "console.js" => javascript(SCRIPT),
-        "terminal-frame.js" => javascript(include_str!(
-            "../../packaging/magisk/src/ssmcp/webroot/terminal-frame.js"
-        )),
-        "setup.js" => javascript(include_str!(
-            "../../packaging/magisk/src/ssmcp/onboarding/setup.js"
-        )),
-        "device-api.js" => javascript(include_str!(
-            "../../packaging/magisk/src/ssmcp/webroot/device-api.js"
-        )),
-        "module-entry.js" => javascript(include_str!(
-            "../../packaging/magisk/src/ssmcp/webroot/module-entry.js"
-        )),
-        "console.css" => {
-            ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STYLE).into_response()
-        }
-        _ => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
 fn javascript(source: &'static str) -> Response {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
@@ -454,6 +431,11 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
     let mut bytes = [0; 32];
     getrandom::fill(&mut bytes)?;
     let token = crate::hex::encode(&bytes);
+    let gui = crate::session::gui::foreground_workbench(
+        dir.join("sessions"),
+        format!("http://{host}"),
+        token.clone(),
+    )?;
     let mut sessions = Sessions::default();
     if let Some(target) = saved_target(&dir)? {
         sessions.open(&target, &dir)?;
@@ -473,8 +455,15 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
         sessions: tokio::sync::Mutex::new(sessions),
     });
     let app = Router::new()
-        .route("/", get(|| async { Html(INDEX) }))
-        .route("/{file}", get(asset))
+        .route("/setup.js", get(|| async {
+            javascript(include_str!("../../packaging/magisk/src/ssmcp/onboarding/setup.js"))
+        }))
+        .route("/device-api.js", get(|| async {
+            javascript(include_str!("../../packaging/magisk/src/ssmcp/webroot/device-api.js"))
+        }))
+        .route("/console.css", get(|| async {
+            ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STYLE)
+        }))
         .route("/setup", get(|| async { Html(ONBOARDING) }).post(configure))
          .route("/zuse", get(|| async {
             ([(header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'self'; frame-src http://127.0.0.1:43497; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")],
@@ -489,7 +478,10 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
             headers.entry(header::CONTENT_SECURITY_POLICY).or_insert( "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'".parse().unwrap());
             response
         }))
-        .with_state(state);
-    axum::serve(listener, app).await?;
+        .with_state(state)
+        .fallback_service(gui);
+    axum::serve(listener, app)
+        .with_graceful_shutdown(crate::session::gui::shutdown())
+        .await?;
     Ok(())
 }

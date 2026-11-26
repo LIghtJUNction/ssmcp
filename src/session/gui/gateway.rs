@@ -61,6 +61,7 @@ struct Gateway {
     token: String,
     origin: String,
     authority: String,
+    magisk_entry: bool,
     assets: Option<PathBuf>,
     host: Arc<dyn Host>,
     data: Mutex<Data>,
@@ -169,6 +170,14 @@ fn unavailable(message: &str) -> BridgeError {
 }
 
 pub(super) fn router(config: Config, host: Arc<dyn Host>) -> Result<Router, BridgeError> {
+    routes(config, host, false)
+}
+
+pub(super) fn routes(
+    config: Config,
+    host: Arc<dyn Host>,
+    magisk_entry: bool,
+) -> Result<Router, BridgeError> {
     if config.token.len() != 64 || !config.token.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(BridgeError::invalid(
             "gateway pairing requires a 32-byte hexadecimal secret",
@@ -209,20 +218,21 @@ pub(super) fn router(config: Config, host: Arc<dyn Host>) -> Result<Router, Brid
         token: config.token,
         origin,
         authority,
+        magisk_entry,
         assets,
         host,
         data: Mutex::new(Data::default()),
         next_connection: AtomicU64::new(1),
         requests: Semaphore::new(32),
     });
-    Ok(Router::new()
+    let api = Router::new()
         .route("/api/gui/v1/sessions", get(sessions))
         .route("/api/gui/v1/connections", get(connections).post(open))
         .route("/api/gui/v1/connections/{id}", axum::routing::delete(close))
         .route("/api/gui/v1/connections/{id}/bridge", post(bridge))
-        .route("/api/gui/v1/connections/{id}/events", post(events))
-        .route("/", get(index))
-        .route("/{*path}", get(asset))
+        .route("/api/gui/v1/connections/{id}/events", post(events));
+    let app = api.route("/", get(index)).route("/{*path}", get(asset));
+    Ok(app
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state))
 }
@@ -385,6 +395,9 @@ async fn sessions(
     }
     let end = (query.offset + query.limit).min(list.len());
     let fields = [
+        "target",
+        "kind",
+        "state",
         "name",
         "cwd",
         "manager_state",
@@ -675,6 +688,14 @@ async fn close(
 }
 
 async fn index(State(state): State<Arc<Gateway>>) -> Response {
+    if state.magisk_entry {
+        let html = include_str!("../../../apps/ssmcp-web/index.html").replacen(
+            "<html ",
+            "<html data-ssmcp-magisk ",
+            1,
+        );
+        return axum::response::Html(html).into_response();
+    }
     serve_asset(state, "index.html".into()).await
 }
 async fn asset(State(state): State<Arc<Gateway>>, Path(path): Path<String>) -> Response {
