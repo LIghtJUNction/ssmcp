@@ -104,6 +104,22 @@ pub(super) fn send(
     runtime: &Runtime,
     arguments: Value,
 ) -> Result<Value, BridgeError> {
+    host.runtime()?;
+    let client_id = runtime.frontend_client_id().ok_or_else(|| {
+        BridgeError::new(
+            ErrorCode::Unavailable,
+            "this runtime has no registered chat connection",
+        )
+    })?;
+    send_to(host, client_id, runtime.connection_generation(), arguments)
+}
+
+pub(super) fn send_to(
+    host: &BoundHost<'_>,
+    client_id: &str,
+    generation: u64,
+    arguments: Value,
+) -> Result<Value, BridgeError> {
     let args: Send = serde_json::from_value(arguments)
         .map_err(|_| BridgeError::invalid("invalid chat.send arguments"))?;
     Id::new(&args.request_id)?;
@@ -117,16 +133,9 @@ pub(super) fn send(
         ));
     }
     host.authorize(Access::Control)?;
-    host.runtime()?;
-    let client_id = runtime.frontend_client_id().ok_or_else(|| {
-        BridgeError::new(
-            ErrorCode::Unavailable,
-            "this runtime has no registered chat connection",
-        )
-    })?;
     let value = host.capture.bridge.chat_receipts.admit(
         host.backend_generation,
-        runtime.connection_generation(),
+        generation,
         &args,
         || {
             crate::client::steering::frontend_submit(client_id, &args.text, &args.target)
@@ -137,7 +146,7 @@ pub(super) fn send(
         let scope = super::super::thread_history::RecordScope::frontend_input(
             client_id,
             &args.target,
-            runtime.connection_generation(),
+            generation,
             &args.request_id,
         );
         host.capture.push_scoped(json!({"kind":"event","label":"user","value":crate::audit::event(json!({"type":"ssmcp.user_input",
@@ -182,6 +191,15 @@ pub(super) fn state(
             "this runtime has no registered chat connection",
         )
     })?;
+    state_for(host, client_id, resource, query)
+}
+
+pub(super) fn state_for(
+    host: &BoundHost<'_>,
+    client_id: &str,
+    resource: &str,
+    query: Value,
+) -> Result<Value, BridgeError> {
     if resource == "conversation" {
         let query: ConversationQuery = serde_json::from_value(query)
             .map_err(|_| BridgeError::invalid("invalid conversation query"))?;

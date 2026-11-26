@@ -1,4 +1,4 @@
-import { Gateway, readPairingToken, registerAccount, takeLaunchPairing } from './src/gateway.mjs';
+import { Gateway, launchOptions, takeLaunchPairing } from './src/gateway.mjs';
 import { BridgeClient } from './src/client.mjs';
 import { byteLength } from './src/protocol.mjs';
 import { renderWaitContent } from './src/wait-view.mjs';
@@ -19,6 +19,7 @@ let sessions = [], sessionOffset = 0, sessionsNext = null, selectedSession = nul
 let selectedTerminal = null, selectedThread = 'process', timelineOffset = 0, activePanel = 'conversation';
 let lastRenderedRows = [], localError = null, workerDraftEdited = false, queueOffset = 0;
 const composing = new WeakSet();
+let directoryRead = 0, endTarget = null, submittingEnd = false;
 
 function element(tag, className = '', text = '') {
   const node = document.createElement(tag);
@@ -49,10 +50,6 @@ function details(title, value) {
   $('details-content').replaceChildren(element('pre', '', JSON.stringify(redact(value), null, 2)));
   if (!$('details-dialog').open) $('details-dialog').showModal();
 }
-function authDialog() {
-  if (client.connection || ['connecting', 'disconnecting'].includes(client.status)) { fail(new Error('请先完成当前连接操作并断开前端，再更换认证。')); return; }
-  setText('auth-error', ''); $('pairing-token').value = ''; $('auth-dialog').showModal(); $('pairing-file').focus();
-}
 function saveDrafts() {
   if (!client.connection) return;
   drafts.delete(client.connection.session);
@@ -69,11 +66,14 @@ function restoreRecipient(session) {
 }
 
 async function listSessions(offset = 0) {
+  const read = ++directoryRead;
   const page = await gateway.sessions({ offset, limit: 16 });
+  if (read !== directoryRead) return;
   sessions = page.sessions; sessionOffset = offset; sessionsNext = page.has_more ? page.next_offset : null;
   renderSessions(); renderStatus();
 }
 function sessionTarget(row) { return row?.target ?? row?.name; }
+function currentTarget() { return client.connection?.session ?? sessionTarget(selectedSession); }
 function setSidebar(open) {
   $('sidebar').classList.toggle('is-open', open);
   $('menu-button').setAttribute('aria-expanded', String(open));
@@ -140,16 +140,19 @@ function renderStatus() {
   const connected = Boolean(client.connection);
   setText('auth-status', gateway.authenticated ? '已设置认证' : '尚未认证');
   $('auth-dot').classList.toggle('good', gateway.authenticated);
-  setText('auth-button', gateway.authenticated ? '认证设置' : '连接网关');
   setText('connection-label', connected ? `SSMCP / ${client.capabilities?.mode === 'control' ? 'CONTROL' : 'OBSERVE'}` : 'WORKSPACE');
   const info = opened.get(client.connection?.session) ?? selectedSession;
   setText('session-title', info?.name ?? 'ssmcp');
   $('session-title').classList.toggle('sr-only', connected);
   setText('session-cwd', client.states.get('runtime')?.cwd ?? info?.cwd ?? '');
   show('new-session', gateway.authenticated);
+  const ownership = gateway.ownedSessionStatus(currentTarget());
+  show('end-session', Boolean(ownership));
+  setText('end-session', ownership === 'unknown' ? '重试结束此会话' : '结束此会话');
+  $('end-session').disabled = submittingEnd || busy.has('connect') || busy.has('disconnect') || busy.has('session-select')
+    || ['connecting', 'disconnecting'].includes(client.status);
   show('take-control', client.connection?.read_only === true);
   $('take-control').disabled = client.status !== 'connected' || busy.has('connect') || busy.has('session-select') || busy.has('disconnect');
-  show('module-pairing-help', modulePage && !gateway.authenticated);
   $('new-session').disabled = busy.has('session.new') || busy.has('session-select');
   for (const button of $('session-tabs').children) button.disabled = busy.has('session.new') || busy.has('session-select');
   show('connect-strip', Boolean(selectedSession) && !connected);
@@ -172,8 +175,6 @@ function renderStatus() {
   setText('command-count', client.ledger.records.length || '');
   show('conversation-toolbar', connected);
   show('welcome', !connected);
-  $('authenticate').disabled = busy.has('auth');
-  $('forget-token').disabled = busy.has('forget') || busy.has('auth');
 }
 
 function fillAgents(select, baseOptions, selected, allowMissing) {
@@ -445,29 +446,7 @@ async function send(command, args, textarea) {
   renderStatus(); renderComposer(); return record;
 }
 
-$('auth-button').addEventListener('click', authDialog); $('welcome-connect').addEventListener('click', () => gateway.authenticated ? showLaunch() : authDialog());
-$('pairing-file').addEventListener('change', () => { if ($('pairing-file').files.length) $('pairing-token').value = ''; });
-$('pairing-token').addEventListener('input', () => { if ($('pairing-token').value) $('pairing-file').value = ''; });
-$('auth-form').addEventListener('submit', event => {
-  event.preventDefault(); void run('auth', async () => {
-    try {
-      const file = $('pairing-file').files[0];
-      const token = file ? await readPairingToken(file, location.origin) : $('pairing-token').value.trim();
-      if (!token) throw new Error('请选择配对文件或输入令牌。');
-      if (!$('auth-dialog').open) return;
-      if (gateway.setToken(token)) {
-        opened.clear(); drafts.clear(); sessions = []; selectedSession = null; sessionOffset = 0; sessionsNext = null;
-      }
-      $('auth-form').reset();
-      localError = null; $('auth-dialog').close(); renderAll(); showLaunch();
-    } catch (error) { setText('auth-error', error.message); }
-  });
-});
-$('auth-dialog').addEventListener('close', () => { $('auth-form').reset(); });
-$('forget-token').addEventListener('click', () => run('forget', async () => {
-  try { if (client.connection) { saveDrafts(); await client.disconnect(); } }
-  finally { gateway.clearToken(); show('launch-setup', false); show('workbench-shell', true); opened.clear(); drafts.clear(); sessions = []; selectedSession = null; sessionOffset = 0; sessionsNext = null; $('auth-dialog').close(); renderAll(); }
-}));
+$('welcome-connect').addEventListener('click', showLaunch);
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => $(button.dataset.close).close()));
 $('refresh-sessions').addEventListener('click', () => run('sessions', () => listSessions(sessionOffset)));
 $('sessions-prev').addEventListener('click', () => run('sessions', () => listSessions(Math.max(0, sessionOffset - 16))));
@@ -475,6 +454,46 @@ $('sessions-next').addEventListener('click', () => run('sessions', () => listSes
 $('connect-button').addEventListener('click', () => run('connect', async () => {
   await enterSession(selectedSession, $('connection-mode').value === 'observe');
 }));
+$('end-session').addEventListener('click', () => {
+  const target = currentTarget();
+  if ($('end-session').disabled || !gateway.ownedSessionStatus(target)) return;
+  endTarget = target;
+  setText('end-session-target', target); setText('end-session-error', '');
+  $('end-session-dialog').showModal();
+});
+$('end-session-dialog').addEventListener('cancel', event => { if (submittingEnd) event.preventDefault(); });
+$('end-session-dialog').addEventListener('close', () => { endTarget = null; });
+$('end-session-confirm').addEventListener('click', async () => {
+  const target = endTarget;
+  if (submittingEnd || !target || target !== currentTarget() || !gateway.ownedSessionStatus(target)) return;
+  submittingEnd = true;
+  $('end-session-confirm').disabled = $('end-session-cancel').disabled = true;
+  setText('end-session-error', '');
+  try {
+    await gateway.endOwnedSession(target);
+    // A directory read begun before the close receipt cannot reintroduce this target.
+    ++directoryRead; opened.delete(target); drafts.delete(target);
+    sessions = sessions.filter(row => sessionTarget(row) !== target);
+    const closingCurrent = currentTarget() === target;
+    let detachError;
+    if (client.connection?.session === target) {
+      try { await client.disconnect(); } catch (error) { detachError = error; }
+    }
+    if (sessionTarget(selectedSession) === target && (!client.connection || client.connection.session === target)) {
+      selectedSession = null; selectedTerminal = null; selectedThread = 'process'; timelineOffset = 0; lastRenderedRows = [];
+      workerDraftEdited = false; queueOffset = 0; client.timeline.clear(); restoreDrafts(null);
+    }
+    if (closingCurrent) localError = detachError ? new Error('会话已结束。前端连接释放回执未确认。') : null;
+    $('end-session-dialog').close(); renderAll();
+  } catch (error) {
+    if (!gateway.ownedSessionStatus(target)) { $('end-session-dialog').close(); return; }
+    setText('end-session-error', error.effect === 'may_have_occurred'
+      ? '结束结果未确定。可对上方同一会话重试，或取消并稍后核对。' : error.message);
+  } finally {
+    submittingEnd = false; $('end-session-confirm').disabled = $('end-session-cancel').disabled = false;
+    renderStatus();
+  }
+});
 $('take-control').addEventListener('click', () => run('connect', async () => {
   const info = opened.get(client.connection?.session);
   if (!info || !client.connection.read_only) return;
@@ -680,32 +699,41 @@ function hostedRelay() {
     return url.hostname.toLowerCase().replace(/\.+$/, '') === 'ssmcp.lmm.best';
   } catch { return false; }
 }
-$('launch-relay').addEventListener('input', () => {
-  const hosted = hostedRelay();
-  show('launch-hosted', hosted);
-  $('launch-terms').required = hosted; $('launch-privacy').required = hosted;
-});
+function consentStep(visible) {
+  show('launch-hosted', visible);
+  for (const id of ['launch-terms', 'launch-privacy']) {
+    $(id).required = visible;
+    if (!visible) $(id).checked = false;
+  }
+}
+$('launch-relay').addEventListener('input', () => consentStep(false));
+
 function showLaunch() {
-  if (!gateway.authenticated) { authDialog(); return; }
-  show('launch-setup', true); show('workbench-shell', false);
-  show('launch-back', !modulePage || opened.size > 0);
+  show('launch-entry', !gateway.authenticated);
+  show('workbench-shell', false);
+  show('launch-setup', gateway.authenticated);
+  if (!gateway.authenticated) {
+    setText('entry-hint', modulePage ? '请从 Magisk 管理器的 SSMCP 模块执行操作。'
+      : /Android|iPhone|iPad/.test(navigator.userAgent) ? '请从设备上的 SSMCP 应用打开。' : '请在本机运行 ssmcp gui open。');
+    return;
+  }
+  if (!gateway.pendingOwnedRequest) consentStep(false);
+  const manualList = !modulePage && Boolean(launchOptions(location)?.session);
+  show('launch-back', opened.size > 0 || manualList);
   setText('launch-back', opened.size ? '返回工作台' : '浏览现有会话');
-  setText('launch-error', gateway.pendingOwnedRequest ? '上次创建结果未确定，请核对原请求。' : '');
+  setText('launch-error', gateway.pendingOwnedRequest ? '上次连接结果未确定。' : '');
   updateLaunchControls(false);
-  if (!matchMedia('(pointer: coarse)').matches) $('launch-name').focus();
+  if (!$('launch-name').disabled) $('launch-name').focus({preventScroll:true});
 }
 function updateLaunchControls(sending) {
   const pending = Boolean(gateway.pendingOwnedRequest);
   for (const id of ['launch-name', 'launch-relay', 'launch-terms', 'launch-privacy']) $(id).disabled = sending || pending;
   $('launch-connect').disabled = sending;
-  $('launch-register').disabled = sending || pending;
-  $('launch-pair').disabled = sending || Boolean(client.connection);
   $('launch-back').disabled = sending || (pending && !opened.size);
   show('launch-request-id', pending);
   setText('launch-request-id', pending ? '请求 ID ' + gateway.pendingOwnedRequest.request_id : '');
-  setText('launch-connect', pending ? '核对上次创建' : '创建会话');
+  setText('launch-connect', pending ? '核对上次创建' : '连接');
 }
-$('launch-pair').addEventListener('click', authDialog);
 $('launch-back').addEventListener('click', async () => {
   if ($('launch-back').disabled || !gateway.authenticated || (modulePage && !opened.size)) return;
   updateLaunchControls(true);
@@ -717,16 +745,11 @@ $('launch-back').addEventListener('click', async () => {
 });
 $('launch-form').addEventListener('submit', async event => {
   event.preventDefault();
-  const registering = event.submitter?.id === 'launch-register';
-  if (!gateway.authenticated || (registering ? $('launch-register').disabled : $('launch-connect').disabled)) return;
+  if (!gateway.authenticated || $('launch-connect').disabled) return;
   const args = { destination: $('launch-name').value.trim() + '@' + $('launch-relay').value.trim(),
     terms: $('launch-terms').checked, privacy: $('launch-privacy').checked };
   updateLaunchControls(true); setText('launch-error', '');
   try {
-    if (registering) {
-      await registerAccount(body => gateway.request('/register', {method: 'POST', body, mutation: true}), args, $('registration-link'));
-      setText('launch-error', '完成注册后，回到此页。'); return;
-    }
     const target = await gateway.createOwnedSession(args);
     const info = { name: args.destination, target, readOnly: true };
     opened.set(target, info);
@@ -736,13 +759,36 @@ $('launch-form').addEventListener('submit', async event => {
   } catch (error) {
     if ($('launch-setup').hidden) { fail(error); renderAll(); }
     else {
+      // Request policy acknowledgement only when the hosted relay explicitly requires it.
+      const needsPolicy = hostedRelay() && error.effect === 'none' && error.status === 400
+        && ['invalid', 'invalid_request'].includes(error.code)
+        && error.message === "confirm the hosted relay's terms and privacy policy";
+      if (needsPolicy) {
+        consentStep(true);
+        updateLaunchControls(false);
+        $('launch-terms').focus();
+      }
       const message = error.effect === 'may_have_occurred' ? '创建结果未确定，请点“核对上次创建”重试原请求。'
-        : error.status === 401 ? '配对已失效，请打开“配对设置”重新配对。'
-        : modulePage && [403, 404, 503].includes(error.status) ? error.message + ' 请在普通用户账户下启动本机网关并重新配对。'
-        : error.status === 403 ? '网关拒绝创建，请核对账户权限并使用普通用户的本机网关。' : error.message;
+        : error.status === 401 ? '本次授权已失效，请从原入口重新打开。'
+        : needsPolicy ? '请确认该服务的用户协议和隐私政策。' : error.message;
       setText('launch-error', message);
     }
   } finally { updateLaunchControls(false); }
 });
 renderAll();
-if (gateway.authenticated) showLaunch();
+showLaunch();
+// Android delivers its in-memory bearer to this exact origin via WebView.postWebMessage.
+// Ordinary window.postMessage events have a source window and cannot complete this handoff.
+if (!gateway.authenticated && !modulePage && window.top === window && location.pathname === '/'
+    && !location.search && /Android/.test(navigator.userAgent) && /; wv\)/.test(navigator.userAgent)) {
+  function acceptNativePairing(event) {
+    if (!event.isTrusted || event.source !== null || typeof event.data !== 'string'
+        || event.data.length !== 64 || !/^[0-9a-f]{64}$/.test(event.data)) return;
+    window.removeEventListener('message', acceptNativePairing);
+    gateway.setToken(event.data);
+    renderAll(); showLaunch();
+    document.documentElement.dataset.ssmcpPairingReady = 'paired';
+  }
+  window.addEventListener('message', acceptNativePairing);
+  document.documentElement.dataset.ssmcpPairingReady = '1';
+}

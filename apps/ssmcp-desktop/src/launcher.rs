@@ -107,6 +107,17 @@ pub struct Launcher {
     pub error: String,
 }
 
+fn saved_consent(saved: Option<&str>, username: &str, server: &str) -> bool {
+    let Some(target) = saved else { return false };
+    let Some((old_user, old_server)) = target.split_once('@') else {
+        return false;
+    };
+    username.trim().eq_ignore_ascii_case(old_user)
+        && connection_form::official_relay(target)
+        && connection_form::relay_origin(old_server).ok()
+            == connection_form::relay_origin(server).ok()
+}
+
 impl Launcher {
     pub fn new(target: Option<&str>) -> Self {
         let saved = connection_form::desktop_profile().ok().flatten();
@@ -120,9 +131,7 @@ impl Launcher {
             focus: FormFocus::default(),
             user: user.into(),
             relay: relay.into(),
-            accepted: saved
-                .as_deref()
-                .is_some_and(|previous| connection_form::official_relay(previous)),
+            accepted: saved_consent(saved.as_deref(), user, relay),
             saved,
             registration: None,
             error: String::new(),
@@ -132,6 +141,13 @@ impl Launcher {
     pub fn event(&mut self, event: &zgpui::native::Event) -> bool {
         use zgpui::native::Event;
         self.focus.event(event);
+        if self.focus.active
+            && matches!(self.focus.selected, Some(USERNAME_INPUT | RELAY_INPUT))
+            && matches!(event, Event::Text(text) if text.chars().any(char::is_control))
+        {
+            self.error = "请在每个输入框中只填写一行。".into();
+            return true;
+        }
         if matches!(event, Event::Key { code: 13, .. }) {
             if self.focus.active
                 && matches!(self.focus.selected, Some(USERNAME_INPUT | RELAY_INPUT))
@@ -215,6 +231,7 @@ impl Launcher {
             true,
         );
         if user_changed || relay_changed {
+            self.accepted = saved_consent(self.saved.as_deref(), &self.user, &self.relay);
             self.registration = None;
             self.error.clear();
         }
@@ -350,6 +367,15 @@ impl Launcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_consent_follows_the_selected_account_and_server() {
+        let saved = Some("alice@ssmcp.lmm.best");
+        assert!(saved_consent(saved, "Alice", "https://ssmcp.lmm.best:443"));
+        assert!(!saved_consent(saved, "bob", DEFAULT_RELAY));
+        assert!(!saved_consent(saved, "alice", "ssmcp.lmm.best:8443"));
+        assert!(!saved_consent(None, "alice", DEFAULT_RELAY));
+    }
+
     #[test]
     fn first_run_validates_the_two_fields() {
         let mut form = Launcher::new(Some("@relay.example"));

@@ -41,6 +41,7 @@ struct Member {
 }
 pub(super) struct OwnedHost {
     cwd: PathBuf,
+    chat: bool,
     namespace: PathBuf,
     receipts: PathBuf,
     policy: Policy,
@@ -65,6 +66,7 @@ impl OwnedHost {
         crate::platform::private_directory(&receipts)?;
         Ok(Self {
             cwd,
+            chat: false,
             namespace,
             receipts,
             policy,
@@ -73,29 +75,13 @@ impl OwnedHost {
             first: browser_launcher.then(|| AsyncMutex::new(None)),
         })
     }
-    /// An owner can edit or revoke the native consent outside the web service.
-    /// Keep checking even when the old browser is closed and no HTTP calls arrive.
     #[cfg(any(target_os = "android", test))]
-    pub(super) fn monitor_consent(self: &Arc<Self>) {
-        let weak = Arc::downgrade(self);
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                let Some(host) = weak.upgrade() else { break };
-                let revoked: Vec<_> = host
-                    .members
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .iter()
-                    .filter(|(_, m)| host.policy.check(&m.destination).is_err())
-                    .map(|(target, _)| target.clone())
-                    .collect();
-                for target in revoked {
-                    let _ = host.end_owned(target).await;
-                }
-            }
-        });
+    pub(super) fn chat(cwd: PathBuf, root: &Path) -> crate::Result<Self> {
+        let mut host = Self::new(cwd, root, Policy::default(), false)?;
+        host.chat = true;
+        Ok(host)
     }
+
     fn marker(&self, target: &str) -> Result<PathBuf, BridgeError> {
         let id = target
             .strip_prefix("live:")
@@ -143,9 +129,12 @@ impl Host for OwnedHost {
                 )
             })?;
             let exe = std::env::current_exe().map_err(|e| native(e.into()))?;
-            let core = OwnedSession::launch_in(&exe, &destination, &self.cwd, &self.namespace)
-                .await
-                .map_err(|e| native(e).uncertain())?;
+            let core = if self.chat {
+                OwnedSession::launch_chat_in(&exe, &destination, &self.cwd, &self.namespace).await
+            } else {
+                OwnedSession::launch_in(&exe, &destination, &self.cwd, &self.namespace).await
+            }
+            .map_err(|e| native(e).uncertain())?;
             self.policy.check(&destination).map_err(|e| e.uncertain())?;
             let target = core.target().to_owned();
             let marker = self.marker(&target)?;
@@ -303,12 +292,12 @@ mod tests {
     }
     #[test]
     fn module_checks_current_native_consent() {
-        let saved = Arc::new(Mutex::new(Some("user@https://example.test".to_owned())));
+        let saved = Arc::new(Mutex::new(Some("alice@https://example.test".to_owned())));
         let read = saved.clone();
         let policy = Policy(Some(Arc::new(move || Ok(read.lock().unwrap().clone()))));
-        assert!(policy.check("user@example.test").is_ok());
+        assert!(policy.check("alice@example.test").is_ok());
         assert!(policy.check("other@example.test").is_err());
         *saved.lock().unwrap() = None;
-        assert!(policy.check("user@example.test").is_err());
+        assert!(policy.check("alice@example.test").is_err());
     }
 }

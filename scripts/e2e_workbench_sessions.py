@@ -16,7 +16,7 @@ import uuid
 from e2e_account_relay import Harness, wait_for
 
 
-def check_tui(test, workspace, sub, nested, http, attach, bridge, state):
+def check_tui(test, workspace, sub, nested, http, attach, state):
     """Drive the ordinary TUI through a controlling terminal; observe only over IPC."""
     master, slave = os.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 42, 106, 0, 0))
@@ -59,8 +59,7 @@ def check_tui(test, workspace, sub, nested, http, attach, bridge, state):
                        "foreground keyboard session")
         parent = attach(own["target"], read_only=True)
         def cwd(connection):
-            cap = bridge(connection, "capabilities")
-            return state(connection, cap["generation"])["cwd"]
+            return state(connection)["cwd"]
         wait_for(lambda: len(frames) >= 1 and cwd(parent) == str(workspace)
                  and not (termios.tcgetattr(slave)[3] & termios.ICANON),
                  "primary physical composer and its real runtime", timeout=20)
@@ -156,10 +155,12 @@ def run(binary):
                 connection = entry["connection_id"]
                 connections[connection] = route
                 return connection
-            def bridge(connection, op, **kw):
-                receipt = http("connections/" + connection + "/bridge", {
+            def request_bridge(connection, op, **kw):
+                return http("connections/" + connection + "/bridge", {
                     "id": uuid.uuid4().hex, "version":1, "operation":{"op":op, **kw}
                 }, connections[connection])
+            def bridge(connection, op, **kw):
+                receipt = request_bridge(connection, op, **kw)
                 assert receipt["body"]["kind"] != "error", receipt["body"]
                 return receipt
             def active(connection):
@@ -169,9 +170,20 @@ def run(binary):
             def action(connection, generation, command, **arguments):
                 return bridge(connection, "command", generation=generation, command=command,
                               arguments=arguments)["body"]["value"]["value"]
-            def state(connection, generation):
-                return bridge(connection, "state", generation=generation,resource="runtime",
-                              query={})["body"]["value"]["value"]
+            def state(connection):
+                # A long-lived CLI can reconnect while the independent windows run.
+                # Refresh only this read-only observation against the same attach target.
+                def current():
+                    cap = bridge(connection, "capabilities")
+                    if not any(r["id"] == "runtime" for r in cap["body"]["value"]["resources"]):
+                        return None
+                    body = request_bridge(connection, "state", generation=cap["generation"],
+                                          resource="runtime", query={})["body"]
+                    if body["kind"] == "error" and body["value"]["code"] == "stale_generation":
+                        return None
+                    assert body["kind"] == "state", body
+                    return body["value"]["value"]
+                return wait_for(current, "current runtime on this bridge connection")
             def chat_ready(connection, generation, client_id):
                 cap = bridge(connection, "capabilities")
                 assert cap["generation"] == generation
@@ -199,21 +211,21 @@ def run(binary):
             first = next(row["target"] for row in targets if row["name"] == "primary")
             primary = attach(first)
             pgen = wait_for(lambda: active(primary),"primary session bridge")
-            assert state(primary, pgen)["process_id"] == parent.pid
+            assert state(primary)["process_id"] == parent.pid
             assert action(primary,pgen,"session.cd",path="project")["cwd"] == str(sub)
             pwd(test.connection("primary"),sub)
             created = action(primary,pgen,"session.new")
             assert created["session"] != first and created["cwd"] == str(sub)
             secondary = attach(created["session"])
             sgen = wait_for(lambda: active(secondary), "child session bridge", timeout=15)
-            second_state = state(secondary,sgen)
+            second_state = state(secondary)
             assert second_state["process_id"] != parent.pid
-            assert second_state["client_id"] != state(primary,pgen)["client_id"]
+            assert second_state["client_id"] != state(primary)["client_id"]
             assert second_state["cwd"] == str(sub)
             assert action(secondary,sgen,"session.cd",path="child only")["cwd"] == str(nested)
             pwd(test.state.sessions[second_state["client_id"]],nested)
             pwd(test.connection("primary"),sub)
-            assert state(primary,pgen)["cwd"] == str(sub)
+            assert state(primary)["cwd"] == str(sub)
             # These peers belong to independent frontends, even with an existing CLI
             # in the same workspace. Only a private ownership pipe, never a TTY, is provided.
             master, slave = os.openpty()
@@ -253,7 +265,7 @@ def run(binary):
                     assert target not in {row["target"] for row in http("sessions")["sessions"]}
                     conn = attach(target, route=route)
                     generation = wait_for(lambda: active(conn), "headless peer ready", timeout=15)
-                    runtime = state(conn, generation)
+                    runtime = state(conn)
                     assert runtime["process_id"] == proc.pid and runtime["cwd"] == str(workspace)
                     client_id = runtime["client_id"]
                     wait_for(lambda: chat_ready(conn, generation, client_id),
@@ -271,13 +283,15 @@ def run(binary):
                         assert published[client_id]["id"] == receipt["message_id"]
                     if label == "one":
                         first_id = runtime["client_id"]
-                assert len({first_id, runtime["client_id"], state(primary,pgen)["client_id"]}) == 3
+                assert len({first_id, runtime["client_id"], state(primary)["client_id"]}) == 3
                 # An unrelated CLI and the other graphical owner survive the first window closing.
                 peers[0].stdin.close()
                 assert peers[0].wait(timeout=8) == 0
                 assert peers[1].poll() is None
-                assert state(conn, generation)["client_id"] == runtime["client_id"]
-                assert state(primary, pgen)["cwd"] == str(sub)
+                assert state(conn)["client_id"] == runtime["client_id"]
+                surviving_primary = state(primary)
+                assert surviving_primary["process_id"] == parent.pid
+                assert surviving_primary["cwd"] == str(sub)
             finally:
                 for proc in peers:
                     proc.stdin.close()
@@ -289,7 +303,7 @@ def run(binary):
                             proc.wait()
             print("PASS: headless owner chat, isolated relay sessions and independent shutdown", flush=True)
             print("PASS: distinct process, relay identity and private attach target; child inherits cwd; both sessions execute pwd in their own directories", flush=True)
-            check_tui(test, workspace, sub, nested, http, attach, bridge, state)
+            check_tui(test, workspace, sub, nested, http, attach, state)
             assert not test.state.errors, test.state.errors
         except Exception:
             for _, err, _, _ in test.logs:

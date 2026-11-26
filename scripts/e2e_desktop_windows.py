@@ -6,6 +6,9 @@ import subprocess
 import sys
 import tempfile
 
+from Xlib import X, display
+from Xlib.protocol import event
+
 from e2e_account_relay import Harness, IDENTITY, descendants, process_running, wait_for
 
 
@@ -20,9 +23,9 @@ def run(desktop):
                    XDG_DATA_HOME=str(home / "data"))
         registry = home / "sessions"
 
-        def open_window(label, lifetime):
+        def open_window(label):
             frame = home / f"{label}.json"
-            proc = subprocess.Popen([desktop, "--exit-after-ms", str(lifetime),
+            proc = subprocess.Popen([desktop, "--exit-after-ms", "90000",
                                      "--first-frame-receipt", frame], cwd=home, env=env,
                                     start_new_session=True, stdin=subprocess.DEVNULL)
             test.processes.append(proc)
@@ -50,7 +53,7 @@ def run(desktop):
             return None
 
         try:
-            first = open_window("first", 30000)
+            first = open_window("first")
             window, = windows()
             assert clients() == {} and not list(registry.glob("frontends/*/live/*/overview.json"))
             subprocess.run(["xdotool", "windowfocus", "--sync", window], check=True, timeout=3)
@@ -67,7 +70,7 @@ def run(desktop):
             wait_for(lambda: profile.is_file() and json.loads(profile.read_text())
                      == test.state.allow_principal, "saved desktop destination")
 
-            second = open_window("second", 45000)
+            second = open_window("second")
             assert len(windows()) == 2
             second_id, = wait_for(lambda: clients().keys() - {first_id},
                                   "second independent relay client", timeout=12)
@@ -77,7 +80,17 @@ def run(desktop):
                 assert private.stat().st_mode & 0o077 == 0
             assert not list(registry.glob("live/*/overview.json"))
 
-            assert first.wait(timeout=32) == 0
+            # Ask the native window to close through the standard X11 protocol.
+            x11 = display.Display()
+            try:
+                target = x11.create_resource_object("window", int(window))
+                target.send_event(event.ClientMessage(
+                    window=target, client_type=x11.intern_atom("WM_PROTOCOLS"),
+                    data=(32, [x11.intern_atom("WM_DELETE_WINDOW"), X.CurrentTime, 0, 0, 0])))
+                x11.sync()
+            finally:
+                x11.close()
+            assert first.wait(timeout=8) == 0
             wait_for(lambda: not process_running(first_pid) and first_id not in clients(),
                      "first desktop core and relay session closed")
             assert second.poll() is None and process_running(second_pid)

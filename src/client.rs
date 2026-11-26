@@ -57,6 +57,7 @@ mod ui_command;
 mod update;
 pub(crate) use update::frontend_update;
 mod version;
+pub(crate) mod web_chat;
 mod worker_control;
 mod worker_window;
 #[cfg(target_os = "linux")]
@@ -2236,7 +2237,7 @@ pub async fn run() -> crate::Result<()> {
     }
     if matches!(
         args.first().and_then(|arg| arg.to_str()),
-        Some("__frontend-run")
+        Some("__frontend-run" | "__magisk-chat-frontend")
     ) {
         let [_, destination, instance] = args.as_slice() else {
             return Err("the frontend runner requires an explicit destination and instance".into());
@@ -2260,8 +2261,19 @@ pub async fn run() -> crate::Result<()> {
             let _ = std::io::stdin().read(&mut [0u8; 1]);
             let _ = closed.send(());
         });
+        let core = async {
+            if args[0] == "__magisk-chat-frontend" {
+                web_chat::run(
+                    destination.to_str().ok_or("invalid chat destination")?,
+                    instance,
+                )
+                .await
+            } else {
+                run_with_args(vec![destination.clone()], Some(instance)).await
+            }
+        };
         tokio::select! {
-            result = run_with_args(vec![destination.clone()], Some(instance)) => return result,
+            result = core => return result,
             _ = lease => return Ok(()),
         }
     }

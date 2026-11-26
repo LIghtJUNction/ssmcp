@@ -56,7 +56,7 @@ impl Proposal {
     }
 }
 
-pub(super) fn call(arguments: Value) -> Result<Value, String> {
+pub(crate) fn call(arguments: Value) -> Result<Value, String> {
     let proposal = Proposal::parse(arguments)?;
     let source = Source::capture();
     let call = source

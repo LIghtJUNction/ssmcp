@@ -87,40 +87,28 @@ pub(crate) fn foreground_workbench(
         true,
     )?)
 }
-/// Build a paired device workbench under the active native account consent.
+/// The module web token selects only the protocol-only chat child. It has no device fallback.
 #[cfg(any(target_os = "android", test))]
-pub(crate) fn foreground_owned_workbench(
+pub(crate) fn foreground_chat_workbench(
     root: PathBuf,
     workspace: PathBuf,
     origin: String,
     token: String,
-    confirmed_destination: impl Fn() -> crate::Result<Option<String>> + Send + Sync + 'static,
 ) -> crate::Result<axum::Router> {
     super::create_private_tree(&root)?;
     super::verify_directory(&root)?;
-    // Each local frontend has its own verified private session directory.
-    let cwd = workspace.canonicalize()?;
-    if !cwd.is_dir() {
-        return Err("module workspace must be a directory".into());
-    }
-    let host = Arc::new(OwnedHost::new(
-        cwd,
-        &root,
-        Policy(Some(Arc::new(confirmed_destination))),
-        false,
-    )?);
-    let app = gateway::routes(
+    let host = Arc::new(OwnedHost::chat(workspace, &root)?);
+    Ok(gateway::routes(
         gateway::Config {
             token,
             origin,
             assets: None,
         },
-        host.clone(),
+        host,
         true,
-    )?;
-    host.monitor_consent();
-    Ok(app)
+    )?)
 }
+
 fn native(error: crate::Error) -> BridgeError {
     BridgeError::new(ErrorCode::Unavailable, error.to_string())
 }

@@ -3,6 +3,7 @@ package dev.ssmcp.mobile
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.graphics.Bitmap
+import android.os.SystemClock
 import android.view.View
 import android.net.Uri
 import android.webkit.*
@@ -13,13 +14,16 @@ import java.io.ByteArrayInputStream
 internal class WorkbenchView(
     activity: Activity,
     private val target: Workbench,
-    private val choosePairingFile: (ValueCallback<Array<Uri>>) -> Unit,
     private val failed: (String) -> Unit
 ) : WebView(activity) {
+    private val homePage = target.origin + "/"
     private var pairing = target.token
+    private var waitingForPairing = pairing.isNotEmpty()
+    private var pageGeneration = 0
 
     init {
         isSaveEnabled = false
+        visibility = if (waitingForPairing) View.INVISIBLE else View.VISIBLE
         settings.apply {
             javaScriptEnabled = true
             allowFileAccess = false
@@ -36,8 +40,9 @@ internal class WorkbenchView(
                 !target.owns(request.url.toString())
 
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
-                if (target.owns(url)) {
-                    view.visibility = View.VISIBLE
+                ++pageGeneration
+                if (target.owns(url) && (!waitingForPairing || url == homePage)) {
+                    view.visibility = if (waitingForPairing) View.INVISIBLE else View.VISIBLE
                 } else {
                     view.visibility = View.INVISIBLE
                     view.stopLoading()
@@ -52,30 +57,8 @@ internal class WorkbenchView(
             }
 
             override fun onPageFinished(view: WebView, url: String) {
-                if (url != target.origin + "/" || pairing.isEmpty()) return
-                // Install a one-shot receiver on the existing pairing form. The secret travels
-                // in an origin-targeted message, never in a URL, an intent, or script source.
-                evaluateJavascript("""
-                    (() => {
-                      const entry = document.getElementById('pairing-token');
-                      const form = document.getElementById('auth-form');
-                      const open = document.getElementById('auth-button');
-                      if (!entry || !form || !open) return false;
-                      window.addEventListener('message', function receive(event) {
-                        if (event.source !== null || typeof event.data !== 'string') return;
-                        window.removeEventListener('message', receive);
-                        open.click();
-                        if (!document.getElementById('auth-dialog').open) return;
-                        entry.value = event.data;
-                        form.requestSubmit();
-                      });
-                      return true;
-                    })()
-                """.trimIndent()) { ready ->
-                    if (ready == "true" && this@WorkbenchView.url == target.origin + "/" && pairing.isNotEmpty()) {
-                        postWebMessage(WebMessage(pairing), Uri.parse(target.origin))
-                        pairing = ""
-                    }
+                if (waitingForPairing && url == homePage) {
+                    finishPairing(++pageGeneration, SystemClock.uptimeMillis() + 5_000)
                 }
             }
 
@@ -86,17 +69,31 @@ internal class WorkbenchView(
                 if (request.isForMainFrame) failed("工作台返回 HTTP ${response.statusCode}，请检查网关地址。")
             }
         }
-        webChromeClient = object : WebChromeClient() {
-            override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
-                if (view.url == target.origin + "/" && params.mode == FileChooserParams.MODE_OPEN) choosePairingFile(callback)
-                else callback.onReceiveValue(null)
-                return true
+        loadUrl(homePage)
+    }
+
+    private fun finishPairing(generation: Int, deadline: Long) {
+        if (generation != pageGeneration || url != homePage || !waitingForPairing) return
+        evaluateJavascript("document.documentElement.dataset.ssmcpPairingReady") { state ->
+            if (generation != pageGeneration || url != homePage) return@evaluateJavascript
+            when (state) {
+                "\"1\"" -> if (pairing.isNotEmpty()) {
+                    postWebMessage(WebMessage(pairing), Uri.parse(target.origin))
+                    pairing = ""
+                }
+                "\"paired\"" -> if (pairing.isEmpty()) {
+                    waitingForPairing = false
+                    visibility = View.VISIBLE
+                    return@evaluateJavascript
+                }
             }
+            if (SystemClock.uptimeMillis() < deadline) postDelayed({ finishPairing(generation, deadline) }, 100)
+            else failed("网关未完成自动配对，请从高级设置重新打开工作台。")
         }
-        loadUrl(target.origin + "/")
     }
 
     fun dispose() {
+        ++pageGeneration
         pairing = ""
         stopLoading()
         webChromeClient = null

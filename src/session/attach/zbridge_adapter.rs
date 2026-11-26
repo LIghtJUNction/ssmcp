@@ -248,7 +248,18 @@ impl Host for BoundHost<'_> {
             description: "Actual backend presence, registry summary and live event cursor".into(),
         }];
         let mut commands = Vec::new();
-        if let Some(runtime) = runtime {
+        if crate::client::web_chat::identity().is_some() {
+            for name in ["conversation", "threads", "chat.queue"] {
+                resources.push(Resource {
+                    id: id(name),
+                    schema_version: 1,
+                    description: name.into(),
+                });
+            }
+            if mode == Mode::Control {
+                commands.push(chat::command());
+            }
+        } else if let Some(runtime) = runtime {
             runtime.local_registry().ensure_open().map_err(native)?;
             resources.push(Resource {
                 id: id("time"),
@@ -346,6 +357,37 @@ impl Host for BoundHost<'_> {
     fn state(&self, resource: Id, query: Value) -> HostFuture<'_, State> {
         Box::pin(async move {
             self.authorize(Access::Observe)?;
+            if let Some(peer) = crate::client::web_chat::identity() {
+                let value = match resource.as_str() {
+                    "runtime" => {
+                        no_query(query)?;
+                        let cursor = self
+                            .capture
+                            .ring
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .next;
+                        json!({"backend_active":true,"backend_generation":Counter(peer.generation),
+                            "live_cursor":Counter(cursor), "retention":"live_process_memory",
+                            "process_id":std::process::id(), "client_id":peer.client_id})
+                    }
+                    "threads" | "chat.queue" | "conversation" => {
+                        chat::state_for(self, &peer.client_id, resource.as_str(), query)?
+                    }
+                    _ => {
+                        return Err(BridgeError::new(
+                            ErrorCode::Denied,
+                            "device resource unavailable in chat",
+                        ));
+                    }
+                };
+                return Ok(State {
+                    resource,
+                    schema_version: 1,
+                    revision: None,
+                    value,
+                });
+            }
             let value = match resource.as_str() {
                 "runtime" => {
                     no_query(query)?;
@@ -462,6 +504,16 @@ impl Host for BoundHost<'_> {
     fn command(&self, command: Id, arguments: Value) -> HostFuture<'_, CommandResult> {
         Box::pin(async move {
             self.authorize(Access::Control)?;
+            if let Some(peer) = crate::client::web_chat::identity() {
+                if command.as_str() != "chat.send" {
+                    return Err(BridgeError::new(
+                        ErrorCode::Denied,
+                        "device command unavailable in chat",
+                    ));
+                }
+                let value = chat::send_to(self, &peer.client_id, peer.generation, arguments)?;
+                return Ok(CommandResult { command, value });
+            }
             let runtime = self.runtime()?;
             runtime.local_registry().ensure_open().map_err(native)?;
             let value = match command.as_str() {

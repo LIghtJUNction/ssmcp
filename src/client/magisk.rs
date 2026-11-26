@@ -1,4 +1,5 @@
 //! Owner-launched, loopback-only Android configuration and session console.
+mod entry;
 mod frame;
 
 use axum::{
@@ -194,35 +195,6 @@ fn saved_target(dir: &Path) -> Result<Option<String>> {
     // The module hook compares this marker to the spelling in the owner's rc.
     write_private(&dir.join(CONSENT), written.as_bytes())?;
     Ok(Some(target))
-}
-
-/// Loading the UI never promotes an rc edit to consent. Only the native setup
-/// and boot paths write the original target acknowledgement.
-fn confirmed_web_destination(dir: &Path) -> Result<Option<String>> {
-    let read = |name: &str| -> std::io::Result<Option<String>> {
-        match std::fs::read_to_string(dir.join(name)) {
-            Ok(value) => Ok(Some(value)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error),
-        }
-    };
-    let (Some(rc), Some(consent)) = (read("ssmcp.rc")?, read(CONSENT)?) else {
-        return Ok(None);
-    };
-    let Ok((written, destination)) = rc_target(&rc) else {
-        return Ok(None);
-    };
-    Ok((written == consent).then_some(destination))
-}
-
-fn web_owner_destination(dir: &Path) -> Result<Option<String>> {
-    // This host would launch the new process with its own credentials. The
-    // module daemon itself has root. It can serve the UI but cannot own a
-    // browser session while running with that identity.
-    if unsafe { libc::getuid() == 0 || libc::geteuid() == 0 } {
-        return Err("The module has no unprivileged session host. Open the SSMCP Android app to create an independent session.".into());
-    }
-    confirmed_web_destination(dir)
 }
 
 fn save(dir: &Path, name: &str, server: &str) -> Result<String> {
@@ -528,13 +500,11 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
     let device_token = pairing_token()?;
     let web_workspace = dir.join("web-workspace");
     std::fs::create_dir_all(&web_workspace)?;
-    let configuration = dir.clone();
-    let gui = crate::session::gui::foreground_owned_workbench(
+    let gui = crate::session::gui::foreground_chat_workbench(
         dir.join("web-sessions"),
         web_workspace,
         format!("http://{host}"),
         web_token.clone(),
-        move || web_owner_destination(&configuration),
     )?;
     let mut sessions = Sessions::default();
     if let Some(target) = saved_target(&dir)? {
@@ -547,6 +517,7 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
         &format!("http://{host}/setup#{device_token}"),
     )?;
     publish_pairing(&dir, "console.url", &format!("http://{host}/#{web_token}"))?;
+    entry::publish(&host, &web_token)?;
     let state = Arc::new(Console {
         dir,
         device_token,
@@ -635,33 +606,6 @@ mod rc_tests {
             assert!(contents == format!("{}\n{url}\n", std::process::id()));
             std::fs::remove_file(file).unwrap();
         }
-        std::fs::remove_dir(dir).unwrap();
-    }
-
-    #[test]
-    fn workbench_configuration_never_creates_or_replaces_native_consent() {
-        use super::{CONSENT, confirmed_web_destination, pairing_token};
-        let dir =
-            std::env::temp_dir().join(format!("ssmcp-magisk-consent-{}", pairing_token().unwrap()));
-        std::fs::create_dir(&dir).unwrap();
-        let rc = dir.join("ssmcp.rc");
-        let consent = dir.join(CONSENT);
-        std::fs::write(&rc, "ssmcp Alice@https://relay.example\n").unwrap();
-        assert!(confirmed_web_destination(&dir).unwrap().is_none());
-        assert!(!consent.exists());
-        std::fs::write(&consent, "Alice@https://relay.example").unwrap();
-        assert_eq!(
-            confirmed_web_destination(&dir).unwrap().as_deref(),
-            Some("alice@relay.example")
-        );
-        std::fs::write(&rc, "ssmcp Bob@https://relay.example\n").unwrap();
-        assert!(confirmed_web_destination(&dir).unwrap().is_none());
-        assert_eq!(
-            std::fs::read_to_string(&consent).unwrap(),
-            "Alice@https://relay.example"
-        );
-        std::fs::remove_file(rc).unwrap();
-        std::fs::remove_file(consent).unwrap();
         std::fs::remove_dir(dir).unwrap();
     }
 

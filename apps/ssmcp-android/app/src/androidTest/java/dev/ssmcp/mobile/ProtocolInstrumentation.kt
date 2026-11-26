@@ -37,6 +37,14 @@ class ProtocolInstrumentation : Instrumentation() {
                 check(runCatching { Workbench.at(bad) }.isFailure) { "Unexpected workbench origin" }
             }
             check(Workbench.at("http://127.0.0.1:8787").owns("http://127.0.0.1:8787/app.mjs"))
+            val fixtureToken = "a1".repeat(32)
+            val receipt = """{"schema":"ssmcp-gui-pairing-v1","url":"https://example.test:443/","token":"$fixtureToken"}"""
+            val pairing = Workbench.readPairing(receipt.byteInputStream())
+            check(pairing.origin == endpoint.origin && pairing.token == fixtureToken)
+            for (invalid in listOf(receipt.replace("gui-pairing", "device-pairing"),
+                receipt.replace("test:443/", "test:443/setup"), receipt.replace(fixtureToken, "short"), " ".repeat(8193))) {
+                check(runCatching { Workbench.readPairing(invalid.byteInputStream()) }.isFailure)
+            }
             check(android.system.Os.geteuid() == targetContext.applicationInfo.uid && android.system.Os.geteuid() != 0) {
                 "Instrumentation must run under the non-root application UID"
             }
@@ -68,7 +76,7 @@ class ProtocolInstrumentation : Instrumentation() {
         val result = AtomicReference<String?>()
         runOnMainSync {
             val web = webView(activity.window.decorView)
-            if (web == null) done.countDown()
+            if (web == null || !web.isShown) done.countDown()
             else web.evaluateJavascript(expression) { result.set(it); done.countDown() }
         }
         check(done.await(4, TimeUnit.SECONDS)) { "WebView did not evaluate JavaScript" }
@@ -87,9 +95,11 @@ class ProtocolInstrumentation : Instrumentation() {
     private fun awaitSetup(activity: Activity) = waitFor(activity, "paired local creation form", """
         document.querySelector('#launch-setup')?.hidden === false
             && document.querySelector('#workbench-shell')?.hidden === true
-            && document.querySelector('#auth-status')?.textContent === '已设置认证'
-            && document.querySelector('#auth-dialog')?.open === false
-            && document.querySelector('#pairing-token')?.value === ''
+            && document.documentElement.dataset.ssmcpPairingReady === 'paired'
+            && !document.querySelector('dialog[open]')
+            && ![...document.querySelectorAll('input[type=password],input[type=file],#pairing-token')]
+                .some(input => input.getClientRects().length)
+            && document.querySelector('#launch-relay')?.getClientRects().length > 0
             && !document.querySelector('#launch-name')?.disabled
             && !document.querySelector('#launch-connect')?.disabled
             && location.protocol === 'http:' && location.hostname === '127.0.0.1' && !location.hash && !location.search

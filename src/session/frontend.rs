@@ -76,6 +76,25 @@ impl OwnedSession {
         cwd: &Path,
         session_root: &Path,
     ) -> crate::Result<Self> {
+        Self::launch_core(executable, destination, cwd, session_root, false).await
+    }
+
+    pub(crate) async fn launch_chat_in(
+        executable: &Path,
+        destination: &str,
+        cwd: &Path,
+        session_root: &Path,
+    ) -> crate::Result<Self> {
+        Self::launch_core(executable, destination, cwd, session_root, true).await
+    }
+
+    async fn launch_core(
+        executable: &Path,
+        destination: &str,
+        cwd: &Path,
+        session_root: &Path,
+        chat: bool,
+    ) -> crate::Result<Self> {
         crate::server_endpoint::parse_target(destination)?;
         if !executable.is_absolute() {
             return Err("the frontend requires an absolute ssmcp executable path".into());
@@ -89,9 +108,24 @@ impl OwnedSession {
         let instance = super::random_suffix()?;
         let target = format!("live:{instance}");
         let mut command = std::process::Command::new(executable);
+        let private_root = if chat {
+            let home = root.join(format!("chat-{instance}"));
+            crate::platform::private_directory(&home)?;
+            command
+                .env_clear()
+                .env("HOME", &home)
+                .env("SSMCP_AUTH_HOME", home.join("auth"))
+                .env("TMPDIR", &home)
+                .current_dir(&home)
+                .args(["__magisk-chat-frontend", destination, &instance]);
+            Some(PrivateRoot(home))
+        } else {
+            command
+                .current_dir(cwd)
+                .args(["__frontend-run", destination, &instance]);
+            None
+        };
         command
-            .args(["__frontend-run", destination, &instance])
-            .current_dir(cwd)
             .env("SSMCP_SESSION_HOME", &root)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -110,9 +144,9 @@ impl OwnedSession {
             target: String::new(),
             directory: PathBuf::new(),
             root,
-            private_root: None,
+            private_root,
         };
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(7);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(if chat { 45 } else { 7 });
         loop {
             if let Some(status) = session.try_wait()? {
                 return Err(format!(

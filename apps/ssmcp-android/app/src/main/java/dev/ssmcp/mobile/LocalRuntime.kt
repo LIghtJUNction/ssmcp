@@ -3,7 +3,6 @@ package dev.ssmcp.mobile
 import android.content.Context
 import android.os.SystemClock
 import android.system.Os
-import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -42,10 +41,8 @@ internal object LocalRuntime {
             val deadline = SystemClock.elapsedRealtime() + 10_000
             while (!file.isFile && process.isAlive && SystemClock.elapsedRealtime() < deadline) Thread.sleep(50)
             check(process.isAlive && file.length() in 1L..8192L) { "本机工作台未就绪。请检查安装包后重试。" }
-            val receipt = JSONObject(file.readText())
-            val target = Workbench.at(receipt.getString("url"), receipt.getString("token"))
-            check(receipt.getString("schema") == "ssmcp-gui-pairing-v1" &&
-                target.origin.startsWith("http://127.0.0.1:") && Regex("[0-9a-f]{64}").matches(target.token)) { "本机工作台配对信息无效。" }
+            val target = file.inputStream().use { Workbench.readPairing(it) }
+            check(target.origin.startsWith("http://127.0.0.1:")) { "本机工作台配对地址无效。" }
             page = target
             return target
         } catch (error: Exception) {

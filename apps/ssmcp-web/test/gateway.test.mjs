@@ -209,3 +209,52 @@ test('replacing pairing while an owned request is in flight discards its receipt
   await assert.rejects(received, {code:'pairing_changed'});
   assert.equal(gateway.pendingOwnedRequest, null);
 });
+
+test('ending a session requires this pairing’s verified creation and an exact closed receipt', async () => {
+  const target = 'live:' + 'a1'.repeat(16), other = 'live:' + 'b2'.repeat(16), deletes = [];
+  let answer = () => { throw new Error('lost response'); };
+  const gateway = new Gateway({fetchImpl: async (path, init) => {
+    if (init.method === 'POST') return json({request_id:JSON.parse(init.body).request_id, session:target});
+    deletes.push(path); assert.equal(init.method, 'DELETE'); assert.equal(init.headers.Authorization, 'Bearer pair');
+    assert.equal(init.body, undefined); return answer();
+  }});
+  gateway.setToken('pair');
+  await assert.rejects(gateway.endOwnedSession(target), {code:'not_owned'});
+  await gateway.createOwnedSession({destination:'alice@local', terms:false, privacy:false});
+  await assert.rejects(gateway.endOwnedSession(other), {code:'not_owned'});
+  assert.equal(deletes.length, 0);
+  await assert.rejects(gateway.endOwnedSession(target), {effect:'may_have_occurred'});
+  assert.equal(gateway.ownedSessionStatus(target), 'unknown');
+  for (const value of [{session:other, status:'closed'}, {session:target, status:'closing'}, {}]) {
+    answer = () => json(value);
+    await assert.rejects(gateway.endOwnedSession(target), {effect:'may_have_occurred'});
+  }
+  answer = () => json({error:{code:'denied',effect:'none',message:'denied'}}, 403);
+  await assert.rejects(gateway.endOwnedSession(target), {status:403});
+  assert.equal(gateway.ownedSessionStatus(target), 'unknown');
+  answer = () => json({session:target, status:'closed'});
+  await gateway.endOwnedSession(target);
+  assert.equal(gateway.ownedSessionStatus(target), undefined);
+  await assert.rejects(gateway.endOwnedSession(target), {code:'not_owned'});
+  assert.deepEqual(deletes, Array(6).fill('/api/gui/v1/owned-sessions/' + encodeURIComponent(target)));
+});
+
+test('duplicate end and a late old-pairing receipt cannot affect a replacement’s session', async () => {
+  const target = 'live:' + 'ac'.repeat(16), args = {destination:'a@host', terms:false, privacy:false};
+  let release, deletes = 0;
+  const gateway = new Gateway({fetchImpl: async (_path, init) => {
+    if (init.method === 'POST') return json({request_id:JSON.parse(init.body).request_id, session:target});
+    deletes++;
+    return new Promise(resolve => { release = () => resolve(json({session:target, status:'closed'})); });
+  }});
+  gateway.setToken('first'); await gateway.createOwnedSession(args);
+  const closing = gateway.endOwnedSession(target);
+  assert.equal(gateway.ownedSessionStatus(target), 'closing');
+  await assert.rejects(gateway.endOwnedSession(target), {code:'pending'});
+  gateway.setToken('replacement');
+  await assert.rejects(gateway.endOwnedSession(target), {code:'not_owned'});
+  await gateway.createOwnedSession(args);
+  release(); await assert.rejects(closing, {code:'pairing_changed'});
+  assert.equal(deletes, 1); assert.equal(gateway.ownedSessionStatus(target), 'open');
+  gateway.clearToken(); await assert.rejects(gateway.endOwnedSession(target), {code:'not_owned'});
+});

@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
+  <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#141516">
   <title>ssmcp · 安装引导</title>
   <link rel="stylesheet" href="console.css">
@@ -20,7 +21,7 @@
       <h1 id="setup-title">首次连接</h1>
       <div class="launch-line">
         <code>ssmcp</code>
-        <label><input id="name" placeholder="用户名" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="32"><span>↑ 用户名，首次注册可自定</span></label>
+        <label><input id="name" placeholder="用户名" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="32"><span>↑ 用户名</span></label>
         <code>@</code>
         <label><input id="server" value="ssmcp.lmm.best" inputmode="url" autocomplete="off" autocapitalize="none" spellcheck="false"><span>↑ 中继服务器，可改为自部署域名</span></label>
       </div>
@@ -38,16 +39,14 @@
       </fieldset>
       <div class="setup-actions">
         <button type="button" id="connect" class="primary">连接中继</button>
-        <button type="button" id="register-name">注册用户名</button>
       </div>
-      <a id="registration-link" target="_blank" rel="noopener noreferrer" hidden>前往中继完成注册</a>
+      <p>如需注册用户名，请前往你使用的中继服务。</p>
       <a class="text-link deploy-link" href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/deployment.md" target="_blank" rel="noopener">查看自部署教程 <span aria-hidden="true">↗</span></a>
     </section>
 
     <section id="complete" aria-labelledby="complete-title" hidden>
       <h1 id="complete-title" tabindex="-1">初始化完成</h1>
-      <p class="page-intro">设备已保存中继账号，服务会随设备开机启动。可在工作台查看会话与消息。</p>
-      <button class="primary" type="button" id="open-gui">打开对话</button>
+      <p class="page-intro">请从 Magisk 模块操作打开工作台。</p>
       <dl class="account-info"><dt>中继账号</dt><dd><code id="complete-target"></code></dd></dl>
       <section class="plugin-guide" aria-labelledby="guide-title">
         <h2 id="guide-title">在 ChatGPT 中添加设备</h2>

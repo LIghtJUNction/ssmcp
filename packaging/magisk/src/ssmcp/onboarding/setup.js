@@ -1,6 +1,4 @@
-import { api, el, hasCredential, openSessionGui, terminal, usesOfficialRelay } from './device-api.js';
-
-import { registerAccount } from './src/gateway.mjs';
+import { api, el, hasCredential, terminal, usesOfficialRelay } from './device-api.js';
 
 function setView(view) {
   document.body.dataset.view = view;
@@ -17,7 +15,7 @@ function relayChanged() {
 }
 el('server').addEventListener('input', relayChanged);
 
-async function configure(register = false) {
+async function configure() {
   if (document.body.dataset.view !== 'setup' || el('connect').disabled) return;
   const name = el('name').value.trim();
   const server = el('server').value.trim();
@@ -26,7 +24,7 @@ async function configure(register = false) {
     el(name ? 'server' : 'name').focus();
     return;
   }
-  const required = register ? [] : [['root', '请先确认 Android root 权限。']];
+  const required = [['root', '请先确认 Android root 权限。']];
   if (!el('hosted').hidden) {
     required.push(['terms', '请先阅读并同意用户协议。'], ['privacy', '请先阅读并同意隐私政策。']);
   }
@@ -40,37 +38,37 @@ async function configure(register = false) {
     target: `${name}@${server}`,
     root: el('root').checked, terms: el('terms').checked, privacy: el('privacy').checked,
   };
-  const controls = ['name', 'server', 'root', 'terms', 'privacy', 'connect', 'register-name'].map(el);
+  const controls = ['name', 'server', 'root', 'terms', 'privacy', 'connect'].map(el);
   controls.forEach(control => { control.disabled = true; });
   status('正在检查中继账号…');
   try {
-    if (register) {
-      await registerAccount(body => api('/api/gui/v1/register', body), {destination: request.target, terms: request.terms, privacy: request.privacy}, el('registration-link'));
-      status('完成注册后，回到此页连接。'); return;
-    }
     await api('/setup', request);
-    openSessionGui();
+    showComplete(request.target);
+    await readConfiguration(true);
   } catch (error) {
     if (error.status === 409) {
       try { await readConfiguration(); } catch (readError) { status(readError.message); return; }
       if (document.body.dataset.view === 'complete') return;
     }
-    status(`连接失败：${error.message}`);
+    status(document.body.dataset.view === 'complete' ? `已保存设备配置，账户详情暂时无法读取：${error.message}` : `连接失败：${error.message}`);
   } finally {
     controls.forEach(control => { control.disabled = false; });
   }
 }
 el('connect').onclick = () => configure();
-el('register-name').onclick = () => configure(true);
-el('open-gui').onclick = openSessionGui;
+
+function showComplete(target, mcp) {
+  el('complete-target').textContent = target;
+  el('complete-mcp').textContent = mcp || '请在中继账户页面查看';
+  el('complete-traffic').hidden = !mcp || !usesOfficialRelay(mcp);
+  setView('complete');
+  status('');
+}
 
 async function readConfiguration(checkCompletionOnly = false) {
   const { target, configured, mcp } = await terminal('list', 0);
   if (target) {
-    el('complete-target').textContent = target;
-    el('complete-mcp').textContent = mcp;
-    el('complete-traffic').hidden = !usesOfficialRelay(mcp);
-    setView('complete');
+    showComplete(target, mcp);
   } else {
     if (checkCompletionOnly) return;
     if (configured) {
@@ -97,5 +95,5 @@ if (hasCredential) {
   readConfiguration().catch(error => status(error.message));
 } else {
   setView('notice');
-  status('请返回模块管理器，打开 SSMCP 的 WebUI，再点「打开安装引导」。');
+  status('请从 Magisk 模块操作重新打开设备设置。');
 }

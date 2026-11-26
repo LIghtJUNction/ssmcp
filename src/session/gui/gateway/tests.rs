@@ -840,15 +840,15 @@ async fn creation_requires_pairing_and_consent_and_deduplicates_concurrent_and_o
         StatusCode::FORBIDDEN
     );
     assert_eq!(
-        create("no-consent", "user@ssmcp.lmm.best")
+        create("no-consent", "alice@ssmcp.lmm.best")
             .await
             .unwrap()
             .status(),
         StatusCode::BAD_REQUEST
     );
     let (a, b) = tokio::join!(
-        create("same", "user@relay.test"),
-        create("same", "user@relay.test")
+        create("same", "alice@relay.test"),
+        create("same", "alice@relay.test")
     );
     let a: Value = a.unwrap().error_for_status().unwrap().json().await.unwrap();
     let b: Value = b.unwrap().error_for_status().unwrap().json().await.unwrap();
@@ -863,7 +863,7 @@ async fn creation_requires_pairing_and_consent_and_deduplicates_concurrent_and_o
     );
     // More than a complete in-memory receipt window can pass without replaying the old request.
     for n in 0..MAX_OPEN_RECEIPTS + 2 {
-        let row: Value = create(&format!("req-{n}"), "user@relay.test")
+        let row: Value = create(&format!("req-{n}"), "alice@relay.test")
             .await
             .unwrap()
             .error_for_status()
@@ -873,7 +873,7 @@ async fn creation_requires_pairing_and_consent_and_deduplicates_concurrent_and_o
             .unwrap();
         assert_ne!(a["session"], row["session"]);
     }
-    let replay: Value = create("same", "user@relay.test")
+    let replay: Value = create("same", "alice@relay.test")
         .await
         .unwrap()
         .error_for_status()
@@ -891,7 +891,7 @@ async fn attach_gateway_rejects_owned_creation() {
     let server = Server::new(None).await;
     let r = server
         .request(reqwest::Method::POST, "/owned-sessions")
-        .json(&json!({"request_id":"owned","destination":"user@relay.test"}))
+        .json(&json!({"request_id":"owned","destination":"alice@relay.test"}))
         .send()
         .await
         .unwrap();

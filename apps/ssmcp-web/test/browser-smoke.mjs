@@ -22,6 +22,9 @@ try {
   let newCount = 0, activeTarget = foreground, cwd = '/fixture/project';
   const created = [], owned = new Map();
   let dropFirstReceipt = true;
+  const endedTargets = [];
+  let reportFirstEnd;
+  const firstEnd = new Promise(resolve => { reportFirstEnd = resolve; });
   const errors = [], commands = [], requests = [], pending = [];
   let cursor = '9007199254740993', queue = [], failTerminal = false;
   page.on('pageerror', error => errors.push(error.message));
@@ -67,6 +70,15 @@ try {
   await page.route('**/api/gui/v1/**', async route => {
     const req = route.request(); const url = new URL(req.url()); const body = req.postDataJSON();
     requests.push({ path: url.pathname, authorization: req.headers().authorization, body });
+    if (url.pathname.startsWith('/api/gui/v1/owned-sessions/')) {
+      assert.equal(req.method(), 'DELETE');
+      const target = decodeURIComponent(url.pathname.split('/').at(-1));
+      endedTargets.push(target);
+      if (endedTargets.length === 1) return new Promise(done => {
+        reportFirstEnd(async () => { await route.abort('failed'); done(); });
+      });
+      return fulfill(route, {session:target, status:'closed'});
+    }
     if (url.pathname.endsWith('/owned-sessions')) {
       if (!owned.has(body.request_id)) {
         newCount++;
@@ -113,27 +125,12 @@ try {
     await fulfill(item.route, observation(item.request, eventPage({ start: '9007199254740992', next: cursor, events })));
     item.resolve();
   }
-  const initial = await page.goto(`http://127.0.0.1:${port}`);
+  const token = '9a'.repeat(32);
+  // A legacy explicit observation link can open the directory on a separate user gesture.
+  const initial = await page.goto(`http://127.0.0.1:${port}/?session=${foreground}#${token}`);
   assert.match(initial.headers()['content-security-policy'], /script-src 'self'/);
   assert.equal(initial.headers()['content-security-policy'].includes('unsafe-inline'), false);
-  await page.locator('#welcome-connect').click();
-  const token = '9a'.repeat(32);
-  const pairing = url => ({ name: 'pairing.json', mimeType: 'application/json',
-    buffer: Buffer.from(JSON.stringify({ schema: 'ssmcp-gui-pairing-v1', url, token })) });
-  await page.locator('#pairing-file').setInputFiles(pairing('https://other.example'));
-  await page.locator('#authenticate').click();
-  await page.getByText('配对文件与当前网页地址不一致，请打开对应网关的网页。', { exact: true }).waitFor();
-  assert.equal(requests.length, 0, 'mismatched pairing must not contact the API');
-  await page.locator('#pairing-file').setInputFiles(pairing(new URL(page.url()).origin));
-  await page.locator('#authenticate').click();
-  await page.waitForFunction(() => !document.querySelector('#auth-dialog').open);
-  assert.equal(await page.locator('#pairing-file').inputValue(), '');
-  // Traditional token entry still works in the same tab.
-  assert.equal(requests.length, 0, 'pairing does not enumerate or attach');
-  await page.locator('#launch-pair').click();
-  await page.locator('#pairing-token').fill(token);
-  await page.locator('#authenticate').click();
-  await page.waitForFunction(() => !document.querySelector('#auth-dialog').open);
+  await page.locator('#launch-form').waitFor();
   assert.equal(requests.length, 0);
   await page.locator('#launch-back').click();
   const sessionRows = page.locator('.session-item');
@@ -152,7 +149,7 @@ try {
   assert.equal(await sessionRows.nth(0).getAttribute('aria-current'), 'false');
   assert.equal(await sessionRows.nth(1).getAttribute('aria-current'), 'true');
   assert.equal(commands.length, 0, 'connection/state reads must not dispatch commands');
-  assert.equal(await page.locator('#pairing-token').inputValue(), '');
+  assert.equal(await page.locator('input[type=password], input[type=file]').count(), 0);
   assert.deepEqual(await page.evaluate(() => [localStorage.length, sessionStorage.length]), [0, 0]);
 
   async function viewport(width, height) {
@@ -353,6 +350,45 @@ try {
     await page.screenshot({ path: join(process.env.WEB_TEST_EVIDENCE, 'session-mobile-sidebar.png') });
     await page.locator('#close-menu').click();
   }
+  await viewport(1365, 900);
+  assert.equal(await page.locator('#end-session').isVisible(), false, 'a manually attached CLI is never page-owned');
+  assert.equal(endedTargets.length, 0, 'switching tabs and disconnecting do not end sessions');
+  const firstTab = page.locator('.session-tab').filter({hasText:'session1@relay.example'});
+  await firstTab.click();
+  await page.locator('#end-session').click();
+  assert.equal(await page.locator('#end-session-target').textContent(), firstOwned);
+  await page.locator('#end-session-cancel').click();
+  assert.equal(endedTargets.length, 0);
+  await page.locator('#end-session').click(); await page.locator('#end-session-confirm').click();
+  const loseEndReply = await firstEnd;
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#end-session-dialog').evaluate(dialog => dialog.open), true);
+  assert.equal(await page.locator('#end-session-confirm').isDisabled(), true);
+  await loseEndReply();
+  await page.getByText(/结束结果未确定。可对上方同一会话重试/).waitFor();
+  assert.deepEqual(endedTargets, [firstOwned]);
+  await page.locator('#end-session-cancel').click();
+  await page.locator('.session-tab').first().click();
+  await page.locator('#end-session').waitFor({state:'hidden'});
+  await firstTab.click();
+  await page.locator('#disconnect-button').click();
+  await page.waitForFunction(() => document.querySelector('#connected-actions').hidden);
+  assert.deepEqual(endedTargets, [firstOwned]);
+  await page.getByRole('button', {name:'重试结束此会话'}).click(); await page.locator('#end-session-confirm').click();
+  await page.waitForFunction(() => !document.querySelector('#end-session-dialog').open && document.querySelector('#end-session').hidden);
+  assert.equal(await firstTab.count(), 0);
+  assert.equal(await page.locator('.session-tab').count(), 2);
+  assert.equal(await page.locator('#connect-strip').isVisible(), false);
+  assert.deepEqual(endedTargets, [firstOwned, firstOwned]);
+  const secondTab = page.locator('.session-tab').filter({hasText:'session2@relay.example'});
+  await secondTab.click(); await page.locator('#end-session').click();
+  const secondOwned = [...owned.values()][1];
+  assert.equal(await page.locator('#end-session-target').textContent(), secondOwned);
+  await page.locator('#end-session-confirm').click();
+  await page.waitForFunction(() => !document.querySelector('#end-session-dialog').open && document.querySelector('#connected-actions').hidden);
+  assert.equal(await page.locator('.session-tab').count(), 1, 'only the manual CLI tab remains');
+  assert.equal(await page.locator('#chat-text').inputValue(), '');
+  assert.deepEqual(endedTargets, [firstOwned, firstOwned, secondOwned]);
   assert.deepEqual(errors, []);
   assert.deepEqual(await page.evaluate(() => window.cspViolations), []);
   assert.ok(requests.every(request => request.authorization === 'Bearer ' + token));
@@ -392,45 +428,68 @@ try {
   await moduleTab.locator('#launch-name').fill('module');
   await moduleTab.locator('#launch-relay').fill('relay.example');
   await moduleTab.locator('#launch-connect').click();
-  await moduleTab.getByText(/缺少普通用户运行器.*普通用户账户/).waitFor();
+  await moduleTab.getByText('缺少普通用户运行器。', {exact:true}).waitFor();
   assert.deepEqual(bootstrapRequests, ['/api/gui/v1/owned-sessions']);
   assert.equal(await moduleTab.locator('#workbench-shell').isVisible(), false);
   await moduleTab.close();
+  const mobile = await browser.newPage({
+    viewport:{width:320,height:640},
+    userAgent:'Mozilla/5.0 (Linux; Android 14; Fixture Build/TOY; wv) AppleWebKit/537.36 Version/4.0 Chrome/120.0 Mobile Safari/537.36'
+  });
+  let mobileApiCalls = 0;
+  await mobile.route('**/api/gui/v1/**', r => { mobileApiCalls++; return r.abort(); });
+  await mobile.goto(`http://127.0.0.1:${port}/`);
+  await mobile.locator('#entry-hint').getByText('请从设备上的 SSMCP 应用打开。').waitFor();
+  assert.equal(await mobile.locator('input[type=file], input[type=password]').count(), 0);
+  assert.equal(await mobile.locator('#launch-form').isVisible(), false);
+  assert.equal(await mobile.evaluate(() => document.documentElement.dataset.ssmcpPairingReady), '1');
+  await mobile.evaluate(token => new Promise(resolve => {
+    window.addEventListener('message', () => setTimeout(resolve, 0), {once:true});
+    window.postMessage(token, location.origin);
+  }), token);
+  await mobile.evaluate(token => window.dispatchEvent(new MessageEvent('message', {data:token,source:null})), token);
+  assert.equal(await mobile.locator('#launch-form').isVisible(), false);
+  assert.equal(mobileApiCalls, 0);
+  await mobile.close();
   const setup = await browser.newPage({viewport:{width:390,height:844}});
-  const starts = [], registrations = [];
-  await setup.context().route("https://my.example/**", route => route.fulfill({body:"Registration fixture"}));
+  const starts = [];
   await setup.route('**/api/gui/v1/**', async route => {
     const path = new URL(route.request().url()).pathname;
-    if (path === '/api/gui/v1/register') {
-      registrations.push(route.request().postDataJSON());
-      return fulfill(route, {url:'https://my.example/setup?code=fixture'});
-    }
     assert.equal(path, '/api/gui/v1/owned-sessions');
     assert.equal(route.request().headers().authorization, 'Bearer ' + token);
-    starts.push(route.request().postDataJSON());
+    const args = route.request().postDataJSON();
+    starts.push(args);
+    if (args.destination.endsWith('@ssmcp.lmm.best') && !(args.terms && args.privacy)) {
+      return route.fulfill({status:400, contentType:'application/json',
+        body:JSON.stringify({error:{code:'invalid_request', effect:'none', message:"confirm the hosted relay's terms and privacy policy"}})});
+    }
     await route.fulfill({status:400, contentType:'application/json', body:JSON.stringify({error:{code:'denied', effect:'none', message:'测试账号未注册'}})});
   });
-  await setup.goto(`http://127.0.0.1:${port}/?session=${foreground}#${token}`);
+  await setup.goto(`http://127.0.0.1:${port}/?setup=1#${token}`);
   await setup.locator('#launch-name').waitFor();
   assert.equal(await setup.locator('#launch-relay').inputValue(), 'ssmcp.lmm.best');
   assert.equal(starts.length, 0);
   if (process.env.WEB_TEST_EVIDENCE) await setup.screenshot({path:join(process.env.WEB_TEST_EVIDENCE, 'first-connection-mobile.png')});
+  assert.deepEqual(await setup.locator('#launch-form input:visible').evaluateAll(inputs => inputs.map(input => input.id)), ['launch-name','launch-relay']);
+  assert.deepEqual(await setup.locator('#launch-form button:visible').allTextContents(), ['连接']);
+  assert.equal(await setup.locator('#launch-name').evaluate(e => e === document.activeElement), true);
+  await setup.setViewportSize({width:320,height:640});
+  assert.equal(await setup.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await setup.locator('#launch-name').fill('new-user');
-  await setup.locator('#launch-connect').click();
-  assert.equal(starts.length, 0);
-  await setup.locator('#launch-register').click();
-  assert.equal(registrations.length, 0);
-  await setup.locator('#launch-relay').fill('my.example');
-  const [registrationPage] = await Promise.all([setup.waitForEvent('popup'), setup.locator('#launch-register').click()]);
-  await registrationPage.waitForURL('https://my.example/setup?code=fixture');
-  assert.equal(await registrationPage.evaluate(() => window.opener), null);
-  assert.deepEqual(registrations, [{destination:'new-user@my.example',terms:false,privacy:false}]);
-  await registrationPage.close();
-  assert.equal(await setup.locator('#launch-name').inputValue(), 'new-user');
+  await setup.locator('#launch-name').press('Enter');
+  await setup.locator('#launch-hosted').waitFor();
+  assert.equal(starts.length, 1);
+  assert.deepEqual([starts[0].terms,starts[0].privacy], [false,false]);
+  for (const id of ['launch-terms','launch-privacy']) assert.equal(await setup.locator('#'+id).isChecked(), false);
+  await setup.locator('#launch-terms').check(); await setup.locator('#launch-privacy').check();
   await setup.locator('#launch-connect').click();
   await setup.getByText('测试账号未注册').waitFor();
-  assert.match(starts[0].request_id, /^owned_/);
-  assert.deepEqual(starts, [{request_id: starts[0].request_id, destination:'new-user@my.example',terms:false,privacy:false}]);
+  assert.deepEqual([starts[1].terms,starts[1].privacy], [true,true]);
+  await setup.locator('#launch-relay').fill('my.example');
+  assert.equal(await setup.locator('#launch-hosted').isVisible(), false);
+  await setup.locator('#launch-relay').press('Enter');
+  await setup.waitForFunction(() => !document.querySelector('#launch-connect').disabled);
+  assert.deepEqual(starts[2], {request_id:starts[2].request_id, destination:'new-user@my.example', terms:false, privacy:false});
   await setup.close();
   process.stdout.write('Browser fixture smoke passed: CSP, protocol envelopes, IME/focus, bounded DOM, scroll continuity, queue receipt, five right-aligned input origins, original-ID quote button/selected excerpt/R shortcut, preserved multiline draft and ordinary quoted delivery, unknown command, mobile panels.\n');
 } finally {

@@ -147,18 +147,14 @@ dialog form { display: grid; gap: 10px; } .dialog-heading { justify-content: spa
   .icon-button,.send-button { min-width: 42px; min-height: 42px; }
   textarea,input { font-size: 16px; }
 }
-.launch-setup { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
-.launch-setup form { width: min(100%, 660px); }
-.launch-setup h1 { font-size: 19px; margin-bottom: 32px; }
-.launch-line { display: grid; grid-template-columns: auto minmax(0,1fr) auto minmax(0,1.5fr); gap: 10px; align-items: baseline; }
-.launch-line code { font-size: 18px; }
-.launch-line label { min-width: 0; }
-.launch-line input { width: 100%; padding: 8px 4px; border: 0; border-bottom: 1px solid var(--muted); border-radius: 0; background: transparent; font: 17px var(--mono); }
-.launch-line span,.launch-consent,.launch-actions a { color: var(--muted); font-size: 12px; }
-.launch-line span { display: block; margin-top: 6px; }
-.launch-consent { display: flex; gap: 12px; flex-wrap: wrap; margin: 28px 0 12px; }
-.launch-actions { display: flex; gap: 16px; align-items: center; margin: 18px 0; }
-@media (max-width: 480px) {
-  .launch-line { grid-template-columns: auto minmax(0,1fr); }
-  .launch-line code { text-align: right; }
-}
+.launch-setup { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: clamp(20px, 6vw, 64px); }
+.launch-setup form { width: min(100%, 22rem); display: grid; gap: 22px; }
+.launch-field { display: grid; min-width: 0; gap: 7px; }
+.launch-field span { color: var(--muted); font-size: 13px; }
+.launch-field input { width: 100%; min-width: 0; padding: 9px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; font: 17px/1.5 var(--mono); }
+.launch-field input:focus { outline: 0; border-color: var(--accent); }
+.launch-setup .primary { min-height: 44px; margin-top: 4px; border-radius: 6px; }
+.launch-setup .form-error:empty { display: none; }
+.launch-setup .form-error, #entry-hint { overflow-wrap: anywhere; }
+#entry-hint { color: var(--muted); }
+.launch-consent { display: grid; gap: 8px; color: var(--muted); font-size: 13px; }

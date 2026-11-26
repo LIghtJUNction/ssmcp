@@ -333,7 +333,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libx11-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev \
-            xvfb xauth x11-utils mesa-utils libgl1-mesa-dri fonts-noto-cjk xdotool imagemagick
+            xvfb xauth x11-utils mesa-utils libgl1-mesa-dri fonts-noto-cjk xdotool imagemagick python3-xlib
       - name: Install Rust 1.100.0 for native Linux
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
         with:
@@ -475,7 +475,7 @@ jobs:
           GALLIUM_DRIVER: llvmpipe
         run: |
           xvfb-run --auto-servernum --server-args='-screen 0 1280x900x24 +extension GLX -nolisten tcp' \
-            python3 scripts/e2e_desktop_windows.py \
+            /usr/bin/python3 scripts/e2e_desktop_windows.py \
             "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/ssmcp-desktop"
       - name: Package the exact Linux Release executable tested in Xvfb
         run: |

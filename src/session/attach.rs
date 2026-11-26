@@ -516,11 +516,24 @@ enum Request {
 async fn handle_request(capture: &Capture, request: Value) -> Result<Value> {
     let request: Request =
         serde_json::from_value(request).map_err(|_| "invalid attach operation")?;
+    if crate::client::web_chat::identity().is_some()
+        && !matches!(
+            &request,
+            Request::Bridge { .. } | Request::Open { .. } | Request::Detach { .. }
+        )
+    {
+        return Err("raw device attach operations are unavailable in a chat session".into());
+    }
     match request {
         Request::Open { read_only } => {
             let (runtime, backend_generation, live_cursor) = capture.snapshot();
-            let active = runtime.is_some();
-            let chat_enabled = runtime.as_ref().map(|runtime| runtime.chat_enabled());
+            let chat = crate::client::web_chat::identity().is_some();
+            let active = chat || runtime.is_some();
+            let chat_enabled = if chat {
+                Some(true)
+            } else {
+                runtime.as_ref().map(|runtime| runtime.chat_enabled())
+            };
             let terminals = if let Some(runtime) = runtime {
                 runtime.terminals().call("terminal.list", json!({})).await?["terminals"].clone()
             } else {

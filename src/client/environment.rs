@@ -42,7 +42,11 @@ pub(super) fn startup() -> crate::Result<Vec<(OsString, OsString)>> {
 
 fn skips_environment(args: &[OsString]) -> Result<bool, String> {
     // Preserve diagnostic paths even when the RC or home directory is broken.
-    if args.is_empty() {
+    if args.is_empty()
+        || args
+            .first()
+            .is_some_and(|arg| arg == "__magisk-chat-frontend")
+    {
         return Ok(true);
     }
     if super::version::request(args)

@@ -111,6 +111,7 @@ export class Gateway {
   #token = '';
   #ownedAttempt = null;
   #ownedUncertain = false;
+  #ownedSessions = new Map();
   constructor({ fetchImpl = globalThis.fetch.bind(globalThis), prefix = '/api/gui/v1' } = {}) {
     if (!/^\/[A-Za-z0-9_/-]+$/.test(prefix) || prefix.startsWith('//')) {
       throw new TypeError('网关前缀必须是同源路径。');
@@ -125,12 +126,12 @@ export class Gateway {
     }
     const changed = this.#token !== token.trim();
     if (changed) {
-      this.#ownedAttempt = null; this.#ownedUncertain = false;
+      this.#ownedAttempt = null; this.#ownedUncertain = false; this.#ownedSessions.clear();
     }
     this.#token = token.trim();
     return changed;
   }
-  clearToken() { this.#token = ''; this.#ownedAttempt = null; this.#ownedUncertain = false; }
+  clearToken() { this.#token = ''; this.#ownedAttempt = null; this.#ownedUncertain = false; this.#ownedSessions.clear(); }
   get authenticated() { return this.#token.length > 0; }
 
   async request(path, { method = 'GET', body, signal, mutation = false, requestId = null, timeoutMs = 15_000 } = {}) {
@@ -197,12 +198,35 @@ export class Gateway {
         throw new GatewayError('创建回执无法验证，结果未确定。', {code: 'unknown', effect: 'may_have_occurred', requestId: attempt.request_id});
       }
       this.#ownedAttempt = null; this.#ownedUncertain = false;
+      if (!this.#ownedSessions.has(result.session)) this.#ownedSessions.set(result.session, { status: 'open' });
       return result.session;
     } catch (error) {
       if (this.#ownedAttempt === attempt) {
         if (error.effect === 'may_have_occurred') this.#ownedUncertain = true;
         else if (!this.#ownedUncertain) this.#ownedAttempt = null;
       }
+      throw error;
+    }
+  }
+
+  ownedSessionStatus(target) { return this.#ownedSessions.get(target)?.status; }
+
+  async endOwnedSession(target) {
+    const entry = this.#ownedSessions.get(target);
+    if (!entry) throw new GatewayError('只能结束当前配对在本页创建的会话。', {code:'not_owned'});
+    if (entry.status === 'closing') throw new GatewayError('正在等待结束回执。', {code:'pending'});
+    const previous = entry.status;
+    entry.status = 'closing';
+    try {
+      const result = await this.request('/owned-sessions/' + encodeURIComponent(target), {method:'DELETE', mutation:true});
+      if (this.#ownedSessions.get(target) !== entry) throw new GatewayError('本机网关配对已更换。', {code:'pairing_changed'});
+      if (result?.session !== target || result?.status !== 'closed') {
+        throw new GatewayError('结束回执与原会话不匹配，结果未确定。', {code:'unknown', effect:'may_have_occurred'});
+      }
+      this.#ownedSessions.delete(target);
+    } catch (error) {
+      if (this.#ownedSessions.get(target) !== entry) throw new GatewayError('本机网关配对已更换。', {code:'pairing_changed'});
+      entry.status = error.effect === 'may_have_occurred' ? 'unknown' : previous;
       throw error;
     }
   }

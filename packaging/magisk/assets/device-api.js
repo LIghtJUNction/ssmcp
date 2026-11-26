@@ -1,26 +1,17 @@
 export const el = id => document.getElementById(id);
 
 function readCredential() {
-  // Manager WebViews use a separate origin. Only the device listener accepts this bearer.
-  if (location.protocol !== 'http:' || location.hostname !== '127.0.0.1') return null;
-  const key = 'ssmcp-console';
+  // A device setup credential belongs to one native action and one page load.
+  // Clear cached credentials left by older module versions without using them.
+  if (location.protocol !== 'http:' || location.hostname !== '127.0.0.1'
+      || location.pathname !== '/setup' || location.search) return null;
+  try { sessionStorage.removeItem('ssmcp-console'); } catch { /* Storage is optional. */ }
   const fragment = location.hash.slice(1);
-  if (/^[0-9a-f]{64}$/.test(fragment)) {
-    try { sessionStorage.setItem(key, fragment); } catch { /* This page can still use the credential. */ }
-    history.replaceState(null, '', location.pathname + location.search);
-    return fragment;
-  }
-  try {
-    const saved = sessionStorage.getItem(key);
-    return /^[0-9a-f]{64}$/.test(saved) ? saved : null;
-  } catch { return null; }
+  if (location.hash) history.replaceState(null, '', location.pathname);
+  return fragment.length === 64 && /^[0-9a-f]{64}$/.test(fragment) ? fragment : null;
 }
 const token = readCredential();
 export const hasCredential = Boolean(token);
-
-export function openSessionGui() {
-  if (token && location.origin === 'http://127.0.0.1:42387') location.replace('/#' + token);
-}
 
 export function usesOfficialRelay(server) {
   try {
@@ -32,7 +23,8 @@ export function usesOfficialRelay(server) {
 }
 
 export async function api(path, body) {
-  if (!hasCredential) throw Error('请返回模块管理器，重新打开 SSMCP 的 WebUI。');
+  if (!hasCredential) throw Error('请从模块管理器重新打开设备设置。');
+  if (path !== '/setup' && path !== '/terminal') throw Error('设备凭据仅供本机设备设置使用。');
   let response;
   try {
     response = await fetch(path, {
@@ -48,7 +40,7 @@ export async function api(path, body) {
   }
   const result = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = response.status === 401 ? '页面授权已失效，请返回模块管理器，重新打开 SSMCP 的 WebUI。' : result?.error;
+    const message = response.status === 401 ? '设备授权已失效，请从模块管理器重新打开设备设置。' : result?.error;
     const error = Error(message || `模块服务返回错误（${response.status}）。`);
     error.status = response.status;
     throw error;
