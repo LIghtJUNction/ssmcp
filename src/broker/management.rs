@@ -1,5 +1,5 @@
 //! Gateway-authoritative ownership, administrative views and session termination.
-use super::{Broker, Session};
+use super::{Authorization, Broker, Session};
 use crate::{
     history::{AuditAction, AuditEvent, AuditLog, AuditOutcome, AuditPage},
     identity::Identity,
@@ -41,37 +41,44 @@ impl Broker {
         scope: Scope,
     ) -> Result<DashboardSnapshot, ManagementError> {
         let state = self.management_access(actor, scope)?;
-        let mut visible: Vec<_> = self
-            .sessions
-            .read()
-            .await
-            .values()
-            .flat_map(|clients| clients.values())
-            .filter(|session| {
-                session.is_alive()
-                    && (scope == Scope::All
-                        || session.owner_subject.as_deref() == Some(&actor.subject))
-            })
-            .map(|session| SessionSnapshot {
-                id: session.client_id().into(),
-                name: session.info.name.clone(),
-                hostname: session.info.hostname.clone(),
-                cwd: session.info.cwd.clone(),
-                mode: session.info.mode.name().into(),
-                ssh_user: session.ssh_user.clone(),
-                owner_subject: session.owner_subject.clone(),
-                connected_at: session.connected_at,
-                allowed_github: session
-                    .allowed()
-                    .iter()
-                    .filter(|id| id.provider == "github")
-                    .map(|id| AllowedIdentity {
-                        subject: id.subject.clone(),
-                        login: id.login.clone(),
-                    })
-                    .collect(),
-            })
-            .collect();
+        let authorization = Authorization::Identity(actor.clone());
+        let mut visible = Vec::new();
+        let mut shared_sessions = Vec::new();
+        {
+            let sessions = self.sessions.read().await;
+            for session in sessions
+                .values()
+                .flat_map(|clients| clients.values())
+                .filter(|session| session.is_alive())
+            {
+                if scope == Scope::Own && session.owner_subject.as_deref() != Some(&actor.subject) {
+                    if authorization.permits(session) {
+                        shared_sessions.push(session.info());
+                    }
+                    continue;
+                }
+                visible.push(SessionSnapshot {
+                    id: session.client_id().into(),
+                    name: session.info.name.clone(),
+                    hostname: session.info.hostname.clone(),
+                    cwd: session.info.cwd.clone(),
+                    mode: session.info.mode.name().into(),
+                    ssh_user: session.ssh_user.clone(),
+                    owner_subject: session.owner_subject.clone(),
+                    connected_at: session.connected_at,
+                    allowed_github: session
+                        .allowed()
+                        .iter()
+                        .filter(|id| id.provider == "github")
+                        .map(|id| AllowedIdentity {
+                            subject: id.subject.clone(),
+                            login: id.login.clone(),
+                        })
+                        .collect(),
+                });
+            }
+        }
+        shared_sessions.sort_unstable_by(|a, b| a.id.cmp(&b.id));
         visible.sort_unstable_by(|a, b| {
             b.connected_at
                 .cmp(&a.connected_at)
@@ -101,6 +108,7 @@ impl Broker {
             scope,
             generated_at: management::now(),
             sessions: visible,
+            shared_sessions,
             stats,
             audit: page.events,
             audit_next_before: page.next_before,

@@ -1431,6 +1431,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn portal_shared_sessions_follow_live_grants_and_provider_subject() {
+        use crate::management::{ManagementError, Scope};
+
+        let fixture = Fixture::new().await;
+        let (mut socket, session) = fixture.ready(None, names(&["alice", "colleague"])).await;
+        let snapshot =
+            async |actor: &Identity| fixture.broker.management_snapshot(actor, Scope::Own).await;
+        let guest = identity("7", "renamed");
+        let granted = snapshot(&guest).await.unwrap();
+        assert!(granted.sessions.is_empty());
+        assert_eq!(granted.shared_sessions, vec![session.info()]);
+
+        let other = identity("123", "renamed");
+        assert!(snapshot(&other).await.unwrap().shared_sessions.is_empty());
+        let other_provider = Identity {
+            provider: "other".into(),
+            ..guest.clone()
+        };
+        assert_eq!(
+            snapshot(&other_provider).await.unwrap_err(),
+            ManagementError::Forbidden
+        );
+
+        send(
+            &mut socket,
+            Frame::Access {
+                id: 1,
+                command: AccessCommand::Remove {
+                    principal: "colleague@ssmcp.test".into(),
+                },
+            },
+        )
+        .await;
+        assert!(matches!(
+            receive(&mut socket).await,
+            Frame::AccessReply {
+                id: 1,
+                result: Ok(_)
+            }
+        ));
+        assert!(snapshot(&guest).await.unwrap().shared_sessions.is_empty());
+        assert!(session.is_alive());
+        let retained = snapshot(&identity("42", "octocat")).await.unwrap();
+        assert_eq!(retained.shared_sessions, vec![session.info()]);
+        close(socket).await;
+    }
+
+    #[tokio::test]
     async fn anonymous_allow_request_quota_failure_preserves_other_controller_and_live_transport() {
         let fixture = Fixture::new().await;
         let (mut socket, session) = fixture.ready(None, names(&["alice", "colleague"])).await;

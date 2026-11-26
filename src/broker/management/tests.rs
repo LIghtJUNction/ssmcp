@@ -51,28 +51,12 @@ fn configure(temp: &Temp, owners: HashMap<String, String>) -> Broker {
 }
 
 #[tokio::test]
-async fn allowed_tool_access_cannot_list_or_disconnect_another_owners_connection() {
+async fn allowed_tool_access_lists_only_discovery_info_and_cannot_disconnect_another_owner() {
     let temp = Temp::new();
     let broker = configure(&temp, HashMap::new());
-    let mut foreign = broker.test_register("gh-456", "secret").await;
-    broker
-        .sessions
-        .write()
-        .await
-        .get_mut("gh-456")
-        .unwrap()
-        .remove(foreign.client_id());
-    Arc::get_mut(&mut foreign)
-        .unwrap()
-        .allowed()
-        .push(identity("123"));
-    broker
-        .sessions
-        .write()
-        .await
-        .get_mut("gh-456")
-        .unwrap()
-        .insert(foreign.client_id().into(), foreign.clone());
+    let foreign = broker
+        .test_register_identity("gh-456", identity("123"))
+        .await;
     let own = broker.test_register("gh-123", "secret").await;
     let accessible = broker
         .clients(
@@ -89,6 +73,7 @@ async fn allowed_tool_access_cannot_list_or_disconnect_another_owners_connection
         .unwrap();
     assert_eq!(personal.sessions.len(), 1);
     assert_eq!(personal.sessions[0].id, own.client_id());
+    assert_eq!(personal.shared_sessions, vec![foreign.info()]);
     assert_eq!(
         broker
             .management_disconnect(&identity("123"), foreign.client_id())
@@ -108,6 +93,7 @@ async fn allowed_tool_access_cannot_list_or_disconnect_another_owners_connection
         .await
         .unwrap();
     assert_eq!(admin.sessions.len(), 2);
+    assert!(admin.shared_sessions.is_empty());
     assert_eq!(
         admin
             .sessions
