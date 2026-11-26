@@ -102,7 +102,11 @@ elif scenario.startswith("guarded-repo-"):
     assert access in parent_offer and "control_attribution_v1" in parent_offer
     assert (repo in parent_offer) == (scenario != "guarded-repo-unsolicited")
     capabilities = [access, "control_attribution_v1"]
-    if scenario != "guarded-repo-no-echo":
+    tracking = "git_tracking_v1"
+    assert (tracking in parent_offer) == (repo in parent_offer)
+    if scenario == "guarded-repo-tracking-only" or scenario == "guarded-repo-unsolicited":
+        capabilities.append(tracking)
+    if scenario not in ("guarded-repo-no-echo", "guarded-repo-tracking-only"):
         capabilities.append(repo)
 elif scenario == "messages":
     capabilities = [os.environ["SSMCP_PROTOCOL_MESSAGES_CAPABILITY"]]
@@ -544,10 +548,11 @@ async fn guarded_repository_events_require_both_offer_and_echo() {
         return;
     }
 
-    for (scenario, offered, enabled) in [
-        ("guarded-repo-negotiated", true, true),
-        ("guarded-repo-no-echo", true, false),
-        ("guarded-repo-unsolicited", false, false),
+    for (scenario, offered, enabled, git_tracking) in [
+        ("guarded-repo-negotiated", true, true, false),
+        ("guarded-repo-tracking-only", true, false, true),
+        ("guarded-repo-no-echo", true, false, false),
+        ("guarded-repo-unsolicited", false, false, false),
     ] {
         let fixture = Fixture::new();
         let metadata = metadata(true);
@@ -586,6 +591,7 @@ async fn guarded_repository_events_require_both_offer_and_echo() {
             .await
             .unwrap();
         assert_eq!(registration.repository_events, enabled);
+        assert_eq!(registration.git_tracking, git_tracking);
         if enabled {
             write_frame(
                 &mut registration.writer,

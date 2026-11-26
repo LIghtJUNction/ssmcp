@@ -26,6 +26,38 @@ ssmcp --server https://ssmcp.example --name workspace --allow YOUR_USERNAME@ssmc
 
 先调用 `list`，核对两个客户端的 `hostname` 和 `cwd`。下文示例放入 `code_mode.code`，其中 `developmentId` 和 `workspaceId` 应替换为实际发现的 ID。客户端重连会更换 ID，应重新发现。不同客户端可以运行任意 `-t` 后端，工作区能力与后端类型无关。
 
+## 放在项目内的临时工作区
+
+项目启动目录是代码和配置的根。SSMCP 将它创建的临时作业放在这个项目的 `.ssmcp/tmp/jobs/`，将它创建的 Git 工作树放在 `.ssmcp/worktrees/`。同一台机器上的不同项目各自管理这些目录。恢复副本放在 `.ssmcp/recovery/`。
+
+### 独立 Git 工作树
+
+在 Linux 或 macOS 的 Git 项目根目录运行以下命令。省略版本时从当前 `HEAD` 创建分离检出。
+
+```sh
+ssmcp worktree create
+```
+
+回执中的 `id` 标识这次分配，`path` 是项目内的相对路径。构建、编辑和检查都可以在这个路径下进行。等所有使用者结束后，执行 `ssmcp worktree release ID`，将 `ID` 换成回执值。释放会记录时间，同一 ID 可以重复释放。默认保留 24 小时，客户端在启动、运行期间每五分钟和重新加载时处理到期项。`ssmcp cleanup --dry-run` 可以预览，`ssmcp cleanup` 可以按同样的项目规则执行。
+
+SSMCP 在清理前核对创建记录、目录身份、Git 的工作树登记和本地修改。仍在租用、有未提交或未跟踪内容、Git 加锁、含项目当前提交尚未包含的提交等情况，会保留检出。移入 `.ssmcp/worktrees/` 的已有目录仍由创建者管理。SSMCP 会核对自己的创建与释放记录。
+
+### 单个命令的临时目录
+
+已验证的 Agent 可在 Linux 管道作业中传入 `managed_workspace: true`，让客户端为这一条命令选择专用工作目录。项目根路径由 `SSMCP_PROJECT_ROOT` 提供。下面的例子在临时目录生成一份报告，随后按同一作业 ID 读取输出。
+
+```javascript
+const job = await exec.start(clientId, {
+  command: ["sh", "-c", 'git -C "$SSMCP_PROJECT_ROOT" rev-parse HEAD > revision.txt && cat revision.txt'],
+  managed_workspace: true
+});
+const state = await exec.wait(clientId, job.job_id, { wait_ms: 4000 });
+const page = await exec.read(clientId, { job_id: job.job_id, max_bytes: 1024 });
+return { job_id: job.job_id, running: state.running, stdout: page.stdout };
+```
+
+作业状态仍需读取时保留作业 ID。运行时在作业被遗忘、被保留列表淘汰或连接正常结束后，核对进程树和产物归属，再尝试回收专用临时目录。检测到后续改动、嵌套 Git 工作树或状态不确定时会保留现场。普通命令继续使用它所指定的工作目录。
+
 ## 文件读写
 
 `fs` 提供少量结构化方法，不需要为每次读文件拼接 Shell 命令：
@@ -59,7 +91,7 @@ return await fs.write(workspaceId, {
 
 ## 命令任务产物与软额度
 
-Linux 客户端上的已验证 Agent 可以在 `exec.start` 传入 `track_artifacts: true`，为一次原生命令任务启用追踪，默认软额度为 20 GB（20,000,000,000 字节）。正整数 `artifact_budget_bytes` 覆盖默认值，旧调用单独传入该参数仍会启用追踪。每个启用的任务在工作区 `.ssmcp/task-artifacts/` 下有一个以短标识命名的独占目录。跨多条命令共享的构建缓存仍属于调用者管理的共享路径。
+Linux 客户端上的已验证 Agent 可以在 `exec.start` 传入 `track_artifacts: true`，为一次原生命令任务启用追踪，默认软额度为 20 GB（20,000,000,000 字节）。正整数 `artifact_budget_bytes` 覆盖默认值，旧调用单独传入该参数仍会启用追踪。持久产物保存在 `.ssmcp/task-artifacts/` 下，显式选择临时模式的产物保存在 `.ssmcp/tmp/jobs/` 下。每个目录都由本次任务独占。跨多条命令共享的构建缓存仍属于调用者管理的共享路径。
 
 ```js
 const job = await exec.start(clientId, {

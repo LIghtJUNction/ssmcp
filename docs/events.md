@@ -130,6 +130,22 @@ default). Setting the interval to zero disables background network checks.
 Local comparisons still reflect changes to the tracking ref after a manual
 fetch. A reconnect establishes a new PR baseline.
 
+### Observe the upstream commit ID
+
+For automation that tracks individual commits, subscribe to
+`git.tracking_changed` on a connection that negotiated `git_tracking_v1`.
+For example, a force-push can replace one upstream commit with another while
+the local branch stays one commit behind. The event identifies both upstream
+commit IDs, so a subscriber can detect that change even when the counts match.
+
+The first sample for a branch and upstream establishes a baseline. Later
+samples report a change in the upstream commit ID or in the ahead/behind
+counts. Each event contains the short local `branch`, full `upstream` ref,
+local `head`, `previous_upstream_oid`, `upstream_oid`, `ahead`, and `behind`.
+The existing Git status loop samples the local remote-tracking ref. A manual
+or automatic fetch makes remote changes visible to that loop. A branch or
+upstream switch establishes a fresh baseline.
+
 ## Automatic worker subscriptions
 
 A chat-enabled participant with a verified `main`, `coordinator`, `controller`

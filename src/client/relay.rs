@@ -110,7 +110,8 @@ pub(super) fn offer_repository_events(command: &mut Command) {
         command.env(
             "SSMCP_RELAY_CAPABILITIES",
             format!(
-                "{offer},{},{}",
+                "{offer},{},{},{}",
+                crate::wire::GIT_TRACKING_CAPABILITY,
                 crate::wire::repository_events::CAPABILITY,
                 crate::wire::WORKER_ACTIVITY_CAPABILITY
             ),
@@ -249,6 +250,7 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::CHAT_DISABLED_CAPABILITY
                 | crate::wire::openai::CAPABILITY
                 | crate::wire::repository_events::CAPABILITY
+                | crate::wire::GIT_TRACKING_CAPABILITY
                 | crate::wire::MAIN_LIFECYCLE_CAPABILITY
                 | crate::wire::WORKER_DREAMING_CAPABILITY
                 | crate::wire::WORKER_ACTIVITY_CAPABILITY

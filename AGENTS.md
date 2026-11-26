@@ -26,6 +26,6 @@ Generated documentation media under `docs/assets`, `docs/qa`, and `docs/reports`
 
 Use `main` as the only ongoing development branch. Commit reviewed source changes and push them directly to `main` in small steps, then continue local validation and corrective commits on `main`. Routine iterations do not require a feature branch or pull request.
 
-Preserve unrelated uncommitted work. When an existing checkout is busy or dirty, create a detached worktree under the primary checkout’s `.ssmcp/worktrees/` from the current `origin/main`. Keep temporary task directories under its `.ssmcp/tmp/`. Push with a normal fast-forward, and reconcile any new upstream commits without overwriting another contributor's work. Remove this task's temporary local branches only after confirming that `main` contains their commits.
+Preserve unrelated uncommitted work. When an existing checkout is busy or dirty, create a detached worktree under the primary checkout’s `.ssmcp/worktrees/` from the current `origin/main`. Keep temporary task directories under its `.ssmcp/tmp/`. When using `ssmcp worktree create origin/main`, retain its ID and run `ssmcp worktree release ID` only after every user of that checkout has finished. Push with a normal fast-forward, and reconcile any new upstream commits without overwriting another contributor's work. Remove this task's temporary local branches only after confirming that `main` contains their commits.
 
 Local tests remain the acceptance gate. A source push does not mean that a release was published or a running client or server was updated.

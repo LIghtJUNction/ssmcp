@@ -390,6 +390,7 @@ pub(crate) struct DevicePeer {
     pub openai_context: bool,
     pub main_lifecycle: bool,
     pub worker_dreaming: bool,
+    pub git_tracking: bool,
     pub repository_events: bool,
     pub worker_activity: bool,
     pub project_continuity: bool,
@@ -410,6 +411,7 @@ impl From<Registration> for DevicePeer {
             openai_context: false,
             main_lifecycle: false,
             worker_dreaming: false,
+            git_tracking: false,
             repository_events: false,
             worker_activity: false,
             project_continuity: false,
@@ -864,6 +866,7 @@ async fn connect(
             values.next().is_some_and(|v| v.as_bytes() == b"1") && values.next().is_none()
         },
         worker_dreaming: capability_requested(&headers, wire::WORKER_DREAMING_CAPABILITY),
+        git_tracking: capability_requested(&headers, wire::GIT_TRACKING_CAPABILITY),
         repository_events: capability_requested(&headers, wire::repository_events::CAPABILITY),
         worker_activity: capability_requested(&headers, wire::WORKER_ACTIVITY_CAPABILITY),
     };

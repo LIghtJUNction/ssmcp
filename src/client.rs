@@ -147,6 +147,7 @@ Usage: ssmcp username@server [options]
        ssmcp paths [NAME ...] [--json | --plain] [--list]
        ssmcp context <create|list|show|inspect|use|rm> [options]
        ssmcp update [--check]
+       ssmcp worktree create [REV] | release ID | cleanup [--dry-run] (Unix)
        ssmcp cleanup [--dry-run|--list|--config|--set-config FILE]
        ssmcp tools [status|check|update]
        ssmcp --version [--all]
@@ -2157,6 +2158,18 @@ pub async fn run() -> crate::Result<()> {
     if agent::dispatch(&args)? {
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "worktree") {
+        #[cfg(unix)]
+        {
+            println!(
+                "{}",
+                crate::managed_worktrees::command(std::path::Path::new("."), &args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(unix))]
+        return Err("managed Git worktrees currently require Unix".into());
+    }
     if args.first().is_some_and(|arg| arg == "cleanup") {
         let arguments = args
             .iter()
@@ -2679,6 +2692,7 @@ struct RegisteredTransport {
     messaging_supported: bool,
     chat_disabled_acknowledged: bool,
     worker_dreaming: bool,
+    git_tracking: bool,
     repository_events: bool,
     worker_activity: bool,
     time_observation_supported: bool,
@@ -2816,6 +2830,8 @@ async fn register_transport(
     let durable_wait_offer = relay::durable_wait_display_offer(&transport_command);
     let peer_offer = relay::peer_ports_offer(&transport_command);
     let openai_context_offer = relay::offers(&transport_command, crate::wire::openai::CAPABILITY);
+    let git_tracking_offer =
+        relay::offers(&transport_command, crate::wire::GIT_TRACKING_CAPABILITY);
     let repository_events_offer = relay::offers(
         &transport_command,
         crate::wire::repository_events::CAPABILITY,
@@ -2944,6 +2960,10 @@ async fn register_transport(
             capabilities
                 .iter()
                 .any(|cap| cap == crate::wire::project_continuity::CAPABILITY),
+            git_tracking_offer
+                && capabilities
+                    .iter()
+                    .any(|cap| cap == crate::wire::GIT_TRACKING_CAPABILITY),
             repository_events_offer
                 && capabilities
                     .iter()
@@ -2997,6 +3017,7 @@ async fn register_transport(
         worker_activity,
         worker_dreaming,
         project_continuity,
+        git_tracking,
         repository_events,
         openai_context_supported,
         chat_disabled_acknowledged,
@@ -3021,6 +3042,7 @@ async fn register_transport(
         messaging_supported,
         worker_activity,
         worker_dreaming,
+        git_tracking,
         repository_events,
         chat_disabled_acknowledged,
         time_observation_supported,
@@ -3462,6 +3484,7 @@ async fn connect_inner(
         chat_disabled_acknowledged: _,
         worker_activity,
         worker_dreaming,
+        git_tracking,
         repository_events,
         time_observation_supported,
         wait_display_version,
@@ -3755,11 +3778,13 @@ async fn connect_inner(
     let git_settings = config::git()?;
     // Git refresh belongs to the connected workspace, including JSONL and
     // background sessions. The display only consumes its optional snapshot.
+    let (tracking_sender, mut tracking_events) = tokio::sync::mpsc::channel(8);
     let (event_sender, mut repo_events) = tokio::sync::mpsc::channel(32);
     let git_status = git_status::GitStatus::start(
         PathBuf::from(&metadata.cwd),
         git_settings,
         repository_events.then_some(event_sender),
+        git_tracking.then_some(tracking_sender),
     );
     let mut ui_updates = tokio::time::interval(Duration::from_secs(1));
     ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -3843,9 +3868,15 @@ async fn connect_inner(
                 access::poll();
                 messaging::poll();
             },
-            Some(event) = repo_events.recv(), if repository_events => {
+            Some(frame) = async {
+                tokio::select! {
+                    Some(event) = repo_events.recv(), if repository_events => Some(Frame::RepositoryEvent { event }),
+                    Some(change) = tracking_events.recv(), if git_tracking => Some(Frame::GitTracking { change }),
+                    else => None,
+                }
+            }, if repository_events || git_tracking => {
                 let sent = timeout(Duration::from_secs(10), async {
-                    write_frame(&mut *writer.lock().await, &Frame::RepositoryEvent { event }).await
+                    write_frame(&mut *writer.lock().await, &frame).await
                 }).await;
                 match sent {
                     Ok(Ok(())) => {},

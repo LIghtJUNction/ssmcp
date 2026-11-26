@@ -1068,9 +1068,10 @@ impl Shell {
                         "description":"Opt in only for a repeatable, read-only pipe command. The verified thread may receive the same job_id for matching argv, directory, environment and input version; cancellation affects that shared job. Change input_version whenever inputs change. Defaults to independent execution when omitted.",
                         "properties":{"input_version":{"type":"string","minLength":1,"maxLength":128,"description":"Caller version of all external inputs, at most 128 UTF-8 bytes."},
                             "ttl_ms":{"type":"integer","minimum":0,"maximum":reuse::MAX_TTL.as_millis() as u64,"default":0,"description":"Maximum age of a successful complete result after exit; zero shares only in-flight execution."}}},
+                    "managed_workspace":{"type":"boolean","default":false,"description":"Run a verified Agent pipe job in a fresh project .ssmcp/tmp/jobs directory. Omit cwd. SSMCP_PROJECT_ROOT is the authorized project path. Its contents are task-exclusive temporary output, retained until the job is forgotten or the session ends. Ordinary commands use their requested project cwd."},
                     "track_artifacts":{"type":"boolean","default":false,"description":format!("Enable Linux task artifact tracking for a verified Agent. Sets the job's TMPDIR and SSMCP_ARTIFACT_DIR. Default soft limit when enabled: {DEFAULT_ARTIFACT_BUDGET_BYTES} logical bytes.")},
                     "artifact_budget_bytes":{"type":"integer","minimum":1,"description":"Custom logical-byte soft limit. Providing a positive value also enables tracking for compatibility."},
-                    "temporary_artifacts":{"type":"boolean","default":false,"description":"Enable tracking for disposable, task-exclusive artifacts eligible for bounded shutdown cleanup. Omit to keep artifacts after close or reload."},
+                    "temporary_artifacts":{"type":"boolean","default":false,"description":"Allocate disposable, task-exclusive output under .ssmcp/tmp/jobs while preserving the requested cwd. Successful released jobs are eligible for bounded periodic or shutdown cleanup."},
                     "mode":{"type":"string","enum":["pipes","pty"],"description":"Explicit pipes or full controlling PTY. Omission preserves legacy observation. PTY currently requires Linux."},
                     "rows":{"type":"integer","minimum":1,"maximum":1000,"description":"Initial PTY rows; only with mode:pty."},
                     "cols":{"type":"integer","minimum":1,"maximum":1000,"description":"Initial PTY columns; only with mode:pty."},
@@ -1302,18 +1303,25 @@ impl Shell {
             "ssmcp.exec.forget" => {
                 let args: Id = parse(args)?;
                 protect_main(&args.job_id)?;
-                let mut registry = self.registry();
-                if registry.closed {
-                    return Err("shell command manager is closed".into());
+                let forgotten = {
+                    let mut registry = self.registry();
+                    if registry.closed {
+                        return Err("shell command manager is closed".into());
+                    }
+                    if registry
+                        .jobs
+                        .get(&args.job_id)
+                        .is_some_and(|job| job.state().running)
+                    {
+                        return Err("job is running; cancel it before forgetting".into());
+                    }
+                    registry.forget(&args.job_id)
+                };
+                #[cfg(target_os = "linux")]
+                if forgotten {
+                    self.reclaim_released_workspaces().await;
                 }
-                if registry
-                    .jobs
-                    .get(&args.job_id)
-                    .is_some_and(|job| job.state().running)
-                {
-                    return Err("job is running; cancel it before forgetting".into());
-                }
-                Ok(json!({"job_id":args.job_id,"forgotten":registry.forget(&args.job_id)}))
+                Ok(json!({"job_id":args.job_id,"forgotten":forgotten}))
             }
             "ssmcp.exec.events" => self.events.read(args).await,
             _ => Err(format!("unknown shell execution capability: {name}")),
@@ -1476,6 +1484,8 @@ impl Shell {
             track_artifacts: bool,
             #[serde(default)]
             temporary_artifacts: bool,
+            #[serde(default)]
+            managed_workspace: bool,
             stdin: Option<InputMode>,
             mode: Option<Mode>,
             rows: Option<u16>,
@@ -1484,6 +1494,10 @@ impl Shell {
             timeout_ms: u64,
         }
         let args: Start = parse(args)?;
+        if args.managed_workspace && args.cwd.is_some() {
+            return Err("managed_workspace chooses its own task directory; omit cwd".into());
+        }
+        let temporary_artifacts = args.temporary_artifacts || args.managed_workspace;
         let stdin = args.stdin.unwrap_or_default();
         if args.mode == Some(Mode::Pty) {
             if !cfg!(target_os = "linux") {
@@ -1492,10 +1506,7 @@ impl Shell {
             if args.stdin.is_some() {
                 return Err("PTY mode owns stdin; omit the pipe/null stdin option".into());
             }
-            if args.artifact_budget_bytes.is_some()
-                || args.track_artifacts
-                || args.temporary_artifacts
-            {
+            if args.artifact_budget_bytes.is_some() || args.track_artifacts || temporary_artifacts {
                 return Err("task artifact supervision currently requires pipes mode".into());
             }
             if args.rows.is_some_and(|n| n == 0 || n > 1000)
@@ -1508,8 +1519,7 @@ impl Shell {
         }
         let title = job_title(args.title)?;
         let artifact_budget = args.artifact_budget_bytes.or_else(|| {
-            (args.track_artifacts || args.temporary_artifacts)
-                .then_some(DEFAULT_ARTIFACT_BUDGET_BYTES)
+            (args.track_artifacts || temporary_artifacts).then_some(DEFAULT_ARTIFACT_BUDGET_BYTES)
         });
         if let Some(budget) = artifact_budget {
             if budget == 0 {
@@ -1518,7 +1528,7 @@ impl Shell {
             if !cfg!(target_os = "linux") {
                 return Err("task artifact budgets are available on Linux".into());
             }
-            if (args.temporary_artifacts || !creator.allows_local_artifact_tracking())
+            if (temporary_artifacts || !creator.allows_local_artifact_tracking())
                 && creator
                     .call
                     .as_ref()
@@ -1633,6 +1643,21 @@ impl Shell {
             self.namespace,
             NEXT_JOB.fetch_add(1, Ordering::Relaxed)
         );
+        #[cfg(target_os = "linux")]
+        let mut artifacts = artifact_budget
+            .map(|limit| artifacts::Artifacts::new(&self.root, limit, temporary_artifacts))
+            .transpose()
+            .map_err(|err| format!("could not prepare task artifact directory: {err}"))?;
+        #[cfg(target_os = "linux")]
+        let cwd = if args.managed_workspace {
+            artifacts
+                .as_ref()
+                .expect("managed workspace allocated")
+                .path
+                .clone()
+        } else {
+            cwd
+        };
         let observation = match &self.observer {
             Some(pool) => Some(pool.begin(id.clone(), &json!(args.command), &cwd).await?),
             None => None,
@@ -1694,15 +1719,13 @@ impl Shell {
             .transpose()?;
         let timing = ExecutionTiming { started, deadline };
         #[cfg(target_os = "linux")]
-        let mut artifacts = artifact_budget
-            .map(|limit| artifacts::Artifacts::new(&self.root, limit))
-            .transpose()
-            .map_err(|err| format!("could not prepare task artifact directory: {err}"))?;
-        #[cfg(target_os = "linux")]
         if let Some(artifacts) = &artifacts {
             command
                 .env("TMPDIR", &artifacts.path)
                 .env("SSMCP_ARTIFACT_DIR", &artifacts.path);
+            if args.managed_workspace {
+                command.env("SSMCP_PROJECT_ROOT", &self.root);
+            }
         }
         #[cfg(target_os = "linux")]
         let mut memory = super::command_memory::CommandMemory::for_job()
@@ -1796,7 +1819,7 @@ impl Shell {
             #[cfg(target_os = "linux")]
             artifacts: artifacts.map(Mutex::new),
             #[cfg(target_os = "linux")]
-            temporary_artifacts: args.temporary_artifacts,
+            temporary_artifacts,
         });
         let (ready, start) = command_ready::channel::<Option<crate::worker::NativeCommandLog>>();
         let events = self.events.clone();
@@ -1835,6 +1858,15 @@ impl Shell {
             #[cfg(target_os = "linux")]
             let usage = process.take_usage();
             tokio::join!(drain(out, &worker, "stdout"), drain(err, &worker, "stderr"));
+            #[cfg(target_os = "linux")]
+            if worker.temporary_artifacts
+                && outcome.code == Some(0)
+                && let Some(artifacts) = &worker.artifacts
+                && let Ok(mut artifacts) = artifacts.try_lock()
+            {
+                artifacts.seal();
+            }
+
             {
                 let mut state = worker.state();
                 // Status reads can observe completion without a notification.
@@ -1944,18 +1976,80 @@ impl Shell {
 
     #[cfg(target_os = "linux")]
     async fn reclaim_temporary(&self) {
-        let jobs = {
+        {
             let mut registry = self.registry();
-            let mut jobs = std::mem::take(&mut registry.retired_temporary);
-            jobs.extend(
-                registry
-                    .jobs
-                    .drain()
-                    .map(|(_, job)| job)
-                    .filter(|job| job.temporary_artifacts),
-            );
-            jobs
+            let jobs = registry
+                .jobs
+                .drain()
+                .map(|(_, job)| job)
+                .filter(|job| job.temporary_artifacts)
+                .collect::<Vec<_>>();
+            registry.retired_temporary.extend(jobs);
+        }
+        self.reclaim_released_workspaces().await;
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn reclaim_released_workspaces(&self) {
+        if self.registry().retired_temporary.is_empty() {
+            return;
+        }
+        let root = self.root.clone();
+        let safety = tokio::task::spawn_blocking(move || -> std::io::Result<_> {
+            let config = crate::managed_files::config(&root)?;
+            if !config.enabled {
+                return Ok(None);
+            }
+            let worktrees = artifacts::registered_worktrees(
+                &root,
+                std::time::Instant::now() + artifacts::CLEANUP_TIME,
+            )?;
+            Ok(Some((config, worktrees)))
+        })
+        .await;
+        let (config, worktrees) = match safety {
+            Ok(Ok(Some(facts))) => facts,
+            Ok(Ok(None)) => return,
+            Ok(Err(error)) => {
+                eprintln!(
+                    "ssmcp: preserving released task workspaces because cleanup eligibility could not be verified: {error}"
+                );
+                return;
+            }
+            Err(_) => return,
         };
+        let mut jobs = VecDeque::new();
+        {
+            let mut registry = self.registry();
+            registry.retired_temporary.retain(|job| {
+                if Arc::strong_count(job) != 1 || !job.state().tree_reaped {
+                    return true;
+                }
+                let Some(finished) = job.state().finished else {
+                    return true;
+                };
+                let Some(artifacts) = &job.artifacts else {
+                    return true;
+                };
+                let Ok(tracked) = artifacts.try_lock() else {
+                    return true;
+                };
+                if worktrees.iter().any(|path| {
+                    path.starts_with(&tracked.path)
+                        || (tracked.path.starts_with(path) && !self.root.starts_with(path))
+                }) {
+                    return true;
+                }
+                if !config.released_job_eligible(
+                    tracked.relative_directory(),
+                    finished.elapsed().as_secs(),
+                ) {
+                    return true;
+                }
+                jobs.push_back(job.clone());
+                false
+            });
+        }
         if jobs.is_empty() {
             return;
         }

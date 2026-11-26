@@ -108,6 +108,7 @@ mod tests {
             json!({"kind":"pull_request_opened","remote":"https://example.test","number":1}),
             json!({"kind":"pull_request_opened","remote":"x".repeat(1025),"number":1}),
             json!({"kind":"worker_completed","number":3}),
+            json!({"kind":"upstream_changed","branch":"main","upstream":"origin/main","ahead":0,"behind":1,"upstream_oid":"a".repeat(40)}),
             json!({"kind":"upstream_changed","branch":"main\n","upstream":"origin/main","ahead":0,"behind":1}),
             json!({"kind":"upstream_changed","branch":"main","upstream":"origin/main","ahead":0,"behind":MAX_NUMBER+1}),
             json!({"kind":"upstream_changed","branch":"main","upstream":"origin/main","ahead":0,"behind":0,"previous":{"ahead":0,"behind":1,"token":"foreign"}}),

@@ -25,6 +25,8 @@ pub mod identity;
 #[cfg(target_os = "linux")]
 pub(crate) mod local_socket;
 pub mod managed_files;
+#[cfg(unix)]
+pub(crate) mod managed_worktrees;
 #[cfg(target_os = "linux")]
 pub mod management;
 pub(crate) mod memory;

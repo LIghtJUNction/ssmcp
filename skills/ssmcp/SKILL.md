@@ -147,6 +147,10 @@ Use `outputs.stat(clientId,{id})` to refresh file size, SHA-256, line count and 
 
 Read bounded context documents directly: the context provider preserves complete structured results up to its 1 MiB response limit and 256 KiB document limit, including through MCP resources. For other ordinary output, expect automatic spilling above 32 KiB or 500 lines, up to 24-hour retention, a 512 MiB completed-file quota and a 256 MiB individual cap. Artifacts live in the client's private storage, normally `/tmp/ssmcp/<uid>` on Unix and `%LOCALAPPDATA%\ssmcp\output` on Windows. Use returned metadata rather than assuming a path on other platforms. `outputs.cleanup(clientId)` applies normal retention without deleting active or unrelated files. Artifacts, jobs and audit records are scoped to their owning connection. Retention on disk does not grant another client or a replacement connection access; use only IDs authorized by the current interface.
 
+## Use the project's managed workspaces
+
+Allocate disposable task directories with the current client's advertised `exec.start` schema and `managed_workspace: true`. The client places each one under the selected project's `.ssmcp/tmp/jobs/`. For an isolated Git checkout, run `ssmcp worktree create` in the project root on Linux or macOS, keep the returned ID, and use its returned path. Release the ID after every user of that checkout has finished. Project cleanup can then remove an eligible clean checkout according to its retention rule. Preview the actual decisions with `ssmcp cleanup --dry-run`. Preserve user changes and recovery copies when reconciling older checkouts.
+
 ## Read and write workspace files
 
 Use the `fs` helpers in `code_mode`: `fs.list(id, options)`, `fs.stat(id, options)`, `fs.read(id, options)`, `fs.write(id, options)`, and `fs.mkdir(id, options)`. Paths are relative to the client's startup directory. Native schemas specify bounds and optional fields.

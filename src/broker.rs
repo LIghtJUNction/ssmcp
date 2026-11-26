@@ -323,14 +323,18 @@ impl Session {
         Ok(snapshot)
     }
 
-    fn publish_repository_event(
+    async fn publish_repository_event(
         &self,
         broker: &Broker,
-        event: wire::repository_events::Event,
+        registration: Option<&crate::device::Registration>,
+        kind: &str,
+        data: Value,
     ) -> Result<(), String> {
-        event.validate()?;
-        let kind = event.kind();
-        let data = event.into_data();
+        if let Some(registration) = registration
+            && !registration.is_live(broker).await
+        {
+            return Err("controlled client authorization expired or revoked".into());
+        }
         // Both valid resource scopes use provider subjects from the local grant.
         // Journal reads still verify the original connection and the caller's ACL.
         for identity in self.allowed().iter() {
@@ -338,7 +342,9 @@ impl Session {
                 continue;
             }
             let authorization = Authorization::Identity(identity.clone());
-            for resource in [IDENTITY_RESOURCE, self.ssh_user.as_str()] {
+            let account_scope =
+                (self.ssh_user != IDENTITY_RESOURCE).then_some(self.ssh_user.as_str());
+            for resource in std::iter::once(IDENTITY_RESOURCE).chain(account_scope) {
                 let owner = crate::bridge::owner(resource, &authorization)?;
                 if self
                     .events
@@ -1589,6 +1595,11 @@ impl Broker {
         let chat_disabled = peer
             .as_ref()
             .map_or(self.local_chat_disabled, |peer| peer.chat_disabled);
+        let git_tracking = access_supported
+            && !allow.is_empty()
+            && peer
+                .as_ref()
+                .is_some_and(|peer| peer.git_tracking && !peer.worker_dreaming);
         let repository_events = !allow.is_empty()
             && peer
                 .as_ref()
@@ -1631,6 +1642,9 @@ impl Broker {
         }
         if chat_disabled {
             capabilities.push(wire::CHAT_DISABLED_CAPABILITY.into());
+        }
+        if git_tracking {
+            capabilities.push(wire::GIT_TRACKING_CAPABILITY.into());
         }
         if repository_events {
             capabilities.push(wire::repository_events::CAPABILITY.into());
@@ -2001,11 +2015,14 @@ impl Broker {
                     }
                 };
                 match received {
-                    Some(Frame::RepositoryEvent { event }) if repository_events => {
-                        if let Some(registration) = registration && !registration.is_live(&self).await {
-                            return Err("controlled client authorization expired or revoked".into());
+                    Some(Frame::GitTracking { change }) if git_tracking => {
+                        if change.valid() {
+                            session.publish_repository_event(&self, registration, "git.tracking_changed", serde_json::to_value(change)?).await?;
                         }
-                        session.publish_repository_event(&self, event)?;
+                    }
+                    Some(Frame::RepositoryEvent { event }) if repository_events => {
+                        event.validate()?;
+                        session.publish_repository_event(&self, registration, event.kind(), event.into_data()).await?;
                     }
                     Some(Frame::ProjectProof { proof }) if project => {
                         if project_continuity::consume_challenge(&mut project_deadline, std::time::Instant::now()) {

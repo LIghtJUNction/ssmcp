@@ -4,8 +4,9 @@
 use crate::backend::process::Managed;
 mod fetch;
 mod pull_requests;
+mod tracking;
 mod upstream_events;
-use crate::wire::repository_events::Event;
+use crate::wire::{GitTrackingChange, repository_events::Event};
 pub(crate) use fetch::{FetchSnapshot, FetchState};
 use std::{
     ffi::OsString,
@@ -149,6 +150,7 @@ impl GitStatus {
         cwd: PathBuf,
         settings: super::config::GitSettings,
         events: Option<mpsc::Sender<Event>>,
+        tracking_events: Option<mpsc::Sender<GitTrackingChange>>,
     ) -> Self {
         let initial = GitSnapshot {
             fetch: FetchSnapshot::new(settings.fetch_interval_seconds),
@@ -167,7 +169,14 @@ impl GitStatus {
                 stopped.clone(),
             ))
         });
-        let task = tokio::spawn(observe(cwd, sender, refresh.clone(), events, stopped));
+        let task = tokio::spawn(observe(
+            cwd,
+            sender,
+            refresh.clone(),
+            events,
+            tracking_events,
+            stopped,
+        ));
         Self {
             current,
             refresh,
@@ -221,6 +230,7 @@ async fn observe(
     sender: watch::Sender<Arc<GitSnapshot>>,
     refresh: Arc<Notify>,
     events: Option<mpsc::Sender<Event>>,
+    tracking_events: Option<mpsc::Sender<GitTrackingChange>>,
     mut stopped: watch::Receiver<bool>,
 ) {
     let initialize = async {
@@ -252,6 +262,7 @@ async fn observe(
         }
     };
     let mut upstream = upstream_events::Comparison::default();
+    let mut tracking = tracking::Tracking::default();
     loop {
         if *stopped.borrow() {
             return;
@@ -322,6 +333,16 @@ async fn observe(
                 biased;
                 _ = stopped.changed() => return,
                 _ = tx.send(event) => {}
+            }
+        }
+        if let Some(tx) = &tracking_events {
+            let snapshot = sender.borrow().clone();
+            if let Some(change) = tracking.observe(&git, &root, &snapshot, &mut stopped).await {
+                tokio::select! {
+                    biased;
+                    _ = stopped.changed() => return,
+                    _ = tx.send(change) => {}
+                }
             }
         }
         tokio::select! {

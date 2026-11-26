@@ -6,6 +6,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
 mod attribution;
 pub mod device_address;
+mod git_tracking;
 pub mod messages;
 pub mod openai;
 pub mod project_continuity;
@@ -13,6 +14,9 @@ pub mod repository_events;
 pub mod versions;
 pub mod wait_display;
 pub use attribution::{ControlAccount, ControlAgent, ControlAttribution};
+
+pub use git_tracking::GitTrackingChange;
+pub(crate) const GIT_TRACKING_CAPABILITY: &str = "git_tracking_v1";
 
 /// The sole supported wire protocol, including controller, source audit and steering.
 pub const VERSION: u32 = 7;
@@ -664,6 +668,9 @@ pub enum Frame {
         proof: project_continuity::Proof,
     },
     ProjectForget {},
+    GitTracking {
+        change: GitTrackingChange,
+    },
     RepositoryEvent {
         event: repository_events::Event,
     },

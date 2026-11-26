@@ -56,14 +56,14 @@ impl FetchSnapshot {
 }
 
 #[derive(Debug)]
-enum Error {
+pub(super) enum Error {
     Cancelled,
     Failed(&'static str),
 }
 
-struct Output {
-    code: Option<i32>,
-    stdout: Vec<u8>,
+pub(super) struct Output {
+    pub(super) code: Option<i32>,
+    pub(super) stdout: Vec<u8>,
 }
 
 async fn run(
@@ -107,7 +107,7 @@ async fn run(
     result
 }
 
-async fn read(
+pub(super) async fn read(
     git: &Path,
     root: &Path,
     arguments: &[&str],
@@ -661,6 +661,7 @@ mod tests {
                 fetch_interval_seconds: 60,
             },
             Some(events),
+            None,
         );
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {

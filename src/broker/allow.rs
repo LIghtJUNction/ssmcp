@@ -197,6 +197,7 @@ impl Broker {
 
 #[cfg(test)]
 mod tests {
+    mod git_tracking;
     mod native_messages;
     mod project_continuity;
     mod repository_events;

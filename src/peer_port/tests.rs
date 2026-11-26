@@ -113,6 +113,7 @@ impl Fixture {
             openai_context: false,
             main_lifecycle: false,
             worker_dreaming: false,
+            git_tracking: false,
             repository_events: false,
             worker_activity: false,
             project_continuity: false,
