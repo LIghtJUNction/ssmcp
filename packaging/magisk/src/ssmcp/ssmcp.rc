@@ -4,8 +4,8 @@
 # Enter the username of a registered owner on the relay.
 # @ 后为服务器域名。默认 ssmcp.lmm.best，也可使用你自己部署的中继。
 # After @ is the relay hostname. Use ssmcp.lmm.best or your own relay.
-# 官方中继按月计量，每月免费 1 GiB，额外流量可购买。SSMCP 开源，支持自部署。
-# The hosted relay includes 1 GiB free per month and sells additional traffic.
+# 官方中继按月计量，每月免费 1 GB，额外流量可购买。SSMCP 开源，支持自部署。
+# The hosted relay includes 1 GB free per month and sells additional traffic.
 # SSMCP is open source and can be self-hosted.
 # MCP: https://ssmcp.lmm.best/mcp · OAuth 登录需要 GitHub 账号 / requires a GitHub account.
 # 使用教程 / Guide: https://ssmcp.lmm.best

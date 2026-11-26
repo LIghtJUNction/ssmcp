@@ -89,6 +89,57 @@ async fn post(url: &str, token: &str, body: &Value) -> (StatusCode, Value) {
 }
 
 #[tokio::test]
+async fn default_external_allowance_is_one_decimal_gb_before_and_after_purchase() {
+    let dir = Directory::new();
+    let mut config = input(&dir);
+    let settings = config["accounting"].as_object_mut().unwrap();
+    settings.remove("free_monthly_bytes");
+    settings.remove("paid_monthly_bytes");
+    let relay = broker(config).unwrap();
+    let accounting = relay.relay_accounting.as_ref().unwrap();
+    let snapshot = |id| accounting.storage(move |ledger| ledger.snapshot(id));
+    let initial = snapshot("123").await.unwrap();
+    let allowance = 1_000_000_000;
+    assert_eq!(initial.remaining_bytes, Some(allowance));
+    assert_eq!(initial.free_bytes, allowance);
+    assert_eq!(initial.paid_bytes, 0);
+
+    // Reserve a byte count directly without allocating or transferring a full month of traffic.
+    accounting
+        .reserve("alice", true, allowance as usize)
+        .await
+        .unwrap();
+    let exhausted = snapshot("123").await.unwrap();
+    assert_eq!(exhausted.remaining_bytes, Some(0));
+    assert_eq!(
+        accounting.reserve("alice", true, 1).await,
+        Err(TrafficError::Exhausted)
+    );
+    assert_eq!(snapshot("123").await.unwrap(), exhausted);
+
+    let period = initial.period;
+    let grant = || {
+        accounting.storage({
+            let period = period.clone();
+            move |ledger| ledger.grant("123", &period, "lmm:boundary", 7, true)
+        })
+    };
+    assert!(grant().await.unwrap());
+    assert!(!grant().await.unwrap());
+    let paid = snapshot("123").await.unwrap();
+    assert_eq!(paid.free_bytes, allowance);
+    assert_eq!(paid.paid_bytes, 7);
+    assert_eq!(paid.remaining_bytes, Some(7));
+    accounting.reserve("alice", true, 7).await.unwrap();
+    assert_eq!(snapshot("123").await.unwrap().remaining_bytes, Some(0));
+    assert_eq!(
+        accounting.reserve("alice", true, 1).await,
+        Err(TrafficError::Exhausted)
+    );
+    assert_eq!(snapshot("456").await.unwrap().remaining_bytes, Some(allowance));
+}
+
+#[tokio::test]
 async fn scoped_monthly_meter_and_paid_order_replay_are_durable() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let dir = Directory::new();
