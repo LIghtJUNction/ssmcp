@@ -106,6 +106,7 @@ struct ReportReceipt {
 struct ReleaseReceipt {
     actor: Actor,
     retirement: Retirement,
+    acknowledged: bool,
 }
 
 /// Native execution keeps this opaque token from actual start to actual end.
@@ -281,6 +282,61 @@ impl<T: Clone> Remote<T> {
         Ok((task, false))
     }
 
+    pub(super) fn force_retirement(
+        &self,
+        queue: &Queue<T>,
+        target: &Retirement,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !state.ready {
+            return Err("remote pool is closed".into());
+        }
+        let Some(actor) = queue.force_retirement(
+            target,
+            |actor| {
+                state
+                    .active
+                    .values()
+                    .find(|a| &a.actor == actor)
+                    .map(|a| a.lease.clone())
+            },
+            now_ms,
+        )?
+        else {
+            return Ok(());
+        };
+        let revoked = state
+            .active
+            .iter()
+            .find(|(_, a)| a.actor == actor)
+            .map(|(id, _)| id.clone());
+        if let Some(id) = revoked {
+            state.active.remove(&id);
+            state
+                .reported
+                .retain(|receipt| receipt.report.claim.id != id);
+        }
+        Self::remember_release(&mut state, actor, target.clone(), false);
+        Ok(())
+    }
+
+    fn remember_release(
+        state: &mut State<T>,
+        actor: Actor,
+        retirement: Retirement,
+        acknowledged: bool,
+    ) {
+        state.released.push_back(ReleaseReceipt {
+            actor,
+            retirement,
+            acknowledged,
+        });
+        while state.released.len() > MAX_RECEIPTS {
+            state.released.pop_front();
+        }
+    }
+
     pub(super) fn release(
         &self,
         queue: &Queue<T>,
@@ -294,7 +350,10 @@ impl<T: Clone> Remote<T> {
             .iter()
             .find(|receipt| receipt.retirement.id == retirement.id)
         {
-            return if &receipt.actor == actor && receipt.retirement == retirement {
+            return if receipt.acknowledged
+                && &receipt.actor == actor
+                && receipt.retirement == retirement
+            {
                 Ok(true)
             } else {
                 Err("worker release does not match its authenticated retained receipt".into())
@@ -304,13 +363,7 @@ impl<T: Clone> Remote<T> {
             return Err("remote worker connection is not ready or has closed".into());
         }
         queue.release_remote(actor, &retirement, now_ms)?;
-        state.released.push_back(ReleaseReceipt {
-            actor: actor.clone(),
-            retirement,
-        });
-        while state.released.len() > MAX_RECEIPTS {
-            state.released.pop_front();
-        }
+        Self::remember_release(&mut state, actor.clone(), retirement, true);
         Ok(false)
     }
 

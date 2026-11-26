@@ -217,6 +217,7 @@ pub(super) fn subcommands(command: &str) -> &'static [SlashCommand] {
         },
         "/worker" => commands! {
             "/worker ls" => "List worker stations",
+            "/worker retire" => "#NN · preview retirement of this station, then confirm locally",
             "/worker +" => "N · add 1–128 stations; type the count next",
             "/worker -" => "N · retire 1–128 stations; type the count next",
         },

@@ -882,7 +882,19 @@ impl State {
                             .unwrap_or_else(|| "SSMCP workers · Esc closes\n\nNo worker window is connected.\nUse /worker +N to open one with N offline stations.".into());
                         self.chat_show_local_text(text);
                     }
+                    Command::Retire(slot) => {
+                        let received_at = self.physical_enter
+                            .ok_or("Worker retirement requires Enter in the local main terminal.")?;
+                        if crate::client::worker_window::linked_snapshot().is_none() {
+                            return Err("Open the linked worker pool in the local main terminal first.".into());
+                        }
+                        let confirmation = self.worker_retirement.take()
+                            .and_then(|prompt| prompt.submission(slot, received_at));
+                        worker_control::enqueue(worker_control::Request::Retire { slot, confirmation })?;
+                        self.notice = Some(format!("Retirement request queued for worker #{:02}.", slot + 1));
+                    }
                     Command::Delta(delta) => {
+                        self.worker_retirement = None;
                         worker_control::enqueue_delta(delta)?;
                         self.notice = Some(
                             "Worker change queued · active workers must confirm departure".into(),
@@ -3779,6 +3791,59 @@ mod tests {
             .nth(row)
             .unwrap()
             .to_owned()
+    }
+
+    #[test]
+    fn retirement_warning_requires_visible_main_terminal_and_physical_submission() {
+        use crate::client::worker_control::{Confirmation, Prompt};
+        let preview = serde_json::json!({
+            "client_id":"window", "generation":"pool", "last_resize":{
+                "accepted":true, "request_id":17, "confirm_slot":3, "task_id":"task_12"
+            }
+        });
+        let receipt = Confirmation::from_preview(17, 2, &preview).unwrap();
+        let ui = Ui {
+            layout: Layout::Chat,
+            ..Ui::default()
+        };
+        let mut state = State::new(24, 80, &ui);
+        state.worker_retirement = Some(Prompt::new(receipt.clone()));
+        let mut frame = state.chat_frame(Instant::now());
+        let shown = state.retirement_banner(&mut frame).unwrap();
+        assert_eq!(shown, receipt);
+        let mut screen = vt100::Parser::new(nonzero(24), nonzero(80), 0);
+        screen.process(&frame.diff(None));
+        let visible = screen.screen().contents();
+        for phrase in [
+            "worker #03",
+            "task_12",
+            "unknown",
+            "/worker retire #03 again to confirm",
+        ] {
+            assert!(visible.contains(phrase), "{visible}");
+        }
+        assert!(
+            state
+                .worker_retirement
+                .as_ref()
+                .unwrap()
+                .submission(2, Instant::now())
+                .is_none()
+        );
+        assert!(
+            state
+                .chat_command("/worker retire #03")
+                .unwrap_err()
+                .contains("local main terminal")
+        );
+        assert!(state.worker_retirement.is_some());
+        state.preview = true;
+        assert!(state.retirement_banner(&mut frame).is_none());
+        assert!(state.chat_command("/worker retire #03").is_err());
+        state.preview = false;
+        frame.geometry.cols = 6;
+        frame.geometry.pty_rows = 2;
+        assert!(state.retirement_banner(&mut frame).is_none());
     }
 
     #[test]

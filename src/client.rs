@@ -1797,6 +1797,14 @@ fn worker_arguments(
     Ok(result)
 }
 
+struct PendingStationRetirement {
+    request_id: u64,
+    slot: usize,
+    confirming: bool,
+    client_id: String,
+    generation: String,
+}
+
 struct WorkerController {
     executable: PathBuf,
     arguments: Vec<OsString>,
@@ -1806,6 +1814,7 @@ struct WorkerController {
     window: Option<worker_window::WindowChild>,
     launching: Option<JoinHandle<Result<worker_window::WindowChild, String>>>,
     pending: Option<(u64, usize)>,
+    retirement: Option<PendingStationRetirement>,
 }
 
 impl WorkerController {
@@ -1819,7 +1828,93 @@ impl WorkerController {
             window: None,
             launching: None,
             pending: None,
+            retirement: None,
         })
+    }
+
+    fn clear_retirement(&mut self) {
+        self.retirement = None;
+        terminal::cancel_worker_retirement();
+    }
+
+    fn retirement_pending(&mut self, snapshot: Option<&serde_json::Value>) -> bool {
+        let Some(pending) = &self.retirement else {
+            return false;
+        };
+        let Some(state) = snapshot else {
+            return true;
+        };
+        let same_pool = state["client_id"].as_str() == Some(pending.client_id.as_str())
+            && state["generation"].as_str() == Some(pending.generation.as_str());
+        let receipt = &state["last_resize"];
+        if same_pool && receipt["request_id"].as_u64() != Some(pending.request_id) {
+            return true;
+        }
+
+        let pending = self.retirement.take().expect("pending station request");
+        if same_pool
+            && receipt["accepted"].as_bool() == Some(true)
+            && pending.confirming
+            && let Some(actual) = state["desired_total"].as_u64()
+        {
+            // No count commands are dispatched while the exact operation is pending.
+            // Keep the child's new target instead of recreating a retired station.
+            self.desired = actual as usize;
+        }
+        if !same_pool {
+            terminal::cancel_worker_retirement();
+            terminal::notice("Worker pool changed. Select the station again.");
+        } else if receipt["accepted"].as_bool() != Some(true) {
+            terminal::notice(
+                receipt["error"]
+                    .as_str()
+                    .unwrap_or("Station retirement was rejected."),
+            );
+        } else if pending.confirming {
+            terminal::notice(&format!("Worker #{:02} retired.", pending.slot + 1));
+        } else if let Some(confirmation) =
+            worker_control::Confirmation::from_preview(pending.request_id, pending.slot, state)
+        {
+            terminal::offer_worker_retirement(confirmation);
+        } else {
+            terminal::notice("Worker preview changed. Select the station again.");
+        }
+        false
+    }
+
+    fn request_station_retirement(
+        &mut self,
+        slot: usize,
+        confirmation: Option<worker_control::Confirmation>,
+        snapshot: Option<&serde_json::Value>,
+    ) -> Result<(), String> {
+        let state = snapshot.ok_or("No connected worker pool.")?;
+        let window = self.window.as_ref().ok_or("No connected worker window.")?;
+        let client_id = state["client_id"]
+            .as_str()
+            .ok_or("Worker window is reconnecting.")?;
+        let generation = state["generation"]
+            .as_str()
+            .ok_or("Worker pool is reconnecting.")?;
+        if state["stopping"] == true || state["closed"] == true {
+            return Err("Worker pool is stopping.".into());
+        }
+        let confirming = confirmation.is_some();
+        let request_id = match confirmation {
+            Some(proof) if proof.slot == slot && proof.matches(state) => {
+                window.confirm_retirement(slot, proof.request_id)?
+            }
+            Some(_) => return Err("That preview expired. Select the station again.".into()),
+            None => window.prepare_retirement(slot)?,
+        };
+        self.retirement = Some(PendingStationRetirement {
+            request_id,
+            slot,
+            confirming,
+            client_id: client_id.to_owned(),
+            generation: generation.to_owned(),
+        });
+        Ok(())
     }
 
     async fn poll(&mut self) {
@@ -1857,6 +1952,7 @@ impl WorkerController {
                 // Drop its owned handle before opening exactly one replacement.
                 self.window = None;
                 self.pending = None;
+                self.clear_retirement();
                 terminal::notice("Reloading worker window; this chat session stays connected.");
                 // Re-check parent stop intent on the next UI tick before launch.
                 return;
@@ -1864,12 +1960,14 @@ impl WorkerController {
             Some((Ok(true), false)) => {
                 self.window = None;
                 self.pending = None;
+                self.clear_retirement();
                 self.desired = 0;
                 terminal::notice("Worker window closed; this chat session remains available.");
             }
             Some((Err(error), _)) => {
                 self.window = None;
                 self.pending = None;
+                self.clear_retirement();
                 self.desired = 0;
                 terminal::notice(&format!(
                     "Worker window: {error}. This chat session remains available."
@@ -1882,6 +1980,9 @@ impl WorkerController {
             .window
             .as_ref()
             .and_then(|_| worker_window::linked_snapshot());
+        if self.retirement_pending(snapshot.as_ref()) {
+            return;
+        }
         if let (Some((id, target)), Some(snapshot)) = (self.pending, snapshot.as_ref()) {
             let receipt = &snapshot["last_resize"];
             if receipt["request_id"].as_u64() == Some(id) {
@@ -1901,12 +2002,35 @@ impl WorkerController {
         // A bounded batch keeps input responsive even if another producer is busy.
         let previous_target = self.desired;
         for _ in 0..8 {
-            let Some(delta) = worker_control::take() else {
+            let Some(request) = worker_control::take() else {
                 break;
             };
-            match worker_total_after_delta(self.desired, delta) {
-                Ok(total) => self.desired = total,
-                Err(error) => terminal::notice(&error),
+            match request {
+                worker_control::Request::Delta(delta) => {
+                    match worker_total_after_delta(self.desired, delta) {
+                        Ok(total) => self.desired = total,
+                        Err(error) => terminal::notice(&error),
+                    }
+                }
+                worker_control::Request::Retire { slot, confirmation } => {
+                    if self.pending.is_some()
+                        || self.desired != previous_target
+                        || snapshot
+                            .as_ref()
+                            .and_then(|state| state["desired_total"].as_u64())
+                            .is_some_and(|target| target != self.desired as u64)
+                    {
+                        terminal::notice(
+                            "A worker count change is pending. Select the station after its receipt.",
+                        );
+                    } else {
+                        match self.request_station_retirement(slot, confirmation, snapshot.as_ref())
+                        {
+                            Ok(()) => return,
+                            Err(error) => terminal::notice(&error),
+                        }
+                    }
+                }
             }
         }
 
@@ -1970,6 +2094,7 @@ impl WorkerController {
 
 impl Drop for WorkerController {
     fn drop(&mut self) {
+        self.clear_retirement();
         if let Some(launch) = self.launching.take() {
             // A blocking launch that already started owns its eventual result;
             // dropping the cancelled handle drops that WindowChild on completion.
@@ -4055,15 +4180,9 @@ async fn connect_inner(
                     }
                 }
                 if options.worker_window_child
-                    && let Some(total) = worker_window::take_resize_request()
+                    && let Err(error) = worker_window::apply_pending_resize(&backend)
                 {
-                    let result = backend.resize_workers(total);
-                    if let Err(error) = &result {
-                        terminal::notice(&format!("Worker resize rejected: {error}"));
-                    }
-                    if let Err(error) = worker_window::report_resize_result(total, result) {
-                        terminal::notice(&format!("Worker resize receipt: {error}"));
-                    }
+                    terminal::notice(&format!("Worker change: {error}"));
                 }
                 if let Some(controller) = &options.worker_window {
                     controller.lock().await.poll().await;

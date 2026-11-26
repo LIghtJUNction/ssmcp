@@ -805,6 +805,25 @@ pub(crate) fn notice(message: &str) {
     }
 }
 
+pub(super) fn offer_worker_retirement(confirmation: super::worker_control::Confirmation) {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.worker.is_none() && !state.preview {
+            state.worker_retirement = Some(super::worker_control::Prompt::new(confirmation));
+            state.dirty = true;
+        }
+    }
+}
+
+pub(super) fn cancel_worker_retirement() {
+    if let Some(shared) = shared() {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.worker_retirement.take().is_some() {
+            state.dirty = true;
+        }
+    }
+}
+
 pub(super) fn finish_client_update(summary: &str, details: &str) {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -962,12 +981,25 @@ pub(crate) fn keyboard(text: &str) -> String {
 /// Give the active compositor original stdin bytes before any UTF-8 decoding.
 /// Binary bracketed pastes are consumed here; headless input keeps its text path.
 pub(crate) fn keyboard_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    dispatch_keyboard_bytes(bytes, None)
+}
+
+/// Only the foreground stdin/console reader supplies this timestamp. Preview,
+/// attach, generated input and timer flushes use the ordinary keyboard path.
+pub(super) fn physical_keyboard_bytes(bytes: &[u8], read_at: Instant) -> Option<Vec<u8>> {
+    dispatch_keyboard_bytes(bytes, bytes.contains(&b'\r').then_some(read_at))
+}
+
+fn dispatch_keyboard_bytes(bytes: &[u8], physical_enter: Option<Instant>) -> Option<Vec<u8>> {
     let shared = shared()?;
     if !shared.alive.load(Ordering::Acquire) {
         return None;
     }
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    Some(state.keyboard(bytes, Instant::now(), false))
+    state.physical_enter = physical_enter;
+    let output = state.keyboard(bytes, Instant::now(), false);
+    state.physical_enter = None;
+    Some(output)
 }
 
 /// A monitor has no headless input fallback. Its independent input pump keeps
@@ -1592,6 +1624,8 @@ struct State {
     filter_offset: usize,
     preview: bool,
     notice: Option<String>,
+    worker_retirement: Option<super::worker_control::Prompt>,
+    physical_enter: Option<Instant>,
     update_notice: Option<update_notice::Notice>,
     rendered_update_notice: Option<update_notice::Notice>,
     actions: Vec<&'static str>,
@@ -1649,6 +1683,8 @@ impl State {
             filter_offset: 0,
             preview: false,
             notice: None,
+            worker_retirement: None,
+            physical_enter: None,
             update_notice: None,
             rendered_update_notice: None,
             actions: Vec::new(),
@@ -2304,6 +2340,58 @@ impl State {
         frame
     }
 
+    fn retirement_banner(
+        &mut self,
+        frame: &mut Frame,
+    ) -> Option<super::worker_control::Confirmation> {
+        let prompt = self.worker_retirement.as_ref()?;
+        if !prompt.confirmation.fresh(Instant::now()) {
+            self.worker_retirement = None;
+            return None;
+        }
+        if self.ui.layout != Layout::Chat
+            || self.selection
+            || self.help
+            || self.sleep.visible
+            || self.reader.is_reading()
+            || self.preview
+            || self.worker.is_some()
+        {
+            return None;
+        }
+        let ticket = &prompt.confirmation;
+        let station = ticket.slot + 1;
+        let message = format!(
+            "Force retire worker #{station:02}\nCurrent task: {}\nUnconfirmed work becomes unknown.\nEnter /worker retire #{station:02} again to confirm.",
+            ticket.task_id.as_deref().unwrap_or("none"),
+        );
+        let mut rows = Vec::new();
+        for mut line in message.lines() {
+            while !line.is_empty() {
+                let part = fit(line, frame.geometry.cols);
+                if part.is_empty() || rows.len() >= usize::from(frame.geometry.pty_rows) {
+                    if let Some(row) = frame.rows.first_mut() {
+                        *row = fit(
+                            "Enlarge the terminal to review the worker retirement.",
+                            frame.geometry.cols,
+                        );
+                    }
+                    return None;
+                }
+                line = &line[part.len()..];
+                rows.push(self.tone(PanelTone::Accent, &part));
+            }
+        }
+        let confirmation = ticket.clone();
+        for (row, notice) in frame.rows.iter_mut().zip(rows) {
+            *row = notice;
+        }
+        // Render the warning as terminal text even when the underlying view
+        // contains media overlays that would otherwise cover these rows.
+        self.media.clear();
+        Some(confirmation)
+    }
+
     fn base_frame(&mut self, now: Instant) -> Frame {
         self.media.clear();
         if self.worker.is_some() {
@@ -2850,6 +2938,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
     let mut previous = None;
     let mut previous_cell = None;
     let mut pending_update_notice = None;
+    let mut pending_retirement = None;
     let mut last_panel = Instant::now();
     while !shared.stop.load(Ordering::Acquire) {
         let Ok(screen) = SCREEN.try_lock() else {
@@ -2861,6 +2950,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
             previous_cell = None;
             pending.clear();
             offset = 0;
+            pending_retirement = None;
             output.media = images::Renderer::default();
             shared.state.lock().unwrap_or_else(|e| e.into_inner()).dirty = true;
         }
@@ -2878,7 +2968,8 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
                 // still redraw so images cannot retain their old pixel bounds.
                 let cell = state.graphics.cell();
                 let refresh = if state.should_redraw(previous.as_ref(), previous_cell) {
-                    let frame = state.frame(Instant::now());
+                    let mut frame = state.frame(Instant::now());
+                    let retirement = state.retirement_banner(&mut frame);
                     let media = std::mem::take(&mut state.media);
                     state.dirty = false;
                     previous_cell = cell;
@@ -2886,14 +2977,15 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
                         .rendered_update_notice
                         .take()
                         .filter(|_| !state.preview);
-                    Some((frame, media, notice))
+                    Some((frame, media, notice, retirement))
                 } else {
                     None
                 };
                 (refresh, state.graphics.take_requests())
             };
             pending = requests;
-            if let Some((frame, media, notice)) = refresh {
+            if let Some((frame, media, notice, retirement)) = refresh {
+                pending_retirement = retirement;
                 pending_update_notice = notice;
                 let (before, after) = output.media.update(media, frame.cursor, frame.hidden);
                 append_frame(&mut pending, &frame, previous.as_ref(), &before, &after);
@@ -2906,6 +2998,16 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
             Err(_) => break,
         }
         drop(screen);
+        if offset >= pending.len()
+            && pending_retirement.is_some()
+            && super::input::physical_queue_empty()
+            && let Some(rendered) = pending_retirement.take()
+        {
+            let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(prompt) = &mut state.worker_retirement {
+                prompt.present(&rendered, Instant::now());
+            }
+        }
         update_notice::complete(&mut pending_update_notice, offset >= pending.len());
         std::thread::sleep(FRAME_INTERVAL);
     }

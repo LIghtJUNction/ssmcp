@@ -219,11 +219,11 @@ enum SlotState {
 /// A shutdown acknowledgement is authority over exactly one station epoch.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Retirement {
-    pub(super) id: String,
-    pub(super) generation: String,
-    pub(super) slot: usize,
-    pub(super) epoch: u64,
+pub(crate) struct Retirement {
+    pub(crate) id: String,
+    pub(crate) generation: String,
+    pub(crate) slot: usize,
+    pub(crate) epoch: u64,
 }
 
 struct Slot {
@@ -233,6 +233,7 @@ struct Slot {
     state: SlotState,
     registered: Option<Actor>,
     retirement: Option<Retirement>,
+    last_retirement: Option<Retirement>,
     logs: VecDeque<SlotLog>,
     next_log_sequence: u64,
     task_summary: Option<String>,
@@ -246,6 +247,12 @@ struct Slot {
 }
 
 impl Slot {
+    fn finish_retirement(&mut self) {
+        self.registered = None;
+        self.last_retirement = self.retirement.take();
+        self.enabled = false;
+    }
+
     fn new() -> Self {
         Self {
             enabled: true,
@@ -253,6 +260,7 @@ impl Slot {
             state: SlotState::Offline("executor not connected".into()),
             registered: None,
             retirement: None,
+            last_retirement: None,
             logs: VecDeque::new(),
             notebook: station::Notebook::default(),
             next_log_sequence: 1,
@@ -1064,7 +1072,9 @@ impl<T: Clone> Queue<T> {
             worker.notebook.finish(&view, &lease.text);
         }
         telemetry::settle_time(worker, status != TaskStatus::Unknown);
-        worker.state = if worker.retirement.is_some() && !closed {
+        worker.state = if source == lifecycle::FORCE_RETIREMENT {
+            SlotState::Offline(lifecycle::FORCE_RETIREMENT.into())
+        } else if worker.retirement.is_some() && !closed {
             SlotState::Retiring
         } else if reusable && !closed && !stopping {
             SlotState::Idle
@@ -1118,6 +1128,9 @@ impl<T: Clone> Queue<T> {
                 self.cancel_unavailable_shares(state, now_ms);
             }
             self.record_slot_event(state, kind, lease.slot, now_ms);
+        }
+        if source == lifecycle::FORCE_RETIREMENT {
+            state.slots[lease.slot].finish_retirement();
         }
         trim(state);
         self.changed(state);

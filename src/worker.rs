@@ -19,6 +19,7 @@ mod remote;
 pub(crate) use pool::Pool;
 #[cfg(target_os = "linux")]
 pub(crate) use pool::TaskContext;
+pub(crate) use queue::Retirement;
 pub(crate) use remote::CommandLog;
 
 /// Maximum time spent observing one worker request; queued work outlives the call.

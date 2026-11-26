@@ -2044,8 +2044,87 @@ class WorkerWindows(Harness):
         self.check(termios.tcgetattr(frontend.slave) == frontend.original,
                    "parent exit restores its private terminal settings")
 
+
+    def retire_selected_worker(self, frontend, parent, worker, manager):
+        pool_id = worker["id"]
+        self.bound(pool_id, manager, "ssmcp.worker.attach")
+        executors = self.register_waiting_workers(frontend, parent, worker)
+        claims = {}
+        for index, executor in enumerate(executors):
+            submitted = self.bound(pool_id, manager, "ssmcp.worker.submit", {
+                "request_id": f"targeted-task-{index}", "text": f"Hold fixture task {index}",
+            })["task"]
+            assigned = self.bound(pool_id, executor, "ssmcp.worker.wait", {
+                "request_id": executor["wait_request_id"], "wait_ms": 0,
+            })
+            claim = assigned["claim"]
+            self.check(assigned["status"] == "assigned" and claim["task_id"] == submitted["task_id"],
+                       "a registered worker holds the exact submitted task")
+            claims[claim["slot"]] = (executor, claim)
+        self.check(set(claims) == {0, 1, 2}, "three distinct registered slots hold real claims")
+
+        command = "/worker retire #03"
+        def confirmation(frame):
+            text = " ".join(" ".join(frame["rows"]).lower().split())
+            return command in text and ("again" in text or "confirm" in text)
+
+        frontend.send(command.encode() + b"\r")
+        frontend.until(confirmation, "main terminal shows how to confirm retirement of #03")
+        before = self.bound(pool_id, manager, "ssmcp.worker.status")["worker"]
+        original = {(slot, claim["epoch"], claim["task_id"]) for slot, (_, claim) in claims.items()}
+        def active_slots(snapshot):
+            return {(slot["slot"], slot["epoch"], slot["task_id"]) for slot in snapshot["slots"]
+                    if slot["registered"] and slot["state"] == "working"}
+        self.check(before["total"] == before["registered_workers"] == 3 and active_slots(before) == original,
+                   "showing the confirmation leaves all three original claims occupied")
+        frontend.send(b"\x01\x0b" + command.encode() + b"\r")
+        self.pool_projection(
+            frontend, parent, lambda p: p["total"] == p["desired_total"] == p["registered_workers"]
+            == p["working"] == 2 and p["queued"] == p["retiring"] == 0,
+            "parent observes two occupied stations after confirming #03")
+        after = self.bound(pool_id, manager, "ssmcp.worker.status")["worker"]
+        self.check(active_slots(after) == {entry for entry in original if entry[0] != 2},
+                   "the two surviving station epochs and active task IDs are unchanged")
+
+        removed, claim = claims[2]
+        late_args = {"claim": claim, "status": "completed", "output": "LATE"}
+        # The original member still has relay access. The native call may reject
+        # its promise or return an MCP error, depending on the forwarding layer.
+        late = self.public_call("code_mode", {
+            "agent": {"client_id": pool_id, "id": removed["agent_id"], "token": removed["token"]},
+            "code": (
+                "const id = %s; const [late] = await Promise.allSettled(["
+                "call(id, 'ssmcp.worker.complete', %s)]);"
+                "const live = await call(id, 'ssmcp.worker.status', {});"
+                "return !live.isError && (late.status === 'rejected' || late.value.isError === true);"
+            ) % (json.dumps(pool_id), json.dumps(late_args)),
+        })
+        self.check(late["result"] is True, "the live original claimant's late completion is rejected")
+        for slot in (0, 1):
+            executor, survivor = claims[slot]
+            output = f"completed by #{slot + 1:02}"
+            done = self.bound(pool_id, executor, "ssmcp.worker.complete", {
+                "claim": survivor, "status": "completed", "output": output,
+            })
+            self.check(done["status"] == "recorded" and done["claim"] == survivor
+                       and done["task"]["status"] == "completed" and done["task"]["output"] == output,
+                       f"#{slot + 1:02} completes its own original claim")
+        result = self.bound(pool_id, manager, "ssmcp.worker.result", {"task_id": claim["task_id"]})
+        lost = result["task"]
+        page = self.bound(pool_id, manager, "ssmcp.worker.tasks")["page"]
+        self.check(lost["status"] == "unknown" and lost["replay_safe"] is False
+                   and lost["attempt"] == claim["attempt"] and result["worker"]["queued"] == 0
+                   and result["worker"]["idle"] == 2 and len(page["tasks"]) == 3
+                   and {t["task_id"] for t in page["tasks"]} == {c["task_id"] for _, c in claims.values()},
+                   "the removed task stays unknown with no retry, replacement or queued copy")
+        self.cases["targeted-retirement"] = {"removed_slot": 2, "outcome": lost["status"],
+                                             "survivors_completed": 2, "late_completion_rejected": True}
+        frontend.send(b"\x1b")
+        frontend.until(empty_composer_ready, "main composer after targeted retirement")
+
     def worker_close(self):
-        frontend, directory, _, parent, worker, _ = self.launch("worker-close")
+        frontend, directory, _, parent, worker, manager = self.launch("worker-close")
+        self.retire_selected_worker(frontend, parent, worker, manager)
         (directory / "close-monitor").touch()
         self.assert_children_gone(directory)
         wait_for(lambda: all(client["id"] != worker["id"] for client in self.sessions()),
@@ -2212,6 +2291,7 @@ class WorkerWindows(Harness):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, required=True)
+    parser.add_argument("--case", choices=("all", "targeted-retirement"), default="all")
     parser.add_argument("--fixture-binary", type=Path,
                         default=os.environ.get("SSMCP_E2E_FIXTURE_BINARY"))
     parser.add_argument("--decoder", type=Path)
@@ -2265,7 +2345,11 @@ def main():
                                     evidence_directory, font_arguments)
             report["status"] = "failed"
             try:
-                harness.run()
+                if args.case == "targeted-retirement":
+                    harness.prepare()
+                    harness.worker_close()
+                else:
+                    harness.run()
                 report["status"] = "passed"
                 exit_code = 0
             finally:

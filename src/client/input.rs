@@ -125,11 +125,22 @@ async fn forward_local(terminals: &Terminals, text: &str) {
     }
 }
 
-async fn forward_keys(terminals: &Terminals, events: Vec<InputEvent>) -> Result<(), String> {
+async fn forward_keys(
+    terminals: &Terminals,
+    events: Vec<InputEvent>,
+    physical_enter: Option<Instant>,
+) -> Result<(), String> {
     for event in events {
         match event {
             InputEvent::Text(text) => {
-                let text = super::terminal::keyboard(&text);
+                let text = match physical_enter {
+                    Some(read_at) => {
+                        super::terminal::physical_keyboard_bytes(text.as_bytes(), read_at)
+                            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                            .unwrap_or(text)
+                    }
+                    None => super::terminal::keyboard(&text),
+                };
                 apply_display_changes(terminals).await?;
                 forward_local(terminals, &text).await;
             }
@@ -151,11 +162,11 @@ async fn forward_human(
     keys: &mut SessionKeys,
     text: &str,
 ) -> Result<(), String> {
-    forward_keys(terminals, keys.feed(text, Instant::now(), false)).await
+    forward_keys(terminals, keys.feed(text, Instant::now(), false), None).await
 }
 
 async fn forward_display(terminals: &Terminals, keys: &mut SessionKeys) -> Result<(), String> {
-    forward_keys(terminals, keys.feed("", Instant::now(), true)).await?;
+    forward_keys(terminals, keys.feed("", Instant::now(), true), None).await?;
     let keyboard = super::terminal::take_keyboard();
     apply_display_changes(terminals).await?;
     if !keyboard.is_empty() {
@@ -381,6 +392,11 @@ mod key_tests {
     }
 }
 
+/// A frame can arm consent once bytes buffered before its presentation have drained.
+pub(super) fn physical_queue_empty() -> bool {
+    platform::physical_queue_empty()
+}
+
 #[cfg(unix)]
 mod platform {
     use super::*;
@@ -395,6 +411,13 @@ mod platform {
         io::{Interest, unix::AsyncFd},
         signal::unix::{Signal, SignalKind, signal},
     };
+
+    pub(super) fn physical_queue_empty() -> bool {
+        let mut pending: libc::c_int = 0;
+        // SAFETY: FIONREAD writes the byte count to the provided integer.
+        (unsafe { libc::ioctl(libc::STDIN_FILENO, libc::FIONREAD, &mut pending) }) == 0
+            && pending == 0
+    }
 
     pub(super) struct Mode {
         fd: AsyncFd<OwnedFd>,
@@ -603,14 +626,15 @@ mod platform {
                 }
                 ready = mode.fd.readable() => {
                     let mut ready = ready.map_err(|e| format!("read local terminal: {e}"))?;
+                    let read_at = Instant::now();
                     let read = ready.try_io(|fd| {
                         // SAFETY: buffer is writable and fd is an open nonblocking tty.
                         let n = unsafe { libc::read(fd.get_ref().as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len()) };
                         if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
                     });
                     match read {
-                        Ok(Ok(0)) => { forward_input(terminals, &mut keys, &mut utf8, &[], true, input_mode).await?; break; }
-                        Ok(Ok(n)) => forward_input(terminals, &mut keys, &mut utf8, &buffer[..n], false, input_mode).await?,
+                        Ok(Ok(0)) => { forward_input(terminals, &mut keys, &mut utf8, &[], true, input_mode, read_at).await?; break; }
+                        Ok(Ok(n)) => forward_input(terminals, &mut keys, &mut utf8, &buffer[..n], false, input_mode, read_at).await?,
                         Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
                         Ok(Err(e)) => return Err(format!("read local terminal: {e}")),
                         Err(_) => continue,
@@ -630,11 +654,12 @@ mod platform {
         bytes: &[u8],
         eof: bool,
         input_mode: InputMode,
+        read_at: Instant,
     ) -> Result<(), String> {
         if input_mode == InputMode::Monitor {
             return super::super::terminal::monitor_keyboard_bytes(bytes, eof);
         }
-        if let Some(output) = super::super::terminal::keyboard_bytes(bytes) {
+        if let Some(output) = super::super::terminal::physical_keyboard_bytes(bytes, read_at) {
             apply_display_changes(terminals).await?;
             let text = utf8.push(&output, eof);
             if !text.is_empty() {
@@ -815,6 +840,7 @@ mod platform {
                     bytes,
                     false,
                     InputMode::Monitor,
+                    Instant::now(),
                 )
                 .await
                 {
@@ -1073,9 +1099,17 @@ mod platform {
             GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, INPUT_RECORD,
             KEY_EVENT, KEY_EVENT_RECORD, LEFT_ALT_PRESSED, LEFT_CTRL_PRESSED, RIGHT_ALT_PRESSED,
             RIGHT_CTRL_PRESSED, ReadConsoleInputW, SHIFT_PRESSED, STD_ERROR_HANDLE,
-            STD_OUTPUT_HANDLE, SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
+            STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
         },
     };
+
+    pub(super) fn physical_queue_empty() -> bool {
+        let mut pending = 0;
+        // SAFETY: this query writes the record count, and fails closed for redirected input.
+        (unsafe { GetNumberOfConsoleInputEvents(GetStdHandle(STD_INPUT_HANDLE), &mut pending) })
+            != 0
+            && pending == 0
+    }
 
     pub(super) struct Mode {
         handle: OwnedHandle,
@@ -1212,6 +1246,7 @@ mod platform {
             }
             let mut records = [INPUT_RECORD::default(); 64];
             let mut read = 0;
+            let read_at = Instant::now();
             // SAFETY: records has capacity for min(count,64) initialized records.
             if unsafe {
                 ReadConsoleInputW(
@@ -1239,6 +1274,13 @@ mod platform {
                                     text.as_bytes(),
                                     false,
                                 )?;
+                            } else if key.wVirtualKeyCode == 0x0d {
+                                forward_keys(
+                                    terminals,
+                                    keys.feed(&text, read_at, false),
+                                    Some(read_at),
+                                )
+                                .await?;
                             } else {
                                 forward_human(terminals, &mut keys, &text).await?;
                             }

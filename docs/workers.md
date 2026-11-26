@@ -101,12 +101,15 @@ Use these commands in the main chat:
 | `/worker ls` | Show the linked pool's actual stations and registered workers. |
 | `/worker +N` | Add `N` offline stations. |
 | `/worker -N` | Request removal of `N` stations, starting with offline and idle stations. |
+| `/worker retire #03` | Select station #03 for retirement. Repeat the command locally after its confirmation prompt to force that station offline. |
 
 Invitation text appears in a local, scrollable panel, and the client also tries to copy it to the clipboard. A missing clipboard does not prevent reading the prompt. When the pool is fully staffed, `/invite worker` displays `Worker stations are fully staffed.` and does not generate another invitation. Sending a prompt to an external agent does not itself connect that agent or start a model.
 
 Shrinking a pool preserves in-flight claims and cancellation acknowledgements. A station being removed while its task is still running remains **working**. Once it has no running task but still awaits retirement confirmation, it is **retiring**. The physical station count is `idle + working + offline + retiring`; `desired_total` describes the requested capacity while retirement is pending.
 
-Capacity can range from zero to 128 stations. While a resize is awaiting retirement acknowledgements, only a repeat of the same target is accepted. The parent projection's `last_resize` identifies the actual request, target, acceptance and any error; sending a window-control message alone does not prove that the pool accepted it. A pool with zero stations remains connected and can grow again.
+To remove a worker that can no longer acknowledge retirement, enter `/worker retire #03` in the main terminal, substituting the number shown in the worker window. Read the station and task in the prompt. If that worker remains stuck, enter the same command again. The pool records any unconfirmed task as `unknown` with `replay_safe: false`. Other stations keep their claims. A normal release before confirmation preserves the recorded result. The pool cannot stop work that the external agent may still be doing.
+
+Capacity can range from zero to 128 stations. While a count-based resize is awaiting retirement acknowledgements, only a repeat of the same target is accepted for that resize. The parent projection's `last_resize` identifies the actual request, target, acceptance and any error; sending a window-control message alone does not prove that the pool accepted it. A pool with zero stations remains connected and can grow again.
 
 ## Connect the external workers
 
@@ -490,7 +493,7 @@ return await call(id, "ssmcp.worker.report", {
 
 The tool also accepts `command_start` and `command_end` events for commands an external worker actually observes. Command text is limited to 4096 bytes; progress and detail are limited to 1024 bytes. Use the event's fields from the discovered schema. Repeating a retained request ID with identical content is idempotent; changed content, another caller or a stale claim is rejected. A progress report does not complete the task.
 
-When a station is selected for removal, its original worker receives a retirement receipt through `worker.wait`. Keep that object unchanged. `worker.release` refuses an active claim and only removes the station after the owning worker acknowledges retirement. Repeating an already accepted release is safe while its receipt is retained. The worker can then leave its collaboration membership and stop waiting; no external model or operating-system process is forcibly terminated by this acknowledgement.
+For cooperative removal, the original worker receives a retirement receipt through `worker.wait`. Keep that object unchanged. `worker.release` refuses an active claim and only removes the station after the owning worker acknowledges retirement. Repeating an already accepted release is safe while its receipt is retained. The worker can then leave its collaboration membership and stop waiting; no external model or operating-system process is forcibly terminated by this acknowledgement.
 
 A closed connection between the worker client and its relay makes unconfirmed assigned work `unknown`; do not replay it automatically. An agent that goes silent has not confirmed completion or cancellation. Its in-flight task continues to occupy its station until the task's lifecycle resolves; an idle-status display must not be used as evidence that external effects have stopped.
 

@@ -191,6 +191,19 @@ impl Pool {
         Ok(self.resize_result())
     }
 
+    pub(crate) fn prepare_retirement(
+        &self,
+        slot: usize,
+    ) -> Result<(Retirement, Option<String>), String> {
+        self.remote()?;
+        self.queue.prepare_retirement(slot)
+    }
+
+    pub(crate) fn force_retirement(&self, target: &Retirement) -> Result<(), String> {
+        self.remote()?
+            .force_retirement(&self.queue, target, now_ms())
+    }
+
     fn resize_result(&self) -> Value {
         let worker = self.queue.compact_snapshot();
         json!({"resize_pending":worker["total"] != worker["desired_total"],"worker":worker})

@@ -1051,6 +1051,7 @@ fn monitor_help(width: usize) -> Vec<(PanelTone, String)> {
         "F2   Progress / logs and client metrics",
         "Enter   Open logs / expand command text",
         "T   Full task / back",
+        "Main chat · /worker retire #NN selects one station",
         "Ctrl+R Reload · Ctrl+C Stop",
     ]
     .into_iter()
@@ -1073,6 +1074,7 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
         return Vec::new();
     }
     let task = slot.task_id.as_ref().and(slot.task_summary.as_deref());
+    let show_retire_command = slot.retire_requested && budget >= 3;
     let mut rows = activity_field(
         "Task",
         task,
@@ -1082,7 +1084,9 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
             "No active task"
         },
         width,
-        budget.saturating_sub(1).max(1),
+        budget
+            .saturating_sub(1 + usize::from(show_retire_command))
+            .max(1),
     );
     if rows.len() < budget {
         let (tone, _, state) = slot_state(slot);
@@ -1114,6 +1118,15 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
             tone,
             clipped(&format!("{state}{calls}{elapsed}{retiring}{reason}"), width),
         ));
+    }
+    if show_retire_command && rows.len() < budget {
+        let command = format!("/worker retire #{:02}", slot.slot + 1);
+        let label = if width >= command.len() + 12 {
+            format!("Main chat · {command}")
+        } else {
+            command
+        };
+        rows.push((PanelTone::Muted, clipped(&label, width)));
     }
     rows
 }
@@ -2416,6 +2429,21 @@ mod tests {
             compact.iter().any(|(_, line)| line.contains("4/10m")),
             "{compact:?}"
         );
+    }
+
+    #[test]
+    fn pending_retirement_shows_the_selected_station_command() {
+        let mut snapshot = snapshot();
+        let slot = &mut snapshot.slots[2];
+        let has_command = |slot: &SlotView, width| {
+            progress_summary(slot, width, 3)
+                .iter()
+                .any(|(_, text)| text.contains("/worker retire #03"))
+        };
+        assert!(!has_command(slot, 80));
+        slot.retire_requested = true;
+        assert!(has_command(slot, 80));
+        assert!(has_command(slot, 20));
     }
 
     #[test]

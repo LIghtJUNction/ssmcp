@@ -2,6 +2,9 @@
 //! bounded tombstones so a resize never changes an outstanding claim's slot.
 use super::*;
 
+pub(super) const FORCE_RETIREMENT: &str =
+    "Station force-retired by the operator; external execution is unconfirmed";
+
 impl<T: Clone> Queue<T> {
     pub(in crate::worker) fn remote_ready(&self) -> Result<(), String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
@@ -112,40 +115,131 @@ impl<T: Clone> Queue<T> {
         }
         let now_ms = super::super::now_ms();
         for (index, retirement) in selected {
-            let worker = &mut state.slots[index];
-            if retirement.is_none() {
-                worker.enabled = false;
-                continue;
-            }
-            let task_id = match &worker.state {
-                SlotState::Working(id) => Some(id.clone()),
-                _ => None,
-            };
-            worker.retirement = retirement;
-            if task_id.is_none() {
-                worker.state = SlotState::Retiring;
-            }
-            log(
-                worker,
-                now_ms,
-                "warning",
-                "Resize requested shutdown; waiting for this worker's authenticated acknowledgement",
-                task_id.as_deref(),
-            );
-            if let Some(task) = task_id.as_ref().and_then(|id| state.tasks.get_mut(id)) {
-                task.view.status = TaskStatus::Cancelling;
-                task.view.updated_ms = now_ms;
-            }
-            if let Some(id) = task_id {
-                self.record_task_event(&mut state, "worker.cancelling", &id, None, now_ms);
+            if let Some(retirement) = retirement {
+                self.mark_retiring(&mut state, index, retirement, now_ms);
             } else {
-                self.record_slot_event(&mut state, "worker.retiring", index, now_ms);
+                state.slots[index].enabled = false;
             }
         }
         self.cancel_unavailable_shares(&mut state, now_ms);
         state.desired_total = total;
         self.changed(&mut state);
         Ok(())
+    }
+
+    fn mark_retiring(
+        &self,
+        state: &mut State<T>,
+        index: usize,
+        retirement: Retirement,
+        now_ms: u64,
+    ) {
+        let worker = &mut state.slots[index];
+        let task_id = match &worker.state {
+            SlotState::Working(id) => Some(id.clone()),
+            _ => None,
+        };
+        worker.retirement = Some(retirement);
+        if task_id.is_none() {
+            worker.state = SlotState::Retiring;
+        }
+        log(
+            worker,
+            now_ms,
+            "warning",
+            "Resize requested shutdown; waiting for this worker's authenticated acknowledgement",
+            task_id.as_deref(),
+        );
+        if let Some(task) = task_id.as_ref().and_then(|id| state.tasks.get_mut(id)) {
+            task.view.status = TaskStatus::Cancelling;
+            task.view.updated_ms = now_ms;
+        }
+        if let Some(id) = task_id {
+            self.record_task_event(state, "worker.cancelling", &id, None, now_ms);
+        } else {
+            self.record_slot_event(state, "worker.retiring", index, now_ms);
+        }
+    }
+
+    pub(in crate::worker) fn prepare_retirement(
+        &self,
+        index: usize,
+    ) -> Result<(Retirement, Option<String>), String> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !state.remote_ready || state.closed || state.stopping {
+            return Err("only an active remote worker pool can retire a station".into());
+        }
+        let worker = state
+            .slots
+            .get(index)
+            .filter(|slot| slot.enabled && slot.registered.is_some())
+            .ok_or("selected worker station has no registered participant")?;
+        let task = match &worker.state {
+            SlotState::Working(task) => Some(task.clone()),
+            _ => None,
+        };
+        if let Some(ticket) = &worker.retirement {
+            return Ok((ticket.clone(), task));
+        }
+        let ticket = Retirement {
+            id: super::super::remote::nonce()?,
+            generation: self.generation.clone(),
+            slot: index,
+            epoch: worker.epoch,
+        };
+        let now_ms = super::super::now_ms();
+        self.mark_retiring(&mut state, index, ticket.clone(), now_ms);
+        state.desired_total -= 1;
+        self.cancel_unavailable_shares(&mut state, now_ms);
+        self.changed(&mut state);
+        Ok((ticket, task))
+    }
+
+    pub(in crate::worker) fn force_retirement(
+        &self,
+        target: &Retirement,
+        active: impl FnOnce(&Actor) -> Option<Lease<T>>,
+        now_ms: u64,
+    ) -> Result<Option<Actor>, String> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.closed || target.generation != self.generation {
+            return Err("retirement generation changed".into());
+        }
+        let worker = state
+            .slots
+            .get(target.slot)
+            .filter(|s| s.epoch == target.epoch)
+            .ok_or("retirement station or epoch changed")?;
+        if !worker.enabled && worker.last_retirement.as_ref() == Some(target) {
+            return Ok(None);
+        }
+        let actor = worker
+            .registered
+            .as_ref()
+            .filter(|_| worker.enabled && worker.retirement.as_ref() == Some(target))
+            .ok_or("selected retirement no longer matches this station")?
+            .clone();
+        if matches!(worker.state, SlotState::Working(_)) {
+            let lease = active(&actor)
+                .filter(|lease| lease.slot == target.slot && valid(&state, &self.generation, lease))
+                .ok_or("could not verify the active claim; station preserved")?;
+            self.finish_locked(
+                &mut state,
+                &lease,
+                Outcome::Unknown(FORCE_RETIREMENT.into()),
+                false,
+                now_ms,
+                FORCE_RETIREMENT,
+            )?;
+        } else {
+            let worker = &mut state.slots[target.slot];
+            worker.state = SlotState::Offline(FORCE_RETIREMENT.into());
+            log(worker, now_ms, "warning", FORCE_RETIREMENT, None);
+            self.record_slot_event(&mut state, "worker.offline", target.slot, now_ms);
+            state.slots[target.slot].finish_retirement();
+            self.changed(&mut state);
+        }
+        Ok(Some(actor))
     }
 
     pub(in crate::worker) fn retirement(&self, actor: &Actor) -> Option<Retirement> {
@@ -201,10 +295,7 @@ impl<T: Clone> Queue<T> {
         );
         worker.state = SlotState::Offline("external worker released its station".into());
         self.record_slot_event(&mut state, "worker.offline", retirement.slot, now_ms);
-        let worker = &mut state.slots[retirement.slot];
-        worker.registered = None;
-        worker.retirement = None;
-        worker.enabled = false;
+        state.slots[retirement.slot].finish_retirement();
         self.changed(&mut state);
         Ok(())
     }

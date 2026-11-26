@@ -91,6 +91,7 @@ fn subcommand_hints_cover_literal_parser_branches_without_invented_values() {
         ("/group ret", "/group retry"),
         ("/paste-retry di", "/paste-retry discard"),
         ("/invite wo", "/invite worker"),
+        ("/worker ret", "/worker retire"),
     ] {
         let mut composer = draft(prefix);
         let item = composer.selected_suggestion().unwrap();
