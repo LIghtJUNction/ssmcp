@@ -75,7 +75,7 @@ impl OwnedHost {
             first: browser_launcher.then(|| AsyncMutex::new(None)),
         })
     }
-    #[cfg(any(target_os = "android", test))]
+    #[cfg(target_os = "android")]
     pub(super) fn chat(cwd: PathBuf, root: &Path) -> crate::Result<Self> {
         let mut host = Self::new(cwd, root, Policy::default(), false)?;
         host.chat = true;

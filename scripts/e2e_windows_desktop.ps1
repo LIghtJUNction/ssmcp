@@ -244,6 +244,31 @@ public static class SsmcpWindowProbe {
         }
         return 0;
     }
+    // Count every pixel in the owned inset, including thin glyphs between grid lines.
+    public static int[] PixelCounts(IntPtr start, int stride, int width, int height) {
+        var histogram = new System.Collections.Generic.Dictionary<int, int>();
+        int[] row = new int[width];
+        int dominant = 0, most = 0;
+        for (int y = 0; y < height; y++) {
+            Marshal.Copy(IntPtr.Add(start, checked(y * stride)), row, 0, width);
+            foreach (int pixel in row) {
+                int rgb = pixel & 0xFFFFFF;
+                int count;
+                histogram.TryGetValue(rgb, out count);
+                histogram[rgb] = ++count;
+                if (count > most) { most = count; dominant = rgb; }
+            }
+        }
+        int contrasting = 0;
+        foreach (var item in histogram) {
+            int rgb = item.Key;
+            int red = Math.Abs((rgb >> 16) - (dominant >> 16));
+            int green = Math.Abs(((rgb >> 8) & 255) - ((dominant >> 8) & 255));
+            int blue = Math.Abs((rgb & 255) - (dominant & 255));
+            if (Math.Max(red, Math.Max(green, blue)) >= 24) contrasting += item.Value;
+        }
+        return new int[] { checked(width * height), histogram.Count, dominant, contrasting };
+    }
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point point);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
@@ -496,29 +521,18 @@ public static class SsmcpWindowProbe {
                     throw "The owned client region changed or became obscured during capture (state $captureState)."
                 }
                 $captureAttempts++
-                $histogram = [Collections.Generic.Dictionary[int,int]]::new()
-                $samples = [Collections.Generic.List[int]]::new()
-                for ($row = 0; $row -lt 48; $row++) {
-                    $y = $clientTop - $top + [int][Math]::Floor(($row + 0.5) * ($clientBottom - $clientTop) / 48)
-                    for ($column = 0; $column -lt 64; $column++) {
-                        $x = $clientLeft - $left + [int][Math]::Floor(($column + 0.5) * ($clientRight - $clientLeft) / 64)
-                        $rgb = $bitmap.GetPixel($x, $y).ToArgb() -band 0xFFFFFF
-                        $samples.Add($rgb)
-                        if ($histogram.ContainsKey($rgb)) { $histogram[$rgb]++ } else { $histogram[$rgb] = 1 }
-                    }
-                }
-                $dominant = ($histogram.GetEnumerator() | Sort-Object -Property Value -Descending | Select-Object -First 1).Key
-                $contrasting = 0
-                foreach ($rgb in $samples) {
-                    $red = [Math]::Abs((($rgb -shr 16) -band 255) - (($dominant -shr 16) -band 255))
-                    $green = [Math]::Abs((($rgb -shr 8) -band 255) - (($dominant -shr 8) -band 255))
-                    $blue = [Math]::Abs(($rgb -band 255) - ($dominant -band 255))
-                    if ([Math]::Max($red, [Math]::Max($green, $blue)) -ge 24) { $contrasting++ }
-                }
-                $requiredContrast = [Math]::Max(12, [int][Math]::Ceiling($samples.Count * 0.005))
-                $nonblank = $histogram.Count -ge 3 -and $contrasting -ge $requiredContrast
+                $region = [Drawing.Rectangle]::new($clientLeft - $left, $clientTop - $top,
+                    $clientRight - $clientLeft, $clientBottom - $clientTop)
+                $bits = $bitmap.LockBits($region, [Drawing.Imaging.ImageLockMode]::ReadOnly,
+                    [Drawing.Imaging.PixelFormat]::Format32bppArgb)
+                try {
+                    $count, $distinct, $dominant, $contrasting = [SsmcpWindowProbe]::PixelCounts(
+                        $bits.Scan0, $bits.Stride, $region.Width, $region.Height)
+                } finally { $bitmap.UnlockBits($bits) }
+                $requiredContrast = [Math]::Max(12, [int][Math]::Ceiling($count * 0.005))
+                $nonblank = $distinct -ge 3 -and $contrasting -ge $requiredContrast
                 $report.client_pixels = [ordered]@{
-                    ready = $nonblank; sample_count = $samples.Count; distinct_colors = $histogram.Count
+                    ready = $nonblank; sample_count = $count; distinct_colors = $distinct
                     dominant_rgb = ('{0:X6}' -f $dominant); contrasting_samples = $contrasting
                     minimum_channel_difference = 24; required_contrasting_samples = $requiredContrast
                     inset = $inset; left = $clientLeft; top = $clientTop; right = $clientRight; bottom = $clientBottom
@@ -540,13 +554,13 @@ public static class SsmcpWindowProbe {
 
         $formWidth = [Math]::Min(660, $client.Right - 40)
         $formX = ($client.Right - $formWidth) / 2
-        $formY = [Math]::Max(67, ($client.Bottom - 190) / 2)
         $narrow = $formWidth -lt 475
-        $prefix = if ($narrow) { 64 } else { 88 }
-        $nameX = $formX + $prefix + 20
-        $relayX = if ($narrow) { $nameX } else { $nameX + ($formWidth - $prefix - 38) * 0.44 + 38 }
-        $relayY = if ($narrow) { $formY + 90 } else { $formY }
-        $submitY = $relayY + 94
+        $formHeight = if ($narrow) { 262 } else { 190 }
+        $formY = [Math]::Max(40, ($client.Bottom - $formHeight) / 2)
+        $nameX = $formX + 20
+        $relayX = if ($narrow) { $nameX } else { $formX + ($formWidth - 20) * 0.42 + 40 }
+        $relayY = if ($narrow) { $formY + 86 } else { $formY }
+        $submitY = $relayY + 66
         if ($formWidth -lt 370) { $submitY += 48 }
         $submitX = $formX + $formWidth - 46
 

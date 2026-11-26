@@ -88,7 +88,7 @@ pub(crate) fn foreground_workbench(
     )?)
 }
 /// The module web token selects only the protocol-only chat child. It has no device fallback.
-#[cfg(any(target_os = "android", test))]
+#[cfg(target_os = "android")]
 pub(crate) fn foreground_chat_workbench(
     root: PathBuf,
     workspace: PathBuf,
