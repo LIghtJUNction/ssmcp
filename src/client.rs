@@ -88,7 +88,7 @@ Usage: ssmcp [username@server] [options]
 Start
   ssmcp                         Reuse your last successful connection
   ssmcp --worker N              Open chat and a worker window with N slots
-  ssmcp --worker N --daemon     Run an N-slot worker pool in the background
+  ssmcp --worker N --daemon      Run an N-slot worker pool in the background
   ssmcp local                   Start a same-machine MCP session on Linux
   ssmcp mcp                     Start local MCP for your harness on Linux
   ssmcp mcp install             Register that control endpoint in Codex
@@ -118,6 +118,13 @@ Options
   --version [--all]    Show the version or the locked dependency tree
   --no-watchdog  --theme NAME   --no-color
 
+Background sessions
+  ssmcp alice@relay.example --daemon --name workstation
+  ssmcp sessions status workstation
+  ssmcp sessions logs workstation
+  ssmcp sessions stop workstation
+  See ssmcp sessions --help for session management and --help-full for background options.
+
 Same machine (Linux)
   1. Run ssmcp local in the directory you want to control.
   2. Open /logs in that session. Add its MCP URL to your local MCP client
@@ -139,6 +146,7 @@ const HELP_FULL: &str = r#"ssmcp — connect this device and manage its local se
 
 Usage: ssmcp username@server [options]
        ssmcp [--server URL] [options]
+       ssmcp [connection options] --daemon [--name NAME]
        ssmcp [connection options] --worker N [--daemon]
        ssmcp mcp [local options]                       (Linux)
        ssmcp mcp install [--harness codex] [--listen IP:PORT]  (Linux)
@@ -159,8 +167,10 @@ Usage: ssmcp username@server [options]
        ssmcp [options] [--server URL]
        ssmcp overview [--json] [--watch]
        ssmcp overview <show|state|jobs|exec|cancel|command> TARGET [arguments]
-       ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
-       ssmcp sessions create NAME [options] [user@]host
+       ssmcp sessions list [--json]
+       ssmcp sessions <status|start|stop|close|restart|auth|remove> NAME [--json]
+       ssmcp sessions logs NAME [--lines N] [--json]
+       ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER
        ssmcp attach [list] [--json]
        ssmcp attach [--local] [--read-only] [--] NAME
        ssmcp computer [version|download [VERSION]|install DOWNLOAD_ID|uninstall INSTALLATION_ID]
@@ -187,8 +197,8 @@ Usage: ssmcp username@server [options]
   --name NAME          Display name (default: hostname-pid)
   --daemon            Start a user-owned background service without terminal windows
                       With --worker N, run the worker pool in the background
-  --cpu-limit PERCENT  Linux background CPU quota; 100% is one CPU
-  --memory-limit SIZE  Linux background memory cap; e.g. 512MiB
+  --cpu-limit PERCENT  Linux only, with --daemon or sessions create; 100% is one CPU
+  --memory-limit SIZE  Linux only, with --daemon or sessions create; e.g. 512MiB
   --session-control    Grant this connection local saved-session management tools
   --no-watchdog        Disable automatic reconnects (enabled by default)
   --watchdog           Enable automatic reconnects explicitly (compatibility flag)
@@ -224,14 +234,27 @@ Examples:
   ssmcp --name laptop
   ssmcp list
   ssmcp --no-watchdog --name one-shot
-  ssmcp sessions status workstation
-  ssmcp sessions stop workstation
   ssmcp service install --system --user alice
   sudo systemctl enable --now ssmcp
-  ssmcp sessions create workstation --watchdog alice@my-server.example
   ssmcp attach --local workstation
   ssmcp attach --read-only workstation
-  ssmcp sessions close workstation
+
+Background sessions:
+  ssmcp alice@my-server.example --daemon --name workstation
+  ssmcp alice@my-server.example --daemon --name workers --worker 2
+  ssmcp sessions create runner --cwd /path/to/project alice@my-server.example
+
+--daemon creates and starts a saved relay session in the current directory.
+Choose a unique --name to manage it later. A background worker pool uses remote
+executors by default and opens no chat or monitor window. Same-machine
+`ssmcp local` requires a foreground terminal.
+Use `ssmcp sessions --help` to inspect connection status, read live logs and manage
+the saved session. Launching a session and connecting to the relay are separate
+steps. Each saved session pins an executable copy. To adopt a newer executable,
+recreate the session with the updated client.
+The watchdog reconnects by default. Use --no-watchdog to disable reconnects or
+--reconnect-delay N to tune the initial delay. These flags cannot be combined.
+--daemon is incompatible with --list-tools.
 
 Start a controlled device with ssmcp username@server. The account must already
 exist on the relay. The device connects without an account token. Control apps
@@ -1653,7 +1676,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER\nRequires a running ssmcp service.\n\n  --cpu-limit PERCENT  Linux CPU quota; 100% is one CPU\n  --memory-limit SIZE  Linux memory cap; e.g. 512MiB\n  USERNAME@SERVER selects the registered account. The controlled device connects without logging in."
+            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER\n\nCreates and starts a saved relay session through the running ssmcp service.\n  --cwd DIR           Workspace directory (default: current directory)\n  --json              Print the session record as JSON\n  --worker N          Start a background worker pool with N slots\n  --cpu-limit PERCENT  Linux CPU quota; 100% is one CPU\n  --memory-limit SIZE  Linux memory cap; e.g. 512MiB\n  --no-watchdog       Disable automatic reconnects (enabled by default)\n  --reconnect-delay N  Set the initial reconnect delay in seconds (default: 5)\n\nUSERNAME@SERVER selects the registered account. The device connects without logging in.\nSee ssmcp sessions --help for lifecycle commands."
         );
         return Ok(());
     }
