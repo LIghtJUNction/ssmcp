@@ -1232,6 +1232,7 @@ mod tests {
             "ssmcp.ui.filter",
             "ssmcp.ui.get",
             "ssmcp.ui.events",
+            "ssmcp.ui.handoff",
             "ssmcp.ui.listener",
             "ssmcp.ui.message",
             "ssmcp.ui.present",

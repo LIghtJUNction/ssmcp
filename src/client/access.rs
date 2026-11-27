@@ -435,8 +435,8 @@ mod tests {
         let mut requests = manager.connect(true, Some("https://ssmcp.test"), "one");
         manager.reply(requests.try_recv().unwrap().id, Ok(owner()));
         let guest = Entry {
-            principal: "guest@ssmcp.test".into(),
-            login: "guest".into(),
+            principal: "session-guest@ssmcp.test".into(),
+            login: "session-guest".into(),
             subject: "7".into(),
             owner: false,
         };
