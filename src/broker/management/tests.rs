@@ -46,7 +46,12 @@ fn configure(temp: &Temp, owners: HashMap<String, String>) -> Broker {
     let accounts = temp.0.join("accounts");
     {
         let mut store = crate::portal::store::Store::open(&accounts).unwrap();
-        for subject in owners.values() {
+        // Dashboard traffic state, like SSH admission, belongs to registered accounts.
+        for subject in owners
+            .values()
+            .map(String::as_str)
+            .chain(["123", "321", "456", "789", "999"])
+        {
             store.login(&identity(subject)).unwrap();
         }
     }

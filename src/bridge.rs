@@ -1299,6 +1299,7 @@ mod tests {
                 },
             )
             .await;
+            let user = registration.username.clone();
             let (server, client) = tokio::net::UnixStream::pair().unwrap();
             let attachment = tokio::spawn(broker.clone().attach_device(
                 server,
@@ -1323,12 +1324,12 @@ mod tests {
             )
             .await
             .unwrap();
-            let Some(Frame::Ready { url, .. }) = wire::read_frame(&mut reader).await.unwrap()
+            let Some(Frame::Ready { client_id, .. }) = wire::read_frame(&mut reader).await.unwrap()
             else {
                 panic!("fixture did not register");
             };
-            let user = url.rsplit('/').next().unwrap();
-            let session = broker.online_session(user).await.unwrap();
+            let session = broker.online_session(&user).await.unwrap();
+            assert_eq!(session.client_id(), client_id);
             let held = Arc::new(AtomicUsize::new(0));
             let release = Arc::new(Semaphore::new(0));
             let reject_close = Arc::new(AtomicBool::new(false));
