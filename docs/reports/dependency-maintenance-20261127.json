@@ -414,5 +414,10 @@
     "cleanup": [
       "Removed duplicate /scripts/deploy_server.py and /scripts/render_log_preview.py Cargo include entries. Their original include entries and source files remain."
     ]
+  },
+  "parallel_update": {
+    "main": "44573d83f2f857f9a87db4432d688857f7bc334d",
+    "description": "Another maintainer adopted validated zrun p0.15 in main while this audit ran. Merge and preserve their update; prior deferral describes the initial audit, not the final adopted graph.",
+    "source": "git+https://github.com/LIghtJUNction/zrun.git#91bc8d387c6e6123fa3017bacb4547853dd37014"
   }
 }
