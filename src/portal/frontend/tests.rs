@@ -519,6 +519,19 @@ async fn replacing_real_worker_preserves_core_oauth_and_same_device_websocket() 
         .parse()
         .unwrap(),
     );
+    let device_token = crate::device::test_device_token(
+        &broker,
+        Identity {
+            provider: "github".into(),
+            subject: "123".into(),
+            login: "alice".into(),
+        },
+    )
+    .await;
+    request.headers_mut().insert(
+        "authorization",
+        format!("Bearer {device_token}").parse().unwrap(),
+    );
     let (mut socket, _) = tokio_tungstenite::connect_async(request.clone())
         .await
         .unwrap();

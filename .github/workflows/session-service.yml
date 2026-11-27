@@ -125,6 +125,9 @@ jobs:
       - run: cargo build --locked --bin ssmcp
       - name: Exercise private native session lifecycle
         run: python scripts/e2e_service_portable.py --bin-dir target/debug --report target/acceptance/session-service.json --revision "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}"
+      - name: Build the debug CLI with its private loopback CA input
+        if: runner.os == 'Linux'
+        run: cargo build --locked --features e2e-loopback-ca --bin ssmcp
       - name: Exercise passive control through the real CLI with delegated limits
         if: runner.os == 'Linux'
         shell: bash

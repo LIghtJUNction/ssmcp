@@ -1263,15 +1263,39 @@ mod tests {
         task: tokio::task::JoinHandle<()>,
         attachment: tokio::task::JoinHandle<crate::Result<()>>,
         _broker: Arc<Broker>,
+        directory: std::path::PathBuf,
     }
 
     impl WirePeer {
         async fn start() -> Self {
             use crate::wire::{self, ClientMetadata, Frame, Mode};
             use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-            let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+            let directory = std::env::temp_dir().join(format!(
+                "ssmcp-bridge-auth-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let mut broker = Broker::new("https://ssmcp.example".into());
+            broker.portal = crate::portal::Portal::open(&directory).unwrap();
+            let broker = Arc::new(broker);
+            let registration = crate::device::test_registration(
+                &broker,
+                crate::identity::Identity {
+                    provider: "github".into(),
+                    subject: "42".into(),
+                    login: "fixture".into(),
+                },
+            )
+            .await;
             let (server, client) = tokio::net::UnixStream::pair().unwrap();
-            let attachment = tokio::spawn(broker.clone().attach(server));
+            let attachment = tokio::spawn(broker.clone().attach_device(
+                server,
+                registration.into(),
+                Default::default(),
+            ));
             let (reader, mut writer) = client.into_split();
             let mut reader = tokio::io::BufReader::new(reader);
             wire::write_frame(
@@ -1346,6 +1370,7 @@ mod tests {
                 task,
                 attachment,
                 _broker: broker,
+                directory,
             }
         }
         fn remote(&self) -> Remote {
@@ -1362,6 +1387,7 @@ mod tests {
         fn drop(&mut self) {
             self.task.abort();
             self.attachment.abort();
+            let _ = std::fs::remove_dir_all(&self.directory);
         }
     }
 

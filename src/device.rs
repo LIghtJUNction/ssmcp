@@ -645,6 +645,37 @@ async fn authenticate(
         key,
     })
 }
+// Test fixtures still issue a real device-only record and traverse authentication.
+#[cfg(test)]
+pub(crate) async fn test_device_token(broker: &Broker, identity: Identity) -> String {
+    let subject = identity.subject.clone();
+    broker
+        .portal
+        .storage(move |store| store.login(&identity))
+        .await
+        .unwrap();
+    broker
+        .portal
+        .client_storage(move |store| store.device_login(subject))
+        .await
+        .unwrap()
+        .0
+}
+
+#[cfg(test)]
+pub(crate) async fn test_registration(broker: &Broker, identity: Identity) -> Registration {
+    let token = test_device_token(broker, identity).await;
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {token}").parse().unwrap(),
+    );
+    let mut registration = authenticate(broker, &headers, false).await.unwrap();
+    registration.session_access = true;
+    registration.control_attribution = true;
+    registration
+}
+
 async fn authenticate_device(
     broker: &Broker,
     headers: &HeaderMap,

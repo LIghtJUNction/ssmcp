@@ -83,7 +83,7 @@ Build the CLI and library test executable with the locked toolchain, then run:
 
 ```sh
 cargo test --locked --lib client::control_only::tests
-cargo build --locked --bin ssmcp
+cargo build --locked --features e2e-loopback-ca --bin ssmcp
 cargo test --locked --lib --no-run
 # Use the executable path printed by the preceding command.
 SSMCP_E2E_FIXTURE_BINARY=/absolute/path/to/the/library-test-executable \
@@ -101,3 +101,6 @@ Default parsing and offline discovery are checked without requiring a manager.
 It never connects to a live relay, installs a service or invokes a model.
 On a capable Linux host, native command admission uses the existing user manager.
 Use `--require-execution` to make missing execution prerequisites exit with code 2.
+
+The private CA feature is limited to debug builds and literal loopback origins.
+Normal builds retain the existing public-root and pin verification policy.

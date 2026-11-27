@@ -321,6 +321,22 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn native_catalog_cannot_dispatch_workflow_or_events() {
+        // Admission migrates the calling process. Never move the parallel test
+        // runner and its already-running children into a new delegated scope.
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("SSMCP_CONTROL_ONLY_UNIT_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "client::control_only::tests::native_catalog_cannot_dispatch_workflow_or_events", "--nocapture"])
+                .env("SSMCP_CONTROL_ONLY_UNIT_CHILD", "1")
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
         let controls = Controls::open().await.unwrap();
         let projection = controls.process.observe_exec_projection();
         let page = controls
