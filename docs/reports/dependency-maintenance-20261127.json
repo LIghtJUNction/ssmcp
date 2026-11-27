@@ -417,7 +417,7 @@
   },
   "parallel_update": {
     "main": "44573d83f2f857f9a87db4432d688857f7bc334d",
-    "description": "Another maintainer adopted validated zrun p0.15 in main while this audit ran. Merge and preserve their update; prior deferral describes the initial audit, not the final adopted graph.",
-    "source": "git+https://github.com/LIghtJUNction/zrun.git#91bc8d387c6e6123fa3017bacb4547853dd37014"
+    "description": "Another maintainer adopted validated zrun p0.15 in main while this audit ran. Merge and preserve their update; prior deferral describes the initial audit, not the final adopted graph. The desktop lock adopts the same exact 45a13dd commit, not the latest upstream 91bc8d3.",
+    "source": "git+https://github.com/LIghtJUNction/zrun.git#45a13ddea8e3a2b0bc139355fe32db97ce3f69d3"
   }
 }
