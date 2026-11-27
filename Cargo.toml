@@ -211,12 +211,12 @@ resolver = "3"
 e2e-loopback-ca = []
 
 [dependencies]
-zbridge = { git = "https://github.com/LIghtJUNction/zbridge.git" }
-ztuio = { git = "https://github.com/LIghtJUNction/ztuio.git" }
-zi18n = { git = "https://github.com/LIghtJUNction/zi18n.git" }
-zhex = { git = "https://github.com/LIghtJUNction/zhex.git" }
-zharness = { git = "https://github.com/LIghtJUNction/zharness.git", default-features = false, features = ["std"] }
-zplugin = { git = "https://github.com/LIghtJUNction/zplugin.git", default-features = false, features = ["std", "macros"] }
+zbridge = { version = "=0.1.0", git = "https://github.com/LIghtJUNction/zbridge.git" }
+ztuio = { version = "=0.1.0", git = "https://github.com/LIghtJUNction/ztuio.git" }
+zi18n = { version = "=0.1.0", git = "https://github.com/LIghtJUNction/zi18n.git" }
+zhex = { version = "=0.1.3", git = "https://github.com/LIghtJUNction/zhex.git" }
+zharness = { version = "=0.6.0", git = "https://github.com/LIghtJUNction/zharness.git", default-features = false, features = ["std"] }
+zplugin = { version = "=0.3.1", git = "https://github.com/LIghtJUNction/zplugin.git", default-features = false, features = ["std", "macros"] }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }
 base64 = { version = "=0.23.1", default-features = false, features = ["std"] }
 flate2 = { version = "=1.1.11", default-features = false, features = ["rust_backend"] }
@@ -259,7 +259,7 @@ webauthn-rs = { version = "=0.6.2", default-features = false, features = ["condi
 time = { version = "=0.3.55", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
-zrun = { git = "https://github.com/LIghtJUNction/zrun.git", features = ["process"] }
+zrun = { version = "=0.1.0-p0.15", git = "https://github.com/LIghtJUNction/zrun.git", features = ["process"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 portable-pty = "=0.9.0"
