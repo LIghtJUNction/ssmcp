@@ -86,3 +86,15 @@ Project Z 工作区可使用 `python3 scripts/project_z.py impact --repositories
 ssmcp 继续使用自己的工具目录、运行时 hook、输出边界和会话历史。接入原生扩展不替换这些机制，也不创建第二套模型循环。
 
 本机动态库是调用者明确选择的受信任代码，加载时可能运行初始化逻辑。ABI 校验检查接口能否正确交换数据，不是文件或网络沙箱；同步本机调用也不能承诺被强制取消。该限制来自本机动态链接本身，不能用超时或界面状态冒充副作用回滚。
+
+## 滚动稳定更新（2026-11-27）
+
+根项目和桌面客户端的直接 registry 依赖使用精确 `=x.y.z` 约束；Git 包版本同样精确约束，并保留跨仓库统一的 canonical URL；两个 Cargo.lock 分别固定完整提交，构建和验收必须使用 `--locked`。不要单独给共享 Git 包增加不同的 `rev` 来源，否则可能产生重复的协议类型。锁文件是 Git 源码的不可变 pin，默认分支是更新发现来源，不代表构建时跟随远端浮动。
+
+Dependabot 每周检查根项目、桌面客户端的 Cargo 图及 GitHub Actions。patch 更新按生态小批分组；minor/major 更新保持独立 PR（包括可能破坏兼容的 0.x minor），预览版和有破坏性 API 变化的 Git 更新另行验证，不自动合并。安全更新仍须保留现有认证、授权、资源和测试门槛。每批同时审核 manifest 与相关锁文件，核对真实消费者和上游提交，完成本地云或托管 CI 验收后才采用。
+
+本轮 crates.io 官方 API 核对表明，根锁中所有直接 registry 包已经处于查询时的最新稳定版；本轮将约束固定到这些既有版本。桌面锁同步 toml、toml_edit 和 toml_parser 的稳定补丁。zcall、zconv 新 head 组合在编译时出现 `StreamConfig` 缺少 `gemini_chat_history` 字段，继续保留既有锁定，待上游接口协调后再升级；zrun 新 head 是 `0.1.0-p0.15` 预览版，调度变更较广，继续保留现有 `0.1.0-p0.13`。逐包版本、完整 SHA、查询时刻及来源见[核对记录](reports/dependency-maintenance-20261127.json)。核对记录不替代运行验收。
+
+并行维护者随后在 main `44573d83` 采用了其已验证的 zrun p0.15 命令运行时。本批正常合并并保留该更新；上文预览版暂缓记录是初始核对时的判断，不是对后续 main 的回退。最终解析以合并后的两个锁文件和当前提交 CI 为准。
+
+依赖 PR 自动触发精确 head 的 Web/原生客户端 CI；根与桌面 manifest/锁文件的更新同时触发三平台 Session service 门槛（包括 Linux 全量库测试与严格 control-only 执行）。依赖 PR 也触发既有完整 Linux 集成检查；原手动/可复用入口和所有门槛保留，不触发发布或部署。

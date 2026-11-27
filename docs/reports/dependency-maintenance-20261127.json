@@ -1,0 +1,423 @@
+{
+  "checked_at": "2026-11-27T19:57:57.251029+00:00",
+  "base": "b14df6913cb0ea9412a6f029d05a054e73122b64",
+  "dependencies": [
+    {
+      "name": "axum",
+      "locked": [
+        "0.8.9"
+      ],
+      "latest_stable": "0.8.9",
+      "url": "https://crates.io/api/v1/crates/axum"
+    },
+    {
+      "name": "base64",
+      "locked": [
+        "0.21.7",
+        "0.22.1",
+        "0.23.1"
+      ],
+      "latest_stable": "0.23.1",
+      "url": "https://crates.io/api/v1/crates/base64"
+    },
+    {
+      "name": "cap-fs-ext",
+      "locked": [
+        "4.0.3"
+      ],
+      "latest_stable": "4.0.3",
+      "url": "https://crates.io/api/v1/crates/cap-fs-ext"
+    },
+    {
+      "name": "cap-std",
+      "locked": [
+        "4.0.3"
+      ],
+      "latest_stable": "4.0.3",
+      "url": "https://crates.io/api/v1/crates/cap-std"
+    },
+    {
+      "name": "flate2",
+      "locked": [
+        "1.1.11"
+      ],
+      "latest_stable": "1.1.11",
+      "url": "https://crates.io/api/v1/crates/flate2"
+    },
+    {
+      "name": "futures-util",
+      "locked": [
+        "0.3.34"
+      ],
+      "latest_stable": "0.3.34",
+      "url": "https://crates.io/api/v1/crates/futures-util"
+    },
+    {
+      "name": "getrandom",
+      "locked": [
+        "0.2.17",
+        "0.3.4",
+        "0.4.3"
+      ],
+      "latest_stable": "0.4.3",
+      "url": "https://crates.io/api/v1/crates/getrandom"
+    },
+    {
+      "name": "httpdate",
+      "locked": [
+        "1.0.3"
+      ],
+      "latest_stable": "1.0.3",
+      "url": "https://crates.io/api/v1/crates/httpdate"
+    },
+    {
+      "name": "image",
+      "locked": [
+        "0.25.10"
+      ],
+      "latest_stable": "0.25.10",
+      "url": "https://crates.io/api/v1/crates/image"
+    },
+    {
+      "name": "libc",
+      "locked": [
+        "0.2.191"
+      ],
+      "latest_stable": "0.2.191",
+      "url": "https://crates.io/api/v1/crates/libc"
+    },
+    {
+      "name": "mime",
+      "locked": [
+        "0.3.18"
+      ],
+      "latest_stable": "0.3.18",
+      "url": "https://crates.io/api/v1/crates/mime"
+    },
+    {
+      "name": "miniz_oxide",
+      "locked": [
+        "0.8.9",
+        "0.9.1"
+      ],
+      "latest_stable": "0.9.1",
+      "url": "https://crates.io/api/v1/crates/miniz_oxide"
+    },
+    {
+      "name": "png",
+      "locked": [
+        "0.18.1"
+      ],
+      "latest_stable": "0.18.1",
+      "url": "https://crates.io/api/v1/crates/png"
+    },
+    {
+      "name": "portable-pty",
+      "locked": [
+        "0.9.0"
+      ],
+      "latest_stable": "0.9.0",
+      "url": "https://crates.io/api/v1/crates/portable-pty"
+    },
+    {
+      "name": "rcgen",
+      "locked": [
+        "0.14.10"
+      ],
+      "latest_stable": "0.14.10",
+      "url": "https://crates.io/api/v1/crates/rcgen"
+    },
+    {
+      "name": "reqwest",
+      "locked": [
+        "0.13.5"
+      ],
+      "latest_stable": "0.13.5",
+      "url": "https://crates.io/api/v1/crates/reqwest"
+    },
+    {
+      "name": "ring",
+      "locked": [
+        "0.17.14"
+      ],
+      "latest_stable": "0.17.14",
+      "url": "https://crates.io/api/v1/crates/ring"
+    },
+    {
+      "name": "rustls",
+      "locked": [
+        "0.23.46"
+      ],
+      "latest_stable": "0.23.46",
+      "url": "https://crates.io/api/v1/crates/rustls"
+    },
+    {
+      "name": "rustls-webpki",
+      "locked": [
+        "0.103.17"
+      ],
+      "latest_stable": "0.103.17",
+      "url": "https://crates.io/api/v1/crates/rustls-webpki"
+    },
+    {
+      "name": "serde",
+      "locked": [
+        "1.0.229"
+      ],
+      "latest_stable": "1.0.229",
+      "url": "https://crates.io/api/v1/crates/serde"
+    },
+    {
+      "name": "serde_json",
+      "locked": [
+        "1.0.154"
+      ],
+      "latest_stable": "1.0.154",
+      "url": "https://crates.io/api/v1/crates/serde_json"
+    },
+    {
+      "name": "serde_urlencoded",
+      "locked": [
+        "0.7.1"
+      ],
+      "latest_stable": "0.7.1",
+      "url": "https://crates.io/api/v1/crates/serde_urlencoded"
+    },
+    {
+      "name": "sha2",
+      "locked": [
+        "0.11.2"
+      ],
+      "latest_stable": "0.11.2",
+      "url": "https://crates.io/api/v1/crates/sha2"
+    },
+    {
+      "name": "subtle",
+      "locked": [
+        "2.6.1"
+      ],
+      "latest_stable": "2.6.1",
+      "url": "https://crates.io/api/v1/crates/subtle"
+    },
+    {
+      "name": "tar",
+      "locked": [
+        "0.4.46"
+      ],
+      "latest_stable": "0.4.46",
+      "url": "https://crates.io/api/v1/crates/tar"
+    },
+    {
+      "name": "time",
+      "locked": [
+        "0.3.55"
+      ],
+      "latest_stable": "0.3.55",
+      "url": "https://crates.io/api/v1/crates/time"
+    },
+    {
+      "name": "tokio",
+      "locked": [
+        "1.54.1"
+      ],
+      "latest_stable": "1.54.1",
+      "url": "https://crates.io/api/v1/crates/tokio"
+    },
+    {
+      "name": "tokio-rustls",
+      "locked": [
+        "0.26.6"
+      ],
+      "latest_stable": "0.26.6",
+      "url": "https://crates.io/api/v1/crates/tokio-rustls"
+    },
+    {
+      "name": "tokio-tungstenite",
+      "locked": [
+        "0.29.0",
+        "0.30.0"
+      ],
+      "latest_stable": "0.30.0",
+      "url": "https://crates.io/api/v1/crates/tokio-tungstenite"
+    },
+    {
+      "name": "toml",
+      "locked": [
+        "1.2.3+spec-1.1.0"
+      ],
+      "latest_stable": "1.2.3+spec-1.1.0",
+      "url": "https://crates.io/api/v1/crates/toml"
+    },
+    {
+      "name": "toml_edit",
+      "locked": [
+        "0.25.21+spec-1.1.0"
+      ],
+      "latest_stable": "0.25.21+spec-1.1.0",
+      "url": "https://crates.io/api/v1/crates/toml_edit"
+    },
+    {
+      "name": "unicode-width",
+      "locked": [
+        "0.2.3"
+      ],
+      "latest_stable": "0.2.3",
+      "url": "https://crates.io/api/v1/crates/unicode-width"
+    },
+    {
+      "name": "vt100",
+      "locked": [
+        "0.18.1"
+      ],
+      "latest_stable": "0.18.1",
+      "url": "https://crates.io/api/v1/crates/vt100"
+    },
+    {
+      "name": "webauthn-rs",
+      "locked": [
+        "0.6.2"
+      ],
+      "latest_stable": "0.6.2",
+      "url": "https://crates.io/api/v1/crates/webauthn-rs"
+    },
+    {
+      "name": "webpki-roots",
+      "locked": [
+        "0.26.11",
+        "1.0.12"
+      ],
+      "latest_stable": "1.0.12",
+      "url": "https://crates.io/api/v1/crates/webpki-roots"
+    },
+    {
+      "name": "windows-sys",
+      "locked": [
+        "0.52.0",
+        "0.59.0",
+        "0.60.2",
+        "0.61.2"
+      ],
+      "latest_stable": "0.61.2",
+      "url": "https://crates.io/api/v1/crates/windows-sys"
+    },
+    {
+      "name": "zip",
+      "locked": [
+        "9.8.2"
+      ],
+      "latest_stable": "9.8.2",
+      "url": "https://crates.io/api/v1/crates/zip"
+    }
+  ],
+  "git_sources": [
+    {
+      "url": "https://github.com/LIghtJUNction/zbridge.git",
+      "locked": [
+        "1cfeb5b1f11c26c35cf7456c9b8b60d1f2d5d8de"
+      ],
+      "head": "1cfeb5b1f11c26c35cf7456c9b8b60d1f2d5d8de",
+      "error": null
+    },
+    {
+      "url": "https://github.com/LIghtJUNction/zcall.git",
+      "locked": [
+        "311e152afb6d6dda7b123f60a13173a5ddf62878"
+      ],
+      "head": "9df1722e063ba12df1309b6b728b74debe1368ac",
+      "error": null
+    },
+    {
+      "url": "https://github.com/LIghtJUNction/zconv.git",
+      "locked": [
+        "f9448d27997dc70dac05f0c0e58857bcce43ab72"
+      ],
+      "head": "7438ce49651ec1018ed14cf86a2b0c617349c712",
+      "error": null
+    },
+    {
+      "url": "https://github.com/LIghtJUNction/zguard.git",
+      "locked": [
+        "6772b932a65e18f64e13591dee6edb2f6b099406"
+      ],
+      "head": "6772b932a65e18f64e13591dee6edb2f6b099406",
+      "error": null
+    },
+    {
+      "url": "https://github.com/LIghtJUNction/zharness.git",
+      "locked": [
+        "1f7bdfdb42ff70be84afb67429e152766bf74eeb"
+      ],
+      "head": "1f7bdfdb42ff70be84afb67429e152766bf74eeb",
+      "error": null
+    },
+    {
+      "url": "https://github.com/LIghtJUNction/zhex.git",
+      "locked": [
+        "52515207f9d97a2580182169b611b4763366b328"
+      ],
+      "head": "52515207f9d97a2580182169b611b4763366b328",
+      "error": null
+    },
+    {
+      "url": "https://github.com/LIghtJUNction/zi18n.git",
+      "locked": [
+        "755549f82fa513c4e4f2f5aaf6fdeea8da4a6347"
+      ],
+      "head": "755549f82fa513c4e4f2f5aaf6fdeea8da4a6347",
+      "error": null
+    },
+    {
+      "url": "https://github.com/LIghtJUNction/zplugin.git",
+      "locked": [
+        "a1a524ff9499415e83725904963c34919aba64db"
+      ],
+      "head": "a1a524ff9499415e83725904963c34919aba64db",
+      "error": null
+    },
+    {
+      "url": "https://github.com/LIghtJUNction/zrun.git",
+      "locked": [
+        "4bd2913188ff665e78a2f3b16f776cc8be764f51"
+      ],
+      "head": "91bc8d387c6e6123fa3017bacb4547853dd37014",
+      "error": null
+    },
+    {
+      "url": "https://github.com/LIghtJUNction/zsys.git",
+      "locked": [
+        "44dbc7f57ad2ba3336b95dde51f4a24005ea8d68"
+      ],
+      "head": "44dbc7f57ad2ba3336b95dde51f4a24005ea8d68",
+      "error": null
+    },
+    {
+      "url": "https://github.com/LIghtJUNction/ztuio.git",
+      "locked": [
+        "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e"
+      ],
+      "head": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "error": null
+    }
+  ],
+  "decisions": {
+    "registry": "Pin direct stable requirements to the already-resolved latest stable versions; no root registry version changes.",
+    "git_updates": [],
+    "deferred": [
+      "zrun 0.1.0-p0.13 -> 0.1.0-p0.15 is a preview and includes scheduler changes; retain 4bd2913188ff665e78a2f3b16f776cc8be764f51 pending separate compatibility validation.",
+      "zcall 9df1722 + zconv 7438ce4 failed cargo test --locked -p zcall -p zconv: E0063 missing gemini_chat_history in StreamConfig at zcall src/session/encoder.rs:152. Retain both existing locked commits; upstream interface coordination is required."
+    ],
+    "desktop_registry": [
+      "toml 1.2.2 -> 1.2.3",
+      "toml_edit 0.25.20 -> 0.25.21",
+      "toml_parser 1.1.6 -> 1.1.7"
+    ],
+    "cleanup": [
+      "Removed duplicate /scripts/deploy_server.py and /scripts/render_log_preview.py Cargo include entries. Their original include entries and source files remain."
+    ]
+  },
+  "parallel_update": {
+    "main": "44573d83f2f857f9a87db4432d688857f7bc334d",
+    "description": "Another maintainer adopted validated zrun p0.15 in main while this audit ran. Merge and preserve their update; prior deferral describes the initial audit, not the final adopted graph. The desktop lock adopts the same exact 45a13dd commit, not the latest upstream 91bc8d3.",
+    "source": "git+https://github.com/LIghtJUNction/zrun.git#45a13ddea8e3a2b0bc139355fe32db97ce3f69d3"
+  }
+}
