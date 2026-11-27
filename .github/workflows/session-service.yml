@@ -16,6 +16,10 @@ on:
       - '.github/workflows/session-service.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'apps/ssmcp-desktop/Cargo.toml'
+      - 'apps/ssmcp-desktop/Cargo.lock'
+      - '.github/dependabot.yml'
+      - '.github/workflows/ci.yml'
   workflow_dispatch:
     inputs:
       ref:

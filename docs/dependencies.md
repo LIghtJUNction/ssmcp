@@ -96,3 +96,5 @@ Dependabot 每周检查根项目、桌面客户端的 Cargo 图及 GitHub Action
 本轮 crates.io 官方 API 核对表明，根锁中所有直接 registry 包已经处于查询时的最新稳定版；本轮将约束固定到这些既有版本。桌面锁同步 toml、toml_edit 和 toml_parser 的稳定补丁。zcall、zconv 新 head 组合在编译时出现 `StreamConfig` 缺少 `gemini_chat_history` 字段，继续保留既有锁定，待上游接口协调后再升级；zrun 新 head 是 `0.1.0-p0.15` 预览版，调度变更较广，继续保留现有 `0.1.0-p0.13`。逐包版本、完整 SHA、查询时刻及来源见[核对记录](reports/dependency-maintenance-20261127.json)。核对记录不替代运行验收。
 
 并行维护者随后在 main `44573d83` 采用了其已验证的 zrun p0.15 命令运行时。本批正常合并并保留该更新；上文预览版暂缓记录是初始核对时的判断，不是对后续 main 的回退。最终解析以合并后的两个锁文件和当前提交 CI 为准。
+
+依赖 PR 自动触发精确 head 的 Web/原生客户端 CI；根与桌面 manifest/锁文件的更新同时触发三平台 Session service 门槛（包括 Linux 全量库测试与严格 control-only 执行）。依赖 PR 也触发既有完整 Linux 集成检查；原手动/可复用入口和所有门槛保留，不触发发布或部署。
