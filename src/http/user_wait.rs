@@ -625,6 +625,7 @@ mod tests {
 
     struct Fixture {
         broker: Arc<Broker>,
+        _accounts: crate::broker::TestAccountStore,
         user: String,
         token: String,
         session: Arc<Session>,
@@ -640,7 +641,8 @@ mod tests {
         }
 
         async fn with_disabled_chat(disabled: bool) -> Self {
-            let mut broker = Broker::new("https://ssmcp.example".into());
+            let (mut broker, accounts) =
+                Broker::test_with_registered_ssh("https://ssmcp.example".into());
             broker.local_chat_disabled = disabled;
             let broker = Arc::new(broker);
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -694,6 +696,7 @@ mod tests {
                 .unwrap();
             Self {
                 broker,
+                _accounts: accounts,
                 user,
                 token,
                 session,

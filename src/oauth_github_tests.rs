@@ -239,13 +239,27 @@ impl Fixture {
         let (server, client) = UnixStream::pair().unwrap();
         assert!(
             !allow.is_empty(),
-            "unsigned controlled fixtures require explicit account access"
+            "controlled fixtures retain explicit account access"
         );
+        let (subject, login) = if allow[0].starts_with("bob@") {
+            ("7", "bob")
+        } else {
+            ("42", "Alice")
+        };
+        let registration = crate::device::test_registration(
+            &self.broker,
+            crate::identity::Identity {
+                provider: "github".into(),
+                subject: subject.into(),
+                login: login.into(),
+            },
+        )
+        .await;
         let attachment = tokio::spawn(self.broker.clone().attach_device(
             server,
             crate::device::DevicePeer {
                 external_user_id: None,
-                account: None,
+                account: Some(registration),
                 session_access: true,
                 control_attribution: true,
                 native_messages: false,
@@ -762,7 +776,7 @@ async fn github_http_denial_consumes_consent_without_issuing_an_mcp_grant() {
 }
 
 #[tokio::test]
-async fn anonymous_http_allow_is_not_an_oauth_credential_or_login_code() {
+async fn device_http_allow_is_not_an_oauth_credential_or_login_code() {
     let mut fixture = Fixture::start().await;
     let alice = fixture
         .attach("alice-project", &["alice@ssmcp.example.test"])
