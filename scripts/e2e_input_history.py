@@ -87,20 +87,19 @@ class InputHistory(Composer):
         launcher.chmod(0o700)
         self.binary_dir = launchers
         self.clipboard = directory / "clipboard"
-        writer = launchers / "wl-copy"
+
+    def client_environment(self, label, **options):
+        environment = super().client_environment(label, **options)
+        writer = Path(environment["PATH"]) / "wl-copy"
         cat = shutil.which("cat")
         if not cat:
             raise RuntimeError("test requires system cat")
         writer.write_text("#!/bin/sh\n" + shlex.quote(cat) + " > "
                           + shlex.quote(str(self.clipboard)) + "\n")
         writer.chmod(0o700)
-
-    def client_environment(self, label, **options):
-        environment = super().client_environment(label, **options)
         environment.pop("DISPLAY", None)
         environment.update({
             "HOME": str(self.home),
-            "PATH": str(self.binary_dir) + os.pathsep + environment["PATH"],
             "WAYLAND_DISPLAY": "fixture-clipboard",
             "XDG_STATE_HOME": str(self.state_home),
             "XDG_CONFIG_HOME": str(self.directory / "config"),

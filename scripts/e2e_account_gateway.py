@@ -33,7 +33,8 @@ IDENTITY = {"provider": "github", "subject": "123", "login": "fixture",
 
 
 def has_platform_consent(page, origin, identity):
-    address = escape(f"{identity['username']}@{origin}")
+    host = urlsplit(origin).netloc or origin
+    address = escape(f"{identity['username']}@{host}")
     return (isinstance(page, str) and f"<strong>{address}</strong>" in page
             and "@github" not in page
             and "name=decision value=allow" in page
