@@ -1280,6 +1280,15 @@ mod tests {
             ));
             let mut broker = Broker::new("https://ssmcp.example".into());
             broker.portal = crate::portal::Portal::open(&directory).unwrap();
+            broker.identities = crate::identity::IdentityProviders::with_github_test_endpoints(
+                &broker.public_url,
+                crate::identity::GitHubConfig {
+                    client_id: "fixture".into(),
+                    client_secret: "fixture".into(),
+                },
+                "http://127.0.0.1:9",
+            )
+            .unwrap();
             let broker = Arc::new(broker);
             let registration = crate::device::test_registration(
                 &broker,

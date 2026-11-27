@@ -19,6 +19,8 @@ import concurrent.futures
 import configparser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import hashlib
+import ssl
 import os
 from pathlib import Path
 import plistlib
@@ -100,7 +102,15 @@ class UnavailableGateway:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), GatewayHandler)
         self.server.daemon_threads = True
         self.server.fixture = self
-        self.origin = f"http://127.0.0.1:{self.server.server_address[1]}"
+        # Existing checked-in trust inputs are test-only and valid for literal loopback.
+        fixtures = Path(__file__).resolve().parents[1] / "tests/fixtures/relay-trust"
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(fixtures / "server.pem", fixtures / "server-key.pem")
+        self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
+        self.origin = f"https://127.0.0.1:{self.server.server_address[1]}"
+        self.ca = fixtures / "ca.pem"
+        public = "".join(line for line in (fixtures / "public-key.pem").read_text().splitlines() if not line.startswith("---"))
+        self.pin = "sha256//" + base64.b64encode(hashlib.sha256(base64.b64decode(public)).digest()).decode()
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
@@ -150,6 +160,9 @@ class Portable:
     def prepare_gateway(self):
         self.gateway = UnavailableGateway()
         self.secrets.append(self.gateway.token)
+        config = Path(self.environment["SSMCP_CLIENT_CONFIG"]).parent
+        (config / "loopback-e2e-ca.pem").write_bytes(self.gateway.ca.read_bytes())
+        (config / "trusted-servers.toml").write_text(f'[[servers]]\nserver = "{self.gateway.origin}"\npins = ["{self.gateway.pin}"]\n')
         self.cli(["login", f"portable-fixture@{self.gateway.origin}", "--no-browser"])
         self.check(True, "real CLI authorizes only the owned disposable device account")
 

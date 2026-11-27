@@ -142,6 +142,11 @@ pub(super) async fn run(options: &Options) -> crate::Result<()> {
         .server
         .as_deref()
         .ok_or("control-only requires a relay server")?;
+    let username = options
+        .username
+        .as_deref()
+        .ok_or("control-only requires USERNAME@SERVER")?;
+    account::managed::ensure(username, server, false).await?;
     let mut interrupt = interrupt_signal()?;
     let mut terminate = terminate_signal()?;
     let cancelled = async {
@@ -154,7 +159,11 @@ pub(super) async fn run(options: &Options) -> crate::Result<()> {
         Some(server),
         &options.metadata()?,
         &mut registered,
-        || command(executable, server),
+        || {
+            let mut command = command(executable, server);
+            command.env(relay::DEVICE_USER_ENV, username);
+            command
+        },
         cancelled,
         Duration::from_secs(120),
     )

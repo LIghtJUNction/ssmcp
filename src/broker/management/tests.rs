@@ -520,6 +520,15 @@ async fn failed_connect_audit_never_sends_ready_or_leaves_a_registered_session()
     let temp = Temp::new();
     let mut broker = small_journal(&temp);
     broker.portal = crate::portal::Portal::open(&temp.0.join("accounts")).unwrap();
+    broker.identities = crate::identity::IdentityProviders::with_github_test_endpoints(
+        &broker.public_url,
+        crate::identity::GitHubConfig {
+            client_id: "fixture".into(),
+            client_secret: "fixture".into(),
+        },
+        "http://127.0.0.1:9",
+    )
+    .unwrap();
     broker
         .management
         .as_ref()
