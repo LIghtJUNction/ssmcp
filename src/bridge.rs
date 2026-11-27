@@ -1299,7 +1299,6 @@ mod tests {
                 },
             )
             .await;
-            let user = registration.username.clone();
             let (server, client) = tokio::net::UnixStream::pair().unwrap();
             let attachment = tokio::spawn(broker.clone().attach_device(
                 server,
@@ -1328,8 +1327,18 @@ mod tests {
             else {
                 panic!("fixture did not register");
             };
-            let session = broker.online_session(&user).await.unwrap();
-            assert_eq!(session.client_id(), client_id);
+            let session = broker
+                .client(
+                    crate::broker::IDENTITY_RESOURCE,
+                    &crate::broker::Authorization::Identity(crate::identity::Identity {
+                        provider: "github".into(),
+                        subject: "42".into(),
+                        login: "fixture".into(),
+                    }),
+                    &client_id,
+                )
+                .await
+                .unwrap();
             let held = Arc::new(AtomicUsize::new(0));
             let release = Arc::new(Semaphore::new(0));
             let reject_close = Arc::new(AtomicBool::new(false));
