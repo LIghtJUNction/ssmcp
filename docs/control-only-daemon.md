@@ -71,7 +71,10 @@ it is not silently enabled by lack of a terminal or by `--input none`.
 
 On Linux, execution retains the existing delegated cgroup memory requirement.
 An existing user manager must support the normal SSMCP resource admission.
-Admission occurs only on an authorized command-start request. This mode does
+Admission occurs only after authorization, the in-flight gate and command argument
+validation. The synchronous user-manager admission runs off the transport and
+native async executors; cancelling the pending request cannot continue into
+command creation. This mode does
 not install/start a manager or disable command memory ceilings. Without the
 required user bus and delegation, registration and read-only process controls
 work, but native command starts fail closed.
@@ -92,7 +95,8 @@ checks the real CLI without a TTY, native control, local revocation, catalog
 exclusions, signals and disconnection. Execution and owned-command cleanup
 require the existing resource delegation; missing prerequisites are reported
 as blockers, never as successful command execution. Library tests separately
-exercise native execution using the existing library-test resource policy.
+exercise native execution and now require the same delegated resource admission
+when they construct a control-only host.
 Default parsing and offline discovery are checked without requiring a manager.
 It never connects to a live relay, installs a service or invokes a model.
 On a capable Linux host, native command admission uses the existing user manager.
