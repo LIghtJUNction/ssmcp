@@ -326,7 +326,7 @@ dependencies = [
  "cap-primitives",
  "cap-std",
  "io-lifetimes 3.0.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -343,7 +343,7 @@ dependencies = [
  "maybe-owned",
  "rustix",
  "rustix-linux-procfs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
  "winx",
 ]
 
@@ -828,7 +828,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2283,7 +2283,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2349,7 +2349,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2744,7 +2744,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3569,7 +3569,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4084,7 +4084,7 @@ dependencies = [
  "memchr",
  "nix 0.31.4",
  "typed-path",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
  "zeroize",
 ]
 
@@ -4121,8 +4121,8 @@ dependencies = [
 
 [[package]]
 name = "zrun"
-version = "0.1.0-p0.13"
-source = "git+https://github.com/LIghtJUNction/zrun.git#4bd2913188ff665e78a2f3b16f776cc8be764f51"
+version = "0.1.0-p0.15"
+source = "git+https://github.com/LIghtJUNction/zrun.git#91bc8d387c6e6123fa3017bacb4547853dd37014"
 dependencies = [
  "libc",
  "zrun-executor",
@@ -4134,8 +4134,8 @@ dependencies = [
 
 [[package]]
 name = "zrun-executor"
-version = "0.1.0-p0.13"
-source = "git+https://github.com/LIghtJUNction/zrun.git#4bd2913188ff665e78a2f3b16f776cc8be764f51"
+version = "0.1.0-p0.15"
+source = "git+https://github.com/LIghtJUNction/zrun.git#91bc8d387c6e6123fa3017bacb4547853dd37014"
 dependencies = [
  "zrun-io",
  "zrun-task",
@@ -4144,8 +4144,8 @@ dependencies = [
 
 [[package]]
 name = "zrun-io"
-version = "0.1.0-p0.13"
-source = "git+https://github.com/LIghtJUNction/zrun.git#4bd2913188ff665e78a2f3b16f776cc8be764f51"
+version = "0.1.0-p0.15"
+source = "git+https://github.com/LIghtJUNction/zrun.git#91bc8d387c6e6123fa3017bacb4547853dd37014"
 dependencies = [
  "libc",
  "mio",
@@ -4153,18 +4153,18 @@ dependencies = [
 
 [[package]]
 name = "zrun-sync"
-version = "0.1.0-p0.13"
-source = "git+https://github.com/LIghtJUNction/zrun.git#4bd2913188ff665e78a2f3b16f776cc8be764f51"
+version = "0.1.0-p0.15"
+source = "git+https://github.com/LIghtJUNction/zrun.git#91bc8d387c6e6123fa3017bacb4547853dd37014"
 
 [[package]]
 name = "zrun-task"
-version = "0.1.0-p0.13"
-source = "git+https://github.com/LIghtJUNction/zrun.git#4bd2913188ff665e78a2f3b16f776cc8be764f51"
+version = "0.1.0-p0.15"
+source = "git+https://github.com/LIghtJUNction/zrun.git#91bc8d387c6e6123fa3017bacb4547853dd37014"
 
 [[package]]
 name = "zrun-time"
-version = "0.1.0-p0.13"
-source = "git+https://github.com/LIghtJUNction/zrun.git#4bd2913188ff665e78a2f3b16f776cc8be764f51"
+version = "0.1.0-p0.15"
+source = "git+https://github.com/LIghtJUNction/zrun.git#91bc8d387c6e6123fa3017bacb4547853dd37014"
 
 [[package]]
 name = "zsys"
