@@ -116,6 +116,13 @@ class EventTests(unittest.TestCase):
         self.assertEqual(group("CI", "", revision), f"ci-CI-{revision}")
         self.assertEqual(group("CI", "", ""), "ci-CI-refs/heads/main")
 
+    def test_release_gui_call_can_read_actions_artifacts(self):
+        workflows = Path(__file__).resolve().parents[1] / ".github/workflows"
+        release_workflow = (workflows / "release.yml").read_text()
+        call = release_workflow.split("  gui:\n", 1)[1].split("\n  build:", 1)[0]
+        self.assertIn("    uses: ./.github/workflows/gui-clients.yml\n", call)
+        self.assertIn("    permissions:\n      contents: read\n      actions: read\n", call)
+
     def test_only_publication_is_serialized_across_release_tags(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/release.yml").read_text()
         before, publication = workflow.split("  publish_release:\n", 1)

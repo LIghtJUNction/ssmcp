@@ -211,6 +211,9 @@ jobs:
   gui:
     needs: validate
     if: needs.validate.outputs.gui_clients == 'true' && (needs.validate.outputs.publish == 'true' || needs.validate.outputs.build_only == 'true')
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/gui-clients.yml
     with:
       ref: ${{ needs.validate.outputs.sha }}

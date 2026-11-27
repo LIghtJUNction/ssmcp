@@ -1272,7 +1272,8 @@ impl State {
             {
                 self.notice = Some("Select a session agent or Next caller for /handoff".into());
             } else {
-                match crate::client::handoff::clipboard::request(words.next().unwrap_or("").trim()) {
+                match crate::client::handoff::clipboard::request(words.next().unwrap_or("").trim())
+                {
                     Ok(prompt) => self.chat_submit_text(&prompt),
                     Err(error) => self.notice = Some(error),
                 }
