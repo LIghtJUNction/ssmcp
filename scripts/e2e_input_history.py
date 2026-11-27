@@ -514,7 +514,10 @@ class InputHistory(Composer):
                    "the agent receives the tool name, request token and user's handoff note")
 
         def complete(request_token, handoff):
-            result = self.response("await collab.bind(%s, %s); return await call(%s, %s, %s);" % (
+            code = ("await collab.bind(%s, %s); "
+                    "try { return await call(%s, %s, %s); } "
+                    "catch (error) { return {error: String(error)}; }")
+            result = self.response(code % (
                 json.dumps(self.client_id),
                 json.dumps({"agent_id": member["agent_id"], "token": member["token"]}),
                 json.dumps(self.client_id), json.dumps("ssmcp.ui.handoff"),
@@ -524,14 +527,15 @@ class InputHistory(Composer):
 
         handoff = "继续检查输入恢复。\n已核对队列，下一步运行回归用例。"
         denied = complete("0" * 32, handoff)
-        self.check(denied.get("isError") and not self.clipboard.exists(),
+        rejection = "No matching active /handoff request on this client"
+        self.check(rejection in denied.get("error", "") and not self.clipboard.exists(),
                    "a mismatched token cannot change the clipboard")
         receipt = complete(token, handoff)["structuredContent"]
         self.check(receipt["copied"] and self.clipboard.read_bytes() == handoff.encode(),
                    "the native handoff tool copies the exact multiline UTF-8 text")
         front.until(lambda shot: "Handoff copied. Paste it into the next agent." in text(shot),
                     "the terminal confirms that the handoff is ready to paste")
-        self.check(complete(token, "must not replace").get("isError")
+        self.check(rejection in complete(token, "must not replace").get("error", "")
                    and self.clipboard.read_bytes() == handoff.encode(),
                    "a completed handoff cannot overwrite the clipboard again")
 
